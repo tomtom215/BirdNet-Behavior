@@ -204,6 +204,10 @@ pub fn create_apprise_client(
         species_notify_exclude,
         cooldown: std::time::Duration::from_secs(cooldown_secs),
         per_species_cooldown: std::collections::HashMap::new(),
+        rate_per_minute: cli
+            .notify_rate_per_minute
+            .or_else(|| config.and_then(|c| c.get_parsed::<u32>("NOTIFY_RATE_PER_MINUTE").ok()))
+            .unwrap_or(birdnet_integrations::apprise::DEFAULT_RATE_PER_MINUTE),
     };
 
     let native = native_routes(notify_urls.as_deref(), apprise_config_file.as_deref());
@@ -521,5 +525,43 @@ mod tests {
             !needs_cli,
             "a station configured only with native URLs must not shell out"
         );
+    }
+
+    #[test]
+    fn the_rate_limit_can_be_set_from_the_environment() {
+        // `.env.example` documents BIRDNET_NOTIFY_RATE_PER_MINUTE, which is
+        // only true if clap has a flag bound to it *and* the constructor reads
+        // that flag. It read the config-file key alone at first, so the
+        // documented variable would have been silently inert on every Docker
+        // deployment.
+        let mut cli = default_cli();
+        cli.notify_urls = Some("ntfy://garden".to_owned());
+        cli.notify_rate_per_minute = Some(3);
+        let handle = create_apprise_client(&cli, None).expect("client");
+        let configured = handle.blocking_lock().config().rate_per_minute;
+        assert_eq!(configured, 3);
+    }
+
+    #[test]
+    fn the_config_file_key_still_works_and_the_flag_wins() {
+        // Counterpart: adding the flag must not orphan the config-file key,
+        // and the flag has to take precedence when both are present.
+        let cli = default_cli();
+        let cfg = config_with(&[("NOTIFY_RATE_PER_MINUTE", "7"), ("NOTIFY_URLS", "ntfy://g")]);
+        let from_file = create_apprise_client(&cli, Some(&cfg))
+            .expect("client")
+            .blocking_lock()
+            .config()
+            .rate_per_minute;
+        assert_eq!(from_file, 7);
+
+        let mut cli = default_cli();
+        cli.notify_rate_per_minute = Some(3);
+        let from_flag = create_apprise_client(&cli, Some(&cfg))
+            .expect("client")
+            .blocking_lock()
+            .config()
+            .rate_per_minute;
+        assert_eq!(from_flag, 3, "the flag must win over the config file");
     }
 }

@@ -331,6 +331,14 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_NOTIFY_URLS")]
     pub notify_urls: Option<String>,
 
+    /// Ceiling on notifications per destination per minute; `0` disables it.
+    ///
+    /// About the services' limits rather than ours: Discord allows five
+    /// requests a second per webhook, Telegram about thirty, and Pushover ten
+    /// thousand messages a month. Config-file key: `NOTIFY_RATE_PER_MINUTE`.
+    #[arg(long, env = "BIRDNET_NOTIFY_RATE_PER_MINUTE")]
+    pub notify_rate_per_minute: Option<u32>,
+
     /// Minimum confidence threshold for Apprise notifications (0.0–1.0).
     #[arg(long, default_value = "0.8", env = "BIRDNET_NOTIFY_CONFIDENCE")]
     pub notify_confidence: f32,

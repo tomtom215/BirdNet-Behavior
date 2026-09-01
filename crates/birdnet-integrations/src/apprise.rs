@@ -29,6 +29,16 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default cooldown between notifications for the same species (5 minutes).
 const DEFAULT_COOLDOWN_SECS: u64 = 300;
 
+/// Default ceiling on sends per destination per minute.
+///
+/// Twelve is above what a station produces once the per-species cooldown is
+/// applied — a dawn chorus of twelve distinct species in one minute is a good
+/// morning — and an order of magnitude below every service's own limit.
+///
+/// Public so callers that build [`NotifyConfig`] field by field rather than
+/// from [`Default`] use this value rather than a copy of it.
+pub const DEFAULT_RATE_PER_MINUTE: u32 = 12;
+
 /// Total request attempts (initial + retries) before a send is abandoned.
 const MAX_ATTEMPTS: u32 = 3;
 
@@ -93,6 +103,13 @@ pub struct NotifyConfig {
     pub cooldown: Duration,
     /// Per-species cooldown overrides (scientific name → duration).
     pub per_species_cooldown: HashMap<String, Duration>,
+    /// Ceiling on sends per destination per minute; `0` disables it.
+    ///
+    /// Not about our own load — it is about the services'. Discord allows five
+    /// requests a second per webhook, Telegram about thirty, and Pushover
+    /// **ten thousand messages a month**. A station with fifty species active
+    /// can exhaust the last one in a fortnight without a cap.
+    pub rate_per_minute: u32,
 }
 
 impl Default for NotifyConfig {
@@ -103,6 +120,7 @@ impl Default for NotifyConfig {
             species_notify_exclude: Vec::new(),
             cooldown: Duration::from_secs(DEFAULT_COOLDOWN_SECS),
             per_species_cooldown: HashMap::new(),
+            rate_per_minute: DEFAULT_RATE_PER_MINUTE,
         }
     }
 }
@@ -132,6 +150,13 @@ pub struct Client {
     config_file: Option<PathBuf>,
     /// Destinations delivered in-process by [`crate::dispatch`].
     native: Vec<crate::dispatch::Route>,
+    /// One delivery gate — circuit breaker plus rate limit — per entry of
+    /// `native`, by index.
+    guards: Vec<crate::dispatch::Gate>,
+    /// Sends skipped because a destination's circuit was open.
+    skipped_circuit_open: u64,
+    /// Sends skipped because a destination was over its rate limit.
+    skipped_rate_limited: u64,
     /// Whether the `apprise` CLI still has to run for `config_file`.
     ///
     /// False once every URL in that file has a native sender — which is the
@@ -164,6 +189,9 @@ impl Client {
             last_notified: HashMap::new(),
             config_file: None,
             native: Vec::new(),
+            guards: Vec::new(),
+            skipped_circuit_open: 0,
+            skipped_rate_limited: 0,
             cli_needed: true,
         })
     }
@@ -192,6 +220,9 @@ impl Client {
             last_notified: HashMap::new(),
             config_file: Some(config_file),
             native: Vec::new(),
+            guards: Vec::new(),
+            skipped_circuit_open: 0,
+            skipped_rate_limited: 0,
             cli_needed: true,
         })
     }
@@ -260,7 +291,7 @@ impl Client {
     ///
     /// Returns `AppriseError` on network or server failure.
     pub async fn notify_detection(
-        &self,
+        &mut self,
         species: &str,
         confidence: f32,
         date: &str,
@@ -286,7 +317,7 @@ impl Client {
     ///
     /// Returns `AppriseError` on network or server failure.
     pub async fn send_notification(
-        &self,
+        &mut self,
         title: &str,
         body: &str,
         notify_type: NotifyType,
@@ -303,7 +334,7 @@ impl Client {
     ///
     /// Returns `AppriseError` on network or server failure.
     pub async fn send_notification_with_image(
-        &self,
+        &mut self,
         title: &str,
         body: &str,
         notify_type: NotifyType,
@@ -314,21 +345,47 @@ impl Client {
 
         // Native routes first: no subprocess, no Python, and a real error
         // rather than an exit status when a URL is wrong.
-        for route in &self.native {
-            match crate::dispatch::send_with_retry(
-                &self.http,
-                &route.target,
-                &crate::dispatch::Message {
-                    title: title.to_string(),
-                    body: body.to_string(),
-                    severity: notify_type.into(),
-                    image_url: image_url.map(ToString::to_string),
-                },
-            )
-            .await
-            {
-                Ok(()) => delivered += 1,
+        let message = crate::dispatch::Message {
+            title: title.to_string(),
+            body: body.to_string(),
+            severity: notify_type.into(),
+            image_url: image_url.map(ToString::to_string),
+        };
+        for (index, route) in self.native.iter().enumerate() {
+            // A destination that is down is skipped outright, apart from one
+            // probe per open period. Without this the station spends an
+            // attempt (or three, with backoff) on a retired webhook for every
+            // detection, all day — and it is the retries, not the sends, that
+            // get an address rate-limited. The interaction rules live in
+            // `dispatch::Gate`, where they are testable with injected time.
+            match self.guards[index].admit(Instant::now()) {
+                crate::dispatch::Admission::Send | crate::dispatch::Admission::Probe => {}
+                crate::dispatch::Admission::CircuitOpen(wait) => {
+                    self.skipped_circuit_open += 1;
+                    tracing::debug!(
+                        target_label = %route.label,
+                        retry_in_secs = wait.as_secs(),
+                        "skipping a destination whose circuit is open"
+                    );
+                    continue;
+                }
+                crate::dispatch::Admission::RateLimited => {
+                    self.skipped_rate_limited += 1;
+                    tracing::warn!(
+                        target_label = %route.label,
+                        "dropping a notification: destination is over its rate limit"
+                    );
+                    continue;
+                }
+            }
+
+            match crate::dispatch::send_with_retry(&self.http, &route.target, &message).await {
+                Ok(()) => {
+                    self.guards[index].on_success();
+                    delivered += 1;
+                }
                 Err(e) => {
+                    self.guards[index].on_failure(Instant::now());
                     // `route.label` is credential-free by construction; the
                     // URL it came from is not, and must never be logged.
                     tracing::warn!(target_label = %route.label, error = %e, "notification failed");
@@ -400,9 +457,21 @@ impl Client {
         routes: Vec<crate::dispatch::Route>,
         cli_fallback: bool,
     ) -> Self {
+        let now = Instant::now();
+        self.guards = routes
+            .iter()
+            .map(|_| crate::dispatch::Gate::new(self.config.rate_per_minute, now))
+            .collect();
         self.native = routes;
         self.cli_needed = cli_fallback;
         self
+    }
+
+    /// How many sends have been skipped because a destination's circuit was
+    /// open, and how many because it was over its rate limit.
+    #[must_use]
+    pub const fn skip_counts(&self) -> (u64, u64) {
+        (self.skipped_circuit_open, self.skipped_rate_limited)
     }
 
     /// Credential-free labels for the natively delivered destinations.

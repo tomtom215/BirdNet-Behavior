@@ -29,10 +29,12 @@
 //! assert_eq!(t.kind(), "telegram");
 //! ```
 
+mod limit;
 mod parse;
 mod plan;
 mod send;
 
+pub use limit::{Admission, Breaker, Gate, RateLimiter, Verdict};
 pub use parse::{NtfyAuth, ParseError, SlackAuth, Target, parse};
 pub use plan::{Auth, Body, Expect, Message, Plan, Severity, plans};
 pub use send::{SendError, send};

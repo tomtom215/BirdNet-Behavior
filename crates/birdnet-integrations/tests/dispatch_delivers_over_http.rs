@@ -311,7 +311,7 @@ async fn a_failing_native_route_is_reported_rather_than_swallowed() {
 
     let stub = Stub::start(404, "no such topic").await;
     let parsed = routes(&format!("ntfy://{}/garden", stub.addr));
-    let client = Client::new_cli_only(std::path::PathBuf::new(), NotifyConfig::default())
+    let mut client = Client::new_cli_only(std::path::PathBuf::new(), NotifyConfig::default())
         .expect("client")
         .with_native_routes(parsed.native, false);
 
@@ -320,4 +320,111 @@ async fn a_failing_native_route_is_reported_rather_than_swallowed() {
         .await
         .expect_err("the only destination refused the message");
     assert!(err.to_string().contains("404"), "{err}");
+}
+
+// ---------------------------------------------------------------------------
+// The delivery guards, through the client the daemon holds
+// ---------------------------------------------------------------------------
+
+/// A client with one native route pointed at `stub`, and no rate limit.
+fn client_for(addr: &str, rate_per_minute: u32) -> birdnet_integrations::apprise::Client {
+    use birdnet_integrations::apprise::{Client, NotifyConfig};
+    use birdnet_integrations::dispatch::routes;
+
+    let parsed = routes(&format!("ntfy://{addr}/garden"));
+    assert_eq!(parsed.native.len(), 1);
+    Client::new_cli_only(
+        std::path::PathBuf::new(),
+        NotifyConfig {
+            rate_per_minute,
+            ..NotifyConfig::default()
+        },
+    )
+    .expect("client")
+    .with_native_routes(parsed.native, false)
+}
+
+#[tokio::test]
+async fn a_dead_destination_stops_being_retried_per_detection() {
+    // A retired webhook answers 404 to every request forever. Without a
+    // breaker the station spends `MAX_ATTEMPTS` requests on it for every
+    // detection, all day. The count on the wire is the whole point, so this
+    // gate counts requests rather than inspecting state.
+    let stub = Stub::start(404, "gone").await;
+    let mut client = client_for(&stub.addr, 0);
+
+    for _ in 0..20 {
+        let _ = client
+            .send_notification("t", "b", birdnet_integrations::apprise::NotifyType::Info)
+            .await;
+    }
+
+    let attempts = stub.requests().len();
+    assert!(
+        attempts <= 4,
+        "20 notifications to a dead destination made {attempts} requests; \
+         the circuit should have opened after the third failure"
+    );
+    let (open, limited) = client.skip_counts();
+    assert!(open >= 16, "only {open} sends were skipped");
+    assert_eq!(limited, 0, "nothing here is rate limited");
+}
+
+#[tokio::test]
+async fn a_healthy_destination_is_never_tripped() {
+    // Counterpart: a breaker that opened regardless would also pass the gate
+    // above, and would silently stop a working station from notifying.
+    let stub = Stub::start(200, "{}").await;
+    let mut client = client_for(&stub.addr, 0);
+
+    for _ in 0..20 {
+        client
+            .send_notification("t", "b", birdnet_integrations::apprise::NotifyType::Info)
+            .await
+            .expect("delivered");
+    }
+
+    assert_eq!(stub.requests().len(), 20);
+    assert_eq!(client.skip_counts(), (0, 0));
+}
+
+#[tokio::test]
+async fn a_rate_limit_caps_what_reaches_a_working_destination() {
+    // Pushover allows ten thousand messages a *month*. The cap is not about
+    // our load, it is about not being cut off by the service.
+    let stub = Stub::start(200, "{}").await;
+    let mut client = client_for(&stub.addr, 5);
+
+    for _ in 0..20 {
+        let _ = client
+            .send_notification("t", "b", birdnet_integrations::apprise::NotifyType::Info)
+            .await;
+    }
+
+    assert_eq!(
+        stub.requests().len(),
+        5,
+        "the rate limit did not bound what reached the destination"
+    );
+    let (open, limited) = client.skip_counts();
+    assert_eq!(limited, 15);
+    assert_eq!(open, 0, "a rate limit is not a destination failure");
+}
+
+#[tokio::test]
+async fn being_rate_limited_never_opens_the_circuit() {
+    // Counterpart to the gate above. Feeding a rate-limited send into the
+    // breaker would make a busy morning look like an outage and suppress
+    // notifications long after the burst had passed.
+    let stub = Stub::start(200, "{}").await;
+    let mut client = client_for(&stub.addr, 2);
+
+    for _ in 0..10 {
+        let _ = client
+            .send_notification("t", "b", birdnet_integrations::apprise::NotifyType::Info)
+            .await;
+    }
+    let (open, limited) = client.skip_counts();
+    assert_eq!(open, 0, "the circuit opened on rate-limited sends");
+    assert_eq!(limited, 8);
 }
