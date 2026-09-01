@@ -41,6 +41,252 @@ use rusqlite::{Connection, params};
 use std::fmt;
 
 // ---------------------------------------------------------------------------
+// Portable form (export / import)
+// ---------------------------------------------------------------------------
+
+/// Placeholder written in place of a credential in a redacted export.
+///
+/// Importing a rule carrying this keeps every other field and drops the
+/// credential, so a shared or backed-up rule set restores intact and the
+/// operator is told exactly which rules need their secret re-entered.
+pub const REDACTED: &str = "***REDACTED***";
+
+/// Format version of an exported rule set.
+///
+/// Written so a future change of shape is detectable rather than being read as
+/// a set of rules with every field missing.
+pub const EXPORT_VERSION: u32 = 1;
+
+/// One rule in its portable, flat form.
+///
+/// Deliberately flat rather than mirroring [`AlertAction`]'s enum: an exported
+/// file is something an operator reads, hand-edits and pastes into a chat with
+/// someone else, and a tagged union renders badly for all three.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RuleExport {
+    /// Human-readable rule name.
+    pub name: String,
+    /// Whether the rule is active.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Glob-style species pattern; absent matches all species.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub species_pattern: Option<String>,
+    /// Minimum confidence (inclusive).
+    #[serde(default)]
+    pub confidence_min: f64,
+    /// Maximum confidence (inclusive).
+    #[serde(default = "default_one")]
+    pub confidence_max: f64,
+    /// Hour-of-day window start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hour_start: Option<u8>,
+    /// Hour-of-day window end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hour_end: Option<u8>,
+    /// Comma-separated ISO weekday numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub days_of_week: Option<String>,
+    /// `"webhook"`, `"log"` or `"suppress"`.
+    pub action: String,
+    /// Webhook target URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_url: Option<String>,
+    /// Webhook HTTP method.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_method: Option<String>,
+    /// Webhook body template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_body: Option<String>,
+    /// `"bearer"`, `"basic"` or `"header"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_auth_kind: Option<String>,
+    /// The credential, or [`REDACTED`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_auth_value: Option<String>,
+    /// Header name, for the `header` scheme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub webhook_header_name: Option<String>,
+}
+
+/// serde default for [`RuleExport::enabled`].
+const fn default_true() -> bool {
+    true
+}
+
+/// serde default for [`RuleExport::confidence_max`].
+const fn default_one() -> f64 {
+    1.0
+}
+
+/// An exported rule set, with its format version.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RuleSet {
+    /// [`EXPORT_VERSION`] at the time of writing.
+    pub version: u32,
+    /// Whether credentials were replaced with [`REDACTED`].
+    pub redacted: bool,
+    /// The rules.
+    pub rules: Vec<RuleExport>,
+}
+
+/// Convert a stored rule to its portable form.
+///
+/// `include_secrets` false — the default everywhere it is offered — replaces
+/// each credential with [`REDACTED`] while keeping its scheme and header name,
+/// so the reader can see *that* a rule authenticates and how, without the
+/// export being a file that must be handled as a secret.
+#[must_use]
+pub fn to_export(rule: &AlertRule, include_secrets: bool) -> RuleExport {
+    let mut out = RuleExport {
+        name: rule.name.clone(),
+        enabled: rule.enabled,
+        species_pattern: rule.species_pattern.clone(),
+        confidence_min: rule.confidence_min,
+        confidence_max: rule.confidence_max,
+        hour_start: rule.hour_start,
+        hour_end: rule.hour_end,
+        days_of_week: rule.days_of_week.clone(),
+        action: rule.action.type_str().to_string(),
+        webhook_url: None,
+        webhook_method: None,
+        webhook_body: None,
+        webhook_auth_kind: None,
+        webhook_auth_value: None,
+        webhook_header_name: None,
+    };
+    if let AlertAction::Webhook {
+        url,
+        method,
+        body_template,
+        auth,
+    } = &rule.action
+    {
+        out.webhook_url = Some(url.clone());
+        out.webhook_method = Some(method.clone());
+        out.webhook_body.clone_from(body_template);
+        if let Some(auth) = auth {
+            let (value, header_name) = auth.to_columns();
+            out.webhook_auth_kind = Some(auth.kind_str().to_string());
+            out.webhook_header_name = header_name;
+            out.webhook_auth_value = Some(if include_secrets {
+                value
+            } else {
+                REDACTED.to_string()
+            });
+        }
+    }
+    out
+}
+
+/// Why one entry of an imported rule set could not be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportRejection {
+    /// The rule has no name.
+    NoName,
+    /// `action` was `"webhook"` with no URL.
+    WebhookWithoutUrl(String),
+    /// `action` named something other than webhook, log or suppress.
+    UnknownAction {
+        /// The rule's name.
+        name: String,
+        /// The action string that was not recognised.
+        action: String,
+    },
+}
+
+impl fmt::Display for ImportRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoName => write!(f, "a rule has no name"),
+            Self::WebhookWithoutUrl(name) => {
+                write!(f, "rule {name:?} is a webhook with no URL")
+            }
+            Self::UnknownAction { name, action } => {
+                write!(f, "rule {name:?} has unknown action {action:?}")
+            }
+        }
+    }
+}
+
+/// One imported rule, ready to insert.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Imported {
+    /// The rule.
+    pub rule: NewAlertRule,
+    /// Whether its credential arrived redacted and was therefore dropped.
+    pub credential_was_redacted: bool,
+}
+
+/// Convert a portable rule back into an insertable one.
+///
+/// # Errors
+///
+/// Returns [`ImportRejection`] if the entry cannot describe a usable rule.
+pub fn from_export(e: &RuleExport) -> Result<Imported, ImportRejection> {
+    let name = e.name.trim();
+    if name.is_empty() {
+        return Err(ImportRejection::NoName);
+    }
+
+    let mut credential_was_redacted = false;
+    let action = match e.action.as_str() {
+        "log" => AlertAction::Log,
+        "suppress" => AlertAction::Suppress,
+        "webhook" => {
+            let url = e
+                .webhook_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+                .ok_or_else(|| ImportRejection::WebhookWithoutUrl(name.to_string()))?;
+            let auth = match e.webhook_auth_value.as_deref() {
+                Some(REDACTED) => {
+                    credential_was_redacted = true;
+                    None
+                }
+                value => WebhookAuth::from_columns(
+                    e.webhook_auth_kind.as_deref().unwrap_or_default(),
+                    value,
+                    e.webhook_header_name.as_deref(),
+                ),
+            };
+            AlertAction::Webhook {
+                url: url.to_string(),
+                method: e
+                    .webhook_method
+                    .clone()
+                    .filter(|m| !m.trim().is_empty())
+                    .unwrap_or_else(|| "POST".to_string()),
+                body_template: e.webhook_body.clone().filter(|b| !b.trim().is_empty()),
+                auth,
+            }
+        }
+        other => {
+            return Err(ImportRejection::UnknownAction {
+                name: name.to_string(),
+                action: other.to_string(),
+            });
+        }
+    };
+
+    Ok(Imported {
+        rule: NewAlertRule {
+            name: name.to_string(),
+            enabled: e.enabled,
+            species_pattern: e.species_pattern.clone().filter(|p| !p.trim().is_empty()),
+            confidence_min: e.confidence_min.clamp(0.0, 1.0),
+            confidence_max: e.confidence_max.clamp(0.0, 1.0),
+            hour_start: e.hour_start.filter(|h| *h <= 23),
+            hour_end: e.hour_end.filter(|h| *h <= 23),
+            days_of_week: e.days_of_week.clone().filter(|d| !d.trim().is_empty()),
+            action,
+        },
+        credential_was_redacted,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
 
@@ -234,7 +480,10 @@ pub struct AlertRule {
 }
 
 /// Lightweight struct for inserting a new rule.
-#[derive(Debug, Clone)]
+// `PartialEq` so an import round trip can be asserted whole rather than field
+// by field; not `Eq`, because the confidence bounds are `f64`.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NewAlertRule {
     /// Human-readable rule name.
     pub name: String,
@@ -1017,5 +1266,178 @@ mod tests {
         };
         let rendered = format!("{header:?}");
         assert!(rendered.contains("X-API-Key"), "{rendered}");
+    }
+
+    // ── export / import ─────────────────────────────────────────────────
+
+    /// A rule with every field set to something distinguishable.
+    fn full_rule(auth: Option<WebhookAuth>) -> AlertRule {
+        AlertRule {
+            id: 7,
+            name: "Owls at night".into(),
+            enabled: false,
+            species_pattern: Some("Strix*".into()),
+            confidence_min: 0.65,
+            confidence_max: 0.95,
+            hour_start: Some(22),
+            hour_end: Some(4),
+            days_of_week: Some("1,2,3".into()),
+            action: AlertAction::Webhook {
+                url: "https://ha.lan/api/webhook/xyz".into(),
+                method: "GET".into(),
+                body_template: Some("{\"b\":\"{{species}}\"}".into()),
+                auth,
+            },
+        }
+    }
+
+    #[test]
+    fn an_export_with_secrets_round_trips_every_field() {
+        // The backup-and-restore case. A field silently lost here is a rule
+        // that looks right in the list and matches something different.
+        let original = full_rule(Some(WebhookAuth::Bearer("tok_ABC".into())));
+        let imported = from_export(&to_export(&original, true)).expect("imports");
+        assert!(!imported.credential_was_redacted);
+
+        let restored = imported.rule;
+        assert_eq!(restored.name, original.name);
+        assert_eq!(restored.enabled, original.enabled);
+        assert_eq!(restored.species_pattern, original.species_pattern);
+        assert!((restored.confidence_min - original.confidence_min).abs() < f64::EPSILON);
+        assert!((restored.confidence_max - original.confidence_max).abs() < f64::EPSILON);
+        assert_eq!(restored.hour_start, original.hour_start);
+        assert_eq!(restored.hour_end, original.hour_end);
+        assert_eq!(restored.days_of_week, original.days_of_week);
+        assert_eq!(restored.action, original.action);
+    }
+
+    #[test]
+    fn a_redacted_export_carries_no_credential_but_still_says_there_was_one() {
+        // The share-when-asking-for-help case: the reader can see that the
+        // rule authenticates, and how, without the file being a secret.
+        let e = to_export(
+            &full_rule(Some(WebhookAuth::Bearer("tok_ABC".into()))),
+            false,
+        );
+        assert_eq!(e.webhook_auth_kind.as_deref(), Some("bearer"));
+        assert_eq!(e.webhook_auth_value.as_deref(), Some(REDACTED));
+        let rendered = format!("{e:?}");
+        assert!(!rendered.contains("tok_ABC"), "{rendered}");
+    }
+
+    #[test]
+    fn a_redacted_header_export_keeps_the_header_name_and_drops_the_value() {
+        // Counterpart on the other half of the pair: the header *name* is not
+        // a secret and is the part that makes the export intelligible.
+        let e = to_export(
+            &full_rule(Some(WebhookAuth::Header {
+                name: "X-API-Key".into(),
+                value: "k_SECRET".into(),
+            })),
+            false,
+        );
+        assert_eq!(e.webhook_header_name.as_deref(), Some("X-API-Key"));
+        assert_eq!(e.webhook_auth_value.as_deref(), Some(REDACTED));
+        assert!(!format!("{e:?}").contains("k_SECRET"));
+    }
+
+    #[test]
+    fn importing_a_redacted_rule_keeps_it_and_reports_the_missing_credential() {
+        // Dropping the whole rule would lose the conditions and the URL, which
+        // are the laborious part; importing it silently authenticated with the
+        // literal "***REDACTED***" would be worse still.
+        let imported = from_export(&to_export(
+            &full_rule(Some(WebhookAuth::Bearer("t".into()))),
+            false,
+        ))
+        .expect("imports");
+        assert!(imported.credential_was_redacted, "the caller is not told");
+        let AlertAction::Webhook { auth, url, .. } = &imported.rule.action else {
+            panic!("not a webhook");
+        };
+        assert_eq!(*auth, None, "the placeholder was imported as a credential");
+        assert_eq!(url, "https://ha.lan/api/webhook/xyz", "the URL was lost");
+    }
+
+    #[test]
+    fn a_rule_that_never_had_a_credential_is_not_reported_as_needing_one() {
+        // Counterpart: a flag that was always true would make the import
+        // warning meaningless, and every log-action rule would claim to need
+        // a credential.
+        for auth in [None, Some(WebhookAuth::Bearer("t".into()))] {
+            let redacted = auth.is_some();
+            let imported = from_export(&to_export(&full_rule(auth), true)).expect("imports");
+            assert!(
+                !imported.credential_was_redacted,
+                "an unredacted export should never report a missing credential \
+                 (had auth: {redacted})"
+            );
+        }
+    }
+
+    #[test]
+    fn the_non_webhook_actions_survive_the_round_trip() {
+        for action in [AlertAction::Log, AlertAction::Suppress] {
+            let mut rule = full_rule(None);
+            rule.action = action.clone();
+            let imported = from_export(&to_export(&rule, true)).expect("imports");
+            assert_eq!(imported.rule.action, action);
+        }
+    }
+
+    #[test]
+    fn an_unusable_entry_is_rejected_rather_than_imported_broken() {
+        let base = to_export(&full_rule(None), true);
+
+        let mut nameless = base.clone();
+        nameless.name = "   ".into();
+        assert_eq!(from_export(&nameless), Err(ImportRejection::NoName));
+
+        let mut no_url = base.clone();
+        no_url.webhook_url = None;
+        assert_eq!(
+            from_export(&no_url),
+            Err(ImportRejection::WebhookWithoutUrl("Owls at night".into()))
+        );
+
+        let mut nonsense = base;
+        nonsense.action = "launch_missiles".into();
+        assert_eq!(
+            from_export(&nonsense),
+            Err(ImportRejection::UnknownAction {
+                name: "Owls at night".into(),
+                action: "launch_missiles".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_rejection_message_never_quotes_the_rules_credential() {
+        // Import errors are rendered into the admin page and written to the
+        // log. `ImportRejection` carries the rule name, which is operator-
+        // chosen, and nothing else from the entry.
+        let mut e = to_export(
+            &full_rule(Some(WebhookAuth::Bearer("SUPERSECRETTOKEN".into()))),
+            true,
+        );
+        e.action = "nonsense".into();
+        let err = from_export(&e).expect_err("rejected");
+        let rendered = format!("{err} {err:?}");
+        assert!(!rendered.contains("SUPERSECRETTOKEN"), "{rendered}");
+    }
+
+    #[test]
+    fn out_of_range_values_in_a_hand_edited_file_are_clamped_or_dropped() {
+        // These files are meant to be hand-edited, so the importer is the
+        // boundary. A confidence of 5.0 would make a rule that never matches;
+        // an hour of 30 would make a window that never opens.
+        let mut e = to_export(&full_rule(None), true);
+        e.confidence_min = -3.0;
+        e.confidence_max = 5.0;
+        e.hour_start = Some(30);
+        let r = from_export(&e).expect("imports").rule;
+        assert!((r.confidence_min - 0.0).abs() < f64::EPSILON);
+        assert!((r.confidence_max - 1.0).abs() < f64::EPSILON);
+        assert_eq!(r.hour_start, None);
     }
 }

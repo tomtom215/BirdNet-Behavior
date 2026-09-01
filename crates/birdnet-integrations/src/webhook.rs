@@ -1,17 +1,24 @@
 //! Alert-rule webhook dispatch: the request-shape decision (pure) and the
 //! network send (the only non-pure step).
+//!
+//! Lives here rather than in the daemon because two callers need it: the
+//! detection processor, which fires a rule when a detection matches, and the
+//! admin "Test" button, which fires the same request on demand so an operator
+//! can find out their endpoint is wrong before a bird does.
 
 use birdnet_db::alert_rules::WebhookAuth;
 
-/// The wire-level shape of an outbound webhook request: method, body, and
-/// content-type. Built by [`build_webhook_spec`] from operator-supplied
-/// rule config, then handed to [`dispatch_webhook`] for the actual send.
+/// The wire-level shape of an outbound webhook request.
+///
+/// Method, body and content-type, built by [`build_webhook_spec`] from
+/// operator-supplied rule config, then handed to [`dispatch_webhook`] for the
+/// actual send.
 ///
 /// Returned as a value (rather than wired into `reqwest::RequestBuilder`
 /// directly) so the request shape can be tested without building a
 /// reqwest client or hitting the network.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WebhookSpec {
+pub struct WebhookSpec {
     /// HTTP verb. `Get` carries no body; `Post` carries a JSON body.
     pub method: WebhookMethod,
     /// JSON body sent with `Post`. Defaults to `"{}"` when the operator
@@ -22,7 +29,7 @@ pub(super) struct WebhookSpec {
 
 /// Webhook HTTP method picked from the operator's alert-rule config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WebhookMethod {
+pub enum WebhookMethod {
     /// `GET` — used when the operator's rule has `method = "GET"`
     /// (case-insensitive). The body is ignored.
     Get,
@@ -44,7 +51,7 @@ pub(super) enum WebhookMethod {
 /// alert-rule schema documents only `GET` and `POST` and we want the
 /// safe default for misconfigured rules.
 #[must_use]
-pub(super) fn build_webhook_spec(method: &str, body: Option<&str>) -> WebhookSpec {
+pub fn build_webhook_spec(method: &str, body: Option<&str>) -> WebhookSpec {
     if method.eq_ignore_ascii_case("GET") {
         WebhookSpec {
             method: WebhookMethod::Get,
@@ -67,7 +74,7 @@ pub(super) fn build_webhook_spec(method: &str, body: Option<&str>) -> WebhookSpe
 /// * The caller can react to specific failure modes if it ever wants
 ///   to (today it just logs, but the surface is there).
 #[derive(Debug)]
-pub(super) enum WebhookError {
+pub enum WebhookError {
     /// Building the reqwest client failed (TLS init, system DNS, etc.).
     ClientBuild(String),
     /// The request was sent but the network or the remote rejected it.
@@ -92,7 +99,13 @@ impl std::error::Error for WebhookError {}
 /// [`build_webhook_spec`], which is unit-tested. This function's body is
 /// dominated by the network call; returning `Result<u16, WebhookError>`
 /// makes the body-replacement cargo-mutants unviable.
-pub(super) async fn dispatch_webhook(
+///
+/// # Errors
+///
+/// Returns [`WebhookError::ClientBuild`] if the HTTP client cannot be built,
+/// or [`WebhookError::Send`] if the request does not complete. Neither message
+/// carries the URL, which for a webhook is frequently the credential.
+pub async fn dispatch_webhook(
     url: &str,
     method: &str,
     body: Option<&str>,
@@ -135,7 +148,7 @@ pub(super) async fn dispatch_webhook(
 /// The path and query of a webhook URL are where the secret lives, and the
 /// dispatch log line names the rule and the target on every failure.
 #[must_use]
-pub(super) fn redact_url(url: &str) -> String {
+pub fn redact_url(url: &str) -> String {
     let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     // Userinfo is a credential too: `https://user:pass@host/...`.

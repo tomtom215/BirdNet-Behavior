@@ -41,7 +41,6 @@ mod config;
 pub use config::{resolve_confidence, resolve_station_coords};
 pub mod disposition;
 mod processor;
-mod webhook;
 
 #[cfg(test)]
 mod test_support;

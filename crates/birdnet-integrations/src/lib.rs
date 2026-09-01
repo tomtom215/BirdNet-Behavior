@@ -18,4 +18,5 @@ pub mod notification;
 mod retry;
 pub mod species_images;
 pub mod weather;
+pub mod webhook;
 pub mod weekly_report;

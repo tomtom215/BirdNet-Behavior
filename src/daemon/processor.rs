@@ -16,8 +16,8 @@ use super::disposition::{
     derive_source_label, is_first_detection_today, latency_ms_to_seconds, passes_filter,
     should_dispatch_notification,
 };
-use super::webhook::dispatch_webhook;
 use birdnet_db::notifications::NotifStatus;
+use birdnet_integrations::webhook::dispatch_webhook;
 
 use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
 
@@ -452,7 +452,7 @@ pub(super) fn event_processor(
                         let rule_name = rule.name.clone();
                         // The path and query of a webhook URL are where its
                         // secret lives, so the log names the host only.
-                        let target = crate::daemon::webhook::redact_url(&url);
+                        let target = birdnet_integrations::webhook::redact_url(&url);
                         rt_handle.spawn(async move {
                             match dispatch_webhook(&url, &method, body.as_deref(), auth.as_ref())
                                 .await

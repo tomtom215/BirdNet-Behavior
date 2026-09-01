@@ -63,3 +63,16 @@ Leaving the scheme on **None** keeps the request exactly as it was — which is
 what every rule created before this existed does. The credential is stored in
 the station's own database, is never rendered back into the page, and is
 redacted from logs and from an exported rule set.
+
+**Test** on a rule fires its action once, immediately, with an unmistakably
+synthetic detection (`Test Detection (not a real bird)`) and reports the HTTP
+status. Finding out an endpoint is wrong is worth doing when the rule is
+written rather than the first time an owl calls at 3 a.m.
+
+**Export** downloads the whole rule set as JSON with every credential replaced
+by `***REDACTED***`, so it is safe to paste into a forum thread when asking for
+help. **Export with credentials** is the backup-and-restore form and that file
+is a secret. **Import** adds the rules in a pasted set — it never replaces what
+is already there — and names any rule whose credential arrived redacted, since
+those will fire unauthenticated until one is entered. One unusable entry is
+reported and skipped rather than discarding the rest of the paste.
