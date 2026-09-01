@@ -211,6 +211,11 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::Notifications,
     ),
     (
+        "notify_urls",
+        Wiring::Bridged("NOTIFY_URLS"),
+        SettingsCategory::Notifications,
+    ),
+    (
         "birdweather_token",
         Wiring::Bridged("BIRDWEATHER_TOKEN"),
         SettingsCategory::Notifications,

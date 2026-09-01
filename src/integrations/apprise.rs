@@ -1,8 +1,98 @@
 //! Apprise push-notification client construction.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::cli::Cli;
+
+/// Native destinations resolved from the operator's configuration.
+pub struct NativeRoutes {
+    /// Destinations delivered in-process.
+    pub routes: Vec<birdnet_integrations::dispatch::Route>,
+    /// Whether the `apprise` CLI must still run for the config file.
+    pub cli_fallback: bool,
+}
+
+/// Work out what can be delivered natively and what still needs Apprise.
+///
+/// `--notify-urls` is always native: a scheme with no native sender there is
+/// reported and dropped, because that flag exists precisely to avoid Apprise.
+///
+/// An Apprise **config file** is all-or-nothing. If every URL in it has a
+/// native sender the file is delivered in-process and the `apprise` CLI is
+/// never invoked. If even one does not, the whole file goes to the CLI — the
+/// CLI has no way to be told "send to all but these", so routing part of the
+/// file natively *and* running the CLI would deliver the rest twice.
+///
+/// A file that cannot be read is left to the CLI rather than assumed empty.
+fn native_routes(notify_urls: Option<&str>, config_file: Option<&Path>) -> NativeRoutes {
+    use birdnet_integrations::dispatch;
+
+    let mut routes = Vec::new();
+
+    if let Some(urls) = notify_urls {
+        let parsed = dispatch::routes(urls);
+        if !parsed.deferred.is_empty() {
+            tracing::warn!(
+                schemes = %parsed.deferred.join(", "),
+                "--notify-urls has no native sender for these schemes; \
+                 configure them in an Apprise config file instead"
+            );
+        }
+        for route in &parsed.native {
+            tracing::info!(destination = %route.label, "native notification destination");
+        }
+        routes.extend(parsed.native);
+    }
+
+    let Some(path) = config_file else {
+        return NativeRoutes {
+            routes,
+            cli_fallback: false,
+        };
+    };
+
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        tracing::debug!(
+            path = %path.display(),
+            "Apprise config file not readable here; leaving it to the apprise CLI"
+        );
+        return NativeRoutes {
+            routes,
+            cli_fallback: true,
+        };
+    };
+
+    let parsed = dispatch::routes(&contents);
+    if parsed.deferred.is_empty() && parsed.unparseable == 0 && !parsed.native.is_empty() {
+        for route in &parsed.native {
+            tracing::info!(destination = %route.label, "native notification destination");
+        }
+        routes.extend(parsed.native);
+        tracing::info!(
+            path = %path.display(),
+            "every URL in the Apprise config file is delivered natively; \
+             the apprise CLI will not be invoked"
+        );
+        return NativeRoutes {
+            routes,
+            cli_fallback: false,
+        };
+    }
+
+    if !parsed.deferred.is_empty() {
+        tracing::info!(
+            path = %path.display(),
+            schemes = %parsed.deferred.join(", "),
+            "Apprise config file contains schemes without a native sender; \
+             delivering the whole file through the apprise CLI"
+        );
+    }
+    NativeRoutes {
+        routes,
+        cli_fallback: true,
+    }
+}
 
 /// Type alias for the shared Apprise client handle.
 pub type AppriseHandle = Arc<tokio::sync::Mutex<birdnet_integrations::apprise::Client>>;
@@ -43,8 +133,16 @@ pub fn create_apprise_client(
         })
         .filter(|p| !p.as_os_str().is_empty());
 
-    // Need at least one of: URL or config file.
-    if apprise_url.is_none() && apprise_config_file.is_none() {
+    // Notification URLs delivered in-process. Apprise's syntax, none of its
+    // runtime: a station configured only with these needs no Python at all.
+    let notify_urls = cli
+        .notify_urls
+        .clone()
+        .or_else(|| config?.get("NOTIFY_URLS").map(String::from))
+        .and_then(nonblank);
+
+    // Need at least one of: native URLs, an Apprise server, or a config file.
+    if apprise_url.is_none() && apprise_config_file.is_none() && notify_urls.is_none() {
         return None;
     }
 
@@ -108,18 +206,32 @@ pub fn create_apprise_client(
         per_species_cooldown: std::collections::HashMap::new(),
     };
 
+    let native = native_routes(notify_urls.as_deref(), apprise_config_file.as_deref());
+
     let client_result = if url.is_empty() {
         // CLI-only mode: no HTTP server configured. The guard above already
         // returned `None` when neither a URL nor a config file survived
         // blank-trimming, so a blank URL here means a config file is present —
         // but say so with a `let ... else` rather than an `.expect`, because
         // the previous `.expect` was reachable and aborted startup.
-        #[allow(clippy::redundant_clone)] // else branch also borrows apprise_config_file
-        let cfg_path = apprise_config_file.clone()?;
-        tracing::info!(
-            path = %cfg_path.display(),
-            "Apprise CLI-only notifications enabled"
-        );
+        // No Apprise server. Either a config file, native URLs, or both.
+        // `new_cli_only` wants a path, so hand it the config file when there
+        // is one and a placeholder when the operator supplied only URLs — the
+        // CLI is not invoked in that case, because `cli_fallback` is false.
+        let cfg_path = apprise_config_file.unwrap_or_default();
+        if cfg_path.as_os_str().is_empty() {
+            tracing::info!(
+                destinations = native.routes.len(),
+                "native notifications enabled (no Apprise involved)"
+            );
+        } else {
+            tracing::info!(
+                path = %cfg_path.display(),
+                native = native.routes.len(),
+                apprise_cli = native.cli_fallback,
+                "Apprise CLI-only notifications enabled"
+            );
+        }
         birdnet_integrations::apprise::Client::new_cli_only(cfg_path, notify_config)
     } else {
         birdnet_integrations::apprise::Client::new(&url, notify_config).map(|c| {
@@ -145,7 +257,9 @@ pub fn create_apprise_client(
     };
 
     match client_result {
-        Ok(client) => Some(Arc::new(tokio::sync::Mutex::new(client))),
+        Ok(client) => Some(Arc::new(tokio::sync::Mutex::new(
+            client.with_native_routes(native.routes, native.cli_fallback),
+        ))),
         Err(e) => {
             tracing::error!(error = %e, "failed to create Apprise client");
             None
@@ -302,5 +416,110 @@ mod tests {
         let mut cli = default_cli();
         cli.apprise_config = Some(tmp.path().to_path_buf());
         assert!(create_apprise_client(&cli, None).is_some());
+    }
+
+    // ── native routing vs. the apprise CLI ──────────────────────────────
+    //
+    // The rule these pin: an Apprise config file is all-or-nothing. Getting
+    // this wrong is silent in both directions — half the file delivered twice,
+    // or half of it never delivered at all.
+
+    use std::io::Write as _;
+
+    /// Write `contents` to a temp file and resolve its routes.
+    fn routes_for_file(contents: &str) -> super::NativeRoutes {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(contents.as_bytes()).unwrap();
+        f.flush().unwrap();
+        super::native_routes(None, Some(f.path()))
+    }
+
+    #[test]
+    fn a_config_file_of_only_native_schemes_does_not_need_the_apprise_cli() {
+        let r = routes_for_file(
+            "discord://1234/abcd\n\
+             ntfy://my-garden\n\
+             # a comment\n\
+             tgram://999:secret/12315544\n",
+        );
+        assert_eq!(r.routes.len(), 3);
+        assert!(
+            !r.cli_fallback,
+            "with every URL delivered natively the apprise CLI must not run too"
+        );
+    }
+
+    #[test]
+    fn one_unsupported_scheme_sends_the_whole_file_through_the_cli() {
+        // Counterpart to the gate above, and the reason it is all-or-nothing:
+        // `apprise -c file` sends to every URL in the file. Routing the two
+        // native ones here *and* running the CLI would deliver them twice.
+        let r = routes_for_file(
+            "discord://1234/abcd\n\
+             ntfy://my-garden\n\
+             matrix://user:pass@matrix.org/#birds\n",
+        );
+        assert!(
+            r.routes.is_empty(),
+            "nothing may be routed natively when the CLI still has to run"
+        );
+        assert!(r.cli_fallback);
+    }
+
+    #[test]
+    fn an_unreadable_config_file_is_left_to_the_cli() {
+        // Assuming an empty file would silently disable every channel in it.
+        let r = super::native_routes(None, Some(std::path::Path::new("/nonexistent/apprise.yml")));
+        assert!(r.routes.is_empty());
+        assert!(r.cli_fallback, "an unread file must not be assumed empty");
+    }
+
+    #[test]
+    fn notify_urls_alone_never_invokes_the_cli() {
+        let r = super::native_routes(Some("discord://1234/abcd,ntfy://garden"), None);
+        assert_eq!(r.routes.len(), 2);
+        assert!(!r.cli_fallback);
+    }
+
+    #[test]
+    fn an_unsupported_scheme_in_notify_urls_is_dropped_not_smuggled_to_the_cli() {
+        // `--notify-urls` exists to avoid Apprise, so it cannot quietly turn
+        // the CLI back on; the startup warning is what tells the operator.
+        let r = super::native_routes(Some("mailto://user:pass@gmail.com"), None);
+        assert!(r.routes.is_empty());
+        assert!(!r.cli_fallback);
+    }
+
+    #[test]
+    fn notify_urls_alone_builds_a_client() {
+        // Before this, the constructor returned `None` unless an Apprise URL
+        // or config file was set, so a station configured only with native
+        // URLs would have sent nothing at all.
+        let mut cli = default_cli();
+        cli.notify_urls = Some("ntfy://my-garden".to_owned());
+        assert!(create_apprise_client(&cli, None).is_some());
+    }
+
+    #[test]
+    fn the_client_reports_whether_apprise_is_needed() {
+        let mut cli = default_cli();
+        cli.notify_urls = Some("discord://1234/abcd".to_owned());
+        let handle = create_apprise_client(&cli, None).expect("client");
+        let (labels, needs_cli) = {
+            let client = handle.blocking_lock();
+            (
+                client
+                    .native_labels()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                client.needs_apprise_cli(),
+            )
+        };
+        assert_eq!(labels, ["discord"]);
+        assert!(
+            !needs_cli,
+            "a station configured only with native URLs must not shell out"
+        );
     }
 }

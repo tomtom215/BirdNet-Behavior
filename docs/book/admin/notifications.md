@@ -10,7 +10,18 @@ The **Notifications** page (`/notifications`) shows your channels and a log of r
 
 ## Channels
 
-- **Apprise** — one URL string unlocks 80+ services (Telegram, Slack, Discord, Pushover, ntfy, email, and more). Set it under Settings → Notifications, or with `BIRDNET_APPRISE_URL`.
+- **Direct push** — paste one or more notification URLs under Settings →
+  Notifications ("Notification URLs"), or set `BIRDNET_NOTIFY_URLS`. The syntax
+  is Apprise's, so anything you already have written down works, but the station
+  sends it itself: no Python, no `apprise` binary, no subprocess per detection.
+  Handled natively: `discord://`, `slack://`, `tgram://`, `ntfy://`/`ntfys://`,
+  `gotify://`/`gotifys://`, `pover://`, and `json://`/`jsons://` for a plain
+  webhook.
+- **Apprise** — for the other ~70 services. Point `BIRDNET_APPRISE_URL` at an
+  [Apprise API server](https://github.com/caronc/apprise-api), or
+  `BIRDNET_APPRISE_CONFIG` at an `apprise` config file. If every URL in that
+  file is one of the schemes above, the `apprise` CLI is never invoked and you
+  do not need it installed.
 - **Email** — direct SMTP/STARTTLS with a per-species cooldown, configured under Settings → Notifications.
 - **BirdWeather** — upload detections to your BirdWeather station. Set the token under Settings → Notifications, or with `BIRDNET_BIRDWEATHER_TOKEN`.
 

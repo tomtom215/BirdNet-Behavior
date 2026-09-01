@@ -363,6 +363,11 @@ fn build_settings_items(
         SettingsCategory::Notifications
     );
     push!(
+        form.notify_urls,
+        "notify_urls",
+        SettingsCategory::Notifications
+    );
+    push!(
         form.birdweather_token,
         "birdweather_token",
         SettingsCategory::Notifications
@@ -569,6 +574,7 @@ mod tests {
             privacy_threshold: None,
             apprise_url: None,
             apprise_config: None,
+            notify_urls: None,
             birdweather_token: None,
             notify_confidence: None,
             notify_cooldown: None,

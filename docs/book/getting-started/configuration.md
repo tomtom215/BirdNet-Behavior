@@ -31,6 +31,7 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_METADATA_LABELS` | `--metadata-labels` | `METADATA_LABELS_PATH` | set by the installer / entrypoint |
 | `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` (no effect without a metadata model) |
 | `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
+| `BIRDNET_NOTIFY_URLS` | `--notify-urls` | `NOTIFY_URLS` | — |
 | `BIRDNET_APPRISE_URL` | `--apprise-url` | `APPRISE_URL` | — |
 | `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | — | `0.8` |
 | `BIRDNET_DEADMAN_HOURS` | `--deadman-hours` | `DEADMAN_HOURS` | `24` (`0` = off) |

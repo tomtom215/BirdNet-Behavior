@@ -40,6 +40,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     // Notifications
     "apprise_url",
     "apprise_config",
+    "notify_urls",
     "birdweather_token",
     "notify_confidence",
     "notify_cooldown",
@@ -134,6 +135,8 @@ pub struct SettingsForm {
     pub apprise_url: Option<String>,
     /// Path to an Apprise YAML config file on the station filesystem.
     pub apprise_config: Option<String>,
+    /// Notification URLs delivered in-process, one per line.
+    pub notify_urls: Option<String>,
     /// BirdWeather station token for uploading detections to the BirdWeather community map.
     pub birdweather_token: Option<String>,
     /// Minimum confidence (0.0–1.0) required to trigger a notification.

@@ -320,6 +320,17 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_APPRISE_URL")]
     pub apprise_url: Option<String>,
 
+    /// Notification URLs delivered in-process, comma- or newline-separated.
+    ///
+    /// Uses Apprise's URL syntax — `discord://{id}/{token}`,
+    /// `tgram://{bot_token}/{chat_id}`, `ntfy://{topic}`,
+    /// `gotify://{host}/{token}`, `pover://{user}@{token}`,
+    /// `slack://{a}/{b}/{c}`, `jsons://{host}/{path}` — but sends them
+    /// directly, so no Apprise installation is involved. A scheme without a
+    /// native sender is reported once at startup and needs `--apprise-config`.
+    #[arg(long, env = "BIRDNET_NOTIFY_URLS")]
+    pub notify_urls: Option<String>,
+
     /// Minimum confidence threshold for Apprise notifications (0.0–1.0).
     #[arg(long, default_value = "0.8", env = "BIRDNET_NOTIFY_CONFIDENCE")]
     pub notify_confidence: f32,

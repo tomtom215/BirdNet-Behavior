@@ -16,7 +16,9 @@ birdnet-db.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-reqwest = { workspace = true, features = ["blocking", "json"] }
+# `form` is for Pushover, whose API takes url-encoded parameters rather than
+# JSON; reqwest 0.13 gates `RequestBuilder::form` behind it.
+reqwest = { workspace = true, features = ["blocking", "json", "form"] }
 tokio.workspace = true
 lettre.workspace = true
 # SHA-256 verification of downloaded auto-update archives against the

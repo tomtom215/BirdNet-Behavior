@@ -37,7 +37,7 @@ pub(crate) const SECTIONS: [(&str, &str); 8] = [
     ("audio", "Audio Capture"),
     ("location", "Location &amp; Recording Schedule"),
     ("detection", "Detection Settings"),
-    ("notifications", "Notifications (Apprise)"),
+    ("notifications", "Notifications"),
     ("species", "Species Filters"),
     ("system", "System &amp; Display"),
     ("auth", "Web Authentication"),
