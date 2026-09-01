@@ -45,6 +45,16 @@ trap 'rm -rf "${WORK}"' EXIT
 # root and are not what this test is about. `birdnet-behavior` and `date` are
 # stubbed to sentinels: if the heredoc ever executes prose again, the sentinel
 # lands in the file and the grep below sees it.
+# `write_config` is pulled in below by `source <(sed ...)`, a process
+# substitution the linter cannot follow even with `-x`. Every variable this
+# function assigns is read by it (installer/lib/62-config-file.sh), so they all
+# look assigned-and-never-used from here. The directive is scoped to this
+# function and to SC2034 alone, so a real finding anywhere else in this file
+# still fails the build.
+#
+# (No line of this comment may begin with the linter's own name: it parses such
+# a line as a directive and errors on the prose.)
+# shellcheck disable=SC2034
 render() {
     local geo_installed="$1" dest="$2"
     (

@@ -490,7 +490,6 @@ dependencies = [
  "hound",
  "mdbook-driver",
  "proptest",
- "reqwest",
  "rusqlite",
  "serde_json",
  "tempfile",

@@ -296,7 +296,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-reqwest.workspace = true
 # Used by the `seed-demo-data` [[bin]] for direct SQL against the
 # demo-tagged `settings` row + assertions in the bin's tests. Already
 # a transitive dep via birdnet-db, so this is a visibility declaration
