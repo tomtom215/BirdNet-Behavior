@@ -1339,6 +1339,42 @@ pub const MIGRATIONS: &[Migration] = &[
 
         ANALYZE;",
     },
+    Migration {
+        version: 35,
+        description: "Let an alert-rule webhook authenticate, instead of only working against open endpoints",
+        // An alert rule could fire a webhook at any URL, but with no way to
+        // carry a credential. That restricted the feature to endpoints that
+        // authenticate by URL alone — a Slack or Discord webhook, or a
+        // home-LAN service with no auth at all. Anything with an API key
+        // (Home Assistant's `/api/webhook` is the common one, along with every
+        // hosted automation service) could not be targeted, and the operator's
+        // only recourse was to run their own unauthenticated relay.
+        //
+        // Three columns rather than one, because the three schemes put the
+        // credential in different places and folding them into a single
+        // "header line" field would mean parsing operator input to find out
+        // which one they meant:
+        //
+        //   kind = ''       no authentication (the existing behaviour)
+        //   kind = 'bearer' Authorization: Bearer <value>
+        //   kind = 'basic'  Authorization: Basic base64(<value>), value = user:password
+        //   kind = 'header' <name>: <value>
+        //
+        // `''` as the default is what makes this a no-op upgrade: every
+        // existing rule keeps sending exactly the request it sent before.
+        //
+        // The value is a secret at rest in the operator's own database, which
+        // is the same place the BirdWeather token and the session secret
+        // already live. What it must not do is escape from there: the rules
+        // export redacts it, the admin table never renders it, and the
+        // dispatch error path logs the rule name rather than the request.
+        up_sql: "ALTER TABLE alert_rules
+                     ADD COLUMN action_webhook_auth_kind TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE alert_rules
+                     ADD COLUMN action_webhook_auth_value TEXT;
+                 ALTER TABLE alert_rules
+                     ADD COLUMN action_webhook_header_name TEXT;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2448,5 +2484,55 @@ mod tests {
             ("2026-03-11".to_string(), "08:30:09".to_string()),
             "a row already on the new convention must not be shifted again"
         );
+    }
+
+    #[test]
+    fn migration_35_leaves_existing_webhook_rules_unauthenticated() {
+        // The no-op-upgrade guarantee. A station upgrading with live alert
+        // rules must keep sending exactly the request it sent before: the new
+        // columns default to "no credential", not to an empty one, because an
+        // empty `Authorization` header is rejected by some servers and counted
+        // as a failed login by others.
+        let conn = memory_db();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 35) {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO alert_rules
+                 (name, enabled, species_pattern, confidence_min, confidence_max,
+                  action_type, action_webhook_url, action_webhook_method)
+             VALUES ('legacy', 1, NULL, 0.0, 1.0, 'webhook', 'https://x/y', 'POST');",
+        )
+        .unwrap();
+
+        let m35 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 35)
+            .expect("migration 35 exists");
+        conn.execute_batch(m35.up_sql).unwrap();
+
+        let (kind, value, header): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT action_webhook_auth_kind, action_webhook_auth_value,
+                        action_webhook_header_name
+                   FROM alert_rules WHERE name = 'legacy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "", "a pre-existing rule must carry no auth scheme");
+        assert_eq!(value, None);
+        assert_eq!(header, None);
+
+        // And the row still loads as an unauthenticated webhook.
+        let rule = crate::alert_rules::list_rules(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.name == "legacy")
+            .expect("the rule survived the migration");
+        assert!(matches!(
+            rule.action,
+            crate::alert_rules::AlertAction::Webhook { auth: None, .. }
+        ));
     }
 }

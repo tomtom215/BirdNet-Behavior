@@ -434,6 +434,7 @@ pub(super) fn event_processor(
                         url,
                         method,
                         body_template,
+                        auth,
                     } => {
                         let body = body_template.as_deref().map(|tmpl| {
                             birdnet_db::alert_rules::render_webhook_body(
@@ -447,18 +448,24 @@ pub(super) fn event_processor(
                         });
                         let url = url.clone();
                         let method = method.clone();
+                        let auth = auth.clone();
                         let rule_name = rule.name.clone();
+                        // The path and query of a webhook URL are where its
+                        // secret lives, so the log names the host only.
+                        let target = crate::daemon::webhook::redact_url(&url);
                         rt_handle.spawn(async move {
-                            match dispatch_webhook(&url, &method, body.as_deref()).await {
+                            match dispatch_webhook(&url, &method, body.as_deref(), auth.as_ref())
+                                .await
+                            {
                                 Ok(status) => tracing::debug!(
                                     rule = %rule_name,
-                                    url,
+                                    target,
                                     status,
                                     "webhook dispatched"
                                 ),
                                 Err(e) => tracing::warn!(
                                     rule = %rule_name,
-                                    url,
+                                    target,
                                     error = %e,
                                     "webhook dispatch failed"
                                 ),
@@ -1243,6 +1250,7 @@ mod tests {
                         url: "http://198.51.100.1:1/".to_owned(),
                         method: "POST".to_owned(),
                         body_template: Some("{\"species\":\"{{species}}\"}".to_owned()),
+                        auth: None,
                     },
                 ),
             )

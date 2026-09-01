@@ -29,6 +29,7 @@
 //!         url: "https://example.com/hook".into(),
 //!         method: "POST".into(),
 //!         body_template: None,
+//!         auth: None,
 //!     },
 //! };
 //!
@@ -80,6 +81,98 @@ impl From<rusqlite::Error> for AlertRuleError {
 // Types
 // ---------------------------------------------------------------------------
 
+/// How an alert-rule webhook authenticates.
+///
+/// `Debug` is written by hand: this type is embedded in [`AlertAction`], which
+/// is `Debug`-formatted into logs and error messages, and a derived
+/// implementation would print the credential in every one of them.
+#[derive(Clone, PartialEq, Eq)]
+pub enum WebhookAuth {
+    /// `Authorization: Bearer <token>`.
+    Bearer(String),
+    /// `Authorization: Basic base64(user:password)`.
+    Basic {
+        /// Username.
+        user: String,
+        /// Password.
+        password: String,
+    },
+    /// A named header, for services with their own scheme
+    /// (`X-API-Key`, `X-Webhook-Token`, …).
+    Header {
+        /// Header name. Not a secret.
+        name: String,
+        /// Header value.
+        value: String,
+    },
+}
+
+impl fmt::Debug for WebhookAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bearer(_) => write!(f, "Bearer(<redacted>)"),
+            Self::Basic { user, .. } => {
+                write!(f, "Basic {{ user: {user:?}, password: <redacted> }}")
+            }
+            Self::Header { name, .. } => {
+                write!(f, "Header {{ name: {name:?}, value: <redacted> }}")
+            }
+        }
+    }
+}
+
+impl WebhookAuth {
+    /// The `action_webhook_auth_kind` column value.
+    #[must_use]
+    pub const fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Bearer(_) => "bearer",
+            Self::Basic { .. } => "basic",
+            Self::Header { .. } => "header",
+        }
+    }
+
+    /// Rebuild from the three stored columns.
+    ///
+    /// Returns `None` for an unknown kind or a missing value, which is what a
+    /// row written by a newer binary and read by an older one looks like: the
+    /// rule then fires unauthenticated rather than not at all.
+    #[must_use]
+    pub fn from_columns(
+        kind: &str,
+        value: Option<&str>,
+        header_name: Option<&str>,
+    ) -> Option<Self> {
+        let value = value?;
+        match kind {
+            "bearer" => Some(Self::Bearer(value.to_string())),
+            "basic" => {
+                let (user, password) = value.split_once(':')?;
+                Some(Self::Basic {
+                    user: user.to_string(),
+                    password: password.to_string(),
+                })
+            }
+            "header" => Some(Self::Header {
+                name: header_name.filter(|n| !n.is_empty())?.to_string(),
+                value: value.to_string(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// The `action_webhook_auth_value` and `action_webhook_header_name`
+    /// column values.
+    #[must_use]
+    pub fn to_columns(&self) -> (String, Option<String>) {
+        match self {
+            Self::Bearer(t) => (t.clone(), None),
+            Self::Basic { user, password } => (format!("{user}:{password}"), None),
+            Self::Header { name, value } => (value.clone(), Some(name.clone())),
+        }
+    }
+}
+
 /// The action executed when a rule's conditions are met.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlertAction {
@@ -92,6 +185,9 @@ pub enum AlertAction {
         /// Optional body template. Placeholders: `{{species}}`, `{{sci_name}}`,
         /// `{{confidence}}`, `{{date}}`, `{{time}}`.
         body_template: Option<String>,
+        /// Optional credential. `None` sends the request unauthenticated,
+        /// which is what every rule written before this existed does.
+        auth: Option<WebhookAuth>,
     },
     /// Emit a structured log entry at `INFO` level.
     Log,
@@ -287,7 +383,9 @@ pub fn list_rules(conn: &Connection) -> Result<Vec<AlertRule>, AlertRuleError> {
     let mut stmt = conn.prepare(
         "SELECT id, name, enabled, species_pattern, confidence_min, confidence_max,
                 hour_start, hour_end, days_of_week,
-                action_type, action_webhook_url, action_webhook_method, action_webhook_body
+                action_type, action_webhook_url, action_webhook_method, action_webhook_body,
+                action_webhook_auth_kind, action_webhook_auth_value,
+                action_webhook_header_name
          FROM alert_rules ORDER BY id",
     )?;
 
@@ -297,12 +395,20 @@ pub fn list_rules(conn: &Connection) -> Result<Vec<AlertRule>, AlertRuleError> {
             let webhook_url: Option<String> = row.get(10)?;
             let webhook_method: String = row.get(11)?;
             let webhook_body: Option<String> = row.get(12)?;
+            let auth_kind: String = row.get(13)?;
+            let auth_value: Option<String> = row.get(14)?;
+            let header_name: Option<String> = row.get(15)?;
 
             let action = match action_type.as_str() {
                 "webhook" => AlertAction::Webhook {
                     url: webhook_url.unwrap_or_default(),
                     method: webhook_method,
                     body_template: webhook_body,
+                    auth: WebhookAuth::from_columns(
+                        &auth_kind,
+                        auth_value.as_deref(),
+                        header_name.as_deref(),
+                    ),
                 },
                 "suppress" => AlertAction::Suppress,
                 _ => AlertAction::Log,
@@ -348,25 +454,34 @@ pub fn get_rule(conn: &Connection, id: i64) -> Result<Option<AlertRule>, AlertRu
 ///
 /// Returns `AlertRuleError` on constraint or DB failure.
 pub fn insert_rule(conn: &Connection, rule: &NewAlertRule) -> Result<i64, AlertRuleError> {
-    let (url, method, body) = match &rule.action {
+    let (url, method, body, auth) = match &rule.action {
         AlertAction::Webhook {
             url,
             method,
             body_template,
+            auth,
         } => (
             Some(url.as_str()),
             method.as_str(),
             body_template.as_deref(),
+            auth.as_ref(),
         ),
-        _ => (None, "POST", None),
+        _ => (None, "POST", None, None),
     };
+    let auth_kind = auth.map_or("", WebhookAuth::kind_str);
+    let (auth_value, header_name) = auth.map_or((None, None), |a| {
+        let (v, n) = a.to_columns();
+        (Some(v), n)
+    });
 
     conn.execute(
         "INSERT INTO alert_rules
              (name, enabled, species_pattern, confidence_min, confidence_max,
               hour_start, hour_end, days_of_week,
-              action_type, action_webhook_url, action_webhook_method, action_webhook_body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              action_type, action_webhook_url, action_webhook_method, action_webhook_body,
+              action_webhook_auth_kind, action_webhook_auth_value,
+              action_webhook_header_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             rule.name,
             i64::from(rule.enabled),
@@ -380,6 +495,9 @@ pub fn insert_rule(conn: &Connection, rule: &NewAlertRule) -> Result<i64, AlertR
             url,
             method,
             body,
+            auth_kind,
+            auth_value,
+            header_name,
         ],
     )?;
 
@@ -497,6 +615,7 @@ mod tests {
                 url: "https://example.com/hook".into(),
                 method: "POST".into(),
                 body_template: None,
+                auth: None,
             },
         }
     }
@@ -714,5 +833,189 @@ mod tests {
         );
         assert!(out.contains("Barn Owl"));
         assert!(out.contains("0.9234"));
+    }
+
+    // ── webhook authentication (migration 35) ───────────────────────────
+
+    /// A webhook rule carrying `auth`.
+    fn authed_rule(name: &str, auth: Option<WebhookAuth>) -> NewAlertRule {
+        NewAlertRule {
+            name: name.to_owned(),
+            enabled: true,
+            species_pattern: None,
+            confidence_min: 0.0,
+            confidence_max: 1.0,
+            hour_start: None,
+            hour_end: None,
+            days_of_week: None,
+            action: AlertAction::Webhook {
+                url: "https://ha.lan/api/webhook/abc".into(),
+                method: "POST".into(),
+                body_template: None,
+                auth,
+            },
+        }
+    }
+
+    /// The action stored for `name`.
+    fn stored_action(conn: &Connection, name: &str) -> AlertAction {
+        list_rules(conn)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.name == name)
+            .expect("rule was inserted")
+            .action
+    }
+
+    #[test]
+    fn every_auth_scheme_survives_a_round_trip() {
+        let conn = memory_db();
+        let cases = [
+            ("bearer", WebhookAuth::Bearer("tok_ABC123".into())),
+            (
+                "basic",
+                WebhookAuth::Basic {
+                    user: "ada".into(),
+                    password: "hunter2".into(),
+                },
+            ),
+            (
+                "header",
+                WebhookAuth::Header {
+                    name: "X-API-Key".into(),
+                    value: "k_XYZ".into(),
+                },
+            ),
+        ];
+        for (name, auth) in cases {
+            insert_rule(&conn, &authed_rule(name, Some(auth.clone()))).unwrap();
+            let AlertAction::Webhook { auth: stored, .. } = stored_action(&conn, name) else {
+                panic!("{name} did not come back as a webhook");
+            };
+            assert_eq!(stored, Some(auth), "{name} did not survive the round trip");
+        }
+    }
+
+    #[test]
+    fn a_basic_password_containing_a_colon_survives() {
+        // `user:password` is packed into one column, so the split must be on
+        // the *first* colon. A generated password with a colon in it would
+        // otherwise come back truncated and fail to authenticate — which the
+        // operator would see only as a 401 in the log.
+        let conn = memory_db();
+        insert_rule(
+            &conn,
+            &authed_rule(
+                "colon",
+                Some(WebhookAuth::Basic {
+                    user: "ada".into(),
+                    password: "a:b:c".into(),
+                }),
+            ),
+        )
+        .unwrap();
+        let AlertAction::Webhook { auth, .. } = stored_action(&conn, "colon") else {
+            panic!("not a webhook");
+        };
+        assert_eq!(
+            auth,
+            Some(WebhookAuth::Basic {
+                user: "ada".into(),
+                password: "a:b:c".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_rule_without_auth_still_stores_and_loads_as_unauthenticated() {
+        // The no-op-upgrade guarantee: every rule written before migration 35
+        // must keep sending exactly the request it sent before.
+        let conn = memory_db();
+        insert_rule(&conn, &authed_rule("plain", None)).unwrap();
+        let AlertAction::Webhook { auth, .. } = stored_action(&conn, "plain") else {
+            panic!("not a webhook");
+        };
+        assert_eq!(auth, None);
+    }
+
+    #[test]
+    fn a_row_with_a_kind_but_no_value_loads_as_unauthenticated() {
+        // What a row written by a newer binary looks like to an older one, and
+        // what a hand-edited database can hold. Firing the rule without the
+        // credential is better than the alternatives: refusing to load the
+        // rule would silently disable an operator's alerting.
+        let conn = memory_db();
+        insert_rule(&conn, &authed_rule("partial", None)).unwrap();
+        conn.execute(
+            "UPDATE alert_rules SET action_webhook_auth_kind = 'bearer' WHERE name = 'partial'",
+            [],
+        )
+        .unwrap();
+        let AlertAction::Webhook { auth, .. } = stored_action(&conn, "partial") else {
+            panic!("not a webhook");
+        };
+        assert_eq!(auth, None);
+
+        // ...and an unknown scheme name does the same rather than panicking.
+        conn.execute(
+            "UPDATE alert_rules
+                SET action_webhook_auth_kind = 'oauth3', action_webhook_auth_value = 'x'
+              WHERE name = 'partial'",
+            [],
+        )
+        .unwrap();
+        let AlertAction::Webhook { auth, .. } = stored_action(&conn, "partial") else {
+            panic!("not a webhook");
+        };
+        assert_eq!(auth, None);
+    }
+
+    #[test]
+    fn debugging_an_alert_rule_never_prints_its_credential() {
+        // `AlertRule` is `Debug`-formatted into log lines and error messages,
+        // and the rules list is dumped wholesale in more than one diagnostic.
+        // A derived `Debug` on `WebhookAuth` would put a live API key in every
+        // one of them, and into any support bundle taken afterwards.
+        let secrets = [
+            WebhookAuth::Bearer("SUPERSECRETTOKEN".into()),
+            WebhookAuth::Basic {
+                user: "ada".into(),
+                password: "SUPERSECRETPASSWORD".into(),
+            },
+            WebhookAuth::Header {
+                name: "X-API-Key".into(),
+                value: "SUPERSECRETKEY".into(),
+            },
+        ];
+        for auth in secrets {
+            let rule = authed_rule("dbg", Some(auth.clone()));
+            let rendered = format!("{:?} {:#?}", rule.action, rule.action);
+            for needle in ["SUPERSECRETTOKEN", "SUPERSECRETPASSWORD", "SUPERSECRETKEY"] {
+                assert!(
+                    !rendered.contains(needle),
+                    "{auth:?} leaked its credential: {rendered}"
+                );
+            }
+            // ...while still saying enough to debug with.
+            assert!(rendered.contains("redacted"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn the_non_secret_half_of_a_credential_is_still_visible() {
+        // Counterpart: a `Debug` that printed nothing at all would satisfy the
+        // gate above and leave an operator unable to tell which scheme or
+        // which header a failing rule was using.
+        let basic = WebhookAuth::Basic {
+            user: "ada".into(),
+            password: "hunter2".into(),
+        };
+        assert!(format!("{basic:?}").contains("ada"));
+        let header = WebhookAuth::Header {
+            name: "X-API-Key".into(),
+            value: "k".into(),
+        };
+        let rendered = format!("{header:?}");
+        assert!(rendered.contains("X-API-Key"), "{rendered}");
     }
 }

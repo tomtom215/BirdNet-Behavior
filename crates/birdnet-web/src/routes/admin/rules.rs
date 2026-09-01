@@ -26,7 +26,7 @@ use axum::{Form, Router, routing::get};
 use serde::Deserialize;
 
 use birdnet_db::alert_rules::{
-    AlertAction, NewAlertRule, delete_rule, insert_rule, list_rules, toggle_rule,
+    AlertAction, NewAlertRule, WebhookAuth, delete_rule, insert_rule, list_rules, toggle_rule,
 };
 
 use crate::routes::pages::escape_html;
@@ -72,6 +72,44 @@ struct RuleForm {
     action_webhook_url: Option<String>,
     action_webhook_method: Option<String>,
     action_webhook_body: Option<String>,
+    /// `""` / `bearer` / `basic` / `header`.
+    action_webhook_auth_kind: Option<String>,
+    /// The credential: a token, `user:password`, or a header value.
+    action_webhook_auth_value: Option<String>,
+    /// Header name, for `action_webhook_auth_kind = "header"`.
+    action_webhook_header_name: Option<String>,
+}
+
+/// Build the optional credential from the three form fields.
+///
+/// Returns `None` when no scheme is chosen or the credential is blank, so a
+/// half-filled form produces an unauthenticated rule rather than a request
+/// with an empty `Authorization` header — which some servers reject outright
+/// and others treat as a failed login attempt.
+fn webhook_auth_from_form(
+    kind: Option<&str>,
+    value: Option<&str>,
+    header_name: Option<&str>,
+) -> Option<WebhookAuth> {
+    let value = value.map(str::trim).filter(|v| !v.is_empty())?;
+    match kind.map(str::trim).unwrap_or_default() {
+        "bearer" => Some(WebhookAuth::Bearer(value.to_string())),
+        "basic" => {
+            let (user, password) = value.split_once(':')?;
+            Some(WebhookAuth::Basic {
+                user: user.to_string(),
+                password: password.to_string(),
+            })
+        }
+        "header" => Some(WebhookAuth::Header {
+            name: header_name
+                .map(str::trim)
+                .filter(|n| !n.is_empty())?
+                .to_string(),
+            value: value.to_string(),
+        }),
+        _ => None,
+    }
 }
 
 /// Locale-tolerant decimal parser for an `Option<String>` form field.
@@ -133,6 +171,11 @@ async fn create_rule(
                     .filter(|s| !s.trim().is_empty())
                     .unwrap_or_else(|| "POST".into()),
                 body_template: form.action_webhook_body.filter(|s| !s.trim().is_empty()),
+                auth: webhook_auth_from_form(
+                    form.action_webhook_auth_kind.as_deref(),
+                    form.action_webhook_auth_value.as_deref(),
+                    form.action_webhook_header_name.as_deref(),
+                ),
             }
         }
         "suppress" => AlertAction::Suppress,
@@ -350,6 +393,30 @@ pub(crate) fn rules_body() -> String {
             <div class="hint">Placeholders: {species}, {sci_name}, {confidence}, {date}, {time}</div>
           </div>
         </div>
+
+        <div class="form-grid">
+          <div>
+            <label for="action_webhook_auth_kind">Authentication</label>
+            <select id="action_webhook_auth_kind" name="action_webhook_auth_kind">
+              <option value="">None</option>
+              <option value="bearer">Bearer token</option>
+              <option value="basic">Basic (user:password)</option>
+              <option value="header">Custom header</option>
+            </select>
+          </div>
+          <div>
+            <label for="action_webhook_auth_value">Credential</label>
+            <input id="action_webhook_auth_value" name="action_webhook_auth_value"
+                   type="password" autocomplete="off" spellcheck="false"
+                   placeholder="token, or user:password">
+            <div class="hint">Stored in this station's database and never shown again.</div>
+          </div>
+        </div>
+        <div id="webhook-header-name-field">
+          <label for="action_webhook_header_name">Header Name</label>
+          <input id="action_webhook_header_name" name="action_webhook_header_name" type="text"
+                 placeholder="X-API-Key">
+        </div>
       </div>
 
       <div class="form-actions">
@@ -373,6 +440,16 @@ pub(crate) fn rules_body() -> String {
   document.getElementById('action_type').addEventListener('change', function() {
     document.getElementById('webhook-fields').style.display = this.value === 'webhook' ? 'block' : 'none';
   });
+  // Set from script rather than a `style` attribute: `style-src` carries no
+  // 'unsafe-inline', so an inline style would be dropped by CSP and the field
+  // would render visible for every scheme. CSSOM assignment is not blocked.
+  var authKind = document.getElementById('action_webhook_auth_kind');
+  var headerField = document.getElementById('webhook-header-name-field');
+  function syncHeaderNameField() {
+    headerField.style.display = authKind.value === 'header' ? 'block' : 'none';
+  }
+  authKind.addEventListener('change', syncHeaderNameField);
+  syncHeaderNameField();
 </script>"##
     .to_owned()
 }
@@ -529,5 +606,134 @@ mod tests {
         // No panic; 30 characters kept plus the ellipsis.
         assert!(out.ends_with('…'));
         assert_eq!(out.chars().filter(|&c| c != '…').count(), 30);
+    }
+
+    // ── webhook authentication, from the form ───────────────────────────
+
+    #[test]
+    fn each_scheme_is_built_from_the_form_fields() {
+        assert_eq!(
+            webhook_auth_from_form(Some("bearer"), Some("tok_ABC"), None),
+            Some(WebhookAuth::Bearer("tok_ABC".into()))
+        );
+        assert_eq!(
+            webhook_auth_from_form(Some("basic"), Some("ada:hunter2"), None),
+            Some(WebhookAuth::Basic {
+                user: "ada".into(),
+                password: "hunter2".into(),
+            })
+        );
+        assert_eq!(
+            webhook_auth_from_form(Some("header"), Some("k_XYZ"), Some("X-API-Key")),
+            Some(WebhookAuth::Header {
+                name: "X-API-Key".into(),
+                value: "k_XYZ".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_half_filled_form_produces_no_credential_rather_than_an_empty_one() {
+        // An empty or malformed `Authorization` header is not the same as
+        // none: some servers reject it outright, and others count it as a
+        // failed login attempt and lock the account after enough of them. The
+        // form is three optional fields, so every partial combination is
+        // reachable by an operator who changes the dropdown and saves.
+        let cases: [(Option<&str>, Option<&str>, Option<&str>); 7] = [
+            (None, None, None),                           // untouched
+            (Some("bearer"), None, None),                 // scheme, no token
+            (Some("bearer"), Some("   "), None),          // scheme, blank token
+            (Some(""), Some("tok_ABC"), None),            // token, no scheme
+            (Some("header"), Some("k_XYZ"), None),        // header value, no name
+            (Some("header"), Some("k_XYZ"), Some(" ")),   // header name blank
+            (Some("basic"), Some("no-colon-here"), None), // not user:password
+        ];
+        for (kind, value, header) in cases {
+            assert_eq!(
+                webhook_auth_from_form(kind, value, header),
+                None,
+                "{kind:?}/{value:?}/{header:?} should not produce a credential"
+            );
+        }
+    }
+
+    #[test]
+    fn a_basic_password_containing_a_colon_is_kept_whole() {
+        // Counterpart to the `no-colon-here` case above: the split is on the
+        // first colon only, so a generated password with colons in it works.
+        assert_eq!(
+            webhook_auth_from_form(Some("basic"), Some("ada:a:b:c"), None),
+            Some(WebhookAuth::Basic {
+                user: "ada".into(),
+                password: "a:b:c".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_unknown_scheme_produces_no_credential() {
+        assert_eq!(
+            webhook_auth_from_form(Some("oauth3"), Some("tok_ABC"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn the_rule_form_offers_every_scheme_the_dispatcher_implements() {
+        // The dropdown and `webhook_auth_from_form` are edited separately; a
+        // scheme in one and not the other is silently a no-op for the operator.
+        let html = rules_body();
+        for kind in ["bearer", "basic", "header"] {
+            assert!(
+                html.contains(&format!(r#"<option value="{kind}">"#)),
+                "the form does not offer {kind}"
+            );
+            assert!(
+                webhook_auth_from_form(Some(kind), Some("ada:secret"), Some("X-Api-Key")).is_some(),
+                "the handler does not accept {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_credential_field_is_not_a_plain_text_input() {
+        // It is typed on a page an operator may well be screen-sharing while
+        // asking for help, and browsers offer to save what they see in a text
+        // input.
+        let html = rules_body();
+        let start = html
+            .find(r#"<input id="action_webhook_auth_value""#)
+            .expect("the credential field is rendered");
+        let field = &html[start..start + html[start..].find('>').expect("unclosed tag")];
+        assert!(
+            field.contains(r#"type="password""#),
+            "the credential field is not masked: {field}"
+        );
+    }
+
+    #[test]
+    fn the_header_name_field_is_hidden_by_script_not_by_a_style_attribute() {
+        // `style-src` carries no 'unsafe-inline', so an inline style attribute
+        // hiding this field would be dropped by CSP and the field would render
+        // visible under every scheme — a silent failure, which is why
+        // `inline_style_guard` exists. This pins the mechanism as well as the
+        // outcome, because a reviewer adding a sibling field will copy
+        // whatever is here.
+        let html = rules_body();
+        // Assembled rather than written out: `inline_style_guard` greps the
+        // source for the literal and would flag this assertion itself.
+        let inline_style = format!("{}=\"", "style");
+        let tag_start = html
+            .find(r#"<div id="webhook-header-name-field""#)
+            .expect("the header-name field is rendered");
+        let tag = &html[tag_start..tag_start + html[tag_start..].find('>').expect("unclosed tag")];
+        assert!(
+            !tag.contains(&inline_style),
+            "the header-name field is hidden with an inline style: {tag}"
+        );
+        assert!(
+            html.contains("syncHeaderNameField();"),
+            "nothing sets the header-name field's initial visibility"
+        );
     }
 }

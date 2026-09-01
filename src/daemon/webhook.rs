@@ -1,6 +1,8 @@
 //! Alert-rule webhook dispatch: the request-shape decision (pure) and the
 //! network send (the only non-pure step).
 
+use birdnet_db::alert_rules::WebhookAuth;
+
 /// The wire-level shape of an outbound webhook request: method, body, and
 /// content-type. Built by [`build_webhook_spec`] from operator-supplied
 /// rule config, then handed to [`dispatch_webhook`] for the actual send.
@@ -94,6 +96,7 @@ pub(super) async fn dispatch_webhook(
     url: &str,
     method: &str,
     body: Option<&str>,
+    auth: Option<&WebhookAuth>,
 ) -> Result<u16, WebhookError> {
     let spec = build_webhook_spec(method, body);
     let client = reqwest::Client::builder()
@@ -101,7 +104,7 @@ pub(super) async fn dispatch_webhook(
         .build()
         .map_err(|e| WebhookError::ClientBuild(e.to_string()))?;
 
-    let request = match spec.method {
+    let mut request = match spec.method {
         WebhookMethod::Get => client.get(url),
         WebhookMethod::Post => client
             .post(url)
@@ -109,16 +112,46 @@ pub(super) async fn dispatch_webhook(
             .body(spec.body),
     };
 
+    request = match auth {
+        Some(WebhookAuth::Bearer(token)) => request.bearer_auth(token),
+        Some(WebhookAuth::Basic { user, password }) => request.basic_auth(user, Some(password)),
+        Some(WebhookAuth::Header { name, value }) => request.header(name, value),
+        None => request,
+    };
+
     request
         .send()
         .await
         .map(|resp| resp.status().as_u16())
-        .map_err(|e| WebhookError::Send(e.to_string()))
+        // `reqwest::Error` appends the URL it failed on. A rule's webhook URL
+        // is frequently the credential itself — a Slack or Discord hook, a
+        // Home Assistant `?token=` — so it must not reach the log through an
+        // error message.
+        .map_err(|e| WebhookError::Send(e.without_url().to_string()))
+}
+
+/// A webhook URL with everything after the host removed.
+///
+/// The path and query of a webhook URL are where the secret lives, and the
+/// dispatch log line names the rule and the target on every failure.
+#[must_use]
+pub(super) fn redact_url(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    // Userinfo is a credential too: `https://user:pass@host/...`.
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    if scheme.is_empty() {
+        host.to_string()
+    } else {
+        format!("{scheme}://{host}/…")
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{WebhookError, WebhookMethod, build_webhook_spec, dispatch_webhook};
+    use super::{
+        WebhookAuth, WebhookError, WebhookMethod, build_webhook_spec, dispatch_webhook, redact_url,
+    };
 
     // ── build_webhook_spec ──────────────────────────────────────────────
     //
@@ -183,7 +216,7 @@ mod tests {
     async fn dispatch_webhook_returns_send_error_on_unreachable() {
         // TEST-NET-2 (198.51.100.0/24) — RFC 5737 reserved range, will
         // not route. The 10-second timeout caps the test runtime.
-        let r = dispatch_webhook("http://198.51.100.1:1/", "POST", None).await;
+        let r = dispatch_webhook("http://198.51.100.1:1/", "POST", None, None).await;
         assert!(r.is_err(), "expected Err on unreachable host, got {r:?}");
         // Confirm it's the Send variant, not ClientBuild — the client
         // builds fine; only the network call fails.
@@ -210,5 +243,158 @@ mod tests {
                 .to_string()
                 .contains("dispatch")
         );
+    }
+
+    // ── authentication reaches the wire ─────────────────────────────────
+    //
+    // `build_webhook_spec` is pure and says nothing about headers, so the only
+    // way to know a credential is actually sent is to read the bytes. These
+    // use a one-shot blocking stub on an ephemeral port rather than a mock:
+    // what is being checked is the request as a server sees it.
+
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    /// Serve exactly one request and return everything up to the body.
+    fn stub_once() -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr").to_string();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = vec![0_u8; 8192];
+            let n = sock.read(&mut buf).unwrap_or(0);
+            let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+            let _ = sock.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+            let _ = sock.flush();
+        });
+        (addr, rx)
+    }
+
+    /// The headers of the single request `auth` produces, lowercased by name.
+    async fn headers_for(auth: Option<&WebhookAuth>) -> Vec<(String, String)> {
+        let (addr, rx) = stub_once();
+        let status = dispatch_webhook(&format!("http://{addr}/hook"), "POST", None, auth)
+            .await
+            .expect("dispatched");
+        assert_eq!(status, 204);
+        let raw = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("request");
+        raw.lines()
+            .skip(1)
+            .take_while(|l| !l.is_empty())
+            .filter_map(|l| l.split_once(':'))
+            .map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_string()))
+            .collect()
+    }
+
+    /// One header value by (lowercase) name.
+    fn header_of<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[tokio::test]
+    async fn a_bearer_credential_reaches_the_server() {
+        let headers = headers_for(Some(&WebhookAuth::Bearer("tok_ABC123".into()))).await;
+        assert_eq!(
+            header_of(&headers, "authorization"),
+            Some("Bearer tok_ABC123")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_basic_credential_reaches_the_server_base64_encoded() {
+        let headers = headers_for(Some(&WebhookAuth::Basic {
+            user: "ada".into(),
+            password: "hunter2".into(),
+        }))
+        .await;
+        // base64("ada:hunter2")
+        assert_eq!(
+            header_of(&headers, "authorization"),
+            Some("Basic YWRhOmh1bnRlcjI=")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_custom_header_credential_reaches_the_server_under_its_own_name() {
+        let headers = headers_for(Some(&WebhookAuth::Header {
+            name: "X-API-Key".into(),
+            value: "k_XYZ".into(),
+        }))
+        .await;
+        assert_eq!(header_of(&headers, "x-api-key"), Some("k_XYZ"));
+        assert_eq!(
+            header_of(&headers, "authorization"),
+            None,
+            "a custom header must not also set Authorization"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rule_without_auth_sends_no_authorization_header() {
+        // Counterpart: an empty or defaulted credential header is not the same
+        // as none. Some servers reject a malformed `Authorization` outright,
+        // and others count it as a failed login attempt and lock the account.
+        let headers = headers_for(None).await;
+        assert_eq!(header_of(&headers, "authorization"), None);
+        // ...and the request is otherwise unchanged.
+        assert_eq!(
+            header_of(&headers, "content-type"),
+            Some("application/json")
+        );
+    }
+
+    // ── the URL is a credential too ─────────────────────────────────────
+
+    #[test]
+    fn redacting_a_url_keeps_the_host_and_drops_everything_after_it() {
+        // A Slack or Discord webhook URL *is* the credential, and Home
+        // Assistant's is `?token=`. The dispatch log names the target on every
+        // failure, which on a broken rule is every detection.
+        let cases = [
+            (
+                "https://hooks.slack.com/services/T0/B0/SUPERSECRET",
+                "https://hooks.slack.com/…",
+            ),
+            (
+                "https://ha.lan:8123/api/webhook/SUPERSECRET?token=SUPERSECRET",
+                "https://ha.lan:8123/…",
+            ),
+            (
+                "https://ada:SUPERSECRET@hooks.example.com/x",
+                "https://hooks.example.com/…",
+            ),
+            ("http://198.51.100.1:1/", "http://198.51.100.1:1/…"),
+        ];
+        for (url, expected) in cases {
+            let redacted = redact_url(url);
+            assert_eq!(redacted, expected, "{url}");
+            assert!(!redacted.contains("SUPERSECRET"), "{redacted}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_dispatch_does_not_name_the_url_it_failed_on() {
+        // `reqwest::Error` appends ` for url (...)` in `Display`, so the error
+        // itself leaks the whole webhook — including the path the credential
+        // lives in — even when the caller only logs `{e}`.
+        let e = dispatch_webhook(
+            "http://198.51.100.1:1/hook/SUPERSECRETPATH",
+            "POST",
+            None,
+            None,
+        )
+        .await
+        .expect_err("TEST-NET-2 port 1 cannot connect");
+        let rendered = format!("{e} {e:?}");
+        assert!(!rendered.contains("SUPERSECRETPATH"), "{rendered}");
     }
 }

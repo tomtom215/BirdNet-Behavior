@@ -49,3 +49,17 @@ With `--mqtt-ha-discovery`, the station registers itself in Home Assistant autom
 ## Alert rules
 
 The **Rules** engine (`/admin/rules`) fires conditional actions on detections — for example, a webhook only when an owl is heard at night above 0.7 confidence, or a rule that suppresses a noisy false-positive species. Each rule matches on species pattern, confidence range, hour-of-day and day-of-week.
+
+A webhook rule can authenticate, so it can target endpoints that need a key
+rather than only ones that authenticate by URL alone:
+
+| Scheme | Sends | Credential field |
+|---|---|---|
+| Bearer token | `Authorization: Bearer <token>` | the token |
+| Basic | `Authorization: Basic base64(user:password)` | `user:password` |
+| Custom header | `<name>: <value>` | the value, plus a header name |
+
+Leaving the scheme on **None** keeps the request exactly as it was — which is
+what every rule created before this existed does. The credential is stored in
+the station's own database, is never rendered back into the page, and is
+redacted from logs and from an exported rule set.
