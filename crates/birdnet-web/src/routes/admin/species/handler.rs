@@ -272,6 +272,15 @@ fn parse_list(val: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// Add one species to the operator's exclusion list.
+///
+/// Public so the suspect-species report can reuse the list the operator
+/// already has, rather than inventing a second exclusion mechanism that would
+/// be a second place to look when a bird stops appearing.
+pub(crate) fn add_to_exclude_list(state: &AppState, sci_name: &str) {
+    modify_list(state, "species_exclude", sci_name, &ListAction::Add);
+}
+
 fn modify_list(state: &AppState, key: &'static str, name: &str, action: &ListAction) {
     let name = name.trim().to_string();
     if name.is_empty() {

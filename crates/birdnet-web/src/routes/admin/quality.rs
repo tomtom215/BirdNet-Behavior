@@ -42,6 +42,121 @@ pub fn router() -> Router<AppState> {
         .route("/admin/quality", get(quality_page))
         .route("/admin/quality/summary", get(quality_summary_partial))
         .route("/admin/quality/trend", get(quality_trend_partial))
+        .route("/admin/quality/phantoms", get(phantoms_partial))
+        .route(
+            "/admin/quality/phantoms/exclude",
+            axum::routing::post(exclude_phantom),
+        )
+}
+
+// ---------------------------------------------------------------------------
+// Suspect species
+// ---------------------------------------------------------------------------
+
+/// The HTMX partial listing species whose detections look like artefacts.
+async fn phantoms_partial(State(state): State<AppState>) -> Html<String> {
+    let reports = tokio::task::spawn_blocking(move || load_phantoms(&state))
+        .await
+        .unwrap_or_default();
+    Html(render_phantoms(&reports))
+}
+
+/// Read the per-species shapes and score them.
+pub(crate) fn load_phantoms(state: &AppState) -> Vec<birdnet_db::phantoms::PhantomReport> {
+    let shapes = state.with_db(|conn| birdnet_db::sqlite::species_shapes(conn).unwrap_or_default());
+    birdnet_db::phantoms::report(&shapes)
+}
+
+/// Form carrying the species the operator chose to exclude.
+#[derive(Debug, serde::Deserialize)]
+struct ExcludeForm {
+    /// Scientific name to add to the exclusion list.
+    sci_name: String,
+}
+
+/// `POST /admin/quality/phantoms/exclude` — add one species to the exclusion
+/// list and re-render the report.
+///
+/// Adds to the list the operator already has rather than inventing a second
+/// mechanism: excluding a species is a thing this station already knows how to
+/// do, and a phantom-specific filter would be a second place to look when a
+/// bird stops appearing.
+async fn exclude_phantom(
+    State(state): State<AppState>,
+    axum::Form(form): axum::Form<ExcludeForm>,
+) -> Html<String> {
+    let sci_name = form.sci_name.trim().to_owned();
+    if !sci_name.is_empty() {
+        let s = state.clone();
+        let name = sci_name.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::routes::admin::species::handler::add_to_exclude_list(&s, &name);
+        })
+        .await;
+        tracing::info!(species = %sci_name, "species excluded from the suspect-species report");
+    }
+    let reports = tokio::task::spawn_blocking(move || load_phantoms(&state))
+        .await
+        .unwrap_or_default();
+    Html(render_phantoms(&reports))
+}
+
+/// Render the suspect-species report.
+pub(crate) fn render_phantoms(reports: &[birdnet_db::phantoms::PhantomReport]) -> String {
+    let mut out = String::with_capacity(1024);
+    out.push_str(
+        r#"<div class="section-title">Species that may not be birds</div>
+  <p class="hint">Flagged by the <em>shape</em> of their detections, not by name: a repeated non-bird sound — a barking dog, a creaking gate — produces the same wrong species at the same confidence, on the same few days, and never survives review. This is a heuristic and it will sometimes be wrong about a genuinely scarce visitor, so nothing is filtered until you say so. Excluding a species adds it to the list under <a href="/admin/species">Species</a>, where you can undo it.</p>"#,
+    );
+
+    if reports.is_empty() {
+        out.push_str(
+            r#"<p class="empty-note mb">Nothing looks suspicious. Species are only considered once they have at least 10 detections, and are only listed when two independent signals agree.</p></div>"#,
+        );
+        return out;
+    }
+
+    out.push_str(
+        r#"<table class="thr-table"><thead><tr><th class="cell-left">Species</th><th>Detections</th><th>Days</th><th>Confidence</th><th class="cell-left">Why</th><th></th></tr></thead><tbody>"#,
+    );
+    for r in reports {
+        let sci = escape_html(&r.shape.sci_name);
+        let com = escape_html(&r.shape.com_name);
+        let total = r.shape.total;
+        let days = r.shape.distinct_days;
+        let lo = r.shape.min_confidence * 100.0;
+        let hi = r.shape.max_confidence * 100.0;
+        let why = r
+            .signals
+            .iter()
+            .map(|s| escape_html(s.label()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let _ = write!(
+            out,
+            r##"<tr>
+  <td>{com}<br><span class="hint">{sci}</span></td>
+  <td class="cell-center">{total}</td>
+  <td class="cell-center">{days}</td>
+  <td class="cell-center">{lo:.0}–{hi:.0}%</td>
+  <td>{why}</td>
+  <td class="cell-right">
+    <form hx-post="/admin/quality/phantoms/exclude" hx-target="#phantoms-section" hx-swap="innerHTML" class="inline-form">
+      <input type="hidden" name="sci_name" value="{sci}">
+      <button type="submit" class="btn btn-danger del-btn"
+              data-confirm-action="hx-post"
+              data-confirm-url="/admin/quality/phantoms/exclude"
+              data-confirm-title="Exclude species"
+              data-confirm-body="Stop recording {com}? Existing detections are kept; you can undo this under Species."
+              data-confirm-confirm-label="Exclude"
+              data-confirm-style="danger">Exclude</button>
+    </form>
+  </td>
+</tr>"##
+        );
+    }
+    out.push_str("</tbody></table></div>");
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -605,5 +720,126 @@ fn conf_to_color(conf: f64) -> &'static str {
         "var(--dawn)"
     } else {
         "var(--rare)"
+    }
+}
+
+#[cfg(test)]
+mod phantom_tests {
+    use super::render_phantoms;
+    use birdnet_db::phantoms::{PhantomReport, PhantomSignal, SpeciesShape};
+
+    /// A report for one flagged species.
+    fn report(sci: &str, com: &str, signals: Vec<PhantomSignal>) -> PhantomReport {
+        PhantomReport {
+            shape: SpeciesShape {
+                sci_name: sci.to_owned(),
+                com_name: com.to_owned(),
+                total: 80,
+                distinct_days: 2,
+                min_confidence: 0.71,
+                max_confidence: 0.73,
+                confirmed: 0,
+                rejected: 6,
+            },
+            signals,
+        }
+    }
+
+    #[test]
+    fn a_flagged_species_is_shown_with_its_reasons_and_its_numbers() {
+        // The operator is being asked to remove a species from their own
+        // record. A verdict with no evidence beside it is not actionable, and
+        // the numbers are what let them overrule it.
+        let html = render_phantoms(&[report(
+            "Phantomus fictus",
+            "Not A Bird",
+            vec![
+                PhantomSignal::NeverConfirmed,
+                PhantomSignal::ConfinedToFewDays,
+            ],
+        )]);
+        assert!(html.contains("Not A Bird"), "{html}");
+        assert!(html.contains("Phantomus fictus"), "{html}");
+        assert!(html.contains("every review rejected"), "{html}");
+        assert!(html.contains("many detections, few days"), "{html}");
+        assert!(
+            html.contains("80"),
+            "the detection count is missing: {html}"
+        );
+        assert!(
+            html.contains("71–73%"),
+            "the confidence band is missing: {html}"
+        );
+    }
+
+    #[test]
+    fn an_empty_report_says_so_rather_than_rendering_an_empty_table() {
+        // A bare table header reads as a broken page. It also has to say what
+        // "nothing" means, or a station whose species all sit below the
+        // minimum looks like one with nothing to find.
+        let html = render_phantoms(&[]);
+        assert!(html.contains("Nothing looks suspicious"), "{html}");
+        assert!(
+            !html.contains("<tbody>"),
+            "an empty table was rendered: {html}"
+        );
+        assert!(
+            html.contains("10 detections"),
+            "the threshold is not explained: {html}"
+        );
+    }
+
+    #[test]
+    fn the_exclude_button_carries_the_scientific_name() {
+        // The exclusion list is keyed on the scientific name; posting the
+        // common name would silently exclude nothing.
+        let html = render_phantoms(&[report(
+            "Phantomus fictus",
+            "Not A Bird",
+            vec![
+                PhantomSignal::NeverConfirmed,
+                PhantomSignal::ConfinedToFewDays,
+            ],
+        )]);
+        assert!(
+            html.contains(r#"name="sci_name" value="Phantomus fictus""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn excluding_is_confirmed_before_it_happens() {
+        // It stops a species being recorded at all. The station's other
+        // destructive actions all confirm first, and this is the one that is
+        // easiest to press by accident while reading a table.
+        let html = render_phantoms(&[report(
+            "Phantomus fictus",
+            "Not A Bird",
+            vec![
+                PhantomSignal::NeverConfirmed,
+                PhantomSignal::ConfinedToFewDays,
+            ],
+        )]);
+        assert!(html.contains("data-confirm-action"), "{html}");
+        assert!(
+            html.contains("Existing detections are kept"),
+            "the confirmation does not say what it will and will not do: {html}"
+        );
+    }
+
+    #[test]
+    fn a_species_name_is_escaped_in_the_row_and_the_form() {
+        // Names reach here from the model's label file, and land in a table
+        // cell, an attribute value, and the confirmation text.
+        let html = render_phantoms(&[report(
+            r#"Evil" onload="x"#,
+            r"<script>alert(1)</script>",
+            vec![
+                PhantomSignal::NeverConfirmed,
+                PhantomSignal::ConfinedToFewDays,
+            ],
+        )]);
+        assert!(!html.contains(r#"onload="x"#), "{html}");
+        assert!(!html.contains("<script>alert"), "{html}");
     }
 }

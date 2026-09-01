@@ -540,6 +540,47 @@ pub fn reviewed_detections_by_species(
     Ok(out)
 }
 
+/// Per-species detection shape, for [`crate::phantoms`].
+///
+/// Reads the raw `detections` table for the same reason as
+/// [`reviewed_detections_by_species`]: the analytic view hides rejected rows,
+/// and this is a question *about* which species get rejected.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_shapes(conn: &Connection) -> Result<Vec<crate::phantoms::SpeciesShape>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT d.Sci_Name,
+                MAX(d.Com_Name)                                  AS com,
+                COUNT(*)                                         AS total,
+                COUNT(DISTINCT d.Date)                           AS days,
+                MIN(d.Confidence)                                AS min_conf,
+                MAX(d.Confidence)                                AS max_conf,
+                COALESCE(SUM(CASE WHEN r.status = 'confirmed' THEN 1 ELSE 0 END), 0) AS confirmed,
+                COALESCE(SUM(CASE WHEN r.status = 'rejected'  THEN 1 ELSE 0 END), 0) AS rejected
+           FROM detections d
+      LEFT JOIN detection_reviews r
+             ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+          GROUP BY d.Sci_Name",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(crate::phantoms::SpeciesShape {
+                sci_name: row.get(0)?,
+                com_name: row.get(1)?,
+                total: row.get(2)?,
+                distinct_days: row.get(3)?,
+                min_confidence: row.get(4)?,
+                max_confidence: row.get(5)?,
+                confirmed: row.get(6)?,
+                rejected: row.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Daily average confidence trend over the last `days` days.
 ///
 /// Returns `(date, avg_confidence)` pairs in chronological order.
@@ -1103,5 +1144,77 @@ mod tests {
         let confirmed: Vec<bool> = reviews.iter().map(|r| r.confirmed).collect();
         // Ordered by confidence ascending: the rejected 0.55 first.
         assert_eq!(confirmed, vec![false, true]);
+    }
+
+    // ── species shapes, for the phantom report ──────────────────────────
+
+    #[test]
+    fn a_species_shape_summarises_its_detections() {
+        let (_tmp, conn) = empty_db();
+        // Three detections across two days, confidences 0.55/0.60/0.91, one
+        // rejected.
+        reviewed(&conn, "Turdus merula", "05:00:01", 0.55, "rejected");
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-14', '05:00:02', 'Turdus merula', 'Turdus merula', 0.60, 'x.wav'),
+                    ('2026-03-15', '05:00:03', 'Turdus merula', 'Turdus merula', 0.91, 'x.wav')",
+            [],
+        )
+        .unwrap();
+
+        let shapes = species_shapes(&conn).unwrap();
+        let s = shapes
+            .iter()
+            .find(|s| s.sci_name == "Turdus merula")
+            .expect("the species is present");
+        assert_eq!(s.total, 3);
+        assert_eq!(s.distinct_days, 2, "distinct days, not rows");
+        assert!((s.min_confidence - 0.55).abs() < 1e-9);
+        assert!((s.max_confidence - 0.91).abs() < 1e-9);
+        assert_eq!(s.rejected, 1);
+        assert_eq!(s.confirmed, 0);
+    }
+
+    #[test]
+    fn species_shapes_count_the_rejected_detections_too() {
+        // A phantom's detections are exactly the ones a reviewer threw out.
+        // Reading `detections_analytic` would hide them, and the species with
+        // the strongest evidence against it would have the smallest shape.
+        let (_tmp, conn) = empty_db();
+        for (i, _) in (0..4).enumerate() {
+            reviewed(
+                &conn,
+                "Phantomus fictus",
+                &format!("05:00:{i:02}"),
+                0.72,
+                "rejected",
+            );
+        }
+        let shapes = species_shapes(&conn).unwrap();
+        let s = shapes
+            .iter()
+            .find(|s| s.sci_name == "Phantomus fictus")
+            .expect("present");
+        assert_eq!(
+            s.total, 4,
+            "rejected detections were excluded from the shape"
+        );
+        assert_eq!(s.rejected, 4);
+    }
+
+    #[test]
+    fn species_shapes_are_one_row_per_species() {
+        let (_tmp, conn) = empty_db();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-14','05:00:01','Turdus merula','Blackbird',0.8,'x.wav'),
+                    ('2026-03-14','05:00:02','Turdus merula','Blackbird',0.9,'x.wav'),
+                    ('2026-03-14','05:00:03','Parus major','Great Tit',0.7,'x.wav')",
+            [],
+        )
+        .unwrap();
+        let shapes = species_shapes(&conn).unwrap();
+        assert_eq!(shapes.len(), 2);
+        assert_eq!(shapes.iter().map(|s| s.total).sum::<i64>(), 3);
     }
 }

@@ -141,11 +141,15 @@ fn build_data(state: &AppState) -> String {
 <div id="backups">{backups}</div>
 <h2 class="st-h3" id="import">Bring your history with you</h2>
 {import}
-<div id="quality">{quality}</div>"#,
+<div id="quality">{quality}</div>
+<div class="card" id="phantoms-section">{phantoms}</div>"#,
         tabs = station_subtabs("data"),
         backups = crate::routes::admin::backup_recovery::backups_body(state),
         import = crate::routes::admin::migration::migration_body(state),
         quality = crate::routes::admin::quality::quality_body(state),
+        phantoms = crate::routes::admin::quality::render_phantoms(
+            &crate::routes::admin::quality::load_phantoms(state),
+        ),
     )
 }
 

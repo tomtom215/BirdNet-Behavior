@@ -12,6 +12,7 @@ pub mod clock;
 pub mod migration;
 pub mod notifications;
 pub mod outbound_queue;
+pub mod phantoms;
 pub mod resilience;
 pub mod settings;
 pub mod sqlite;
