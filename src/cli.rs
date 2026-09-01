@@ -559,6 +559,20 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_NOISE_CLASSES")]
     pub noise_classes: Option<String>,
 
+    /// Suppress a repeat of the same species within this many seconds
+    /// (0 = disabled).
+    ///
+    /// A 15-second recording is five 3-second chunks, so a bird that sings
+    /// through the whole of it is recorded five times — and every count in the
+    /// application is a row count, so a species that sings in long phrases
+    /// outscores one that calls in short bursts for no reason but phrasing.
+    ///
+    /// Off by default: switching it on changes how many rows a station
+    /// records, which puts a visible step in every chart when it happens.
+    /// Config key: `DUPLICATE_INTERVAL_SECS`.
+    #[arg(long, default_value = "0", env = "BIRDNET_DUPLICATE_INTERVAL_SECS")]
+    pub duplicate_interval_secs: i64,
+
     /// Analysis window overlap in seconds (0.0-2.9, default 0.0).
     ///
     /// Controls how much consecutive 3-second analysis windows overlap.

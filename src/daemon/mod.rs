@@ -40,6 +40,7 @@ mod config;
 /// runtime ignores reports on a station that does not exist.
 pub use config::{resolve_confidence, resolve_station_coords};
 pub mod disposition;
+mod duplicate;
 mod processor;
 
 #[cfg(test)]
@@ -129,6 +130,17 @@ pub fn start_detection_daemon(
         0.0,
         config.and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok()),
     );
+
+    // `0` is both the flag default and a meaningful value ("disabled"), so
+    // the config key is consulted only when the flag was left alone — the same
+    // rule `resolve_f32_with_default` applies to the other thresholds.
+    let duplicate_interval_secs = if cli.duplicate_interval_secs == 0 {
+        config
+            .and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok())
+            .unwrap_or(0)
+    } else {
+        cli.duplicate_interval_secs
+    };
 
     let noise_threshold = resolve_f32_with_default(
         cli.noise_threshold,
@@ -234,6 +246,7 @@ pub fn start_detection_daemon(
                     thresholds_for_processor,
                     global_confidence,
                     extractor,
+                    duplicate_interval_secs,
                 );
             });
             Some(handle)

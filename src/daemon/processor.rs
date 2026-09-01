@@ -153,9 +153,17 @@ pub(super) fn event_processor(
     species_thresholds: std::collections::HashMap<String, f64>,
     global_confidence: f32,
     extractor: Extractor,
+    duplicate_interval_secs: i64,
 ) {
     tracing::debug!("event processor started");
     let mut species_thresholds = ThresholdCache::new(species_thresholds);
+    let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
+    if duplicates.is_enabled() {
+        tracing::info!(
+            interval_secs = duplicate_interval_secs,
+            "duplicate-prediction interval enabled"
+        );
+    }
 
     loop {
         let Ok(event) = event_rx.recv() else {
@@ -225,6 +233,30 @@ pub(super) fn event_processor(
                 continue;
             }
             DispositionDecision::Accept => {}
+        }
+
+        // One continuous song is one detection. Applied *after* the threshold
+        // gates so a suppressed duplicate cannot consume the interval on
+        // behalf of a detection that would itself have been quarantined —
+        // otherwise a run of low-confidence chunks would shadow the confident
+        // one in the middle of them.
+        //
+        // A detection whose own timestamp cannot be read is admitted rather
+        // than gated: `Date`/`Time` are free-form text, and the alternative is
+        // dropping a real detection because its filename was odd.
+        if let Some(at_secs) =
+            crate::daemon::duplicate::detection_secs(&detection.date, &detection.time)
+            && let crate::daemon::duplicate::DuplicateVerdict::Suppress { since_last_secs } =
+                duplicates.admit(&detection.scientific_name, at_secs)
+        {
+            tracing::debug!(
+                correlation_id,
+                species = %detection.scientific_name,
+                since_last_secs,
+                "suppressing a repeat within the duplicate-prediction interval"
+            );
+            state.metrics().inc_detection_dropped("duplicate");
+            continue;
         }
 
         // Insert into SQLite. Numeric columns receive Option<f64> /
@@ -1015,6 +1047,7 @@ mod tests {
                 HashMap::new(),
                 0.25,
                 extractor,
+                0,
             );
         })
         .await
@@ -1112,11 +1145,23 @@ mod tests {
     /// every external integration disabled. Returns once the channel is
     /// drained and the processor's loop exits, so DB assertions are
     /// observed after all synchronous work has run.
+    /// Drive the processor with the duplicate-prediction interval disabled.
     async fn run_processor(
         state: &birdnet_web::state::AppState,
         events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
         species_thresholds: HashMap<String, f64>,
         global_confidence: f32,
+    ) {
+        run_processor_with_interval(state, events, species_thresholds, global_confidence, 0).await;
+    }
+
+    /// Drive the processor, suppressing repeats within `duplicate_interval_secs`.
+    async fn run_processor_with_interval(
+        state: &birdnet_web::state::AppState,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        species_thresholds: HashMap<String, f64>,
+        global_confidence: f32,
+        duplicate_interval_secs: i64,
     ) {
         let broadcast = state.detection_broadcast();
         let (event_tx, event_rx) = mpsc::channel();
@@ -1150,6 +1195,7 @@ mod tests {
                 species_thresholds,
                 global_confidence,
                 extractor,
+                duplicate_interval_secs,
             );
         })
         .await
@@ -1301,5 +1347,106 @@ mod tests {
 
         let detections = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
         assert_eq!(detections, 2, "both accepted events must be stored");
+    }
+
+    // ── the duplicate-prediction interval, through the processor ────────
+
+    /// An event for `sci` at `hms` on a fixed date.
+    fn event_at(
+        sci: &str,
+        hms: &str,
+        dir: &std::path::Path,
+    ) -> birdnet_core::detection::daemon::DetectionEvent {
+        let mut ev = make_event(sci, sci, 0.95, dir.join("rec.wav"), "corr-dup");
+        ev.detection.time = hms.to_owned();
+        ev
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_duplicate_interval_collapses_one_song_into_one_row() {
+        // Through the real processor, not the gate in isolation: this is what
+        // says the gate is wired in at all, and wired in on the accept path
+        // rather than somewhere the detection had already been dropped.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let events = ["05:00:00", "05:00:03", "05:00:06", "05:00:09", "05:00:12"]
+            .iter()
+            .map(|hms| event_at("Turdus merula", hms, tmp.path()))
+            .collect();
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 30).await;
+
+        let stored = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
+        assert_eq!(
+            stored, 1,
+            "five chunks of one song were recorded as {stored} detections"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn without_the_interval_every_chunk_is_still_recorded() {
+        // Counterpart, and the guarantee that matters on upgrade: the feature
+        // is off by default and a station that has not asked for it must keep
+        // recording exactly what it recorded before.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let events = ["05:00:00", "05:00:03", "05:00:06", "05:00:09", "05:00:12"]
+            .iter()
+            .map(|hms| event_at("Turdus merula", hms, tmp.path()))
+            .collect();
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 0).await;
+
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            5
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_interval_does_not_shadow_a_different_species() {
+        // A dawn chorus is many species at once; a gate keyed on anything
+        // coarser than the species would record one bird and drop the chorus.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let events = vec![
+            event_at("Turdus merula", "05:00:00", tmp.path()),
+            event_at("Parus major", "05:00:01", tmp.path()),
+            event_at("Erithacus rubecula", "05:00:02", tmp.path()),
+            event_at("Turdus merula", "05:00:03", tmp.path()),
+        ];
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 30).await;
+
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            3,
+            "the chorus was collapsed to the first bird heard"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_quarantined_detection_does_not_consume_the_interval() {
+        // The gate runs after the threshold gates for this reason: a run of
+        // low-confidence chunks must not shadow the confident one among them.
+        // With the order reversed the first chunk claims the interval, is then
+        // quarantined, and the good detection in the middle of the song is
+        // dropped as its duplicate — leaving no row at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let thresholds = HashMap::from([("Turdus merula".to_owned(), 0.90_f64)]);
+
+        let mut weak = event_at("Turdus merula", "05:00:00", tmp.path());
+        weak.detection.confidence = 0.50;
+        let strong = event_at("Turdus merula", "05:00:03", tmp.path());
+
+        run_processor_with_interval(&state, vec![weak, strong], thresholds, 0.25, 30).await;
+
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            1,
+            "the quarantined chunk consumed the interval and the real \
+             detection was dropped as its duplicate"
+        );
     }
 }
