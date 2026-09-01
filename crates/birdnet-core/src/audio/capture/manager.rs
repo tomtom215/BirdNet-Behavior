@@ -151,6 +151,7 @@ mod tests {
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            pipeline: crate::audio::capture::types::AudioPipeline::none(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         }
@@ -187,6 +188,7 @@ mod tests {
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            pipeline: crate::audio::capture::types::AudioPipeline::none(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         };
@@ -210,6 +212,7 @@ mod tests {
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            pipeline: crate::audio::capture::types::AudioPipeline::none(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         };

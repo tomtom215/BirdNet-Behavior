@@ -98,7 +98,32 @@ fn resolve_alsa_devices(cli: &Cli, config: Option<&birdnet_core::config::Config>
 pub(super) struct ResolvedSource {
     pub(super) source: CaptureSource,
     pub(super) gain_db: f32,
+    /// Signal conditioning for this source, mapped from the `audio_sources`
+    /// row. Only the DB-driven path can carry it: a source configured purely
+    /// from CLI flags has no row to read toggles from, so it gets the
+    /// conditioning defaults.
+    pub(super) pipeline: birdnet_core::audio::capture::AudioPipeline,
     pub(super) quiet: Option<supervisor::QuietWindow>,
+}
+
+/// Map the stored per-source toggles onto the core type the capture path
+/// consumes.
+///
+/// `birdnet-core` must not depend on `birdnet-db`, so this is the one seam
+/// where the storage shape and the audio shape meet. `rtsp_keepalive` maps to
+/// `rtsp_stall_timeout`, which is renamed rather than copied: ffmpeg sends RTSP
+/// keepalives on its own and has no switch for them, so the stored flag's
+/// stated behaviour was unimplementable. See
+/// [`birdnet_core::audio::capture::AudioPipeline::rtsp_stall_timeout`].
+pub(super) const fn map_pipeline(
+    flags: birdnet_db::audio_sources::PipelineFlags,
+) -> birdnet_core::audio::capture::AudioPipeline {
+    birdnet_core::audio::capture::AudioPipeline {
+        high_pass: flags.high_pass,
+        dc_removal: flags.dc_removal,
+        agc: flags.agc,
+        rtsp_stall_timeout: flags.rtsp_keepalive,
+    }
 }
 
 /// Parse a DB `schedule_quiet` (`HH:MM`, `HH:MM`) pair into the supervisor's
@@ -160,6 +185,7 @@ pub(super) fn resolve_sources_from_db(
         out.push(ResolvedSource {
             source,
             gain_db: row.gain_db,
+            pipeline: map_pipeline(row.pipeline),
             quiet: parse_quiet_window(row.schedule_quiet.as_ref()),
         });
     }

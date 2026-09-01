@@ -30,7 +30,7 @@ use serde::Deserialize;
 
 use birdnet_db::audio_sources::{
     AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, NewAudioSource,
-    RtspTransport, SourceKind,
+    PipelineFlags, RtspTransport, SourceKind,
 };
 
 use crate::routes::pages::escape_html;
@@ -158,6 +158,70 @@ struct CreateForm {
     /// is paused from `quiet_start` up to but not including `quiet_end`.
     #[serde(default)]
     quiet_end: Option<String>,
+    /// Per-source conditioning toggles. `Some("1")` when ticked, `None` when
+    /// the operator unticked it *or* when the form does not carry the control
+    /// at all — see [`ToggleSet::from_form`] for how those are told apart.
+    #[serde(default)]
+    high_pass: Option<String>,
+    #[serde(default)]
+    dc_removal: Option<String>,
+    #[serde(default)]
+    agc: Option<String>,
+    #[serde(default)]
+    rtsp_keepalive: Option<String>,
+    /// Hidden companion field, always submitted by the edit form. Its presence
+    /// is what says "this submission came from a form that carries the four
+    /// checkboxes", so an unticked box means *off* rather than *absent*.
+    /// Without it, a PATCH from any other form would silently clear all four.
+    #[serde(default)]
+    pipeline_present: Option<String>,
+}
+
+/// The four conditioning toggles as submitted, or `None` when the form did not
+/// carry them.
+///
+/// An unchecked HTML checkbox submits nothing at all, so "off" and "not on this
+/// form" look identical in the payload. The hidden `pipeline_present` marker
+/// disambiguates them, which matters because the create form and the edit form
+/// are different shapes and a PATCH that guessed wrong would turn a source's
+/// conditioning off without the operator touching it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// The four booleans mirror `PipelineFlags` one-for-one. Collapsing them into an
+// enum or a bitflag here would only add a translation layer between the form
+// and the storage type, and the checkbox names are the wire format.
+#[allow(clippy::struct_excessive_bools)]
+struct ToggleSet {
+    high_pass: bool,
+    dc_removal: bool,
+    agc: bool,
+    rtsp_keepalive: bool,
+}
+
+impl ToggleSet {
+    fn from_form(
+        marker: Option<&str>,
+        high_pass: Option<&str>,
+        dc_removal: Option<&str>,
+        agc: Option<&str>,
+        rtsp_keepalive: Option<&str>,
+    ) -> Option<Self> {
+        marker?;
+        Some(Self {
+            high_pass: high_pass.is_some(),
+            dc_removal: dc_removal.is_some(),
+            agc: agc.is_some(),
+            rtsp_keepalive: rtsp_keepalive.is_some(),
+        })
+    }
+
+    const fn into_flags(self) -> PipelineFlags {
+        PipelineFlags {
+            high_pass: self.high_pass,
+            dc_removal: self.dc_removal,
+            agc: self.agc,
+            rtsp_keepalive: self.rtsp_keepalive,
+        }
+    }
 }
 
 /// What the form's two quiet-window fields mean together.
@@ -256,6 +320,15 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
             Ok(t) => new.rtsp_transport = t,
             Err(_) => return validation_response("Unknown RTSP transport."),
         }
+    }
+    if let Some(toggles) = ToggleSet::from_form(
+        form.pipeline_present.as_deref(),
+        form.high_pass.as_deref(),
+        form.dc_removal.as_deref(),
+        form.agc.as_deref(),
+        form.rtsp_keepalive.as_deref(),
+    ) {
+        new.pipeline = toggles.into_flags();
     }
     match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
         Ok(QuietChoice::Set(a, b)) => new.schedule_quiet = Some((a, b)),
@@ -357,6 +430,15 @@ async fn update(
             Ok(t) => patch.rtsp_transport = Some(t),
             Err(_) => return validation_response("Unknown RTSP transport."),
         }
+    }
+    if let Some(toggles) = ToggleSet::from_form(
+        form.pipeline_present.as_deref(),
+        form.high_pass.as_deref(),
+        form.dc_removal.as_deref(),
+        form.agc.as_deref(),
+        form.rtsp_keepalive.as_deref(),
+    ) {
+        patch.pipeline = Some(toggles.into_flags());
     }
     match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
         Ok(QuietChoice::Set(a, b)) => patch.schedule_quiet = Some(Some((a, b))),
@@ -552,6 +634,15 @@ fn render_status_pill(id: &str, status: Status) -> String {
 
 fn render_edit_form(row: &AudioSource) -> String {
     let label = row.label.clone().unwrap_or_default();
+    // Checkbox state for the four per-source conditioning toggles. An unchecked
+    // HTML checkbox submits *nothing*, which is what lets `Option<String>` in
+    // the form struct tell "operator cleared it" from "form does not carry the
+    // control" — the same distinction the quiet window already relies on.
+    let checked = |on: bool| if on { " checked" } else { "" };
+    let high_pass_checked = checked(row.pipeline.high_pass);
+    let dc_removal_checked = checked(row.pipeline.dc_removal);
+    let agc_checked = checked(row.pipeline.agc);
+    let rtsp_keepalive_checked = checked(row.pipeline.rtsp_keepalive);
     // `("", "")` when no window is set — an `<input type="time">` with an empty
     // value renders as the blank "--:--" the operator needs in order to say
     // "none", which is why both ends are submitted even when unset.
@@ -589,6 +680,20 @@ fn render_edit_form(row: &AudioSource) -> String {
       <p class="hint">This source stops recording between these times, in the station's
         local time. Leave both blank for none.</p>
     </div>
+    <div class="aud-edit-pipeline">
+      <input type="hidden" name="pipeline_present" value="1">
+      <span class="bnb-eyebrow">Signal conditioning</span>
+      <label><input type="checkbox" name="high_pass" value="1"{high_pass_checked}>
+        High-pass &mdash; cut wind rumble below 120&nbsp;Hz</label>
+      <label><input type="checkbox" name="dc_removal" value="1"{dc_removal_checked}>
+        Remove DC offset</label>
+      <label><input type="checkbox" name="agc" value="1"{agc_checked}>
+        Automatic gain control</label>
+      <label><input type="checkbox" name="rtsp_keepalive" value="1"{rtsp_keepalive_checked}>
+        Drop a stalled RTSP stream after 10&nbsp;s so it restarts</label>
+      <p class="hint">Applied to this source before analysis. The first three also
+        shape what you hear on the live stream; the last one affects RTSP only.</p>
+    </div>
     <div class="audio-source__right aud-edit-right">
       <button type="submit" class="bnb-btn moss">Save</button>
       <button type="button" class="bnb-btn ghost"
@@ -606,6 +711,10 @@ fn render_edit_form(row: &AudioSource) -> String {
         device_id = escape_html(&row.device_id),
         quiet_start = escape_html(quiet.0),
         quiet_end = escape_html(quiet.1),
+        high_pass_checked = high_pass_checked,
+        dc_removal_checked = dc_removal_checked,
+        agc_checked = agc_checked,
+        rtsp_keepalive_checked = rtsp_keepalive_checked,
     )
 }
 
@@ -789,6 +898,11 @@ mod tests {
     async fn a_quiet_window_set_on_the_form_reaches_the_database() {
         let (_d, state) = fixture();
         let base = || CreateForm {
+            high_pass: None,
+            dc_removal: None,
+            agc: None,
+            rtsp_keepalive: None,
+            pipeline_present: None,
             scope: String::new(),
             kind: "usb-alsa".to_string(),
             device_id: "plughw:2,0".to_string(),
@@ -863,6 +977,11 @@ mod tests {
     async fn create_rejects_duplicate_device() {
         let (_d, state) = fixture();
         let form = || CreateForm {
+            high_pass: None,
+            dc_removal: None,
+            agc: None,
+            rtsp_keepalive: None,
+            pipeline_present: None,
             scope: String::new(),
             kind: "usb-alsa".to_string(),
             device_id: "plughw:1,0".to_string(),
@@ -1258,5 +1377,102 @@ mod tests {
     fn synth_id_uses_kind_prefix() {
         let id = synth_id(SourceKind::Rtsp);
         assert!(id.starts_with("src_rtsp_"));
+    }
+}
+
+// ── the conditioning toggles reach the operator and the daemon ──────────
+//
+// These four flags were stored, defaulted and round-tripped by the store, and
+// the edit form never rendered a control for any of them — so the only way to
+// change one was direct SQL. The audio path never read them either; that half
+// is fixed in `birdnet-core`. This half is the form.
+#[cfg(test)]
+mod pipeline_toggle_tests {
+    use super::*;
+    use birdnet_db::audio_sources::Channels;
+
+    fn source_with(pipeline: PipelineFlags) -> AudioSource {
+        AudioSource {
+            id: "mic".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "plughw:1,0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 16,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline,
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        }
+    }
+
+    /// The gate for the missing controls: the edit form must carry all four.
+    /// Fails before the fix — the form had no checkbox at all.
+    #[test]
+    fn the_edit_form_renders_every_toggle() {
+        let html = render_edit_form(&source_with(PipelineFlags::default()));
+        for field in ["high_pass", "dc_removal", "agc", "rtsp_keepalive"] {
+            assert!(
+                html.contains(&format!(r#"name="{field}""#)),
+                "the edit form has no control for {field}"
+            );
+        }
+        assert!(
+            html.contains(r#"name="pipeline_present""#),
+            "the hidden marker must be present or an unticked box reads as absent"
+        );
+    }
+
+    /// A stored value has to come back checked, or saving the form would
+    /// silently clear whatever was set.
+    #[test]
+    fn stored_state_is_reflected_in_the_checkboxes() {
+        let on = render_edit_form(&source_with(PipelineFlags {
+            high_pass: true,
+            dc_removal: false,
+            agc: true,
+            rtsp_keepalive: false,
+        }));
+        // Exactly the two that are on carry `checked`.
+        assert_eq!(
+            on.matches(" checked").count(),
+            2,
+            "two toggles are on, so exactly two boxes are checked"
+        );
+        assert!(on.contains(r#"name="high_pass" value="1" checked"#));
+        assert!(on.contains(r#"name="dc_removal" value="1">"#));
+    }
+
+    /// An unchecked box submits nothing, so "off" and "this form has no such
+    /// control" arrive identically. The hidden marker is what separates them.
+    #[test]
+    fn absent_marker_means_leave_the_stored_flags_alone() {
+        assert_eq!(
+            ToggleSet::from_form(None, Some("1"), None, None, None),
+            None,
+            "without the marker the submission must not touch the flags"
+        );
+    }
+
+    /// The counterpart: with the marker, an unticked box really does mean off.
+    /// Without this the guard above would be satisfied by never applying the
+    /// toggles at all.
+    #[test]
+    fn present_marker_applies_every_box_including_the_unticked_ones() {
+        let set = ToggleSet::from_form(Some("1"), Some("1"), None, None, Some("1"))
+            .expect("marker present");
+        assert_eq!(
+            set.into_flags(),
+            PipelineFlags {
+                high_pass: true,
+                dc_removal: false,
+                agc: false,
+                rtsp_keepalive: true,
+            }
+        );
     }
 }

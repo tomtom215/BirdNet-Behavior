@@ -204,13 +204,24 @@ impl fmt::Display for RtspTransport {
     }
 }
 
-/// Audio-pipeline toggles.
+/// Audio-pipeline toggles, as stored.
 ///
-/// Four feature flags that the audio daemon honours per source. Each is
-/// intrinsically boolean (a filter is either applied or not), so the
-/// pedantic "more than 3 bools" suggestion to refactor into enums is not
-/// useful here — these are independent toggles whose set is fixed by
-/// the daemon's pipeline.
+/// Four independent per-source flags. Each is intrinsically boolean (a filter
+/// is either applied or not), so the pedantic "more than 3 bools" suggestion to
+/// refactor into enums is not useful here.
+///
+/// This is the **storage** shape. `birdnet-core` must not depend on this crate,
+/// so the capture path consumes `birdnet_core::audio::capture::AudioPipeline`
+/// and `birdnet-behavior`'s `capture::sources::map_pipeline` is the one seam
+/// that converts between them. Consult that function before assuming a field
+/// here means what its name suggests — `rtsp_keepalive` in particular does not:
+/// ffmpeg sends RTSP keepalives on its own and offers no switch for them, so it
+/// maps to `AudioPipeline::rtsp_stall_timeout`, which bounds socket reads so a
+/// stalled stream is noticed and restarted.
+///
+/// This comment previously claimed the daemon "honours" all four. It did not
+/// read any of them: they were written, round-tripped, and dropped at the
+/// resolver. The claim is worth remembering as a caution about this file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct PipelineFlags {

@@ -21,7 +21,7 @@ use std::process::{Child, Command, Stdio};
 
 use super::live::PcmSpec;
 use super::segment::{SegmentClock, SegmentWriter};
-use super::tee::{self, Tee};
+use super::tee::{self, Shaping, Tee};
 use super::types::{AudioFormat, CaptureError, CaptureSource, RecordingConfig, recording_filename};
 
 /// A running audio capture process.
@@ -237,6 +237,13 @@ fn drain_capture_stderr(child: &mut Child, source: &str) {
     }
 }
 
+/// How long an RTSP read may stall before ffmpeg gives up, in microseconds.
+///
+/// Ten seconds: long enough to ride out a congested link or a camera's own
+/// keyframe interval, short enough that the supervisor restarts a dead stream
+/// within one detection window rather than at the next service restart.
+const RTSP_SOCKET_TIMEOUT_US: u64 = 10_000_000;
+
 /// The smallest absolute gain (in dB) we bother applying. Below this the gain
 /// is treated as "off": the capture tee forwards samples untouched — which is
 /// what keeps the unity-gain path byte-exact — and the ffmpeg sources omit the
@@ -266,11 +273,65 @@ pub fn gain_volume_filter(gain_db: f32) -> Option<String> {
     gain_is_active(gain_db).then(|| format!("volume={gain_db:.2}dB"))
 }
 
-/// Append `-af volume=<gain>dB` to `cmd` when the gain is active; a no-op at
-/// unity gain so the ffmpeg command line is unchanged for sources without gain.
-fn apply_gain_filter(cmd: &mut Command, gain_db: f32) {
-    if let Some(filter) = gain_volume_filter(gain_db) {
-        cmd.arg("-af").arg(filter);
+/// The complete ffmpeg `-af` chain for a source's gain and conditioning.
+///
+/// `None` means "add no `-af` at all", which keeps the command line of an
+/// unconditioned unity-gain source byte-for-byte what it was before per-source
+/// conditioning existed.
+///
+/// Stage order is signal order, and each position is a decision:
+///
+/// 1. **DC block** first. A constant offset is a step at the input of every
+///    later stage, and a step through the 120 Hz corner below rings audibly.
+/// 2. **High-pass** next, on a signal already centred on zero.
+/// 3. **Gain** after conditioning, so the operator's dB acts on the cleaned
+///    signal rather than on rumble that is about to be removed.
+/// 4. **AGC** last, so it normalises the level that actually leaves the chain.
+///    Putting it before the gain would let the gain undo it.
+///
+/// `dynaudnorm`'s `f=500` (500 ms frames) and `g=15` (15-frame Gaussian window,
+/// which must be odd) trade a slower reaction for not pumping the noise floor
+/// up between songs — the failure mode that makes a naive AGC worse than none
+/// on a dawn-chorus recording.
+///
+/// Pure, so both the chain and its order are unit-testable without spawning
+/// ffmpeg; `pipeline_filter_tests` additionally runs the result through the
+/// installed ffmpeg so a filter name that does not exist cannot ship.
+#[must_use]
+pub fn audio_filter_chain(
+    gain_db: f32,
+    pipeline: crate::audio::capture::types::AudioPipeline,
+) -> Option<String> {
+    use crate::audio::capture::types::{DC_BLOCK_CUTOFF_HZ, HIGH_PASS_CUTOFF_HZ};
+
+    let mut stages: Vec<String> = Vec::new();
+    if pipeline.dc_removal {
+        stages.push(format!("highpass=f={DC_BLOCK_CUTOFF_HZ:.0}"));
+    }
+    if pipeline.high_pass {
+        stages.push(format!("highpass=f={HIGH_PASS_CUTOFF_HZ:.0}"));
+    }
+    if let Some(gain) = gain_volume_filter(gain_db) {
+        stages.push(gain);
+    }
+    if pipeline.agc {
+        stages.push("dynaudnorm=f=500:g=15".to_owned());
+    }
+
+    (!stages.is_empty()).then(|| stages.join(","))
+}
+
+/// Append the `-af` chain for this source's gain and conditioning, if any.
+///
+/// A no-op for an unconditioned source at unity gain, so its ffmpeg command
+/// line is unchanged.
+fn apply_audio_filters(
+    cmd: &mut Command,
+    gain_db: f32,
+    pipeline: crate::audio::capture::types::AudioPipeline,
+) {
+    if let Some(chain) = audio_filter_chain(gain_db, pipeline) {
+        cmd.arg("-af").arg(chain);
     }
 }
 
@@ -415,7 +476,18 @@ fn start_teed_alsa_microphone(
         SegmentClock::System,
     );
 
-    let tee = match tee::spawn(label, stdout, writer, tap, config.gain_db, channel_pick) {
+    let tee = match tee::spawn(
+        label,
+        stdout,
+        writer,
+        tap,
+        Shaping {
+            gain_db: config.gain_db,
+            pipeline: config.pipeline,
+            spec,
+            pick: channel_pick,
+        },
+    ) {
         Ok(tee) => tee,
         Err(e) => {
             // `std::process::Child` does **not** kill on drop, so bailing out
@@ -466,7 +538,7 @@ fn start_avfoundation_microphone(
         .arg(spec.sample_rate.to_string())
         .arg("-ac")
         .arg(spec.channels.to_string());
-    apply_gain_filter(&mut cmd, config.gain_db);
+    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline);
     cmd.arg("-f")
         .arg("segment")
         .arg("-segment_time")
@@ -543,7 +615,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
         .arg(sample_rate.to_string())
         .arg("-ac")
         .arg(channels.to_string());
-    apply_gain_filter(&mut cmd, config.gain_db);
+    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline);
     let mut child = cmd
         .arg("-f")
         .arg("segment")
@@ -590,6 +662,22 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-rtsp_transport")
         .arg(transport.ffmpeg_arg())
+        // Bound socket I/O so a camera that stops sending is *noticed*.
+        //
+        // ffmpeg has no "send RTSP keepalives" switch — it issues them on its
+        // own, from the session timeout the server advertises — so the stored
+        // `rtsp_keepalive` toggle had nothing to map to and did nothing. What
+        // an operator actually wants from it is the outcome: a stream that has
+        // silently stopped should end rather than block forever. `-timeout`
+        // (microseconds) is that knob. Without it ffmpeg's default is 0, "wait
+        // indefinitely", and a half-open TCP connection to a rebooted camera
+        // keeps the process alive and the supervisor content while no audio
+        // arrives at all.
+        .args(if config.pipeline.rtsp_stall_timeout {
+            vec!["-timeout".to_owned(), RTSP_SOCKET_TIMEOUT_US.to_string()]
+        } else {
+            Vec::new()
+        })
         .arg("-i")
         .arg(url)
         .arg("-vn")
@@ -599,7 +687,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
         .arg("48000")
         .arg("-ac")
         .arg("1");
-    apply_gain_filter(&mut cmd, config.gain_db);
+    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline);
     let mut child = cmd
         .arg("-f")
         .arg("segment")
@@ -719,6 +807,7 @@ mod capture_failure_classification {
 mod tests {
     use super::super::types::{AudioFormat, LocalOffset, RtspTransport};
     use super::*;
+    use crate::audio::capture::types::AudioPipeline;
     use std::path::PathBuf;
 
     #[test]
@@ -788,6 +877,7 @@ mod tests {
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            pipeline: AudioPipeline::none(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         };
@@ -822,7 +912,19 @@ mod tests {
             LocalOffset::utc(),
             SegmentClock::System,
         );
-        let tee = tee::spawn("test".to_owned(), source, writer, None, 0.0, None).ok()?;
+        let tee = tee::spawn(
+            "test".to_owned(),
+            source,
+            writer,
+            None,
+            Shaping {
+                gain_db: 0.0,
+                pipeline: AudioPipeline::none(),
+                spec,
+                pick: None,
+            },
+        )
+        .ok()?;
         Some(CaptureProcess {
             child,
             source: CaptureSource::Microphone {
@@ -912,6 +1014,7 @@ mod tests {
             segment_duration_secs: 3600,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            pipeline: AudioPipeline::none(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         };
@@ -1076,7 +1179,7 @@ mod tests {
         // exactly the `-af volume=...dB` pair. We assert on the rendered argv.
         let argv = |gain: f32| -> Vec<String> {
             let mut cmd = Command::new("ffmpeg");
-            apply_gain_filter(&mut cmd, gain);
+            apply_audio_filters(&mut cmd, gain, AudioPipeline::none());
             cmd.get_args()
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect()
@@ -1085,6 +1188,135 @@ mod tests {
         assert_eq!(
             argv(9.0),
             vec!["-af".to_string(), "volume=9.00dB".to_string()]
+        );
+    }
+}
+
+// ── the per-source pipeline flags reach the audio ───────────────────────
+//
+// Gates for the defect where `high_pass`, `dc_removal` and `agc` were stored
+// per source, shown in the admin UI, and read by nothing. Observed failing
+// against a shim in which `audio_filter_chain` ignored its `pipeline` argument
+// and returned only the gain filter — which is exactly what the pre-fix
+// `apply_gain_filter` did.
+//
+// The filter *names* here are not taken on trust: `filters_are_real_ffmpeg_filters`
+// runs the chain through the ffmpeg on this machine, so a typo or a filter that
+// does not exist in the installed build fails the suite rather than the field.
+#[cfg(test)]
+mod pipeline_filter_tests {
+    use super::*;
+    use crate::audio::capture::types::AudioPipeline;
+
+    #[test]
+    fn every_stage_off_and_unity_gain_produces_no_filter_chain() {
+        assert_eq!(audio_filter_chain(0.0, AudioPipeline::none()), None);
+    }
+
+    /// The pre-fix behaviour, kept as a gate: gain alone still yields exactly
+    /// the chain it always did, so sources without conditioning are unchanged.
+    #[test]
+    fn gain_alone_is_unchanged() {
+        assert_eq!(
+            audio_filter_chain(12.0, AudioPipeline::none()).as_deref(),
+            Some("volume=12.00dB")
+        );
+    }
+
+    /// The gate for the defect. Fails on the shim, which dropped `pipeline`.
+    #[test]
+    fn each_stage_contributes_its_filter() {
+        let hp = audio_filter_chain(
+            0.0,
+            AudioPipeline {
+                high_pass: true,
+                dc_removal: false,
+                agc: false,
+                rtsp_stall_timeout: false,
+            },
+        )
+        .expect("high-pass alone must produce a chain");
+        assert_eq!(hp, "highpass=f=120");
+
+        let dc = audio_filter_chain(
+            0.0,
+            AudioPipeline {
+                high_pass: false,
+                dc_removal: true,
+                agc: false,
+                rtsp_stall_timeout: false,
+            },
+        )
+        .expect("dc removal alone must produce a chain");
+        assert_eq!(dc, "highpass=f=5");
+
+        let agc = audio_filter_chain(
+            0.0,
+            AudioPipeline {
+                high_pass: false,
+                dc_removal: false,
+                agc: true,
+                rtsp_stall_timeout: false,
+            },
+        )
+        .expect("agc alone must produce a chain");
+        assert!(agc.starts_with("dynaudnorm"), "got {agc}");
+    }
+
+    /// Order is not cosmetic: DC has to go before the audible high-pass (a DC
+    /// step through a 120 Hz corner rings), conditioning before gain (so the
+    /// gain acts on the cleaned signal), and AGC last so it normalises the
+    /// final level rather than a level something later changes.
+    #[test]
+    fn stages_are_chained_in_signal_order() {
+        let chain = audio_filter_chain(
+            6.0,
+            AudioPipeline {
+                high_pass: true,
+                dc_removal: true,
+                agc: true,
+                rtsp_stall_timeout: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            chain,
+            "highpass=f=5,highpass=f=120,volume=6.00dB,dynaudnorm=f=500:g=15"
+        );
+    }
+
+    /// The names above are only worth anything if the installed ffmpeg agrees.
+    /// Runs the full chain over one second of generated silence; a bad filter
+    /// name or option makes ffmpeg exit non-zero and this fail.
+    #[test]
+    fn filters_are_real_ffmpeg_filters() {
+        if !is_tool_available("ffmpeg") {
+            eprintln!("ffmpeg not installed — filter-name check skipped");
+            return;
+        }
+        let chain = audio_filter_chain(
+            6.0,
+            AudioPipeline {
+                high_pass: true,
+                dc_removal: true,
+                agc: true,
+                rtsp_stall_timeout: false,
+            },
+        )
+        .unwrap();
+
+        let out = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error"])
+            .args(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "1"])
+            .args(["-af", &chain])
+            .args(["-f", "null", "-"])
+            .output()
+            .expect("spawn ffmpeg");
+
+        assert!(
+            out.status.success(),
+            "ffmpeg rejected the filter chain `{chain}`:\n{}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 }

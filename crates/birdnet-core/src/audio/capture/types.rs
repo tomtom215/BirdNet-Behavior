@@ -198,6 +198,13 @@ pub struct RecordingConfig {
     /// `ffmpeg -f alsa` — which made a station's capture tool depend on a
     /// number in the admin UI while the availability check did not know it.
     pub gain_db: f32,
+    /// Per-source signal conditioning applied before analysis.
+    ///
+    /// Like [`Self::gain_db`], *where* it is applied depends on the backend —
+    /// an ffmpeg source gets filters in its `-af` chain, a teed microphone gets
+    /// the equivalent stages in this process — but the conditioning is the
+    /// same either way.
+    pub pipeline: AudioPipeline,
     /// The station's live UTC offset, used to stamp segment filenames with
     /// local civil time. See [`LocalOffset`] for why it is shared rather than
     /// copied.
@@ -586,5 +593,102 @@ mod tests {
     #[test]
     fn local_offset_defaults_to_utc() {
         assert_eq!(LocalOffset::default().get(), 0);
+    }
+}
+
+/// Per-source signal-conditioning applied before analysis.
+///
+/// The admin UI has offered these toggles since the `audio_sources` table
+/// gained them, and they were stored, round-tripped, and shown — but never
+/// read by anything that touches audio. `PipelineFlags`' own doc comment in
+/// `birdnet-db` said the daemon "honours" them; it did not. An operator who
+/// turned off the high-pass on a source got exactly the audio they had before.
+///
+/// This is the core-side type the capture layer actually consumes.
+/// `birdnet-core` does not depend on `birdnet-db`, so the DB row's flags are
+/// mapped onto this at the resolver seam rather than the storage type leaking
+/// into the audio path.
+///
+/// # Where each one is applied
+///
+/// Two backends carry audio, and they condition it in different places, so
+/// each field says what it means in both:
+///
+/// | Flag | ffmpeg sources (RTSP, `PipeWire`) | teed microphone (`arecord`) |
+/// |------|-----------------------------------|-----------------------------|
+/// | `high_pass` | `highpass=f=…` in the `-af` chain | one-pole IIR in the tee |
+/// | `dc_removal` | `highpass=f=…` at 5 Hz | one-pole IIR in the tee |
+/// | `agc` | `dynaudnorm` | peak normaliser in the tee |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct AudioPipeline {
+    /// Attenuate below [`HIGH_PASS_CUTOFF_HZ`] to cut wind rumble and handling
+    /// noise before inference. Nothing `BirdNET` classifies lives down there:
+    /// the model's mel bank starts well above it.
+    pub high_pass: bool,
+    /// Remove any constant offset the capture chain adds. A DC-offset signal
+    /// wastes headroom and biases every frame-energy measurement the quality
+    /// gate takes, so this is on by default.
+    pub dc_removal: bool,
+    /// Normalise level automatically. Off by default: it helps a quiet or
+    /// wildly varying source, and on a well-set-up microphone it mostly
+    /// amplifies the noise floor between songs.
+    pub agc: bool,
+    /// Bound RTSP socket reads so a stream that has silently stopped ends
+    /// instead of blocking, letting the supervisor restart it.
+    ///
+    /// This is where the stored `rtsp_keepalive` toggle lands, and the name
+    /// change is the point. ffmpeg has no switch for sending RTSP keepalives —
+    /// it issues them itself, on the session timeout the server advertises —
+    /// so a flag promising to "send periodic OPTIONS requests" had nothing to
+    /// map to and did nothing at all. What an operator wants from it is the
+    /// *outcome*: notice a dead camera. `-timeout` delivers that, and a
+    /// half-open connection to a rebooted camera no longer keeps the process
+    /// alive and the supervisor content while no audio arrives.
+    ///
+    /// Ignored by non-RTSP sources.
+    pub rtsp_stall_timeout: bool,
+}
+
+/// High-pass corner used when [`AudioPipeline::high_pass`] is on.
+///
+/// 120 Hz sits below the fundamental of essentially every passerine song while
+/// still inside the band where wind, traffic and handling noise dominate.
+pub const HIGH_PASS_CUTOFF_HZ: f32 = 120.0;
+
+/// High-pass corner used for DC removal.
+///
+/// Low enough to be inaudible and to leave even the deepest bittern boom
+/// untouched, high enough to settle a DC step in a fraction of a second.
+pub const DC_BLOCK_CUTOFF_HZ: f32 = 5.0;
+
+impl Default for AudioPipeline {
+    fn default() -> Self {
+        Self {
+            high_pass: true,
+            dc_removal: true,
+            agc: false,
+            rtsp_stall_timeout: true,
+        }
+    }
+}
+
+impl AudioPipeline {
+    /// Nothing applied — the byte-exact passthrough used by tests and by any
+    /// caller that has not opted into conditioning.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            high_pass: false,
+            dc_removal: false,
+            agc: false,
+            rtsp_stall_timeout: false,
+        }
+    }
+
+    /// Whether any stage is enabled.
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        self.high_pass || self.dc_removal || self.agc
     }
 }
