@@ -15,4 +15,5 @@ pub mod outbound_queue;
 pub mod resilience;
 pub mod settings;
 pub mod sqlite;
+pub mod thresholds;
 pub mod weather;

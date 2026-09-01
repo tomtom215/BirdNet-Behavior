@@ -133,7 +133,10 @@ fn render_list_card(
 }
 
 /// Render the per-species confidence thresholds section as an HTMX partial.
-pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThreshold]) -> String {
+pub fn render_thresholds_partial(
+    thresholds: &[birdnet_db::sqlite::SpeciesThreshold],
+    suggestions: &[SuggestedThreshold],
+) -> String {
     let mut out = String::with_capacity(2048);
     out.push_str(r#"<div class="card">
   <div class="section-title">Per-Species Confidence Thresholds</div>
@@ -166,6 +169,8 @@ pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThresh
         }
         out.push_str("</tbody></table>");
     }
+
+    out.push_str(&render_threshold_suggestions(suggestions));
 
     out.push_str(
         r##"<form hx-post="/admin/species/thresholds/set" hx-target="#thresholds-section" hx-swap="innerHTML" class="add-row">
@@ -408,5 +413,213 @@ mod tests {
         assert!(test.contains(r#"href="/admin/species" class="am-nav-active""#));
         assert!(test.contains("bnb-crumbs"));
         assert!(test.contains("Filter test"));
+    }
+}
+
+/// A threshold suggestion, ready to render.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SuggestedThreshold {
+    /// Scientific name — the key the threshold is stored under.
+    pub sci_name: String,
+    /// Common name, for the operator reading the row.
+    pub com_name: String,
+    /// The suggestion and the evidence behind it.
+    pub suggestion: birdnet_db::thresholds::ThresholdSuggestion,
+    /// The threshold already configured for this species, if any.
+    pub current: Option<f64>,
+}
+
+/// Suggestions weaker than this are not shown at all.
+///
+/// Youden's J near zero means confidence carries no information about whether
+/// the operator will confirm a detection — the reviews and the model disagree
+/// at random. Any threshold then looks as good as any other, and offering one
+/// would dress up noise as advice.
+pub const MIN_SUGGESTION_J: f64 = 0.2;
+
+/// Render the suggestions block, or nothing when there is nothing worth saying.
+fn render_threshold_suggestions(suggestions: &[SuggestedThreshold]) -> String {
+    let worth_showing: Vec<&SuggestedThreshold> = suggestions
+        .iter()
+        .filter(|s| s.suggestion.youden_j() >= MIN_SUGGESTION_J)
+        .collect();
+    if worth_showing.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::with_capacity(1024);
+    out.push_str(
+        r#"<div class="section-title mt">Suggested from your reviews</div>
+  <p class="hint">Worked out from the detections you have confirmed and rejected for each species — the threshold that best separates the two. Nothing is applied until you press Apply. The counts are what the suggestion would have done to the reviews it was derived from.</p>
+  <table class="thr-table"><thead><tr><th class="cell-left">Species</th><th>Suggested</th><th>Would have kept</th><th>Would have caught</th><th>Separation</th><th></th></tr></thead><tbody>"#,
+    );
+    for s in worth_showing {
+        let sci = escape_html(&s.sci_name);
+        let com = escape_html(&s.com_name);
+        let pct = s.suggestion.threshold * 100.0;
+        let kept = s.suggestion.confirmed_kept;
+        let confirmed_total = s.suggestion.confirmed_kept + s.suggestion.confirmed_lost;
+        let caught = s.suggestion.rejected_caught;
+        let rejected_total = s.suggestion.rejected_caught + s.suggestion.rejected_kept;
+        let j = s.suggestion.youden_j();
+        // Naming what is already set matters: the row otherwise reads as new
+        // advice when it may be advice the operator already took.
+        let current = s.current.map_or_else(
+            || "<span class='hint'>none set</span>".to_string(),
+            |c| format!("<span class='hint'>now {:.0}%</span>", c * 100.0),
+        );
+        let _ = write!(
+            out,
+            r##"<tr>
+  <td>{com}<br><span class="hint">{sci}</span></td>
+  <td class="cell-center">{pct:.0}%<br>{current}</td>
+  <td class="cell-center">{kept} of {confirmed_total} confirmed</td>
+  <td class="cell-center">{caught} of {rejected_total} rejected</td>
+  <td class="cell-center">{j:.2}</td>
+  <td class="cell-right">
+    <form hx-post="/admin/species/thresholds/set" hx-target="#thresholds-section" hx-swap="innerHTML" class="inline-form">
+      <input type="hidden" name="sci_name" value="{sci}">
+      <input type="hidden" name="threshold" value="{:.4}">
+      <button type="submit" class="btn btn-primary">Apply</button>
+    </form>
+  </td>
+</tr>"##,
+            s.suggestion.threshold
+        );
+    }
+    out.push_str("</tbody></table>");
+    out
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::{MIN_SUGGESTION_J, SuggestedThreshold, render_thresholds_partial};
+    use birdnet_db::thresholds::ThresholdSuggestion;
+
+    /// A suggestion with the given split.
+    fn suggestion(
+        sci: &str,
+        threshold: f64,
+        confirmed_kept: usize,
+        confirmed_lost: usize,
+        rejected_caught: usize,
+        rejected_kept: usize,
+        current: Option<f64>,
+    ) -> SuggestedThreshold {
+        SuggestedThreshold {
+            sci_name: sci.to_owned(),
+            com_name: "Common Name".to_owned(),
+            suggestion: ThresholdSuggestion {
+                threshold,
+                confirmed_kept,
+                confirmed_lost,
+                rejected_caught,
+                rejected_kept,
+            },
+            current,
+        }
+    }
+
+    /// A clean, well-separated suggestion.
+    fn strong() -> SuggestedThreshold {
+        suggestion("Turdus merula", 0.85, 8, 0, 6, 0, None)
+    }
+
+    #[test]
+    fn a_suggestion_is_rendered_with_the_evidence_behind_it() {
+        // The numbers are the whole point: the operator is being asked to
+        // decide, and "0.85" alone gives them nothing to decide on. What it
+        // would have cost and what it would have caught are the two facts.
+        let html = render_thresholds_partial(&[], &[strong()]);
+        assert!(html.contains("85%"), "the threshold is missing: {html}");
+        assert!(
+            html.contains("8 of 8 confirmed"),
+            "the cost is missing: {html}"
+        );
+        assert!(
+            html.contains("6 of 6 rejected"),
+            "the benefit is missing: {html}"
+        );
+        assert!(html.contains("Turdus merula"), "{html}");
+    }
+
+    #[test]
+    fn applying_a_suggestion_posts_the_exact_threshold_not_the_rounded_one() {
+        // The table shows 85%, but the value that must reach the form is the
+        // computed one. Posting the rounded percentage would apply a threshold
+        // the evidence was never about, and by a margin big enough to change
+        // which detections it admits.
+        let html = render_thresholds_partial(
+            &[],
+            &[suggestion("Turdus merula", 0.8123, 5, 1, 4, 0, None)],
+        );
+        assert!(
+            html.contains(r#"name="threshold" value="0.8123""#),
+            "the Apply button posts a rounded threshold: {html}"
+        );
+        assert!(
+            html.contains("81%"),
+            "the display should still round: {html}"
+        );
+    }
+
+    #[test]
+    fn a_suggestion_that_separates_nothing_is_not_shown() {
+        // Youden's J near zero means the reviews carry no information about
+        // confidence. Offering a threshold anyway would dress up noise as
+        // advice, and the operator has no way to tell the difference.
+        let noise = suggestion("Turdus merula", 0.7, 4, 4, 4, 4, None);
+        assert!(noise.suggestion.youden_j().abs() < f64::EPSILON);
+        let html = render_thresholds_partial(&[], &[noise]);
+        assert!(
+            !html.contains("Suggested from your reviews"),
+            "a suggestion with no separating power was rendered: {html}"
+        );
+    }
+
+    #[test]
+    fn the_cutoff_admits_a_suggestion_just_above_it() {
+        // Counterpart: a filter that hid everything would satisfy the gate
+        // above and the feature would never appear.
+        assert!(strong().suggestion.youden_j() > MIN_SUGGESTION_J);
+        assert!(
+            render_thresholds_partial(&[], &[strong()]).contains("Suggested from your reviews")
+        );
+    }
+
+    #[test]
+    fn a_species_that_already_has_a_threshold_says_so() {
+        // Otherwise the row reads as new advice when it may be advice the
+        // operator already took, and pressing Apply looks like a no-op.
+        let html = render_thresholds_partial(
+            &[],
+            &[suggestion("Turdus merula", 0.85, 8, 0, 6, 0, Some(0.90))],
+        );
+        assert!(html.contains("now 90%"), "{html}");
+
+        let html = render_thresholds_partial(&[], &[strong()]);
+        assert!(html.contains("none set"), "{html}");
+    }
+
+    #[test]
+    fn no_suggestions_renders_no_suggestion_block_at_all() {
+        let html = render_thresholds_partial(&[], &[]);
+        assert!(!html.contains("Suggested from your reviews"), "{html}");
+        // ...and the rest of the page is still there.
+        assert!(html.contains("Per-Species Confidence Thresholds"), "{html}");
+    }
+
+    #[test]
+    fn a_species_name_is_escaped_in_both_the_cell_and_the_form() {
+        // The name reaches here from the model's label file, and lands in a
+        // table cell *and* an attribute value.
+        let html = render_thresholds_partial(
+            &[],
+            &[suggestion(r#"Evil" onload="x"#, 0.85, 8, 0, 6, 0, None)],
+        );
+        assert!(
+            !html.contains(r#"onload="x"#),
+            "unescaped name reached the page: {html}"
+        );
     }
 }

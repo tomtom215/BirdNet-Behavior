@@ -8,7 +8,9 @@ use serde::Deserialize;
 
 use birdnet_db::settings::{SettingsCategory, ensure_settings_table, get, set};
 
-use super::render::{render_filter_test_page, render_species_partial, render_thresholds_partial};
+use super::render::{
+    SuggestedThreshold, render_filter_test_page, render_species_partial, render_thresholds_partial,
+};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -114,11 +116,45 @@ pub async fn remove_include(
 // Threshold handlers
 // ---------------------------------------------------------------------------
 
+/// Load the current thresholds and the suggestions derived from reviews.
+///
+/// One helper because the three threshold handlers all end by re-rendering the
+/// same partial, and a suggestion computed in only two of them would appear
+/// and vanish as the operator worked.
+fn load_thresholds_and_suggestions(
+    state: &AppState,
+) -> (
+    Vec<birdnet_db::sqlite::SpeciesThreshold>,
+    Vec<SuggestedThreshold>,
+) {
+    state.with_db(|conn| {
+        let thresholds = birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default();
+        let configured: std::collections::HashMap<&str, f64> = thresholds
+            .iter()
+            .map(|t| (t.sci_name.as_str(), t.confidence_threshold))
+            .collect();
+        let suggestions = birdnet_db::sqlite::reviewed_detections_by_species(conn)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(sci_name, com_name, reviews)| {
+                birdnet_db::thresholds::suggest_threshold(&reviews).map(|suggestion| {
+                    SuggestedThreshold {
+                        current: configured.get(sci_name.as_str()).copied(),
+                        sci_name,
+                        com_name,
+                        suggestion,
+                    }
+                })
+            })
+            .collect();
+        (thresholds, suggestions)
+    })
+}
+
 /// Return the HTMX partial fragment listing all current per-species confidence thresholds.
 pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
-    let thresholds =
-        state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());
-    Html(render_thresholds_partial(&thresholds))
+    let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
+    Html(render_thresholds_partial(&thresholds, &suggestions))
 }
 
 /// Per-species threshold submission.
@@ -156,9 +192,8 @@ pub async fn set_threshold(
     state.with_db(|conn| {
         birdnet_db::sqlite::set_species_threshold(conn, &sci_name, threshold).ok();
     });
-    let thresholds =
-        state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());
-    Ok(Html(render_thresholds_partial(&thresholds)))
+    let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
+    Ok(Html(render_thresholds_partial(&thresholds, &suggestions)))
 }
 
 /// Form carrying the species whose per-species threshold should be removed.
@@ -180,9 +215,8 @@ pub async fn delete_threshold(
     state.with_db(|conn| {
         birdnet_db::sqlite::delete_species_threshold(conn, &form.sci_name).ok();
     });
-    let thresholds =
-        state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());
-    Ok(Html(render_thresholds_partial(&thresholds)))
+    let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
+    Ok(Html(render_thresholds_partial(&thresholds, &suggestions)))
 }
 
 // ---------------------------------------------------------------------------
