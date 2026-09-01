@@ -20,6 +20,7 @@
 pub mod disk;
 pub mod live;
 pub mod manager;
+pub mod probe;
 pub mod process;
 pub mod status;
 pub mod tmpfs;

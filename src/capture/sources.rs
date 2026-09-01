@@ -11,6 +11,13 @@ use crate::cli::Cli;
 
 use super::{schedule, supervisor};
 
+/// Sample rate a station captures at unless the device says otherwise.
+///
+/// 48 kHz: what the V2.4 model wants, what most USB capture devices do, and a
+/// clean integer ratio to the 32 kHz the V3.0 models want. Was written inline
+/// at each autodetected source, so the two could drift apart.
+const DEFAULT_CAPTURE_RATE: u32 = 48_000;
+
 /// Resolve all RTSP URLs from CLI flags and config.
 ///
 /// Priority, first match wins: `--rtsp-urls`, then config `RTSP_URLS`
@@ -381,8 +388,11 @@ pub(super) fn resolve_sources(
 
     if let Some(device) = pipewire_device {
         let mut srcs = vec![CaptureSource::PipeWire {
+            // PipeWire resamples internally, so it accepts any rate and there
+            // is nothing to probe; the ALSA path below is where a device can
+            // refuse.
+            sample_rate: DEFAULT_CAPTURE_RATE,
             device,
-            sample_rate: 48_000,
             channels: 1,
             stream_id: None,
         }];
@@ -395,8 +405,14 @@ pub(super) fn resolve_sources(
             .enumerate()
             .map(|(i, device)| CaptureSource::Microphone {
                 channel_pick: None,
+                // Ask the device rather than assuming. A 44.1 kHz-only
+                // interface handed `-r 48000` either fails to start — so the
+                // supervisor restarts it forever behind an ALSA error nobody
+                // reads — or is silently plug-converted, which is worse:
+                // capture works and every spectrogram has been resampled from
+                // something narrower than the station believes.
+                sample_rate: capture_rate_for(&device, DEFAULT_CAPTURE_RATE),
                 device,
-                sample_rate: 48_000,
                 channels: 1,
                 // A single mic keeps `None` (id-less filename, `local` label);
                 // several mics each get a stable `MIC_n` id.
@@ -485,6 +501,31 @@ fn capture_source_to_new(
         }
         CaptureSource::Rtsp { url, .. } => NewAudioSource::defaults(id, SourceKind::Rtsp, url),
     }
+}
+
+/// The rate a microphone should capture at, given what it says it supports.
+///
+/// `preferred` is the model's rate. Falls back to it whenever the device says
+/// nothing usable, so a probe that fails costs a station nothing — the config
+/// is exactly what it would have been.
+///
+/// Separated from the autodetection below so the log line and the fallback are
+/// testable without a sound card; the probe itself is
+/// [`birdnet_core::audio::capture::probe::probe_alsa_rates`].
+fn capture_rate_for(device: &str, preferred: u32) -> u32 {
+    use birdnet_core::audio::capture::probe::{pick_rate, probe_alsa_rates};
+
+    let support = probe_alsa_rates(device);
+    pick_rate(&support, preferred).map_or(preferred, |rate| {
+        tracing::info!(
+            device,
+            preferred,
+            using = rate,
+            ?support,
+            "capture device does not support the preferred sample rate; using its nearest"
+        );
+        rate
+    })
 }
 
 #[cfg(test)]
@@ -1183,5 +1224,28 @@ mod quiet_endpoint_tests {
         for s in ["", "moonrise", "25:00", "noon", "sun"] {
             assert_eq!(parse_quiet_endpoint(s), None, "{s} must not parse");
         }
+    }
+
+    // ── capture-rate probing ────────────────────────────────────────────
+
+    #[test]
+    fn a_device_that_cannot_be_probed_keeps_the_preferred_rate() {
+        // The failure path, and the one that runs in this project's CI: there
+        // is no sound card and no `arecord`, so the probe learns nothing. A
+        // station must then be configured exactly as it was before probing
+        // existed — the feature can improve a configuration, never break one.
+        assert_eq!(
+            capture_rate_for("no-such-device-anywhere", DEFAULT_CAPTURE_RATE),
+            DEFAULT_CAPTURE_RATE
+        );
+        // And the model's rate is honoured, not a constant baked in here.
+        assert_eq!(capture_rate_for("no-such-device-anywhere", 32_000), 32_000);
+    }
+
+    #[test]
+    fn the_default_capture_rate_is_the_one_the_v24_model_wants() {
+        // Named once rather than written at each autodetected source, which is
+        // how the two could previously drift apart.
+        assert_eq!(DEFAULT_CAPTURE_RATE, 48_000);
     }
 }
