@@ -155,6 +155,11 @@ pub fn run_daemon(
         }
     };
 
+    let filter_observer = config.on_species_filter_state.clone();
+    if let Some(observer) = filter_observer.as_ref() {
+        observer.report(species_filter.has_model(), None);
+    }
+
     // Create privacy filter
     let privacy_filter = PrivacyFilter::new(config.privacy_threshold);
 
@@ -213,6 +218,7 @@ pub fn run_daemon(
                 &mut model,
                 &privacy_filter,
                 &mut species_filter,
+                filter_observer.as_ref(),
                 lat,
                 lon,
                 &event_tx,
@@ -297,6 +303,7 @@ pub fn run_daemon(
                     &mut model,
                     &privacy_filter,
                     &mut species_filter,
+                    filter_observer.as_ref(),
                     lat,
                     lon,
                     0, // week will be computed by caller
@@ -339,6 +346,7 @@ fn process_existing_files(
     model: &mut BirdNetModel,
     privacy_filter: &PrivacyFilter,
     species_filter: &mut SpeciesFilter,
+    filter_observer: Option<&super::SpeciesFilterObserver>,
     lat: Option<f64>,
     lon: Option<f64>,
     event_tx: &mpsc::SyncSender<DetectionEvent>,
@@ -373,6 +381,7 @@ fn process_existing_files(
             model,
             privacy_filter,
             species_filter,
+            filter_observer,
             lat,
             lon,
             0,
@@ -443,6 +452,7 @@ mod tests {
             process_existing: false,
             metadata_model_path: None,
             metadata_labels_path: None,
+            on_species_filter_state: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

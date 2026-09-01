@@ -214,9 +214,16 @@ pub(super) fn event_processor(
                         "failed to quarantine detection"
                     );
                 }
+                state.metrics().inc_detection_dropped("quarantine");
                 continue;
             }
-            DispositionDecision::DropBelowGlobal => continue,
+            DispositionDecision::DropBelowGlobal => {
+                // Counted, not silent. "The station is detecting nothing" and
+                // "the station is discarding everything" look identical from
+                // outside, and the reason label is what tells them apart.
+                state.metrics().inc_detection_dropped("confidence");
+                continue;
+            }
             DispositionDecision::Accept => {}
         }
 

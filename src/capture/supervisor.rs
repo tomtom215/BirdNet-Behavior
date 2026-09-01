@@ -442,6 +442,7 @@ impl<S: Source> SupervisedSource<S> {
                     "audio source STALLED — process alive but writing no segments; restarting it"
                 );
                 self.source.stop();
+                metrics.inc_capture_stall(&self.label);
                 stalled_now = true;
             } else {
                 if let Some(since) = self.down_since {
@@ -491,6 +492,7 @@ impl<S: Source> SupervisedSource<S> {
         // attempt}: a process that starts and then never writes a segment is
         // stalled `stall_after` from HERE, not from a stale output watermark.
         self.started_at = Some(now);
+        metrics.inc_capture_restart(&self.label);
         match self.source.start() {
             Ok(()) => tracing::info!(
                 source = %self.label,

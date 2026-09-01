@@ -172,6 +172,16 @@ pub fn start_detection_daemon(
         process_existing: cli.process_existing,
         metadata_model_path,
         metadata_labels_path,
+        // Publish the occurrence filter's real state to Prometheus. This is
+        // the number that would have made the inert-filter defect visible from
+        // a dashboard instead of from reading the code: 0 means every species
+        // the classifier knows is a candidate, wherever the station is.
+        on_species_filter_state: Some(birdnet_core::detection::daemon::SpeciesFilterObserver::new(
+            {
+                let metrics = state.metrics();
+                move |active, candidates| metrics.set_occurrence_filter(active, candidates)
+            },
+        )),
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,

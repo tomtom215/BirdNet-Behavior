@@ -274,6 +274,7 @@ fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
         &mut model,
         &privacy,
         &mut filter,
+        None,
         Some(42.36),
         Some(-71.06),
         20,

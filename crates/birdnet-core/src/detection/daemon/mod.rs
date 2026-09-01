@@ -71,6 +71,34 @@ impl From<InferenceError> for DaemonError {
     }
 }
 
+/// Observer for the species occurrence filter's state.
+///
+/// `(active, candidates)`: whether the filter is running at all, and how many
+/// species it admits once it has run (`None` before its first evaluation).
+#[derive(Clone)]
+pub struct SpeciesFilterObserver(std::sync::Arc<dyn Fn(bool, Option<u64>) + Send + Sync>);
+
+impl std::fmt::Debug for SpeciesFilterObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SpeciesFilterObserver(..)")
+    }
+}
+
+impl SpeciesFilterObserver {
+    /// Wrap a closure.
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(bool, Option<u64>) + Send + Sync + 'static,
+    {
+        Self(std::sync::Arc::new(f))
+    }
+
+    /// Report the current state.
+    pub fn report(&self, active: bool, candidates: Option<u64>) {
+        (self.0)(active, candidates);
+    }
+}
+
 /// Configuration for the detection daemon.
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
@@ -105,6 +133,16 @@ pub struct DaemonConfig {
     /// `None`, the lists in [`Self::species_filter`] are used as given and never
     /// change for the life of the daemon.
     pub species_lists_provider: Option<crate::inference::species_filter::SpeciesListsProvider>,
+    /// Called when the species occurrence filter's state changes: whether it
+    /// is actually running, and how many species it currently admits.
+    ///
+    /// A callback rather than a metrics handle because `birdnet-core` does not
+    /// depend on the web crate — the same reason `species_lists_provider` is
+    /// shaped this way. The binary wires it to the Prometheus registry, where
+    /// `birdnet_occurrence_filter_active` is the single number that would have
+    /// made an inert filter visible from a dashboard instead of from reading
+    /// the code.
+    pub on_species_filter_state: Option<SpeciesFilterObserver>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
     /// Station latitude (for species occurrence filtering).
@@ -200,6 +238,7 @@ mod tests {
             process_existing: false,
             metadata_model_path: None,
             metadata_labels_path: None,
+            on_species_filter_state: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

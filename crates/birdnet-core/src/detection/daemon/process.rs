@@ -126,6 +126,7 @@ pub fn process_and_infer_filtered(
     model: &mut BirdNetModel,
     privacy_filter: &PrivacyFilter,
     species_filter: &mut SpeciesFilter,
+    filter_observer: Option<&crate::detection::daemon::SpeciesFilterObserver>,
     lat: Option<f64>,
     lon: Option<f64>,
     week: u32,
@@ -171,6 +172,12 @@ pub fn process_and_infer_filtered(
     // coordinates, as this used to, meant a station that never set a latitude
     // kept recording every species its operator had asked to suppress.
     let allowed_species = species_filter.filter_species(lat.zip(lon), week, model.labels())?;
+    if let Some(observer) = filter_observer {
+        observer.report(
+            species_filter.has_model(),
+            Some(allowed_species.len() as u64),
+        );
+    }
 
     // Collect events, applying species filter
     let mut events = Vec::new();
