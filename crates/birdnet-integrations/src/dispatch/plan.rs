@@ -5,7 +5,10 @@
 //! a test cannot point them at a local stub. Building the request as data
 //! first makes the part that actually matters — the URL the credential is
 //! spliced into, the payload shape, which header carries the token — assertable
-//! without a network, and leaves [`super::send`] as a thin executor.
+//! without a network, and leaves [`super::send()`] as a thin executor.
+//!
+//! (`send` is both a module and the function re-exported from it, so the link
+//! needs the `()` to say which.)
 
 use serde_json::{Value, json};
 

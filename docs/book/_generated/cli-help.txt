@@ -165,6 +165,20 @@ Options:
 
           [env: BIRDNET_APPRISE_URL=]
 
+      --notify-urls <NOTIFY_URLS>
+          Notification URLs delivered in-process, comma- or newline-separated.
+
+          Uses Apprise's URL syntax — `discord://{id}/{token}`, `tgram://{bot_token}/{chat_id}`, `ntfy://{topic}`, `gotify://{host}/{token}`, `pover://{user}@{token}`, `slack://{a}/{b}/{c}`, `jsons://{host}/{path}` — but sends them directly, so no Apprise installation is involved. A scheme without a native sender is reported once at startup and needs `--apprise-config`.
+
+          [env: BIRDNET_NOTIFY_URLS=]
+
+      --notify-rate-per-minute <NOTIFY_RATE_PER_MINUTE>
+          Ceiling on notifications per destination per minute; `0` disables it.
+
+          About the services' limits rather than ours: Discord allows five requests a second per webhook, Telegram about thirty, and Pushover ten thousand messages a month. Config-file key: `NOTIFY_RATE_PER_MINUTE`.
+
+          [env: BIRDNET_NOTIFY_RATE_PER_MINUTE=]
+
       --notify-confidence <NOTIFY_CONFIDENCE>
           Minimum confidence threshold for Apprise notifications (0.0–1.0)
 
@@ -345,6 +359,55 @@ Options:
           [env: BIRDNET_PRIVACY_THRESHOLD=]
           [default: 0.0]
 
+      --noise-threshold <NOISE_THRESHOLD>
+          Confidence at which a barking dog suppresses its audio chunk (0.0 = disabled).
+
+          `BirdNET`'s label set carries non-bird classes, and a bark near the microphone is broadband enough that the classifier also produces confident-looking scores for whatever species it most resembles. When a watched class scores at or above this, every detection in that chunk is discarded. Typical values: 0.5-0.8. Config key: `NOISE_THRESHOLD`.
+
+          [env: BIRDNET_NOISE_THRESHOLD=]
+          [default: 0.0]
+
+      --noise-classes <NOISE_CLASSES>
+          Non-bird label names the noise filter watches, comma-separated.
+
+          Defaults to `Dog`. Other classes in the label set are `Siren`, `Engine`, `Power tools`, `Fireworks`, `Gun`, `Environmental` and `Noise` — the last two score highly on ordinary quiet recordings, so watching them will suppress a great deal. Names are matched exactly (case-insensitively) against a label's common or scientific name. Config key: `NOISE_CLASSES`.
+
+          [env: BIRDNET_NOISE_CLASSES=]
+
+      --duplicate-interval-secs <DUPLICATE_INTERVAL_SECS>
+          Suppress a repeat of the same species within this many seconds (0 = disabled).
+
+          A 15-second recording is five 3-second chunks, so a bird that sings through the whole of it is recorded five times — and every count in the application is a row count, so a species that sings in long phrases outscores one that calls in short bursts for no reason but phrasing.
+
+          Off by default: switching it on changes how many rows a station records, which puts a visible step in every chart when it happens. Config key: `DUPLICATE_INTERVAL_SECS`.
+
+          [env: BIRDNET_DUPLICATE_INTERVAL_SECS=]
+          [default: 0]
+
+      --night-filter
+          Quarantine day birds heard in the middle of the night.
+
+          A blue tit "detected" at 02:30 is almost always the classifier hearing something else. Owls, nightjars, rails and bitterns are exempt — see `birdnet_core::detection::nocturnal` for the genus list, and `--night-extra-nocturnal` to add to it.
+
+          Needs station coordinates; without them there is no sunrise to compute and the filter stays off. Detections are quarantined for review, never dropped, because the taxonomy is genus-level and cannot be complete. Config key: `NIGHT_FILTER`.
+
+          [env: BIRDNET_NIGHT_FILTER=]
+
+      --night-margin-mins <NIGHT_MARGIN_MINS>
+          Minutes after sunset and before sunrise before the night window opens.
+
+          Birds sing through dusk and start again well before sunrise, so a window that began at sunset would quarantine the evening chorus. Config key: `NIGHT_MARGIN_MINS`.
+
+          [env: BIRDNET_NIGHT_MARGIN_MINS=]
+          [default: 60]
+
+      --night-extra-nocturnal <NIGHT_EXTRA_NOCTURNAL>
+          Extra genera or scientific names always allowed at night, comma-separated.
+
+          A station recording nocturnal flight calls — migrating thrushes and warblers calling as they pass overhead — should either leave `--night-filter` off or name those genera here. Config key: `NIGHT_EXTRA_NOCTURNAL`.
+
+          [env: BIRDNET_NIGHT_EXTRA_NOCTURNAL=]
+
       --overlap <OVERLAP>
           Analysis window overlap in seconds (0.0-2.9, default 0.0).
 
@@ -476,10 +539,32 @@ Options:
           [env: BIRDNET_MQTT_HOST=]
 
       --mqtt-port <MQTT_PORT>
-          MQTT broker port (default: 1883; TLS: 8883)
+          MQTT broker port.
+
+          Left unset it is 1883, or 8883 when `--mqtt-tls` is given.
 
           [env: BIRDNET_MQTT_PORT=]
-          [default: 1883]
+
+      --mqtt-tls
+          Connect to the MQTT broker over TLS (`mqtts`).
+
+          The certificate is verified against the platform trust store plus anything in `--mqtt-ca-file`. There is no way to skip verification: an unverified TLS connection carrying the broker credentials is worse than a plaintext one, because it looks safe.
+
+          [env: BIRDNET_MQTT_TLS=]
+
+      --mqtt-ca-file <MQTT_CA_FILE>
+          PEM file of extra certificates to trust for `--mqtt-tls`.
+
+          For a broker behind a private CA — or a self-signed one, whose own certificate works here as a trust anchor. Config key: `MQTT_CA_FILE`.
+
+          [env: BIRDNET_MQTT_CA_FILE=]
+
+      --mqtt-tls-server-name <MQTT_TLS_SERVER_NAME>
+          Hostname to validate the broker's certificate against.
+
+          Defaults to `--mqtt-host`. Set it when connecting to a broker by IP whose certificate names a hostname — the usual shape on a home LAN with no internal DNS. Config key: `MQTT_TLS_SERVER_NAME`.
+
+          [env: BIRDNET_MQTT_TLS_SERVER_NAME=]
 
       --mqtt-client-id <MQTT_CLIENT_ID>
           MQTT client identifier published in CONNECT packets.

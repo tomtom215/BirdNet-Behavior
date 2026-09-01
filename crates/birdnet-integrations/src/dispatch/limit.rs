@@ -22,6 +22,12 @@
 
 use std::time::{Duration, Instant};
 
+// The three tuning constants below are private, so the public docs above name
+// them in plain backticks rather than as intra-doc links: rustdoc runs with
+// `-D warnings`, and a public item linking to a private one fails the build
+// (it would resolve only under `--document-private-items`). Their values are
+// stated in the prose that names them, so nothing is lost.
+
 /// Consecutive failures before a destination is considered down.
 ///
 /// Two rather than one: a single timeout is ordinary on a domestic uplink, and
@@ -49,8 +55,8 @@ pub enum Verdict {
 
 /// Per-destination circuit breaker.
 ///
-/// Closed until [`TRIP_AFTER`] consecutive failures, then open for a period
-/// that doubles with each further trip up to [`OPEN_CAP`]. One probe is
+/// Closed until `TRIP_AFTER` consecutive failures, then open for a period
+/// that doubles with each further trip up to `OPEN_CAP`. One probe is
 /// admitted each time the open period elapses.
 #[derive(Debug, Clone)]
 pub struct Breaker {
@@ -112,7 +118,7 @@ impl Breaker {
     }
 
     /// Record a failure. Opens or re-opens the circuit once the threshold is
-    /// reached, for a period that doubles per trip up to [`OPEN_CAP`].
+    /// reached, for a period that doubles per trip up to `OPEN_CAP`.
     pub fn on_failure(&mut self, now: Instant) {
         self.failures = self.failures.saturating_add(1);
         // A failed probe counts as a fresh trip: the destination is still down.
@@ -239,7 +245,7 @@ impl Gate {
     /// Decide whether to send now, spending a rate-limit token if one is used.
     ///
     /// The probe is *not* exempt from the rate limit, and does not need to be:
-    /// the shortest open period ([`OPEN_BASE`]) is at least as long as the time
+    /// the shortest open period (`OPEN_BASE`) is at least as long as the time
     /// the bucket takes to refill one token at the slowest configurable rate,
     /// so a probe always finds a token waiting. An earlier version had an
     /// exemption here; it was unreachable, and no mutation of it could be made
