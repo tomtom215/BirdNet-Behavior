@@ -26,7 +26,7 @@ use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use super::types::{ConnAckError, MqttConfig, MqttError};
+use super::types::{ConnAckError, MqttConfig, MqttError, TlsConfig};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -44,6 +44,47 @@ use super::types::{ConnAckError, MqttConfig, MqttError};
 /// Returns [`MqttError`] if the connection fails, the broker rejects
 /// the CONNECT, or any I/O error occurs.
 pub fn publish(config: &MqttConfig, topic: &str, payload: &[u8]) -> Result<(), MqttError> {
+    // The TLS session is built *before* the socket is opened. A CA file that
+    // is missing or unusable is a configuration mistake, and reporting it as
+    // "connection refused" — which is what happens when the broker is also
+    // down — sends the operator to look at the wrong thing.
+    let tls = config
+        .tls
+        .as_ref()
+        .map(|tls| {
+            let name = tls.server_name.as_deref().unwrap_or(&config.host);
+            tls_session(tls, name)
+        })
+        .transpose()?;
+
+    let stream = connect(config)?;
+    match tls {
+        None => session(stream, config, topic, payload),
+        Some(conn) => session(
+            rustls::StreamOwned::new(conn, stream),
+            config,
+            topic,
+            payload,
+        ),
+    }
+}
+
+/// The CONNECT → CONNACK → PUBLISH → DISCONNECT exchange, over any transport.
+fn session<S: Read + Write>(
+    mut stream: S,
+    config: &MqttConfig,
+    topic: &str,
+    payload: &[u8],
+) -> Result<(), MqttError> {
+    send_connect(&mut stream, config)?;
+    recv_connack(&mut stream)?;
+    send_publish(&mut stream, topic, payload, config.retain)?;
+    send_disconnect(&mut stream)?;
+    Ok(())
+}
+
+/// Open the TCP connection, with both timeouts applied.
+fn connect(config: &MqttConfig) -> Result<TcpStream, MqttError> {
     let addr = format!("{}:{}", config.host, config.port);
 
     let timeout = Duration::from_millis(config.timeout_ms);
@@ -57,7 +98,7 @@ pub fn publish(config: &MqttConfig, topic: &str, payload: &[u8]) -> Result<(), M
         .map_err(|e| MqttError::Connection(format!("{addr}: {e}")))?
         .next()
         .ok_or_else(|| MqttError::Connection(format!("{addr}: no addresses resolved")))?;
-    let mut stream = TcpStream::connect_timeout(&sock_addr, timeout)
+    let stream = TcpStream::connect_timeout(&sock_addr, timeout)
         .map_err(|e| MqttError::Connection(format!("{addr}: {e}")))?;
 
     stream
@@ -67,20 +108,84 @@ pub fn publish(config: &MqttConfig, topic: &str, payload: &[u8]) -> Result<(), M
         .set_write_timeout(Some(timeout))
         .map_err(MqttError::Io)?;
 
-    // Perform the three-step handshake: CONNECT → CONNACK → PUBLISH → DISCONNECT
-    send_connect(&mut stream, config)?;
-    recv_connack(&mut stream)?;
-    send_publish(&mut stream, topic, payload, config.retain)?;
-    send_disconnect(&mut stream)?;
+    Ok(stream)
+}
 
-    Ok(())
+/// Build the rustls session for one connection.
+///
+/// Trust anchors are the platform store plus anything in `ca_file`. Which
+/// certificate belongs in that file depends on whether the broker is behind a
+/// private CA or self-signed; see [`TlsConfig::ca_file`].
+fn tls_session(tls: &TlsConfig, server_name: &str) -> Result<rustls::ClientConnection, MqttError> {
+    let mut roots = rustls::RootCertStore::empty();
+
+    // Platform roots are best-effort: a minimal container image may carry no
+    // trust store at all, and that is not a failure when `ca_file` supplies
+    // the anchor the broker actually uses.
+    match rustls_native_certs::load_native_certs() {
+        result if result.certs.is_empty() && tls.ca_file.is_none() => {
+            return Err(MqttError::Tls(format!(
+                "no trust anchors: the platform certificate store is empty or unreadable \
+                 ({} error(s)) and no CA file was configured",
+                result.errors.len()
+            )));
+        }
+        result => {
+            let (added, _) = roots.add_parsable_certificates(result.certs);
+            tracing::debug!(added, "loaded platform trust anchors for MQTT TLS");
+        }
+    }
+
+    if let Some(path) = &tls.ca_file {
+        let pem =
+            std::fs::read(path).map_err(|e| MqttError::Tls(format!("{}: {e}", path.display())))?;
+        let mut cursor = std::io::BufReader::new(std::io::Cursor::new(pem));
+        let certs: Vec<_> = rustls_pki_types::pem::PemObject::pem_reader_iter(&mut cursor)
+            .collect::<Result<Vec<rustls_pki_types::CertificateDer<'static>>, _>>()
+            .map_err(|e| MqttError::Tls(format!("{}: {e}", path.display())))?;
+        if certs.is_empty() {
+            return Err(MqttError::Tls(format!(
+                "{}: no certificates found in this file",
+                path.display()
+            )));
+        }
+        let (added, ignored) = roots.add_parsable_certificates(certs);
+        tracing::info!(
+            path = %path.display(),
+            added,
+            ignored,
+            "loaded MQTT TLS trust anchors from the configured CA file"
+        );
+        if added == 0 {
+            return Err(MqttError::Tls(format!(
+                "{}: none of the certificates in this file could be used as a trust anchor",
+                path.display()
+            )));
+        }
+    }
+
+    // `ring` explicitly rather than the process-wide default provider: which
+    // provider that is depends on which other crate installed one first, and
+    // this crate cross-compiles to aarch64 where `aws-lc-rs` needs a C
+    // toolchain in the cross image.
+    let config = rustls::ClientConfig::builder_with_provider(
+        rustls::crypto::ring::default_provider().into(),
+    )
+    .with_safe_default_protocol_versions()
+    .map_err(|e| MqttError::Tls(e.to_string()))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+
+    let name = rustls_pki_types::ServerName::try_from(server_name.to_string())
+        .map_err(|e| MqttError::Tls(format!("{server_name:?} is not a valid server name: {e}")))?;
+    rustls::ClientConnection::new(config.into(), name).map_err(|e| MqttError::Tls(e.to_string()))
 }
 
 // ---------------------------------------------------------------------------
 // CONNECT packet (§3.1)
 // ---------------------------------------------------------------------------
 
-fn send_connect(stream: &mut TcpStream, config: &MqttConfig) -> Result<(), MqttError> {
+fn send_connect<S: Write>(stream: &mut S, config: &MqttConfig) -> Result<(), MqttError> {
     // Connect flags byte:
     //   bit 7: Username flag
     //   bit 6: Password flag
@@ -126,7 +231,7 @@ fn send_connect(stream: &mut TcpStream, config: &MqttConfig) -> Result<(), MqttE
 // CONNACK packet (§3.2)
 // ---------------------------------------------------------------------------
 
-fn recv_connack(stream: &mut TcpStream) -> Result<(), MqttError> {
+fn recv_connack<S: Read>(stream: &mut S) -> Result<(), MqttError> {
     let mut buf = [0u8; 4];
     stream
         .read_exact(&mut buf)
@@ -155,8 +260,8 @@ fn recv_connack(stream: &mut TcpStream) -> Result<(), MqttError> {
 // PUBLISH packet (§3.3)
 // ---------------------------------------------------------------------------
 
-fn send_publish(
-    stream: &mut TcpStream,
+fn send_publish<S: Write>(
+    stream: &mut S,
     topic: &str,
     payload: &[u8],
     retain: bool,
@@ -185,7 +290,7 @@ fn send_publish(
 // DISCONNECT packet (§3.14)
 // ---------------------------------------------------------------------------
 
-fn send_disconnect(stream: &mut TcpStream) -> Result<(), MqttError> {
+fn send_disconnect<S: Write>(stream: &mut S) -> Result<(), MqttError> {
     // DISCONNECT: fixed header 0xE0, remaining length 0x00
     stream.write_all(&[0xE0, 0x00]).map_err(MqttError::Io)
 }

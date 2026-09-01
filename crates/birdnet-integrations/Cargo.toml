@@ -24,9 +24,17 @@ lettre.workspace = true
 # SHA-256 verification of downloaded auto-update archives against the
 # release's published `SHA256SUMS` before the new binary is swapped in.
 sha2.workspace = true
+# MQTT over TLS: the hand-rolled MQTT 3.1.1 publisher wraps its TcpStream in a
+# rustls session when the broker speaks mqtts.
+rustls.workspace = true
+rustls-pki-types.workspace = true
+rustls-native-certs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The MQTT-over-TLS gate stands up a real rustls server, so it needs the
+# server half of the same crate the publisher uses for the client half.
+rustls = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

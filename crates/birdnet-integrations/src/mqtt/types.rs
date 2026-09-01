@@ -35,6 +35,45 @@ pub struct MqttConfig {
     pub retain: bool,
     /// Connection and I/O timeout.
     pub timeout_ms: u64,
+    /// TLS settings, or `None` for a plaintext connection.
+    pub tls: Option<TlsConfig>,
+}
+
+/// How to establish TLS to the broker.
+#[derive(Debug, Clone, Default)]
+pub struct TlsConfig {
+    /// PEM file of certificates to trust *in addition to* the platform store.
+    ///
+    /// A home broker is very often behind a private CA or a self-signed
+    /// certificate, neither of which the platform store knows. Which file to
+    /// point at depends on which of those it is, and the two are not
+    /// interchangeable — both cases are pinned by tests in
+    /// `tests/mqtt_over_tls.rs`, because the first version of this comment got
+    /// it wrong:
+    ///
+    /// * **Private CA** — name the *CA's* certificate. Naming the broker's own
+    ///   certificate fails with `UnknownIssuer`, which reads like a bad file
+    ///   rather than the wrong one.
+    /// * **Self-signed, no CA** — name the broker's own certificate. It signed
+    ///   itself, so the chain terminates at the anchor.
+    ///
+    /// Either way the broker's certificate must carry `CA:FALSE`. A bare
+    /// `openssl req -x509`, which is what every "make a self-signed cert"
+    /// recipe gives, defaults to `CA:TRUE`, and rustls refuses such a
+    /// certificate when a server presents it (`CaUsedAsEndEntity`). Add
+    /// `-addext basicConstraints=critical,CA:FALSE`.
+    ///
+    /// There is deliberately no "skip verification" option: it is the setting
+    /// that gets switched on during setup and never switched off, and an
+    /// unverified TLS connection to a broker carrying station credentials is
+    /// worse than a plaintext one, because it looks safe.
+    pub ca_file: Option<std::path::PathBuf>,
+    /// Hostname to validate the certificate against.
+    ///
+    /// Defaults to [`MqttConfig::host`]. Set it when connecting by IP to a
+    /// broker whose certificate names a hostname, which is the common shape on
+    /// a home LAN with no internal DNS.
+    pub server_name: Option<String>,
 }
 
 impl Default for MqttConfig {
@@ -49,6 +88,7 @@ impl Default for MqttConfig {
             qos: QosLevel::AtMostOnce,
             retain: false,
             timeout_ms: 5_000,
+            tls: None,
         }
     }
 }
@@ -125,6 +165,10 @@ pub enum MqttError {
     Serialise(String),
     /// No MQTT configuration is set.
     NotConfigured,
+    /// TLS could not be established: no usable trust anchor, an unreadable or
+    /// unparseable CA file, or a certificate the broker presented that does
+    /// not verify.
+    Tls(String),
 }
 
 impl fmt::Display for MqttError {
@@ -133,6 +177,7 @@ impl fmt::Display for MqttError {
             Self::Connection(msg) => write!(f, "MQTT connection error: {msg}"),
             Self::ConnAck(e) => write!(f, "MQTT broker rejected CONNECT: {e}"),
             Self::Io(e) => write!(f, "MQTT I/O error: {e}"),
+            Self::Tls(msg) => write!(f, "MQTT TLS error: {msg}"),
             Self::Encode(msg) => write!(f, "MQTT encoding error: {msg}"),
             Self::Serialise(msg) => write!(f, "MQTT payload serialisation error: {msg}"),
             Self::NotConfigured => write!(f, "MQTT not configured"),

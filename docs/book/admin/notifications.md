@@ -44,6 +44,33 @@ BIRDNET_MQTT_HOST=192.168.1.10
 BIRDNET_MQTT_HA_DISCOVERY=1     # publish Home Assistant auto-discovery config
 ```
 
+### TLS
+
+```text
+BIRDNET_MQTT_TLS=1              # port defaults to 8883 when this is on
+BIRDNET_MQTT_CA_FILE=/etc/birdnet/mqtt-ca.pem
+BIRDNET_MQTT_TLS_SERVER_NAME=broker.lan   # when connecting by IP
+```
+
+The certificate is always verified, against the system trust store plus
+anything in `BIRDNET_MQTT_CA_FILE`. There is no option to skip verification:
+that is the setting that gets switched on during setup and never switched off,
+and an unverified TLS connection carrying the broker password is worse than a
+plaintext one because it looks safe. Setting `BIRDNET_MQTT_CA_FILE` turns TLS
+on by itself — configuring a trust anchor and then connecting in plaintext is
+never what was meant.
+
+Which certificate goes in that file depends on your broker:
+
+- **Behind a private CA** — the *CA's* certificate. Pointing it at the broker's
+  own certificate fails with `UnknownIssuer`.
+- **Self-signed, no CA** — the broker's own certificate.
+
+Either way the broker's certificate must carry `CA:FALSE`. A plain
+`openssl req -x509` — what most "make a self-signed certificate" recipes give —
+defaults to `CA:TRUE`, and the connection then fails with `CaUsedAsEndEntity`.
+Add `-addext basicConstraints=critical,CA:FALSE` when generating it.
+
 With `--mqtt-ha-discovery`, the station registers itself in Home Assistant automatically, so the latest detection, species count and confidence appear as entities you can put on a dashboard or trigger automations from.
 
 ## Alert rules

@@ -670,9 +670,35 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_MQTT_HOST")]
     pub mqtt_host: Option<String>,
 
-    /// MQTT broker port (default: 1883; TLS: 8883).
-    #[arg(long, default_value = "1883", env = "BIRDNET_MQTT_PORT")]
-    pub mqtt_port: u16,
+    /// MQTT broker port.
+    ///
+    /// Left unset it is 1883, or 8883 when `--mqtt-tls` is given.
+    #[arg(long, env = "BIRDNET_MQTT_PORT")]
+    pub mqtt_port: Option<u16>,
+
+    /// Connect to the MQTT broker over TLS (`mqtts`).
+    ///
+    /// The certificate is verified against the platform trust store plus
+    /// anything in `--mqtt-ca-file`. There is no way to skip verification:
+    /// an unverified TLS connection carrying the broker credentials is worse
+    /// than a plaintext one, because it looks safe.
+    #[arg(long, env = "BIRDNET_MQTT_TLS")]
+    pub mqtt_tls: bool,
+
+    /// PEM file of extra certificates to trust for `--mqtt-tls`.
+    ///
+    /// For a broker behind a private CA — or a self-signed one, whose own
+    /// certificate works here as a trust anchor. Config key: `MQTT_CA_FILE`.
+    #[arg(long, env = "BIRDNET_MQTT_CA_FILE")]
+    pub mqtt_ca_file: Option<PathBuf>,
+
+    /// Hostname to validate the broker's certificate against.
+    ///
+    /// Defaults to `--mqtt-host`. Set it when connecting to a broker by IP
+    /// whose certificate names a hostname — the usual shape on a home LAN
+    /// with no internal DNS. Config key: `MQTT_TLS_SERVER_NAME`.
+    #[arg(long, env = "BIRDNET_MQTT_TLS_SERVER_NAME")]
+    pub mqtt_tls_server_name: Option<String>,
 
     /// MQTT client identifier published in CONNECT packets.
     ///
