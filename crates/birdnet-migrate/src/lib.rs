@@ -12,7 +12,7 @@
 //! 2. **Validate** — [`traits::Validator`] runs pre-flight checks (row count,
 //!    date format, confidence range).
 //! 3. **Import** — [`traits::Migrator`] copies rows in batches using
-//!    `INSERT OR IGNORE` so the operation is idempotent.
+//!    a named uniqueness conflict so the operation is idempotent.
 //!
 //! The source file is **never modified**.
 //!

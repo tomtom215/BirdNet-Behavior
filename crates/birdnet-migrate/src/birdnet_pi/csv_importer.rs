@@ -263,9 +263,10 @@ fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), Migrat
     for row in batch {
         let rows_changed = tx
             .execute(
-                "INSERT OR IGNORE INTO detections
+                "INSERT INTO detections
                  (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
                 rusqlite::params![
                     row.date, row.time, row.sci_name, row.com_name,
                     row.confidence, row.lat, row.lon, row.cutoff,

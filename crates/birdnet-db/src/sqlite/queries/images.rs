@@ -36,7 +36,11 @@ pub fn add_image_blacklist(
     reason: Option<&str>,
 ) -> Result<bool, DbError> {
     let changed = conn.execute(
-        "INSERT OR IGNORE INTO image_blacklist (sci_name, url, reason) VALUES (?1, ?2, ?3)",
+        // Named conflict rather than `OR IGNORE`: blacklisting the same URL
+        // twice is ordinary and absorbed, but a NOT NULL violation is a bug
+        // and must not report success.
+        "INSERT INTO image_blacklist (sci_name, url, reason) VALUES (?1, ?2, ?3)
+         ON CONFLICT(sci_name, url) DO NOTHING",
         params![sci_name, url, reason],
     )?;
     Ok(changed > 0)
