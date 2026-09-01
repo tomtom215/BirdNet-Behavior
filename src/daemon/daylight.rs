@@ -314,6 +314,59 @@ mod tests {
         );
     }
 
+    /// The same station, with its clock set to a whole-hour offset.
+    ///
+    /// Greenwich's solar minutes are the known ones either way — only the
+    /// conversion into the operator's clock changes.
+    fn greenwich_at_offset(utc_offset_secs: i64) -> DaylightFilter {
+        DaylightFilter::new(
+            Some(Location::new_unchecked(51.48, 0.0)),
+            60,
+            utc_offset_secs,
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn the_solar_events_are_shifted_into_the_station_clock_not_away_from_it() {
+        // Every other test here runs at UTC, where `+ offset_min` and
+        // `- offset_min` are the same expression — which is why cargo-mutants
+        // found both of them surviving. A station away from UTC is where the
+        // sign is load-bearing: get it wrong and the window moves by twice the
+        // offset, so a station at UTC+3 quarantines its afternoon and records
+        // its small hours.
+        //
+        // Greenwich, 15 January: sunrise minute 479 (07:59 UTC), sunset 978
+        // (16:18). At UTC+3 those are 10:59 and 19:18 local, so with an hour
+        // of margin the night window is 20:18 → 09:59.
+        let east = greenwich_at_offset(3 * 3600);
+        assert_eq!(
+            east.verdict("Cyanistes caeruleus", "2026-01-15", "05:00:00"),
+            DaylightVerdict::Quarantine,
+            "05:00 is four hours before local sunrise and should be night"
+        );
+        assert_eq!(
+            east.verdict("Cyanistes caeruleus", "2026-01-15", "16:00:00"),
+            DaylightVerdict::Keep,
+            "16:00 is three hours before local sunset and should be day"
+        );
+
+        // Westward, to pin the direction rather than merely "some shift
+        // happens": at UTC-3 sunrise is 04:59 and sunset 13:18 local, so the
+        // window is 14:18 -> 03:59 and the same two clock times swap sides.
+        let west = greenwich_at_offset(-3 * 3600);
+        assert_eq!(
+            west.verdict("Cyanistes caeruleus", "2026-01-15", "05:00:00"),
+            DaylightVerdict::Keep,
+            "05:00 is after local sunrise at UTC-3 and should be day"
+        );
+        assert_eq!(
+            west.verdict("Cyanistes caeruleus", "2026-01-15", "16:00:00"),
+            DaylightVerdict::Quarantine,
+            "16:00 is after local sunset at UTC-3 and should be night"
+        );
+    }
+
     #[test]
     fn the_operator_can_exempt_a_species_or_a_whole_genus() {
         // The genus table cannot be complete, and a station that hears a
