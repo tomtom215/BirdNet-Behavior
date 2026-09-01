@@ -25,6 +25,7 @@
 pub mod noise_floor;
 pub mod rain_detector;
 pub mod snr;
+pub mod stream_fault;
 pub mod types;
 
 pub use noise_floor::NoiseFloorTracker;
