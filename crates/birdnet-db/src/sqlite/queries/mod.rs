@@ -48,10 +48,10 @@ pub use maintenance::{
     record_run_result,
 };
 pub use quarantine::{
-    QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats,
-    approve_quarantine, count_quarantine, delete_quarantine, get_quarantine, insert_quarantine,
-    list_quarantine, prune_quarantine, quarantine_pending_count, quarantine_stats,
-    reject_quarantine,
+    ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
+    QuarantineStats, approve_quarantine, count_quarantine, delete_quarantine, get_quarantine,
+    insert_quarantine, list_quarantine, prune_quarantine, quarantine_pending_count,
+    quarantine_stats, reject_quarantine,
 };
 pub use species::{
     SpeciesThreshold, delete_species_threshold, get_species_threshold_map, get_species_thresholds,

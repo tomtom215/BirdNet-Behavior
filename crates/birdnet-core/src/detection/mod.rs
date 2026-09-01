@@ -3,6 +3,7 @@
 //! Defines the core detection data structures and the watch -> analyze -> report pipeline.
 
 pub mod daemon;
+pub mod nocturnal;
 pub mod noise;
 pub mod pipeline;
 pub mod privacy;

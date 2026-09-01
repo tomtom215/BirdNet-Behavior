@@ -573,6 +573,38 @@ pub struct Cli {
     #[arg(long, default_value = "0", env = "BIRDNET_DUPLICATE_INTERVAL_SECS")]
     pub duplicate_interval_secs: i64,
 
+    /// Quarantine day birds heard in the middle of the night.
+    ///
+    /// A blue tit "detected" at 02:30 is almost always the classifier hearing
+    /// something else. Owls, nightjars, rails and bitterns are exempt — see
+    /// `birdnet_core::detection::nocturnal` for the genus list, and
+    /// `--night-extra-nocturnal` to add to it.
+    ///
+    /// Needs station coordinates; without them there is no sunrise to compute
+    /// and the filter stays off. Detections are quarantined for review, never
+    /// dropped, because the taxonomy is genus-level and cannot be complete.
+    /// Config key: `NIGHT_FILTER`.
+    #[arg(long, env = "BIRDNET_NIGHT_FILTER")]
+    pub night_filter: bool,
+
+    /// Minutes after sunset and before sunrise before the night window opens.
+    ///
+    /// Birds sing through dusk and start again well before sunrise, so a
+    /// window that began at sunset would quarantine the evening chorus.
+    /// Config key: `NIGHT_MARGIN_MINS`.
+    #[arg(long, default_value = "60", env = "BIRDNET_NIGHT_MARGIN_MINS")]
+    pub night_margin_mins: i64,
+
+    /// Extra genera or scientific names always allowed at night,
+    /// comma-separated.
+    ///
+    /// A station recording nocturnal flight calls — migrating thrushes and
+    /// warblers calling as they pass overhead — should either leave
+    /// `--night-filter` off or name those genera here.
+    /// Config key: `NIGHT_EXTRA_NOCTURNAL`.
+    #[arg(long, env = "BIRDNET_NIGHT_EXTRA_NOCTURNAL")]
+    pub night_extra_nocturnal: Option<String>,
+
     /// Analysis window overlap in seconds (0.0-2.9, default 0.0).
     ///
     /// Controls how much consecutive 3-second analysis windows overlap.

@@ -55,6 +55,80 @@ pub(super) fn resolve_f32_with_default(
     }
 }
 
+/// Build the taxon-aware daylight filter from flags, config and coordinates.
+///
+/// Returns a disabled filter unless the operator asked for it *and* the
+/// station has coordinates: without a latitude there is no sunrise to compute,
+/// and a filter that guessed one would quarantine the wrong half of the day.
+#[must_use]
+pub(super) fn build_daylight_filter(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> crate::daemon::daylight::DaylightFilter {
+    let requested = cli.night_filter
+        || config
+            .and_then(|c| c.get_parsed::<bool>("NIGHT_FILTER").ok())
+            .unwrap_or(false);
+
+    let location = if requested {
+        if let (Some(lat), Some(lon)) = (latitude, longitude) {
+            birdnet_scheduler::solar::Location::new(lat, lon)
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "night filter requested but the station coordinates are out of \
+                         range; leaving it off"
+                    );
+                })
+                .ok()
+        } else {
+            tracing::warn!(
+                "night filter requested but the station has no coordinates; leaving it off \
+                 — set a latitude and longitude to enable it"
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    let margin_mins = if cli.night_margin_mins == 60 {
+        config
+            .and_then(|c| c.get_parsed::<i64>("NIGHT_MARGIN_MINS").ok())
+            .unwrap_or(60)
+    } else {
+        cli.night_margin_mins
+    };
+
+    crate::daemon::daylight::DaylightFilter::new(
+        location,
+        margin_mins,
+        birdnet_db::clock::local_utc_offset_secs(),
+        resolve_extra_nocturnal(
+            cli.night_extra_nocturnal.as_deref(),
+            config.and_then(|c| c.get("NIGHT_EXTRA_NOCTURNAL")),
+        ),
+    )
+}
+
+/// Split the operator's extra-nocturnal list on commas.
+#[must_use]
+pub(super) fn resolve_extra_nocturnal(
+    cli_value: Option<&str>,
+    config_value: Option<&str>,
+) -> Vec<String> {
+    cli_value
+        .or(config_value)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// Resolve the noise filter's watch list from the flag and the config file.
 ///
 /// An explicitly empty setting (`NOISE_CLASSES=`) means *watch nothing*, and
@@ -840,5 +914,67 @@ mod tests {
     fn the_flag_wins_over_the_config_file() {
         assert_eq!(resolve_noise_classes(Some("Siren"), Some("Dog")), ["Siren"]);
         assert_eq!(resolve_noise_classes(None, Some("Engine")), ["Engine"]);
+    }
+
+    // ── the daylight filter's preconditions ─────────────────────────────
+
+    #[test]
+    fn the_night_filter_stays_off_without_coordinates() {
+        // Without a latitude there is no sunrise to compute. Enabling anyway
+        // and failing open would work, but it would also tell the operator at
+        // startup that a filter was running which could never fire.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.night_filter = true;
+        assert!(
+            !build_daylight_filter(&cli, None, None, None).is_enabled(),
+            "the night filter enabled itself without coordinates"
+        );
+        assert!(
+            !build_daylight_filter(&cli, None, Some(51.48), None).is_enabled(),
+            "a latitude alone was enough to enable the night filter"
+        );
+    }
+
+    #[test]
+    fn the_night_filter_turns_on_when_asked_and_locatable() {
+        // Counterpart: a builder that always returned a disabled filter would
+        // satisfy the gate above and the feature would never work at all.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.night_filter = true;
+        assert!(build_daylight_filter(&cli, None, Some(51.48), Some(0.0)).is_enabled());
+    }
+
+    #[test]
+    fn the_night_filter_stays_off_unless_asked_for() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        assert!(!build_daylight_filter(&cli, None, Some(51.48), Some(0.0)).is_enabled());
+    }
+
+    #[test]
+    fn out_of_range_coordinates_leave_the_night_filter_off() {
+        // `Location::new` validates; a station with a corrupt latitude must
+        // not get a filter built on a bogus sunrise.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.night_filter = true;
+        assert!(!build_daylight_filter(&cli, None, Some(120.0), Some(0.0)).is_enabled());
+        assert!(!build_daylight_filter(&cli, None, Some(51.48), Some(999.0)).is_enabled());
+    }
+
+    #[test]
+    fn extra_nocturnal_entries_are_split_and_trimmed() {
+        assert_eq!(
+            resolve_extra_nocturnal(Some(" Catharus , Vireo ,, "), None),
+            ["Catharus", "Vireo"]
+        );
+        assert!(resolve_extra_nocturnal(None, None).is_empty());
+        assert_eq!(
+            resolve_extra_nocturnal(None, Some("Catharus")),
+            ["Catharus"]
+        );
+        assert_eq!(
+            resolve_extra_nocturnal(Some("Vireo"), Some("Catharus")),
+            ["Vireo"],
+            "the config file beat the flag"
+        );
     }
 }

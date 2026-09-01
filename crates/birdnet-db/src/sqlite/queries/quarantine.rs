@@ -31,9 +31,25 @@ pub enum QuarantineReason {
     /// Detection passed the global threshold but failed a stricter per-species
     /// confidence threshold set by the user.
     LowConfidence,
+    /// A species not known to be nocturnal, detected in the middle of the
+    /// night. Quarantined rather than dropped because the taxonomy behind that
+    /// judgement is genus-level and cannot be complete.
+    ImplausibleHour,
     /// Manually quarantined by a user from the Today page or API.
     Manual,
 }
+
+/// Every variant, so a drift gate can enumerate them.
+///
+/// Rust cannot iterate an enum's variants, and the one thing that must never
+/// drift here is the set of reasons the database will accept — see
+/// `every_quarantine_reason_is_accepted_by_the_schema`.
+pub const ALL_QUARANTINE_REASONS: &[QuarantineReason] = &[
+    QuarantineReason::BelowSfThresh,
+    QuarantineReason::LowConfidence,
+    QuarantineReason::ImplausibleHour,
+    QuarantineReason::Manual,
+];
 
 impl QuarantineReason {
     /// Canonical string stored in the database.
@@ -42,6 +58,7 @@ impl QuarantineReason {
         match self {
             Self::BelowSfThresh => "below_sf_thresh",
             Self::LowConfidence => "low_confidence",
+            Self::ImplausibleHour => "implausible_hour",
             Self::Manual => "manual",
         }
     }
@@ -52,6 +69,7 @@ impl QuarantineReason {
         match self {
             Self::BelowSfThresh => "Below SF threshold",
             Self::LowConfidence => "Below species threshold",
+            Self::ImplausibleHour => "Night-time, not a night bird",
             Self::Manual => "Manually flagged",
         }
     }
@@ -62,6 +80,7 @@ impl QuarantineReason {
         match s {
             "below_sf_thresh" => Self::BelowSfThresh,
             "low_confidence" => Self::LowConfidence,
+            "implausible_hour" => Self::ImplausibleHour,
             _ => Self::Manual,
         }
     }

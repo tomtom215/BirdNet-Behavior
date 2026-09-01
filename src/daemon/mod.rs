@@ -39,6 +39,7 @@ mod config;
 /// of these rules was duplicated: a diagnostic that read the setting the
 /// runtime ignores reports on a station that does not exist.
 pub use config::{resolve_confidence, resolve_station_coords};
+mod daylight;
 pub mod disposition;
 mod duplicate;
 mod processor;
@@ -184,6 +185,8 @@ pub fn start_detection_daemon(
 
     let (latitude, longitude) = resolve_station_coords(cli, config);
 
+    let daylight = config::build_daylight_filter(cli, config, latitude, longitude);
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
@@ -247,6 +250,7 @@ pub fn start_detection_daemon(
                     global_confidence,
                     extractor,
                     duplicate_interval_secs,
+                    daylight,
                 );
             });
             Some(handle)
