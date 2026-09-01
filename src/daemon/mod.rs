@@ -133,15 +133,14 @@ pub fn start_detection_daemon(
     );
 
     // `0` is both the flag default and a meaningful value ("disabled"), so
-    // the config key is consulted only when the flag was left alone — the same
-    // rule `resolve_f32_with_default` applies to the other thresholds.
-    let duplicate_interval_secs = if cli.duplicate_interval_secs == 0 {
-        config
-            .and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok())
-            .unwrap_or(0)
-    } else {
-        cli.duplicate_interval_secs
-    };
+    // the config key is consulted only when the flag was left alone. Passing
+    // the default in rather than comparing here keeps the one comparison in
+    // `resolve_i64_with_default`, where a unit test can reach it.
+    let duplicate_interval_secs = crate::daemon::config::resolve_i64_with_default(
+        cli.duplicate_interval_secs,
+        0,
+        config.and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok()),
+    );
 
     let noise_threshold = resolve_f32_with_default(
         cli.noise_threshold,

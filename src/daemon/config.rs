@@ -55,6 +55,32 @@ pub(super) fn resolve_f32_with_default(
     }
 }
 
+/// The same precedence rule for `i64` flags.
+///
+/// `duplicate_interval_secs` and `night_margin_mins` were each written out
+/// by hand at their use site, and cargo-mutants found the same hole in both:
+/// `==` → `!=` survived, because no test exercised the one cell where the
+/// two branches disagree — flag at its documented default *and* a config key
+/// present. Sharing one function means one comparison to gate rather than a
+/// new one per flag, which is the reason the `f32` sibling above exists.
+///
+/// No `EPSILON` dance here: integers compare exactly. The default is still
+/// passed in rather than assumed, because "the operator left the flag alone"
+/// is a claim about clap's default for *that* flag — `0` for one of these
+/// and `60` for the other.
+#[must_use]
+pub(super) fn resolve_i64_with_default(
+    cli_value: i64,
+    cli_default: i64,
+    config_value: Option<i64>,
+) -> i64 {
+    if cli_value == cli_default {
+        config_value.unwrap_or(cli_value)
+    } else {
+        cli_value
+    }
+}
+
 /// Build the taxon-aware daylight filter from flags, config and coordinates.
 ///
 /// Returns a disabled filter unless the operator asked for it *and* the
@@ -94,13 +120,11 @@ pub(super) fn build_daylight_filter(
         None
     };
 
-    let margin_mins = if cli.night_margin_mins == 60 {
-        config
-            .and_then(|c| c.get_parsed::<i64>("NIGHT_MARGIN_MINS").ok())
-            .unwrap_or(60)
-    } else {
-        cli.night_margin_mins
-    };
+    let margin_mins = resolve_i64_with_default(
+        cli.night_margin_mins,
+        60,
+        config.and_then(|c| c.get_parsed::<i64>("NIGHT_MARGIN_MINS").ok()),
+    );
 
     crate::daemon::daylight::DaylightFilter::new(
         location,
@@ -494,6 +518,46 @@ mod tests {
         assert!((resolve_f32_with_default(0.0, 0.0, Some(0.02)) - 0.02).abs() < f32::EPSILON);
         assert!((resolve_f32_with_default(0.0, 0.0, None) - 0.0).abs() < f32::EPSILON);
         assert!((resolve_f32_with_default(0.01, 0.0, Some(0.02)) - 0.01).abs() < f32::EPSILON);
+    }
+
+    // ── resolve_i64_with_default ────────────────────────────────────────
+    //
+    // The same four cells as above. These exist because cargo-mutants found
+    // `==` → `!=` surviving at *both* hand-written i64 use sites (the night
+    // margin and the duplicate interval); the comparison now lives here once,
+    // and the config-present × CLI-at-default cell is what kills it.
+
+    #[test]
+    fn resolve_i64_uses_config_when_cli_at_default_and_config_present() {
+        // `night_margin_mins`: flag left at clap's documented 60, config asks
+        // for 30. Under `!=` the branches swap and this returns 60.
+        assert_eq!(resolve_i64_with_default(60, 60, Some(30)), 30);
+        // `duplicate_interval_secs`, whose default is 0 rather than non-zero:
+        // the same rule has to hold for a zero default, which is the case the
+        // old inline `== 0` form was written for.
+        assert_eq!(resolve_i64_with_default(0, 0, Some(45)), 45);
+    }
+
+    #[test]
+    fn resolve_i64_uses_cli_default_when_no_config() {
+        // CLI at default, nothing in the config: the default stands. Kills
+        // the "replace body with 0 / 1 / -1" mutants for the non-zero case.
+        assert_eq!(resolve_i64_with_default(60, 60, None), 60);
+        assert_eq!(resolve_i64_with_default(0, 0, None), 0);
+    }
+
+    #[test]
+    fn resolve_i64_cli_override_wins_over_config() {
+        // The operator passed a flag; the config key is ignored. This is the
+        // documented precedence and the reason the default is a parameter —
+        // "overridden" is only meaningful relative to *this* flag's default.
+        assert_eq!(resolve_i64_with_default(15, 60, Some(30)), 15);
+        assert_eq!(resolve_i64_with_default(90, 0, Some(45)), 90);
+    }
+
+    #[test]
+    fn resolve_i64_uses_cli_when_overridden_and_no_config() {
+        assert_eq!(resolve_i64_with_default(15, 60, None), 15);
     }
 
     // ── build_pipeline_config ───────────────────────────────────────────
