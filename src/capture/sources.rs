@@ -135,9 +135,60 @@ pub(super) const fn map_pipeline(
 /// fail capture for the source.
 fn parse_quiet_window(quiet: Option<&(String, String)>) -> Option<supervisor::QuietWindow> {
     let (start, end) = quiet?;
-    let start_min = schedule::parse_hhmm(start)?;
-    let end_min = schedule::parse_hhmm(end)?;
-    Some(supervisor::QuietWindow::new(start_min, end_min))
+    Some(supervisor::QuietWindow::from_endpoints(
+        parse_quiet_endpoint(start)?,
+        parse_quiet_endpoint(end)?,
+    ))
+}
+
+/// Parse one end of a quiet window: `HH:MM`, or `sunrise`/`sunset` with an
+/// optional signed minute offset (`sunset+30`, `sunrise-15`, `sunset`).
+///
+/// The two forms share one stored column, which is what let solar windows ship
+/// without a schema migration. They are unambiguous: a clock time contains a
+/// colon and no letters.
+pub(super) fn parse_quiet_endpoint(s: &str) -> Option<supervisor::QuietEndpoint> {
+    let t = s.trim();
+    if let Some(min) = schedule::parse_hhmm(t) {
+        return Some(supervisor::QuietEndpoint::Fixed(min));
+    }
+
+    let lower = t.to_ascii_lowercase();
+    let (event, rest) = lower.strip_prefix("sunrise").map_or_else(
+        || {
+            lower
+                .strip_prefix("sunset")
+                .map(|r| (SolarEvent::Sunset, r))
+        },
+        |r| Some((SolarEvent::Sunrise, r)),
+    )?;
+
+    let offset = match rest.trim() {
+        "" => 0,
+        // `+`/`-` is required: a bare `sunset30` is far more likely to be a
+        // typo than an intent, and guessing at it would move a station's
+        // recording window by half an hour without saying so.
+        r if r.starts_with('+') || r.starts_with('-') => r.parse::<i32>().ok()?,
+        _ => return None,
+    };
+    // Offsets beyond half a day stop meaning "around sunset" and start meaning
+    // "some other time entirely", which an operator is better told about than
+    // silently given.
+    if offset.abs() > 12 * 60 {
+        return None;
+    }
+
+    Some(match event {
+        SolarEvent::Sunrise => supervisor::QuietEndpoint::Sunrise(offset),
+        SolarEvent::Sunset => supervisor::QuietEndpoint::Sunset(offset),
+    })
+}
+
+/// Which solar event a quiet endpoint anchors to.
+#[derive(Debug, Clone, Copy)]
+enum SolarEvent {
+    Sunrise,
+    Sunset,
 }
 
 /// Resolve capture sources from the `audio_sources` SQLite table.
@@ -1077,5 +1128,60 @@ mod tests {
             parse_quiet_window(Some(&("22:00".to_string(), "nope".to_string()))),
             None
         );
+    }
+}
+
+// ── parsing the two forms one column holds ──────────────────────────────
+#[cfg(test)]
+mod quiet_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn clock_times_still_parse() {
+        assert_eq!(
+            parse_quiet_endpoint("22:00"),
+            Some(supervisor::QuietEndpoint::Fixed(22 * 60))
+        );
+    }
+
+    #[test]
+    fn solar_anchors_parse_with_and_without_an_offset() {
+        assert_eq!(
+            parse_quiet_endpoint("sunset"),
+            Some(supervisor::QuietEndpoint::Sunset(0))
+        );
+        assert_eq!(
+            parse_quiet_endpoint("sunset+30"),
+            Some(supervisor::QuietEndpoint::Sunset(30))
+        );
+        assert_eq!(
+            parse_quiet_endpoint("SunRise-15"),
+            Some(supervisor::QuietEndpoint::Sunrise(-15)),
+            "case must not matter — an operator types what reads naturally"
+        );
+    }
+
+    /// A bare number after the anchor is far more likely a typo than an
+    /// intent, and guessing would move the window by half an hour silently.
+    #[test]
+    fn an_unsigned_offset_is_rejected() {
+        assert_eq!(parse_quiet_endpoint("sunset30"), None);
+    }
+
+    /// Beyond half a day an "offset from sunset" is some other time entirely.
+    #[test]
+    fn an_absurd_offset_is_rejected() {
+        assert_eq!(parse_quiet_endpoint("sunrise+800"), None);
+        assert!(
+            parse_quiet_endpoint("sunrise+720").is_some(),
+            "12 h is the limit, inclusive"
+        );
+    }
+
+    #[test]
+    fn nonsense_is_rejected() {
+        for s in ["", "moonrise", "25:00", "noon", "sun"] {
+            assert_eq!(parse_quiet_endpoint(s), None, "{s} must not parse");
+        }
     }
 }

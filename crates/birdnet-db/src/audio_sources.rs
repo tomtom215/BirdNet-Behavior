@@ -374,6 +374,33 @@ fn validate_id(id: &str) -> Result<(), AudioSourceError> {
 }
 
 fn validate_hhmm(s: &str) -> Result<(), AudioSourceError> {
+    // A quiet endpoint is either a clock time or a solar anchor. Both share
+    // this column so solar windows needed no migration; the two are
+    // unambiguous because a clock time contains a colon and no letters.
+    //
+    // The authoritative parser lives in the binary
+    // (`capture::sources::parse_quiet_endpoint`) because that is where it is
+    // consumed; this is a storage-side shape check, deliberately looser. It
+    // rejects nonsense without duplicating the offset rules, so the two cannot
+    // drift into disagreeing about which strings are legal.
+    let lower = s.trim().to_ascii_lowercase();
+    if lower.starts_with("sunrise") || lower.starts_with("sunset") {
+        let rest = lower
+            .trim_start_matches("sunrise")
+            .trim_start_matches("sunset");
+        let ok = rest.is_empty()
+            || ((rest.starts_with('+') || rest.starts_with('-'))
+                && rest[1..].chars().all(|c| c.is_ascii_digit())
+                && rest.len() > 1);
+        return if ok {
+            Ok(())
+        } else {
+            Err(AudioSourceError::Invalid(format!(
+                "expected `sunrise`/`sunset` with an optional signed offset, got '{s}'"
+            )))
+        };
+    }
+
     let bytes = s.as_bytes();
     let ok = s.len() == 5
         && bytes[2] == b':'
@@ -381,7 +408,7 @@ fn validate_hhmm(s: &str) -> Result<(), AudioSourceError> {
         && bytes[3..].iter().all(u8::is_ascii_digit);
     if !ok {
         return Err(AudioSourceError::Invalid(format!(
-            "expected HH:MM, got '{s}'"
+            "expected HH:MM or sunrise/sunset±MM, got '{s}'"
         )));
     }
     let hh: u8 = s[..2]

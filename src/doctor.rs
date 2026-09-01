@@ -147,6 +147,35 @@ pub enum Format {
 ///
 /// Returns the process exit code that should be used (`0`/`1`/`2`).
 pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i32 {
+    let checks = collect(cli, config);
+    let exit_code = render::summarise(&checks);
+    match format {
+        Format::Text => print!("{}", render::render_text(&checks)),
+        Format::Json => println!("{}", render::render_json(&checks, exit_code)),
+    }
+    exit_code
+}
+
+/// The diagnostic as a JSON document, for callers that want it in a file
+/// rather than on stdout — `--support-bundle` in particular.
+#[must_use]
+pub fn collect_json(cli: &Cli, config: Option<&Config>) -> String {
+    let checks = collect(cli, config);
+    let exit_code = render::summarise(&checks);
+    render::render_json(&checks, exit_code)
+}
+
+/// The diagnostic as the same text report `--doctor` prints.
+#[must_use]
+pub fn collect_text(cli: &Cli, config: Option<&Config>) -> String {
+    render::render_text(&collect(cli, config))
+}
+
+/// Run every check and return the results.
+///
+/// Split out of [`run_with_format`] so the support bundle renders the same
+/// checks the operator sees rather than a second, drifting list.
+fn collect(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     let mut checks: Vec<Check> = Vec::new();
 
     // Repairs run before the checks so the subsequent diagnostics observe the
@@ -174,13 +203,7 @@ pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i3
     checks.extend(environment::check_optional_tools(cli, config));
     checks.extend(disk::check_disk_space(cli, config));
     checks.push(watchdog::check_systemd_watchdog());
-
-    let exit_code = render::summarise(&checks);
-    match format {
-        Format::Text => print!("{}", render::render_text(&checks)),
-        Format::Json => println!("{}", render::render_json(&checks, exit_code)),
-    }
-    exit_code
+    checks
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -204,7 +227,7 @@ fn writable(path: &Path) -> bool {
 /// checked `is_file()` on `PATH` while capture forked `which`, so the doctor
 /// could report `arecord` present on a host where `CaptureManager::start`
 /// refused with `arecord not found in PATH`. One question, one answer.
-fn tool_exists(name: &str) -> bool {
+pub fn tool_exists(name: &str) -> bool {
     birdnet_core::audio::capture::is_tool_available(name)
 }
 

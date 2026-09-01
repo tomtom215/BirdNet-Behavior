@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use birdnet_core::audio::capture::{CaptureManager, CaptureStatusHandle, LocalOffset};
-use birdnet_scheduler::{DailySchedule, ScheduleClock, ScheduleConfig};
+use birdnet_scheduler::{DailySchedule, ScheduleClock, ScheduleConfig, SolarDay};
 use birdnet_web::metrics::SharedMetrics;
 
 use super::schedule;
-use super::supervisor::Supervisor;
+use super::supervisor::{SolarMinutes, Supervisor};
 
 /// How often the supervisor reconciles each source toward its desired state.
 /// Short enough to notice a dead subprocess and resume after a scheduled
@@ -64,6 +64,7 @@ pub(super) fn run_supervisor(
             now,
             recording_allowed(schedule_config, secs, offset),
             quiet_minute_of_day(secs, offset),
+            solar_minutes(schedule_config, secs, offset),
             metrics,
         );
         // Publish per-source health for the web layer's Station Health page,
@@ -131,6 +132,38 @@ fn local_minute_of_day(secs: u64, offset_secs: i64) -> u32 {
 /// the supervisor only enforces them once the clock is trustworthy.
 fn quiet_minute_of_day(secs: u64, offset_secs: i64) -> Option<u32> {
     schedule::secs_look_synced(secs).then(|| local_minute_of_day(secs, offset_secs))
+}
+
+/// Today's sunrise and sunset, in the same local minute-of-day frame the quiet
+/// windows are compared against.
+///
+/// Empty when the station has no coordinates or the clock is untrusted, which
+/// makes any solar quiet window inactive — the same fail-open stance the global
+/// schedule takes, and for the same reason: a guessed solar time pauses capture
+/// in a way nobody can see from the outside.
+fn solar_minutes(config: &ScheduleConfig, secs: u64, offset_secs: i64) -> SolarMinutes {
+    if !schedule::secs_look_synced(secs) {
+        return SolarMinutes::default();
+    }
+    let Some(location) = config.location else {
+        return SolarMinutes::default();
+    };
+    // The *date* is UTC-derived because `SolarDay` is computed for a UTC day;
+    // only the resulting minute-of-day is shifted into local time, exactly as
+    // `schedule_allows_at` does for the global gate.
+    let (year, month, day, _) = schedule::civil_from_unix_secs(secs);
+    let Ok(solar) = SolarDay::for_date(location, year, month, day) else {
+        return SolarMinutes::default();
+    };
+    let shift = |utc_min: u32| {
+        let day = i64::from(24 * 60);
+        let minutes = i64::from(utc_min) + offset_secs / 60;
+        u32::try_from(minutes.rem_euclid(day)).ok()
+    };
+    SolarMinutes {
+        sunrise_min: solar.sunrise_utc_min.and_then(shift),
+        sunset_min: solar.sunset_utc_min.and_then(shift),
+    }
 }
 
 /// Log a one-line notice when the clock's apparent sync state changes.

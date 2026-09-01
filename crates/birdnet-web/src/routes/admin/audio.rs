@@ -236,6 +236,35 @@ enum QuietChoice {
     Set(String, String),
 }
 
+/// Whether a quiet-window endpoint is one of the two forms the column holds.
+///
+/// A clock time, or a solar anchor with an optional signed offset. The
+/// authoritative parser is `capture::sources::parse_quiet_endpoint` in the
+/// binary — this is the form-validation half, and it is deliberately the same
+/// shape check rather than a second set of rules, so a value the admin UI
+/// accepts is one the daemon can read back.
+fn is_quiet_endpoint(s: &str) -> bool {
+    if is_hhmm(s) {
+        return true;
+    }
+    let lower = s.trim().to_ascii_lowercase();
+    let Some(rest) = lower
+        .strip_prefix("sunrise")
+        .or_else(|| lower.strip_prefix("sunset"))
+    else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(digits) = rest.strip_prefix('+').or_else(|| rest.strip_prefix('-')) else {
+        return false;
+    };
+    !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && digits.parse::<i32>().is_ok_and(|n| n <= 12 * 60)
+}
+
 /// Interpret the form's `quiet_start` / `quiet_end` pair.
 ///
 /// Blank means "no quiet window", and both fields have to agree about that: a
@@ -251,8 +280,10 @@ fn parse_quiet_choice(start: Option<&str>, end: Option<&str>) -> Result<QuietCho
     match (start.is_empty(), end.is_empty()) {
         (true, true) => Ok(QuietChoice::Clear),
         (false, false) => {
-            if !is_hhmm(start) || !is_hhmm(end) {
-                return Err("Quiet window times must be HH:MM (24-hour), e.g. 22:00.");
+            if !is_quiet_endpoint(start) || !is_quiet_endpoint(end) {
+                return Err(
+                    "Quiet window ends must be a clock time (22:00) or a solar anchor                      (sunset, sunset+30, sunrise-15).",
+                );
             }
             if start == end {
                 return Err(
@@ -671,14 +702,26 @@ fn render_edit_form(row: &AudioSource) -> String {
     <div class="aud-edit-quiet">
       <span class="bnb-eyebrow">Quiet window</span>
       <label class="sr-only" for="q-start-{id}">Quiet from</label>
-      <input id="q-start-{id}" name="quiet_start" type="time" value="{quiet_start}"
-             class="aud-edit-time">
+      <input id="q-start-{id}" name="quiet_start" type="text" value="{quiet_start}"
+             class="aud-edit-time" placeholder="22:00" list="quiet-anchors"
+             pattern="(\d{{2}}:\d{{2}})|([Ss]un(rise|set)([+-]\d{{1,3}})?)"
+             title="A clock time (22:00) or a solar anchor (sunset+30, sunrise-15)">
       <span class="bnb-meta" aria-hidden="true">→</span>
       <label class="sr-only" for="q-end-{id}">Quiet until</label>
-      <input id="q-end-{id}" name="quiet_end" type="time" value="{quiet_end}"
-             class="aud-edit-time">
-      <p class="hint">This source stops recording between these times, in the station's
-        local time. Leave both blank for none.</p>
+      <input id="q-end-{id}" name="quiet_end" type="text" value="{quiet_end}"
+             class="aud-edit-time" placeholder="06:00" list="quiet-anchors"
+             pattern="(\d{{2}}:\d{{2}})|([Ss]un(rise|set)([+-]\d{{1,3}})?)"
+             title="A clock time (06:00) or a solar anchor (sunrise-15)">
+      <datalist id="quiet-anchors">
+        <option value="sunset"></option>
+        <option value="sunset+30"></option>
+        <option value="sunrise"></option>
+        <option value="sunrise-30"></option>
+      </datalist>
+      <p class="hint">This source stops recording between these times. A clock time
+        (<code>22:00</code>) is fixed all year; a solar anchor (<code>sunset+30</code>,
+        <code>sunrise-15</code>) follows the season, which is usually what you mean.
+        Leave both blank for none.</p>
     </div>
     <div class="aud-edit-pipeline">
       <input type="hidden" name="pipeline_present" value="1">
@@ -1239,8 +1282,13 @@ mod tests {
         let html = render_edit_form(&source);
         assert!(html.contains(r#"name="quiet_start""#), "no start field");
         assert!(html.contains(r#"name="quiet_end""#), "no end field");
+        // The control type deliberately changed from `time` to `text` when solar
+        // anchors arrived: an `<input type="time">` silently discards `sunset+30`.
+        // What this assertion is about is unchanged — an unset window renders
+        // blank so the operator can leave it unset. The type itself is pinned by
+        // `solar_quiet_form_tests::the_quiet_inputs_are_not_time_pickers`.
         assert!(
-            html.contains(r#"name="quiet_start" type="time" value=""#),
+            html.contains(r#"name="quiet_start" type="text" value="""#),
             "an unset window must render blank so the operator can leave it unset"
         );
 
@@ -1473,6 +1521,86 @@ mod pipeline_toggle_tests {
                 agc: false,
                 rtsp_keepalive: true,
             }
+        );
+    }
+}
+
+// ── the quiet window accepts solar anchors ──────────────────────────────
+#[cfg(test)]
+mod solar_quiet_form_tests {
+    use super::*;
+
+    #[test]
+    fn clock_times_and_solar_anchors_are_both_accepted() {
+        for s in [
+            "22:00",
+            "06:00",
+            "sunset",
+            "sunset+30",
+            "sunrise-15",
+            "SUNSET+5",
+        ] {
+            assert!(is_quiet_endpoint(s), "{s} must be accepted");
+        }
+    }
+
+    /// The counterpart. An accept-everything validator would pass the test
+    /// above and let a value into the column that the daemon cannot read back,
+    /// which reads to the operator as a quiet window that does nothing.
+    #[test]
+    fn nonsense_is_still_rejected() {
+        for s in [
+            "",
+            "moonset",
+            "25:00",
+            "sunset30",
+            "sunrise+",
+            "sunrise+900",
+            "noon",
+        ] {
+            assert!(!is_quiet_endpoint(s), "{s} must be rejected");
+        }
+    }
+
+    #[test]
+    fn a_solar_window_round_trips_through_the_form_parser() {
+        assert_eq!(
+            parse_quiet_choice(Some("sunset+30"), Some("sunrise-15")),
+            Ok(QuietChoice::Set(
+                "sunset+30".to_owned(),
+                "sunrise-15".to_owned()
+            ))
+        );
+    }
+
+    /// The rendered control must be able to hold a solar anchor at all — an
+    /// `<input type="time">` silently discards one, which is how the value
+    /// would have been lost between the form and the database.
+    #[test]
+    fn the_quiet_inputs_are_not_time_pickers() {
+        let html = render_edit_form(&AudioSource {
+            id: "mic".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "plughw:1,0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: birdnet_db::audio_sources::Channels::Mono,
+            bit_depth: 16,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: Some(("sunset+30".to_string(), "sunrise-15".to_string())),
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        });
+        assert!(
+            !html.contains(r#"name="quiet_start" type="time""#),
+            "a time picker cannot hold `sunset+30`"
+        );
+        assert!(
+            html.contains("sunset+30") && html.contains("sunrise-15"),
+            "the stored anchors must render back into the form: {html}"
         );
     }
 }

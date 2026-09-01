@@ -132,6 +132,41 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Global log level: `trace`, `debug`, `info`, `warn`, `error`, `off`.
+    ///
+    /// Also settable as `LOG_LEVEL` in the config file. `RUST_LOG` overrides
+    /// both when it is set, so a developer's export still wins.
+    #[arg(long, env = "BIRDNET_LOG_LEVEL", value_name = "LEVEL")]
+    pub log_level: Option<String>,
+
+    /// Per-subsystem log levels, e.g. `audio=debug,web=warn`.
+    ///
+    /// Subsystem names are operator-facing rather than Rust module paths:
+    /// `audio`, `detection`, `web`, `db`, `integrations`, `analytics`. An
+    /// explicit path (`birdnet_core::inference=trace`) is accepted too.
+    ///
+    /// This is the equivalent of BirdNET-Pi's per-service log levels: one
+    /// process rather than eight services, so the knob is per subsystem.
+    /// Unknown names are reported at startup rather than ignored. Also
+    /// settable as `LOG_MODULES` in the config file.
+    #[arg(long, env = "BIRDNET_LOG_MODULES", value_name = "SPEC")]
+    pub log_modules: Option<String>,
+
+    /// Collect a support bundle and exit.
+    ///
+    /// Writes a `.tar.gz` holding the diagnostic report (both JSON and text),
+    /// the station's version, a **redacted** copy of the configuration, and the
+    /// last 2000 journal lines — everything a maintainer asks for in the first
+    /// three replies to a bug report, in one file.
+    ///
+    /// Passwords, tokens and URL credentials are masked. Read it before posting
+    /// it anywhere public all the same.
+    ///
+    /// Defaults to `birdnet-support.tar.gz` in the working directory; pass a
+    /// path to write it elsewhere.
+    #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "birdnet-support.tar.gz")]
+    pub support_bundle: Option<PathBuf>,
+
     /// Run the preflight diagnostic and emit a single-line JSON document.
     ///
     /// Same checks and exit codes as `--doctor`, but the output is a

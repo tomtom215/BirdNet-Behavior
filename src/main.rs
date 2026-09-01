@@ -15,8 +15,10 @@ mod daemon;
 mod doctor;
 mod helpers;
 mod integrations;
+mod log_filter;
 mod maintenance;
 mod sd_notify;
+mod support;
 mod weekly_report;
 
 use tracing_subscriber::prelude::*;
@@ -24,9 +26,6 @@ use tracing_subscriber::{EnvFilter, reload};
 
 use cli::Cli;
 use helpers::{run_backup, run_integrity_check};
-
-/// Default log filter when `RUST_LOG` is not set.
-const DEFAULT_LOG_FILTER: &str = "info,birdnet_behavior=debug";
 
 /// The mutually-exclusive top-level action the binary takes, decided from
 /// the parsed CLI before any subsystem is built.
@@ -59,6 +58,10 @@ enum Action {
     /// `--doctor` / `--doctor-json`: print diagnostics and exit with a
     /// status-derived code. Carries the chosen render format.
     Doctor(doctor::Format),
+    /// `--support-bundle`: collect a redacted diagnostic archive and exit.
+    /// The destination is read from the CLI at dispatch rather than carried
+    /// here, so `Action` stays `Copy`.
+    SupportBundle,
     /// No short-circuit flag set: start the detection daemon + web server.
     RunServer,
 }
@@ -85,6 +88,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::MigrationReport
     } else if cli.rebuild_species_summary {
         Action::RebuildSpeciesSummary
+    } else if cli.support_bundle.is_some() {
+        Action::SupportBundle
     } else if cli.doctor || cli.doctor_json || cli.fix {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
@@ -102,9 +107,33 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `parse_tracked`, not `parse`: it additionally records which arguments the
+    // operator really supplied, which is what lets a value set in the admin UI
+    // beat a clap `default_value` while still losing to an explicit flag.
+    let cli = Cli::parse_tracked();
+
+    // Resolve the log filter before anything else: a startup problem that is
+    // only visible at `debug` is exactly the one an operator needs to have
+    // turned on *before* the run that reproduces it.
+    //
+    // `RUST_LOG` still wins outright — a developer who exported it means it —
+    // and only when it is absent do the config file's `LOG_LEVEL` /
+    // `LOG_MODULES` apply. The CLI beats the config in turn, so
+    // `--log-modules audio=debug` works on a station whose config says
+    // otherwise without editing the file.
+    let early_config = birdnet_core::config::Config::load_from(&cli.config).ok();
+    let (composed, log_warnings) = log_filter::compose(
+        cli.log_level
+            .as_deref()
+            .or_else(|| early_config.as_ref().and_then(|c| c.get("LOG_LEVEL"))),
+        cli.log_modules
+            .as_deref()
+            .or_else(|| early_config.as_ref().and_then(|c| c.get("LOG_MODULES"))),
+    );
+
     // Use a reloadable filter so SIGHUP can change the log level at runtime.
     let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(composed.clone()));
     let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
     // Send logs to stderr (Unix convention) so stdout stays clean for
     // structured output like `--doctor-json`.
@@ -113,18 +142,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
+    // Reported after the subscriber is installed so they land in the journal
+    // like everything else. A filter directive that was ignored has to say so:
+    // silently dropping it is indistinguishable from a subsystem with nothing
+    // to report, which is the state the operator was trying to change.
+    for warning in &log_warnings {
+        tracing::warn!("{warning}");
+    }
+
     // Spawn SIGHUP handler for runtime log level changes.
     // Usage: set RUST_LOG env var then `kill -HUP <pid>`.
     #[cfg(unix)]
     {
         let handle = reload_handle;
+        let reload_default = composed.clone();
         tokio::spawn(async move {
             let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
                 .expect("failed to install SIGHUP handler");
             loop {
                 sighup.recv().await;
                 let new_filter = EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+                    .unwrap_or_else(|_| EnvFilter::new(reload_default.clone()));
                 match handle.reload(new_filter) {
                     Ok(()) => tracing::info!("log filter reloaded via SIGHUP"),
                     Err(e) => tracing::error!(error = %e, "failed to reload log filter"),
@@ -132,11 +170,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
-
-    // `parse_tracked`, not `parse`: it additionally records which arguments the
-    // operator really supplied, which is what lets a value set in the admin UI
-    // beat a clap `default_value` while still losing to an explicit flag.
-    let cli = Cli::parse_tracked();
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -175,6 +208,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Action::Doctor(format) => {
             let code = doctor::run_with_format(&cli, config.as_ref(), format);
+            std::process::exit(code);
+        }
+        Action::SupportBundle => {
+            let dest = cli
+                .support_bundle
+                .clone()
+                .unwrap_or_else(support::default_path);
+            let code = support::run(&cli, config.as_ref(), &dest);
             std::process::exit(code);
         }
         Action::RunServer => app::run(cli, config).await,

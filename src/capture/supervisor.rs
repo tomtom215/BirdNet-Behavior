@@ -144,24 +144,105 @@ fn should_warn_down(down_since: Option<Instant>, last_warn: Option<Instant>, now
     last_warn.is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
 }
 
-/// A per-source "quiet" window during which capture is paused, expressed in
-/// minutes since midnight on the **same clock basis as the recording schedule**
-/// (`schedule::civil_from_unix_secs`, i.e. UTC). The admin UI stores it as an
-/// `HH:MM`–`HH:MM` pair; `super` parses that to minutes once, at construction,
-/// so the supervisor only ever deals with already-validated integers.
+/// One end of a per-source quiet window.
 ///
-/// A window where `start == end` is treated as empty (never quiet), matching
-/// how clearing both fields reads to an operator.
+/// A clock time is fixed all year; a solar time is not, and for a bird station
+/// that difference is the whole point. "Stop recording at 22:00" means
+/// something different in June than in December at any latitude worth putting a
+/// microphone at — the operator who wants to skip the noisy part of the evening
+/// means *after dusk*, and a fixed time only approximates that for a few weeks
+/// either side of when they set it.
+///
+/// Both forms live in the same stored string, so this needed no migration:
+/// `22:00` is fixed, `sunset+30` and `sunrise-15` are solar. `super::sources`
+/// parses the stored value once, at construction, so the supervisor only ever
+/// deals with validated values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum QuietEndpoint {
+    /// Minutes since midnight, `0..=1439`.
+    Fixed(u32),
+    /// Sunrise plus an offset in minutes (negative is before).
+    Sunrise(i32),
+    /// Sunset plus an offset in minutes (negative is before).
+    Sunset(i32),
+}
+
+/// Today's solar times, in the same minutes-since-midnight frame as `now_min`.
+///
+/// `None` for either event covers the polar cases the scheduler already models:
+/// above the Arctic circle in midsummer there is no sunset to anchor to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct SolarMinutes {
+    pub(super) sunrise_min: Option<u32>,
+    pub(super) sunset_min: Option<u32>,
+}
+
+impl QuietEndpoint {
+    /// Resolve to minutes since midnight, or `None` when a solar endpoint has
+    /// no event to anchor to today.
+    ///
+    /// Offsets wrap within the day rather than saturating: `sunrise-30` on a
+    /// day when the sun comes up at 00:10 means 23:40 the previous evening,
+    /// which is a real window an operator can mean, and clamping it to 00:00
+    /// would silently widen the quiet period by ten minutes.
+    #[must_use]
+    fn resolve(self, solar: SolarMinutes) -> Option<u32> {
+        let (base, offset) = match self {
+            Self::Fixed(min) => return Some(min),
+            Self::Sunrise(off) => (solar.sunrise_min?, off),
+            Self::Sunset(off) => (solar.sunset_min?, off),
+        };
+        let day = i64::from(MINUTES_PER_DAY);
+        let shifted = (i64::from(base) + i64::from(offset)).rem_euclid(day);
+        u32::try_from(shifted).ok()
+    }
+}
+
+/// Minutes in a day, for the wrap arithmetic above.
+const MINUTES_PER_DAY: u32 = 24 * 60;
+
+/// A per-source "quiet" window during which capture is paused, on the **same
+/// clock basis as the recording schedule** (`schedule::civil_from_unix_secs`).
+///
+/// A window whose two ends resolve to the same minute is treated as empty
+/// (never quiet), matching how clearing both fields reads to an operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct QuietWindow {
-    start_min: u32,
-    end_min: u32,
+    start: QuietEndpoint,
+    end: QuietEndpoint,
 }
 
 impl QuietWindow {
     /// Build a window from start/end minutes-since-midnight (each `0..=1439`).
+    ///
+    /// Test-only convenience: production always goes through
+    /// [`Self::from_endpoints`], because the stored value may name a solar
+    /// anchor rather than a clock time.
+    #[cfg(test)]
     pub(super) const fn new(start_min: u32, end_min: u32) -> Self {
-        Self { start_min, end_min }
+        Self {
+            start: QuietEndpoint::Fixed(start_min),
+            end: QuietEndpoint::Fixed(end_min),
+        }
+    }
+
+    /// Build a window from two endpoints of any kind.
+    pub(super) const fn from_endpoints(start: QuietEndpoint, end: QuietEndpoint) -> Self {
+        Self { start, end }
+    }
+
+    /// Whether `now_min` falls inside this window given today's solar times.
+    ///
+    /// A solar endpoint that cannot be resolved (polar day or night) makes the
+    /// window **inactive** rather than guessing a time: pausing capture on a
+    /// guess is the one outcome an operator cannot detect from the outside, and
+    /// the global schedule's own night-inhibit already covers the polar case.
+    #[must_use]
+    fn contains(self, now_min: u32, solar: SolarMinutes) -> bool {
+        let (Some(start), Some(end)) = (self.start.resolve(solar), self.end.resolve(solar)) else {
+            return false;
+        };
+        in_quiet_window(now_min, start, end)
     }
 }
 
@@ -253,9 +334,9 @@ impl<S: Source> SupervisedSource<S> {
     /// not enforce quiet windows then, mirroring the schedule's fail-open
     /// behaviour so a bogus boot-time date can't silence a source. A source
     /// with no configured window is never quiet.
-    fn in_quiet(&self, now_min: Option<u32>) -> bool {
+    fn in_quiet(&self, now_min: Option<u32>, solar: SolarMinutes) -> bool {
         match (self.quiet, now_min) {
-            (Some(q), Some(min)) => in_quiet_window(min, q.start_min, q.end_min),
+            (Some(q), Some(min)) => q.contains(min, solar),
             _ => false,
         }
     }
@@ -324,9 +405,10 @@ impl<S: Source> SupervisedSource<S> {
         now: Instant,
         recording_allowed: bool,
         now_min: Option<u32>,
+        solar: SolarMinutes,
         metrics: &SharedMetrics,
     ) {
-        let allowed = recording_allowed && !self.in_quiet(now_min);
+        let allowed = recording_allowed && !self.in_quiet(now_min, solar);
         // Whether this tick caught the (alive) process silently stalled, so the
         // shared down path below can publish `Stalled` rather than `BackingOff`.
         let mut stalled_now = false;
@@ -489,10 +571,11 @@ impl<S: Source> Supervisor<S> {
         now: Instant,
         recording_allowed: bool,
         now_min: Option<u32>,
+        solar: SolarMinutes,
         metrics: &SharedMetrics,
     ) {
         for source in &mut self.sources {
-            source.reconcile(now, recording_allowed, now_min, metrics);
+            source.reconcile(now, recording_allowed, now_min, solar, metrics);
         }
     }
 
@@ -748,7 +831,7 @@ mod tests {
     fn schedule_closed_stops_running_source() {
         let m = metrics();
         let mut sup = one(FakeSource::healthy());
-        sup.tick(Instant::now(), false, None, &m);
+        sup.tick(Instant::now(), false, None, SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.stop_calls, 1);
         assert!(!sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(0));
@@ -758,7 +841,7 @@ mod tests {
     fn schedule_closed_leaves_stopped_source_alone() {
         let m = metrics();
         let mut sup = one(FakeSource::dead());
-        sup.tick(Instant::now(), false, None, &m);
+        sup.tick(Instant::now(), false, None, SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.start_calls, 0);
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert_eq!(gauge(&m, "local"), Some(0));
@@ -770,7 +853,7 @@ mod tests {
     fn healthy_source_not_touched_and_gauge_up() {
         let m = metrics();
         let mut sup = one(FakeSource::healthy());
-        sup.tick(Instant::now(), true, None, &m);
+        sup.tick(Instant::now(), true, None, SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.start_calls, 0);
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert_eq!(gauge(&m, "local"), Some(1));
@@ -786,14 +869,20 @@ mod tests {
 
         // Tick 1: observed down → one start attempt fires, source comes
         // back to life, but the gauge is only confirmed up next tick.
-        sup.tick(t0, true, None, &m);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert!(sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(0));
         assert!(sup.sources[0].down_since.is_some());
 
         // Tick 2: observed running → gauge up, fault state cleared.
-        sup.tick(t0 + Duration::from_secs(1), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(1),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 1, "no spurious restart");
         assert_eq!(gauge(&m, "local"), Some(1));
         assert_eq!(sup.sources[0].attempts_since_healthy, 0);
@@ -808,19 +897,31 @@ mod tests {
         let mut sup = one(FakeSource::healthy());
         let t0 = Instant::now();
 
-        sup.tick(t0, true, None, &m);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
         assert_eq!(gauge(&m, "local"), Some(1));
 
         // Fault injection: the subprocess dies.
         sup.sources[0].source.running = false;
 
         // Next tick notices and issues a restart.
-        sup.tick(t0 + Duration::from_secs(1), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(1),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert!(sup.sources[0].source.running);
 
         // And it is confirmed back up.
-        sup.tick(t0 + Duration::from_secs(2), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(2),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(gauge(&m, "local"), Some(1));
     }
 
@@ -833,24 +934,48 @@ mod tests {
         let t0 = Instant::now();
 
         // First tick: immediate attempt (attempt #1), next allowed at +2s.
-        sup.tick(t0, true, None, &m);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert_eq!(gauge(&m, "local"), Some(0));
 
         // Just before the 2s backoff elapses: no new attempt.
-        sup.tick(t0 + Duration::from_secs(1), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(1),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 1);
 
         // Exactly at the 2s boundary: attempt #2, next allowed at +4s.
-        sup.tick(t0 + Duration::from_secs(2), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(2),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 2);
 
         // Within the new 4s window: no attempt.
-        sup.tick(t0 + Duration::from_secs(5), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(5),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 2);
 
         // Past 2+4 = 6s: attempt #3.
-        sup.tick(t0 + Duration::from_secs(6), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(6),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 3);
     }
 
@@ -861,13 +986,19 @@ mod tests {
         let m = metrics();
         let mut sup = one(FakeSource::always_failing());
         let t0 = Instant::now();
-        sup.tick(t0, true, None, &m);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
         let next = sup.sources[0].next_attempt_at.expect("attempt armed");
         // One nanosecond before: still backing off.
-        sup.tick(earlier(next, Duration::from_nanos(1)), true, None, &m);
+        sup.tick(
+            earlier(next, Duration::from_nanos(1)),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 1);
         // Exactly at the boundary: fire.
-        sup.tick(next, true, None, &m);
+        sup.tick(next, true, None, SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.start_calls, 2);
     }
 
@@ -885,15 +1016,33 @@ mod tests {
         let mut sup = one(src);
         let t0 = Instant::now();
 
-        sup.tick(t0, true, None, &m); // attempt #1 fails
+        sup.tick(t0, true, None, SolarMinutes::default(), &m); // attempt #1 fails
         assert_eq!(sup.sources[0].attempts_since_healthy, 1);
-        sup.tick(t0 + Duration::from_secs(2), true, None, &m); // #2 fails
+        sup.tick(
+            t0 + Duration::from_secs(2),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        ); // #2 fails
         assert_eq!(sup.sources[0].attempts_since_healthy, 2);
-        sup.tick(t0 + Duration::from_secs(6), true, None, &m); // #3 succeeds
+        sup.tick(
+            t0 + Duration::from_secs(6),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        ); // #3 succeeds
         assert!(sup.sources[0].source.running);
 
         // Confirmed running → counters reset.
-        sup.tick(t0 + Duration::from_secs(7), true, None, &m);
+        sup.tick(
+            t0 + Duration::from_secs(7),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].attempts_since_healthy, 0);
         assert!(sup.sources[0].next_attempt_at.is_none());
         assert_eq!(gauge(&m, "local"), Some(1));
@@ -913,7 +1062,7 @@ mod tests {
             ),
             (FakeSource::dead(), "RTSP_1".to_owned(), None, Duration::MAX),
         ]);
-        sup.tick(Instant::now(), true, None, &m);
+        sup.tick(Instant::now(), true, None, SolarMinutes::default(), &m);
         // Healthy one untouched, dead one restarted.
         assert_eq!(sup.sources[0].source.start_calls, 0);
         assert_eq!(sup.sources[1].source.start_calls, 1);
@@ -932,7 +1081,7 @@ mod tests {
         let mut sup = one(FakeSource::always_failing());
         let t0 = Instant::now();
 
-        sup.tick(t0, true, None, &m);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
         assert!(
             sup.sources[0].last_down_warn.is_none(),
             "no warning before the threshold elapses"
@@ -943,6 +1092,7 @@ mod tests {
             t0 + DOWN_WARN_AFTER + Duration::from_secs(1),
             true,
             None,
+            SolarMinutes::default(),
             &m,
         );
         assert!(
@@ -989,7 +1139,7 @@ mod tests {
         let inside =
             SupervisedSource::new(FakeSource::healthy(), "s".to_owned(), None, Duration::MAX);
         // No window configured → never quiet, regardless of the clock.
-        assert!(!inside.in_quiet(Some(400)));
+        assert!(!inside.in_quiet(Some(400), SolarMinutes::default()));
 
         let win = SupervisedSource::new(
             FakeSource::healthy(),
@@ -998,11 +1148,11 @@ mod tests {
             Duration::MAX,
         );
         // Window set + clock untrusted (None) → not enforced (fail open).
-        assert!(!win.in_quiet(None));
+        assert!(!win.in_quiet(None, SolarMinutes::default()));
         // Window set + clock inside the window → quiet.
-        assert!(win.in_quiet(Some(400)));
+        assert!(win.in_quiet(Some(400), SolarMinutes::default()));
         // Window set + clock outside the window → not quiet.
-        assert!(!win.in_quiet(Some(800)));
+        assert!(!win.in_quiet(Some(800), SolarMinutes::default()));
     }
 
     // ---- reconcile: per-source quiet window -------------------------------
@@ -1016,14 +1166,20 @@ mod tests {
 
         // Inside the window, even though the global schedule allows recording:
         // the source must be stopped and the gauge driven to 0.
-        sup.tick(t0, true, Some(400), &m);
+        sup.tick(t0, true, Some(400), SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.stop_calls, 1);
         assert!(!sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(0));
 
         // Outside the window: the source is desired ON again, so a (re)start
         // attempt fires.
-        sup.tick(t0 + Duration::from_secs(1), true, Some(800), &m);
+        sup.tick(
+            t0 + Duration::from_secs(1),
+            true,
+            Some(800),
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert!(sup.sources[0].source.running);
     }
@@ -1034,7 +1190,7 @@ mod tests {
         // The window covers "now", but the clock is unsynced (now_min = None),
         // so we fail open and keep recording rather than trust a bogus time.
         let mut sup = one_with_quiet(FakeSource::healthy(), QuietWindow::new(360, 720));
-        sup.tick(Instant::now(), true, None, &m);
+        sup.tick(Instant::now(), true, None, SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert!(sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(1));
@@ -1058,13 +1214,19 @@ mod tests {
         let t0 = Instant::now();
 
         // Tick 1: dead → restart issued (arms the from-birth stall clock).
-        sup.tick(t0, true, Some(400), &m);
+        sup.tick(t0, true, Some(400), SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert!(sup.sources[0].source.running);
 
         // Healthy-looking but mute: no output ever appears. Before the stall
         // threshold the source is left alone…
-        sup.tick(t0 + Duration::from_secs(30), true, Some(400), &m);
+        sup.tick(
+            t0 + Duration::from_secs(30),
+            true,
+            Some(400),
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert_eq!(gauge(&m, "RTSP_1"), Some(1));
 
@@ -1072,7 +1234,13 @@ mod tests {
         // and (the backoff window having long expired) restarted in the same
         // tick. Repeat stalls therefore cost one respawn per `stall_after`,
         // never a hot loop.
-        sup.tick(t0 + stall_after, true, Some(401), &m);
+        sup.tick(
+            t0 + stall_after,
+            true,
+            Some(401),
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.stop_calls, 1, "stall resets process");
         assert_eq!(sup.sources[0].source.start_calls, 2, "immediate respawn");
         assert_eq!(gauge(&m, "RTSP_1"), Some(0), "down until output reappears");
@@ -1083,6 +1251,7 @@ mod tests {
             t0 + stall_after + Duration::from_secs(2),
             true,
             Some(401),
+            SolarMinutes::default(),
             &m,
         );
         assert_eq!(gauge(&m, "RTSP_1"), Some(1));
@@ -1090,7 +1259,13 @@ mod tests {
 
         // …and a still-mute process is reset again exactly one stall window
         // after the respawn.
-        sup.tick(t0 + stall_after * 2, true, Some(402), &m);
+        sup.tick(
+            t0 + stall_after * 2,
+            true,
+            Some(402),
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.stop_calls, 2);
         assert_eq!(sup.sources[0].source.start_calls, 3);
     }
@@ -1109,8 +1284,14 @@ mod tests {
         let mut sup = Supervisor::new(vec![(src, "RTSP_1".to_owned(), None, stall_after)]);
         let t0 = Instant::now();
 
-        sup.tick(t0, true, Some(400), &m); // start issued; stall clock armed
-        sup.tick(t0 + stall_after, true, Some(401), &m);
+        sup.tick(t0, true, Some(400), SolarMinutes::default(), &m); // start issued; stall clock armed
+        sup.tick(
+            t0 + stall_after,
+            true,
+            Some(401),
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(
             sup.sources[0].source.stop_calls, 1,
             "boundary-age output must not count as fresh"
@@ -1128,9 +1309,15 @@ mod tests {
         let mut sup = Supervisor::new(vec![(src, "local".to_owned(), None, stall_after)]);
         let t0 = Instant::now();
 
-        sup.tick(t0, true, Some(400), &m);
+        sup.tick(t0, true, Some(400), SolarMinutes::default(), &m);
         for minutes in 1..=10_u64 {
-            sup.tick(t0 + Duration::from_secs(minutes * 60), true, Some(400), &m);
+            sup.tick(
+                t0 + Duration::from_secs(minutes * 60),
+                true,
+                Some(400),
+                SolarMinutes::default(),
+                &m,
+            );
         }
         assert_eq!(sup.sources[0].source.stop_calls, 0, "never stall-stopped");
         assert_eq!(gauge(&m, "local"), Some(1));
@@ -1153,8 +1340,14 @@ mod tests {
         ]);
         let t0 = Instant::now();
 
-        sup.tick(t0, true, Some(400), &m); // RTSP_1 started; RTSP_2 healthy
-        sup.tick(t0 + stall_after, true, Some(401), &m); // RTSP_1 stalls
+        sup.tick(t0, true, Some(400), SolarMinutes::default(), &m); // RTSP_1 started; RTSP_2 healthy
+        sup.tick(
+            t0 + stall_after,
+            true,
+            Some(401),
+            SolarMinutes::default(),
+            &m,
+        ); // RTSP_1 stalls
 
         assert_eq!(sup.sources[0].source.stop_calls, 1, "stalled stream reset");
         assert_eq!(
@@ -1181,8 +1374,14 @@ mod tests {
         )]);
         let t0 = Instant::now();
 
-        sup.tick(t0, true, None, &m); // started; clock untrusted
-        sup.tick(t0 + stall_after * 3, true, None, &m);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m); // started; clock untrusted
+        sup.tick(
+            t0 + stall_after * 3,
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(
             sup.sources[0].source.stop_calls, 0,
             "no stall verdict without a trusted clock"
@@ -1197,8 +1396,14 @@ mod tests {
         let m = metrics();
         let mut sup = one(FakeSource::dead());
         let t0 = Instant::now();
-        sup.tick(t0, true, Some(400), &m);
-        sup.tick(t0 + Duration::from_secs(86_400), true, Some(400), &m);
+        sup.tick(t0, true, Some(400), SolarMinutes::default(), &m);
+        sup.tick(
+            t0 + Duration::from_secs(86_400),
+            true,
+            Some(400),
+            SolarMinutes::default(),
+            &m,
+        );
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert_eq!(gauge(&m, "local"), Some(1));
     }
@@ -1210,7 +1415,7 @@ mod tests {
         // left running — this pins the `!in_quiet` term (a mutant dropping it
         // would still pass, but the pause test above would then fail).
         let mut sup = one_with_quiet(FakeSource::healthy(), QuietWindow::new(360, 720));
-        sup.tick(Instant::now(), true, Some(720), &m);
+        sup.tick(Instant::now(), true, Some(720), SolarMinutes::default(), &m);
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert!(sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(1));
@@ -1230,7 +1435,7 @@ mod tests {
                 .is_empty()
         );
         let now = Instant::now();
-        sup.tick(now, true, None, &m);
+        sup.tick(now, true, None, SolarMinutes::default(), &m);
         sup.publish_status(now, 12_345, &handle);
         // A `publish_status` that did nothing would leave the handle empty; it
         // must carry the reconciled source and the publish timestamp.
@@ -1248,12 +1453,12 @@ mod tests {
         let handle = birdnet_core::audio::capture::new_capture_status();
         let t0 = Instant::now();
         // Tick 1: the dead source is (re)started, stamping `started_at`.
-        sup.tick(t0, true, None, &m);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
         sup.publish_status(t0, 1_000, &handle);
         // Tick 2: now observed running and healthy → Connected, with uptime
         // measured from the tick-1 restart.
         let t1 = t0 + Duration::from_secs(30);
-        sup.tick(t1, true, None, &m);
+        sup.tick(t1, true, None, SolarMinutes::default(), &m);
         sup.publish_status(t1, 1_030, &handle);
         let status = birdnet_core::audio::capture::read_capture_status(&handle);
         let src = &status.sources[0];
@@ -1261,5 +1466,102 @@ mod tests {
         // The Connected arm derives uptime from `started_at`; deleting that arm
         // would wrongly report None for a running, healthy source.
         assert_eq!(src.uptime_secs, Some(30));
+    }
+}
+
+// ── solar quiet windows ─────────────────────────────────────────────────
+//
+// A clock time is fixed all year; a solar time is not, and for a bird station
+// that is the whole point. "Stop at 22:00" means something different in June
+// than in December at any latitude worth putting a microphone at.
+#[cfg(test)]
+mod solar_quiet_tests {
+    use super::*;
+
+    const SUNRISE: u32 = 5 * 60 + 30; // 05:30
+    const SUNSET: u32 = 20 * 60 + 45; // 20:45
+
+    fn solar() -> SolarMinutes {
+        SolarMinutes {
+            sunrise_min: Some(SUNRISE),
+            sunset_min: Some(SUNSET),
+        }
+    }
+
+    #[test]
+    fn a_fixed_endpoint_ignores_the_solar_times() {
+        assert_eq!(QuietEndpoint::Fixed(600).resolve(solar()), Some(600));
+        assert_eq!(
+            QuietEndpoint::Fixed(600).resolve(SolarMinutes::default()),
+            Some(600),
+            "a clock time does not need a sun"
+        );
+    }
+
+    #[test]
+    fn solar_endpoints_resolve_against_the_day() {
+        assert_eq!(QuietEndpoint::Sunrise(0).resolve(solar()), Some(SUNRISE));
+        assert_eq!(
+            QuietEndpoint::Sunset(30).resolve(solar()),
+            Some(SUNSET + 30)
+        );
+        assert_eq!(
+            QuietEndpoint::Sunrise(-15).resolve(solar()),
+            Some(SUNRISE - 15)
+        );
+    }
+
+    /// An offset that crosses midnight wraps rather than clamping. Clamping
+    /// `sunrise-30` to 00:00 on a day the sun rises at 00:10 would silently
+    /// widen the quiet window by ten minutes.
+    #[test]
+    fn an_offset_across_midnight_wraps() {
+        let early = SolarMinutes {
+            sunrise_min: Some(10),
+            sunset_min: Some(SUNSET),
+        };
+        assert_eq!(
+            QuietEndpoint::Sunrise(-30).resolve(early),
+            Some(24 * 60 - 20),
+            "00:10 minus 30 minutes is 23:40 the evening before"
+        );
+    }
+
+    /// Polar day or night: no event to anchor to. The window must go inactive
+    /// rather than resolve to something arbitrary — pausing capture on a guess
+    /// is the one failure nobody can see from outside.
+    #[test]
+    fn an_unresolvable_solar_endpoint_makes_the_window_inactive() {
+        let w = QuietWindow::from_endpoints(QuietEndpoint::Sunset(0), QuietEndpoint::Sunrise(0));
+        assert!(
+            !w.contains(12 * 60, SolarMinutes::default()),
+            "with no sunrise or sunset the window cannot be evaluated, so it must not apply"
+        );
+    }
+
+    /// The counterpart: with a sun, the same window really does apply. Without
+    /// this, "inactive when unresolvable" would be satisfied by a window that
+    /// never applied at all.
+    #[test]
+    fn the_same_window_applies_once_the_sun_is_known() {
+        let w = QuietWindow::from_endpoints(QuietEndpoint::Sunset(0), QuietEndpoint::Sunrise(0));
+        assert!(
+            w.contains(23 * 60, solar()),
+            "23:00 is between sunset and sunrise, so the source is quiet"
+        );
+        assert!(
+            !w.contains(12 * 60, solar()),
+            "noon is outside a dusk-to-dawn window"
+        );
+    }
+
+    /// A dusk-to-dawn window wraps midnight, which is the common case an
+    /// operator configures and the one a naive `start < end` check gets wrong.
+    #[test]
+    fn a_dusk_to_dawn_window_wraps_midnight() {
+        let w = QuietWindow::from_endpoints(QuietEndpoint::Sunset(30), QuietEndpoint::Sunrise(-30));
+        assert!(w.contains(SUNSET + 45, solar()), "just after dusk");
+        assert!(w.contains(2 * 60, solar()), "the small hours");
+        assert!(!w.contains(SUNRISE + 60, solar()), "an hour after dawn");
     }
 }

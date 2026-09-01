@@ -40,6 +40,31 @@ Options:
 
           [alias: --preflight]
 
+      --log-level <LEVEL>
+          Global log level: `trace`, `debug`, `info`, `warn`, `error`, `off`.
+
+          Also settable as `LOG_LEVEL` in the config file. `RUST_LOG` overrides both when it is set, so a developer's export still wins.
+
+          [env: BIRDNET_LOG_LEVEL=]
+
+      --log-modules <SPEC>
+          Per-subsystem log levels, e.g. `audio=debug,web=warn`.
+
+          Subsystem names are operator-facing rather than Rust module paths: `audio`, `detection`, `web`, `db`, `integrations`, `analytics`. An explicit path (`birdnet_core::inference=trace`) is accepted too.
+
+          This is the equivalent of BirdNET-Pi's per-service log levels: one process rather than eight services, so the knob is per subsystem. Unknown names are reported at startup rather than ignored. Also settable as `LOG_MODULES` in the config file.
+
+          [env: BIRDNET_LOG_MODULES=]
+
+      --support-bundle [<PATH>]
+          Collect a support bundle and exit.
+
+          Writes a `.tar.gz` holding the diagnostic report (both JSON and text), the station's version, a **redacted** copy of the configuration, and the last 2000 journal lines — everything a maintainer asks for in the first three replies to a bug report, in one file.
+
+          Passwords, tokens and URL credentials are masked. Read it before posting it anywhere public all the same.
+
+          Defaults to `birdnet-support.tar.gz` in the working directory; pass a path to write it elsewhere.
+
       --doctor-json
           Run the preflight diagnostic and emit a single-line JSON document.
 

@@ -1384,6 +1384,11 @@ ${lon_line}
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # DATABASE_LANG=en
 
+# --- Logging ---
+# LOG_LEVEL=info           # trace|debug|info|warn|error|off (RUST_LOG wins)
+# LOG_MODULES=             # per subsystem, e.g. audio=debug,web=warn
+#                          # names: audio detection web db integrations analytics
+
 # --- Species occurrence filtering ---
 # Drops species that do not occur near this station at this time of year. Needs
 # all three of the following; the installer fetches the last two for you, and
