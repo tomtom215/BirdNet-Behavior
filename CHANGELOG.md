@@ -5,6 +5,97 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Two clusters: removing the Apprise dependency for the services most stations
+actually use, and giving the detection pipeline the quality controls that
+separate a station's real records from its model's artefacts. Plus one latent
+data-loss bug found while adding a quarantine reason.
+
+### Added — notifications without Apprise
+
+- **Native senders for seven scheme families.** `discord://`, `slack://`,
+  `tgram://`, `ntfy://`, `gotify://`, `pover://` and `json://` (with their TLS
+  forms) are delivered in-process. The URL syntax is Apprise's, so anything an
+  operator already has written down still works, but no Python, no `apprise`
+  binary and no subprocess per detection. Set `BIRDNET_NOTIFY_URLS`. Apprise
+  still handles every other scheme; an Apprise *config file* is all-or-nothing,
+  and the CLI is never invoked when every URL in it is natively supported.
+- **A circuit breaker and rate limit per destination.** A retired webhook that
+  answers 404 forever is retried three times per detection, all day — and it is
+  the retries, not the sends, that get an address rate-limited. The breaker
+  opens after three consecutive failures for a period that doubles per trip
+  (60 s → 30 min), admitting one probe each time it elapses.
+  `BIRDNET_NOTIFY_RATE_PER_MINUTE` (default 12) bounds a *healthy* destination:
+  Pushover allows ten thousand messages a month.
+- **Authentication for alert-rule webhooks.** Bearer, Basic, or a named header,
+  so a rule can target Home Assistant's `/api/webhook` and every hosted
+  automation service rather than only endpoints that authenticate by URL alone.
+- **Alert rules can be tested, exported and imported.** **Test** fires a rule
+  now with an unmistakably synthetic detection and reports the HTTP status.
+  Export redacts credentials by default (so it is safe to paste into a forum
+  thread) with an opt-in form for backup. Import adds rather than replaces, and
+  names any rule whose credential arrived redacted.
+- **MQTT over TLS.** `BIRDNET_MQTT_TLS`, with the certificate always verified
+  against the platform store plus `BIRDNET_MQTT_CA_FILE`. There is deliberately
+  no way to skip verification. rustls was already in the tree, so this adds
+  three dependency edges and no new compiled crate.
+
+### Added — detection quality
+
+All five are **off by default**: each changes how many rows a station records,
+and doing that silently on upgrade would put a visible step in every chart.
+
+- **A noise-class filter** (`BIRDNET_NOISE_THRESHOLD`). A dog barking near the
+  microphone is broadband, so the classifier scores whatever species it most
+  resembles — and because the barking is regular, the phantom accumulates until
+  it looks like a resident. Discards the chunk a watched class was heard in.
+- **A duplicate-prediction interval** (`BIRDNET_DUPLICATE_INTERVAL_SECS`). A
+  15-second recording is five chunks, so a bird singing throughout is recorded
+  five times, and every count in the application is a row count.
+- **A taxon-aware night filter** (`BIRDNET_NIGHT_FILTER`). Quarantines day birds
+  heard in the small hours while exempting owls, nightjars, rails, bitterns and
+  thick-knees by genus. Needs station coordinates; fails open. Stations
+  recording nocturnal flight calls should leave it off.
+- **Suggested per-species thresholds** (Species page). Works out the threshold
+  that best separates the detections you confirmed from the ones you rejected,
+  and shows what it would have cost and caught. Only ever suggests.
+- **A suspect-species report** (Station → Data). Flags species by the *shape* of
+  their detections — every review rejected, never detected confidently,
+  confidence that never varies, many detections on very few days — with a
+  one-click exclusion. Reports; never filters on its own.
+
+### Added — operations
+
+- **A stream-fault watchdog.** A muted channel or an unplugged input produces a
+  valid, punctual stream of zeros: the supervisor reads `Connected`, and on a
+  multi-source station the detection deadman never fires because the other
+  microphones keep detecting. Digital silence, a stuck level and saturation are
+  now detected and alerted on, once per episode with a recovery notice.
+- **Sample-rate probing for autodetected microphones.** A 44.1 kHz-only
+  interface handed `-r 48000` either failed to start forever or was silently
+  plug-converted — the worse case, since capture works and every spectrogram is
+  narrower than the station believes. Falls back to the previous behaviour
+  whenever the probe learns nothing.
+
+### Fixed
+
+- **`INSERT OR IGNORE` was discarding rows silently.** It absorbs *every*
+  constraint violation, not just the duplicate it is written for, and reports
+  success either way. Adding a fourth quarantine reason without widening the
+  column's `CHECK` meant every detection quarantined for it was dropped on the
+  floor with `Ok(())` returned and no row and no error to find. Migration 36
+  widens the constraint; every production write now names the conflict it
+  actually means with `ON CONFLICT (...) DO NOTHING`, and a workspace guard
+  fails if the idiom reappears.
+- **A wrong recipe in the tuning guide.** `docs/book/guides/recipes.md` told
+  operators to put `tgram://bottoken/chatid` in `BIRDNET_APPRISE_URL`, which is
+  the base URL of an Apprise *server* — the station would have POSTed to
+  `tgram:///notify`.
+- **`BIRDNET_NOTIFY_RATE_PER_MINUTE` would have been inert.** Documented in
+  `.env.example` while only the config-file key was read; there is now a flag
+  bound to it, and the config key still works.
+
 ## [0.15.0] - 2026-08-26
 
 A production-readiness pass against one question: *if this station is sealed
