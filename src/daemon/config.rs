@@ -55,6 +55,33 @@ pub(super) fn resolve_f32_with_default(
     }
 }
 
+/// Resolve the noise filter's watch list from the flag and the config file.
+///
+/// An explicitly empty setting (`NOISE_CLASSES=`) means *watch nothing*, and
+/// must not silently fall back to the default: an operator who wants the
+/// threshold on but the dog off has no other way to say so, and a default that
+/// reappeared would keep suppressing chunks they had asked to keep.
+///
+/// An absent setting takes the default. Absent and empty are different
+/// answers, which is why this cannot be a `filter(|s| !s.is_empty())`.
+#[must_use]
+pub(super) fn resolve_noise_classes(
+    cli_value: Option<&str>,
+    config_value: Option<&str>,
+) -> Vec<String> {
+    let Some(raw) = cli_value.or(config_value) else {
+        return birdnet_core::detection::noise::DEFAULT_NOISE_CLASSES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// Build the [`PipelineConfig`] used by the daemon's audio pipeline.
 ///
 /// The pipeline's only operator-tunable knobs at this layer are the
@@ -780,5 +807,38 @@ mod tests {
         );
         let cfg = config_with(&[("SENSITIVITY", "1.4")]);
         assert!((resolve_sensitivity(Some(&cfg)) - 1.4).abs() < f32::EPSILON);
+    }
+
+    // ── noise-filter watch list ─────────────────────────────────────────
+
+    #[test]
+    fn an_absent_noise_class_setting_takes_the_default() {
+        assert_eq!(resolve_noise_classes(None, None), ["Dog"]);
+    }
+
+    #[test]
+    fn an_explicitly_empty_setting_watches_nothing() {
+        // Counterpart, and the reason this is not `filter(|s| !s.is_empty())`:
+        // absent and empty are different answers. An operator who wants the
+        // threshold on but the dog off has no other way to say so, and a
+        // default that reappeared would keep discarding chunks they asked to
+        // keep — silently, since a suppressed chunk leaves no row.
+        assert!(resolve_noise_classes(Some(""), None).is_empty());
+        assert!(resolve_noise_classes(None, Some("")).is_empty());
+        assert!(resolve_noise_classes(Some("  , ,"), None).is_empty());
+    }
+
+    #[test]
+    fn a_list_is_split_on_commas_and_trimmed() {
+        assert_eq!(
+            resolve_noise_classes(Some(" Dog , Siren ,, Engine "), None),
+            ["Dog", "Siren", "Engine"]
+        );
+    }
+
+    #[test]
+    fn the_flag_wins_over_the_config_file() {
+        assert_eq!(resolve_noise_classes(Some("Siren"), Some("Dog")), ["Siren"]);
+        assert_eq!(resolve_noise_classes(None, Some("Engine")), ["Engine"]);
     }
 }

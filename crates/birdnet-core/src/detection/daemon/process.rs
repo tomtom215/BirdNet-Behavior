@@ -3,8 +3,8 @@
 use std::path::Path;
 use std::time::Instant;
 
+use crate::detection::ChunkFilters;
 use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
-use crate::detection::privacy::PrivacyFilter;
 use crate::detection::types::Detection;
 use crate::inference::model::BirdNetModel;
 use crate::inference::species_filter::SpeciesFilter;
@@ -108,9 +108,10 @@ pub fn process_and_infer(
 
 /// Process a single audio file with privacy and species occurrence filters.
 ///
-/// After running inference, applies the privacy filter (suppressing chunks
-/// with human voice) and the species occurrence filter (only keeping species
-/// that are likely present at the given location and time of year).
+/// After running inference, applies the whole-chunk filters (suppressing
+/// chunks with human voice, and chunks a dog barked in) and the species
+/// occurrence filter (only keeping species that are likely present at the
+/// given location and time of year).
 ///
 /// # Errors
 ///
@@ -124,7 +125,7 @@ pub fn process_and_infer_filtered(
     path: &Path,
     pipeline_config: &PipelineConfig,
     model: &mut BirdNetModel,
-    privacy_filter: &PrivacyFilter,
+    chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&crate::detection::daemon::SpeciesFilterObserver>,
     lat: Option<f64>,
@@ -160,8 +161,8 @@ pub fn process_and_infer_filtered(
         all_predictions.push(detections);
     }
 
-    // Apply privacy filter
-    let filtered_predictions = privacy_filter.filter_predictions(&all_predictions);
+    // Apply the whole-chunk filters: human speech, then non-bird noise.
+    let filtered_predictions = chunk_filters.apply(&all_predictions);
 
     // Build the allowed species set from the species filter.
     //
@@ -215,7 +216,8 @@ pub fn process_and_infer_filtered(
         file = %path.display(),
         detections = events.len(),
         total_ms = total.as_millis(),
-        privacy = privacy_filter.is_enabled(),
+        privacy = chunk_filters.privacy.is_enabled(),
+        noise = chunk_filters.noise.is_enabled(),
         species_filter = species_filter.has_model(),
         "filtered file processing complete"
     );

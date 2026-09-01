@@ -145,6 +145,11 @@ pub struct DaemonConfig {
     pub on_species_filter_state: Option<SpeciesFilterObserver>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
+    /// Confidence at or above which a watched non-bird noise class suppresses
+    /// its chunk (0.0 = disabled).
+    pub noise_threshold: f32,
+    /// Non-bird label names the noise filter watches.
+    pub noise_classes: Vec<String>,
     /// Station latitude (for species occurrence filtering).
     pub latitude: Option<f64>,
     /// Station longitude (for species occurrence filtering).
@@ -242,6 +247,8 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            noise_threshold: 0.0,
+            noise_classes: Vec::new(),
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),

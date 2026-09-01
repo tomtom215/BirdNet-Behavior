@@ -130,6 +130,16 @@ pub fn start_detection_daemon(
         config.and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok()),
     );
 
+    let noise_threshold = resolve_f32_with_default(
+        cli.noise_threshold,
+        0.0,
+        config.and_then(|c| c.get_parsed::<f32>("NOISE_THRESHOLD").ok()),
+    );
+    let noise_classes = crate::daemon::config::resolve_noise_classes(
+        cli.noise_classes.as_deref(),
+        config.and_then(|c| c.get("NOISE_CLASSES")),
+    );
+
     let overlap = resolve_f32_with_default(
         cli.overlap,
         0.0,
@@ -184,6 +194,8 @@ pub fn start_detection_daemon(
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
+        noise_threshold,
+        noise_classes,
         latitude,
         longitude,
         species_thresholds,

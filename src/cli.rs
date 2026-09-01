@@ -537,6 +537,28 @@ pub struct Cli {
     #[arg(long, default_value = "0.0", env = "BIRDNET_PRIVACY_THRESHOLD")]
     pub privacy_threshold: f32,
 
+    /// Confidence at which a barking dog suppresses its audio chunk
+    /// (0.0 = disabled).
+    ///
+    /// `BirdNET`'s label set carries non-bird classes, and a bark near the
+    /// microphone is broadband enough that the classifier also produces
+    /// confident-looking scores for whatever species it most resembles. When a
+    /// watched class scores at or above this, every detection in that chunk is
+    /// discarded. Typical values: 0.5-0.8. Config key: `NOISE_THRESHOLD`.
+    #[arg(long, default_value = "0.0", env = "BIRDNET_NOISE_THRESHOLD")]
+    pub noise_threshold: f32,
+
+    /// Non-bird label names the noise filter watches, comma-separated.
+    ///
+    /// Defaults to `Dog`. Other classes in the label set are `Siren`,
+    /// `Engine`, `Power tools`, `Fireworks`, `Gun`, `Environmental` and
+    /// `Noise` — the last two score highly on ordinary quiet recordings, so
+    /// watching them will suppress a great deal. Names are matched exactly
+    /// (case-insensitively) against a label's common or scientific name.
+    /// Config key: `NOISE_CLASSES`.
+    #[arg(long, env = "BIRDNET_NOISE_CLASSES")]
+    pub noise_classes: Option<String>,
+
     /// Analysis window overlap in seconds (0.0-2.9, default 0.0).
     ///
     /// Controls how much consecutive 3-second analysis windows overlap.

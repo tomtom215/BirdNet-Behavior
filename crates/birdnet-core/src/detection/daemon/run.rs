@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crate::audio::capture::is_audio_file;
 use crate::detection::pipeline::{self, PipelineConfig};
 use crate::detection::privacy::PrivacyFilter;
+use crate::detection::{ChunkFilters, noise::NoiseFilter};
 use crate::file_settle::{FILE_SETTLE, PendingFiles};
 use crate::inference::labels::LabelSet;
 use crate::inference::model::BirdNetModel;
@@ -160,13 +161,23 @@ pub fn run_daemon(
         observer.report(species_filter.has_model(), None);
     }
 
-    // Create privacy filter
-    let privacy_filter = PrivacyFilter::new(config.privacy_threshold);
+    // Create the whole-chunk filters.
+    let chunk_filters = ChunkFilters {
+        privacy: PrivacyFilter::new(config.privacy_threshold),
+        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone()),
+    };
 
-    if privacy_filter.is_enabled() {
+    if chunk_filters.privacy.is_enabled() {
         tracing::info!(
             threshold = config.privacy_threshold,
             "privacy filter enabled"
+        );
+    }
+    if chunk_filters.noise.is_enabled() {
+        tracing::info!(
+            threshold = config.noise_threshold,
+            classes = ?chunk_filters.noise.classes(),
+            "noise filter enabled"
         );
     }
 
@@ -216,7 +227,7 @@ pub fn run_daemon(
                 &watch_dir,
                 &pipeline_config,
                 &mut model,
-                &privacy_filter,
+                &chunk_filters,
                 &mut species_filter,
                 filter_observer.as_ref(),
                 lat,
@@ -301,7 +312,7 @@ pub fn run_daemon(
                     &path,
                     &pipeline_config,
                     &mut model,
-                    &privacy_filter,
+                    &chunk_filters,
                     &mut species_filter,
                     filter_observer.as_ref(),
                     lat,
@@ -344,7 +355,7 @@ fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
     model: &mut BirdNetModel,
-    privacy_filter: &PrivacyFilter,
+    chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&super::SpeciesFilterObserver>,
     lat: Option<f64>,
@@ -379,7 +390,7 @@ fn process_existing_files(
             &path,
             pipeline_config,
             model,
-            privacy_filter,
+            chunk_filters,
             species_filter,
             filter_observer,
             lat,
@@ -456,6 +467,8 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            noise_threshold: 0.0,
+            noise_classes: Vec::new(),
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),

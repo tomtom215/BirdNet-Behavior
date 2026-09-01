@@ -256,10 +256,14 @@ fn staged_recording(dir: &Path) -> std::path::PathBuf {
 fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
     use birdnet_core::detection::daemon::process_and_infer_filtered;
     use birdnet_core::detection::privacy::PrivacyFilter;
+    use birdnet_core::detection::{ChunkFilters, noise::NoiseFilter};
 
     let mut model = load_model()?;
     let pipeline = pipeline_for(&model);
-    let privacy = PrivacyFilter::new(0.0);
+    let chunk_filters = ChunkFilters {
+        privacy: PrivacyFilter::new(0.0),
+        noise: NoiseFilter::with_default_classes(0.0),
+    };
     let mut filter = SpeciesFilter::new_passthrough(SpeciesFilterConfig {
         exclude_list: exclude,
         ..SpeciesFilterConfig::default()
@@ -272,7 +276,7 @@ fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
         &path,
         &pipeline,
         &mut model,
-        &privacy,
+        &chunk_filters,
         &mut filter,
         None,
         Some(42.36),
