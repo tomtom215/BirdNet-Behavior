@@ -217,8 +217,18 @@ async fn serve_spectrogram(
     // small fixed width — so it ignores the label params entirely.
     let thumb = query.thumb.is_some_and(|v| v != 0);
 
+    // `raw_spectrogram` suppresses the overlay everywhere, for operators who
+    // embed these images — an OBS bird-feeder stream, a kiosk, a paper. It is
+    // BirdNET-Pi's `RAW_SPECTROGRAM` with one honest difference: their setting
+    // also removes *axes*, and we have never drawn any. The image is a bare mel
+    // surface either way; the only thing to suppress is the text.
+    let raw = state.with_db(|conn| {
+        birdnet_db::settings::get_or(conn, "raw_spectrogram", "false")
+            .unwrap_or_else(|_| "false".to_owned())
+    }) == "true";
+
     // Build the optional overlay label, plus a matching cache-key fragment.
-    let label = if thumb {
+    let label = if thumb || raw {
         None
     } else {
         query.species.map(|species| SpectrogramLabel {

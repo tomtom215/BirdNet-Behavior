@@ -60,6 +60,9 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "custom_image_dir",
     "max_files_per_species",
     "purge_threshold",
+    "raw_spectrogram",
+    "extraction_length",
+    "rare_species_days",
     "stream_retention_secs",
     "stream_max_mb",
     "site_name",
@@ -176,6 +179,23 @@ pub struct SettingsForm {
     /// Disk-use threshold (percentage, 0–100) at which the oldest recordings are purged
     /// regardless of age.
     pub purge_threshold: Option<String>,
+    /// Suppress the species/confidence overlay on generated spectrograms.
+    ///
+    /// BirdNET-Pi's `RAW_SPECTROGRAM`, with one honest difference: theirs also
+    /// removes axes, and this renderer has never drawn any.
+    pub raw_spectrogram: Option<String>,
+    /// Seconds of audio saved around each detection (BirdNET-Pi:
+    /// `EXTRACTION_LENGTH`). The field existed in `ExtractionConfig` from the
+    /// start and was never reachable from the UI, so every station ran the
+    /// 6-second default.
+    pub extraction_length: Option<String>,
+    /// Days without a sighting after which a species counts as rare.
+    ///
+    /// BirdNET-Pi's `RARE_SPECIES_THRESHOLD`. Before this the definition was
+    /// hardcoded as "first ever for this station", which never fires again
+    /// once a species has been seen once — so a bird absent for three years
+    /// returned without comment.
+    pub rare_species_days: Option<String>,
     /// Seconds a raw capture segment is kept in the transient stream directory
     /// before being drained (0 = disable the age drain).
     pub stream_retention_secs: Option<String>,

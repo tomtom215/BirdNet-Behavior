@@ -205,13 +205,25 @@ pub(super) fn build_extraction_config(
         "FREQ_SHIFT",
     );
 
+    // Clamped rather than trusted: an extraction longer than the segment it is
+    // cut from cannot be satisfied, and one at zero writes empty clips that
+    // look like a broken microphone. 1–60 s brackets every sane answer.
+    let extraction_length = resolve::setting::<f32>(
+        cli,
+        "extraction_length",
+        cli.extraction_length.unwrap_or(6.0),
+        config,
+        "EXTRACTION_LENGTH",
+    )
+    .clamp(1.0, 60.0);
+
     ExtractionConfig {
+        extraction_length,
         target_format: AudioFormat::parse(&cli.audio_format),
         audio_format: cli.audio_format.clone(),
         output_dir: recordings_dir.to_path_buf(),
         recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz,
-        ..ExtractionConfig::default()
     }
 }
 

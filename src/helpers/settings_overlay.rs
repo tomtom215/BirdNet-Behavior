@@ -307,6 +307,24 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::System,
     ),
     (
+        "extraction_length",
+        Wiring::Bridged("EXTRACTION_LENGTH"),
+        SettingsCategory::System,
+    ),
+    (
+        "raw_spectrogram",
+        // Read straight from the settings table by the spectrogram route at
+        // render time, so a change takes effect on the next image rather than
+        // the next restart.
+        Wiring::OwnedBy("the spectrogram renderer"),
+        SettingsCategory::System,
+    ),
+    (
+        "rare_species_days",
+        Wiring::OwnedBy("the rare-species feeds"),
+        SettingsCategory::System,
+    ),
+    (
         "stream_retention_secs",
         Wiring::Bridged("STREAM_RETENTION_SECS"),
         SettingsCategory::System,

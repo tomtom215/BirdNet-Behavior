@@ -13,6 +13,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let customimg = get_setting(s, "custom_image_dir", "");
     let maxfiles = get_setting(s, "max_files_per_species", "0");
     let purge = get_setting(s, "purge_threshold", "95");
+    let raw_spec = get_setting(s, "raw_spectrogram", "false");
+    let raw_spec_checked = if raw_spec == "true" { " checked" } else { "" };
+    let rare_days = get_setting(s, "rare_species_days", "30");
+    let extract_len = get_setting(s, "extraction_length", "6");
     // Defaults mirror `helpers::system::DEFAULT_STREAM_*` so the form shows what
     // the station is actually doing when nothing has been set.
     let streamret = get_setting(s, "stream_retention_secs", "600");
@@ -77,6 +81,34 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <input id="purge_threshold" name="purge_threshold" type="number"
              value="{purge}" min="50" max="99" class="bnb-w-num">
       <p class="hint">Start purging old recordings when disk usage exceeds this % (BirdNET-Pi: DISK_PURGE_THRESHOLD). Locked clips are never purged.</p>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="rare_species_days">Rare after (days)</label>
+        <input id="rare_species_days" name="rare_species_days" type="number"
+               value="{rare_days}" min="0" max="3650" class="bnb-w-num">
+        <p class="hint">A species not heard for this many days is flagged rare when it
+          returns, and appears in the rare feeds (BirdNET-Pi: RARE_SPECIES_THRESHOLD).
+          0 keeps the old behaviour: only the very first sighting of a species counts.</p>
+      </div>
+      <div>
+        <label for="extraction_length">Clip Length (seconds)</label>
+        <input id="extraction_length" name="extraction_length" type="number"
+               value="{extract_len}" min="1" max="60" step="1" class="bnb-w-num">
+        <p class="hint">Audio saved around each detection (BirdNET-Pi:
+          EXTRACTION_LENGTH). Longer clips are easier to verify by ear and cost
+          proportionally more disk.</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="raw_spectrogram">Bare spectrograms</label>
+        <label class="bnb-check"><input id="raw_spectrogram" name="raw_spectrogram"
+               type="checkbox" value="true"{raw_spec_checked}> No text overlay</label>
+        <p class="hint">Leaves out the species and confidence caption, for embedding in
+          a stream overlay or a print (BirdNET-Pi: RAW_SPECTROGRAM). This renderer draws
+          no axes in either case.</p>
+      </div>
     </div>
     <div class="grid-2">
       <div>

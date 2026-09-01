@@ -132,6 +132,14 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Seconds of audio saved around each detection (default 6).
+    ///
+    /// BirdNET-Pi's `EXTRACTION_LENGTH`. Longer clips are easier to verify by
+    /// ear and cost proportionally more disk; shorter ones can clip the end of
+    /// a song. Also settable on `/admin/settings`.
+    #[arg(long, env = "BIRDNET_EXTRACTION_LENGTH")]
+    pub extraction_length: Option<f32>,
+
     /// Global log level: `trace`, `debug`, `info`, `warn`, `error`, `off`.
     ///
     /// Also settable as `LOG_LEVEL` in the config file. `RUST_LOG` overrides

@@ -1384,6 +1384,9 @@ ${lon_line}
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # DATABASE_LANG=en
 
+# EXTRACTION_LENGTH=6      # seconds of audio saved around each detection
+# RARE_SPECIES_THRESHOLD   # set on /admin/settings (days since last heard)
+
 # --- Logging ---
 # LOG_LEVEL=info           # trace|debug|info|warn|error|off (RUST_LOG wins)
 # LOG_MODULES=             # per subsystem, e.g. audio=debug,web=warn
