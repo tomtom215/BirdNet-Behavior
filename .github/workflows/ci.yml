@@ -72,7 +72,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-clippy
       - name: Clippy — default features (deny warnings)
@@ -124,7 +124,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-test
       - name: Embed the behavioral extension (offline-load coverage)
@@ -251,7 +251,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-inference
       # The model is ~541 MB and immutable for a given release tag, so key the
@@ -334,7 +334,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-doc
       - name: Build docs (deny broken intra-doc links, all features)
@@ -356,7 +356,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-build
       - name: Build workspace (debug)
@@ -440,7 +440,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-msrv
       - name: Check MSRV build (all features incl. bundled DuckDB)
@@ -477,7 +477,7 @@ jobs:
             g++-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci-cross-aarch64
       - name: Check aarch64 build (all features)
