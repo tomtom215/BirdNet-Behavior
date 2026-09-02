@@ -60,8 +60,10 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 > deploying it.
 
 > **`BIRDNET_LISTEN` binds all interfaces by default** (`0.0.0.0:8502`), so the
-> dashboard is reachable across your LAN out of the box. Viewing is open; only
-> the `/admin` panel requires a password. A fresh bare-metal install
+> dashboard is reachable across your LAN out of the box. Viewing is open;
+> anything that *changes* something requires a password — the `/admin` panel,
+> and also deleting, relabelling, reviewing or locking a detection, or saving
+> the onboarding wizard. A fresh bare-metal install
 > auto-generates `CADDY_PWD` (username `birdnet`) and prints it once in the
 > post-install summary — change it via `CADDY_PWD` in `birdnet.conf`. To restrict
 > the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502`. The

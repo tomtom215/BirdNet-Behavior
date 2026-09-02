@@ -38,6 +38,15 @@ pub fn router() -> Router<AppState> {
         .route("/pages/quarantine-list", get(quarantine_list_partial))
         .route("/pages/quarantine-stats", get(quarantine_stats_partial))
         .route(
+            "/pages/quarantine-pending-count",
+            get(quarantine_pending_count_partial),
+        )
+}
+
+/// The state-changing half, mounted behind the admin auth middleware.
+pub fn mutating_router() -> Router<AppState> {
+    Router::new()
+        .route(
             "/pages/quarantine-approve",
             axum::routing::post(quarantine_approve),
         )
@@ -49,12 +58,7 @@ pub fn router() -> Router<AppState> {
             "/pages/quarantine-delete",
             axum::routing::post(quarantine_delete),
         )
-        .route(
-            "/pages/quarantine-pending-count",
-            get(quarantine_pending_count_partial),
-        )
 }
-
 // ---------------------------------------------------------------------------
 // Query / form types
 // ---------------------------------------------------------------------------

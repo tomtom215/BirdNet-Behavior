@@ -38,6 +38,15 @@ pub fn router() -> Router<AppState> {
         .route("/pages/today-count", get(today_count_partial))
         .route("/pages/today-pills", get(today_pills_partial))
         .route("/pages/today-nudge", get(today_nudge_partial))
+}
+
+/// The state-changing half, mounted behind the admin auth middleware.
+///
+/// These delete records, rename them and pin them against the purge. They were
+/// in [`router`] — that is, in the *public* router — until it was noticed that
+/// "viewing is open, only `/admin` needs a login" was not true of them.
+pub fn mutating_router() -> Router<AppState> {
+    Router::new()
         .route("/pages/today-delete", axum::routing::post(delete_detection))
         .route(
             "/pages/today-relabel",
@@ -46,7 +55,6 @@ pub fn router() -> Router<AppState> {
         .route("/pages/today-lock", axum::routing::post(lock_detection))
         .route("/pages/today-unlock", axum::routing::post(unlock_detection))
 }
-
 // ---------------------------------------------------------------------------
 // The home page
 // ---------------------------------------------------------------------------

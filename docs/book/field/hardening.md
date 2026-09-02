@@ -83,7 +83,10 @@ internet-reachable, keep it set (and add TLS off-LAN).
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. The password
   crosses the wire in clear text unless TLS is on — turn on `--tls-mode`, put a
   proxy in front, or keep the station on a trusted LAN. **Clearing `CADDY_PWD`
-  leaves `/admin` open** to anyone who can reach the dashboard.
+  leaves `/admin` open** — and with it every state-changing action on the
+  dashboard (delete a detection, relabel it, set a review verdict, approve or
+  delete a quarantined record, save the onboarding wizard) — to anyone who can
+  reach it. Reading stays open either way.
 - **Reverse-proxy auth** (recommended for internet exposure): terminate TLS and
   require a password at the proxy (Caddy `basic_auth`, nginx `auth_basic`), so
   credentials never cross the wire in clear text.

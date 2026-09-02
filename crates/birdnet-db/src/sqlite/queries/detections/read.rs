@@ -400,22 +400,6 @@ impl TodayFilter {
             _ => Self::All,
         }
     }
-
-    /// Extra `AND …` clause for queries whose `?1` is the queried date.
-    const fn sql_clause(self) -> &'static str {
-        match self {
-            Self::All => "",
-            Self::FirstToday => {
-                " AND NOT EXISTS (SELECT 1 FROM detections d2 \
-                 WHERE d2.Com_Name = detections.Com_Name AND d2.Date < ?1)"
-            }
-            Self::Rare => {
-                " AND Confidence > 0.85 AND NOT EXISTS (SELECT 1 FROM detections d2 \
-                 WHERE d2.Com_Name = detections.Com_Name AND d2.Date < ?1)"
-            }
-            Self::HighConfidence => " AND Confidence >= 0.9",
-        }
-    }
 }
 
 /// Search today's detections with optional text filter, category filter,
@@ -436,61 +420,25 @@ pub fn todays_detections(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
-    let extra = filter.sql_clause();
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-        match parse_search_term(search) {
-            Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
-                (
-                    format!(
-                        "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2{extra} \
-                         ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
-                    ),
-                    vec![
-                        Box::new(date.to_string()),
-                        Box::new(pattern),
-                        Box::new(limit),
-                        Box::new(offset),
-                    ],
-                )
-            }
-            Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
-                (
-                    format!(
-                        "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2){extra} \
-                         ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
-                    ),
-                    vec![
-                        Box::new(date.to_string()),
-                        Box::new(pattern),
-                        Box::new(limit),
-                        Box::new(offset),
-                    ],
-                )
-            }
-            None => (
-                format!(
-                    "SELECT {DETECTION_COLS} FROM detections \
-                     WHERE Date = ?1{extra} ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
-                ),
-                vec![
-                    Box::new(date.to_string()),
-                    Box::new(limit),
-                    Box::new(offset),
-                ],
-            ),
-        };
+    super::filter::search_detections(conn, &conn_filter(date, search, filter), limit, offset)
+}
 
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(AsRef::as_ref).collect();
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map(params_ref.as_slice(), map_detection_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+/// The [`DetectionFilter`] equivalent of this function's four arguments.
+///
+/// Extracted so the two entry points below cannot drift: they used to be two
+/// copies of the same three-armed `match`, and a fix applied to one of them was
+/// a fix the other did not get.
+fn conn_filter(
+    date: &str,
+    search: Option<&str>,
+    filter: TodayFilter,
+) -> super::filter::DetectionFilter {
+    super::filter::DetectionFilter {
+        text: search.map(str::to_owned),
+        dates: super::filter::DateRange::On(date.to_owned()),
+        category: filter,
+        ..super::filter::DetectionFilter::default()
+    }
 }
 
 /// Count today's detections with optional text and category filters.
@@ -504,39 +452,7 @@ pub fn todays_detection_count(
     search: Option<&str>,
     filter: TodayFilter,
 ) -> Result<i64, DbError> {
-    let extra = filter.sql_clause();
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-        match parse_search_term(search) {
-            Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
-                (
-                    format!(
-                        "SELECT COUNT(*) FROM detections \
-                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2{extra}"
-                    ),
-                    vec![Box::new(date.to_string()), Box::new(pattern)],
-                )
-            }
-            Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
-                (
-                    format!(
-                        "SELECT COUNT(*) FROM detections \
-                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2){extra}"
-                    ),
-                    vec![Box::new(date.to_string()), Box::new(pattern)],
-                )
-            }
-            None => (
-                format!("SELECT COUNT(*) FROM detections WHERE Date = ?1{extra}"),
-                vec![Box::new(date.to_string())],
-            ),
-        };
-
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(AsRef::as_ref).collect();
-    let count: i64 = conn.query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
-    Ok(count)
+    super::filter::search_detection_count(conn, &conn_filter(date, search, filter))
 }
 
 /// Category filter for the cross-date Recordings clip browser.

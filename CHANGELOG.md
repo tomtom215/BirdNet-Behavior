@@ -78,6 +78,35 @@ than `aws-lc-rs`, for the same cross-compilation reason `rustls` does.
 design note in `crates/birdnet-db/src/clock.rs` and the test now record it, in
 both directions.
 
+### Fixed — the dashboard let anyone on the LAN change things
+
+`public_routes()` carried **thirteen state-changing `POST` endpoints**: delete a
+detection, relabel it, set or clear a review verdict, approve or reject or
+delete a quarantined record, lock and unlock clips, and save the onboarding
+wizard (which writes the station's coordinates, time zone and notification
+policy). None of them required a login. The only obstacle was the same-origin
+CSRF guard, which stops a hostile *page* and not a hostile *person* — anyone who
+could load the dashboard could call all of them with `curl`.
+
+The documented contract — *"viewing is open; only `/admin` needs a login"* — was
+a statement about `/admin` that had never been checked against the rest of the
+tree. It is now true: those routes moved to `pages::mutating_router()` and are
+mounted behind the same middleware as `/admin`.
+
+Nothing changes for a station with no admin password (a fresh Docker run, or an
+operator who cleared it): the middleware bypasses entirely in that case, as it
+always has. What changes is the station that *has* a password, where these
+actions now need the session that `/admin` already needed. Reading stays open in
+both cases — a new gate asserts that too, because the obvious over-correction is
+to gate the whole of `pages::router()` and turn a viewable station into a login
+wall.
+
+`crates/birdnet-web/tests/public_router_is_read_only.rs` now fails the build if
+any non-safe method appears in the public router, if a gated route stops being
+mounted at all, or if a write is accepted without a session on a station that
+has a password set. The three cover different regressions: the first two are
+both satisfied by a fixture where the middleware never has to decide anything.
+
 ### Added — notifications without Apprise
 
 - **Native senders for seven scheme families.** `discord://`, `slack://`,

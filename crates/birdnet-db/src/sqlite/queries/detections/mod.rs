@@ -1,5 +1,6 @@
 //! Detection CRUD queries, split by concern.
 //!
+//! - `filter` — the composable `DetectionFilter` the searchable list runs on.
 //! - `read` — counts, listings, pagination, today's feed, corroboration.
 //! - `write` — insert, delete, relabel.
 //! - `search` — free-text search-term parsing (pure, no database).
@@ -8,6 +9,7 @@
 //! Every query is re-exported here so callers keep using the flat
 //! `queries::detections::<fn>` path.
 
+mod filter;
 mod locks;
 mod read;
 mod search;
@@ -16,6 +18,10 @@ mod write;
 #[cfg(test)]
 mod test_support;
 
+pub use filter::{
+    DateRange, DetectionFilter, HourWindow, LockFilter, SortOrder, VerdictFilter, known_sources,
+    search_detection_count, search_detections,
+};
 pub use locks::{is_detection_locked, lock_detection, locked_file_names, unlock_detection};
 pub use read::{
     CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, analytic_detection_count,
