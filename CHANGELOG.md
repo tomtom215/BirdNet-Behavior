@@ -7,10 +7,329 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Two clusters: removing the Apprise dependency for the services most stations
-actually use, and giving the detection pipeline the quality controls that
-separate a station's real records from its model's artefacts. Plus one latent
-data-loss bug found while adding a quarantine reason.
+Five clusters: HTTPS in the listener itself, a searchable detection log with
+bulk review, backups that leave the SD card they were written on, removing the
+Apprise dependency for the services most stations actually use, and giving the
+detection pipeline the quality controls that separate a station's real records
+from its model's artefacts.
+
+Plus four bugs that were found the same way each time — by running the thing
+rather than by reading it. Thirteen state-changing endpoints with no login,
+found while adding a fourteenth. A checkbox group that could not be submitted at
+all, found by posting a real form. Five CSS variables that had never been
+defined, found by looking at a screenshot. And one latent data-loss bug found
+while adding a quarantine reason.
+
+### Added — HTTPS, without a reverse proxy
+
+Until now the server spoke plain HTTP and the documentation told you to put
+Caddy or nginx in front. That is a correct answer and a bad default: a second
+daemon and a second config file on a box whose whole point is that it is one
+binary. Both projects this one is measured against ship TLS; now so does this
+one. **Off by default** — nothing changes for an existing station until
+`--tls-mode` is set.
+
+- **`--tls-mode self-signed`.** Generates a small local CA and a server
+  certificate it signs, under `--tls-dir` (default: a `tls` directory beside
+  the database). HTTPS comes up on 8503; plain HTTP keeps answering on 8502
+  unless you say otherwise. Import the CA file once — the startup log and
+  `--doctor` both print its path — and the browser warning stops for good: the
+  CA lives ten years, the certificate it signs 397 days and rotates a month
+  early, so a rotation does not send you back to the trust store.
+
+  Not one self-signed certificate, which is the obvious design and does not
+  work. Observed against rustls-webpki before it was written the other way:
+  with `CA:FALSE` a client that trusts the file rejects the handshake
+  (`BadSignature`), and with `CA:TRUE` it rejects the same file for being a
+  `CaUsedAsEndEntity`. Splitting the CA from the leaf satisfies both.
+
+- **`--tls-mode manual`.** Serves `--tls-cert` and `--tls-key`. Both are
+  re-read when they change on disk, so `certbot renew` at 03:00 is picked up on
+  the next handshake with no restart and no deploy hook — the common failure
+  mode for anyone who has wired an ACME client to a long-lived server.
+
+- **`--tls-listen` and `--tls-redirect`.** HTTPS defaults to `--listen`'s host
+  on port 8503. Point it at `--listen` to serve only HTTPS on the one port, or
+  set `--tls-redirect` to have the plain port answer `308` to the HTTPS origin
+  (`308`, not `301`, so a POSTed settings form is not silently downgraded to a
+  GET). Setting both is contradictory; the redirect is dropped with a warning
+  rather than silently.
+
+- **A `--doctor` check** that does exactly what startup does: parses the
+  configured material, verifies the key matches the certificate, and names the
+  CA to import. A mistyped `--tls-cert` is a `[ FAIL ]` in the diagnostic
+  rather than a service that restart-loops after you have gone back inside.
+
+  It also reports plain HTTP on a routable address as a `[ WARN ]` — and on a
+  loopback bind as a `[ PASS ]`, because a station behind a proxy is a good
+  deployment and nagging every operator would train them to ignore the report.
+
+- **No ACME client.** Deliberate: it needs a reachable name, an open port 80 or
+  a DNS credential, and an account key to look after, and a station on a home
+  LAN has none of those. `manual` mode plus the reload above is the supported
+  path for anyone who does.
+
+**Dependency cost, counted rather than asserted.** Five new direct edges:
+`tokio-rustls`, `hyper` and `hyper-util` were already resolved in the graph
+(via reqwest/lettre and axum) and `rustls-pki-types` arrives under `rustls`,
+so those four are edges only. `rcgen` is the one new crate anybody chose.
+Diffing `Cargo.lock` against `main` and intersecting with `cargo tree -e
+normal --all-features` puts the real figure at **nine newly compiled
+crates** — `rcgen`, `pem`, `yasna`, `time` (+ `time-core`, `deranged`,
+`num-conv`, `powerfmt`) and `futures-macro` — with a further ten appearing in
+the lockfile but never built (`x509-parser` and its ASN.1 stack, plus
+`time-macros` and `wasm-streams`). `rcgen` uses the `ring` backend already in
+the tree rather than `aws-lc-rs`, for the same cross-compilation reason
+`rustls` does.
+
+PEM parsing is `rustls_pki_types::pem`, not `rustls-pemfile`. The latter was
+archived in August 2025 (RUSTSEC-2025-0134) and its final release is a thin
+wrapper around the same parser, so taking it would have bought an advisory
+and a compiled crate for nothing. One consequence is visible to operators:
+the `pki-types` parser reports an empty key file and a corrupt one
+identically, so `--tls-mode manual` tells them apart itself and still says
+which it was.
+
+`time` arriving in *every* build configuration falsified a premise
+`birdnet-db`'s `clock_premise` test had been guarding since it was written; the
+design note in `crates/birdnet-db/src/clock.rs` and the test now record it, in
+both directions.
+
+### Added — a searchable detection log
+
+The Today log answers "what happened today", and its four category shortcuts are
+the questions a person asks while looking at one day. Everything else is a
+*query*: every rejected record from May, this species below 40 %, whatever the
+pond microphone heard between 22:00 and 04:00.
+
+**`/search`** — reachable from the command palette and from Today, deliberately
+not a seventh nav tab (the v3 spine has six homes and the long tail lives in the
+palette by design). Nine criteria, combinable: free text (with the BirdNET-Pi
+`NOT ` syntax), an exact species, a date range, an hour-of-day window, a
+confidence range, an audio source, review verdict, lock state, and the four
+category shortcuts — across six sort orders. The address bar carries the whole
+search, so a useful one can be bookmarked or sent to somebody.
+
+**Bulk actions.** Checkboxes and one action bar: confirm, reject, lock, unlock,
+delete. Reviewing a season one row at a time is not review, it is attrition. The
+endpoint is behind the admin gate, which is exactly the fix above: `action=delete`
+over a selection is the most destructive request this application accepts.
+
+Underneath is `DetectionFilter` in `birdnet-db`, a composable clause builder
+replacing a three-armed `match` that could not have grown to nine dimensions.
+Every placeholder is a positional `?` so the fragment that adds one is the
+fragment that binds its value; a generated 6 561-combination matrix asserts
+`placeholders == params`. `todays_detections` now runs on it too, and its
+category shortcuts became date-relative in the process — the same predicate now
+means the same thing over a range as it did on one day.
+
+`review_verdict` joined the projected detection columns so the list can show and
+filter review state in one query, and `detection_at` replaced two hand-written
+copies of the fifteen-column mapper that were living in `birdnet-web`, outside
+the drift gate that exists to prevent exactly that.
+
+### Fixed — a checkbox group could not be submitted
+
+`axum::Form` deserialises through `serde_urlencoded`, which has no
+representation for a repeated key. A page of checkboxes posts
+`selected=a&selected=b`, which is what the HTML form specification says a
+checkbox group is, and the whole body was rejected:
+
+```text
+Failed to deserialize form body: selected: invalid type: string "…", expected a sequence
+```
+
+Found by posting a real form to a running server. Every unit test around the
+handler constructed the struct directly and so never went near the deserialiser
+— the bug was in the seam none of them crossed. The body is now parsed with
+`form_urlencoded::parse` (the browser's own grammar, already in the tree through
+`url`), and three gates go through the wire format.
+
+### Fixed — five CSS custom properties were never defined
+
+`app.css` used `var(--primary)` in four rules and `var(--card-bg)` in two, and
+defined neither. An undefined custom property does not warn: the declaration is
+invalid at computed-value time and the property silently keeps what it
+inherited. The quarantine lede link, the active filter tab's colour *and*
+underline, a detail-page link and two admin form backgrounds had all been
+shipping in both themes looking approximately right.
+
+Found by looking at a screenshot of a new button that rendered invisible —
+white text on the white it had inherited. `tests/css_variables_are_defined.rs`
+now fails the build on any `var()` with no definition, with a named allowlist
+for the three properties something genuinely sets at runtime, each of which must
+also carry a fallback.
+
+### Fixed — the dashboard let anyone on the LAN change things
+
+`public_routes()` carried **thirteen state-changing `POST` endpoints**: delete a
+detection, relabel it, set or clear a review verdict, approve or reject or
+delete a quarantined record, lock and unlock clips, and save the onboarding
+wizard (which writes the station's coordinates, time zone and notification
+policy). None of them required a login. The only obstacle was the same-origin
+CSRF guard, which stops a hostile *page* and not a hostile *person* — anyone who
+could load the dashboard could call all of them with `curl`.
+
+The documented contract — *"viewing is open; only `/admin` needs a login"* — was
+a statement about `/admin` that had never been checked against the rest of the
+tree. It is now true: those routes moved to `pages::mutating_router()` and are
+mounted behind the same middleware as `/admin`.
+
+Nothing changes for a station with no admin password (a fresh Docker run, or an
+operator who cleared it): the middleware bypasses entirely in that case, as it
+always has. What changes is the station that *has* a password, where these
+actions now need the session that `/admin` already needed. Reading stays open in
+both cases — a new gate asserts that too, because the obvious over-correction is
+to gate the whole of `pages::router()` and turn a viewable station into a login
+wall.
+
+`crates/birdnet-web/tests/public_router_is_read_only.rs` now fails the build if
+any non-safe method appears in the public router, if a gated route stops being
+mounted at all, or if a write is accepted without a session on a station that
+has a password set. The three cover different regressions: the first two are
+both satisfied by a fixture where the middleware never has to decide anything.
+
+### Added — backups that survive the SD card
+
+Until now every backup a station took lived beside the database it came from,
+on the same card. That covers a corrupt page, a bad import, an interrupted
+write — and none of the failures that actually end a station's records: the
+card wears out, the enclosure floods, the Pi is stolen. The manual said so, in
+bold, and told operators to pull a full backup from another machine on a
+schedule they would have to build themselves.
+
+`OFFSITE_BACKUP=s3` or `OFFSITE_BACKUP=sftp` now sends each weekly snapshot
+somewhere else. **Off by default**, and the local snapshots and their 14-file
+rotation are untouched — this only ever adds a copy.
+
+- **Encrypted on the station, and not optionally.** A station's database is a
+  log of what is around a house and when somebody is home. "Server-side
+  encryption" on a bucket means the provider holds the key; an SFTP host means
+  its administrator does. So the file is sealed before it leaves — argon2id
+  over the operator's passphrase, then ChaCha20-Poly1305 — and there is no
+  setting to turn that off. `OFFSITE_PASSPHRASE` has no command-line flag
+  either: an argument is visible in `ps` to every user on the machine and is
+  copied into the journal by systemd.
+
+  Two details carry the weight. The 52-byte header is the AAD of every chunk,
+  so an attacker with write access to the storage host cannot lower the argon2
+  cost to 8 KiB and hand the file back still decrypting. And the nonces are a
+  STREAM counter with a final-chunk flag rather than random, so removing the
+  tail is *detected* — random per-chunk nonces authenticate every chunk and
+  still let a backup restore cleanly, missing last March.
+
+- **`--decrypt-backup <file> --out <path>`.** An encrypted backup with no
+  working restore path is worse than no backup, because it looks like insurance
+  for a year and then does not pay out. Refuses to overwrite an existing file
+  (the likely `--out` on a station is the live `birds.db`) and leaves nothing
+  behind when it fails.
+
+- **S3-compatible, without the SDK.** AWS S3, Backblaze B2, Cloudflare R2,
+  Wasabi, MinIO, Ceph RGW and Garage. `SigV4` written out rather than pulled
+  in: for one PUT, one `GET ?list-type=2` and one DELETE the AWS SDK would
+  bring a dependency tree larger than the rest of this binary, onto a board
+  whose release build is already dominated by ONNX Runtime and DuckDB. It is
+  checked against botocore rather than against a reading of the spec — see
+  below.
+
+- **Any SSH host**, through OpenSSH's own `sftp` in batch mode rather than an
+  in-process SSH stack: a second place for key handling, host-key policy and
+  cipher selection to be subtly wrong is not worth the subprocess it saves.
+  Host key checking has no "off" — `yes` or `accept-new`, nothing else —
+  because an SFTP backup with it disabled encrypts the upload to whoever
+  answers. Uploads land as `<name>.part` and are renamed, so a power cut never
+  leaves something a restore would reach for.
+
+- **Retention by the station's own clock.** `OFFSITE_KEEP` (default 8, `0`
+  keeps everything) orders by the timestamp in the filename, not the store's
+  `LastModified`: a station uploading a backlog writes four backups in one
+  minute, and pruning by upload time would keep an arbitrary four. Files this
+  station did not write are never removed, so a shared bucket stays shared.
+
+- **A `--doctor` check** that reports the destination, the retention, and — for
+  SSH — whether the key exists, whether its mode is one OpenSSH will accept
+  (`0644` is a silent refusal on the client's own stderr, once a week), and
+  whether the host is known. It opens no connection: `--doctor` runs on every
+  start, and a diagnostic that dials a remote host fails whenever the uplink is
+  down.
+
+  A half-configured destination is a `[ FAIL ]` listing *every* missing key, not
+  a silent fall back to "off". That fallback is the shape of the defect that
+  leaves an operator believing they have offsite copies for a year.
+
+#### How this was checked
+
+Every gate was observed failing against the code it was written for; the
+interesting ones are the four that were observed *passing* when they should not
+have been.
+
+- The envelope's "a plain file is not an envelope" test passed a 25-byte string,
+  so `read_exact` hit end-of-file and returned `NotAnEnvelope` before the magic
+  was ever compared. It stayed green with the magic check deleted.
+- The `SigV4` query-sort test used `b+c` against `b-c`, where the raw and
+  encoded orders agree, so sorting before encoding passed. `-` against `:` is
+  where they differ.
+- The CLI truncation test cut 200 bytes off a single-chunk file, which breaks
+  that chunk's own tag — the weaker property. It stayed green with the
+  final-chunk flag deleted. The fixture is now two chunks and the cut removes a
+  whole one.
+- `container_can_run_what_the_daemon_spawns` never saw `sftp` at all: its
+  scanner matched `Command::new("literal")` only, and this code names its binary
+  in a constant. Removing `sftp` from the classification table left the file
+  green. The scanner now resolves same-file `const NAME: &str` too, and has a
+  test of its own.
+
+`SigV4` is checked against vectors generated by **botocore**, the signer inside
+the AWS CLI, by a script committed beside them. The chain is anchored: one
+vector is AWS's own published "Example: GET Object", whose signature
+`f0e8bdb8…6036bdb41` appears in the S3 documentation, and botocore reproduces it
+byte for byte.
+
+Both transports run end to end. `s3_loopback` drives a store that recomputes
+the signature from what arrived on the wire and rejects a mismatch the way
+MinIO would — catching the class the vector test cannot, where the request sent
+is not the request signed. `sftp_loopback` stands up a real `sshd` on a
+loopback port with generated keys. When that harness first ran, `sshd` never
+started, and two of its four tests passed on "connection refused"; the harness
+now asserts the port is listening before handing back a server.
+
+### Changed — the manual, and a gate for the way it goes wrong
+
+Documentation for everything above, and a sweep for the pages the work made
+untrue. Two had said, in plain words, that a feature did not exist — and both
+were right when they were written:
+
+- `admin/backups.md`: *"The station has no built-in upload to S3, a NAS, or
+  email."*
+- `guides/recipes.md`: *"the built-in server is plain HTTP"*
+
+Nothing caught either. There is nothing structural about a paragraph saying a
+feature is absent — it reads exactly like one saying it is present — so
+`the_manual_does_not_still_say_a_shipped_feature_is_missing` names the
+sentences, scans the whole book and the README, and pairs each with the flag
+that retired it. `retired_claims_name_something_that_actually_ships` checks the
+pairing in the other direction, so an entry cannot outlive the feature and
+quietly forbid a sentence that has become true again. Both were observed
+failing by restoring the two real sentences, and by hiding one in an unrelated
+page.
+
+Also updated:
+
+- **`admin/settings.md`** — the Analysis Overlap and Repeat Confirmation
+  controls, which the settings page had grown without the manual noticing.
+- **`reference/web-api.md`** — `/search`, with every query parameter it takes.
+  The page had shipped with no reference entry at all. The parameter names were
+  read off `SearchParams` rather than remembered: it is `conf_min`, not
+  `min_conf`, and the sort tokens are `confidence`/`species`, which a first
+  draft of the table got wrong.
+- **`field/hardening.md`** and **`field/deployment.md`** — the runbooks now say
+  how to get a copy off the device rather than only that you should, including
+  the least-privilege credential shape for each destination.
+- **`guides/faq.md`** — two new entries: what happens when the SD card dies,
+  and why turning on repeat confirmation appeared to change nothing.
+- **`README.md`** — HTTPS, offsite backups and search in the feature list and
+  the BirdNET-Pi comparison; the test count corrected from a badly stale
+  "1,690+", and pinned by a gate so it cannot drift again.
 
 ### Added — notifications without Apprise
 
@@ -43,9 +362,29 @@ data-loss bug found while adding a quarantine reason.
 
 ### Added — detection quality
 
-All five are **off by default**: each changes how many rows a station records,
+All six are **off by default**: each changes how many rows a station records,
 and doing that silently on upgrade would put a visible step in every chart.
 
+- **A repeat-confirmation filter** (`BIRDNET_CONFIRMATION_LEVEL`, and a
+  "Repeat Confirmation" select on the settings page). A real bird sings across
+  more than one analysis window; a car door, a squeaking mount or a fragment of
+  speech usually fires in exactly one. `lenient`, `moderate`, `balanced` and
+  `strict` ask for 20%, 30%, 50% and 70% of the windows within six seconds to
+  agree, rounded up.
+
+  **It does nothing without `BIRDNET_OVERLAP`**, and the whole feature is built
+  around saying so. With no overlap a six-second neighbourhood is two 3-second
+  windows and 20% of two rounds to one, which every detection already meets.
+  So: the option text on the settings page carries the overlap each level needs,
+  `--doctor` reports which side of that line the station is on, and the daemon
+  logs a warning at startup when the level it was given cannot reject anything.
+  All three numbers are computed from the filter rather than written down, and a
+  test pins the manual's table against it.
+
+  Runs last of the three chunk filters, after privacy and noise. That ordering
+  is load-bearing and gated: corroboration counts how many nearby windows
+  carried a species, so running it first would credit a species with evidence
+  from a chunk the noise filter was about to discard.
 - **A noise-class filter** (`BIRDNET_NOISE_THRESHOLD`). A dog barking near the
   microphone is broadband, so the classifier scores whatever species it most
   resembles — and because the barking is regular, the phantom accumulates until

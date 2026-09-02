@@ -370,6 +370,14 @@ operator action needed):
   pruned automatically.
 - **Manual** snapshot any time: `birdnet-behavior --backup-db`.
 
+Every one of those lives on the station's own storage. For a box that is
+expected to run a season unattended, set `OFFSITE_BACKUP` so each weekly
+snapshot is encrypted and uploaded to an object store or an SSH host as well —
+it rides the same weekly job, keeps the newest `OFFSITE_KEEP` (default 8), and
+never touches the local rotation. Restore with
+`birdnet-behavior --decrypt-backup <file> --out <path>`. See
+[Backups & Recovery](../admin/backups.md#offsite-backups).
+
 Restore from the most recent good backup (only do this after the
 daemon is stopped):
 

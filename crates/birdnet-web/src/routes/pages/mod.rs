@@ -45,6 +45,7 @@ pub(crate) mod overlays;
 pub mod provenance;
 pub mod quarantine;
 pub mod recordings;
+pub mod search;
 pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod station_health;
@@ -120,6 +121,7 @@ pub fn router() -> Router<AppState> {
         .merge(quarantine::router())
         .merge(today::router())
         .merge(recordings::router())
+        .merge(search::router())
         .merge(weekly_report::router())
         .merge(history::router())
         .merge(life_list::router())
@@ -136,6 +138,25 @@ pub fn router() -> Router<AppState> {
             "/pages/today-phrase",
             get(today_phrase::today_phrase_partial),
         )
+}
+
+/// Every page route that changes state, for mounting behind the admin auth
+/// middleware.
+///
+/// Kept apart from [`router`] rather than trusted to reviewers: thirteen
+/// state-changing endpoints — delete a detection, relabel it, set a review
+/// verdict, approve or delete a quarantined record, write the station's
+/// configuration — sat in the public router because "viewing is open, only
+/// `/admin` needs a login" was a sentence about `/admin` that nobody had
+/// checked against the rest of the tree. `tests::the_public_router_exposes_no_way_to_change_anything`
+/// now checks it on every build.
+pub fn mutating_router() -> Router<AppState> {
+    today::mutating_router()
+        .merge(detection_reviews::mutating_router())
+        .merge(recordings::mutating_router())
+        .merge(quarantine::mutating_router())
+        .merge(onboarding::mutating_router())
+        .merge(search::mutating_router())
 }
 
 /// Sign-out form fragment rendered into the topnav's `{{sign_out_link}}`

@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use birdnet_core::config::Config;
 use birdnet_core::config::validate::{self as cfg_validate, Severity as ConfigSeverity};
+use birdnet_core::detection::corroboration::REFERENCE_SPAN;
+use birdnet_core::detection::pipeline::PipelineConfig;
 
 use super::Check;
 use crate::cli::Cli;
@@ -139,6 +141,84 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
         |l| format!(" (matched by name through {})", l.display()),
     );
     Check::pass(NAME, format!("active — {}{how}", model.display()))
+}
+
+/// Is the repeat-confirmation filter set to something that can actually reject?
+///
+/// The one defect worth a check of its own: `CONFIRMATION_LEVEL=lenient` with
+/// the default overlap of zero is accepted, logged as enabled, and rejects
+/// nothing — a six-second neighbourhood holds two 3-second windows, and 20% of
+/// two rounds up to one, which every detection already satisfies. The operator
+/// sees no change and has no way to tell whether that is the filter working or
+/// the filter idle.
+///
+/// The daemon warns about this at startup too, but the daemon is not running
+/// when somebody is editing the config file, which is when this matters.
+pub(super) fn check_confirmation_filter(cli: &Cli, config: Option<&Config>) -> Check {
+    const NAME: &str = "Repeat-confirmation filter";
+
+    let (level, warning) = crate::daemon::resolve_confirmation_level(
+        &cli.confirmation_level,
+        "off",
+        config.and_then(|c| c.get("CONFIRMATION_LEVEL")),
+    );
+
+    if let Some(warning) = warning {
+        return Check::fail(
+            NAME,
+            warning,
+            "CONFIRMATION_LEVEL (or --confirmation-level) takes one of: off, lenient, moderate, balanced, strict",
+        );
+    }
+
+    if !level.enabled() {
+        return Check::pass(
+            NAME,
+            "off — every detection that passes the other filters is recorded",
+        );
+    }
+
+    let overlap = crate::daemon::resolve_f32_with_default(
+        cli.overlap,
+        0.0,
+        config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
+    );
+    let chunk_secs = PipelineConfig::default().chunk_duration_secs;
+
+    if level.is_effective_at(overlap, chunk_secs) {
+        let required = level.required_confirmations_at(overlap, chunk_secs);
+        return Check::pass(
+            NAME,
+            format!(
+                "{} — a species must be heard in {required} of the windows within \
+                 {REFERENCE_SPAN:.0}s to be recorded (overlap {overlap}s)",
+                level.as_str()
+            ),
+        );
+    }
+
+    let fix = level.minimum_overlap(chunk_secs).map_or_else(
+        || {
+            "no overlap makes this level bite at the current window length; raise \
+             CONFIRMATION_LEVEL instead"
+                .to_owned()
+        },
+        |need| {
+            format!(
+                "set OVERLAP (or --overlap) to at least {need}s, or raise \
+                 CONFIRMATION_LEVEL — `balanced` and `strict` reject at any overlap"
+            )
+        },
+    );
+    Check::warn(
+        NAME,
+        format!(
+            "{} is set but rejects nothing at overlap {overlap}s — a single window is \
+             already the whole neighbourhood it is asked to agree with",
+            level.as_str()
+        ),
+        fix,
+    )
 }
 
 /// Coordinates as stored by the dashboard, read directly from SQLite.

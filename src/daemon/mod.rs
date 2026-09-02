@@ -25,8 +25,8 @@ use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandl
 
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
-    build_species_filter_config, resolve_f32_with_default, resolve_required_paths,
-    resolve_sensitivity, species_lists_log_counts, species_thresholds_log_count,
+    build_species_filter_config, resolve_required_paths, resolve_sensitivity,
+    species_lists_log_counts, species_thresholds_log_count,
 };
 use processor::event_processor;
 
@@ -38,7 +38,10 @@ mod config;
 /// `resolve_station_coords` records what a second copy cost the last time one
 /// of these rules was duplicated: a diagnostic that read the setting the
 /// runtime ignores reports on a station that does not exist.
-pub use config::{resolve_confidence, resolve_station_coords};
+pub use config::{
+    resolve_confidence, resolve_confirmation_level, resolve_f32_with_default,
+    resolve_station_coords,
+};
 mod daylight;
 pub mod disposition;
 mod duplicate;
@@ -152,6 +155,15 @@ pub fn start_detection_daemon(
         config.and_then(|c| c.get("NOISE_CLASSES")),
     );
 
+    let (confirmation, confirmation_warning) = resolve_confirmation_level(
+        &cli.confirmation_level,
+        "off",
+        config.and_then(|c| c.get("CONFIRMATION_LEVEL")),
+    );
+    if let Some(warning) = confirmation_warning {
+        tracing::warn!("{warning}");
+    }
+
     let overlap = resolve_f32_with_default(
         cli.overlap,
         0.0,
@@ -210,6 +222,7 @@ pub fn start_detection_daemon(
         privacy_threshold,
         noise_threshold,
         noise_classes,
+        confirmation,
         latitude,
         longitude,
         species_thresholds,

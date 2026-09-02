@@ -27,15 +27,17 @@ pub use detection_reviews::{
     unreviewed_recent_detections,
 };
 pub use detections::{
-    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, analytic_detection_count,
+    CLIP_AVAILABLE, DateRange, DetectionFilter, HourWindow, LockFilter, RecordingsFilter,
+    SortOrder, TodayFilter, VerdictFilter, all_detections, analytic_detection_count,
     analytic_detection_count_for_date, analytic_species_count_for_date, best_detections_for_date,
-    concurrent_detections_from_other_sources, delete_detection, detected_at_utc_for,
-    detection_count, detection_count_for_date, detection_count_for_species_date, detection_dates,
-    detections_by_date, detections_by_species, detections_per_day, insert_detection,
-    is_detection_locked, lock_detection, locked_file_names, recent_clips, recent_clips_count,
-    recent_detections, recent_detections_page, relabel_detection, seconds_since_last_detection,
-    species_for_date, todays_detection_count, todays_detections, todays_source_activity,
-    unlock_detection, unstamped_detection_count,
+    com_name_for, concurrent_detections_from_other_sources, delete_detection, detected_at_utc_for,
+    detection_at, detection_count, detection_count_for_date, detection_count_for_species_date,
+    detection_dates, detections_by_date, detections_by_species, detections_per_day,
+    insert_detection, is_detection_locked, known_sources, lock_detection, locked_file_names,
+    recent_clips, recent_clips_count, recent_detections, recent_detections_page, relabel_detection,
+    search_detection_count, search_detections, seconds_since_last_detection, species_for_date,
+    todays_detection_count, todays_detections, todays_source_activity, unlock_detection,
+    unstamped_detection_count,
 };
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{

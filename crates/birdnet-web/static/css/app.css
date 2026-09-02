@@ -2815,7 +2815,7 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .qz-title-row  { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 0.25rem; }
 .qz-h1         { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .qz-lede       { color: var(--text-muted); font-size: 0.9rem; }
-.qz-lede a     { color: var(--primary); }
+.qz-lede a     { color: var(--fg); text-decoration: underline; }
 .qz-loading    { color: var(--text-muted); }
 .qz-stats-flush { margin-bottom: 0; }
 .qz-stat.warn    { color: var(--warning); }
@@ -2825,7 +2825,7 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .qz-filter-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
 .qz-filter-label { color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .qz-filter-link { font-size: 0.9rem; color: var(--text-muted); }
-.qz-filter-link.active { font-weight: 700; color: var(--primary); border-bottom: 2px solid var(--primary); padding-bottom: 0.1rem; }
+.qz-filter-link.active { font-weight: 700; color: var(--fg); border-bottom: 2px solid var(--fg); padding-bottom: 0.1rem; }
 .qz-list-loading { color: var(--text-muted); text-align: center; padding: 2rem; }
 .qz-name       { font-weight: 600; color: var(--text); }
 .qz-sci        { color: var(--text-muted); font-size: 0.8rem; font-style: italic; }
@@ -3342,7 +3342,7 @@ a.dp-recent-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
 .dr-head       { margin-bottom: 1.25rem; }
 .dr-h1         { font-size: 32px; margin: 0.1rem 0 0.35rem; }
 .dr-lede       { color: var(--fg-2); max-width: 60ch; margin: 0; }
-a.dr-link      { color: var(--primary); }
+a.dr-link      { color: var(--fg); text-decoration: underline; }
 .dr-loading    { color: var(--fg-3); padding: 2rem; text-align: center; }
 .dr-error      { color: var(--danger); }
 .dr-counts     { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
@@ -3390,13 +3390,13 @@ a.dr-row-name  { font-weight: 600; color: var(--fg); }
 .img-wrap       { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
 .img-h1         { font-size: 1.5rem; margin-bottom: 1rem; }
 .img-lede       { color: var(--text-muted); margin-bottom: 1.5rem; }
-.img-form       { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1.5rem; }
+.img-form       { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1.5rem; }
 .img-h2         { font-size: 1rem; margin-bottom: 0.75rem; }
 .img-field-row  { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 input.img-input      { flex: 1; min-width: 150px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
 input.img-input-wide { flex: 2; min-width: 250px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
 .img-add-btn    { padding: 0.4rem 1rem; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); cursor: pointer; }
-.img-table      { width: 100%; border-collapse: collapse; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.img-table      { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .img-thead-row  { background: var(--bg-hover); }
 .img-th         { padding: 0.5rem; text-align: left; }
 .img-td         { padding: 0.5rem; }
@@ -4188,3 +4188,83 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
   border-left: 3px solid var(--dawn, var(--border-2));
 }
 .prov-note__body { margin: 0; max-width: 68ch; }
+
+/* ── Search detections (/search) ──────────────────────────────────────────
+   The one screen that is a *query builder* rather than a report, so the form
+   is the page furniture and the results are the content. Tokens only — no
+   literal colours — so both themes come out of the same rules. */
+.sr-head        { margin-bottom: 1.25rem; }
+.sr-h1          { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.35rem; }
+.sr-lede        { color: var(--text-muted); font-size: 0.9rem; max-width: 60ch; margin: 0; }
+
+.sr-form        { display: flex; flex-direction: column; gap: 0.75rem;
+                  background: var(--surface-2); border: 1px solid var(--border);
+                  border-radius: var(--radius); padding: 1rem; margin-bottom: 1.25rem; }
+.sr-row         { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; }
+.sr-field       { display: flex; flex-direction: column; gap: 0.25rem; min-width: 8.5rem; }
+.sr-field > span{ font-size: 0.75rem; font-weight: 600; letter-spacing: 0.03em;
+                  text-transform: uppercase; color: var(--text-muted); }
+.sr-field input, .sr-field select {
+                  padding: 0.4rem 0.5rem; border: 1px solid var(--border);
+                  border-radius: var(--radius); background: var(--surface);
+                  color: var(--text); font: inherit; font-size: 0.9rem; }
+.sr-grow        { flex: 1 1 16rem; }
+.sr-narrow      { min-width: 6.5rem; max-width: 9rem; }
+.sr-actions     { display: flex; gap: 0.5rem; }
+.sr-btn         { display: inline-flex; align-items: center; gap: 0.35rem;
+                  padding: 0.4rem 0.9rem; border-radius: var(--radius);
+                  border: 1px solid var(--border); background: var(--surface);
+                  color: var(--text); font-size: 0.875rem; cursor: pointer;
+                  text-decoration: none; }
+.sr-btn:hover   { background: var(--bg-hover); }
+.sr-btn-primary { background: var(--fg); border-color: transparent; color: var(--bg); }
+.sr-btn-primary:hover { background: var(--fg-2); }
+
+.sr-count       { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.5rem; }
+.sr-empty, .sr-loading, .sr-error { color: var(--text-muted); padding: 1.5rem 0; }
+.sr-error       { color: var(--danger); }
+
+.sr-bulkbar     { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
+                  padding: 0.5rem 0.75rem; margin-bottom: 0.5rem;
+                  background: var(--surface-2); border: 1px solid var(--border);
+                  border-radius: var(--radius); }
+.sr-selall      { display: inline-flex; align-items: center; gap: 0.4rem;
+                  font-size: 0.85rem; color: var(--text-muted); }
+.sr-bulkaction  { padding: 0.3rem 0.5rem; border: 1px solid var(--border);
+                  border-radius: var(--radius); background: var(--surface);
+                  color: var(--text); font: inherit; font-size: 0.85rem; }
+
+.sr-list        { list-style: none; margin: 0; padding: 0;
+                  border: 1px solid var(--border); border-radius: var(--radius);
+                  overflow: hidden; }
+.sr-item        { display: flex; align-items: center; gap: 0.75rem;
+                  padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+.sr-item:last-child { border-bottom: 0; }
+.sr-item:nth-child(even) { background: var(--surface-2); }
+.sr-check       { display: inline-flex; align-items: center; }
+.sr-name        { font-weight: 600; color: var(--text); text-decoration: none;
+                  flex: 1 1 12rem; min-width: 0; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+.sr-name:hover  { text-decoration: underline; }
+.sr-when        { color: var(--text-muted); font-size: 0.8rem;
+                  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sr-conf        { font-variant-numeric: tabular-nums; font-size: 0.85rem;
+                  min-width: 3rem; text-align: right; }
+.sr-source      { font-size: 0.7rem; color: var(--text-muted);
+                  border: 1px solid var(--border); border-radius: 9999px;
+                  padding: 0.05rem 0.45rem; white-space: nowrap; }
+.sr-verdict     { font-size: 0.7rem; border-radius: 9999px;
+                  padding: 0.05rem 0.45rem; white-space: nowrap; }
+.sr-confirmed   { color: var(--success); border: 1px solid var(--success); }
+.sr-rejected    { color: var(--danger);  border: 1px solid var(--danger); }
+.sr-more        { text-align: center; padding: 1rem 0; }
+
+/* The contextual way in from Today — the v3 spine has six homes and search is
+   deliberately not a seventh tab. */
+.td-searchlink  { color: var(--text-muted); font-size: 0.85rem; margin: 0.75rem 0 0; }
+
+@media (max-width: 640px) {
+  .sr-field, .sr-grow, .sr-narrow { min-width: 0; max-width: none; flex: 1 1 100%; }
+  .sr-item    { flex-wrap: wrap; }
+  .sr-name    { flex: 1 1 100%; }
+}

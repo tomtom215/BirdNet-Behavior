@@ -18,7 +18,10 @@ serde_json.workspace = true
 tracing.workspace = true
 # `form` is for Pushover, whose API takes url-encoded parameters rather than
 # JSON; reqwest 0.13 gates `RequestBuilder::form` behind it.
-reqwest = { workspace = true, features = ["blocking", "json", "form"] }
+# `stream`: the offsite backup target streams a file body rather than
+# buffering it — a station database can be hundreds of megabytes and the
+# board it uploads from has 512 MB of RAM.
+reqwest = { workspace = true, features = ["blocking", "json", "form", "stream"] }
 tokio.workspace = true
 lettre.workspace = true
 # SHA-256 verification of downloaded auto-update archives against the
@@ -29,6 +32,18 @@ sha2.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 rustls-native-certs.workspace = true
+# Offsite backups: ChaCha20-Poly1305 for the envelope, HMAC-SHA256 for the
+# S3-compatible target's SigV4 signature, argon2id to turn the operator's
+# passphrase into a key.
+#
+# No `base64`: it was added here for a key fingerprint and an SFTP quoting
+# scheme, neither of which the finished code needed — SigV4 is hex throughout
+# and the batch-file quoting is `"` and `\`. `cargo-machete` caught it.
+ring.workspace = true
+# Wraps the backup file as an async byte stream for reqwest's streaming body.
+tokio-util.workspace = true
+hmac.workspace = true
+argon2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -96,6 +96,67 @@ pub struct Cli {
     #[arg(long, default_value = "0.0.0.0:8502", env = "BIRDNET_LISTEN")]
     pub listen: String,
 
+    /// How the dashboard terminates TLS: `off`, `self-signed`, or `manual`.
+    ///
+    /// `off` (the default) serves plain HTTP, exactly as every release before
+    /// this one did.
+    ///
+    /// `self-signed` generates a small local CA and a server certificate it
+    /// signs, both kept in `--tls-dir` and rotated before they expire. Browsers
+    /// warn until you import the CA file once (the startup log prints its
+    /// path); after that they stop, and a later certificate rotation does not
+    /// bring the warning back.
+    ///
+    /// `manual` serves `--tls-cert` and `--tls-key`. Both are re-read when they
+    /// change on disk, so an ACME client renewing them in the small hours is
+    /// picked up without a restart.
+    #[arg(long, default_value = "off", env = "BIRDNET_TLS_MODE")]
+    pub tls_mode: String,
+
+    /// Certificate chain (PEM) for `--tls-mode manual`.
+    #[arg(long, env = "BIRDNET_TLS_CERT")]
+    pub tls_cert: Option<PathBuf>,
+
+    /// Private key (PEM) for `--tls-mode manual`.
+    #[arg(long, env = "BIRDNET_TLS_KEY")]
+    pub tls_key: Option<PathBuf>,
+
+    /// Where HTTPS listens. Defaults to `--listen`'s host on port 8503.
+    ///
+    /// Set this equal to `--listen` to serve **only** HTTPS on the one port;
+    /// otherwise plain HTTP keeps answering on `--listen` (see
+    /// `--tls-redirect`).
+    #[arg(long, env = "BIRDNET_TLS_LISTEN")]
+    pub tls_listen: Option<String>,
+
+    /// Answer plain HTTP with a redirect to HTTPS instead of serving the app.
+    ///
+    /// Ignored when HTTPS shares the one socket with `--listen`, because then
+    /// there is no plain port to redirect from.
+    #[arg(long, env = "BIRDNET_TLS_REDIRECT")]
+    pub tls_redirect: bool,
+
+    /// Names the generated certificate should cover, comma-separated.
+    ///
+    /// Defaults to `localhost`, this machine's hostname and `<hostname>.local`,
+    /// the bound address, and `127.0.0.1` — the three ways a station is
+    /// normally reached. Adding a name here regenerates the certificate.
+    #[arg(long, env = "BIRDNET_TLS_HOSTNAMES")]
+    pub tls_hostnames: Option<String>,
+
+    /// Directory for the generated CA and server certificate.
+    ///
+    /// Defaults to a `tls` directory beside the database.
+    #[arg(long, env = "BIRDNET_TLS_DIR")]
+    pub tls_dir: Option<PathBuf>,
+
+    /// How many days a generated server certificate is valid for.
+    ///
+    /// The local CA that signs it lives for ten years regardless, so rotating
+    /// the server certificate never invalidates a trust-store import.
+    #[arg(long, default_value_t = 397, env = "BIRDNET_TLS_DAYS")]
+    pub tls_days: u32,
+
     /// Run only the web server (skip analysis daemon).
     #[arg(long)]
     pub web_only: bool,
@@ -558,6 +619,64 @@ pub struct Cli {
     /// Config key: `NOISE_CLASSES`.
     #[arg(long, env = "BIRDNET_NOISE_CLASSES")]
     pub noise_classes: Option<String>,
+
+    /// Decrypt an offsite backup file and exit.
+    ///
+    /// The counterpart to `--offsite-backup`: takes a `.bnb` file downloaded
+    /// from the bucket or the SSH server and writes the plain database to
+    /// `--out`. The result is an ordinary `SQLite` file — stop the service and
+    /// put it in place of `birds.db`, as with any snapshot.
+    ///
+    /// The passphrase comes from `OFFSITE_PASSPHRASE` (config or
+    /// `BIRDNET_OFFSITE_PASSPHRASE`), never from a flag: an argument on a
+    /// command line is visible in `ps` to every user on the machine. There is
+    /// no recovery without it.
+    #[arg(long, value_name = "FILE")]
+    pub decrypt_backup: Option<PathBuf>,
+
+    /// Where `--decrypt-backup` writes the plain database.
+    ///
+    /// Refused if the file already exists: a restore that silently overwrote
+    /// the database you were about to compare against would be worse than one
+    /// that failed.
+    #[arg(long, value_name = "PATH", requires = "decrypt_backup")]
+    pub out: Option<PathBuf>,
+
+    /// Send each weekly backup to an offsite destination: `off`, `s3` or
+    /// `sftp`.
+    ///
+    /// A station's rolling backups live beside its database, on the same card.
+    /// That covers a corrupt page and a bad VACUUM; it does not cover the card
+    /// wearing out, the enclosure flooding, or the Pi being stolen.
+    ///
+    /// Everything is encrypted on the station before it leaves, and that is not
+    /// configurable — so this needs `OFFSITE_PASSPHRASE`, plus the destination's
+    /// own settings. **Those are config-file or environment keys only, never
+    /// flags**: an argument on a command line is visible in `ps` to every user
+    /// on the box and is copied into the journal by systemd. `--doctor` lists
+    /// what is missing. Config key: `OFFSITE_BACKUP`.
+    #[arg(long, env = "BIRDNET_OFFSITE_BACKUP")]
+    pub offsite_backup: Option<String>,
+
+    /// How much agreement from neighbouring analysis windows a species needs
+    /// before it is recorded: `off`, `lenient`, `moderate`, `balanced` or
+    /// `strict`.
+    ///
+    /// A real bird sings across more than one window; a classifier artefact
+    /// usually fires once. Each level names the fraction of the windows within
+    /// six seconds that must carry the same species — 20%, 30%, 50%, 70% —
+    /// rounded up, and never less than the detection itself.
+    ///
+    /// **This does nothing without `--overlap`.** With no overlap a six-second
+    /// neighbourhood holds two 3-second windows, and 20% or 30% of two rounds
+    /// to one, which every detection already satisfies. `--doctor` reports the
+    /// overlap each level needs, and the daemon warns at startup when the
+    /// level it was given cannot reject anything.
+    ///
+    /// Off by default: it removes rows, so switching it on puts a visible step
+    /// in every chart. Config key: `CONFIRMATION_LEVEL`.
+    #[arg(long, default_value = "off", env = "BIRDNET_CONFIRMATION_LEVEL")]
+    pub confirmation_level: String,
 
     /// Suppress a repeat of the same species within this many seconds
     /// (0 = disabled).

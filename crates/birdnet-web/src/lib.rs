@@ -13,4 +13,5 @@ pub mod server;
 pub mod session;
 pub mod state;
 pub mod system_info;
+pub mod tls;
 pub mod urls;

@@ -118,6 +118,13 @@ Corollaries, each learned the same way:
 - **`~/.duckdb` contaminates ICU results.** One probe populates it and every
   ICU-related test then passes for free. `mv ~/.duckdb /tmp/duckdb-cache-backup`
   before trusting any of them.
+- **A file restored with an older mtime does not trigger a rebuild.** A script
+  that mutates a source file, runs `cargo test`, then moves a backup back over
+  it leaves the source *older* than the artifact built from the mutant, and the
+  next `cargo test` silently re-runs that build. This reported a brand-new gate
+  as failing against the code it guards and then as failing again without it —
+  the second result was the first one's binary. `touch` the file after
+  restoring it, and check a new gate passes *before* trusting that it fails.
 - **`pull_request`-triggered gates never see un-PR'd branches.** Open a draft PR
   early, or run the gates locally; work has sat broken on a pushed branch for
   hours because nothing was watching it.

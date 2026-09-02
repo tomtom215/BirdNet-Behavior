@@ -65,11 +65,15 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/recordings", get(recordings_page))
         .route("/pages/recordings-clips", get(clips_partial))
+}
+
+/// The state-changing half, mounted behind the admin auth middleware.
+pub fn mutating_router() -> Router<AppState> {
+    Router::new()
         .route("/pages/recordings-lock", axum::routing::post(lock_clip))
         .route("/pages/recordings-unlock", axum::routing::post(unlock_clip))
         .route("/pages/recordings-delete", axum::routing::post(delete_clip))
 }
-
 /// Query string for the home: which view, and (Clips only) the active filter,
 /// search term and live-audio source.
 #[derive(Debug, Default, Deserialize)]
@@ -654,16 +658,9 @@ mod tests {
             sci_name: "Turdus migratorius".into(),
             com_name: "American Robin".into(),
             confidence: 0.91,
-            lat: None,
-            lon: None,
-            cutoff: None,
-            week: None,
-            sens: None,
-            overlap: None,
             file_name: Some("robin.wav".into()),
-            correlation_id: None,
-            source: None,
             duration_secs,
+            ..DetectionRow::default()
         }
     }
 

@@ -39,7 +39,10 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
+
+use birdnet_integrations::offsite::OffsiteConfig;
 
 use birdnet_db::sqlite::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
@@ -84,6 +87,7 @@ pub fn spawn_database_maintenance(
     recordings_dir: PathBuf,
     species_cap: u32,
     clip_retention_days: u32,
+    offsite: Option<Arc<OffsiteConfig>>,
 ) {
     tokio::spawn(async move {
         run_loop(
@@ -92,6 +96,7 @@ pub fn spawn_database_maintenance(
             recordings_dir,
             species_cap,
             clip_retention_days,
+            offsite,
         )
         .await;
     });
@@ -103,6 +108,7 @@ async fn run_loop(
     recordings_dir: PathBuf,
     species_cap: u32,
     clip_retention_days: u32,
+    offsite: Option<Arc<OffsiteConfig>>,
 ) {
     tracing::info!(
         db_path = %db_path.display(),
@@ -113,6 +119,10 @@ async fn run_loop(
         integrity_check_every_hours = INTEGRITY_CHECK_INTERVAL.as_secs() / 3600,
         vacuum_every_days = VACUUM_INTERVAL.as_secs() / 86400,
         backup_retention = BACKUP_RETENTION,
+        offsite = offsite.as_ref().map_or_else(
+            || "off".to_owned(),
+            |o| o.destination.describe()
+        ),
         "database maintenance task scheduled"
     );
     tokio::time::sleep(STARTUP_GRACE).await;
@@ -187,7 +197,7 @@ async fn run_loop(
             mark_ran(&db_path, JOB_SUMMARY_AUDIT, &mut attempted).await;
         }
         if due(&db_path, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await {
-            run_backup_and_vacuum(&db_path, &backup_dir).await;
+            run_backup_and_vacuum(&db_path, &backup_dir, offsite.as_deref()).await;
             mark_ran(&db_path, JOB_BACKUP_VACUUM, &mut attempted).await;
         }
     }
@@ -713,7 +723,7 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
     }
 }
 
-async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path) {
+async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Option<&OffsiteConfig>) {
     if !db_path.exists() {
         tracing::debug!("backup+vacuum skipped: db not present yet");
         return;
@@ -726,8 +736,11 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path) {
         birdnet_db::resilience::backup_database(&db_path_b, &backup_dir_b)
     })
     .await;
-    match backup_result {
-        Ok(Ok(path)) => tracing::info!(backup = %path.display(), "scheduled backup created"),
+    let fresh = match backup_result {
+        Ok(Ok(path)) => {
+            tracing::info!(backup = %path.display(), "scheduled backup created");
+            Some(path)
+        }
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "scheduled backup failed");
             // Do not VACUUM if backup failed — preserve recoverability.
@@ -737,6 +750,15 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path) {
             tracing::warn!(error = %e, "scheduled backup task panicked");
             return;
         }
+    };
+
+    // Step 1b: send the snapshot we just took offsite, before anything prunes
+    // or rewrites the database. The freshly-created file is used rather than
+    // "the newest backup in the directory": those are the same thing right now,
+    // and reading the directory again would make it possible to upload a
+    // different file than the one this run created.
+    if let (Some(config), Some(path)) = (offsite, fresh.as_ref()) {
+        run_offsite(config, path, backup_dir).await;
     }
 
     // Step 2: prune old backups.
@@ -758,6 +780,39 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path) {
         Ok(Ok(())) => tracing::info!("scheduled VACUUM complete"),
         Ok(Err(e)) => tracing::warn!(error = %e, "scheduled VACUUM failed"),
         Err(e) => tracing::warn!(error = %e, "scheduled VACUUM task panicked"),
+    }
+}
+
+/// Send one freshly-created backup to the configured offsite destination.
+///
+/// Best-effort, like every other job in this loop: a station that cannot reach
+/// its bucket must still VACUUM, still record birds, and still keep its local
+/// backups. The failure is logged at `warn` with the destination named, and
+/// `--doctor` reports the configuration that produced it.
+///
+/// The ciphertext is staged in the backup directory rather than `/tmp`, so it
+/// lands on the same filesystem as the snapshot it is a copy of: on a station
+/// whose data disk is full, this fails while writing the temporary file instead
+/// of part-way through an upload, and on one whose `/tmp` is a small tmpfs it
+/// does not fail at all.
+async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) {
+    let started = std::time::Instant::now();
+    match birdnet_integrations::offsite::run(config, backup, scratch).await {
+        Ok(report) => tracing::info!(
+            destination = %config.destination.describe(),
+            uploaded = %report.uploaded,
+            bytes = report.bytes,
+            pruned = report.pruned.len(),
+            kept = report.kept,
+            elapsed_s = started.elapsed().as_secs(),
+            "offsite backup uploaded"
+        ),
+        Err(e) => tracing::warn!(
+            destination = %config.destination.describe(),
+            error = %e,
+            elapsed_s = started.elapsed().as_secs(),
+            "offsite backup failed; the local backup is unaffected"
+        ),
     }
 }
 

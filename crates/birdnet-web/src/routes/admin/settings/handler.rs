@@ -351,6 +351,11 @@ fn build_settings_items(
         "privacy_threshold",
         SettingsCategory::Detection
     );
+    push!(
+        form.confirmation_level,
+        "confirmation_level",
+        SettingsCategory::Detection
+    );
     // Notifications
     push!(
         form.apprise_url,
@@ -572,6 +577,7 @@ mod tests {
             overlap: None,
             sf_thresh: None,
             privacy_threshold: None,
+            confirmation_level: None,
             apprise_url: None,
             apprise_config: None,
             notify_urls: None,

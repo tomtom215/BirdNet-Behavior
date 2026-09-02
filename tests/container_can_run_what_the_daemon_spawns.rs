@@ -91,6 +91,15 @@ const TOOLS: &[(&str, Provenance)] = &[
         "systemctl",
         Provenance::NotInContainer("there is no systemd inside the container"),
     ),
+    (
+        "sftp",
+        // The offsite backup target drives OpenSSH's own client rather than
+        // carrying an in-process SSH stack: it is a large dependency and a
+        // second place for key handling, host-key policy and cipher selection
+        // to be subtly wrong. That trade only holds if the binary is actually
+        // present, so the container installs it.
+        Provenance::Package("openssh-client"),
+    ),
     ("tar", Provenance::DebianBase),
     (
         "umount",
@@ -150,16 +159,91 @@ fn production_half(src: &str) -> &str {
 
 /// Tools spawned in `src`, as `Command::new("…")` literals.
 fn spawned_tools(src: &str) -> BTreeSet<String> {
-    const NEEDLE: &str = "Command::new(\"";
+    /// The literal form: `Command::new("ffmpeg")`.
+    const LITERAL: &str = "Command::new(\"";
+    /// The named form: `Command::new(SFTP_BINARY)`.
+    const NAMED: &str = "Command::new(";
+
     let mut out = BTreeSet::new();
+
     let mut rest = src;
-    while let Some(idx) = rest.find(NEEDLE) {
-        rest = &rest[idx + NEEDLE.len()..];
+    while let Some(idx) = rest.find(LITERAL) {
+        rest = &rest[idx + LITERAL.len()..];
         if let Some(end) = rest.find('"') {
             out.insert(rest[..end].to_owned());
         }
     }
+
+    // The named form, where the same file declares
+    // `const SFTP_BINARY: &str = "sftp";`.
+    //
+    // This was added because it had to be. The offsite SFTP target names its
+    // binary once, in a constant the doctor check and the error messages share,
+    // and the literal scanner above did not see it: removing `sftp` from
+    // `TOOLS` entirely left this whole file green. A gate that only sees one
+    // spelling of the thing it guards is a gate that stops working the first
+    // time somebody tidies a string into a constant.
+    let consts = string_consts(src);
+    let mut rest = src;
+    while let Some(idx) = rest.find(NAMED) {
+        rest = &rest[idx + NAMED.len()..];
+        let Some(end) = rest.find(')') else { continue };
+        let arg = rest[..end].trim().trim_start_matches('&');
+        if let Some(value) = consts.get(arg) {
+            out.insert(value.clone());
+        }
+    }
+
     out
+}
+
+/// `const NAME: &str = "value";` declarations in one file.
+fn string_consts(src: &str) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for line in src.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("const ").or_else(|| {
+            line.strip_prefix("pub const ")
+                .or_else(|| line.strip_prefix("pub(crate) const "))
+                .or_else(|| line.strip_prefix("pub(super) const "))
+        }) else {
+            continue;
+        };
+        let Some((name, tail)) = rest.split_once(':') else {
+            continue;
+        };
+        if !tail.trim_start().starts_with("&str") {
+            continue;
+        }
+        let Some(after_eq) = tail.split_once('=').map(|(_, v)| v.trim()) else {
+            continue;
+        };
+        let value = after_eq.trim_start_matches('"');
+        if let Some(end) = value.find('"') {
+            out.insert(name.trim().to_owned(), value[..end].to_owned());
+        }
+    }
+    out
+}
+
+#[test]
+fn the_scanner_sees_both_spellings_of_a_spawn() {
+    // The scanner is what makes every other assertion in this file mean
+    // something, so it is checked directly rather than trusted. It missed the
+    // constant form once, and the file stayed green with `sftp` unclassified.
+    let src = r#"
+        pub const SFTP_BINARY: &str = "sftp";
+        const OTHER: &str = "not-spawned";
+        fn a() { Command::new("ffmpeg").arg("-i"); }
+        fn b() { let mut c = Command::new(SFTP_BINARY); }
+    "#;
+    let found = spawned_tools(src);
+    assert!(found.contains("ffmpeg"), "literal form missed: {found:?}");
+    assert!(found.contains("sftp"), "constant form missed: {found:?}");
+    assert!(
+        !found.contains("not-spawned"),
+        "a constant that is never spawned must not be reported: {found:?}"
+    );
 }
 
 /// The package list of the `Dockerfile`'s **runtime** stage.

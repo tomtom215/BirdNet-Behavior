@@ -661,7 +661,7 @@ mod tests {
             file_name: None,
             correlation_id: None,
             source: None,
-            duration_secs: None,
+            ..Default::default()
         }
     }
 

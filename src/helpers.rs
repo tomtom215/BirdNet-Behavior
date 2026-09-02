@@ -21,10 +21,12 @@
 mod auth;
 mod db;
 pub mod egress;
+pub mod offsite;
 pub mod resolve;
 mod settings_overlay;
 mod state;
 mod system;
+pub mod tls;
 
 #[cfg(test)]
 pub mod test_support;

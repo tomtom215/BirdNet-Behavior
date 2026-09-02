@@ -96,7 +96,13 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
     // Gate `/admin/*` behind the v2 cookie middleware. The middleware
     // handles the "no admin password configured" bypass internally
     // (matches the pre-flip basic-auth contract).
-    let admin = routes::admin_routes();
+    // `/admin` *and* every state-changing page route go behind the same gate.
+    // The page routes were public until it was noticed that they let anyone who
+    // could load the dashboard delete a detection, rewrite a review verdict or
+    // change the station's configuration — none of which is "viewing". The
+    // middleware still bypasses entirely when no admin password is configured,
+    // so a fresh station is unaffected.
+    let admin = routes::admin_routes().merge(routes::pages::mutating_router());
     let admin = crate::auth_middleware::apply(admin, state.clone());
 
     let request_metrics = state.metrics();

@@ -41,8 +41,10 @@ mod disk;
 mod environment;
 mod fix;
 mod model;
+mod offsite;
 mod paths;
 mod render;
+mod tls;
 mod watchdog;
 
 /// Verdict of a single check.
@@ -191,10 +193,13 @@ fn collect(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     }
     checks.push(config::check_station_location(cli, config));
     checks.push(config::check_occurrence_filter(cli, config));
+    checks.push(config::check_confirmation_filter(cli, config));
     checks.push(config::check_listen_address(cli));
     checks.push(config::check_admin_exposure(cli, config));
+    checks.extend(tls::check_tls(cli, config));
     checks.extend(clock::check_clock(cli, config));
     checks.extend(database::check_database(cli, config));
+    checks.extend(offsite::check_offsite(cli, config));
     checks.extend(paths::check_paths(cli, config));
     checks.extend(audio::check_audio_source(cli, config));
     checks.extend(model::check_model(cli, config));

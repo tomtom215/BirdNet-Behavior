@@ -18,9 +18,83 @@ BIRDNET_LISTEN=127.0.0.1:8502
 
 (Or answer "restrict to this device" in the interactive installer.) Then reach it remotely with an SSH tunnel (`ssh -L 8502:localhost:8502 pi@host`) or a VPN — see [the private-tunnel section](#a-safer-alternative-a-private-tunnel) below.
 
+## Built-in HTTPS
+
+The server terminates TLS itself. It is **off by default** — a station on a
+trusted LAN behind a reverse proxy has no need of it, and turning it on for
+everyone would break every existing bookmark.
+
+### The one-command version
+
+```bash
+birdnet-behavior --tls-mode self-signed
+```
+
+HTTPS comes up on **8503** (plain HTTP keeps answering on 8502) and the log
+prints one path:
+
+```
+self-signed HTTPS: import this CA file once to stop the browser warning
+  ca=/var/lib/birdnet/tls/local-ca.crt
+```
+
+That file is a small certificate authority the station generated for itself,
+and the server certificate is signed by it. Import the CA once — into your
+browser, your OS trust store, or `curl --cacert` — and the warning stops. It
+keeps working when the server certificate rotates (the CA is good for ten
+years; the certificate it signs for 397 days and is replaced a month before it
+expires), so you do this once per station, not once per year.
+
+To serve **only** HTTPS on the usual port, point both at the same address:
+
+```bash
+birdnet-behavior --listen 0.0.0.0:8502 --tls-mode self-signed --tls-listen 0.0.0.0:8502
+```
+
+Or keep 8502 open and have it redirect:
+
+```bash
+birdnet-behavior --tls-mode self-signed --tls-redirect
+```
+
+### With a real certificate
+
+If you already have one — from your own ACME client, an internal CA, or a
+purchase:
+
+```bash
+birdnet-behavior --tls-mode manual \
+  --tls-cert /etc/letsencrypt/live/birds.example.com/fullchain.pem \
+  --tls-key  /etc/letsencrypt/live/birds.example.com/privkey.pem
+```
+
+Both files are re-read when they change on disk, so a `certbot renew` in the
+small hours is picked up on the next handshake — **no restart, no cron hook.**
+
+### Checking it before you rely on it
+
+`--doctor` does exactly what startup does, early enough to be useful:
+
+```console
+$ birdnet-behavior --doctor
+[ PASS ] HTTPS — self-signed on 0.0.0.0:8503, covering localhost, pi, pi.local, 127.0.0.1 (valid 397 days)
+[ PASS ] HTTPS — import /var/lib/birdnet/tls/local-ca.crt to stop the browser warning
+```
+
+A mistyped path or a key that does not match its certificate is a `[ FAIL ]`
+here rather than a service that restart-loops after you have gone inside.
+
+Every setting has a `BIRDNET_TLS_*` environment variable and a config-file key;
+see [`.env.example`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/.env.example).
+
 ## Do NOT expose it directly to the internet
 
-The built-in server speaks plain HTTP and has no TLS of its own. **Never** port-forward `8502` straight to the internet. Instead, put it behind a reverse proxy that terminates HTTPS and adds authentication.
+Built-in HTTPS encrypts the traffic; it does not make the station safe to
+port-forward. There is no rate-limited login lockout, no WAF, and the
+self-signed mode carries no publicly-trusted name. **Never** port-forward
+`8502`/`8503` straight to the internet. Use a VPN or a private tunnel, or put
+it behind a reverse proxy that terminates HTTPS with a real certificate and
+adds authentication.
 
 ## Reverse proxy with HTTPS
 

@@ -26,7 +26,7 @@ Retention is disk-based, not time-based — the oldest clips are purged once the
 
 ## Is the dashboard exposed on my network? Do I need a login?
 
-By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; only the `/admin` panel is password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. Don't port-forward it to the internet — put a reverse proxy with TLS or a VPN in front. See [Remote Access & Security](../admin/remote-access.md).
+By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; only the `/admin` panel is password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. For encryption on the LAN, `--tls-mode self-signed` serves HTTPS on 8503 without a second daemon. Still don't port-forward it to the internet — put a reverse proxy with a publicly-trusted certificate, or a VPN, in front. See [Remote Access & Security](../admin/remote-access.md).
 
 ## How do I find or reset the admin password?
 
@@ -38,6 +38,39 @@ sudo systemctl restart birdnet-behavior
 ```
 
 Sign in as `admin` — that is the account the dashboard seeds. `CADDY_USER` is read from the process environment only, so setting it in `birdnet.conf` does not rename it (it does work under Docker). Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
+
+## What happens to my records if the SD card dies?
+
+Without offsite backups, they go with it. The weekly snapshot the station takes
+automatically lives in `backups/` beside the database, on the same card — it
+protects against a corrupt page or a bad import, not against the card itself,
+which in a box on a fence post is a *when*.
+
+Set `OFFSITE_BACKUP=s3` or `OFFSITE_BACKUP=sftp` (plus `OFFSITE_PASSPHRASE`) and
+each weekly snapshot is encrypted on the station and uploaded to an object store
+or an SSH host. Encryption is not optional and not configurable: your database
+is a log of what is around your house and when you are there, and neither a
+bucket provider nor an SFTP host should hold the key.
+
+**The passphrase is the only thing that opens those files.** It is not stored
+anywhere, not derivable from the backup, and not known to anyone else — write it
+down somewhere that is not this station. Restoring is
+`birdnet-behavior --decrypt-backup <file> --out <path>`.
+
+See [Backups & Recovery](../admin/backups.md#offsite-backups).
+
+## Why did turning on repeat confirmation change nothing?
+
+Almost certainly because the analysis windows do not overlap. The filter asks
+how many of the windows within six seconds heard the same species — and with no
+overlap, six seconds is two 3-second windows, so "20% of them" rounds up to one,
+which every detection already satisfies.
+
+Set `BIRDNET_OVERLAP` as well. `birdnet-behavior --doctor` reports which side of
+that line your station is on, the dropdown on the settings page prints the
+overlap each level needs, and the daemon logs a warning at startup when the
+level it was given cannot reject anything. See
+[Tuning](./tuning.md#10-asking-for-a-second-opinion).
 
 ## Do I need anything special for behavioral analytics?
 

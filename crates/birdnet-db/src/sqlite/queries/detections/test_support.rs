@@ -41,3 +41,32 @@ pub(super) fn temp_db_with_data() -> (tempfile::NamedTempFile, Connection) {
     }
     (tmp, conn)
 }
+
+/// A fresh in-memory database with the schema and nothing in it.
+///
+/// [`temp_db_with_data`] hands back a fixed four-row fixture, which is the
+/// right shape for the read tests that grew up around it and the wrong shape
+/// for anything asserting on a filter: those need to choose their own rows, and
+/// a shared fixture quietly couples every such test to every other one.
+pub(super) fn test_conn() -> Connection {
+    let conn = Connection::open_in_memory().expect("open in-memory database");
+    crate::migration::migrate(&conn).expect("apply the schema");
+    conn
+}
+
+/// Insert one detection. Only the columns a filter can select on.
+pub(super) fn insert_test_detection(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    com_name: &str,
+    sci_name: &str,
+    confidence: f64,
+) {
+    conn.execute(
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![date, time, sci_name, com_name, confidence],
+    )
+    .expect("insert test detection");
+}

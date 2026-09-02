@@ -38,6 +38,15 @@ pub fn router() -> Router<AppState> {
             "/pages/detection-reviews-queue",
             get(detection_reviews_queue_partial),
         )
+}
+
+/// The state-changing half, mounted behind the admin auth middleware.
+///
+/// A verdict is a curator's claim about the record, and migration 27 carries it
+/// into every analytic — so an unauthenticated write here silently rewrites the
+/// station's numbers.
+pub fn mutating_router() -> Router<AppState> {
+    Router::new()
         .route(
             "/pages/detection-review",
             axum::routing::post(detection_review_set),
@@ -51,7 +60,6 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(detection_review_inline),
         )
 }
-
 /// Form for recording a verdict.
 #[derive(Debug, Deserialize)]
 pub struct ReviewForm {

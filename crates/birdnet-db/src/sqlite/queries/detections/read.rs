@@ -400,22 +400,6 @@ impl TodayFilter {
             _ => Self::All,
         }
     }
-
-    /// Extra `AND …` clause for queries whose `?1` is the queried date.
-    const fn sql_clause(self) -> &'static str {
-        match self {
-            Self::All => "",
-            Self::FirstToday => {
-                " AND NOT EXISTS (SELECT 1 FROM detections d2 \
-                 WHERE d2.Com_Name = detections.Com_Name AND d2.Date < ?1)"
-            }
-            Self::Rare => {
-                " AND Confidence > 0.85 AND NOT EXISTS (SELECT 1 FROM detections d2 \
-                 WHERE d2.Com_Name = detections.Com_Name AND d2.Date < ?1)"
-            }
-            Self::HighConfidence => " AND Confidence >= 0.9",
-        }
-    }
 }
 
 /// Search today's detections with optional text filter, category filter,
@@ -436,61 +420,26 @@ pub fn todays_detections(
     limit: u32,
     offset: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
-    let extra = filter.sql_clause();
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-        match parse_search_term(search) {
-            Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
-                (
-                    format!(
-                        "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2{extra} \
-                         ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
-                    ),
-                    vec![
-                        Box::new(date.to_string()),
-                        Box::new(pattern),
-                        Box::new(limit),
-                        Box::new(offset),
-                    ],
-                )
-            }
-            Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
-                (
-                    format!(
-                        "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2){extra} \
-                         ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
-                    ),
-                    vec![
-                        Box::new(date.to_string()),
-                        Box::new(pattern),
-                        Box::new(limit),
-                        Box::new(offset),
-                    ],
-                )
-            }
-            None => (
-                format!(
-                    "SELECT {DETECTION_COLS} FROM detections \
-                     WHERE Date = ?1{extra} ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
-                ),
-                vec![
-                    Box::new(date.to_string()),
-                    Box::new(limit),
-                    Box::new(offset),
-                ],
-            ),
-        };
+    super::filter::search_detections(conn, &conn_filter(date, search, filter), limit, offset)
+}
 
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(AsRef::as_ref).collect();
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map(params_ref.as_slice(), map_detection_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+/// The [`super::filter::DetectionFilter`] equivalent of this function's four
+/// arguments.
+///
+/// Extracted so the two entry points below cannot drift: they used to be two
+/// copies of the same three-armed `match`, and a fix applied to one of them was
+/// a fix the other did not get.
+fn conn_filter(
+    date: &str,
+    search: Option<&str>,
+    filter: TodayFilter,
+) -> super::filter::DetectionFilter {
+    super::filter::DetectionFilter {
+        text: search.map(str::to_owned),
+        dates: super::filter::DateRange::On(date.to_owned()),
+        category: filter,
+        ..super::filter::DetectionFilter::default()
+    }
 }
 
 /// Count today's detections with optional text and category filters.
@@ -504,39 +453,81 @@ pub fn todays_detection_count(
     search: Option<&str>,
     filter: TodayFilter,
 ) -> Result<i64, DbError> {
-    let extra = filter.sql_clause();
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-        match parse_search_term(search) {
-            Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
-                (
-                    format!(
-                        "SELECT COUNT(*) FROM detections \
-                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2{extra}"
-                    ),
-                    vec![Box::new(date.to_string()), Box::new(pattern)],
-                )
-            }
-            Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
-                (
-                    format!(
-                        "SELECT COUNT(*) FROM detections \
-                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2){extra}"
-                    ),
-                    vec![Box::new(date.to_string()), Box::new(pattern)],
-                )
-            }
-            None => (
-                format!("SELECT COUNT(*) FROM detections WHERE Date = ?1{extra}"),
-                vec![Box::new(date.to_string())],
-            ),
-        };
+    super::filter::search_detection_count(conn, &conn_filter(date, search, filter))
+}
 
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(AsRef::as_ref).collect();
-    let count: i64 = conn.query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
-    Ok(count)
+/// One detection, identified by its local date and time and optionally its
+/// common name.
+///
+/// Exists because `birdnet-web`'s detail page had two hand-written copies of the
+/// fifteen-column projection and its row mapper — the exact drift
+/// [`DETECTION_COL_NAMES`](crate::sqlite::types) guards against inside this
+/// crate, sitting where that gate could not see them. Adding a column to
+/// `DetectionRow` broke both, which is how they were found.
+///
+/// `com_name` disambiguates the case where two species were detected in the
+/// same second; pass `None` to take whichever row comes first.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_at(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    com_name: Option<&str>,
+) -> Result<Option<DetectionRow>, DbError> {
+    let sql = match com_name {
+        Some(_) => format!(
+            "SELECT {DETECTION_COLS} FROM detections \
+             WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1"
+        ),
+        None => format!(
+            "SELECT {DETECTION_COLS} FROM detections \
+             WHERE Date = ?1 AND Time = ?2 LIMIT 1"
+        ),
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = match com_name {
+        Some(name) => stmt.query(rusqlite::params![date, time, name])?,
+        None => stmt.query(rusqlite::params![date, time])?,
+    };
+    rows.next()?
+        .map(map_detection_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+/// The common name of the detection identified by `(date, time, sci_name)`.
+///
+/// Exists so a bulk review does not have to take the operator's word for it.
+/// `set_detection_review` stores the common name alongside the verdict for
+/// display, and the browser has one on screen — but the checkbox that carries
+/// it is client-supplied, and a review row naming a different bird from the
+/// detection it reviews is a quiet corruption of the curation record. One
+/// indexed lookup is cheaper than that.
+///
+/// `None` when no such detection exists, which also makes this the existence
+/// check the bulk path needs.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn com_name_for(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<Option<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name FROM detections \
+         WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3 LIMIT 1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![date, time, sci_name])?;
+    rows.next()?
+        .map(|r| r.get(0))
+        .transpose()
+        .map_err(Into::into)
 }
 
 /// Category filter for the cross-date Recordings clip browser.
@@ -1754,6 +1745,108 @@ mod tests {
             todays_source_activity(&conn, "2026-06-14")
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// `detection_at` must hand back the row that is actually there.
+    ///
+    /// The detail page renders whatever this returns, so `Ok(None)` reads as a
+    /// 404 on a detection that plainly exists, and `Ok(Some(Default::default()))`
+    /// renders a nameless bird at 0.00 confidence under the URL of a real one.
+    /// Both are plausible enough to survive a glance, and both survived
+    /// mutation testing: this function had no test in this crate at all, and
+    /// its only caller lives in `birdnet-web`, which the mutation gate's
+    /// `--lib` scope never runs.
+    #[test]
+    fn detection_at_returns_the_row_recorded_at_that_instant() {
+        let (_tmp, conn) = temp_db_with_data();
+
+        let row = detection_at(&conn, "2026-03-11", "06:45:00", None)
+            .unwrap()
+            .expect("a detection was recorded at 06:45 on 2026-03-11");
+        assert_eq!(row.com_name, "European Robin");
+        assert_eq!(row.sci_name, "Erithacus rubecula");
+        assert!(
+            (row.confidence - 0.92).abs() < 1e-9,
+            "the row's own confidence, not a placeholder: {}",
+            row.confidence
+        );
+
+        // And nothing at a second nobody sang in. Without this half, a
+        // `detection_at` that always answered `None` would pass the test above
+        // by never being asked a question it could get wrong.
+        assert!(
+            detection_at(&conn, "2026-03-11", "06:44:00", None)
+                .unwrap()
+                .is_none(),
+            "no detection was recorded at 06:44"
+        );
+    }
+
+    /// The `com_name` argument picks between two species heard in the same
+    /// second — the case the doc comment describes, and the reason the
+    /// three-parameter branch exists. Nothing exercised it.
+    #[test]
+    fn detection_at_picks_the_named_bird_when_two_share_a_second() {
+        let (_tmp, conn) = temp_db_with_data();
+        // A second blackbird at the robin's exact wall clock.
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+             VALUES ('2026-03-11', '06:45:00', 'Turdus merula', 'Eurasian Blackbird', 0.55)",
+            [],
+        )
+        .unwrap();
+
+        for want in ["European Robin", "Eurasian Blackbird"] {
+            let row = detection_at(&conn, "2026-03-11", "06:45:00", Some(want))
+                .unwrap()
+                .unwrap_or_else(|| panic!("{want} was recorded at 06:45"));
+            assert_eq!(
+                row.com_name, want,
+                "the name asked for decides which of the two comes back"
+            );
+        }
+
+        assert!(
+            detection_at(&conn, "2026-03-11", "06:45:00", Some("Great Tit"))
+                .unwrap()
+                .is_none(),
+            "naming a bird that was not heard then must not fall back to one \
+             that was"
+        );
+    }
+
+    /// `com_name_for` must name the bird the row actually carries.
+    ///
+    /// It exists so a bulk review cannot take the browser's word for which
+    /// species it is reviewing. `Ok(None)` makes every key look nonexistent
+    /// and the bulk path skip silently; `Ok(Some(String::new()))` and
+    /// `Ok(Some("xyzzy".into()))` write a review row naming a different bird
+    /// from the detection it reviews — precisely the quiet corruption of the
+    /// curation record this lookup was added to prevent. All three mutants
+    /// survived, because nothing in this crate called the function.
+    #[test]
+    fn com_name_for_names_the_bird_the_row_actually_carries() {
+        let (_tmp, conn) = temp_db_with_data();
+
+        assert_eq!(
+            com_name_for(&conn, "2026-03-11", "06:45:00", "Erithacus rubecula").unwrap(),
+            Some("European Robin".to_string())
+        );
+
+        // Right instant, wrong species: the mismatch the bulk path checks for,
+        // and the half that stops "always `Some(some name)`" from passing.
+        assert_eq!(
+            com_name_for(&conn, "2026-03-11", "06:45:00", "Turdus merula").unwrap(),
+            None,
+            "the blackbird was not the bird heard at 06:45"
+        );
+
+        // Right species, wrong instant.
+        assert_eq!(
+            com_name_for(&conn, "2026-03-11", "06:44:00", "Erithacus rubecula").unwrap(),
+            None,
+            "no detection was recorded at 06:44"
         );
     }
 }

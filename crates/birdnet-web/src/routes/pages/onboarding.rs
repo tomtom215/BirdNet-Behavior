@@ -69,9 +69,21 @@ pub const ONBOARDING_SETTING_KEYS: &[&str] = &[
 
 /// Mount the first-run onboarding wizard routes.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/onboarding", get(onboarding_page))
-        .route("/onboarding/save", post(onboarding_save))
+    Router::new().route("/onboarding", get(onboarding_page))
+}
+
+/// The state-changing half, mounted behind the admin auth middleware.
+///
+/// The wizard *page* stays public so a fresh station still shows it. The save
+/// writes the station's coordinates, time zone and notification policy, which
+/// is configuration and belongs behind the same gate as the settings form.
+///
+/// On a station with no admin password — a fresh Docker run, or an operator who
+/// cleared it — the middleware bypasses and this behaves exactly as it did. The
+/// only case that changes is "a password is set and nobody has signed in", where
+/// the operator is sent to the login page and returned to the wizard afterwards.
+pub fn mutating_router() -> Router<AppState> {
+    Router::new().route("/onboarding/save", post(onboarding_save))
 }
 
 /// The settings the wizard must show as they already are, rather than as it

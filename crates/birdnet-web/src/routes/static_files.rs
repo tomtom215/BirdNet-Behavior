@@ -47,6 +47,9 @@ const LIVE_DETECTIONS_JS: &[u8] = include_bytes!("../../static/live-detections.j
 /// Type-to-filter for the admin settings page (embedded at compile time).
 const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
 
+/// Select-all for the search page's bulk action bar (embedded at compile time).
+const SEARCH_SELECT_JS: &[u8] = include_bytes!("../../static/search-select.js");
+
 /// Self-hosted webfonts (latin + latin-ext subsets), embedded at compile time
 /// so the UI renders fully offline with no CDN dependency. `Inter Tight` (UI),
 /// `Instrument Serif` (display) and `JetBrains Mono` (numeric) cover Latin
@@ -146,6 +149,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/theme-guard.js", get(theme_guard_js))
         .route("/static/live-detections.js", get(live_detections_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
+        .route("/static/search-select.js", get(search_select_js))
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
         .route("/static/fonts/{file}", get(font_file))
@@ -268,6 +272,17 @@ async fn settings_filter_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         SETTINGS_FILTER_JS,
+    )
+}
+
+async fn search_select_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        SEARCH_SELECT_JS,
     )
 }
 
