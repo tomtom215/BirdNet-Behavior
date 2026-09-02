@@ -52,6 +52,7 @@ const MUTATING_PAGE_ROUTES: &[&str] = &[
     "/pages/quarantine-reject",
     "/pages/quarantine-delete",
     "/onboarding/save",
+    "/pages/search-bulk",
 ];
 
 fn test_state() -> AppState {

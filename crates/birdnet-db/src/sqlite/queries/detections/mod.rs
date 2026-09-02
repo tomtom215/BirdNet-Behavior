@@ -26,8 +26,8 @@ pub use locks::{is_detection_locked, lock_detection, locked_file_names, unlock_d
 pub use read::{
     CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, analytic_detection_count,
     analytic_detection_count_for_date, analytic_species_count_for_date, best_detections_for_date,
-    concurrent_detections_from_other_sources, detected_at_utc_for, detection_count,
-    detection_count_for_date, detection_count_for_species_date, detection_dates,
+    com_name_for, concurrent_detections_from_other_sources, detected_at_utc_for, detection_at,
+    detection_count, detection_count_for_date, detection_count_for_species_date, detection_dates,
     detections_by_date, detections_by_species, detections_per_day, recent_clips,
     recent_clips_count, recent_detections, recent_detections_page, seconds_since_last_detection,
     species_for_date, todays_detection_count, todays_detections, todays_source_activity,

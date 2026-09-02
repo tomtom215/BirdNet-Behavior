@@ -45,6 +45,7 @@ pub(crate) mod overlays;
 pub mod provenance;
 pub mod quarantine;
 pub mod recordings;
+pub mod search;
 pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod station_health;
@@ -120,6 +121,7 @@ pub fn router() -> Router<AppState> {
         .merge(quarantine::router())
         .merge(today::router())
         .merge(recordings::router())
+        .merge(search::router())
         .merge(weekly_report::router())
         .merge(history::router())
         .merge(life_list::router())
@@ -154,6 +156,7 @@ pub fn mutating_router() -> Router<AppState> {
         .merge(recordings::mutating_router())
         .merge(quarantine::mutating_router())
         .merge(onboarding::mutating_router())
+        .merge(search::mutating_router())
 }
 
 /// Sign-out form fragment rendered into the topnav's `{{sign_out_link}}`

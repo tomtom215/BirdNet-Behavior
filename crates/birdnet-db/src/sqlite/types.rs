@@ -84,7 +84,15 @@ pub struct DetectionRecord<'a> {
 }
 
 /// A detection row read from the database.
-#[derive(Debug, Clone, serde::Serialize)]
+///
+/// A `Default` row is **not a detection**: every string is empty and the
+/// confidence is zero. It exists so a test fixture can name the two or three
+/// fields it cares about and inherit the rest — adding a column to this struct
+/// broke five hand-written fixtures across `birdnet-web`, which is a cost paid
+/// every time the shape grows and buys nothing. Production code constructs rows
+/// from the database through [`map_detection_row`]; nothing should be reaching
+/// for `default()` outside a test.
+#[derive(Debug, Clone, serde::Serialize, Default)]
 pub struct DetectionRow {
     /// Detection date.
     pub date: String,
@@ -127,6 +135,14 @@ pub struct DetectionRow {
     /// migration 20 (historical / imported) or were re-inserted without a clip.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_secs: Option<f64>,
+    /// The reviewer's current verdict — `confirmed`, `rejected`, or `None` for
+    /// a row nobody has looked at. Added in migration 27.
+    ///
+    /// Projected alongside the rest rather than joined at display time so a
+    /// list can show *and filter by* review state in one query; the searchable
+    /// log does both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_verdict: Option<String>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -240,6 +256,7 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         correlation_id: row.get(12)?,
         source: row.get(13)?,
         duration_secs: row.get(14)?,
+        review_verdict: row.get(15)?,
     })
 }
 
@@ -273,13 +290,14 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "correlation_id",
     "Source",
     "Duration_Secs",
+    "review_verdict",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict";
 
 #[cfg(test)]
 mod drift_gate_tests {

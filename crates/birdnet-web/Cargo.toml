@@ -62,6 +62,8 @@ hyper-util.workspace = true
 # needs the trait in scope; tower-http does not re-export it.
 tower.workspace = true
 
+form_urlencoded.workspace = true
+
 # Share-link token signing (O-07 — public rare-bird permalinks).
 hmac.workspace = true
 sha2.workspace = true

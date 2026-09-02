@@ -137,7 +137,7 @@ mod tests {
             file_name: Some("test.wav".into()),
             correlation_id: None,
             source: None,
-            duration_secs: None,
+            ..Default::default()
         };
         let out = detections_to_birddb(&[row]);
         let line = out.lines().next().unwrap();

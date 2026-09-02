@@ -645,6 +645,7 @@ dependencies = [
  "birdnet-scheduler",
  "birdnet-timeseries",
  "flate2",
+ "form_urlencoded",
  "hmac",
  "hyper",
  "hyper-util",

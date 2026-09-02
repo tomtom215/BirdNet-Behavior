@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Three clusters: HTTPS in the listener itself, removing the Apprise dependency
-for the services most stations actually use, and giving the detection pipeline
-the quality controls that separate a station's real records from its model's
-artefacts. Plus one latent data-loss bug found while adding a quarantine
-reason.
+Four clusters: HTTPS in the listener itself, a searchable detection log with
+bulk review, removing the Apprise dependency for the services most stations
+actually use, and giving the detection pipeline the quality controls that
+separate a station's real records from its model's artefacts.
+
+Plus four bugs that were found the same way each time — by running the thing
+rather than by reading it. Thirteen state-changing endpoints with no login,
+found while adding a fourteenth. A checkbox group that could not be submitted at
+all, found by posting a real form. Five CSS variables that had never been
+defined, found by looking at a screenshot. And one latent data-loss bug found
+while adding a quarantine reason.
 
 ### Added — HTTPS, without a reverse proxy
 
@@ -77,6 +83,71 @@ than `aws-lc-rs`, for the same cross-compilation reason `rustls` does.
 `birdnet-db`'s `clock_premise` test had been guarding since it was written; the
 design note in `crates/birdnet-db/src/clock.rs` and the test now record it, in
 both directions.
+
+### Added — a searchable detection log
+
+The Today log answers "what happened today", and its four category shortcuts are
+the questions a person asks while looking at one day. Everything else is a
+*query*: every rejected record from May, this species below 40 %, whatever the
+pond microphone heard between 22:00 and 04:00.
+
+**`/search`** — reachable from the command palette and from Today, deliberately
+not a seventh nav tab (the v3 spine has six homes and the long tail lives in the
+palette by design). Nine criteria, combinable: free text (with the BirdNET-Pi
+`NOT ` syntax), an exact species, a date range, an hour-of-day window, a
+confidence range, an audio source, review verdict, lock state, and the four
+category shortcuts — across six sort orders. The address bar carries the whole
+search, so a useful one can be bookmarked or sent to somebody.
+
+**Bulk actions.** Checkboxes and one action bar: confirm, reject, lock, unlock,
+delete. Reviewing a season one row at a time is not review, it is attrition. The
+endpoint is behind the admin gate, which is exactly the fix above: `action=delete`
+over a selection is the most destructive request this application accepts.
+
+Underneath is `DetectionFilter` in `birdnet-db`, a composable clause builder
+replacing a three-armed `match` that could not have grown to nine dimensions.
+Every placeholder is a positional `?` so the fragment that adds one is the
+fragment that binds its value; a generated 6 561-combination matrix asserts
+`placeholders == params`. `todays_detections` now runs on it too, and its
+category shortcuts became date-relative in the process — the same predicate now
+means the same thing over a range as it did on one day.
+
+`review_verdict` joined the projected detection columns so the list can show and
+filter review state in one query, and `detection_at` replaced two hand-written
+copies of the fifteen-column mapper that were living in `birdnet-web`, outside
+the drift gate that exists to prevent exactly that.
+
+### Fixed — a checkbox group could not be submitted
+
+`axum::Form` deserialises through `serde_urlencoded`, which has no
+representation for a repeated key. A page of checkboxes posts
+`selected=a&selected=b`, which is what the HTML form specification says a
+checkbox group is, and the whole body was rejected:
+
+```text
+Failed to deserialize form body: selected: invalid type: string "…", expected a sequence
+```
+
+Found by posting a real form to a running server. Every unit test around the
+handler constructed the struct directly and so never went near the deserialiser
+— the bug was in the seam none of them crossed. The body is now parsed with
+`form_urlencoded::parse` (the browser's own grammar, already in the tree through
+`url`), and three gates go through the wire format.
+
+### Fixed — five CSS custom properties were never defined
+
+`app.css` used `var(--primary)` in four rules and `var(--card-bg)` in two, and
+defined neither. An undefined custom property does not warn: the declaration is
+invalid at computed-value time and the property silently keeps what it
+inherited. The quarantine lede link, the active filter tab's colour *and*
+underline, a detail-page link and two admin form backgrounds had all been
+shipping in both themes looking approximately right.
+
+Found by looking at a screenshot of a new button that rendered invisible —
+white text on the white it had inherited. `tests/css_variables_are_defined.rs`
+now fails the build on any `var()` with no definition, with a named allowlist
+for the three properties something genuinely sets at runtime, each of which must
+also carry a fallback.
 
 ### Fixed — the dashboard let anyone on the LAN change things
 

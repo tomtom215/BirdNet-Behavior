@@ -102,56 +102,15 @@ fn find_detection(
     time: &str,
     com_name: &str,
 ) -> Option<birdnet_db::sqlite::DetectionRow> {
-    use birdnet_db::sqlite::DetectionRow;
-    use rusqlite::params;
-
-    if com_name.is_empty() {
-        conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs
-             FROM detections WHERE Date = ?1 AND Time = ?2 LIMIT 1",
-            params![date, time],
-            |row| Ok(DetectionRow {
-                date: row.get(0)?,
-                time: row.get(1)?,
-                sci_name: row.get(2)?,
-                com_name: row.get(3)?,
-                confidence: row.get(4)?,
-                lat: row.get(5)?,
-                lon: row.get(6)?,
-                cutoff: row.get(7)?,
-                week: row.get(8)?,
-                sens: row.get(9)?,
-                overlap: row.get(10)?,
-                file_name: row.get(11)?,
-                correlation_id: row.get(12)?,
-                source: row.get(13)?,
-                duration_secs: row.get(14)?,
-            }),
-        ).ok()
-    } else {
-        conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs
-             FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
-            params![date, time, com_name],
-            |row| Ok(DetectionRow {
-                date: row.get(0)?,
-                time: row.get(1)?,
-                sci_name: row.get(2)?,
-                com_name: row.get(3)?,
-                confidence: row.get(4)?,
-                lat: row.get(5)?,
-                lon: row.get(6)?,
-                cutoff: row.get(7)?,
-                week: row.get(8)?,
-                sens: row.get(9)?,
-                overlap: row.get(10)?,
-                file_name: row.get(11)?,
-                correlation_id: row.get(12)?,
-                source: row.get(13)?,
-                duration_secs: row.get(14)?,
-            }),
-        ).ok()
-    }
+    // One query, one mapper, both owned by `birdnet-db`. This used to be two
+    // hand-written copies of the fifteen-column projection and its row mapper,
+    // living outside the drift gate that exists inside that crate to stop
+    // exactly this — and they were found the only way such a thing is: a column
+    // was added to `DetectionRow` and both copies failed to compile.
+    let name = (!com_name.is_empty()).then_some(com_name);
+    birdnet_db::sqlite::detection_at(conn, date, time, name)
+        .ok()
+        .flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -421,7 +380,7 @@ mod tests {
             file_name: None,
             correlation_id: id.map(str::to_owned),
             source: None,
-            duration_secs: None,
+            ..Default::default()
         }
     }
 

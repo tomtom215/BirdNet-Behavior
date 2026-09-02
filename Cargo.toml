@@ -120,6 +120,13 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 # stable across the 0.38/0.39 boundary, so only the version bump is needed.
 sysinfo = { version = "0.39", default-features = false, features = ["system", "component"] }
 
+# `application/x-www-form-urlencoded` parsing for the one form axum's own
+# `Form` extractor cannot take: a checkbox group posts `selected=a&selected=b`,
+# one key repeated, and `serde_urlencoded` has no representation for that and
+# rejects the whole body. Already resolved in the graph through `url`
+# (reqwest), so this is a direct edge and no new compiled crate.
+form_urlencoded = "1"
+
 # Async IO utilities (file streaming for recording serving)
 tokio-util = { version = "0.7", features = ["io", "rt"] }
 

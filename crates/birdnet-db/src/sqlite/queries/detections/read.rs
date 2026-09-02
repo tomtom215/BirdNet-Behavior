@@ -455,6 +455,80 @@ pub fn todays_detection_count(
     super::filter::search_detection_count(conn, &conn_filter(date, search, filter))
 }
 
+/// One detection, identified by its local date and time and optionally its
+/// common name.
+///
+/// Exists because `birdnet-web`'s detail page had two hand-written copies of the
+/// fifteen-column projection and its row mapper — the exact drift
+/// [`DETECTION_COL_NAMES`](crate::sqlite::types) guards against inside this
+/// crate, sitting where that gate could not see them. Adding a column to
+/// `DetectionRow` broke both, which is how they were found.
+///
+/// `com_name` disambiguates the case where two species were detected in the
+/// same second; pass `None` to take whichever row comes first.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_at(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    com_name: Option<&str>,
+) -> Result<Option<DetectionRow>, DbError> {
+    let sql = match com_name {
+        Some(_) => format!(
+            "SELECT {DETECTION_COLS} FROM detections \
+             WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1"
+        ),
+        None => format!(
+            "SELECT {DETECTION_COLS} FROM detections \
+             WHERE Date = ?1 AND Time = ?2 LIMIT 1"
+        ),
+    };
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = match com_name {
+        Some(name) => stmt.query(rusqlite::params![date, time, name])?,
+        None => stmt.query(rusqlite::params![date, time])?,
+    };
+    rows.next()?
+        .map(map_detection_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+/// The common name of the detection identified by `(date, time, sci_name)`.
+///
+/// Exists so a bulk review does not have to take the operator's word for it.
+/// `set_detection_review` stores the common name alongside the verdict for
+/// display, and the browser has one on screen — but the checkbox that carries
+/// it is client-supplied, and a review row naming a different bird from the
+/// detection it reviews is a quiet corruption of the curation record. One
+/// indexed lookup is cheaper than that.
+///
+/// `None` when no such detection exists, which also makes this the existence
+/// check the bulk path needs.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn com_name_for(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<Option<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name FROM detections \
+         WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3 LIMIT 1",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![date, time, sci_name])?;
+    rows.next()?
+        .map(|r| r.get(0))
+        .transpose()
+        .map_err(Into::into)
+}
+
 /// Category filter for the cross-date Recordings clip browser.
 ///
 /// Reuses the Today log's vocabulary where it overlaps so the two surfaces

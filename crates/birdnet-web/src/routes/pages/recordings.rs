@@ -658,16 +658,9 @@ mod tests {
             sci_name: "Turdus migratorius".into(),
             com_name: "American Robin".into(),
             confidence: 0.91,
-            lat: None,
-            lon: None,
-            cutoff: None,
-            week: None,
-            sens: None,
-            overlap: None,
             file_name: Some("robin.wav".into()),
-            correlation_id: None,
-            source: None,
             duration_secs,
+            ..DetectionRow::default()
         }
     }
 
