@@ -27,8 +27,17 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | `RECORDING_SCHEDULE` | `all-day` |
 | `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
-| `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` |
+| `BIRDNET_METADATA_MODEL` | `--metadata-model` | `METADATA_MODEL_PATH` | set by the installer / entrypoint |
+| `BIRDNET_METADATA_LABELS` | `--metadata-labels` | `METADATA_LABELS_PATH` | set by the installer / entrypoint |
+| `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` (no effect without a metadata model) |
 | `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
+| `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
+| `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
+| `BIRDNET_DUPLICATE_INTERVAL_SECS` | `--duplicate-interval-secs` | `DUPLICATE_INTERVAL_SECS` | `0` |
+| `BIRDNET_NIGHT_FILTER` | `--night-filter` | `NIGHT_FILTER` | off |
+| `BIRDNET_NIGHT_MARGIN_MINS` | `--night-margin-mins` | `NIGHT_MARGIN_MINS` | `60` |
+| `BIRDNET_NIGHT_EXTRA_NOCTURNAL` | `--night-extra-nocturnal` | `NIGHT_EXTRA_NOCTURNAL` | — |
+| `BIRDNET_NOTIFY_URLS` | `--notify-urls` | `NOTIFY_URLS` | — |
 | `BIRDNET_APPRISE_URL` | `--apprise-url` | `APPRISE_URL` | — |
 | `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | — | `0.8` |
 | `BIRDNET_DEADMAN_HOURS` | `--deadman-hours` | `DEADMAN_HOURS` | `24` (`0` = off) |

@@ -363,6 +363,11 @@ fn build_settings_items(
         SettingsCategory::Notifications
     );
     push!(
+        form.notify_urls,
+        "notify_urls",
+        SettingsCategory::Notifications
+    );
+    push!(
         form.birdweather_token,
         "birdweather_token",
         SettingsCategory::Notifications
@@ -450,6 +455,21 @@ fn build_settings_items(
         SettingsCategory::System
     );
     push!(
+        form.extraction_length,
+        "extraction_length",
+        SettingsCategory::System
+    );
+    push!(
+        form.rare_species_days,
+        "rare_species_days",
+        SettingsCategory::System
+    );
+    push!(
+        form.raw_spectrogram,
+        "raw_spectrogram",
+        SettingsCategory::System
+    );
+    push!(
         form.purge_threshold,
         "purge_threshold",
         SettingsCategory::System
@@ -531,6 +551,9 @@ mod tests {
 
     fn empty_form() -> SettingsForm {
         SettingsForm {
+            raw_spectrogram: None,
+            extraction_length: None,
+            rare_species_days: None,
             alsa_device: None,
             rtsp_url: None,
             rtsp_urls: None,
@@ -551,6 +574,7 @@ mod tests {
             privacy_threshold: None,
             apprise_url: None,
             apprise_config: None,
+            notify_urls: None,
             birdweather_token: None,
             notify_confidence: None,
             notify_cooldown: None,

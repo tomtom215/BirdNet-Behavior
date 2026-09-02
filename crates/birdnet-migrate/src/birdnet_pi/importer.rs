@@ -4,7 +4,8 @@
 //! inserts them (batch by batch) into the destination `birds.db`.
 //!
 //! The source file is opened **read-only** and is never modified.
-//! Duplicate rows are silently skipped via `INSERT OR IGNORE`.
+//! Duplicate rows are skipped by naming the detections uniqueness conflict,
+//! so a re-import is idempotent while any other constraint failure still errors.
 
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -519,7 +520,10 @@ fn fetch_batch(
 
 /// Insert a batch into the destination inside a single transaction.
 ///
-/// Uses `INSERT OR IGNORE` so duplicate rows are silently skipped.
+/// Names the detections uniqueness conflict so duplicate rows are skipped and a
+/// re-import is idempotent. Deliberately not `INSERT OR IGNORE`, which would
+/// also swallow a NOT NULL or CHECK failure and report the row as a duplicate;
+/// see `tests/or_ignore_guard.rs`.
 /// Returns `(inserted, skipped)`.
 fn insert_batch_tagged(
     conn: &mut Connection,
@@ -535,10 +539,11 @@ fn insert_batch_tagged(
     for row in rows {
         let changes = tx
             .execute(
-                "INSERT OR IGNORE INTO detections
+                "INSERT INTO detections
                  (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
                   Cutoff, Week, Sens, Overlap, File_Name, import_batch_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                 ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
                 params![
                     row.date,
                     row.time,
@@ -571,10 +576,11 @@ fn insert_batch(conn: &mut Connection, rows: &[DetectionRow]) -> Result<(u64, u6
     for row in rows {
         let changes = tx
             .execute(
-                "INSERT OR IGNORE INTO detections
+                "INSERT INTO detections
                  (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
                   Cutoff, Week, Sens, Overlap, File_Name)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+                 ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
                 params![
                     row.date,
                     row.time,
@@ -814,7 +820,7 @@ mod tests {
     /// A BirdNET-Pi row with no `File_Name` must still dedupe on re-import.
     ///
     /// It did not: `File_Name` is part of the destination's UNIQUE key and was
-    /// nullable, and SQLite treats NULLs as distinct, so `INSERT OR IGNORE`
+    /// nullable, and SQLite treats NULLs as distinct, so the conflict clause
     /// had nothing to conflict with and silently doubled the row while
     /// reporting `skipped = 0`. Migration 23 made the index NULL-insensitive.
     #[test]

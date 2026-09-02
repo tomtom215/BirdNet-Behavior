@@ -44,20 +44,74 @@ struct FeedQuery {
 // Rare RSS — last N "first today" or quarantine-confirmed detections.
 // ---------------------------------------------------------------------------
 
+/// SQL selecting the "rare" detections, given a gap threshold in days.
+///
+/// Two definitions of rare, and the threshold picks between them:
+///
+/// * `0` — the original behaviour: a species' very first sighting at this
+///   station. Correct but permanently one-shot; once a bird has been recorded
+///   once it can never be rare again, so one absent for three years came back
+///   without comment.
+/// * `n > 0` — BirdNET-Pi's `RARE_SPECIES_THRESHOLD`: a detection counts as
+///   rare when the species has not been heard for `n` days. A first-ever
+///   sighting still qualifies, because there is no previous detection at all.
+///
+/// The gap is measured against the previous detection of the same species
+/// strictly *before* this one, which is what makes a returning bird rare on
+/// the day it returns and ordinary for the rest of its stay.
+///
+/// The boundary is `<=`, not `<`. "Not heard for one day" has to exclude a
+/// bird heard yesterday, and yesterday is exactly `1.0` julian days ago — with
+/// `<` a resident recorded every single day came back rare on every one of
+/// them, which `a_resident_is_never_rare` caught.
+fn rare_detections_sql(gap_days: u32) -> String {
+    if gap_days == 0 {
+        return "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
+                FROM detections_analytic d \
+                WHERE d.Confidence > 0.85 \
+                  AND (SELECT MIN(Date) FROM detections_analytic d2 \
+                       WHERE d2.Com_Name = d.Com_Name) = d.Date \
+                ORDER BY d.Date DESC, d.Time DESC \
+                LIMIT ?1"
+            .to_owned();
+    }
+    format!(
+        "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
+         FROM detections_analytic d \
+         WHERE d.Confidence > 0.85 \
+           AND NOT EXISTS ( \
+                 SELECT 1 FROM detections_analytic p \
+                 WHERE p.Com_Name = d.Com_Name \
+                   AND p.Date < d.Date \
+                   AND julianday(d.Date) - julianday(p.Date) <= {gap_days} \
+               ) \
+         ORDER BY d.Date DESC, d.Time DESC \
+         LIMIT ?1"
+    )
+}
+
+/// Read the configured rare-species gap, in days.
+fn rare_gap_days(state: &AppState) -> u32 {
+    state
+        .with_db(|conn| {
+            birdnet_db::settings::get_or(conn, "rare_species_days", "30")
+                .unwrap_or_else(|_| "30".to_owned())
+        })
+        .trim()
+        .parse::<u32>()
+        .unwrap_or(30)
+        .min(3650)
+}
+
 async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let base = resolve_base(q.base);
 
+    let sql = rare_detections_sql(rare_gap_days(&state));
+
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
-                 FROM detections_analytic d \
-                 WHERE d.Confidence > 0.85 \
-                   AND (SELECT MIN(Date) FROM detections_analytic d2 WHERE d2.Com_Name = d.Com_Name) = d.Date \
-                 ORDER BY d.Date DESC, d.Time DESC \
-                 LIMIT ?1",
-            )?;
+            let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([&limit], |r| {
                 Ok(DetRow {
                     com: r.get(0)?,
@@ -143,16 +197,11 @@ async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
     let base = resolve_base(q.base);
 
+    let sql = rare_detections_sql(rare_gap_days(&state));
+
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
-                 FROM detections_analytic d \
-                 WHERE d.Confidence > 0.85 \
-                   AND (SELECT MIN(Date) FROM detections_analytic d2 WHERE d2.Com_Name = d.Com_Name) = d.Date \
-                 ORDER BY d.Date DESC, d.Time DESC \
-                 LIMIT ?1",
-            )?;
+            let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([&limit], |r| {
                 Ok(DetRow {
                     com: r.get(0)?,
@@ -640,5 +689,117 @@ mod tests {
         let body = build_rss(&[], "http://x", "Test", "/feeds/test.rss", "test feed");
         assert!(body.contains("<rss version=\"2.0\""));
         assert!(body.contains("</channel></rss>"));
+    }
+}
+
+// ── rare is configurable, and the two definitions really differ ─────────
+#[cfg(test)]
+mod rare_threshold_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// Detections for one species on the given dates, plus a common bird that
+    /// is heard constantly and must never read as rare under a gap rule.
+    fn seed(conn: &Connection, returning: &[&str]) {
+        conn.execute_batch(
+            "CREATE TABLE detections_analytic (
+                 Com_Name TEXT, Sci_Name TEXT, Date TEXT, Time TEXT, Confidence REAL);",
+        )
+        .unwrap();
+        for d in returning {
+            conn.execute(
+                "INSERT INTO detections_analytic VALUES ('Wryneck','Jynx torquilla',?1,'06:00',0.95)",
+                [d],
+            )
+            .unwrap();
+        }
+        // A resident, present every day across the same span.
+        for day in 1..=28 {
+            conn.execute(
+                "INSERT INTO detections_analytic VALUES ('Robin','Erithacus rubecula',?1,'06:00',0.95)",
+                [format!("2026-04-{day:02}")],
+            )
+            .unwrap();
+        }
+    }
+
+    fn rare_dates(conn: &Connection, gap_days: u32) -> Vec<(String, String)> {
+        let sql = rare_detections_sql(gap_days);
+        let mut stmt = conn.prepare(&sql).expect("the SQL must be valid");
+        let rows = stmt
+            .query_map([500], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(2)?))
+            })
+            .unwrap();
+        let mut v: Vec<(String, String)> = rows.flatten().collect();
+        v.sort();
+        v
+    }
+
+    /// `0` keeps the original behaviour: only the very first sighting ever.
+    #[test]
+    fn zero_means_first_ever_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn, &["2026-01-10", "2026-04-20", "2026-04-21"]);
+        let rare = rare_dates(&conn, 0);
+        assert_eq!(
+            rare.iter().filter(|(n, _)| n == "Wryneck").count(),
+            1,
+            "exactly the first sighting: {rare:?}"
+        );
+        assert!(
+            rare.iter().any(|(_, d)| d == "2026-01-10"),
+            "and it is the earliest date: {rare:?}"
+        );
+    }
+
+    /// The gap rule is the point: a bird absent for a hundred days is rare
+    /// again when it returns. This is what `0` can never report, so the two
+    /// answers are genuinely different rather than a relabelling.
+    #[test]
+    fn a_gap_makes_a_returning_bird_rare_again() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn, &["2026-01-10", "2026-04-20", "2026-04-21"]);
+
+        let rare: Vec<String> = rare_dates(&conn, 30)
+            .into_iter()
+            .filter(|(n, _)| n == "Wryneck")
+            .map(|(_, d)| d)
+            .collect();
+        assert_eq!(
+            rare,
+            vec!["2026-01-10".to_string(), "2026-04-20".to_string()],
+            "the first sighting and the return, but not the day after the return"
+        );
+    }
+
+    /// The counterpart that stops the gap rule being an "everything is rare"
+    /// alarm: a bird heard every day is never rare, at any threshold.
+    #[test]
+    fn a_resident_is_never_rare() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn, &["2026-01-10"]);
+        for gap in [1, 7, 30, 365] {
+            let robins = rare_dates(&conn, gap)
+                .into_iter()
+                .filter(|(n, _)| n == "Robin")
+                .count();
+            assert_eq!(
+                robins, 1,
+                "at gap={gap} a daily resident may only appear for its first day"
+            );
+        }
+    }
+
+    /// Both SQL forms must actually parse — a `format!`-built query that
+    /// SQLite rejects would make the feed silently empty rather than error.
+    #[test]
+    fn both_query_forms_are_valid_sql() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed(&conn, &["2026-01-10"]);
+        for gap in [0, 1, 30, 3650] {
+            conn.prepare(&rare_detections_sql(gap))
+                .unwrap_or_else(|e| panic!("gap={gap} produced invalid SQL: {e}"));
+        }
     }
 }

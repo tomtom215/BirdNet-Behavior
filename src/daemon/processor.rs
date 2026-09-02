@@ -16,8 +16,8 @@ use super::disposition::{
     derive_source_label, is_first_detection_today, latency_ms_to_seconds, passes_filter,
     should_dispatch_notification,
 };
-use super::webhook::dispatch_webhook;
 use birdnet_db::notifications::NotifStatus;
+use birdnet_integrations::webhook::dispatch_webhook;
 
 use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
 
@@ -153,9 +153,21 @@ pub(super) fn event_processor(
     species_thresholds: std::collections::HashMap<String, f64>,
     global_confidence: f32,
     extractor: Extractor,
+    duplicate_interval_secs: i64,
+    daylight: crate::daemon::daylight::DaylightFilter,
 ) {
     tracing::debug!("event processor started");
     let mut species_thresholds = ThresholdCache::new(species_thresholds);
+    let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
+    if daylight.is_enabled() {
+        tracing::info!("taxon-aware daylight filter enabled");
+    }
+    if duplicates.is_enabled() {
+        tracing::info!(
+            interval_secs = duplicate_interval_secs,
+            "duplicate-prediction interval enabled"
+        );
+    }
 
     loop {
         let Ok(event) = event_rx.recv() else {
@@ -166,6 +178,53 @@ pub(super) fn event_processor(
 
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
+
+        // Is this bird plausible at this hour? Runs before the threshold
+        // gates so a night-time songbird is quarantined with the reason that
+        // actually explains it, rather than being recorded as a threshold
+        // miss — the operator reviewing the queue is deciding whether to
+        // believe it, and "2 a.m." is the fact that decides.
+        if crate::daemon::daylight::DaylightVerdict::Quarantine
+            == daylight.verdict(&detection.scientific_name, &detection.date, &detection.time)
+        {
+            tracing::debug!(
+                correlation_id,
+                species = %detection.scientific_name,
+                time = %detection.time,
+                "quarantining a day bird heard in the middle of the night"
+            );
+            let week_str = detection.week.to_string();
+            let file_str = event.source_file.to_string_lossy();
+            let q_record = birdnet_db::sqlite::QuarantineRecord {
+                date: &detection.date,
+                time: &detection.time,
+                sci_name: &detection.scientific_name,
+                com_name: &detection.common_name,
+                confidence: f64::from(detection.confidence),
+                sf_probability: None,
+                reason: birdnet_db::sqlite::QuarantineReason::ImplausibleHour,
+                file_name: if file_str.is_empty() {
+                    None
+                } else {
+                    Some(file_str.as_ref())
+                },
+                lat: None,
+                lon: None,
+                week: week_str.parse::<i32>().ok(),
+            };
+            if let Err(e) =
+                state.with_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+            {
+                tracing::warn!(
+                    correlation_id,
+                    error = %e,
+                    species = %detection.scientific_name,
+                    "failed to quarantine a night-time detection"
+                );
+            }
+            state.metrics().inc_detection_dropped("implausible_hour");
+            continue;
+        }
 
         // Apply per-species confidence threshold.
         // Detections that pass the global threshold but fail a stricter
@@ -214,10 +273,41 @@ pub(super) fn event_processor(
                         "failed to quarantine detection"
                     );
                 }
+                state.metrics().inc_detection_dropped("quarantine");
                 continue;
             }
-            DispositionDecision::DropBelowGlobal => continue,
+            DispositionDecision::DropBelowGlobal => {
+                // Counted, not silent. "The station is detecting nothing" and
+                // "the station is discarding everything" look identical from
+                // outside, and the reason label is what tells them apart.
+                state.metrics().inc_detection_dropped("confidence");
+                continue;
+            }
             DispositionDecision::Accept => {}
+        }
+
+        // One continuous song is one detection. Applied *after* the threshold
+        // gates so a suppressed duplicate cannot consume the interval on
+        // behalf of a detection that would itself have been quarantined —
+        // otherwise a run of low-confidence chunks would shadow the confident
+        // one in the middle of them.
+        //
+        // A detection whose own timestamp cannot be read is admitted rather
+        // than gated: `Date`/`Time` are free-form text, and the alternative is
+        // dropping a real detection because its filename was odd.
+        if let Some(at_secs) =
+            crate::daemon::duplicate::detection_secs(&detection.date, &detection.time)
+            && let crate::daemon::duplicate::DuplicateVerdict::Suppress { since_last_secs } =
+                duplicates.admit(&detection.scientific_name, at_secs)
+        {
+            tracing::debug!(
+                correlation_id,
+                species = %detection.scientific_name,
+                since_last_secs,
+                "suppressing a repeat within the duplicate-prediction interval"
+            );
+            state.metrics().inc_detection_dropped("duplicate");
+            continue;
         }
 
         // Insert into SQLite. Numeric columns receive Option<f64> /
@@ -427,6 +517,7 @@ pub(super) fn event_processor(
                         url,
                         method,
                         body_template,
+                        auth,
                     } => {
                         let body = body_template.as_deref().map(|tmpl| {
                             birdnet_db::alert_rules::render_webhook_body(
@@ -440,18 +531,24 @@ pub(super) fn event_processor(
                         });
                         let url = url.clone();
                         let method = method.clone();
+                        let auth = auth.clone();
                         let rule_name = rule.name.clone();
+                        // The path and query of a webhook URL are where its
+                        // secret lives, so the log names the host only.
+                        let target = birdnet_integrations::webhook::redact_url(&url);
                         rt_handle.spawn(async move {
-                            match dispatch_webhook(&url, &method, body.as_deref()).await {
+                            match dispatch_webhook(&url, &method, body.as_deref(), auth.as_ref())
+                                .await
+                            {
                                 Ok(status) => tracing::debug!(
                                     rule = %rule_name,
-                                    url,
+                                    target,
                                     status,
                                     "webhook dispatched"
                                 ),
                                 Err(e) => tracing::warn!(
                                     rule = %rule_name,
-                                    url,
+                                    target,
                                     error = %e,
                                     "webhook dispatch failed"
                                 ),
@@ -1001,6 +1098,8 @@ mod tests {
                 HashMap::new(),
                 0.25,
                 extractor,
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
             );
         })
         .await
@@ -1098,11 +1197,51 @@ mod tests {
     /// every external integration disabled. Returns once the channel is
     /// drained and the processor's loop exits, so DB assertions are
     /// observed after all synchronous work has run.
+    /// Drive the processor with the duplicate interval and daylight filter off.
     async fn run_processor(
         state: &birdnet_web::state::AppState,
         events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
         species_thresholds: HashMap<String, f64>,
         global_confidence: f32,
+    ) {
+        run_processor_full(
+            state,
+            events,
+            species_thresholds,
+            global_confidence,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+        )
+        .await;
+    }
+
+    /// Drive the processor, suppressing repeats within `duplicate_interval_secs`.
+    async fn run_processor_with_interval(
+        state: &birdnet_web::state::AppState,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        species_thresholds: HashMap<String, f64>,
+        global_confidence: f32,
+        duplicate_interval_secs: i64,
+    ) {
+        run_processor_full(
+            state,
+            events,
+            species_thresholds,
+            global_confidence,
+            duplicate_interval_secs,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+        )
+        .await;
+    }
+
+    /// Drive the processor with every gate under the test's control.
+    async fn run_processor_full(
+        state: &birdnet_web::state::AppState,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        species_thresholds: HashMap<String, f64>,
+        global_confidence: f32,
+        duplicate_interval_secs: i64,
+        daylight: crate::daemon::daylight::DaylightFilter,
     ) {
         let broadcast = state.detection_broadcast();
         let (event_tx, event_rx) = mpsc::channel();
@@ -1136,6 +1275,8 @@ mod tests {
                 species_thresholds,
                 global_confidence,
                 extractor,
+                duplicate_interval_secs,
+                daylight,
             );
         })
         .await
@@ -1236,6 +1377,7 @@ mod tests {
                         url: "http://198.51.100.1:1/".to_owned(),
                         method: "POST".to_owned(),
                         body_template: Some("{\"species\":\"{{species}}\"}".to_owned()),
+                        auth: None,
                     },
                 ),
             )
@@ -1286,5 +1428,256 @@ mod tests {
 
         let detections = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
         assert_eq!(detections, 2, "both accepted events must be stored");
+    }
+
+    // ── the duplicate-prediction interval, through the processor ────────
+
+    /// An event for `sci` at `hms` on a fixed date.
+    fn event_at(
+        sci: &str,
+        hms: &str,
+        dir: &std::path::Path,
+    ) -> birdnet_core::detection::daemon::DetectionEvent {
+        let mut ev = make_event(sci, sci, 0.95, dir.join("rec.wav"), "corr-dup");
+        ev.detection.time = hms.to_owned();
+        ev
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_duplicate_interval_collapses_one_song_into_one_row() {
+        // Through the real processor, not the gate in isolation: this is what
+        // says the gate is wired in at all, and wired in on the accept path
+        // rather than somewhere the detection had already been dropped.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let events = ["05:00:00", "05:00:03", "05:00:06", "05:00:09", "05:00:12"]
+            .iter()
+            .map(|hms| event_at("Turdus merula", hms, tmp.path()))
+            .collect();
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 30).await;
+
+        let stored = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
+        assert_eq!(
+            stored, 1,
+            "five chunks of one song were recorded as {stored} detections"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn without_the_interval_every_chunk_is_still_recorded() {
+        // Counterpart, and the guarantee that matters on upgrade: the feature
+        // is off by default and a station that has not asked for it must keep
+        // recording exactly what it recorded before.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let events = ["05:00:00", "05:00:03", "05:00:06", "05:00:09", "05:00:12"]
+            .iter()
+            .map(|hms| event_at("Turdus merula", hms, tmp.path()))
+            .collect();
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 0).await;
+
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            5
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_interval_does_not_shadow_a_different_species() {
+        // A dawn chorus is many species at once; a gate keyed on anything
+        // coarser than the species would record one bird and drop the chorus.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let events = vec![
+            event_at("Turdus merula", "05:00:00", tmp.path()),
+            event_at("Parus major", "05:00:01", tmp.path()),
+            event_at("Erithacus rubecula", "05:00:02", tmp.path()),
+            event_at("Turdus merula", "05:00:03", tmp.path()),
+        ];
+        run_processor_with_interval(&state, events, HashMap::new(), 0.25, 30).await;
+
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            3,
+            "the chorus was collapsed to the first bird heard"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_quarantined_detection_does_not_consume_the_interval() {
+        // The gate runs after the threshold gates for this reason: a run of
+        // low-confidence chunks must not shadow the confident one among them.
+        // With the order reversed the first chunk claims the interval, is then
+        // quarantined, and the good detection in the middle of the song is
+        // dropped as its duplicate — leaving no row at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let thresholds = HashMap::from([("Turdus merula".to_owned(), 0.90_f64)]);
+
+        let mut weak = event_at("Turdus merula", "05:00:00", tmp.path());
+        weak.detection.confidence = 0.50;
+        let strong = event_at("Turdus merula", "05:00:03", tmp.path());
+
+        run_processor_with_interval(&state, vec![weak, strong], thresholds, 0.25, 30).await;
+
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            1,
+            "the quarantined chunk consumed the interval and the real \
+             detection was dropped as its duplicate"
+        );
+    }
+
+    // ── the taxon-aware daylight filter, through the processor ──────────
+
+    /// A daylight filter at Greenwich, UTC, with an hour of margin.
+    fn greenwich_night() -> crate::daemon::daylight::DaylightFilter {
+        crate::daemon::daylight::DaylightFilter::new(
+            Some(birdnet_scheduler::solar::Location::new_unchecked(
+                51.48, 0.0,
+            )),
+            60,
+            0,
+            Vec::new(),
+        )
+    }
+
+    /// An event for `sci` at `hms` on 15 January 2026.
+    fn winter_event(
+        sci: &str,
+        hms: &str,
+        dir: &std::path::Path,
+    ) -> birdnet_core::detection::daemon::DetectionEvent {
+        let mut ev = make_event(sci, sci, 0.95, dir.join("rec.wav"), "corr-night");
+        ev.detection.date = "2026-01-15".into();
+        ev.detection.time = hms.to_owned();
+        ev
+    }
+
+    /// How many rows are in `detections` and `quarantine`.
+    fn counts(state: &birdnet_web::state::AppState) -> (i64, i64) {
+        state.with_db(|c| {
+            (
+                birdnet_db::sqlite::detection_count(c).unwrap_or(-1),
+                c.query_row("SELECT COUNT(*) FROM quarantine", [], |r| r.get(0))
+                    .unwrap_or(-1),
+            )
+        })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_day_bird_at_two_in_the_morning_is_quarantined_not_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor_full(
+            &state,
+            vec![winter_event("Cyanistes caeruleus", "02:30:00", tmp.path())],
+            HashMap::new(),
+            0.25,
+            0,
+            greenwich_night(),
+        )
+        .await;
+
+        let (detections, quarantined) = counts(&state);
+        assert_eq!(detections, 0, "a blue tit at 02:30 was recorded as fact");
+        assert_eq!(quarantined, 1, "and it was not preserved for review either");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_owl_at_two_in_the_morning_is_recorded_normally() {
+        // The taxon half, end to end. Without it this is a blanket night
+        // filter, and it quarantines the detections an operator most wants.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor_full(
+            &state,
+            vec![winter_event("Strix aluco", "02:30:00", tmp.path())],
+            HashMap::new(),
+            0.25,
+            0,
+            greenwich_night(),
+        )
+        .await;
+
+        assert_eq!(
+            counts(&state),
+            (1, 0),
+            "a tawny owl was quarantined for hooting at night"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_same_day_bird_in_the_afternoon_is_recorded_normally() {
+        // Counterpart: a filter that quarantined regardless of hour passes the
+        // first gate and silently empties the station.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor_full(
+            &state,
+            vec![winter_event("Cyanistes caeruleus", "13:00:00", tmp.path())],
+            HashMap::new(),
+            0.25,
+            0,
+            greenwich_night(),
+        )
+        .await;
+
+        assert_eq!(counts(&state), (1, 0));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_night_quarantine_says_it_was_the_hour_not_the_confidence() {
+        // The reason is what the operator reads in the review queue, and the
+        // hour is the fact that decides whether to believe the detection. A
+        // 0.95 detection filed as "below species threshold" would be actively
+        // misleading.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor_full(
+            &state,
+            vec![winter_event("Cyanistes caeruleus", "02:30:00", tmp.path())],
+            // A per-species threshold this detection also misses, so the two
+            // gates would both fire and the order decides which reason is
+            // recorded.
+            HashMap::from([("Cyanistes caeruleus".to_owned(), 0.99_f64)]),
+            0.25,
+            0,
+            greenwich_night(),
+        )
+        .await;
+
+        let reason: String = state.with_db(|c| {
+            c.query_row("SELECT reason FROM quarantine", [], |r| r.get(0))
+                .unwrap_or_default()
+        });
+        assert_eq!(reason, "implausible_hour", "filed under the wrong reason");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn with_the_filter_off_a_day_bird_at_night_is_still_recorded() {
+        // The upgrade guarantee: off by default, and a station that has not
+        // asked for this keeps recording exactly what it recorded before.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor_full(
+            &state,
+            vec![winter_event("Cyanistes caeruleus", "02:30:00", tmp.path())],
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+        )
+        .await;
+
+        assert_eq!(counts(&state), (1, 0));
     }
 }

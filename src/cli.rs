@@ -132,6 +132,49 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Seconds of audio saved around each detection (default 6).
+    ///
+    /// BirdNET-Pi's `EXTRACTION_LENGTH`. Longer clips are easier to verify by
+    /// ear and cost proportionally more disk; shorter ones can clip the end of
+    /// a song. Also settable on `/admin/settings`.
+    #[arg(long, env = "BIRDNET_EXTRACTION_LENGTH")]
+    pub extraction_length: Option<f32>,
+
+    /// Global log level: `trace`, `debug`, `info`, `warn`, `error`, `off`.
+    ///
+    /// Also settable as `LOG_LEVEL` in the config file. `RUST_LOG` overrides
+    /// both when it is set, so a developer's export still wins.
+    #[arg(long, env = "BIRDNET_LOG_LEVEL", value_name = "LEVEL")]
+    pub log_level: Option<String>,
+
+    /// Per-subsystem log levels, e.g. `audio=debug,web=warn`.
+    ///
+    /// Subsystem names are operator-facing rather than Rust module paths:
+    /// `audio`, `detection`, `web`, `db`, `integrations`, `analytics`. An
+    /// explicit path (`birdnet_core::inference=trace`) is accepted too.
+    ///
+    /// This is the equivalent of BirdNET-Pi's per-service log levels: one
+    /// process rather than eight services, so the knob is per subsystem.
+    /// Unknown names are reported at startup rather than ignored. Also
+    /// settable as `LOG_MODULES` in the config file.
+    #[arg(long, env = "BIRDNET_LOG_MODULES", value_name = "SPEC")]
+    pub log_modules: Option<String>,
+
+    /// Collect a support bundle and exit.
+    ///
+    /// Writes a `.tar.gz` holding the diagnostic report (both JSON and text),
+    /// the station's version, a **redacted** copy of the configuration, and the
+    /// last 2000 journal lines — everything a maintainer asks for in the first
+    /// three replies to a bug report, in one file.
+    ///
+    /// Passwords, tokens and URL credentials are masked. Read it before posting
+    /// it anywhere public all the same.
+    ///
+    /// Defaults to `birdnet-support.tar.gz` in the working directory; pass a
+    /// path to write it elsewhere.
+    #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "birdnet-support.tar.gz")]
+    pub support_bundle: Option<PathBuf>,
+
     /// Run the preflight diagnostic and emit a single-line JSON document.
     ///
     /// Same checks and exit codes as `--doctor`, but the output is a
@@ -276,6 +319,25 @@ pub struct Cli {
     /// Apprise notification server URL (e.g., `http://localhost:8000`).
     #[arg(long, env = "BIRDNET_APPRISE_URL")]
     pub apprise_url: Option<String>,
+
+    /// Notification URLs delivered in-process, comma- or newline-separated.
+    ///
+    /// Uses Apprise's URL syntax — `discord://{id}/{token}`,
+    /// `tgram://{bot_token}/{chat_id}`, `ntfy://{topic}`,
+    /// `gotify://{host}/{token}`, `pover://{user}@{token}`,
+    /// `slack://{a}/{b}/{c}`, `jsons://{host}/{path}` — but sends them
+    /// directly, so no Apprise installation is involved. A scheme without a
+    /// native sender is reported once at startup and needs `--apprise-config`.
+    #[arg(long, env = "BIRDNET_NOTIFY_URLS")]
+    pub notify_urls: Option<String>,
+
+    /// Ceiling on notifications per destination per minute; `0` disables it.
+    ///
+    /// About the services' limits rather than ours: Discord allows five
+    /// requests a second per webhook, Telegram about thirty, and Pushover ten
+    /// thousand messages a month. Config-file key: `NOTIFY_RATE_PER_MINUTE`.
+    #[arg(long, env = "BIRDNET_NOTIFY_RATE_PER_MINUTE")]
+    pub notify_rate_per_minute: Option<u32>,
 
     /// Minimum confidence threshold for Apprise notifications (0.0–1.0).
     #[arg(long, default_value = "0.8", env = "BIRDNET_NOTIFY_CONFIDENCE")]
@@ -446,6 +508,21 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_METADATA_MODEL")]
     pub metadata_model: Option<PathBuf>,
 
+    /// Path to the metadata model's own label file.
+    ///
+    /// The metadata model and the classifier do not score the same species
+    /// list — BirdNET Geomodel v3.0 covers 12 012 species where the V3.0
+    /// Global 11K classifier emits 11 560 — so the model's output positions
+    /// mean nothing without the labels it shipped with. Supply them and the
+    /// two are matched by scientific name.
+    ///
+    /// Omit this only for a metadata model indexed identically to the
+    /// classifier (a matched BirdNET pair). The station verifies that at
+    /// startup and refuses a mismatched model rather than reporting one bird
+    /// under another bird's name.
+    #[arg(long, env = "BIRDNET_METADATA_LABELS")]
+    pub metadata_labels: Option<PathBuf>,
+
     /// Species frequency threshold for the metadata model filter (0.0-1.0).
     ///
     /// Species with occurrence probability below this threshold are filtered out.
@@ -459,6 +536,74 @@ pub struct Cli {
     /// with adjacent chunks. Typical values: 0.01-0.03.
     #[arg(long, default_value = "0.0", env = "BIRDNET_PRIVACY_THRESHOLD")]
     pub privacy_threshold: f32,
+
+    /// Confidence at which a barking dog suppresses its audio chunk
+    /// (0.0 = disabled).
+    ///
+    /// `BirdNET`'s label set carries non-bird classes, and a bark near the
+    /// microphone is broadband enough that the classifier also produces
+    /// confident-looking scores for whatever species it most resembles. When a
+    /// watched class scores at or above this, every detection in that chunk is
+    /// discarded. Typical values: 0.5-0.8. Config key: `NOISE_THRESHOLD`.
+    #[arg(long, default_value = "0.0", env = "BIRDNET_NOISE_THRESHOLD")]
+    pub noise_threshold: f32,
+
+    /// Non-bird label names the noise filter watches, comma-separated.
+    ///
+    /// Defaults to `Dog`. Other classes in the label set are `Siren`,
+    /// `Engine`, `Power tools`, `Fireworks`, `Gun`, `Environmental` and
+    /// `Noise` — the last two score highly on ordinary quiet recordings, so
+    /// watching them will suppress a great deal. Names are matched exactly
+    /// (case-insensitively) against a label's common or scientific name.
+    /// Config key: `NOISE_CLASSES`.
+    #[arg(long, env = "BIRDNET_NOISE_CLASSES")]
+    pub noise_classes: Option<String>,
+
+    /// Suppress a repeat of the same species within this many seconds
+    /// (0 = disabled).
+    ///
+    /// A 15-second recording is five 3-second chunks, so a bird that sings
+    /// through the whole of it is recorded five times — and every count in the
+    /// application is a row count, so a species that sings in long phrases
+    /// outscores one that calls in short bursts for no reason but phrasing.
+    ///
+    /// Off by default: switching it on changes how many rows a station
+    /// records, which puts a visible step in every chart when it happens.
+    /// Config key: `DUPLICATE_INTERVAL_SECS`.
+    #[arg(long, default_value = "0", env = "BIRDNET_DUPLICATE_INTERVAL_SECS")]
+    pub duplicate_interval_secs: i64,
+
+    /// Quarantine day birds heard in the middle of the night.
+    ///
+    /// A blue tit "detected" at 02:30 is almost always the classifier hearing
+    /// something else. Owls, nightjars, rails and bitterns are exempt — see
+    /// `birdnet_core::detection::nocturnal` for the genus list, and
+    /// `--night-extra-nocturnal` to add to it.
+    ///
+    /// Needs station coordinates; without them there is no sunrise to compute
+    /// and the filter stays off. Detections are quarantined for review, never
+    /// dropped, because the taxonomy is genus-level and cannot be complete.
+    /// Config key: `NIGHT_FILTER`.
+    #[arg(long, env = "BIRDNET_NIGHT_FILTER")]
+    pub night_filter: bool,
+
+    /// Minutes after sunset and before sunrise before the night window opens.
+    ///
+    /// Birds sing through dusk and start again well before sunrise, so a
+    /// window that began at sunset would quarantine the evening chorus.
+    /// Config key: `NIGHT_MARGIN_MINS`.
+    #[arg(long, default_value = "60", env = "BIRDNET_NIGHT_MARGIN_MINS")]
+    pub night_margin_mins: i64,
+
+    /// Extra genera or scientific names always allowed at night,
+    /// comma-separated.
+    ///
+    /// A station recording nocturnal flight calls — migrating thrushes and
+    /// warblers calling as they pass overhead — should either leave
+    /// `--night-filter` off or name those genera here.
+    /// Config key: `NIGHT_EXTRA_NOCTURNAL`.
+    #[arg(long, env = "BIRDNET_NIGHT_EXTRA_NOCTURNAL")]
+    pub night_extra_nocturnal: Option<String>,
 
     /// Analysis window overlap in seconds (0.0-2.9, default 0.0).
     ///
@@ -593,9 +738,35 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_MQTT_HOST")]
     pub mqtt_host: Option<String>,
 
-    /// MQTT broker port (default: 1883; TLS: 8883).
-    #[arg(long, default_value = "1883", env = "BIRDNET_MQTT_PORT")]
-    pub mqtt_port: u16,
+    /// MQTT broker port.
+    ///
+    /// Left unset it is 1883, or 8883 when `--mqtt-tls` is given.
+    #[arg(long, env = "BIRDNET_MQTT_PORT")]
+    pub mqtt_port: Option<u16>,
+
+    /// Connect to the MQTT broker over TLS (`mqtts`).
+    ///
+    /// The certificate is verified against the platform trust store plus
+    /// anything in `--mqtt-ca-file`. There is no way to skip verification:
+    /// an unverified TLS connection carrying the broker credentials is worse
+    /// than a plaintext one, because it looks safe.
+    #[arg(long, env = "BIRDNET_MQTT_TLS")]
+    pub mqtt_tls: bool,
+
+    /// PEM file of extra certificates to trust for `--mqtt-tls`.
+    ///
+    /// For a broker behind a private CA — or a self-signed one, whose own
+    /// certificate works here as a trust anchor. Config key: `MQTT_CA_FILE`.
+    #[arg(long, env = "BIRDNET_MQTT_CA_FILE")]
+    pub mqtt_ca_file: Option<PathBuf>,
+
+    /// Hostname to validate the broker's certificate against.
+    ///
+    /// Defaults to `--mqtt-host`. Set it when connecting to a broker by IP
+    /// whose certificate names a hostname — the usual shape on a home LAN
+    /// with no internal DNS. Config key: `MQTT_TLS_SERVER_NAME`.
+    #[arg(long, env = "BIRDNET_MQTT_TLS_SERVER_NAME")]
+    pub mqtt_tls_server_name: Option<String>,
 
     /// MQTT client identifier published in CONNECT packets.
     ///

@@ -1,5 +1,7 @@
 //! Configuration checks: file presence/parse, value validation, listen address.
 
+use std::path::PathBuf;
+
 use birdnet_core::config::Config;
 use birdnet_core::config::validate::{self as cfg_validate, Severity as ConfigSeverity};
 
@@ -38,17 +40,12 @@ use crate::cli::Cli;
 pub(super) fn check_station_location(cli: &Cli, config: Option<&Config>) -> Check {
     let (lat, lon) = crate::daemon::resolve_station_coords(cli, config);
     if let (Some(lat), Some(lon)) = (lat, lon) {
-        return Check::pass(
-            "Station location",
-            format!("{lat:.4}, {lon:.4} — species filtering by occurrence is active"),
-        );
+        return Check::pass("Station location", format!("{lat:.4}, {lon:.4}"));
     }
     if let Some((lat, lon)) = location_from_settings(config) {
         return Check::pass(
             "Station location",
-            format!(
-                "{lat:.4}, {lon:.4} (from the dashboard settings) — species filtering is active"
-            ),
+            format!("{lat:.4}, {lon:.4} (from the dashboard settings)"),
         );
     }
     Check::warn(
@@ -59,6 +56,89 @@ pub(super) fn check_station_location(cli: &Cli, config: Option<&Config>) -> Chec
          (Settings → Location has a detect button), or put LATITUDE / LONGITUDE \
          in the config and restart",
     )
+}
+
+/// Report whether species occurrence filtering will actually run.
+///
+/// Two things are needed and the diagnostic used to check only one. The
+/// metadata ("geo") model takes `(latitude, longitude, week)`, so coordinates
+/// are necessary — but the model file itself is the other half, and no install
+/// ships one: `install.sh` fetches the classifier and its labels, and
+/// `BIRDNET_METADATA_MODEL` sits in `.env.example` under "bring your own
+/// model". A station that never sets it runs with the filter inert, keeps
+/// every one of the classifier's species as a candidate regardless of where it
+/// is, and reports birds from other continents — which reads as a bad model
+/// rather than as a missing file.
+///
+/// `check_station_location` asserted the opposite ("species filtering by
+/// occurrence is active") from coordinates alone, so the one check that could
+/// have caught this said it was fine. It now reports only the coordinates; the
+/// filter's state is this check's to report.
+///
+/// Deliberately no ONNX session is opened. `--doctor` runs from
+/// `ExecStartPre` on every start, and a diagnostic that loads a model can fail
+/// for reasons that have nothing to do with the thing being diagnosed. The
+/// vocabulary alignment a session would prove is checked by
+/// `SpeciesFilter::load_with_vocabulary` at startup, which refuses a
+/// mismatched model outright; this check owns the configuration half.
+pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Check {
+    const NAME: &str = "Species occurrence filter";
+
+    let model = cli
+        .metadata_model
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("METADATA_MODEL_PATH").map(PathBuf::from)));
+
+    let Some(model) = model else {
+        return Check::warn(
+            NAME,
+            "off — no metadata model configured, so every species the classifier knows stays a candidate wherever the station is",
+            "set METADATA_MODEL_PATH in the config (or BIRDNET_METADATA_MODEL / --metadata-model) to a BirdNET metadata model, and METADATA_LABELS_PATH to the label file it shipped with. See the Species filtering section of the manual for which model matches the installed classifier",
+        );
+    };
+
+    if !model.exists() {
+        return Check::fail(
+            NAME,
+            format!("{} does not exist", model.display()),
+            "occurrence filtering was asked for but the model is not on disk: fix METADATA_MODEL_PATH or download the model again",
+        );
+    }
+
+    let labels = cli
+        .metadata_labels
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("METADATA_LABELS_PATH").map(PathBuf::from)));
+
+    if let Some(labels) = labels.as_ref()
+        && !labels.exists()
+    {
+        return Check::fail(
+            NAME,
+            format!("metadata label file {} does not exist", labels.display()),
+            "the station refuses to start on a label file it cannot read: fix METADATA_LABELS_PATH or remove it if the model is indexed like the classifier",
+        );
+    }
+
+    let (lat, lon) = crate::daemon::resolve_station_coords(cli, config);
+    let has_coords = (lat.is_some() && lon.is_some()) || location_from_settings(config).is_some();
+
+    if !has_coords {
+        return Check::warn(
+            NAME,
+            format!(
+                "{} is present but the station has no coordinates, so the model cannot run and filtering is off",
+                model.display()
+            ),
+            "the model takes latitude and longitude as two of its three inputs: set them on the dashboard (Settings → Location has a detect button) or put LATITUDE / LONGITUDE in the config and restart",
+        );
+    }
+
+    let how = labels.map_or_else(
+        || " (indexed against the classifier's labels)".to_owned(),
+        |l| format!(" (matched by name through {})", l.display()),
+    );
+    Check::pass(NAME, format!("active — {}{how}", model.display()))
 }
 
 /// Coordinates as stored by the dashboard, read directly from SQLite.
@@ -461,5 +541,144 @@ mod tests {
         cli.listen = "not-an-address".to_string();
         let check = check_listen_address(&cli);
         assert_eq!(check.status, Status::Fail);
+    }
+}
+
+// ── the occurrence filter reports its real state ───────────────────────
+//
+// These gates were written against the pre-fix diagnostic and observed
+// failing. `check_station_location` used to return
+//
+//     [ PASS ] Station location: 52.5200, 13.4050 — species filtering by
+//              occurrence is active
+//
+// from coordinates alone. Coordinates are necessary but not sufficient: the
+// filter also needs a metadata model, which no install ships and the
+// diagnostic never looked for. So the one check able to catch a station
+// running with no occurrence filtering at all asserted the opposite.
+#[cfg(test)]
+mod occurrence_filter_gates {
+    use super::*;
+    use crate::doctor::Status;
+    use clap::Parser;
+
+    fn cli_from(args: &[&str]) -> Cli {
+        let mut v = vec!["birdnet-behavior"];
+        v.extend_from_slice(args);
+        Cli::parse_from(v)
+    }
+
+    /// The location check may report only what a coordinate pair proves.
+    ///
+    /// Fails on the old code, whose message contained "filtering by
+    /// occurrence is active".
+    #[test]
+    fn station_location_does_not_claim_the_filter_is_active() {
+        let cfg = Config::parse("LATITUDE=52.5200\nLONGITUDE=13.4050").unwrap();
+        let check = check_station_location(&cli_from(&[]), Some(&cfg));
+
+        assert_eq!(check.status, Status::Pass, "coordinates are set");
+        assert!(
+            !check.message.contains("is active"),
+            "the location check cannot know whether occurrence filtering runs — \
+             that needs a metadata model it never looks at: {}",
+            check.message
+        );
+    }
+
+    /// The station with no metadata model — every install today — must be
+    /// told that occurrence filtering is off.
+    ///
+    /// Fails on the old code: no such check existed.
+    #[test]
+    fn no_metadata_model_warns_that_filtering_is_off() {
+        let cfg = Config::parse("LATITUDE=52.5200\nLONGITUDE=13.4050").unwrap();
+        let check = check_occurrence_filter(&cli_from(&[]), Some(&cfg));
+
+        assert_eq!(
+            check.status,
+            Status::Warn,
+            "a station with coordinates but no metadata model is running unfiltered"
+        );
+        assert!(
+            check
+                .remediation
+                .is_some_and(|r| r.contains("METADATA_MODEL_PATH")),
+            "the remediation must name the setting that turns it on"
+        );
+    }
+
+    /// The counterpart: a configured, present model with coordinates is the
+    /// one state that may report Pass. Without this the check above would be
+    /// satisfied by a diagnostic that always warns.
+    #[test]
+    fn a_present_model_with_coordinates_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mdata = dir.path().join("geomodel.onnx");
+        std::fs::write(&mdata, vec![0u8; 16]).unwrap();
+        let cfg = Config::parse(&format!(
+            "LATITUDE=52.5200\nLONGITUDE=13.4050\nMETADATA_MODEL_PATH={}",
+            mdata.display()
+        ))
+        .unwrap();
+
+        let check = check_occurrence_filter(&cli_from(&[]), Some(&cfg));
+        assert_eq!(check.status, Status::Pass, "{}", check.message);
+    }
+
+    /// A configured model that is not on disk is an error, not a warning:
+    /// the operator asked for occurrence filtering and is not getting it.
+    #[test]
+    fn a_configured_but_missing_model_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(&format!(
+            "LATITUDE=52.5200\nLONGITUDE=13.4050\nMETADATA_MODEL_PATH={}",
+            dir.path().join("absent.onnx").display()
+        ))
+        .unwrap();
+
+        assert_eq!(
+            check_occurrence_filter(&cli_from(&[]), Some(&cfg)).status,
+            Status::Fail
+        );
+    }
+
+    /// A model without coordinates cannot run: the model takes latitude and
+    /// longitude as two of its three inputs.
+    #[test]
+    fn a_model_without_coordinates_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let mdata = dir.path().join("geomodel.onnx");
+        std::fs::write(&mdata, vec![0u8; 16]).unwrap();
+        let cfg = Config::parse(&format!("METADATA_MODEL_PATH={}", mdata.display())).unwrap();
+
+        let check = check_occurrence_filter(&cli_from(&[]), Some(&cfg));
+        assert_eq!(check.status, Status::Warn, "{}", check.message);
+        assert!(
+            check.message.to_lowercase().contains("coordinate")
+                || check.message.to_lowercase().contains("location"),
+            "the message must say which half is missing: {}",
+            check.message
+        );
+    }
+
+    /// A metadata label file that is configured but absent is the same class
+    /// of error as an absent model: the daemon refuses to start on it.
+    #[test]
+    fn a_configured_but_missing_label_file_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let mdata = dir.path().join("geomodel.onnx");
+        std::fs::write(&mdata, vec![0u8; 16]).unwrap();
+        let cfg = Config::parse(&format!(
+            "LATITUDE=52.5200\nLONGITUDE=13.4050\nMETADATA_MODEL_PATH={}\nMETADATA_LABELS_PATH={}",
+            mdata.display(),
+            dir.path().join("absent-labels.txt").display()
+        ))
+        .unwrap();
+
+        assert_eq!(
+            check_occurrence_filter(&cli_from(&[]), Some(&cfg)).status,
+            Status::Fail
+        );
     }
 }

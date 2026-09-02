@@ -46,7 +46,7 @@ pub mod types;
 
 pub use discovery::{HaDiscovery, HaDiscoveryConfig};
 pub use publisher::publish;
-pub use types::{ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel};
+pub use types::{ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel, TlsConfig};
 
 /// High-level MQTT client for publishing bird detection events.
 ///

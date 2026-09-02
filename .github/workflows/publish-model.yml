@@ -76,6 +76,16 @@ jobs:
           labels_sha=$(grep -oP '^LABELS_SHA256="\K[0-9a-f]{64}'   "$cfg")
           cfg_tag=$(grep -oP '^MODEL_RELEASE_TAG="\K[^"]+'         "$cfg")
 
+          # The geomodel (species occurrence filter) is mirrored into the same
+          # release: it pairs with this classifier, and a station that fetched
+          # one from GitHub should not have to reach a second host for the
+          # other. Pins come from the same file for the same reason.
+          geo_ver=$(grep -oP '^GEOMODEL_VERSION="\K[^"]+'              "$cfg")
+          geo_file=$(grep -oP '^GEOMODEL_FILE="\K[^"]+'                "$cfg")
+          geo_labels=$(grep -oP '^GEOMODEL_LABELS_FILE="\K[^"]+'       "$cfg")
+          geo_sha=$(grep -oP '^GEOMODEL_SHA256="\K[0-9a-f]{64}'        "$cfg")
+          geo_labels_sha=$(grep -oP '^GEOMODEL_LABELS_SHA256="\K[0-9a-f]{64}' "$cfg")
+
           # The dispatch input must match the tag the installer points at, or we
           # would publish assets nobody fetches.
           want_tag="${WANT_TAG}"
@@ -85,7 +95,8 @@ jobs:
             exit 1
           fi
 
-          for v in record model_file labels_file model_sha labels_sha; do
+          for v in record model_file labels_file model_sha labels_sha \
+                   geo_ver geo_file geo_labels geo_sha geo_labels_sha; do
             if [[ -z "${!v}" ]]; then
               echo "::error::Could not parse '$v' from $cfg"
               exit 1
@@ -99,12 +110,19 @@ jobs:
             echo "model_sha=$model_sha"
             echo "labels_sha=$labels_sha"
             echo "tag=$cfg_tag"
+            echo "geo_ver=$geo_ver"
+            echo "geo_file=$geo_file"
+            echo "geo_labels=$geo_labels"
+            echo "geo_sha=$geo_sha"
+            echo "geo_labels_sha=$geo_labels_sha"
           } >> "$GITHUB_OUTPUT"
 
           echo "::group::Model metadata"
           echo "tag=$cfg_tag  record=$record"
           echo "model=$model_file ($model_sha)"
           echo "labels=$labels_file ($labels_sha)"
+          echo "geomodel=$geo_file ($geo_sha) from birdnet-team/geomodel $geo_ver"
+          echo "geomodel labels=$geo_labels ($geo_labels_sha)"
           echo "::endgroup::"
 
       - name: Download model + labels from Zenodo
@@ -128,6 +146,29 @@ jobs:
 
           ls -lh dist/
 
+      - name: Download the geomodel from birdnet-team/geomodel
+        shell: bash
+        env:
+          GEO_VER: ${{ steps.cfg.outputs.geo_ver }}
+          GEO_FILE: ${{ steps.cfg.outputs.geo_file }}
+          GEO_LABELS: ${{ steps.cfg.outputs.geo_labels }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/birdnet-team/geomodel/releases/download/${GEO_VER}"
+
+          # The '+' in these filenames is a literal path character, not an
+          # encoded space; curl sends it as-is and GitHub serves it. Verified
+          # against the live release.
+          echo "Fetching ${GEO_FILE} (~14 MB)…"
+          curl -fSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "dist/${GEO_FILE}" "${base}/${GEO_FILE}"
+
+          echo "Fetching ${GEO_LABELS}…"
+          curl -fSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "dist/${GEO_LABELS}" "${base}/${GEO_LABELS}"
+
+          ls -lh dist/
+
       - name: Verify Zenodo bytes against the pinned checksums
         shell: bash
         env:
@@ -135,6 +176,10 @@ jobs:
           LABELS_FILE: ${{ steps.cfg.outputs.labels_file }}
           MODEL_SHA: ${{ steps.cfg.outputs.model_sha }}
           LABELS_SHA: ${{ steps.cfg.outputs.labels_sha }}
+          GEO_FILE: ${{ steps.cfg.outputs.geo_file }}
+          GEO_LABELS: ${{ steps.cfg.outputs.geo_labels }}
+          GEO_SHA: ${{ steps.cfg.outputs.geo_sha }}
+          GEO_LABELS_SHA: ${{ steps.cfg.outputs.geo_labels_sha }}
         run: |
           set -euo pipefail
           cd dist
@@ -144,6 +189,8 @@ jobs:
           # publish a mismatched asset.
           echo "${MODEL_SHA}  ${MODEL_FILE}"   | sha256sum -c -
           echo "${LABELS_SHA}  ${LABELS_FILE}" | sha256sum -c -
+          echo "${GEO_SHA}  ${GEO_FILE}"          | sha256sum -c -
+          echo "${GEO_LABELS_SHA}  ${GEO_LABELS}" | sha256sum -c -
           echo "Checksums match the pinned values in installer/lib/10-config.sh."
 
       - name: Generate SHA256SUMS
@@ -152,9 +199,11 @@ jobs:
         env:
           MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
           LABELS_FILE: ${{ steps.cfg.outputs.labels_file }}
+          GEO_FILE: ${{ steps.cfg.outputs.geo_file }}
+          GEO_LABELS: ${{ steps.cfg.outputs.geo_labels }}
         run: |
           set -euo pipefail
-          sha256sum "${MODEL_FILE}" "${LABELS_FILE}" | tee SHA256SUMS
+          sha256sum "${MODEL_FILE}" "${LABELS_FILE}" "${GEO_FILE}" "${GEO_LABELS}" | tee SHA256SUMS
 
       - name: Attest build provenance (SLSA)
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
@@ -162,6 +211,8 @@ jobs:
           subject-path: |
             dist/${{ steps.cfg.outputs.model_file }}
             dist/${{ steps.cfg.outputs.labels_file }}
+            dist/${{ steps.cfg.outputs.geo_file }}
+            dist/${{ steps.cfg.outputs.geo_labels }}
 
       - name: Create or update the model release
         env:
@@ -171,6 +222,11 @@ jobs:
           LABELS_FILE: ${{ steps.cfg.outputs.labels_file }}
           MODEL_SHA: ${{ steps.cfg.outputs.model_sha }}
           LABELS_SHA: ${{ steps.cfg.outputs.labels_sha }}
+          GEO_VER: ${{ steps.cfg.outputs.geo_ver }}
+          GEO_FILE: ${{ steps.cfg.outputs.geo_file }}
+          GEO_LABELS: ${{ steps.cfg.outputs.geo_labels }}
+          GEO_SHA: ${{ steps.cfg.outputs.geo_sha }}
+          GEO_LABELS_SHA: ${{ steps.cfg.outputs.geo_labels_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -197,6 +253,15 @@ jobs:
             echo "|------|--------|"
             echo "| \`${MODEL_FILE}\` | \`${MODEL_SHA}\` |"
             echo "| \`${LABELS_FILE}\` | \`${LABELS_SHA}\` |"
+            echo "| \`${GEO_FILE}\` | \`${GEO_SHA}\` |"
+            echo "| \`${GEO_LABELS}\` | \`${GEO_LABELS_SHA}\` |"
+            echo ""
+            echo "The last two are the **BirdNET geomodel** (species occurrence"
+            echo "filter), mirrored from"
+            echo "<https://github.com/birdnet-team/geomodel/releases/tag/${GEO_VER}>."
+            echo "It is what stops a station reporting birds that do not occur"
+            echo "near it, and it is optional: the installer and the container"
+            echo "warn and carry on when it cannot be fetched."
             echo ""
             echo "### Verify"
             echo ""
@@ -211,6 +276,12 @@ jobs:
             echo "authors (Lasseck, Eibl, Klinck, Kahl) and licensed **CC-BY-SA-4.0**;"
             echo "this release only mirrors them. See the upstream record's"
             echo "\`TERMS_OF_USE.txt\` and <https://github.com/birdnet-team/birdnet-V3.0-dev>."
+            echo ""
+            echo "The geomodel weights are © Stefan Kahl / K. Lisa Yang Center for"
+            echo "Conservation Bioacoustics and licensed **CC-BY-SA-4.0**, with"
+            echo "prohibited uses covering poaching and military applications; this"
+            echo "release only mirrors them. See \`MODEL_LICENSE.txt\` in the upstream"
+            echo "release and <https://github.com/birdnet-team/geomodel>."
           } > release_body.md
 
           if gh release view "$TAG" >/dev/null 2>&1; then
@@ -222,6 +293,8 @@ jobs:
             gh release upload "$TAG" --clobber \
               "dist/${MODEL_FILE}" \
               "dist/${LABELS_FILE}" \
+              "dist/${GEO_FILE}" \
+              "dist/${GEO_LABELS}" \
               dist/SHA256SUMS
           else
             gh release create "$TAG" \
@@ -230,6 +303,8 @@ jobs:
               --latest=false \
               "dist/${MODEL_FILE}" \
               "dist/${LABELS_FILE}" \
+              "dist/${GEO_FILE}" \
+              "dist/${GEO_LABELS}" \
               dist/SHA256SUMS
           fi
 

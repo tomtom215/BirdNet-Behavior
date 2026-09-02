@@ -112,25 +112,33 @@ fn species_summary_is_maintained_by_every_write_path() {
     assert_agrees(&conn, "plain inserts");
     assert_eq!(summary_total(&conn), 4, "four analytic detections inserted");
 
-    // --- INSERT OR IGNORE, accepted: the BirdNET-Pi importer --------------
+    // --- conflict clause, accepted: the BirdNET-Pi importer ---------------
+    // The importer's actual statement, not `INSERT OR IGNORE`: it stopped
+    // using that so a CHECK or NOT NULL failure could no longer masquerade as
+    // a duplicate, and this arm has to follow it or it covers a path nothing
+    // takes any more.
     conn.execute(
-        "INSERT OR IGNORE INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
-         VALUES ('2026-01-03', '07:00:00', 'Erithacus rubecula', 'Robin', 0.55, 'i.wav')",
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+         VALUES ('2026-01-03', '07:00:00', 'Erithacus rubecula', 'Robin', 0.55, 'i.wav')
+         ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs)
+         DO NOTHING",
         [],
     )
     .expect("import insert");
-    assert_agrees(&conn, "INSERT OR IGNORE (accepted)");
+    assert_agrees(&conn, "import insert (accepted)");
 
-    // --- INSERT OR IGNORE, ignored ----------------------------------------
+    // --- conflict clause, ignored -----------------------------------------
     // An ignored row must add nothing: no row was created, so no contribution
     // exists to count. This arm is why the summary survives a re-run of an
     // import, which is the normal way an operator recovers from a partial one.
     let before = summary_total(&conn);
     let n = conn
         .execute(
-            "INSERT OR IGNORE INTO detections
+            "INSERT INTO detections
                  (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
-             VALUES ('2026-01-03', '07:00:00', 'Erithacus rubecula', 'Robin', 0.55, 'i.wav')",
+             VALUES ('2026-01-03', '07:00:00', 'Erithacus rubecula', 'Robin', 0.55, 'i.wav')
+             ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs)
+             DO NOTHING",
             [],
         )
         .expect("duplicate import insert");
@@ -143,7 +151,7 @@ fn species_summary_is_maintained_by_every_write_path() {
         summary_total(&conn),
         "an ignored insert changed the summary"
     );
-    assert_agrees(&conn, "INSERT OR IGNORE (ignored)");
+    assert_agrees(&conn, "import insert (ignored)");
 
     // --- rejected on arrival ----------------------------------------------
     // A detection inserted already carrying a rejection is outside

@@ -39,9 +39,10 @@ mod config;
 /// of these rules was duplicated: a diagnostic that read the setting the
 /// runtime ignores reports on a station that does not exist.
 pub use config::{resolve_confidence, resolve_station_coords};
+mod daylight;
 pub mod disposition;
+mod duplicate;
 mod processor;
-mod webhook;
 
 #[cfg(test)]
 mod test_support;
@@ -114,6 +115,11 @@ pub fn start_detection_daemon(
         .clone()
         .or_else(|| config.and_then(|c| c.get("METADATA_MODEL_PATH").map(PathBuf::from)));
 
+    let metadata_labels_path = cli
+        .metadata_labels
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("METADATA_LABELS_PATH").map(PathBuf::from)));
+
     let sf_thresh = resolve_f32_with_default(
         cli.sf_thresh,
         0.03,
@@ -124,6 +130,26 @@ pub fn start_detection_daemon(
         cli.privacy_threshold,
         0.0,
         config.and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok()),
+    );
+
+    // `0` is both the flag default and a meaningful value ("disabled"), so
+    // the config key is consulted only when the flag was left alone. Passing
+    // the default in rather than comparing here keeps the one comparison in
+    // `resolve_i64_with_default`, where a unit test can reach it.
+    let duplicate_interval_secs = crate::daemon::config::resolve_i64_with_default(
+        cli.duplicate_interval_secs,
+        0,
+        config.and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok()),
+    );
+
+    let noise_threshold = resolve_f32_with_default(
+        cli.noise_threshold,
+        0.0,
+        config.and_then(|c| c.get_parsed::<f32>("NOISE_THRESHOLD").ok()),
+    );
+    let noise_classes = crate::daemon::config::resolve_noise_classes(
+        cli.noise_classes.as_deref(),
+        config.and_then(|c| c.get("NOISE_CLASSES")),
     );
 
     let overlap = resolve_f32_with_default(
@@ -158,6 +184,8 @@ pub fn start_detection_daemon(
 
     let (latitude, longitude) = resolve_station_coords(cli, config);
 
+    let daylight = config::build_daylight_filter(cli, config, latitude, longitude);
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
@@ -166,9 +194,22 @@ pub fn start_detection_daemon(
         model: build_model_config(sensitivity, confidence),
         process_existing: cli.process_existing,
         metadata_model_path,
+        metadata_labels_path,
+        // Publish the occurrence filter's real state to Prometheus. This is
+        // the number that would have made the inert-filter defect visible from
+        // a dashboard instead of from reading the code: 0 means every species
+        // the classifier knows is a candidate, wherever the station is.
+        on_species_filter_state: Some(birdnet_core::detection::daemon::SpeciesFilterObserver::new(
+            {
+                let metrics = state.metrics();
+                move |active, candidates| metrics.set_occurrence_filter(active, candidates)
+            },
+        )),
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
+        noise_threshold,
+        noise_classes,
         latitude,
         longitude,
         species_thresholds,
@@ -207,6 +248,8 @@ pub fn start_detection_daemon(
                     thresholds_for_processor,
                     global_confidence,
                     extractor,
+                    duplicate_interval_secs,
+                    daylight,
                 );
             });
             Some(handle)

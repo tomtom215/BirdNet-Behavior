@@ -492,6 +492,95 @@ pub fn model_vs_review_by_species(
     Ok(rows)
 }
 
+/// Every reviewed detection for one species, as the threshold suggester wants
+/// them.
+///
+/// Reads the raw `detections` table, not `detections_analytic`: the view hides
+/// rejected rows, and a rejected row is exactly half the evidence here. This is
+/// the same reason [`review_verdict_trend`] and [`model_vs_review_by_species`]
+/// read the raw table.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn reviewed_detections_by_species(
+    conn: &Connection,
+) -> Result<Vec<(String, String, Vec<crate::thresholds::ReviewedDetection>)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT d.Sci_Name, d.Com_Name, d.Confidence, r.status
+           FROM detection_reviews r
+           JOIN detections d
+             ON d.Date = r.date AND d.Time = r.time AND d.Sci_Name = r.sci_name
+          ORDER BY d.Sci_Name, d.Confidence",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            let status: String = row.get(3)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                crate::thresholds::ReviewedDetection {
+                    confidence: row.get(2)?,
+                    confirmed: status == "confirmed",
+                },
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Group in Rust rather than with `GROUP_CONCAT`: the grouping is trivial
+    // (the query is already ordered by species) and packing floats into a
+    // string to unpack them again is a rounding step for nothing.
+    let mut out: Vec<(String, String, Vec<crate::thresholds::ReviewedDetection>)> = Vec::new();
+    for (sci, com, review) in rows {
+        match out.last_mut() {
+            Some((last_sci, _, reviews)) if *last_sci == sci => reviews.push(review),
+            _ => out.push((sci, com, vec![review])),
+        }
+    }
+    Ok(out)
+}
+
+/// Per-species detection shape, for [`crate::phantoms`].
+///
+/// Reads the raw `detections` table for the same reason as
+/// [`reviewed_detections_by_species`]: the analytic view hides rejected rows,
+/// and this is a question *about* which species get rejected.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_shapes(conn: &Connection) -> Result<Vec<crate::phantoms::SpeciesShape>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT d.Sci_Name,
+                MAX(d.Com_Name)                                  AS com,
+                COUNT(*)                                         AS total,
+                COUNT(DISTINCT d.Date)                           AS days,
+                MIN(d.Confidence)                                AS min_conf,
+                MAX(d.Confidence)                                AS max_conf,
+                COALESCE(SUM(CASE WHEN r.status = 'confirmed' THEN 1 ELSE 0 END), 0) AS confirmed,
+                COALESCE(SUM(CASE WHEN r.status = 'rejected'  THEN 1 ELSE 0 END), 0) AS rejected
+           FROM detections d
+      LEFT JOIN detection_reviews r
+             ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+          GROUP BY d.Sci_Name",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(crate::phantoms::SpeciesShape {
+                sci_name: row.get(0)?,
+                com_name: row.get(1)?,
+                total: row.get(2)?,
+                distinct_days: row.get(3)?,
+                min_confidence: row.get(4)?,
+                max_confidence: row.get(5)?,
+                confirmed: row.get(6)?,
+                rejected: row.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Daily average confidence trend over the last `days` days.
 ///
 /// Returns `(date, avg_confidence)` pairs in chronological order.
@@ -942,5 +1031,190 @@ mod tests {
         assert!(bb.model_avg > 0.0);
         // 2 confirmed / (2 + 1 rejected) = 0.66…
         assert!((bb.human_avg - 2.0 / 3.0).abs() < 1e-6);
+    }
+
+    // ── reviewed detections, for the threshold suggester ────────────────
+
+    /// An empty migrated database, kept alive by its temp file.
+    fn empty_db() -> (tempfile::NamedTempFile, Connection) {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        (tmp, conn)
+    }
+
+    /// A detection plus its review verdict.
+    fn reviewed(conn: &Connection, sci: &str, time: &str, confidence: f64, status: &str) {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-14', ?1, ?2, ?2, ?3, 'x.wav')",
+            params![time, sci, confidence],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-03-14', ?1, ?2, ?2, ?3)",
+            params![time, sci, status],
+        )
+        .unwrap();
+        // The denormalised copy the analytic view filters on, kept in step the
+        // way `set_review_verdict` does.
+        conn.execute(
+            "UPDATE detections SET review_verdict = ?3
+              WHERE Date = '2026-03-14' AND Time = ?1 AND Sci_Name = ?2",
+            params![time, sci, status],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reviewed_detections_include_the_rejected_ones() {
+        // The whole point: a rejected detection is half the evidence a
+        // threshold suggestion rests on, and `detections_analytic` hides
+        // exactly those rows. Reading the view here would leave the suggester
+        // with confirmations only, and it would then never suggest anything.
+        let (_tmp, conn) = empty_db();
+        reviewed(&conn, "Turdus merula", "05:00:01", 0.55, "rejected");
+        reviewed(&conn, "Turdus merula", "05:00:02", 0.60, "rejected");
+        reviewed(&conn, "Turdus merula", "05:00:03", 0.91, "confirmed");
+        reviewed(&conn, "Turdus merula", "05:00:04", 0.95, "confirmed");
+
+        let by_species = reviewed_detections_by_species(&conn).unwrap();
+        assert_eq!(by_species.len(), 1);
+        let (sci, _, reviews) = &by_species[0];
+        assert_eq!(sci, "Turdus merula");
+        assert_eq!(reviews.len(), 4, "the rejected detections were dropped");
+        assert_eq!(reviews.iter().filter(|r| !r.confirmed).count(), 2);
+    }
+
+    #[test]
+    fn reviewed_detections_are_grouped_per_species() {
+        // A suggestion is per species; merging two species' reviews would
+        // produce a threshold that fits neither.
+        let (_tmp, conn) = empty_db();
+        reviewed(&conn, "Turdus merula", "05:00:01", 0.55, "rejected");
+        reviewed(&conn, "Turdus merula", "05:00:02", 0.91, "confirmed");
+        reviewed(&conn, "Parus major", "05:00:03", 0.70, "confirmed");
+
+        let by_species = reviewed_detections_by_species(&conn).unwrap();
+        assert_eq!(by_species.len(), 2);
+        let counts: Vec<(String, usize)> = by_species
+            .iter()
+            .map(|(sci, _, r)| (sci.clone(), r.len()))
+            .collect();
+        assert!(
+            counts.contains(&("Turdus merula".to_string(), 2)),
+            "{counts:?}"
+        );
+        assert!(
+            counts.contains(&("Parus major".to_string(), 1)),
+            "{counts:?}"
+        );
+    }
+
+    #[test]
+    fn an_unreviewed_detection_contributes_no_evidence() {
+        // Counterpart: the join must not turn every detection into a verdict.
+        // Treating unreviewed rows as confirmations would make the suggester
+        // recommend a threshold from the model's own opinion of itself.
+        let (_tmp, conn) = empty_db();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-14', '06:00:00', 'Turdus merula', 'Blackbird', 0.99, 'x.wav')",
+            [],
+        )
+        .unwrap();
+        assert!(reviewed_detections_by_species(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_two_verdicts_map_to_the_right_side_of_the_boolean() {
+        // Only the *direction* is observable here. `status` carries
+        // `CHECK(status IN ('confirmed','rejected'))`, so `== "confirmed"` and
+        // `!= "rejected"` cannot be told apart — mutating one into the other
+        // changes nothing, as running it confirms. What this catches is the
+        // inversion, which would have the suggester recommend a threshold that
+        // keeps precisely the detections the operator threw out.
+        //
+        // If a third verdict is ever added, that migration is where the
+        // distinction starts to matter.
+        let (_tmp, conn) = empty_db();
+        reviewed(&conn, "Turdus merula", "05:00:01", 0.91, "confirmed");
+        reviewed(&conn, "Turdus merula", "05:00:02", 0.55, "rejected");
+        let (_, _, reviews) = &reviewed_detections_by_species(&conn).unwrap()[0];
+        let confirmed: Vec<bool> = reviews.iter().map(|r| r.confirmed).collect();
+        // Ordered by confidence ascending: the rejected 0.55 first.
+        assert_eq!(confirmed, vec![false, true]);
+    }
+
+    // ── species shapes, for the phantom report ──────────────────────────
+
+    #[test]
+    fn a_species_shape_summarises_its_detections() {
+        let (_tmp, conn) = empty_db();
+        // Three detections across two days, confidences 0.55/0.60/0.91, one
+        // rejected.
+        reviewed(&conn, "Turdus merula", "05:00:01", 0.55, "rejected");
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-14', '05:00:02', 'Turdus merula', 'Turdus merula', 0.60, 'x.wav'),
+                    ('2026-03-15', '05:00:03', 'Turdus merula', 'Turdus merula', 0.91, 'x.wav')",
+            [],
+        )
+        .unwrap();
+
+        let shapes = species_shapes(&conn).unwrap();
+        let s = shapes
+            .iter()
+            .find(|s| s.sci_name == "Turdus merula")
+            .expect("the species is present");
+        assert_eq!(s.total, 3);
+        assert_eq!(s.distinct_days, 2, "distinct days, not rows");
+        assert!((s.min_confidence - 0.55).abs() < 1e-9);
+        assert!((s.max_confidence - 0.91).abs() < 1e-9);
+        assert_eq!(s.rejected, 1);
+        assert_eq!(s.confirmed, 0);
+    }
+
+    #[test]
+    fn species_shapes_count_the_rejected_detections_too() {
+        // A phantom's detections are exactly the ones a reviewer threw out.
+        // Reading `detections_analytic` would hide them, and the species with
+        // the strongest evidence against it would have the smallest shape.
+        let (_tmp, conn) = empty_db();
+        for (i, _) in (0..4).enumerate() {
+            reviewed(
+                &conn,
+                "Phantomus fictus",
+                &format!("05:00:{i:02}"),
+                0.72,
+                "rejected",
+            );
+        }
+        let shapes = species_shapes(&conn).unwrap();
+        let s = shapes
+            .iter()
+            .find(|s| s.sci_name == "Phantomus fictus")
+            .expect("present");
+        assert_eq!(
+            s.total, 4,
+            "rejected detections were excluded from the shape"
+        );
+        assert_eq!(s.rejected, 4);
+    }
+
+    #[test]
+    fn species_shapes_are_one_row_per_species() {
+        let (_tmp, conn) = empty_db();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-03-14','05:00:01','Turdus merula','Blackbird',0.8,'x.wav'),
+                    ('2026-03-14','05:00:02','Turdus merula','Blackbird',0.9,'x.wav'),
+                    ('2026-03-14','05:00:03','Parus major','Great Tit',0.7,'x.wav')",
+            [],
+        )
+        .unwrap();
+        let shapes = species_shapes(&conn).unwrap();
+        assert_eq!(shapes.len(), 2);
+        assert_eq!(shapes.iter().map(|s| s.total).sum::<i64>(), 3);
     }
 }

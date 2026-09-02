@@ -1339,6 +1339,109 @@ pub const MIGRATIONS: &[Migration] = &[
 
         ANALYZE;",
     },
+    Migration {
+        version: 35,
+        description: "Let an alert-rule webhook authenticate, instead of only working against open endpoints",
+        // An alert rule could fire a webhook at any URL, but with no way to
+        // carry a credential. That restricted the feature to endpoints that
+        // authenticate by URL alone — a Slack or Discord webhook, or a
+        // home-LAN service with no auth at all. Anything with an API key
+        // (Home Assistant's `/api/webhook` is the common one, along with every
+        // hosted automation service) could not be targeted, and the operator's
+        // only recourse was to run their own unauthenticated relay.
+        //
+        // Three columns rather than one, because the three schemes put the
+        // credential in different places and folding them into a single
+        // "header line" field would mean parsing operator input to find out
+        // which one they meant:
+        //
+        //   kind = ''       no authentication (the existing behaviour)
+        //   kind = 'bearer' Authorization: Bearer <value>
+        //   kind = 'basic'  Authorization: Basic base64(<value>), value = user:password
+        //   kind = 'header' <name>: <value>
+        //
+        // `''` as the default is what makes this a no-op upgrade: every
+        // existing rule keeps sending exactly the request it sent before.
+        //
+        // The value is a secret at rest in the operator's own database, which
+        // is the same place the BirdWeather token and the session secret
+        // already live. What it must not do is escape from there: the rules
+        // export redacts it, the admin table never renders it, and the
+        // dispatch error path logs the rule name rather than the request.
+        up_sql: "ALTER TABLE alert_rules
+                     ADD COLUMN action_webhook_auth_kind TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE alert_rules
+                     ADD COLUMN action_webhook_auth_value TEXT;
+                 ALTER TABLE alert_rules
+                     ADD COLUMN action_webhook_header_name TEXT;",
+    },
+    Migration {
+        version: 36,
+        description: "Widen the quarantine reason CHECK, which was silently discarding new reasons",
+        // ## How this was found
+        //
+        // The taxon-aware daylight filter added a fourth quarantine reason,
+        // `implausible_hour`. Its end-to-end test recorded no detection *and*
+        // no quarantine row, and `insert_quarantine` had returned `Ok(())`.
+        //
+        // The table was created (migration 10) with
+        // `CHECK(reason IN ('below_sf_thresh','low_confidence','manual'))`, and
+        // `insert_quarantine` uses `INSERT OR IGNORE` — which is there to
+        // absorb the `UNIQUE(date, time, sci_name)` collision when the same
+        // detection is offered twice. `OR IGNORE` does not distinguish between
+        // constraints: it swallowed the CHECK violation exactly as it swallows
+        // a duplicate, and reported success. Every detection quarantined for
+        // the new reason would have been dropped on the floor, with no error
+        // anywhere and no row to find afterwards.
+        //
+        // ## Why the table is rebuilt
+        //
+        // SQLite cannot alter a CHECK constraint in place; the constraint is
+        // part of the stored `CREATE TABLE` text, so the documented procedure
+        // is rebuild-and-rename.
+        //
+        // `PRAGMA foreign_keys` is not touched: nothing references
+        // `quarantine` (it is a staging table read only by the review UI), so
+        // the rename cannot orphan a child row. The three indexes are
+        // recreated because `DROP TABLE` takes them with it.
+        //
+        // The copy names its columns rather than `SELECT *` so a column added
+        // to one side and not the other fails loudly here instead of silently
+        // shifting every value one place along.
+        up_sql: "CREATE TABLE quarantine_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            sci_name TEXT NOT NULL,
+            com_name TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            sf_probability REAL,
+            reason TEXT NOT NULL CHECK(reason IN
+                ('below_sf_thresh','low_confidence','implausible_hour','manual')),
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            approved INTEGER NOT NULL DEFAULT 0,
+            file_name TEXT,
+            lat REAL,
+            lon REAL,
+            week INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(date, time, sci_name)
+        );
+
+        INSERT INTO quarantine_new
+            (id, date, time, sci_name, com_name, confidence, sf_probability,
+             reason, reviewed, approved, file_name, lat, lon, week, created_at)
+        SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
+               reason, reviewed, approved, file_name, lat, lon, week, created_at
+          FROM quarantine;
+
+        DROP TABLE quarantine;
+        ALTER TABLE quarantine_new RENAME TO quarantine;
+
+        CREATE INDEX IF NOT EXISTS idx_quarantine_reviewed ON quarantine(reviewed);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2448,5 +2551,189 @@ mod tests {
             ("2026-03-11".to_string(), "08:30:09".to_string()),
             "a row already on the new convention must not be shifted again"
         );
+    }
+
+    #[test]
+    fn migration_35_leaves_existing_webhook_rules_unauthenticated() {
+        // The no-op-upgrade guarantee. A station upgrading with live alert
+        // rules must keep sending exactly the request it sent before: the new
+        // columns default to "no credential", not to an empty one, because an
+        // empty `Authorization` header is rejected by some servers and counted
+        // as a failed login by others.
+        let conn = memory_db();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 35) {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO alert_rules
+                 (name, enabled, species_pattern, confidence_min, confidence_max,
+                  action_type, action_webhook_url, action_webhook_method)
+             VALUES ('legacy', 1, NULL, 0.0, 1.0, 'webhook', 'https://x/y', 'POST');",
+        )
+        .unwrap();
+
+        let m35 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 35)
+            .expect("migration 35 exists");
+        conn.execute_batch(m35.up_sql).unwrap();
+
+        let (kind, value, header): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT action_webhook_auth_kind, action_webhook_auth_value,
+                        action_webhook_header_name
+                   FROM alert_rules WHERE name = 'legacy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "", "a pre-existing rule must carry no auth scheme");
+        assert_eq!(value, None);
+        assert_eq!(header, None);
+
+        // And the row still loads as an unauthenticated webhook.
+        let rule = crate::alert_rules::list_rules(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.name == "legacy")
+            .expect("the rule survived the migration");
+        assert!(matches!(
+            rule.action,
+            crate::alert_rules::AlertAction::Webhook { auth: None, .. }
+        ));
+    }
+
+    #[test]
+    fn every_quarantine_reason_is_accepted_by_the_schema() {
+        // The `quarantine.reason` column carries a CHECK constraint listing
+        // the reasons by name, and `insert_quarantine` writes with
+        // `INSERT OR IGNORE` — which it needs, to absorb the
+        // `UNIQUE(date, time, sci_name)` collision when a detection is offered
+        // twice. `OR IGNORE` does not distinguish between constraints, so a
+        // reason the CHECK does not list is discarded exactly as a duplicate
+        // is, `Ok(())` is returned, and the row is gone with no error anywhere.
+        //
+        // That is not hypothetical: it is what `implausible_hour` did before
+        // migration 36, and the only symptom was an end-to-end test finding
+        // neither a detection nor a quarantine row.
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+
+        for (i, reason) in crate::sqlite::ALL_QUARANTINE_REASONS.iter().enumerate() {
+            let record = crate::sqlite::QuarantineRecord {
+                // Distinct times: the table is UNIQUE on (date, time, sci_name)
+                // and a collision here would look exactly like the failure
+                // this test is for.
+                date: "2026-01-15",
+                time: &format!("02:{i:02}:00"),
+                sci_name: "Cyanistes caeruleus",
+                com_name: "Eurasian Blue Tit",
+                confidence: 0.95,
+                sf_probability: None,
+                reason: reason.clone(),
+                file_name: None,
+                lat: None,
+                lon: None,
+                week: Some(3),
+            };
+            crate::sqlite::insert_quarantine(&conn, &record).unwrap();
+
+            let stored: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM quarantine WHERE reason = ?1",
+                    rusqlite::params![reason.as_str()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                stored,
+                1,
+                "the schema silently discarded a quarantine with reason {:?} — add it to \
+                 the CHECK constraint in a migration",
+                reason.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn the_schema_still_rejects_a_reason_nobody_defined() {
+        // Counterpart: widening the CHECK to accept anything would satisfy the
+        // gate above, and the column would stop being a closed set — which is
+        // what makes `from_db_str`'s fallback to `Manual` safe to rely on.
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO quarantine
+                (date, time, sci_name, com_name, confidence, reason)
+             VALUES ('2026-01-15','02:30:00','X','X',0.9,'not_a_reason')",
+            [],
+        )
+        .unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM quarantine", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "the reason column accepts arbitrary strings");
+    }
+
+    #[test]
+    fn migration_36_keeps_the_quarantine_rows_it_rebuilds_around() {
+        // A table rebuild that lost the operator's review queue would be a
+        // silent data loss on upgrade, and the queue is the only record of
+        // detections the station chose not to admit.
+        let conn = memory_db();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 36) {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO quarantine
+                 (date, time, sci_name, com_name, confidence, reason, reviewed, approved, week)
+             VALUES ('2026-01-15','02:30:00','Strix aluco','Tawny Owl',0.91,'low_confidence',1,1,3),
+                    ('2026-01-15','03:00:00','Turdus merula','Blackbird',0.42,'below_sf_thresh',0,0,3);",
+        )
+        .unwrap();
+
+        let m36 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 36)
+            .expect("migration 36 exists");
+        conn.execute_batch(m36.up_sql).unwrap();
+
+        let rows: Vec<(String, String, i64, i64)> = conn
+            .prepare("SELECT sci_name, reason, reviewed, approved FROM quarantine ORDER BY time")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "Strix aluco".to_string(),
+                    "low_confidence".to_string(),
+                    1,
+                    1
+                ),
+                (
+                    "Turdus merula".to_string(),
+                    "below_sf_thresh".to_string(),
+                    0,
+                    0
+                ),
+            ],
+            "the rebuild lost or reordered the review queue"
+        );
+
+        // And the indexes came back with it — `DROP TABLE` takes them.
+        let indexes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type = 'index' AND tbl_name = 'quarantine'
+                    AND name LIKE 'idx_quarantine_%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexes, 3, "the rebuild dropped the quarantine indexes");
     }
 }

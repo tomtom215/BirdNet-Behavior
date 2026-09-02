@@ -84,7 +84,7 @@ async fn weekly_report_loop(
 
         match build_weekly_report(&state) {
             Ok((title, body)) => {
-                let client = apprise.lock().await;
+                let mut client = apprise.lock().await;
                 if let Err(e) = client
                     .send_notification(&title, &body, NotifyType::Info)
                     .await

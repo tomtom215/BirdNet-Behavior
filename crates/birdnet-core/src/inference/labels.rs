@@ -78,8 +78,17 @@ impl LabelSet {
     /// - **V3.0 CSV**: comma-separated with a header row containing at least
     ///   `sci_name` and `com_name` columns (`BirdNET+` V3.0 / Zenodo format).
     ///
-    /// The format is detected from the first non-blank line: if it contains a
-    /// comma and the word `sci_name`, CSV mode is used; otherwise txt mode.
+    /// The format is detected from the first non-blank line:
+    ///
+    /// | First line contains | Format | Parser |
+    /// |---------------------|--------|--------|
+    /// | `,`/`;` **and** `sci_name` | V3.0 classifier CSV | [`Self::parse_csv`] |
+    /// | a tab | geomodel TSV | [`Self::parse_tsv`] |
+    /// | neither | V2.4 `Scientific_Common` text | [`Self::parse`] |
+    ///
+    /// The tab is what separates the three: the CSV header is comma- or
+    /// semicolon-delimited and the underscore format is a single field, so
+    /// neither contains one.
     ///
     /// # Errors
     ///
@@ -105,6 +114,8 @@ impl LabelSet {
         if (first.contains(',') || first.contains(';')) && first.to_lowercase().contains("sci_name")
         {
             Self::parse_csv(content)
+        } else if first.contains('\t') {
+            Self::parse_tsv(content)
         } else {
             Self::parse(content)
         }
@@ -139,6 +150,71 @@ impl LabelSet {
                 scientific_name: sci.to_string(),
                 common_name: com.to_string(),
                 // The V2.4 text format carries no taxonomy.
+                class: None,
+            });
+        }
+
+        if labels.is_empty() {
+            return Err(LabelError::Format("no labels found".into()));
+        }
+
+        Ok(Self { labels })
+    }
+
+    /// Parse the geomodel's tab-separated label file.
+    ///
+    /// The BirdNET geomodel ships its labels as
+    /// `species_code<TAB>scientific_name<TAB>common_name`, one line per model
+    /// output, line 1 being output index 0. The leading eBird species code is
+    /// dropped: nothing downstream keys on it, and the rest of the pipeline
+    /// compares scientific names.
+    ///
+    /// A two-column row is read as `scientific<TAB>common` — there is no code
+    /// to drop. Anything narrower names no species and is rejected rather than
+    /// admitted with an empty name, which would match every blank lookup.
+    ///
+    /// Empty lines and `#` comments are skipped, as in [`Self::parse`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LabelError::Format`] if a row has fewer than two non-empty
+    /// columns, or if the file contains no labels at all.
+    pub fn parse_tsv(content: &str) -> Result<Self, LabelError> {
+        let mut labels = Vec::new();
+
+        for line in content.lines() {
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.trim().is_empty() || line.trim_start().starts_with('#') {
+                continue;
+            }
+
+            let cols: Vec<&str> = line.split('\t').map(str::trim).collect();
+            // 3+ columns: code, scientific, common. Exactly 2: scientific,
+            // common. Extra trailing columns are ignored rather than refused,
+            // so a future column cannot break every station on upgrade.
+            let (sci, com) = match cols.as_slice() {
+                [_code, sci, com, ..] => (*sci, *com),
+                [sci, com] => (*sci, *com),
+                _ => {
+                    return Err(LabelError::Format(format!(
+                        "expected tab-separated 'code<TAB>scientific<TAB>common' \
+                         (or 'scientific<TAB>common'), got: {line}"
+                    )));
+                }
+            };
+
+            if sci.is_empty() || com.is_empty() {
+                return Err(LabelError::Format(format!(
+                    "tab-separated label row has an empty name column: {line}"
+                )));
+            }
+
+            labels.push(SpeciesLabel {
+                index: labels.len(),
+                scientific_name: sci.to_string(),
+                common_name: com.to_string(),
+                // The geomodel's label file carries no taxonomic class column;
+                // the classifier's CSV is where that comes from.
                 class: None,
             });
         }
@@ -427,5 +503,76 @@ mod tests {
         for (i, label) in labels.iter().enumerate() {
             assert_eq!(label.index, i);
         }
+    }
+}
+
+// ── the geomodel's tab-separated label file ─────────────────────────────
+//
+// These gates were written against the pre-fix parser and observed failing:
+// `load_from_str` routed a tab-separated line to `parse`, which requires an
+// underscore, so every one returned
+//
+//     Err(Format("expected 'Scientific_Common', got: 1032549\tPetaurista …"))
+//
+// The BirdNET geomodel's own label file — the one that ships beside the model
+// on the upstream release, and the only thing that says which species each of
+// its 12 012 outputs belongs to — is that format. Without this the station
+// could only read a third-party rewrite of it.
+#[cfg(test)]
+mod geomodel_label_format_tests {
+    use super::*;
+
+    /// Three columns: eBird species code, scientific name, common name.
+    /// Verbatim first lines of `BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt`.
+    const UPSTREAM: &str = "1032549\tPetaurista albiventer\tWhite-bellied Giant Flying Squirrel\n\
+                            1044390\tOrientopsaltria phaeophila\tOrientopsaltria phaeophila\n\
+                            zothaw\tButeo albonotatus\tZone-tailed Hawk\n";
+
+    #[test]
+    fn upstream_three_column_tsv_parses() {
+        let set = LabelSet::load_from_str(UPSTREAM).expect("the geomodel's own label file");
+        assert_eq!(set.len(), 3);
+
+        let first = set.get(0).unwrap();
+        assert_eq!(first.scientific_name, "Petaurista albiventer");
+        assert_eq!(
+            first.common_name, "White-bellied Giant Flying Squirrel",
+            "the species code column must not leak into either name"
+        );
+        assert_eq!(
+            set.get(2).unwrap().scientific_name,
+            "Buteo albonotatus",
+            "line order is the model's output order, so index 2 must be line 3"
+        );
+    }
+
+    /// Two columns are read as `scientific`, `common` — there is no code to
+    /// drop. Without this the 3-column rule would silently take the wrong
+    /// pair from a 2-column file.
+    #[test]
+    fn two_column_tsv_reads_both_columns_as_names() {
+        let set = LabelSet::load_from_str("Turdus merula\tEurasian Blackbird\n").unwrap();
+        assert_eq!(set.get(0).unwrap().scientific_name, "Turdus merula");
+        assert_eq!(set.get(0).unwrap().common_name, "Eurasian Blackbird");
+    }
+
+    /// The counterpart that keeps the new branch a discriminator: the two
+    /// formats that already worked must not start going through it.
+    #[test]
+    fn the_existing_formats_are_untouched() {
+        let txt = LabelSet::load_from_str("Turdus merula_Eurasian Blackbird\n").unwrap();
+        assert_eq!(txt.get(0).unwrap().common_name, "Eurasian Blackbird");
+
+        let csv = LabelSet::load_from_str("sci_name;com_name\nTurdus merula;Eurasian Blackbird\n")
+            .unwrap();
+        assert_eq!(csv.get(0).unwrap().scientific_name, "Turdus merula");
+    }
+
+    /// A single-column tab-free line is still the underscore format's problem
+    /// to reject; a one-column *tabbed* line names no species and must not be
+    /// accepted as one.
+    #[test]
+    fn a_tsv_row_with_too_few_columns_is_an_error() {
+        assert!(LabelSet::load_from_str("Turdus merula\t\n").is_err());
     }
 }

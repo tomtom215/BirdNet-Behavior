@@ -204,13 +204,24 @@ impl fmt::Display for RtspTransport {
     }
 }
 
-/// Audio-pipeline toggles.
+/// Audio-pipeline toggles, as stored.
 ///
-/// Four feature flags that the audio daemon honours per source. Each is
-/// intrinsically boolean (a filter is either applied or not), so the
-/// pedantic "more than 3 bools" suggestion to refactor into enums is not
-/// useful here — these are independent toggles whose set is fixed by
-/// the daemon's pipeline.
+/// Four independent per-source flags. Each is intrinsically boolean (a filter
+/// is either applied or not), so the pedantic "more than 3 bools" suggestion to
+/// refactor into enums is not useful here.
+///
+/// This is the **storage** shape. `birdnet-core` must not depend on this crate,
+/// so the capture path consumes `birdnet_core::audio::capture::AudioPipeline`
+/// and `birdnet-behavior`'s `capture::sources::map_pipeline` is the one seam
+/// that converts between them. Consult that function before assuming a field
+/// here means what its name suggests — `rtsp_keepalive` in particular does not:
+/// ffmpeg sends RTSP keepalives on its own and offers no switch for them, so it
+/// maps to `AudioPipeline::rtsp_stall_timeout`, which bounds socket reads so a
+/// stalled stream is noticed and restarted.
+///
+/// This comment previously claimed the daemon "honours" all four. It did not
+/// read any of them: they were written, round-tripped, and dropped at the
+/// resolver. The claim is worth remembering as a caution about this file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct PipelineFlags {
@@ -363,6 +374,33 @@ fn validate_id(id: &str) -> Result<(), AudioSourceError> {
 }
 
 fn validate_hhmm(s: &str) -> Result<(), AudioSourceError> {
+    // A quiet endpoint is either a clock time or a solar anchor. Both share
+    // this column so solar windows needed no migration; the two are
+    // unambiguous because a clock time contains a colon and no letters.
+    //
+    // The authoritative parser lives in the binary
+    // (`capture::sources::parse_quiet_endpoint`) because that is where it is
+    // consumed; this is a storage-side shape check, deliberately looser. It
+    // rejects nonsense without duplicating the offset rules, so the two cannot
+    // drift into disagreeing about which strings are legal.
+    let lower = s.trim().to_ascii_lowercase();
+    if lower.starts_with("sunrise") || lower.starts_with("sunset") {
+        let rest = lower
+            .trim_start_matches("sunrise")
+            .trim_start_matches("sunset");
+        let ok = rest.is_empty()
+            || ((rest.starts_with('+') || rest.starts_with('-'))
+                && rest[1..].chars().all(|c| c.is_ascii_digit())
+                && rest.len() > 1);
+        return if ok {
+            Ok(())
+        } else {
+            Err(AudioSourceError::Invalid(format!(
+                "expected `sunrise`/`sunset` with an optional signed offset, got '{s}'"
+            )))
+        };
+    }
+
     let bytes = s.as_bytes();
     let ok = s.len() == 5
         && bytes[2] == b':'
@@ -370,7 +408,7 @@ fn validate_hhmm(s: &str) -> Result<(), AudioSourceError> {
         && bytes[3..].iter().all(u8::is_ascii_digit);
     if !ok {
         return Err(AudioSourceError::Invalid(format!(
-            "expected HH:MM, got '{s}'"
+            "expected HH:MM or sunrise/sunset±MM, got '{s}'"
         )));
     }
     let hh: u8 = s[..2]

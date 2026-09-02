@@ -20,6 +20,7 @@
 pub mod disk;
 pub mod live;
 pub mod manager;
+pub mod probe;
 pub mod process;
 pub mod status;
 pub mod tmpfs;
@@ -49,8 +50,8 @@ pub use tmpfs::{
     unmount_tmpfs,
 };
 pub use types::{
-    AudioFormat, CaptureError, CaptureSource, LocalOffset, RecordingConfig, RtspTransport,
-    recording_filename_at,
+    AudioFormat, AudioPipeline, CaptureError, CaptureSource, DC_BLOCK_CUTOFF_HZ,
+    HIGH_PASS_CUTOFF_HZ, LocalOffset, RecordingConfig, RtspTransport, recording_filename_at,
 };
 
 // Internal re-export for detection pipeline modules (daemon.rs, pipeline.rs).

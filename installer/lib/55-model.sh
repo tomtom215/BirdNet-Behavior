@@ -42,27 +42,29 @@ verify_model_sha256() {
     return 1
 }
 
-# Fetch one model file, trying GitHub first then Zenodo, and verify it against
-# its pinned sha256. The downloaded file is only accepted once the checksum
-# matches; a mismatch discards it and falls through to the next source.
+# Fetch one model file from the first origin that serves bytes matching its
+# pinned sha256. A file is only accepted once the checksum matches; a mismatch
+# discards it and falls through to the next origin.
 #
-#   fetch_verified_model DEST FILENAME EXPECTED_SHA HUMAN_NAME RESUMABLE
+#   fetch_verified_model DEST EXPECTED_SHA HUMAN_NAME RESUMABLE LABEL URL [LABEL URL...]
+#
+# The origins are passed as label/URL pairs rather than derived here, because
+# the two model families do not share a URL shape: Zenodo needs
+# `<api>/<file>/content` while both GitHub releases take `<base>/<file>`.
+# Building them at the call site keeps that knowledge next to the config that
+# defines it, and lets the geomodel use its own upstream without teaching this
+# function about a third source.
 #
 # RESUMABLE=1 routes through download_large (resume + progress bar) for the
-# ~541 MB model; any other value uses the plain download helper (small labels).
-# Returns 0 once a verified copy is in place, 1 if every source failed.
+# ~541 MB classifier; any other value uses the plain download helper.
+# Returns 0 once a verified copy is in place, 1 if every origin failed.
 fetch_verified_model() {
-    local dest="$1" filename="$2" expected_sha="$3" human="$4" resumable="$5"
-    local src url label
+    local dest="$1" expected_sha="$2" human="$3" resumable="$4"
+    shift 4
 
-    for src in github zenodo; do
-        if [ "${src}" = "github" ]; then
-            url="${MODEL_GH_BASE}/${filename}"
-            label="GitHub release ${MODEL_RELEASE_TAG}"
-        else
-            url="${ZENODO_API}/${filename}/content"
-            label="Zenodo"
-        fi
+    while [ "$#" -ge 2 ]; do
+        local label="$1" url="$2"
+        shift 2
 
         info "  Fetching ${human} from ${label}…"
         if [ "${resumable}" = "1" ]; then
@@ -87,6 +89,24 @@ fetch_verified_model() {
     done
 
     return 1
+}
+
+# The origin label/URL pairs for one classifier file: our models release first,
+# then Zenodo.
+classifier_origins() {
+    local filename="$1"
+    printf '%s\n' \
+        "GitHub release ${MODEL_RELEASE_TAG}" "${MODEL_GH_BASE}/${filename}" \
+        "Zenodo" "${ZENODO_API}/${filename}/content"
+}
+
+# The origin label/URL pairs for one geomodel file: our models release first,
+# then the upstream birdnet-team release it is mirrored from.
+geomodel_origins() {
+    local filename="$1"
+    printf '%s\n' \
+        "GitHub release ${MODEL_RELEASE_TAG}" "${GEOMODEL_GH_BASE}/${filename}" \
+        "upstream birdnet-team/geomodel ${GEOMODEL_VERSION}" "${GEOMODEL_UPSTREAM_BASE}/${filename}"
 }
 
 download_model() {
@@ -122,8 +142,10 @@ download_model() {
     # Model (~541 MB) — resumable so a dropped connection picks up where it left
     # off on the next run instead of restarting from 0 MB.
     if [ ! -f "${model_dest}" ]; then
-        if ! fetch_verified_model "${model_dest}" "${MODEL_FILE}" "${MODEL_SHA256}" \
-            "BirdNET+ V3.0 model (~541 MB)" 1; then
+        local model_origins
+        mapfile -t model_origins < <(classifier_origins "${MODEL_FILE}")
+        if ! fetch_verified_model "${model_dest}" "${MODEL_SHA256}" \
+            "BirdNET+ V3.0 model (~541 MB)" 1 "${model_origins[@]}"; then
             warn "Model download failed or could not be verified from any source."
             warn "Any partial file is kept at:"
             warn "  ${model_dest}"
@@ -138,11 +160,93 @@ download_model() {
 
     # Labels (small file — no resume needed).
     if [ ! -f "${labels_dest}" ]; then
-        if ! fetch_verified_model "${labels_dest}" "${LABELS_FILE}" "${LABELS_SHA256}" \
-            "species labels CSV" 0; then
+        local labels_origins
+        mapfile -t labels_origins < <(classifier_origins "${LABELS_FILE}")
+        if ! fetch_verified_model "${labels_dest}" "${LABELS_SHA256}" \
+            "species labels CSV" 0 "${labels_origins[@]}"; then
             fatal "Labels download failed or could not be verified. Check your internet connection and retry."
         fi
         chown "${SERVICE_USER}:${SERVICE_USER}" "${labels_dest}"
         success "Labels installed to ${labels_dest}"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# Download the BirdNET geomodel + its labels (the species occurrence filter).
+#
+# Deliberately NON-FATAL, unlike the classifier. A station without the
+# classifier detects nothing and must stop; a station without the geomodel
+# detects everything and merely stops filtering by location, which is exactly
+# how every release before this one behaved. Aborting an otherwise good install
+# over a 14 MB optional download would be the worse failure — so this warns,
+# leaves METADATA_MODEL_PATH unset, and `--doctor` reports the filter as off
+# with the command to fix it.
+#
+# Both files are needed or neither is used: the model's 12 012 outputs are
+# meaningless without the label file that names them, and the station refuses a
+# model it cannot align. A half-download therefore removes what it got rather
+# than leaving a configuration that cannot start.
+#
+# Sets GEOMODEL_INSTALLED=1 when both files are verified and in place, which is
+# what 62-config-file.sh keys the METADATA_* settings on.
+# ---------------------------------------------------------------------------
+GEOMODEL_INSTALLED=0
+
+download_geomodel() {
+    local model_dest="${MODEL_DIR}/${GEOMODEL_FILE}"
+    local labels_dest="${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+
+    if [ -f "${model_dest}" ] && [ -f "${labels_dest}" ]; then
+        GEOMODEL_INSTALLED=1
+        success "Geomodel already present at ${MODEL_DIR} — skipping."
+        return 0
+    fi
+
+    # The same escape hatch the classifier honours: an air-gapped operator
+    # stages the files by hand, and the install-smoke CI job skips the fetch.
+    if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
+        info "BIRDNET_SKIP_MODEL=1 — skipping the geomodel download too."
+        return 0
+    fi
+
+    info "Fetching the BirdNET geomodel ${GEOMODEL_VERSION} (~14 MB) + labels…"
+    info "  This is the species occurrence filter: it drops birds that do not"
+    info "  occur near this station at this time of year."
+
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+
+    local model_origins labels_origins
+    mapfile -t model_origins < <(geomodel_origins "${GEOMODEL_FILE}")
+    mapfile -t labels_origins < <(geomodel_origins "${GEOMODEL_LABELS_FILE}")
+
+    if [ ! -f "${model_dest}" ] &&
+        ! fetch_verified_model "${model_dest}" "${GEOMODEL_SHA256}" \
+            "geomodel (~14 MB)" 0 "${model_origins[@]}"; then
+        rm -f "${model_dest}"
+        warn "Geomodel download failed or could not be verified from any source."
+        warn "The station will run WITHOUT species occurrence filtering: every"
+        warn "species the classifier knows stays a candidate wherever it is."
+        warn "Re-run this installer to retry, then check with:"
+        warn "  birdnet-behavior --doctor"
+        return 0
+    fi
+
+    if [ ! -f "${labels_dest}" ] &&
+        ! fetch_verified_model "${labels_dest}" "${GEOMODEL_LABELS_SHA256}" \
+            "geomodel labels" 0 "${labels_origins[@]}"; then
+        # The model alone cannot be used, and a configured-but-unusable pair is
+        # worse than none: the daemon would refuse it on every start. Remove
+        # both so the next run is a clean retry.
+        rm -f "${labels_dest}" "${model_dest}"
+        warn "Geomodel labels failed to download; removing the model too, since"
+        warn "the station cannot use one without the other. Occurrence filtering"
+        warn "is OFF. Re-run this installer to retry."
+        return 0
+    fi
+
+    chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}" "${labels_dest}"
+    GEOMODEL_INSTALLED=1
+    success "Geomodel installed to ${model_dest}"
+    success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
+    return 0
 }

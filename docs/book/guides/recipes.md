@@ -5,7 +5,7 @@ Short, copy-pasteable answers to "how do I…?" Each links to the page with the 
 ## Get a phone alert when a rare bird shows up
 
 1. Create an [Apprise](https://github.com/caronc/apprise) URL for your service (Telegram, Pushover, ntfy, Discord…).
-2. Set it: `BIRDNET_APPRISE_URL=tgram://bottoken/chatid` (or via `/admin/settings → Notifications`).
+2. Set it: `BIRDNET_NOTIFY_URLS=tgram://bottoken/chatid` (or via `/admin/settings → Notifications`). The station sends to Telegram directly — `BIRDNET_APPRISE_URL` is the base URL of an Apprise *server*, not a destination.
 3. Set `BIRDNET_NOTIFY_CONFIDENCE=0.85` so only solid detections ping you.
 4. Use the rare-bird rules so you're alerted on *new* or *unusual* species, not every robin.
 

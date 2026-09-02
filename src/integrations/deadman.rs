@@ -156,7 +156,7 @@ async fn notify(
     kind: birdnet_integrations::apprise::NotifyType,
 ) {
     let Some(handle) = apprise else { return };
-    let client = handle.lock().await;
+    let mut client = handle.lock().await;
     if let Err(e) = client.send_notification(title, body, kind).await {
         tracing::warn!(error = %e, "deadman notification failed to send");
     }

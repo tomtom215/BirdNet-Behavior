@@ -139,6 +139,6 @@ lines, not after a silent season.
 
 ## Apprise & webhooks
 
-For notifications to 80+ services (Telegram, Slack, Discord, Pushover, ntfy, email…), set a single `BIRDNET_APPRISE_URL`. For fully custom integrations, the [alert-rules engine](../admin/notifications.md#alert-rules) can fire a **webhook** with a configurable method and body when a detection matches your conditions (species pattern, confidence range, hour, day-of-week).
+For Discord, Slack, Telegram, ntfy, Gotify, Pushover or a plain JSON webhook, set `BIRDNET_NOTIFY_URLS` — Apprise URL syntax, delivered in-process. For the remaining Apprise services, point `BIRDNET_APPRISE_URL` at an Apprise API server or `BIRDNET_APPRISE_CONFIG` at an `apprise` config file. For fully custom integrations, the [alert-rules engine](../admin/notifications.md#alert-rules) can fire a **webhook** with a configurable method and body when a detection matches your conditions (species pattern, confidence range, hour, day-of-week).
 
 See [Notifications & Integrations](../admin/notifications.md) for the channel walkthrough.

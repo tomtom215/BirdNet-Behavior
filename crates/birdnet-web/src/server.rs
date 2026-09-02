@@ -99,6 +99,7 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
     let admin = routes::admin_routes();
     let admin = crate::auth_middleware::apply(admin, state.clone());
 
+    let request_metrics = state.metrics();
     let router = routes::public_routes().merge(admin).with_state(state);
 
     // Layer order is outermost-last. The CSRF guard runs after rate limiting
@@ -119,6 +120,13 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
         .layer(axum::middleware::from_fn(
             crate::security::security_headers_middleware,
         ))
+        // Outside everything else so it measures what the client actually
+        // experienced — compression and header rewriting included — rather
+        // than the handler in isolation.
+        .layer(axum::middleware::from_fn(move |req, next| {
+            let metrics = Arc::clone(&request_metrics);
+            crate::metrics::http_metrics_middleware(metrics, req, next)
+        }))
         // Outermost, and it has to be: `security_headers_middleware` buffers
         // every `text/html` body and runs `String::from_utf8_lossy` over it to
         // stamp CSP nonces. Placed *inside* that layer, this one handed it a

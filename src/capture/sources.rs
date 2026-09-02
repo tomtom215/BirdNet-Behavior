@@ -11,6 +11,13 @@ use crate::cli::Cli;
 
 use super::{schedule, supervisor};
 
+/// Sample rate a station captures at unless the device says otherwise.
+///
+/// 48 kHz: what the V2.4 model wants, what most USB capture devices do, and a
+/// clean integer ratio to the 32 kHz the V3.0 models want. Was written inline
+/// at each autodetected source, so the two could drift apart.
+const DEFAULT_CAPTURE_RATE: u32 = 48_000;
+
 /// Resolve all RTSP URLs from CLI flags and config.
 ///
 /// Priority, first match wins: `--rtsp-urls`, then config `RTSP_URLS`
@@ -98,7 +105,32 @@ fn resolve_alsa_devices(cli: &Cli, config: Option<&birdnet_core::config::Config>
 pub(super) struct ResolvedSource {
     pub(super) source: CaptureSource,
     pub(super) gain_db: f32,
+    /// Signal conditioning for this source, mapped from the `audio_sources`
+    /// row. Only the DB-driven path can carry it: a source configured purely
+    /// from CLI flags has no row to read toggles from, so it gets the
+    /// conditioning defaults.
+    pub(super) pipeline: birdnet_core::audio::capture::AudioPipeline,
     pub(super) quiet: Option<supervisor::QuietWindow>,
+}
+
+/// Map the stored per-source toggles onto the core type the capture path
+/// consumes.
+///
+/// `birdnet-core` must not depend on `birdnet-db`, so this is the one seam
+/// where the storage shape and the audio shape meet. `rtsp_keepalive` maps to
+/// `rtsp_stall_timeout`, which is renamed rather than copied: ffmpeg sends RTSP
+/// keepalives on its own and has no switch for them, so the stored flag's
+/// stated behaviour was unimplementable. See
+/// [`birdnet_core::audio::capture::AudioPipeline::rtsp_stall_timeout`].
+pub(super) const fn map_pipeline(
+    flags: birdnet_db::audio_sources::PipelineFlags,
+) -> birdnet_core::audio::capture::AudioPipeline {
+    birdnet_core::audio::capture::AudioPipeline {
+        high_pass: flags.high_pass,
+        dc_removal: flags.dc_removal,
+        agc: flags.agc,
+        rtsp_stall_timeout: flags.rtsp_keepalive,
+    }
 }
 
 /// Parse a DB `schedule_quiet` (`HH:MM`, `HH:MM`) pair into the supervisor's
@@ -110,9 +142,60 @@ pub(super) struct ResolvedSource {
 /// fail capture for the source.
 fn parse_quiet_window(quiet: Option<&(String, String)>) -> Option<supervisor::QuietWindow> {
     let (start, end) = quiet?;
-    let start_min = schedule::parse_hhmm(start)?;
-    let end_min = schedule::parse_hhmm(end)?;
-    Some(supervisor::QuietWindow::new(start_min, end_min))
+    Some(supervisor::QuietWindow::from_endpoints(
+        parse_quiet_endpoint(start)?,
+        parse_quiet_endpoint(end)?,
+    ))
+}
+
+/// Parse one end of a quiet window: `HH:MM`, or `sunrise`/`sunset` with an
+/// optional signed minute offset (`sunset+30`, `sunrise-15`, `sunset`).
+///
+/// The two forms share one stored column, which is what let solar windows ship
+/// without a schema migration. They are unambiguous: a clock time contains a
+/// colon and no letters.
+pub(super) fn parse_quiet_endpoint(s: &str) -> Option<supervisor::QuietEndpoint> {
+    let t = s.trim();
+    if let Some(min) = schedule::parse_hhmm(t) {
+        return Some(supervisor::QuietEndpoint::Fixed(min));
+    }
+
+    let lower = t.to_ascii_lowercase();
+    let (event, rest) = lower.strip_prefix("sunrise").map_or_else(
+        || {
+            lower
+                .strip_prefix("sunset")
+                .map(|r| (SolarEvent::Sunset, r))
+        },
+        |r| Some((SolarEvent::Sunrise, r)),
+    )?;
+
+    let offset = match rest.trim() {
+        "" => 0,
+        // `+`/`-` is required: a bare `sunset30` is far more likely to be a
+        // typo than an intent, and guessing at it would move a station's
+        // recording window by half an hour without saying so.
+        r if r.starts_with('+') || r.starts_with('-') => r.parse::<i32>().ok()?,
+        _ => return None,
+    };
+    // Offsets beyond half a day stop meaning "around sunset" and start meaning
+    // "some other time entirely", which an operator is better told about than
+    // silently given.
+    if offset.abs() > 12 * 60 {
+        return None;
+    }
+
+    Some(match event {
+        SolarEvent::Sunrise => supervisor::QuietEndpoint::Sunrise(offset),
+        SolarEvent::Sunset => supervisor::QuietEndpoint::Sunset(offset),
+    })
+}
+
+/// Which solar event a quiet endpoint anchors to.
+#[derive(Debug, Clone, Copy)]
+enum SolarEvent {
+    Sunrise,
+    Sunset,
 }
 
 /// Resolve capture sources from the `audio_sources` SQLite table.
@@ -160,6 +243,7 @@ pub(super) fn resolve_sources_from_db(
         out.push(ResolvedSource {
             source,
             gain_db: row.gain_db,
+            pipeline: map_pipeline(row.pipeline),
             quiet: parse_quiet_window(row.schedule_quiet.as_ref()),
         });
     }
@@ -304,8 +388,11 @@ pub(super) fn resolve_sources(
 
     if let Some(device) = pipewire_device {
         let mut srcs = vec![CaptureSource::PipeWire {
+            // PipeWire resamples internally, so it accepts any rate and there
+            // is nothing to probe; the ALSA path below is where a device can
+            // refuse.
+            sample_rate: DEFAULT_CAPTURE_RATE,
             device,
-            sample_rate: 48_000,
             channels: 1,
             stream_id: None,
         }];
@@ -318,8 +405,14 @@ pub(super) fn resolve_sources(
             .enumerate()
             .map(|(i, device)| CaptureSource::Microphone {
                 channel_pick: None,
+                // Ask the device rather than assuming. A 44.1 kHz-only
+                // interface handed `-r 48000` either fails to start — so the
+                // supervisor restarts it forever behind an ALSA error nobody
+                // reads — or is silently plug-converted, which is worse:
+                // capture works and every spectrogram has been resampled from
+                // something narrower than the station believes.
+                sample_rate: capture_rate_for(&device, DEFAULT_CAPTURE_RATE),
                 device,
-                sample_rate: 48_000,
                 channels: 1,
                 // A single mic keeps `None` (id-less filename, `local` label);
                 // several mics each get a stable `MIC_n` id.
@@ -408,6 +501,31 @@ fn capture_source_to_new(
         }
         CaptureSource::Rtsp { url, .. } => NewAudioSource::defaults(id, SourceKind::Rtsp, url),
     }
+}
+
+/// The rate a microphone should capture at, given what it says it supports.
+///
+/// `preferred` is the model's rate. Falls back to it whenever the device says
+/// nothing usable, so a probe that fails costs a station nothing — the config
+/// is exactly what it would have been.
+///
+/// Separated from the autodetection below so the log line and the fallback are
+/// testable without a sound card; the probe itself is
+/// [`birdnet_core::audio::capture::probe::probe_alsa_rates`].
+fn capture_rate_for(device: &str, preferred: u32) -> u32 {
+    use birdnet_core::audio::capture::probe::{pick_rate, probe_alsa_rates};
+
+    let support = probe_alsa_rates(device);
+    pick_rate(&support, preferred).map_or(preferred, |rate| {
+        tracing::info!(
+            device,
+            preferred,
+            using = rate,
+            ?support,
+            "capture device does not support the preferred sample rate; using its nearest"
+        );
+        rate
+    })
 }
 
 #[cfg(test)]
@@ -1051,5 +1169,83 @@ mod tests {
             parse_quiet_window(Some(&("22:00".to_string(), "nope".to_string()))),
             None
         );
+    }
+}
+
+// ── parsing the two forms one column holds ──────────────────────────────
+#[cfg(test)]
+mod quiet_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn clock_times_still_parse() {
+        assert_eq!(
+            parse_quiet_endpoint("22:00"),
+            Some(supervisor::QuietEndpoint::Fixed(22 * 60))
+        );
+    }
+
+    #[test]
+    fn solar_anchors_parse_with_and_without_an_offset() {
+        assert_eq!(
+            parse_quiet_endpoint("sunset"),
+            Some(supervisor::QuietEndpoint::Sunset(0))
+        );
+        assert_eq!(
+            parse_quiet_endpoint("sunset+30"),
+            Some(supervisor::QuietEndpoint::Sunset(30))
+        );
+        assert_eq!(
+            parse_quiet_endpoint("SunRise-15"),
+            Some(supervisor::QuietEndpoint::Sunrise(-15)),
+            "case must not matter — an operator types what reads naturally"
+        );
+    }
+
+    /// A bare number after the anchor is far more likely a typo than an
+    /// intent, and guessing would move the window by half an hour silently.
+    #[test]
+    fn an_unsigned_offset_is_rejected() {
+        assert_eq!(parse_quiet_endpoint("sunset30"), None);
+    }
+
+    /// Beyond half a day an "offset from sunset" is some other time entirely.
+    #[test]
+    fn an_absurd_offset_is_rejected() {
+        assert_eq!(parse_quiet_endpoint("sunrise+800"), None);
+        assert!(
+            parse_quiet_endpoint("sunrise+720").is_some(),
+            "12 h is the limit, inclusive"
+        );
+    }
+
+    #[test]
+    fn nonsense_is_rejected() {
+        for s in ["", "moonrise", "25:00", "noon", "sun"] {
+            assert_eq!(parse_quiet_endpoint(s), None, "{s} must not parse");
+        }
+    }
+
+    // ── capture-rate probing ────────────────────────────────────────────
+
+    #[test]
+    fn a_device_that_cannot_be_probed_keeps_the_preferred_rate() {
+        // The failure path, and the one that runs in this project's CI: there
+        // is no sound card and no `arecord`, so the probe learns nothing. A
+        // station must then be configured exactly as it was before probing
+        // existed — the feature can improve a configuration, never break one.
+        assert_eq!(
+            capture_rate_for("no-such-device-anywhere", DEFAULT_CAPTURE_RATE),
+            DEFAULT_CAPTURE_RATE
+        );
+        // And the model's rate is honoured, not a constant baked in here.
+        assert_eq!(capture_rate_for("no-such-device-anywhere", 32_000), 32_000);
+    }
+
+    #[test]
+    fn the_default_capture_rate_is_the_one_the_v24_model_wants() {
+        // Named once rather than written at each autodetected source, which is
+        // how the two could previously drift apart.
+        assert_eq!(DEFAULT_CAPTURE_RATE, 48_000);
     }
 }

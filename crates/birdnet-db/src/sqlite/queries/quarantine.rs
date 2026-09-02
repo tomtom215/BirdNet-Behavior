@@ -31,9 +31,25 @@ pub enum QuarantineReason {
     /// Detection passed the global threshold but failed a stricter per-species
     /// confidence threshold set by the user.
     LowConfidence,
+    /// A species not known to be nocturnal, detected in the middle of the
+    /// night. Quarantined rather than dropped because the taxonomy behind that
+    /// judgement is genus-level and cannot be complete.
+    ImplausibleHour,
     /// Manually quarantined by a user from the Today page or API.
     Manual,
 }
+
+/// Every variant, so a drift gate can enumerate them.
+///
+/// Rust cannot iterate an enum's variants, and the one thing that must never
+/// drift here is the set of reasons the database will accept — see
+/// `every_quarantine_reason_is_accepted_by_the_schema`.
+pub const ALL_QUARANTINE_REASONS: &[QuarantineReason] = &[
+    QuarantineReason::BelowSfThresh,
+    QuarantineReason::LowConfidence,
+    QuarantineReason::ImplausibleHour,
+    QuarantineReason::Manual,
+];
 
 impl QuarantineReason {
     /// Canonical string stored in the database.
@@ -42,6 +58,7 @@ impl QuarantineReason {
         match self {
             Self::BelowSfThresh => "below_sf_thresh",
             Self::LowConfidence => "low_confidence",
+            Self::ImplausibleHour => "implausible_hour",
             Self::Manual => "manual",
         }
     }
@@ -52,6 +69,7 @@ impl QuarantineReason {
         match self {
             Self::BelowSfThresh => "Below SF threshold",
             Self::LowConfidence => "Below species threshold",
+            Self::ImplausibleHour => "Night-time, not a night bird",
             Self::Manual => "Manually flagged",
         }
     }
@@ -62,6 +80,7 @@ impl QuarantineReason {
         match s {
             "below_sf_thresh" => Self::BelowSfThresh,
             "low_confidence" => Self::LowConfidence,
+            "implausible_hour" => Self::ImplausibleHour,
             _ => Self::Manual,
         }
     }
@@ -160,6 +179,18 @@ pub enum QuarantineFilter {
 // Write operations
 // ---------------------------------------------------------------------------
 
+/// The statement [`insert_quarantine`] issues.
+///
+/// A constant so the gate that proves it rejects an unknown `reason` runs the
+/// *same* string production does. Written out in the test instead, the two
+/// would drift and the gate would go on passing against a statement nobody
+/// executes.
+pub(crate) const INSERT_QUARANTINE_SQL: &str = "INSERT INTO quarantine
+            (date, time, sci_name, com_name, confidence, sf_probability,
+             reason, file_name, lat, lon, week)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(date, time, sci_name) DO NOTHING";
+
 /// Insert a new quarantine entry.
 ///
 /// Duplicate entries (same `date`, `time`, `sci_name`) are silently ignored so that
@@ -169,11 +200,15 @@ pub enum QuarantineFilter {
 ///
 /// Returns [`DbError`] on insert failure.
 pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Result<(), DbError> {
+    // `ON CONFLICT(...) DO NOTHING` rather than `INSERT OR IGNORE`. Both
+    // absorb the duplicate this needs to absorb — the same detection offered
+    // twice — but `OR IGNORE` absorbs *every* constraint violation and reports
+    // success. That is not hypothetical: a `reason` missing from this table's
+    // CHECK was silently discarded exactly this way, with `Ok(())` returned
+    // and no row to find afterwards. Naming the conflict lets a CHECK or
+    // NOT NULL violation surface as the error it is.
     conn.execute(
-        "INSERT OR IGNORE INTO quarantine
-            (date, time, sci_name, com_name, confidence, sf_probability,
-             reason, file_name, lat, lon, week)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        INSERT_QUARANTINE_SQL,
         params![
             record.date,
             record.time,
@@ -193,8 +228,8 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
 
 /// Approve a quarantine entry.
 ///
-/// Copies the detection into the `detections` table (using `INSERT OR IGNORE`
-/// to handle the case where the detection was already admitted), then marks the
+/// Copies the detection into the `detections` table (absorbing the case where
+/// the detection was already admitted), then marks the
 /// quarantine row as `reviewed = 1, approved = 1`.  Both writes are wrapped in
 /// a transaction so the database stays consistent if either fails.
 ///
@@ -207,14 +242,19 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
 pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     let tx = conn.unchecked_transaction()?;
 
-    // Copy into detections (INSERT OR IGNORE handles duplicates).
+    // Copy into detections. The conflict is named rather than left to
+    // `OR IGNORE` so that only an already-admitted detection is absorbed; any
+    // other constraint failure is a real error and must not read as "already
+    // there" — approving a detection that then silently failed to appear is
+    // the worst outcome this function has.
     let inserted = tx.execute(
-        "INSERT OR IGNORE INTO detections
+        "INSERT INTO detections
             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
              Week, Sens, Overlap, File_Name, is_locked)
          SELECT date, time, sci_name, com_name, confidence,
                 lat, lon, NULL, week, NULL, NULL, file_name, 0
-         FROM quarantine WHERE id = ?1",
+         FROM quarantine WHERE id = ?1
+         ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
         params![id],
     )?;
 
@@ -623,5 +663,97 @@ mod tests {
             let back = QuarantineReason::from_db_str(s);
             assert_eq!(reason, back);
         }
+    }
+
+    // ── the statement absorbs a duplicate and nothing else ──────────────
+    //
+    // These run `INSERT_QUARANTINE_SQL` itself, so they cannot drift away from
+    // what `insert_quarantine` executes.
+
+    #[test]
+    fn the_insert_absorbs_the_same_detection_offered_twice() {
+        // The behaviour `OR IGNORE` was there for, and which the narrower
+        // conflict clause has to keep: the pipeline can offer one detection
+        // twice, and a hard error there would be noise on a healthy station.
+        let conn = open();
+        let args = rusqlite::params![
+            "2026-01-15",
+            "02:30:00",
+            "Turdus merula",
+            "Blackbird",
+            0.55_f64,
+            None::<f64>,
+            "low_confidence",
+            None::<&str>,
+            None::<f64>,
+            None::<f64>,
+            Some(3_i32),
+        ];
+        assert_eq!(conn.execute(super::INSERT_QUARANTINE_SQL, args).unwrap(), 1);
+        assert_eq!(
+            conn.execute(super::INSERT_QUARANTINE_SQL, args).unwrap(),
+            0,
+            "the duplicate was not absorbed"
+        );
+    }
+
+    #[test]
+    fn the_insert_reports_a_reason_the_schema_does_not_know() {
+        // The bug this whole change is about. Under `INSERT OR IGNORE` this
+        // returned `Ok(0)`: the CHECK violation was swallowed exactly as a
+        // duplicate is, the caller was told the write succeeded, and the row
+        // simply never existed. Naming the conflict makes it an error.
+        let conn = open();
+        let err = conn
+            .execute(
+                super::INSERT_QUARANTINE_SQL,
+                rusqlite::params![
+                    "2026-01-15",
+                    "02:30:00",
+                    "Turdus merula",
+                    "Blackbird",
+                    0.55_f64,
+                    None::<f64>,
+                    "a_reason_nobody_migrated",
+                    None::<&str>,
+                    None::<f64>,
+                    None::<f64>,
+                    Some(3_i32),
+                ],
+            )
+            .expect_err("an unknown reason must not be silently discarded");
+        assert!(
+            err.to_string().to_lowercase().contains("check"),
+            "failed, but not on the CHECK constraint: {err}"
+        );
+    }
+
+    #[test]
+    fn the_insert_reports_a_missing_required_column() {
+        // The same hazard on the other kind of constraint: a NULL where the
+        // schema requires a value is a bug in the caller, not a duplicate.
+        let conn = open();
+        let err = conn
+            .execute(
+                super::INSERT_QUARANTINE_SQL,
+                rusqlite::params![
+                    "2026-01-15",
+                    "02:30:00",
+                    None::<&str>, // sci_name is NOT NULL
+                    "Blackbird",
+                    0.55_f64,
+                    None::<f64>,
+                    "manual",
+                    None::<&str>,
+                    None::<f64>,
+                    None::<f64>,
+                    Some(3_i32),
+                ],
+            )
+            .expect_err("a NULL in a NOT NULL column must not be silently discarded");
+        assert!(
+            err.to_string().to_lowercase().contains("not null"),
+            "failed, but not on the NOT NULL constraint: {err}"
+        );
     }
 }

@@ -16,7 +16,8 @@ pub use analytics::{
     daily_counts, detection_quality_by_hour, distinct_detection_dates, hourly_activity,
     last_hour_count, latest_detection, latest_detection_full, low_confidence_species,
     model_vs_review_by_species, quality_summary, range_daily_counts, review_verdict_trend,
-    today_species_hour_heatmap, weekly_detection_count, weekly_new_species, weekly_top_species,
+    reviewed_detections_by_species, species_shapes, today_species_hour_heatmap,
+    weekly_detection_count, weekly_new_species, weekly_top_species,
 };
 pub use correlation::{companion_species, temporal_cooccurrence, top_cooccurrence_pairs};
 pub use detection_reviews::{
@@ -48,10 +49,10 @@ pub use maintenance::{
     record_run_result,
 };
 pub use quarantine::{
-    QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats,
-    approve_quarantine, count_quarantine, delete_quarantine, get_quarantine, insert_quarantine,
-    list_quarantine, prune_quarantine, quarantine_pending_count, quarantine_stats,
-    reject_quarantine,
+    ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
+    QuarantineStats, approve_quarantine, count_quarantine, delete_quarantine, get_quarantine,
+    insert_quarantine, list_quarantine, prune_quarantine, quarantine_pending_count,
+    quarantine_stats, reject_quarantine,
 };
 pub use species::{
     SpeciesThreshold, delete_species_threshold, get_species_threshold_map, get_species_thresholds,

@@ -43,8 +43,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
-use super::live::{BYTES_PER_SAMPLE, LiveTap};
+use super::live::{BYTES_PER_SAMPLE, LiveTap, PcmSpec};
 use super::segment::SegmentWriter;
+use super::types::{AudioPipeline, DC_BLOCK_CUTOFF_HZ, HIGH_PASS_CUTOFF_HZ};
 
 /// Size of the reader's staging buffer.
 ///
@@ -52,6 +53,257 @@ use super::segment::SegmentWriter;
 /// written anything, so live latency tracks `arecord`'s period size, not this.
 /// It only bounds the syscall rate and the size of an individual disk write.
 const READ_BUFFER_BYTES: usize = 16 * 1024;
+
+/// Everything that shapes the samples between the capture tool and the split.
+///
+/// Bundled rather than passed as five parameters because they travel together
+/// and always come from the same source row — and because a five-argument
+/// audio path is where a caller eventually passes the sample rate where the
+/// channel count belongs.
+#[derive(Debug, Clone, Copy)]
+pub struct Shaping {
+    /// Software capture gain in dB; `0.0` is unity and costs nothing.
+    pub gain_db: f32,
+    /// Per-source conditioning: DC block, high-pass, AGC.
+    pub pipeline: AudioPipeline,
+    /// The PCM format arriving from the capture tool, needed to size the
+    /// filters' per-channel state and their coefficients.
+    pub spec: PcmSpec,
+    /// Which half of a stereo pair to keep, if the operator picked one.
+    pub pick: Option<ChannelPick>,
+}
+
+/// Walks interleaved S16LE PCM sample by sample, tracking the channel index
+/// and the odd byte a pipe read can split a sample across.
+///
+/// Factored out because the conditioning happens in two passes that sit on
+/// opposite sides of the gain, and each needs its own buffer and its own
+/// straddling remainder — sharing one would alias the borrow and, worse, would
+/// hand the second pass the first pass's leftover byte.
+#[derive(Debug)]
+struct SampleWalker {
+    /// Which channel the next sample belongs to. Carried across reads because
+    /// a chunk boundary does not respect frame boundaries.
+    channel: usize,
+    channels: usize,
+    carry: Option<u8>,
+    out: Vec<u8>,
+}
+
+impl SampleWalker {
+    fn new(channels: usize) -> Self {
+        Self {
+            channel: 0,
+            channels: channels.max(1),
+            carry: None,
+            out: Vec::with_capacity(READ_BUFFER_BYTES + BYTES_PER_SAMPLE),
+        }
+    }
+
+    /// Apply `f(sample, channel)` to every whole sample in `input`.
+    fn walk(&mut self, input: &[u8], mut f: impl FnMut(i16, usize) -> i16) -> &[u8] {
+        self.out.clear();
+        let mut rest = input;
+
+        if let Some(low) = self.carry.take() {
+            let Some((&high, tail)) = rest.split_first() else {
+                self.carry = Some(low);
+                return &self.out;
+            };
+            let v = f(i16::from_le_bytes([low, high]), self.channel);
+            self.out.extend_from_slice(&v.to_le_bytes());
+            self.channel = (self.channel + 1) % self.channels;
+            rest = tail;
+        }
+
+        let aligned = rest.len() - rest.len() % BYTES_PER_SAMPLE;
+        for pair in rest[..aligned].as_chunks::<BYTES_PER_SAMPLE>().0 {
+            let v = f(i16::from_le_bytes([pair[0], pair[1]]), self.channel);
+            self.out.extend_from_slice(&v.to_le_bytes());
+            self.channel = (self.channel + 1) % self.channels;
+        }
+        if aligned < rest.len() {
+            self.carry = Some(rest[aligned]);
+        }
+        &self.out
+    }
+}
+
+/// Convert one 16-bit sample to normalised float and back, applying `f`.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the value is clamped into i16's range immediately before the cast"
+)]
+fn through_float(sample: i16, f: impl FnOnce(f32) -> f32) -> i16 {
+    let y = f(f32::from(sample) / f32::from(i16::MAX));
+    (y * f32::from(i16::MAX))
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+        .round() as i16
+}
+
+/// The conditioning that runs **before** the gain: DC block, then high-pass.
+///
+/// The teed microphone path is `arecord → this process → segments`, with no
+/// ffmpeg anywhere, so the `-af` chain the RTSP and `PipeWire` sources get has
+/// to be reproduced here — otherwise the per-source toggles would apply to
+/// network cameras and silently not to the microphone plugged into the Pi,
+/// which is the commonest deployment there is.
+///
+/// State is per channel and carried across reads: a filter that reset every
+/// chunk would put a step at every buffer boundary, audible as a click and
+/// worse for the quality gate than the rumble it removes.
+#[derive(Debug)]
+struct PreConditioner {
+    /// One DC blocker per channel, when `dc_removal` is on.
+    dc: Option<Vec<OnePoleHighPass>>,
+    /// One high-pass per channel, when `high_pass` is on.
+    hp: Option<Vec<OnePoleHighPass>>,
+    walker: SampleWalker,
+}
+
+impl PreConditioner {
+    /// `None` when neither stage is enabled, so the untouched path stays
+    /// byte-exact and allocation-free — the contract [`Gain`] keeps at unity.
+    fn new(pipeline: AudioPipeline, sample_rate: u32, channels: usize) -> Option<Self> {
+        if !pipeline.dc_removal && !pipeline.high_pass {
+            return None;
+        }
+        let per_channel = |cutoff| {
+            (0..channels.max(1))
+                .map(|_| OnePoleHighPass::new(sample_rate, cutoff))
+                .collect::<Vec<_>>()
+        };
+        Some(Self {
+            dc: pipeline.dc_removal.then(|| per_channel(DC_BLOCK_CUTOFF_HZ)),
+            hp: pipeline.high_pass.then(|| per_channel(HIGH_PASS_CUTOFF_HZ)),
+            walker: SampleWalker::new(channels),
+        })
+    }
+
+    fn apply(&mut self, input: &[u8]) -> &[u8] {
+        let Self { dc, hp, walker } = self;
+        walker.walk(input, |sample, ch| {
+            through_float(sample, |mut x| {
+                if let Some(dc) = dc.as_mut() {
+                    x = dc[ch].step(x);
+                }
+                if let Some(hp) = hp.as_mut() {
+                    x = hp[ch].step(x);
+                }
+                x
+            })
+        })
+    }
+}
+
+/// The conditioning that runs **after** the gain: automatic gain control.
+#[derive(Debug)]
+struct AgcStage {
+    agc: PeakAgc,
+    walker: SampleWalker,
+}
+
+impl AgcStage {
+    fn new(pipeline: AudioPipeline, sample_rate: u32, channels: usize) -> Option<Self> {
+        pipeline.agc.then(|| Self {
+            agc: PeakAgc::new(sample_rate),
+            walker: SampleWalker::new(channels),
+        })
+    }
+
+    fn apply(&mut self, input: &[u8]) -> &[u8] {
+        let Self { agc, walker } = self;
+        walker.walk(input, |sample, _ch| through_float(sample, |x| agc.step(x)))
+    }
+}
+
+/// First-order IIR high-pass: `y[n] = α(y[n−1] + x[n] − x[n−1])`.
+///
+/// The same transfer function as `quality::rain_detector`'s block-local
+/// helper, but holding its state between calls so it can run on a stream.
+#[derive(Debug, Clone, Copy)]
+struct OnePoleHighPass {
+    alpha: f32,
+    prev_x: f32,
+    prev_y: f32,
+}
+
+impl OnePoleHighPass {
+    fn new(sample_rate: u32, cutoff_hz: f32) -> Self {
+        let rc = 1.0 / (2.0 * std::f32::consts::PI * cutoff_hz);
+        #[allow(clippy::cast_precision_loss)]
+        let dt = 1.0 / sample_rate as f32;
+        Self {
+            alpha: rc / (rc + dt),
+            prev_x: 0.0,
+            prev_y: 0.0,
+        }
+    }
+
+    fn step(&mut self, x: f32) -> f32 {
+        let y = self.alpha * (self.prev_y + x - self.prev_x);
+        self.prev_x = x;
+        self.prev_y = y;
+        y
+    }
+}
+
+/// Peak-following automatic gain control.
+///
+/// Tracks the signal's recent peak and moves a gain factor towards the one
+/// that would put that peak at [`AGC_TARGET_PEAK`]. Reacting downwards is
+/// immediate so a sudden loud call cannot clip; recovering upwards is slow so
+/// the gain does not ride up into the noise floor during the gaps between
+/// songs — the failure that makes a naive AGC worse than none on a dawn
+/// chorus. The gain is capped at [`AGC_MAX_GAIN`] so a silent channel cannot
+/// be amplified into full-scale hiss.
+#[derive(Debug)]
+struct PeakAgc {
+    peak: f32,
+    gain: f32,
+    attack: f32,
+    release: f32,
+}
+
+/// Target peak for [`PeakAgc`], about −3 dBFS.
+const AGC_TARGET_PEAK: f32 = 0.71;
+/// Ceiling on [`PeakAgc`]'s gain (+20 dB).
+const AGC_MAX_GAIN: f32 = 10.0;
+
+impl PeakAgc {
+    fn new(sample_rate: u32) -> Self {
+        #[allow(clippy::cast_precision_loss)]
+        let sr = sample_rate as f32;
+        Self {
+            peak: 0.0,
+            gain: 1.0,
+            // ~10 ms to follow a rise, ~2 s to fall back.
+            attack: (-1.0 / (0.010 * sr)).exp(),
+            release: (-1.0 / (2.000 * sr)).exp(),
+        }
+    }
+
+    fn step(&mut self, x: f32) -> f32 {
+        let mag = x.abs();
+        self.peak = if mag > self.peak {
+            (self.peak - mag).mul_add(self.attack, mag)
+        } else {
+            (self.peak - mag).mul_add(self.release, mag)
+        };
+
+        let want = if self.peak > 1e-6 {
+            (AGC_TARGET_PEAK / self.peak).min(AGC_MAX_GAIN)
+        } else {
+            AGC_MAX_GAIN
+        };
+        self.gain = if want < self.gain {
+            want
+        } else {
+            (self.gain - want).mul_add(self.release, want)
+        };
+        (x * self.gain).clamp(-1.0, 1.0)
+    }
+}
 
 /// Software capture gain applied to interleaved S16LE PCM.
 ///
@@ -279,8 +531,7 @@ pub fn spawn<R>(
     source: R,
     writer: SegmentWriter,
     tap: Option<Arc<LiveTap>>,
-    gain_db: f32,
-    pick: Option<ChannelPick>,
+    shaping: Shaping,
 ) -> std::io::Result<Tee>
 where
     R: Read + Send + 'static,
@@ -295,8 +546,7 @@ where
                 source,
                 writer,
                 tap.as_deref(),
-                gain_db,
-                pick,
+                shaping,
                 &stop_for_thread,
             );
         })?;
@@ -312,11 +562,19 @@ fn run<R: Read>(
     mut source: R,
     mut writer: SegmentWriter,
     tap: Option<&LiveTap>,
-    gain_db: f32,
-    pick: Option<ChannelPick>,
+    shaping: Shaping,
     stop: &AtomicBool,
 ) {
+    let Shaping {
+        gain_db,
+        pipeline,
+        spec,
+        pick,
+    } = shaping;
     let mut gain = super::process::gain_is_active(gain_db).then(|| Gain::new(gain_db));
+    let channels = spec.channels as usize;
+    let mut pre = PreConditioner::new(pipeline, spec.sample_rate, channels);
+    let mut agc = AgcStage::new(pipeline, spec.sample_rate, channels);
     let mut selector = pick.map(ChannelSelector::new);
     let mut buf = vec![0u8; READ_BUFFER_BYTES];
     let mut bytes_seen: u64 = 0;
@@ -342,10 +600,20 @@ fn run<R: Read>(
         // intermediate copy is needed. Gain's carry is a half-*sample* and the
         // selector's is a partial *frame*, so a read that ends anywhere is
         // reassembled correctly by whichever stage straddles it.
-        let gained: &[u8] = gain
-            .as_mut()
-            .map_or(&buf[..read], |g| g.apply(&buf[..read]));
-        let payload: &[u8] = selector.as_mut().map_or(gained, |s| s.apply(gained));
+        // Conditioning (DC block, high-pass) → gain → AGC → channel selection.
+        // The first three reproduce, in the same order, the `-af` chain
+        // `process::audio_filter_chain` hands the ffmpeg-backed sources, so a
+        // toggle means the same thing whichever backend a source happens to
+        // use. Each stage owns its own buffer, so no borrow aliases another and
+        // no intermediate copy is needed; each also carries its own straddling
+        // remainder (half a sample for the sample stages, a partial frame for
+        // the selector), so a read that ends anywhere is reassembled correctly
+        // by whichever stage the boundary lands in.
+        let raw = &buf[..read];
+        let conditioned: &[u8] = pre.as_mut().map_or(raw, |p| p.apply(raw));
+        let gained: &[u8] = gain.as_mut().map_or(conditioned, |g| g.apply(conditioned));
+        let levelled: &[u8] = agc.as_mut().map_or(gained, |a| a.apply(gained));
+        let payload: &[u8] = selector.as_mut().map_or(levelled, |s| s.apply(levelled));
         if payload.is_empty() {
             continue;
         }
@@ -617,8 +885,12 @@ mod tests {
             std::io::Cursor::new(stream.clone()),
             fx.writer(3),
             None,
-            0.0,
-            None,
+            Shaping {
+                gain_db: 0.0,
+                pipeline: AudioPipeline::none(),
+                spec: TINY,
+                pick: None,
+            },
         )
         .expect("spawn tee");
         Fixture::wait_for("the tee to drain the producer", || !tee.is_alive());
@@ -638,8 +910,12 @@ mod tests {
             std::io::Cursor::new(vec![0u8; 8]),
             fx.writer(3),
             None,
-            0.0,
-            None,
+            Shaping {
+                gain_db: 0.0,
+                pipeline: AudioPipeline::none(),
+                spec: TINY,
+                pick: None,
+            },
         )
         .expect("spawn tee");
         Fixture::wait_for("the tee thread to exit", || !tee.is_alive());
@@ -657,8 +933,12 @@ mod tests {
             reader,
             fx.writer(3),
             Some(Arc::clone(&tap)),
-            0.0,
-            None,
+            Shaping {
+                gain_db: 0.0,
+                pipeline: AudioPipeline::none(),
+                spec: TINY,
+                pick: None,
+            },
         )
         .expect("spawn tee");
 
@@ -693,8 +973,12 @@ mod tests {
             reader,
             fx.writer(3),
             Some(Arc::clone(&tap)),
-            0.0,
-            None,
+            Shaping {
+                gain_db: 0.0,
+                pipeline: AudioPipeline::none(),
+                spec: TINY,
+                pick: None,
+            },
         )
         .expect("spawn tee");
 
@@ -729,8 +1013,12 @@ mod tests {
             reader,
             fx.writer(30),
             Some(Arc::clone(&tap)),
-            6.0206, // ×2
-            None,
+            Shaping {
+                gain_db: 6.0206,
+                pipeline: AudioPipeline::none(),
+                spec: TINY,
+                pick: None,
+            },
         )
         .expect("spawn tee");
 
@@ -785,8 +1073,12 @@ mod tests {
             reader,
             fx.writer(3),
             Some(Arc::clone(&tap)),
-            0.0,
-            None,
+            Shaping {
+                gain_db: 0.0,
+                pipeline: AudioPipeline::none(),
+                spec: TINY,
+                pick: None,
+            },
         )
         .expect("spawn tee");
 
@@ -829,8 +1121,12 @@ mod tests {
             reader,
             fx.writer(3), // 30 bytes per segment
             None,
-            0.0,
-            None,
+            Shaping {
+                gain_db: 0.0,
+                pipeline: AudioPipeline::none(),
+                spec: TINY,
+                pick: None,
+            },
         )
         .expect("spawn tee");
 
@@ -849,6 +1145,193 @@ mod tests {
             fx.recorded_pcm().len(),
             210,
             "byte count across rotations must be exact"
+        );
+    }
+}
+
+// ── the tee applies the same conditioning ffmpeg sources get ────────────
+//
+// The ffmpeg-backed sources get an `-af` chain; the teed microphone gets these
+// stages. Both are driven by the same `AudioPipeline`, so if these did nothing
+// the toggles would work on a network camera and silently not on the
+// microphone plugged into the Pi.
+#[cfg(test)]
+mod conditioning_tests {
+    use super::*;
+
+    const SR: u32 = 48_000;
+
+    fn pcm(samples: &[i16]) -> Vec<u8> {
+        samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+    }
+
+    fn unpcm(bytes: &[u8]) -> Vec<i16> {
+        bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| i16::from_le_bytes(*p))
+            .collect()
+    }
+
+    fn only(high_pass: bool, dc_removal: bool, agc: bool) -> AudioPipeline {
+        AudioPipeline {
+            high_pass,
+            dc_removal,
+            agc,
+            rtsp_stall_timeout: false,
+        }
+    }
+
+    /// A sine at `hz`, `n` samples long, at amplitude `amp` of full scale.
+    fn tone(hz: f32, n: usize, amp: f32) -> Vec<i16> {
+        (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                let t = i as f32 / SR as f32;
+                #[allow(clippy::cast_possible_truncation)]
+                let v = (amp * f32::from(i16::MAX) * (2.0 * std::f32::consts::PI * hz * t).sin())
+                    as i16;
+                v
+            })
+            .collect()
+    }
+
+    /// Peak absolute value, as a fraction of full scale.
+    fn peak(samples: &[i16]) -> f32 {
+        samples
+            .iter()
+            .map(|s| f32::from(s.abs()) / f32::from(i16::MAX))
+            .fold(0.0_f32, f32::max)
+    }
+
+    /// Nothing enabled constructs nothing, so the untouched path stays
+    /// byte-exact — the same contract `Gain` keeps at unity.
+    #[test]
+    fn all_stages_off_constructs_no_stage() {
+        assert!(PreConditioner::new(AudioPipeline::none(), SR, 1).is_none());
+        assert!(AgcStage::new(AudioPipeline::none(), SR, 1).is_none());
+    }
+
+    /// DC removal removes a constant offset.
+    #[test]
+    fn dc_removal_converges_a_constant_offset_to_zero() {
+        let mut pre = PreConditioner::new(only(false, true, false), SR, 1).unwrap();
+        let input = pcm(&vec![8_000_i16; SR as usize]); // 1 s of pure DC
+        let out = unpcm(pre.apply(&input));
+
+        let first = out[0];
+        let last = *out.last().unwrap();
+        assert!(
+            first.abs() > 4_000,
+            "the step itself must survive the first sample: {first}"
+        );
+        assert!(
+            last.abs() < 100,
+            "a constant offset must decay to ~0, got {last}"
+        );
+    }
+
+    /// The high-pass attenuates rumble far more than birdsong. The counterpart
+    /// half is what makes it a discriminator rather than an "attenuates
+    /// everything" alarm: a filter that killed both bands would pass the first
+    /// assertion and fail the second.
+    #[test]
+    fn high_pass_cuts_rumble_and_keeps_the_bird_band() {
+        let n = SR as usize / 2;
+        let attenuation = |hz: f32| {
+            let mut pre = PreConditioner::new(only(true, false, false), SR, 1).unwrap();
+            let input = tone(hz, n, 0.5);
+            let out = unpcm(pre.apply(&pcm(&input)));
+            // Skip the settling transient.
+            peak(&out[n / 4..]) / peak(&input[n / 4..])
+        };
+
+        let rumble = attenuation(30.0);
+        let song = attenuation(2_000.0);
+        assert!(
+            rumble < 0.35,
+            "30 Hz rumble must be well attenuated, kept {rumble:.3}"
+        );
+        assert!(
+            song > 0.95,
+            "2 kHz birdsong must pass essentially untouched, kept {song:.3}"
+        );
+    }
+
+    /// Filter state carries across reads. Without this every buffer boundary
+    /// would restart the filter and put a step into the signal — the reason
+    /// the stages hold state at all rather than reusing the block-local
+    /// helpers in `quality::rain_detector`.
+    #[test]
+    fn output_is_identical_whether_split_across_reads() {
+        let input = pcm(&tone(200.0, 4_000, 0.4));
+
+        let mut whole = PreConditioner::new(only(true, true, false), SR, 1).unwrap();
+        let a = whole.apply(&input).to_vec();
+
+        let mut split = PreConditioner::new(only(true, true, false), SR, 1).unwrap();
+        // 777 is deliberately odd, so a sample straddles the boundary.
+        let mut b = split.apply(&input[..777]).to_vec();
+        b.extend_from_slice(split.apply(&input[777..]));
+
+        assert_eq!(a, b, "a chunk boundary must not change the output");
+    }
+
+    /// Channels are filtered independently. Interleaved PCM filtered with one
+    /// shared state would let a DC offset on the left channel bleed into the
+    /// right, which is exactly what a per-source stereo microphone would show.
+    #[test]
+    fn stereo_channels_do_not_bleed_into_each_other() {
+        let mut pre = PreConditioner::new(only(false, true, false), SR, 2).unwrap();
+        // Left carries a large DC offset; right is silent.
+        let frames: Vec<i16> = (0..SR as usize).flat_map(|_| [12_000_i16, 0]).collect();
+        let out = unpcm(pre.apply(&pcm(&frames)));
+
+        let right_max = out
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .map(|s| s.abs())
+            .max()
+            .unwrap();
+        assert!(
+            right_max < 50,
+            "a silent right channel must stay silent, peaked at {right_max}"
+        );
+    }
+
+    /// AGC lifts a quiet signal towards the target without exceeding it.
+    #[test]
+    fn agc_brings_a_quiet_signal_up_and_does_not_clip() {
+        let mut agc = AgcStage::new(only(false, false, true), SR, 1).unwrap();
+        let quiet = tone(1_000.0, SR as usize * 4, 0.02); // −34 dBFS
+        let out = unpcm(agc.apply(&pcm(&quiet)));
+
+        let tail = &out[out.len() * 3 / 4..];
+        let lifted = peak(tail);
+        assert!(
+            lifted > 0.10,
+            "a −34 dBFS signal must be lifted well above its input level, reached {lifted:.3}"
+        );
+        assert!(lifted <= 1.0, "output must never exceed full scale");
+    }
+
+    /// The counterpart: a signal already at a healthy level is not shoved into
+    /// the clipper. Without this, "AGC works" would be satisfied by a stage
+    /// that simply multiplied everything by ten.
+    #[test]
+    fn agc_does_not_amplify_an_already_loud_signal_into_clipping() {
+        let mut agc = AgcStage::new(only(false, false, true), SR, 1).unwrap();
+        let loud = tone(1_000.0, SR as usize * 2, 0.8);
+        let out = unpcm(agc.apply(&pcm(&loud)));
+
+        let tail = &out[out.len() / 2..];
+        let clipped = tail.iter().filter(|s| s.abs() >= i16::MAX - 1).count();
+        assert!(
+            clipped < tail.len() / 100,
+            "a loud input must not be driven into the rail: {clipped} clipped of {}",
+            tail.len()
         );
     }
 }

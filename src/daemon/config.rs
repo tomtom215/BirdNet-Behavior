@@ -55,6 +55,131 @@ pub(super) fn resolve_f32_with_default(
     }
 }
 
+/// The same precedence rule for `i64` flags.
+///
+/// `duplicate_interval_secs` and `night_margin_mins` were each written out
+/// by hand at their use site, and cargo-mutants found the same hole in both:
+/// `==` → `!=` survived, because no test exercised the one cell where the
+/// two branches disagree — flag at its documented default *and* a config key
+/// present. Sharing one function means one comparison to gate rather than a
+/// new one per flag, which is the reason the `f32` sibling above exists.
+///
+/// No `EPSILON` dance here: integers compare exactly. The default is still
+/// passed in rather than assumed, because "the operator left the flag alone"
+/// is a claim about clap's default for *that* flag — `0` for one of these
+/// and `60` for the other.
+#[must_use]
+pub(super) fn resolve_i64_with_default(
+    cli_value: i64,
+    cli_default: i64,
+    config_value: Option<i64>,
+) -> i64 {
+    if cli_value == cli_default {
+        config_value.unwrap_or(cli_value)
+    } else {
+        cli_value
+    }
+}
+
+/// Build the taxon-aware daylight filter from flags, config and coordinates.
+///
+/// Returns a disabled filter unless the operator asked for it *and* the
+/// station has coordinates: without a latitude there is no sunrise to compute,
+/// and a filter that guessed one would quarantine the wrong half of the day.
+#[must_use]
+pub(super) fn build_daylight_filter(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+) -> crate::daemon::daylight::DaylightFilter {
+    let requested = cli.night_filter
+        || config
+            .and_then(|c| c.get_parsed::<bool>("NIGHT_FILTER").ok())
+            .unwrap_or(false);
+
+    let location = if requested {
+        if let (Some(lat), Some(lon)) = (latitude, longitude) {
+            birdnet_scheduler::solar::Location::new(lat, lon)
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "night filter requested but the station coordinates are out of \
+                         range; leaving it off"
+                    );
+                })
+                .ok()
+        } else {
+            tracing::warn!(
+                "night filter requested but the station has no coordinates; leaving it off \
+                 — set a latitude and longitude to enable it"
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    let margin_mins = resolve_i64_with_default(
+        cli.night_margin_mins,
+        60,
+        config.and_then(|c| c.get_parsed::<i64>("NIGHT_MARGIN_MINS").ok()),
+    );
+
+    crate::daemon::daylight::DaylightFilter::new(
+        location,
+        margin_mins,
+        birdnet_db::clock::local_utc_offset_secs(),
+        resolve_extra_nocturnal(
+            cli.night_extra_nocturnal.as_deref(),
+            config.and_then(|c| c.get("NIGHT_EXTRA_NOCTURNAL")),
+        ),
+    )
+}
+
+/// Split the operator's extra-nocturnal list on commas.
+#[must_use]
+pub(super) fn resolve_extra_nocturnal(
+    cli_value: Option<&str>,
+    config_value: Option<&str>,
+) -> Vec<String> {
+    cli_value
+        .or(config_value)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Resolve the noise filter's watch list from the flag and the config file.
+///
+/// An explicitly empty setting (`NOISE_CLASSES=`) means *watch nothing*, and
+/// must not silently fall back to the default: an operator who wants the
+/// threshold on but the dog off has no other way to say so, and a default that
+/// reappeared would keep suppressing chunks they had asked to keep.
+///
+/// An absent setting takes the default. Absent and empty are different
+/// answers, which is why this cannot be a `filter(|s| !s.is_empty())`.
+#[must_use]
+pub(super) fn resolve_noise_classes(
+    cli_value: Option<&str>,
+    config_value: Option<&str>,
+) -> Vec<String> {
+    let Some(raw) = cli_value.or(config_value) else {
+        return birdnet_core::detection::noise::DEFAULT_NOISE_CLASSES
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// Build the [`PipelineConfig`] used by the daemon's audio pipeline.
 ///
 /// The pipeline's only operator-tunable knobs at this layer are the
@@ -205,13 +330,25 @@ pub(super) fn build_extraction_config(
         "FREQ_SHIFT",
     );
 
+    // Clamped rather than trusted: an extraction longer than the segment it is
+    // cut from cannot be satisfied, and one at zero writes empty clips that
+    // look like a broken microphone. 1–60 s brackets every sane answer.
+    let extraction_length = resolve::setting::<f32>(
+        cli,
+        "extraction_length",
+        cli.extraction_length.unwrap_or(6.0),
+        config,
+        "EXTRACTION_LENGTH",
+    )
+    .clamp(1.0, 60.0);
+
     ExtractionConfig {
+        extraction_length,
         target_format: AudioFormat::parse(&cli.audio_format),
         audio_format: cli.audio_format.clone(),
         output_dir: recordings_dir.to_path_buf(),
         recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz,
-        ..ExtractionConfig::default()
     }
 }
 
@@ -381,6 +518,46 @@ mod tests {
         assert!((resolve_f32_with_default(0.0, 0.0, Some(0.02)) - 0.02).abs() < f32::EPSILON);
         assert!((resolve_f32_with_default(0.0, 0.0, None) - 0.0).abs() < f32::EPSILON);
         assert!((resolve_f32_with_default(0.01, 0.0, Some(0.02)) - 0.01).abs() < f32::EPSILON);
+    }
+
+    // ── resolve_i64_with_default ────────────────────────────────────────
+    //
+    // The same four cells as above. These exist because cargo-mutants found
+    // `==` → `!=` surviving at *both* hand-written i64 use sites (the night
+    // margin and the duplicate interval); the comparison now lives here once,
+    // and the config-present × CLI-at-default cell is what kills it.
+
+    #[test]
+    fn resolve_i64_uses_config_when_cli_at_default_and_config_present() {
+        // `night_margin_mins`: flag left at clap's documented 60, config asks
+        // for 30. Under `!=` the branches swap and this returns 60.
+        assert_eq!(resolve_i64_with_default(60, 60, Some(30)), 30);
+        // `duplicate_interval_secs`, whose default is 0 rather than non-zero:
+        // the same rule has to hold for a zero default, which is the case the
+        // old inline `== 0` form was written for.
+        assert_eq!(resolve_i64_with_default(0, 0, Some(45)), 45);
+    }
+
+    #[test]
+    fn resolve_i64_uses_cli_default_when_no_config() {
+        // CLI at default, nothing in the config: the default stands. Kills
+        // the "replace body with 0 / 1 / -1" mutants for the non-zero case.
+        assert_eq!(resolve_i64_with_default(60, 60, None), 60);
+        assert_eq!(resolve_i64_with_default(0, 0, None), 0);
+    }
+
+    #[test]
+    fn resolve_i64_cli_override_wins_over_config() {
+        // The operator passed a flag; the config key is ignored. This is the
+        // documented precedence and the reason the default is a parameter —
+        // "overridden" is only meaningful relative to *this* flag's default.
+        assert_eq!(resolve_i64_with_default(15, 60, Some(30)), 15);
+        assert_eq!(resolve_i64_with_default(90, 0, Some(45)), 90);
+    }
+
+    #[test]
+    fn resolve_i64_uses_cli_when_overridden_and_no_config() {
+        assert_eq!(resolve_i64_with_default(15, 60, None), 15);
     }
 
     // ── build_pipeline_config ───────────────────────────────────────────
@@ -768,5 +945,100 @@ mod tests {
         );
         let cfg = config_with(&[("SENSITIVITY", "1.4")]);
         assert!((resolve_sensitivity(Some(&cfg)) - 1.4).abs() < f32::EPSILON);
+    }
+
+    // ── noise-filter watch list ─────────────────────────────────────────
+
+    #[test]
+    fn an_absent_noise_class_setting_takes_the_default() {
+        assert_eq!(resolve_noise_classes(None, None), ["Dog"]);
+    }
+
+    #[test]
+    fn an_explicitly_empty_setting_watches_nothing() {
+        // Counterpart, and the reason this is not `filter(|s| !s.is_empty())`:
+        // absent and empty are different answers. An operator who wants the
+        // threshold on but the dog off has no other way to say so, and a
+        // default that reappeared would keep discarding chunks they asked to
+        // keep — silently, since a suppressed chunk leaves no row.
+        assert!(resolve_noise_classes(Some(""), None).is_empty());
+        assert!(resolve_noise_classes(None, Some("")).is_empty());
+        assert!(resolve_noise_classes(Some("  , ,"), None).is_empty());
+    }
+
+    #[test]
+    fn a_list_is_split_on_commas_and_trimmed() {
+        assert_eq!(
+            resolve_noise_classes(Some(" Dog , Siren ,, Engine "), None),
+            ["Dog", "Siren", "Engine"]
+        );
+    }
+
+    #[test]
+    fn the_flag_wins_over_the_config_file() {
+        assert_eq!(resolve_noise_classes(Some("Siren"), Some("Dog")), ["Siren"]);
+        assert_eq!(resolve_noise_classes(None, Some("Engine")), ["Engine"]);
+    }
+
+    // ── the daylight filter's preconditions ─────────────────────────────
+
+    #[test]
+    fn the_night_filter_stays_off_without_coordinates() {
+        // Without a latitude there is no sunrise to compute. Enabling anyway
+        // and failing open would work, but it would also tell the operator at
+        // startup that a filter was running which could never fire.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.night_filter = true;
+        assert!(
+            !build_daylight_filter(&cli, None, None, None).is_enabled(),
+            "the night filter enabled itself without coordinates"
+        );
+        assert!(
+            !build_daylight_filter(&cli, None, Some(51.48), None).is_enabled(),
+            "a latitude alone was enough to enable the night filter"
+        );
+    }
+
+    #[test]
+    fn the_night_filter_turns_on_when_asked_and_locatable() {
+        // Counterpart: a builder that always returned a disabled filter would
+        // satisfy the gate above and the feature would never work at all.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.night_filter = true;
+        assert!(build_daylight_filter(&cli, None, Some(51.48), Some(0.0)).is_enabled());
+    }
+
+    #[test]
+    fn the_night_filter_stays_off_unless_asked_for() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        assert!(!build_daylight_filter(&cli, None, Some(51.48), Some(0.0)).is_enabled());
+    }
+
+    #[test]
+    fn out_of_range_coordinates_leave_the_night_filter_off() {
+        // `Location::new` validates; a station with a corrupt latitude must
+        // not get a filter built on a bogus sunrise.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.night_filter = true;
+        assert!(!build_daylight_filter(&cli, None, Some(120.0), Some(0.0)).is_enabled());
+        assert!(!build_daylight_filter(&cli, None, Some(51.48), Some(999.0)).is_enabled());
+    }
+
+    #[test]
+    fn extra_nocturnal_entries_are_split_and_trimmed() {
+        assert_eq!(
+            resolve_extra_nocturnal(Some(" Catharus , Vireo ,, "), None),
+            ["Catharus", "Vireo"]
+        );
+        assert!(resolve_extra_nocturnal(None, None).is_empty());
+        assert_eq!(
+            resolve_extra_nocturnal(None, Some("Catharus")),
+            ["Catharus"]
+        );
+        assert_eq!(
+            resolve_extra_nocturnal(Some("Vireo"), Some("Catharus")),
+            ["Vireo"],
+            "the config file beat the flag"
+        );
     }
 }

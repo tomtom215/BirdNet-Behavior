@@ -30,6 +30,17 @@ write_config() {
     # Persist the bind address so `install.sh repair`/`update` keep it (the
     # installer reads BIRDNET_LISTEN back from here on re-run).
     local listen_line="BIRDNET_LISTEN=${LISTEN_ADDR}"
+    # The geomodel is optional and its download is non-fatal, so the two
+    # settings are only written live when both files actually landed. Writing
+    # them unconditionally would point a fresh station at paths that do not
+    # exist, and `--doctor` would then report FAIL on an install that had merely
+    # declined an optional download.
+    local geo_model_line="# METADATA_MODEL_PATH="
+    local geo_labels_line="# METADATA_LABELS_PATH="
+    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+        geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
+        geo_labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+    fi
 
     info "Writing default config to ${CONFIG_FILE}…"
     cat > "${CONFIG_FILE}" <<EOF
@@ -71,8 +82,32 @@ ${lon_line}
 #                          # it records every window as a detection.
 # SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
-# SF_THRESH=0.03           # species-frequency metadata-filter threshold
 # DATABASE_LANG=en
+
+# EXTRACTION_LENGTH=6      # seconds of audio saved around each detection
+# RARE_SPECIES_THRESHOLD   # set on /admin/settings (days since last heard)
+
+# --- Logging ---
+# LOG_LEVEL=info           # trace|debug|info|warn|error|off (RUST_LOG wins)
+# LOG_MODULES=             # per subsystem, e.g. audio=debug,web=warn
+#                          # names: audio detection web db integrations analytics
+
+# --- Species occurrence filtering ---
+# Drops species that do not occur near this station at this time of year. Needs
+# all three of the following; the installer fetches the last two for you, and
+# the two settings below are live when it succeeded, commented out when it did
+# not.
+#   1. station coordinates (set above, or on the dashboard)
+#   2. METADATA_MODEL_PATH   — the BirdNET geomodel (ONNX)
+#   3. METADATA_LABELS_PATH  — that model's own label file
+# The geomodel scores a different species list from the classifier (12 012
+# against 11 560), so the label file is what maps one onto the other; omit it
+# only for a metadata model indexed identically to the classifier, which the
+# station verifies at startup and refuses if it does not hold.
+# Run \`birdnet-behavior --doctor\` to see which of the three is missing.
+${geo_model_line}
+${geo_labels_line}
+# SF_THRESH=0.03           # occurrence threshold; no effect while the filter is off
 
 # --- Disk management ---
 # MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap

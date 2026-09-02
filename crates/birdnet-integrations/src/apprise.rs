@@ -1,12 +1,21 @@
-//! Apprise notification client.
+//! Push-notification client.
 //!
-//! Sends push notifications via an [Apprise](https://github.com/caronc/apprise-api)
-//! server when bird detections meet configurable criteria (confidence threshold,
-//! species watchlist, cooldown period).
+//! Sends notifications when bird detections meet configurable criteria
+//! (confidence threshold, species watchlist, cooldown period) over up to three
+//! channels, in this order:
 //!
-//! Apprise aggregates 80+ notification services (Telegram, Slack, Discord, email,
-//! Pushover, etc.) behind a single REST API, so users configure their notification
-//! channels in Apprise and this client simply posts to its `/notify` endpoint.
+//! 1. **Native routes** — [`crate::dispatch`] delivers Discord, Slack,
+//!    Telegram, ntfy, Gotify, Pushover and generic JSON webhooks in-process.
+//!    No Python, no `apprise` binary, no subprocess per detection.
+//! 2. **The `apprise` CLI** — only when the configured Apprise config file
+//!    contains a scheme with no native sender. When every URL in it is
+//!    natively supported the CLI is never invoked, so a station configured
+//!    only for the schemes above needs no Apprise installation at all.
+//! 3. **An Apprise API server** — when `APPRISE_URL` names one; its channels
+//!    are configured inside that server, so there is nothing to route here.
+//!
+//! The URL syntax stays Apprise's throughout, because that is what operators
+//! already have written down.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -19,6 +28,16 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Default cooldown between notifications for the same species (5 minutes).
 const DEFAULT_COOLDOWN_SECS: u64 = 300;
+
+/// Default ceiling on sends per destination per minute.
+///
+/// Twelve is above what a station produces once the per-species cooldown is
+/// applied — a dawn chorus of twelve distinct species in one minute is a good
+/// morning — and an order of magnitude below every service's own limit.
+///
+/// Public so callers that build [`NotifyConfig`] field by field rather than
+/// from [`Default`] use this value rather than a copy of it.
+pub const DEFAULT_RATE_PER_MINUTE: u32 = 12;
 
 /// Total request attempts (initial + retries) before a send is abandoned.
 const MAX_ATTEMPTS: u32 = 3;
@@ -34,6 +53,8 @@ pub enum AppriseError {
     NoUrl,
     /// Apprise CLI invocation failed.
     Cli(String),
+    /// A native (non-Apprise) delivery failed.
+    Native(String),
 }
 
 impl fmt::Display for AppriseError {
@@ -43,6 +64,7 @@ impl fmt::Display for AppriseError {
             Self::Server(msg) => write!(f, "Apprise server error: {msg}"),
             Self::NoUrl => write!(f, "Apprise server URL not configured"),
             Self::Cli(msg) => write!(f, "Apprise CLI error: {msg}"),
+            Self::Native(msg) => write!(f, "notification delivery failed: {msg}"),
         }
     }
 }
@@ -81,6 +103,13 @@ pub struct NotifyConfig {
     pub cooldown: Duration,
     /// Per-species cooldown overrides (scientific name → duration).
     pub per_species_cooldown: HashMap<String, Duration>,
+    /// Ceiling on sends per destination per minute; `0` disables it.
+    ///
+    /// Not about our own load — it is about the services'. Discord allows five
+    /// requests a second per webhook, Telegram about thirty, and Pushover
+    /// **ten thousand messages a month**. A station with fifty species active
+    /// can exhaust the last one in a fortnight without a cap.
+    pub rate_per_minute: u32,
 }
 
 impl Default for NotifyConfig {
@@ -91,6 +120,7 @@ impl Default for NotifyConfig {
             species_notify_exclude: Vec::new(),
             cooldown: Duration::from_secs(DEFAULT_COOLDOWN_SECS),
             per_species_cooldown: HashMap::new(),
+            rate_per_minute: DEFAULT_RATE_PER_MINUTE,
         }
     }
 }
@@ -118,6 +148,22 @@ pub struct Client {
     /// in addition to (or instead of) the HTTP server.
     /// BirdNET-Pi equivalent: `APPRISE_CONFIG_FILE` setting.
     config_file: Option<PathBuf>,
+    /// Destinations delivered in-process by [`crate::dispatch`].
+    native: Vec<crate::dispatch::Route>,
+    /// One delivery gate — circuit breaker plus rate limit — per entry of
+    /// `native`, by index.
+    guards: Vec<crate::dispatch::Gate>,
+    /// Sends skipped because a destination's circuit was open.
+    skipped_circuit_open: u64,
+    /// Sends skipped because a destination was over its rate limit.
+    skipped_rate_limited: u64,
+    /// Whether the `apprise` CLI still has to run for `config_file`.
+    ///
+    /// False once every URL in that file has a native sender — which is the
+    /// point of the native senders. Conservatively true whenever a config file
+    /// is set without the caller having said otherwise, so a config file whose
+    /// contents were never read is still delivered rather than dropped.
+    cli_needed: bool,
 }
 
 impl Client {
@@ -142,6 +188,11 @@ impl Client {
             config,
             last_notified: HashMap::new(),
             config_file: None,
+            native: Vec::new(),
+            guards: Vec::new(),
+            skipped_circuit_open: 0,
+            skipped_rate_limited: 0,
+            cli_needed: true,
         })
     }
 
@@ -168,6 +219,11 @@ impl Client {
             config: notify_config,
             last_notified: HashMap::new(),
             config_file: Some(config_file),
+            native: Vec::new(),
+            guards: Vec::new(),
+            skipped_circuit_open: 0,
+            skipped_rate_limited: 0,
+            cli_needed: true,
         })
     }
 
@@ -235,7 +291,7 @@ impl Client {
     ///
     /// Returns `AppriseError` on network or server failure.
     pub async fn notify_detection(
-        &self,
+        &mut self,
         species: &str,
         confidence: f32,
         date: &str,
@@ -261,7 +317,7 @@ impl Client {
     ///
     /// Returns `AppriseError` on network or server failure.
     pub async fn send_notification(
-        &self,
+        &mut self,
         title: &str,
         body: &str,
         notify_type: NotifyType,
@@ -278,22 +334,88 @@ impl Client {
     ///
     /// Returns `AppriseError` on network or server failure.
     pub async fn send_notification_with_image(
-        &self,
+        &mut self,
         title: &str,
         body: &str,
         notify_type: NotifyType,
         image_url: Option<&str>,
     ) -> Result<(), AppriseError> {
-        // Send via CLI if config file is configured.
-        if self.config_file.is_some()
-            && let Err(e) = self.send_via_cli(title, body).await
-        {
-            tracing::warn!(error = %e, "Apprise CLI notification failed");
+        let mut first_error: Option<AppriseError> = None;
+        let mut delivered = 0_usize;
+
+        // Native routes first: no subprocess, no Python, and a real error
+        // rather than an exit status when a URL is wrong.
+        let message = crate::dispatch::Message {
+            title: title.to_string(),
+            body: body.to_string(),
+            severity: notify_type.into(),
+            image_url: image_url.map(ToString::to_string),
+        };
+        for (index, route) in self.native.iter().enumerate() {
+            // A destination that is down is skipped outright, apart from one
+            // probe per open period. Without this the station spends an
+            // attempt (or three, with backoff) on a retired webhook for every
+            // detection, all day — and it is the retries, not the sends, that
+            // get an address rate-limited. The interaction rules live in
+            // `dispatch::Gate`, where they are testable with injected time.
+            match self.guards[index].admit(Instant::now()) {
+                crate::dispatch::Admission::Send | crate::dispatch::Admission::Probe => {}
+                crate::dispatch::Admission::CircuitOpen(wait) => {
+                    self.skipped_circuit_open += 1;
+                    tracing::debug!(
+                        target_label = %route.label,
+                        retry_in_secs = wait.as_secs(),
+                        "skipping a destination whose circuit is open"
+                    );
+                    continue;
+                }
+                crate::dispatch::Admission::RateLimited => {
+                    self.skipped_rate_limited += 1;
+                    tracing::warn!(
+                        target_label = %route.label,
+                        "dropping a notification: destination is over its rate limit"
+                    );
+                    continue;
+                }
+            }
+
+            match crate::dispatch::send_with_retry(&self.http, &route.target, &message).await {
+                Ok(()) => {
+                    self.guards[index].on_success();
+                    delivered += 1;
+                }
+                Err(e) => {
+                    self.guards[index].on_failure(Instant::now());
+                    // `route.label` is credential-free by construction; the
+                    // URL it came from is not, and must never be logged.
+                    tracing::warn!(target_label = %route.label, error = %e, "notification failed");
+                    if first_error.is_none() {
+                        first_error = Some(AppriseError::Native(e.to_string()));
+                    }
+                }
+            }
+        }
+
+        // The CLI runs only for a config file that still has a scheme without
+        // a native sender — otherwise every URL in it would be sent twice.
+        if self.config_file.is_some() && self.cli_needed {
+            match self.send_via_cli(title, body).await {
+                Ok(()) => delivered += 1,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Apprise CLI notification failed");
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
+                }
+            }
         }
 
         // If no HTTP server URL, we're done.
         if self.base_url.is_empty() {
-            return Ok(());
+            return match (delivered, first_error) {
+                (0, Some(e)) => Err(e),
+                _ => Ok(()),
+            };
         }
 
         let url = format!("{}/notify", self.base_url);
@@ -320,6 +442,50 @@ impl Client {
     pub fn with_config_file(mut self, path: PathBuf) -> Self {
         self.config_file = Some(path);
         self
+    }
+
+    /// Deliver `routes` in-process, and say whether the `apprise` CLI is still
+    /// needed for the configured config file.
+    ///
+    /// `cli_fallback` must be true when at least one URL in that file has no
+    /// native sender. Passing false when it does would silently drop those
+    /// channels; passing true when it does not would send every natively
+    /// routed URL twice.
+    #[must_use]
+    pub fn with_native_routes(
+        mut self,
+        routes: Vec<crate::dispatch::Route>,
+        cli_fallback: bool,
+    ) -> Self {
+        let now = Instant::now();
+        self.guards = routes
+            .iter()
+            .map(|_| crate::dispatch::Gate::new(self.config.rate_per_minute, now))
+            .collect();
+        self.native = routes;
+        self.cli_needed = cli_fallback;
+        self
+    }
+
+    /// How many sends have been skipped because a destination's circuit was
+    /// open, and how many because it was over its rate limit.
+    #[must_use]
+    pub const fn skip_counts(&self) -> (u64, u64) {
+        (self.skipped_circuit_open, self.skipped_rate_limited)
+    }
+
+    /// Credential-free labels for the natively delivered destinations.
+    ///
+    /// Safe to log or render in the admin UI.
+    #[must_use]
+    pub fn native_labels(&self) -> Vec<&str> {
+        self.native.iter().map(|r| r.label.as_str()).collect()
+    }
+
+    /// Whether the `apprise` CLI would be invoked for the configured file.
+    #[must_use]
+    pub const fn needs_apprise_cli(&self) -> bool {
+        self.config_file.is_some() && self.cli_needed
     }
 
     /// Send a notification via the `apprise` CLI tool.

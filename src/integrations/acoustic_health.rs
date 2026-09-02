@@ -44,12 +44,22 @@
 //! of that risk — nothing downstream reads these numbers to make a decision —
 //! and it is the half a sealed station actually needs.
 //!
-//! It also does not alert. A noise floor moves for real reasons: weather,
-//! season, a road, a lawnmower, leaf-out. A threshold picked here, without a
-//! season of real recordings to calibrate against, would fire on all of those
-//! and teach an operator to ignore the channel — the exact failure
-//! [`super::station_health`] is written to avoid. The measurement comes first;
-//! an alert can follow once there is a baseline to draw it from.
+//! It does not alert *on the levels it records*. A noise floor moves for real
+//! reasons: weather, season, a road, a lawnmower, leaf-out. A threshold picked
+//! here, without a season of real recordings to calibrate against, would fire
+//! on all of those and teach an operator to ignore the channel — the exact
+//! failure [`super::station_health`] is written to avoid. The measurement comes
+//! first; an alert can follow once there is a baseline to draw it from.
+//!
+//! It *does* alert on the categorically broken, which is a different question.
+//! [`birdnet_core::audio::quality::stream_fault`] recognises a source that is
+//! alive, punctual, and carrying nothing at all — a muted channel, an unplugged
+//! input, a wedged converter, a gain-blown preamp. Those need no baseline: no
+//! microphone in any weather produces digitally exact zeros or sits at full
+//! scale for a fifth of a segment. The supervisor cannot see it (segments
+//! arrive on time, so the source reads `Connected`), and the detection deadman
+//! cannot see it either on a multi-source station, because the other
+//! microphones keep the station detecting.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -139,22 +149,176 @@ fn assess(path: &Path) -> Option<LevelSample> {
     })
 }
 
-/// Take one observation per source. Returns how many landed, for the log and
-/// for tests.
-fn sample_once(state: &AppState, stream_dir: &Path) -> usize {
+/// Consecutive faulty observations before a source is reported.
+///
+/// Three, so at [`POLL_EVERY`] a source must be broken for a quarter of an hour
+/// before anyone is told. One odd segment is not a fault — a capture process
+/// restarting mid-write can produce a short run of zeros — and an alert that
+/// fires on those is one the operator learns to skip past.
+const FAULT_TICKS_BEFORE_ALERT: u32 = 3;
+
+/// Something worth telling the operator about one source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FaultEvent {
+    /// A sustained fault, reported once for the episode.
+    Onset {
+        /// The source label.
+        source: String,
+        /// What is wrong with it.
+        fault: birdnet_core::audio::quality::stream_fault::StreamFault,
+    },
+    /// A source that had been reported is producing usable audio again.
+    Recovered {
+        /// The source label.
+        source: String,
+    },
+}
+
+/// Per-source episode tracking for stream faults.
+///
+/// Separated from the polling loop, and given the verdict rather than the
+/// audio, so the episode rules — how long before reporting, one report per
+/// episode, a recovery notice — are testable without decoding a file or
+/// waiting a quarter of an hour.
+#[derive(Debug, Default)]
+pub(super) struct FaultWatch {
+    /// Source → (the fault seen, how many consecutive ticks it has held).
+    running: std::collections::HashMap<
+        String,
+        (birdnet_core::audio::quality::stream_fault::StreamFault, u32),
+    >,
+    /// Sources already reported, so an episode is announced once.
+    reported: std::collections::HashSet<String>,
+}
+
+impl FaultWatch {
+    /// Fold in one observation and report what, if anything, changed.
+    ///
+    /// `fault` of `None` means the segment was usable *or* unjudgeable; the
+    /// caller does not distinguish them, because a source whose segments
+    /// cannot be read is the stall detector's problem and reporting it here
+    /// too would double every alert.
+    pub(super) fn observe(
+        &mut self,
+        source: &str,
+        fault: Option<birdnet_core::audio::quality::stream_fault::StreamFault>,
+    ) -> Option<FaultEvent> {
+        let Some(fault) = fault else {
+            self.running.remove(source);
+            // Only announce recovery to someone who was told about the fault.
+            return self.reported.remove(source).then(|| FaultEvent::Recovered {
+                source: source.to_owned(),
+            });
+        };
+
+        let entry = self.running.entry(source.to_owned()).or_insert((fault, 0));
+        if entry.0 == fault {
+            entry.1 = entry.1.saturating_add(1);
+        } else {
+            // A *different* fault restarts the count: the input changed
+            // character, and reporting the new one on the old one's tally
+            // would name a fault that has only just appeared as sustained.
+            *entry = (fault, 1);
+        }
+        let held = entry.1;
+
+        if held >= FAULT_TICKS_BEFORE_ALERT && self.reported.insert(source.to_owned()) {
+            return Some(FaultEvent::Onset {
+                source: source.to_owned(),
+                fault,
+            });
+        }
+        None
+    }
+}
+
+/// Decode `path` and judge whether the input is connected at all.
+fn stream_fault(path: &Path) -> Option<birdnet_core::audio::quality::stream_fault::StreamFault> {
+    let audio = birdnet_core::audio::decode::decode_file_capped(path, MAX_SAMPLES).ok()?;
+    birdnet_core::audio::quality::stream_fault::assess_stream(&audio.samples)
+}
+
+/// What one poll produced.
+pub(super) struct SampleOutcome {
+    /// Observations stored, for the log and for tests.
+    pub(super) recorded: usize,
+    /// Fault episodes that changed state this tick.
+    pub(super) events: Vec<FaultEvent>,
+}
+
+/// Take one observation per source.
+fn sample_once(state: &AppState, stream_dir: &Path, watch: &mut FaultWatch) -> SampleOutcome {
     let (date, hour) = local_date_hour();
-    let mut recorded = 0;
+    let mut out = SampleOutcome {
+        recorded: 0,
+        events: Vec::new(),
+    };
     for (source, path) in newest_segment_per_source(stream_dir) {
+        // Judged before the quality assessment, and independently of whether
+        // it succeeds: a digitally silent segment still produces a perfectly
+        // valid `LevelSample` (a floor of -inf clamps to the minimum), so
+        // hanging this off `assess` would miss the case it exists for.
+        if let Some(event) = watch.observe(&source, stream_fault(&path)) {
+            out.events.push(event);
+        }
         let Some(sample) = assess(&path) else {
             tracing::debug!(path = %path.display(), "acoustic sample skipped");
             continue;
         };
         match state.with_db(|conn| record_sample(conn, &date, hour, &source, sample)) {
-            Ok(()) => recorded += 1,
+            Ok(()) => out.recorded += 1,
             Err(e) => tracing::debug!(error = %e, source = %source, "acoustic sample not stored"),
         }
     }
-    recorded
+    out
+}
+
+/// Log a fault event and, when a notifier is configured, send it.
+///
+/// One message per episode, with a recovery notice — the same discipline as
+/// [`super::deadman`]. A notifier that re-fired every five minutes while the
+/// operator slept would train them to ignore it, which costs more than the
+/// alert is worth.
+async fn report_fault(
+    apprise: Option<&crate::integrations::apprise::AppriseHandle>,
+    event: FaultEvent,
+) {
+    let (title, body, kind) = match &event {
+        FaultEvent::Onset { source, fault } => {
+            tracing::warn!(
+                source = %source,
+                fault = ?fault,
+                "audio source is producing unusable audio — {}",
+                fault.label()
+            );
+            (
+                format!("Audio problem on {source}"),
+                format!(
+                    "The {source} input is running and delivering segments on time, but they                      contain {}. Detections from this source are unreliable until it is fixed.",
+                    fault.label()
+                ),
+                birdnet_integrations::apprise::NotifyType::Warning,
+            )
+        }
+        FaultEvent::Recovered { source } => {
+            tracing::info!(source = %source, "audio source is producing usable audio again");
+            (
+                format!("Audio recovered on {source}"),
+                format!("The {source} input is delivering usable audio again."),
+                birdnet_integrations::apprise::NotifyType::Info,
+            )
+        }
+    };
+
+    let Some(handle) = apprise else { return };
+    if let Err(e) = handle
+        .lock()
+        .await
+        .send_notification(&title, &body, kind)
+        .await
+    {
+        tracing::warn!(error = %e, "stream-fault notification failed to send");
+    }
 }
 
 /// The station's local date and hour — the same lens the detections are stamped
@@ -176,7 +340,14 @@ fn local_date_hour() -> (String, u8) {
 /// `stream_dir` is the transient capture directory. Skipped in web-only mode by
 /// the caller: with no capture running there is nothing to measure, and an
 /// empty directory would simply record nothing every five minutes forever.
-pub fn spawn_acoustic_health(state: AppState, stream_dir: PathBuf) {
+///
+/// `apprise` carries the stream-fault alerts. `None` leaves the WARN log as the
+/// only signal, which is the same bargain [`super::deadman`] makes.
+pub fn spawn_acoustic_health(
+    state: AppState,
+    stream_dir: PathBuf,
+    apprise: Option<crate::integrations::apprise::AppriseHandle>,
+) {
     tokio::spawn(async move {
         tracing::info!(
             poll_secs = POLL_EVERY.as_secs(),
@@ -189,11 +360,38 @@ pub fn spawn_acoustic_health(state: AppState, stream_dir: PathBuf) {
         // segment yet, so it would find nothing and only add a wakeup.
         tick.tick().await;
         let mut last_prune = tokio::time::Instant::now();
+        let mut watch = FaultWatch::default();
         loop {
             tick.tick().await;
             let probe = state.clone();
             let dir = stream_dir.clone();
-            let _ = tokio::task::spawn_blocking(move || sample_once(&probe, &dir)).await;
+            let (outcome, returned) = match tokio::task::spawn_blocking(move || {
+                let mut w = watch;
+                let outcome = sample_once(&probe, &dir, &mut w);
+                (outcome, w)
+            })
+            .await
+            {
+                Ok(v) => v,
+                // The blocking task panicked. Start the watch afresh
+                // rather than losing the loop: a lost episode is a
+                // duplicate alert at worst, and stopping the sampler
+                // would silently end every measurement this task makes.
+                Err(e) => {
+                    tracing::warn!(error = %e, "acoustic sample task failed");
+                    (
+                        SampleOutcome {
+                            recorded: 0,
+                            events: Vec::new(),
+                        },
+                        FaultWatch::default(),
+                    )
+                }
+            };
+            watch = returned;
+            for event in outcome.events {
+                report_fault(apprise.as_ref(), event).await;
+            }
 
             if last_prune.elapsed() >= PRUNE_EVERY {
                 last_prune = tokio::time::Instant::now();
@@ -302,7 +500,7 @@ mod tests {
         write_segment(dir.path(), "2026-08-20-birdnet-deaf-06:00:00.wav", 0.006);
 
         let state = crate::integrations::test_support::test_state();
-        let recorded = sample_once(&state, dir.path());
+        let recorded = sample_once(&state, dir.path(), &mut FaultWatch::default()).recorded;
         assert_eq!(recorded, 2, "one observation per source");
 
         let rows = state
@@ -336,5 +534,154 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(newest_segment_per_source(dir.path()).is_empty());
         assert!(newest_segment_per_source(Path::new("/nonexistent/bnb")).is_empty());
+    }
+
+    // ── stream-fault episodes ───────────────────────────────────────────
+
+    use birdnet_core::audio::quality::stream_fault::StreamFault;
+
+    /// Feed `n` consecutive observations of `fault` for one source.
+    fn feed(
+        w: &mut FaultWatch,
+        source: &str,
+        fault: Option<StreamFault>,
+        n: u32,
+    ) -> Vec<FaultEvent> {
+        (0..n).filter_map(|_| w.observe(source, fault)).collect()
+    }
+
+    #[test]
+    fn a_sustained_fault_is_reported_once() {
+        // Once per episode, not once per poll. A notifier that re-fired every
+        // five minutes overnight is one the operator learns to skip past, and
+        // then misses the next real thing.
+        let mut w = FaultWatch::default();
+        let events = feed(&mut w, "RTSP_1", Some(StreamFault::DigitallySilent), 20);
+        assert_eq!(
+            events,
+            vec![FaultEvent::Onset {
+                source: "RTSP_1".into(),
+                fault: StreamFault::DigitallySilent,
+            }],
+            "the episode was announced more than once"
+        );
+    }
+
+    #[test]
+    fn a_brief_fault_is_not_reported_at_all() {
+        // A capture process restarting mid-write can leave a short run of
+        // zeros. Alerting on that is the fastest way to make the alert
+        // worthless.
+        assert_eq!(FAULT_TICKS_BEFORE_ALERT, 3, "the counts below assume this");
+        let mut w = FaultWatch::default();
+        assert!(feed(&mut w, "RTSP_1", Some(StreamFault::DigitallySilent), 2).is_empty());
+        // ...and it clears without a recovery notice, because nobody was told.
+        assert!(w.observe("RTSP_1", None).is_none());
+    }
+
+    #[test]
+    fn the_third_consecutive_observation_reports() {
+        // Counterpart to the gate above, with a literal count: a watch that
+        // never reported would satisfy it and the feature would do nothing.
+        let mut w = FaultWatch::default();
+        assert!(w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none());
+        assert!(w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none());
+        assert_eq!(
+            w.observe("RTSP_1", Some(StreamFault::Saturated)),
+            Some(FaultEvent::Onset {
+                source: "RTSP_1".into(),
+                fault: StreamFault::Saturated,
+            })
+        );
+    }
+
+    #[test]
+    fn an_intermittent_fault_never_accumulates_into_an_alert() {
+        // The count is of *consecutive* observations. Without that, a source
+        // that is briefly odd once an hour would eventually be reported as
+        // sustained — which it is not.
+        let mut w = FaultWatch::default();
+        for _ in 0..20 {
+            assert!(w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none());
+            assert!(w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none());
+            assert!(w.observe("RTSP_1", None).is_none());
+        }
+    }
+
+    #[test]
+    fn a_recovery_is_announced_only_to_someone_who_was_told() {
+        let mut w = FaultWatch::default();
+        feed(&mut w, "RTSP_1", Some(StreamFault::DigitallySilent), 3);
+        assert_eq!(
+            w.observe("RTSP_1", None),
+            Some(FaultEvent::Recovered {
+                source: "RTSP_1".into()
+            })
+        );
+        // ...and not twice.
+        assert!(w.observe("RTSP_1", None).is_none());
+        // A source that never faulted gets no recovery notice either.
+        assert!(w.observe("local", None).is_none());
+    }
+
+    #[test]
+    fn the_same_source_can_fault_again_after_recovering() {
+        // The episode state has to be cleared by the recovery, or a source
+        // that breaks, is fixed, and breaks again is silent the second time.
+        let mut w = FaultWatch::default();
+        feed(&mut w, "RTSP_1", Some(StreamFault::DigitallySilent), 3);
+        w.observe("RTSP_1", None);
+        assert_eq!(
+            feed(&mut w, "RTSP_1", Some(StreamFault::DigitallySilent), 3),
+            vec![FaultEvent::Onset {
+                source: "RTSP_1".into(),
+                fault: StreamFault::DigitallySilent,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_different_fault_restarts_the_count() {
+        // Two ticks of silence then saturation is not three ticks of anything.
+        // Reporting the new fault on the old one's tally would announce as
+        // sustained something that has only just appeared.
+        let mut w = FaultWatch::default();
+        assert!(
+            w.observe("RTSP_1", Some(StreamFault::DigitallySilent))
+                .is_none()
+        );
+        assert!(
+            w.observe("RTSP_1", Some(StreamFault::DigitallySilent))
+                .is_none()
+        );
+        assert!(
+            w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none(),
+            "a fault reported on a different fault's tally"
+        );
+        assert!(w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none());
+        assert_eq!(
+            w.observe("RTSP_1", Some(StreamFault::Saturated)),
+            Some(FaultEvent::Onset {
+                source: "RTSP_1".into(),
+                fault: StreamFault::Saturated,
+            })
+        );
+    }
+
+    #[test]
+    fn sources_are_tracked_independently() {
+        // A four-camera station with one dead stream is exactly the case the
+        // detection deadman cannot see, because the other three keep the
+        // station detecting. Sharing a counter here would lose it again.
+        let mut w = FaultWatch::default();
+        for _ in 0..3 {
+            assert!(w.observe("local", None).is_none());
+        }
+        let events = feed(&mut w, "RTSP_1", Some(StreamFault::DigitallySilent), 3);
+        assert_eq!(events.len(), 1, "a healthy source masked a broken one");
+        assert!(
+            w.observe("local", Some(StreamFault::Saturated)).is_none(),
+            "one source's episode leaked into another's count"
+        );
     }
 }

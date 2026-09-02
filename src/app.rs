@@ -338,7 +338,7 @@ async fn serve(
         // directory capture writes to, so it needs no coordination with the
         // audio path.
         if let Some(stream_dir) = helpers::stream_dir(&cli, config.as_ref()) {
-            integrations::spawn_acoustic_health(state.clone(), stream_dir);
+            integrations::spawn_acoustic_health(state.clone(), stream_dir, apprise_client.clone());
         }
     }
 

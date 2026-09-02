@@ -30,7 +30,7 @@ use serde::Deserialize;
 
 use birdnet_db::audio_sources::{
     AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, NewAudioSource,
-    RtspTransport, SourceKind,
+    PipelineFlags, RtspTransport, SourceKind,
 };
 
 use crate::routes::pages::escape_html;
@@ -158,6 +158,70 @@ struct CreateForm {
     /// is paused from `quiet_start` up to but not including `quiet_end`.
     #[serde(default)]
     quiet_end: Option<String>,
+    /// Per-source conditioning toggles. `Some("1")` when ticked, `None` when
+    /// the operator unticked it *or* when the form does not carry the control
+    /// at all — see [`ToggleSet::from_form`] for how those are told apart.
+    #[serde(default)]
+    high_pass: Option<String>,
+    #[serde(default)]
+    dc_removal: Option<String>,
+    #[serde(default)]
+    agc: Option<String>,
+    #[serde(default)]
+    rtsp_keepalive: Option<String>,
+    /// Hidden companion field, always submitted by the edit form. Its presence
+    /// is what says "this submission came from a form that carries the four
+    /// checkboxes", so an unticked box means *off* rather than *absent*.
+    /// Without it, a PATCH from any other form would silently clear all four.
+    #[serde(default)]
+    pipeline_present: Option<String>,
+}
+
+/// The four conditioning toggles as submitted, or `None` when the form did not
+/// carry them.
+///
+/// An unchecked HTML checkbox submits nothing at all, so "off" and "not on this
+/// form" look identical in the payload. The hidden `pipeline_present` marker
+/// disambiguates them, which matters because the create form and the edit form
+/// are different shapes and a PATCH that guessed wrong would turn a source's
+/// conditioning off without the operator touching it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// The four booleans mirror `PipelineFlags` one-for-one. Collapsing them into an
+// enum or a bitflag here would only add a translation layer between the form
+// and the storage type, and the checkbox names are the wire format.
+#[allow(clippy::struct_excessive_bools)]
+struct ToggleSet {
+    high_pass: bool,
+    dc_removal: bool,
+    agc: bool,
+    rtsp_keepalive: bool,
+}
+
+impl ToggleSet {
+    fn from_form(
+        marker: Option<&str>,
+        high_pass: Option<&str>,
+        dc_removal: Option<&str>,
+        agc: Option<&str>,
+        rtsp_keepalive: Option<&str>,
+    ) -> Option<Self> {
+        marker?;
+        Some(Self {
+            high_pass: high_pass.is_some(),
+            dc_removal: dc_removal.is_some(),
+            agc: agc.is_some(),
+            rtsp_keepalive: rtsp_keepalive.is_some(),
+        })
+    }
+
+    const fn into_flags(self) -> PipelineFlags {
+        PipelineFlags {
+            high_pass: self.high_pass,
+            dc_removal: self.dc_removal,
+            agc: self.agc,
+            rtsp_keepalive: self.rtsp_keepalive,
+        }
+    }
 }
 
 /// What the form's two quiet-window fields mean together.
@@ -170,6 +234,35 @@ enum QuietChoice {
     Clear,
     /// Both submitted and valid.
     Set(String, String),
+}
+
+/// Whether a quiet-window endpoint is one of the two forms the column holds.
+///
+/// A clock time, or a solar anchor with an optional signed offset. The
+/// authoritative parser is `capture::sources::parse_quiet_endpoint` in the
+/// binary — this is the form-validation half, and it is deliberately the same
+/// shape check rather than a second set of rules, so a value the admin UI
+/// accepts is one the daemon can read back.
+fn is_quiet_endpoint(s: &str) -> bool {
+    if is_hhmm(s) {
+        return true;
+    }
+    let lower = s.trim().to_ascii_lowercase();
+    let Some(rest) = lower
+        .strip_prefix("sunrise")
+        .or_else(|| lower.strip_prefix("sunset"))
+    else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(digits) = rest.strip_prefix('+').or_else(|| rest.strip_prefix('-')) else {
+        return false;
+    };
+    !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && digits.parse::<i32>().is_ok_and(|n| n <= 12 * 60)
 }
 
 /// Interpret the form's `quiet_start` / `quiet_end` pair.
@@ -187,8 +280,10 @@ fn parse_quiet_choice(start: Option<&str>, end: Option<&str>) -> Result<QuietCho
     match (start.is_empty(), end.is_empty()) {
         (true, true) => Ok(QuietChoice::Clear),
         (false, false) => {
-            if !is_hhmm(start) || !is_hhmm(end) {
-                return Err("Quiet window times must be HH:MM (24-hour), e.g. 22:00.");
+            if !is_quiet_endpoint(start) || !is_quiet_endpoint(end) {
+                return Err(
+                    "Quiet window ends must be a clock time (22:00) or a solar anchor                      (sunset, sunset+30, sunrise-15).",
+                );
             }
             if start == end {
                 return Err(
@@ -256,6 +351,15 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
             Ok(t) => new.rtsp_transport = t,
             Err(_) => return validation_response("Unknown RTSP transport."),
         }
+    }
+    if let Some(toggles) = ToggleSet::from_form(
+        form.pipeline_present.as_deref(),
+        form.high_pass.as_deref(),
+        form.dc_removal.as_deref(),
+        form.agc.as_deref(),
+        form.rtsp_keepalive.as_deref(),
+    ) {
+        new.pipeline = toggles.into_flags();
     }
     match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
         Ok(QuietChoice::Set(a, b)) => new.schedule_quiet = Some((a, b)),
@@ -357,6 +461,15 @@ async fn update(
             Ok(t) => patch.rtsp_transport = Some(t),
             Err(_) => return validation_response("Unknown RTSP transport."),
         }
+    }
+    if let Some(toggles) = ToggleSet::from_form(
+        form.pipeline_present.as_deref(),
+        form.high_pass.as_deref(),
+        form.dc_removal.as_deref(),
+        form.agc.as_deref(),
+        form.rtsp_keepalive.as_deref(),
+    ) {
+        patch.pipeline = Some(toggles.into_flags());
     }
     match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
         Ok(QuietChoice::Set(a, b)) => patch.schedule_quiet = Some(Some((a, b))),
@@ -552,6 +665,15 @@ fn render_status_pill(id: &str, status: Status) -> String {
 
 fn render_edit_form(row: &AudioSource) -> String {
     let label = row.label.clone().unwrap_or_default();
+    // Checkbox state for the four per-source conditioning toggles. An unchecked
+    // HTML checkbox submits *nothing*, which is what lets `Option<String>` in
+    // the form struct tell "operator cleared it" from "form does not carry the
+    // control" — the same distinction the quiet window already relies on.
+    let checked = |on: bool| if on { " checked" } else { "" };
+    let high_pass_checked = checked(row.pipeline.high_pass);
+    let dc_removal_checked = checked(row.pipeline.dc_removal);
+    let agc_checked = checked(row.pipeline.agc);
+    let rtsp_keepalive_checked = checked(row.pipeline.rtsp_keepalive);
     // `("", "")` when no window is set — an `<input type="time">` with an empty
     // value renders as the blank "--:--" the operator needs in order to say
     // "none", which is why both ends are submitted even when unset.
@@ -580,14 +702,40 @@ fn render_edit_form(row: &AudioSource) -> String {
     <div class="aud-edit-quiet">
       <span class="bnb-eyebrow">Quiet window</span>
       <label class="sr-only" for="q-start-{id}">Quiet from</label>
-      <input id="q-start-{id}" name="quiet_start" type="time" value="{quiet_start}"
-             class="aud-edit-time">
+      <input id="q-start-{id}" name="quiet_start" type="text" value="{quiet_start}"
+             class="aud-edit-time" placeholder="22:00" list="quiet-anchors"
+             pattern="(\d{{2}}:\d{{2}})|([Ss]un(rise|set)([+-]\d{{1,3}})?)"
+             title="A clock time (22:00) or a solar anchor (sunset+30, sunrise-15)">
       <span class="bnb-meta" aria-hidden="true">→</span>
       <label class="sr-only" for="q-end-{id}">Quiet until</label>
-      <input id="q-end-{id}" name="quiet_end" type="time" value="{quiet_end}"
-             class="aud-edit-time">
-      <p class="hint">This source stops recording between these times, in the station's
-        local time. Leave both blank for none.</p>
+      <input id="q-end-{id}" name="quiet_end" type="text" value="{quiet_end}"
+             class="aud-edit-time" placeholder="06:00" list="quiet-anchors"
+             pattern="(\d{{2}}:\d{{2}})|([Ss]un(rise|set)([+-]\d{{1,3}})?)"
+             title="A clock time (06:00) or a solar anchor (sunrise-15)">
+      <datalist id="quiet-anchors">
+        <option value="sunset"></option>
+        <option value="sunset+30"></option>
+        <option value="sunrise"></option>
+        <option value="sunrise-30"></option>
+      </datalist>
+      <p class="hint">This source stops recording between these times. A clock time
+        (<code>22:00</code>) is fixed all year; a solar anchor (<code>sunset+30</code>,
+        <code>sunrise-15</code>) follows the season, which is usually what you mean.
+        Leave both blank for none.</p>
+    </div>
+    <div class="aud-edit-pipeline">
+      <input type="hidden" name="pipeline_present" value="1">
+      <span class="bnb-eyebrow">Signal conditioning</span>
+      <label><input type="checkbox" name="high_pass" value="1"{high_pass_checked}>
+        High-pass &mdash; cut wind rumble below 120&nbsp;Hz</label>
+      <label><input type="checkbox" name="dc_removal" value="1"{dc_removal_checked}>
+        Remove DC offset</label>
+      <label><input type="checkbox" name="agc" value="1"{agc_checked}>
+        Automatic gain control</label>
+      <label><input type="checkbox" name="rtsp_keepalive" value="1"{rtsp_keepalive_checked}>
+        Drop a stalled RTSP stream after 10&nbsp;s so it restarts</label>
+      <p class="hint">Applied to this source before analysis. The first three also
+        shape what you hear on the live stream; the last one affects RTSP only.</p>
     </div>
     <div class="audio-source__right aud-edit-right">
       <button type="submit" class="bnb-btn moss">Save</button>
@@ -606,6 +754,10 @@ fn render_edit_form(row: &AudioSource) -> String {
         device_id = escape_html(&row.device_id),
         quiet_start = escape_html(quiet.0),
         quiet_end = escape_html(quiet.1),
+        high_pass_checked = high_pass_checked,
+        dc_removal_checked = dc_removal_checked,
+        agc_checked = agc_checked,
+        rtsp_keepalive_checked = rtsp_keepalive_checked,
     )
 }
 
@@ -789,6 +941,11 @@ mod tests {
     async fn a_quiet_window_set_on_the_form_reaches_the_database() {
         let (_d, state) = fixture();
         let base = || CreateForm {
+            high_pass: None,
+            dc_removal: None,
+            agc: None,
+            rtsp_keepalive: None,
+            pipeline_present: None,
             scope: String::new(),
             kind: "usb-alsa".to_string(),
             device_id: "plughw:2,0".to_string(),
@@ -863,6 +1020,11 @@ mod tests {
     async fn create_rejects_duplicate_device() {
         let (_d, state) = fixture();
         let form = || CreateForm {
+            high_pass: None,
+            dc_removal: None,
+            agc: None,
+            rtsp_keepalive: None,
+            pipeline_present: None,
             scope: String::new(),
             kind: "usb-alsa".to_string(),
             device_id: "plughw:1,0".to_string(),
@@ -1120,8 +1282,13 @@ mod tests {
         let html = render_edit_form(&source);
         assert!(html.contains(r#"name="quiet_start""#), "no start field");
         assert!(html.contains(r#"name="quiet_end""#), "no end field");
+        // The control type deliberately changed from `time` to `text` when solar
+        // anchors arrived: an `<input type="time">` silently discards `sunset+30`.
+        // What this assertion is about is unchanged — an unset window renders
+        // blank so the operator can leave it unset. The type itself is pinned by
+        // `solar_quiet_form_tests::the_quiet_inputs_are_not_time_pickers`.
         assert!(
-            html.contains(r#"name="quiet_start" type="time" value=""#),
+            html.contains(r#"name="quiet_start" type="text" value="""#),
             "an unset window must render blank so the operator can leave it unset"
         );
 
@@ -1258,5 +1425,182 @@ mod tests {
     fn synth_id_uses_kind_prefix() {
         let id = synth_id(SourceKind::Rtsp);
         assert!(id.starts_with("src_rtsp_"));
+    }
+}
+
+// ── the conditioning toggles reach the operator and the daemon ──────────
+//
+// These four flags were stored, defaulted and round-tripped by the store, and
+// the edit form never rendered a control for any of them — so the only way to
+// change one was direct SQL. The audio path never read them either; that half
+// is fixed in `birdnet-core`. This half is the form.
+#[cfg(test)]
+mod pipeline_toggle_tests {
+    use super::*;
+    use birdnet_db::audio_sources::Channels;
+
+    fn source_with(pipeline: PipelineFlags) -> AudioSource {
+        AudioSource {
+            id: "mic".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "plughw:1,0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 16,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline,
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        }
+    }
+
+    /// The gate for the missing controls: the edit form must carry all four.
+    /// Fails before the fix — the form had no checkbox at all.
+    #[test]
+    fn the_edit_form_renders_every_toggle() {
+        let html = render_edit_form(&source_with(PipelineFlags::default()));
+        for field in ["high_pass", "dc_removal", "agc", "rtsp_keepalive"] {
+            assert!(
+                html.contains(&format!(r#"name="{field}""#)),
+                "the edit form has no control for {field}"
+            );
+        }
+        assert!(
+            html.contains(r#"name="pipeline_present""#),
+            "the hidden marker must be present or an unticked box reads as absent"
+        );
+    }
+
+    /// A stored value has to come back checked, or saving the form would
+    /// silently clear whatever was set.
+    #[test]
+    fn stored_state_is_reflected_in_the_checkboxes() {
+        let on = render_edit_form(&source_with(PipelineFlags {
+            high_pass: true,
+            dc_removal: false,
+            agc: true,
+            rtsp_keepalive: false,
+        }));
+        // Exactly the two that are on carry `checked`.
+        assert_eq!(
+            on.matches(" checked").count(),
+            2,
+            "two toggles are on, so exactly two boxes are checked"
+        );
+        assert!(on.contains(r#"name="high_pass" value="1" checked"#));
+        assert!(on.contains(r#"name="dc_removal" value="1">"#));
+    }
+
+    /// An unchecked box submits nothing, so "off" and "this form has no such
+    /// control" arrive identically. The hidden marker is what separates them.
+    #[test]
+    fn absent_marker_means_leave_the_stored_flags_alone() {
+        assert_eq!(
+            ToggleSet::from_form(None, Some("1"), None, None, None),
+            None,
+            "without the marker the submission must not touch the flags"
+        );
+    }
+
+    /// The counterpart: with the marker, an unticked box really does mean off.
+    /// Without this the guard above would be satisfied by never applying the
+    /// toggles at all.
+    #[test]
+    fn present_marker_applies_every_box_including_the_unticked_ones() {
+        let set = ToggleSet::from_form(Some("1"), Some("1"), None, None, Some("1"))
+            .expect("marker present");
+        assert_eq!(
+            set.into_flags(),
+            PipelineFlags {
+                high_pass: true,
+                dc_removal: false,
+                agc: false,
+                rtsp_keepalive: true,
+            }
+        );
+    }
+}
+
+// ── the quiet window accepts solar anchors ──────────────────────────────
+#[cfg(test)]
+mod solar_quiet_form_tests {
+    use super::*;
+
+    #[test]
+    fn clock_times_and_solar_anchors_are_both_accepted() {
+        for s in [
+            "22:00",
+            "06:00",
+            "sunset",
+            "sunset+30",
+            "sunrise-15",
+            "SUNSET+5",
+        ] {
+            assert!(is_quiet_endpoint(s), "{s} must be accepted");
+        }
+    }
+
+    /// The counterpart. An accept-everything validator would pass the test
+    /// above and let a value into the column that the daemon cannot read back,
+    /// which reads to the operator as a quiet window that does nothing.
+    #[test]
+    fn nonsense_is_still_rejected() {
+        for s in [
+            "",
+            "moonset",
+            "25:00",
+            "sunset30",
+            "sunrise+",
+            "sunrise+900",
+            "noon",
+        ] {
+            assert!(!is_quiet_endpoint(s), "{s} must be rejected");
+        }
+    }
+
+    #[test]
+    fn a_solar_window_round_trips_through_the_form_parser() {
+        assert_eq!(
+            parse_quiet_choice(Some("sunset+30"), Some("sunrise-15")),
+            Ok(QuietChoice::Set(
+                "sunset+30".to_owned(),
+                "sunrise-15".to_owned()
+            ))
+        );
+    }
+
+    /// The rendered control must be able to hold a solar anchor at all — an
+    /// `<input type="time">` silently discards one, which is how the value
+    /// would have been lost between the form and the database.
+    #[test]
+    fn the_quiet_inputs_are_not_time_pickers() {
+        let html = render_edit_form(&AudioSource {
+            id: "mic".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "plughw:1,0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: birdnet_db::audio_sources::Channels::Mono,
+            bit_depth: 16,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: Some(("sunset+30".to_string(), "sunrise-15".to_string())),
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        });
+        assert!(
+            !html.contains(r#"name="quiet_start" type="time""#),
+            "a time picker cannot hold `sunset+30`"
+        );
+        assert!(
+            html.contains("sunset+30") && html.contains("sunrise-15"),
+            "the stored anchors must render back into the form: {html}"
+        );
     }
 }

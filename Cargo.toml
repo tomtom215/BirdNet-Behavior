@@ -87,6 +87,14 @@ tower-http = { version = "0.7.0", features = ["cors", "trace", "fs", "compressio
 # HTTP client
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 
+# MQTT over TLS. rustls is already in the tree via lettre, reqwest and ort, so
+# this adds no new compiled crate — only a direct edge. `ring` rather than the
+# `aws-lc-rs` default: this project cross-compiles to aarch64 with `cross`, and
+# aws-lc-rs wants a C toolchain and cmake in the cross image.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+rustls-pki-types = "1"
+rustls-native-certs = "0.8"
+
 # Email (SMTP) — pure Rust TLS via rustls, no OpenSSL
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
 
@@ -288,7 +296,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-reqwest.workspace = true
 # Used by the `seed-demo-data` [[bin]] for direct SQL against the
 # demo-tagged `settings` row + assertions in the bin's tests. Already
 # a transitive dep via birdnet-db, so this is a visibility declaration

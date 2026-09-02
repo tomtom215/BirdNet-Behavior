@@ -153,6 +153,33 @@ pub struct MetricsRegistry {
     /// Seconds since the most recent stored detection, refreshed by the
     /// deadman task. `u64::MAX` = not yet measured / no detections ever.
     detection_silence_secs: AtomicU64,
+    /// Classifications the pipeline produced and then discarded, by reason.
+    ///
+    /// A station that is "detecting nothing" is either hearing nothing or
+    /// throwing everything away, and from outside those look identical. The
+    /// reason label is what separates them: a spike in `quality` means the
+    /// microphone is in the wind, a spike in `occurrence` means the geomodel
+    /// disagrees with the classifier about where the station is.
+    detections_dropped: RwLock<HashMap<String, AtomicU64>>,
+    /// Capture processes the supervisor has restarted, per source.
+    capture_restarts: RwLock<HashMap<String, AtomicU64>>,
+    /// Capture processes found alive but producing no segments, per source.
+    /// Distinct from a restart: this is the *diagnosis*, and a stall that keeps
+    /// recurring on one source is a hardware fault rather than a flaky link.
+    capture_stalls: RwLock<HashMap<String, AtomicU64>>,
+    /// Whether the species occurrence filter is actually running (1) or the
+    /// station is admitting every species the classifier knows (0).
+    ///
+    /// The one number that would have made the inert-filter defect visible
+    /// from a dashboard rather than from reading the code.
+    occurrence_filter_active: AtomicU64,
+    /// How many species the occurrence filter currently admits. `u64::MAX`
+    /// until the filter has run once.
+    occurrence_candidates: AtomicU64,
+    /// HTTP responses served, by status class (`2xx`, `4xx`, …).
+    http_responses: RwLock<HashMap<String, AtomicU64>>,
+    /// Web request latency.
+    http_duration: Histogram,
 }
 
 impl Default for MetricsRegistry {
@@ -174,7 +201,85 @@ impl MetricsRegistry {
             detection_write_failures_total: AtomicU64::new(0),
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
+            detections_dropped: RwLock::new(HashMap::new()),
+            capture_restarts: RwLock::new(HashMap::new()),
+            capture_stalls: RwLock::new(HashMap::new()),
+            occurrence_filter_active: AtomicU64::new(0),
+            occurrence_candidates: AtomicU64::new(u64::MAX),
+            http_responses: RwLock::new(HashMap::new()),
+            http_duration: Histogram::new(),
         }
+    }
+
+    /// Bump a labelled counter map, taking the write lock only to insert.
+    fn bump(map: &RwLock<HashMap<String, AtomicU64>>, key: &str) {
+        if let Ok(m) = map.read()
+            && let Some(c) = m.get(key)
+        {
+            c.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if let Ok(mut m) = map.write() {
+            m.entry(key.to_owned())
+                .or_insert_with(|| AtomicU64::new(0))
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Read a labelled counter map into a sorted vector.
+    fn read_map(map: &RwLock<HashMap<String, AtomicU64>>) -> Vec<(String, u64)> {
+        map.read().map_or_else(
+            |_| Vec::new(),
+            |m| {
+                let mut v: Vec<(String, u64)> = m
+                    .iter()
+                    .map(|(k, c)| (k.clone(), c.load(Ordering::Relaxed)))
+                    .collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                v
+            },
+        )
+    }
+
+    /// Record a classification the pipeline discarded.
+    ///
+    /// `reason` is a small closed vocabulary (`quality`, `privacy`,
+    /// `occurrence`, `confidence`, `quarantine`) rather than free text, so the
+    /// label cardinality cannot grow with traffic.
+    pub fn inc_detection_dropped(&self, reason: &str) {
+        Self::bump(&self.detections_dropped, reason);
+    }
+
+    /// Record that a capture process was restarted.
+    pub fn inc_capture_restart(&self, source: &str) {
+        Self::bump(&self.capture_restarts, source);
+    }
+
+    /// Record that a capture process was found alive but silently stalled.
+    pub fn inc_capture_stall(&self, source: &str) {
+        Self::bump(&self.capture_stalls, source);
+    }
+
+    /// Publish whether occurrence filtering is running, and over how many
+    /// species. `None` candidates means "the filter has not run yet".
+    pub fn set_occurrence_filter(&self, active: bool, candidates: Option<u64>) {
+        self.occurrence_filter_active
+            .store(u64::from(active), Ordering::Relaxed);
+        self.occurrence_candidates
+            .store(candidates.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Record one served HTTP response.
+    pub fn observe_http(&self, status: u16, seconds: f64) {
+        let class = match status {
+            100..=199 => "1xx",
+            200..=299 => "2xx",
+            300..=399 => "3xx",
+            400..=499 => "4xx",
+            _ => "5xx",
+        };
+        Self::bump(&self.http_responses, class);
+        self.http_duration.observe(seconds);
     }
 
     /// Bump the detection counter for `(species, chunk_offset)`.
@@ -326,6 +431,16 @@ impl MetricsRegistry {
             source_up,
             outbound_queue,
             detection_silence_secs: self.detection_silence_secs(),
+            detections_dropped: Self::read_map(&self.detections_dropped),
+            capture_restarts: Self::read_map(&self.capture_restarts),
+            capture_stalls: Self::read_map(&self.capture_stalls),
+            occurrence_filter_active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
+            occurrence_candidates: match self.occurrence_candidates.load(Ordering::Relaxed) {
+                u64::MAX => None,
+                n => Some(n),
+            },
+            http_responses: Self::read_map(&self.http_responses),
+            http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
             detection_write_failures: self.detection_write_failures_total.load(Ordering::Relaxed),
         }
@@ -356,6 +471,20 @@ pub struct MetricsSnapshot {
     pub outbound_queue: Vec<(String, u64)>,
     /// Seconds since the most recent stored detection (`None` = unknown).
     pub detection_silence_secs: Option<u64>,
+    /// Discarded classifications by reason.
+    pub detections_dropped: Vec<(String, u64)>,
+    /// Capture restarts per source.
+    pub capture_restarts: Vec<(String, u64)>,
+    /// Silent stalls diagnosed per source.
+    pub capture_stalls: Vec<(String, u64)>,
+    /// Whether occurrence filtering is running.
+    pub occurrence_filter_active: bool,
+    /// Species the occurrence filter admits (`None` = not yet run).
+    pub occurrence_candidates: Option<u64>,
+    /// HTTP responses by status class.
+    pub http_responses: Vec<(String, u64)>,
+    /// Web request latency.
+    pub http_duration: HistogramSnapshot,
 }
 
 /// Render the runtime metrics as Prometheus text 0.0.4.
@@ -395,6 +524,70 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         &mut out,
         "birdnet_db_write_duration_seconds",
         &snap.db_write,
+    );
+
+    out.push_str("# HELP birdnet_detections_dropped_total Classifications produced and then discarded, by reason.\n");
+    out.push_str("# TYPE birdnet_detections_dropped_total counter\n");
+    for (reason, count) in &snap.detections_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_detections_dropped_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
+        );
+    }
+
+    out.push_str("# HELP birdnet_capture_restarts_total Capture processes restarted by the supervisor, per source.\n");
+    out.push_str("# TYPE birdnet_capture_restarts_total counter\n");
+    for (source, count) in &snap.capture_restarts {
+        let _ = writeln!(
+            out,
+            "birdnet_capture_restarts_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_capture_stalls_total Capture processes found alive but producing no segments, per source.\n");
+    out.push_str("# TYPE birdnet_capture_stalls_total counter\n");
+    for (source, count) in &snap.capture_stalls {
+        let _ = writeln!(
+            out,
+            "birdnet_capture_stalls_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_occurrence_filter_active Whether species occurrence filtering is running (1) or every species the classifier knows is admitted (0).\n");
+    out.push_str("# TYPE birdnet_occurrence_filter_active gauge\n");
+    let _ = writeln!(
+        out,
+        "birdnet_occurrence_filter_active {}",
+        u8::from(snap.occurrence_filter_active)
+    );
+
+    if let Some(n) = snap.occurrence_candidates {
+        out.push_str("# HELP birdnet_occurrence_candidates Species the occurrence filter currently admits.\n");
+        out.push_str("# TYPE birdnet_occurrence_candidates gauge\n");
+        let _ = writeln!(out, "birdnet_occurrence_candidates {n}");
+    }
+
+    out.push_str("# HELP birdnet_http_responses_total Web responses served, by status class.\n");
+    out.push_str("# TYPE birdnet_http_responses_total counter\n");
+    for (class, count) in &snap.http_responses {
+        let _ = writeln!(
+            out,
+            "birdnet_http_responses_total{{class=\"{}\"}} {count}",
+            escape_label(class)
+        );
+    }
+
+    out.push_str(
+        "# HELP birdnet_http_request_duration_seconds Web request handling latency in seconds.\n",
+    );
+    out.push_str("# TYPE birdnet_http_request_duration_seconds histogram\n");
+    render_histogram(
+        &mut out,
+        "birdnet_http_request_duration_seconds",
+        &snap.http_duration,
     );
 
     out.push_str("# HELP birdnet_audio_source_up Whether an audio source is currently producing samples (1 = up, 0 = down).\n");
@@ -649,6 +842,164 @@ mod tests {
         assert!(
             apus < buteo && buteo < zono,
             "rendered output not sorted alphabetically"
+        );
+    }
+}
+
+/// Axum middleware that records one `birdnet_http_responses_total` sample and
+/// one latency observation per request.
+///
+/// Placed at the very outside of the stack, so it times what the client
+/// experienced — including compression and the header layer — rather than the
+/// handler alone. The status *class* is recorded rather than the code: a
+/// per-code counter grows a label value for every 4xx a scanner can provoke,
+/// and the operational question ("is anything 5xx-ing?") does not need more.
+pub async fn http_metrics_middleware(
+    metrics: SharedMetrics,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let start = std::time::Instant::now();
+    let response = next.run(req).await;
+    metrics.observe_http(response.status().as_u16(), start.elapsed().as_secs_f64());
+    response
+}
+
+// ── the metrics added for operational visibility ────────────────────────
+//
+// A station you cannot SSH into is diagnosed from its metrics or not at all.
+// Each family below answers a question the parity audit raised and the
+// existing surface could not: is the occurrence filter running, is a source
+// flapping, is the pipeline discarding what it hears, is the web layer
+// erroring.
+#[cfg(test)]
+mod operational_metrics_tests {
+    use super::*;
+
+    fn rendered(f: impl FnOnce(&MetricsRegistry)) -> String {
+        let reg = MetricsRegistry::new();
+        f(&reg);
+        render_runtime_metrics(&reg.snapshot())
+    }
+
+    /// The gauge that would have made the inert-filter defect visible. Zero is
+    /// the dangerous state, so it must be emitted rather than omitted — a
+    /// missing series and a healthy one look identical on a dashboard.
+    #[test]
+    fn the_occurrence_gauge_is_emitted_even_when_the_filter_is_off() {
+        let out = rendered(|_| {});
+        assert!(
+            out.contains("birdnet_occurrence_filter_active 0"),
+            "the off state must be reported, not omitted: {out}"
+        );
+        assert!(
+            !out.contains("birdnet_occurrence_candidates"),
+            "a candidate count must not be invented before the filter has run"
+        );
+    }
+
+    #[test]
+    fn the_occurrence_gauge_reports_a_running_filter_and_its_candidates() {
+        let out = rendered(|r| r.set_occurrence_filter(true, Some(287)));
+        assert!(out.contains("birdnet_occurrence_filter_active 1"), "{out}");
+        assert!(out.contains("birdnet_occurrence_candidates 287"), "{out}");
+    }
+
+    /// "Detecting nothing" and "discarding everything" look identical from
+    /// outside. The reason label is what separates them.
+    #[test]
+    fn dropped_detections_are_counted_by_reason() {
+        let out = rendered(|r| {
+            r.inc_detection_dropped("confidence");
+            r.inc_detection_dropped("confidence");
+            r.inc_detection_dropped("quarantine");
+        });
+        assert!(
+            out.contains(r#"birdnet_detections_dropped_total{reason="confidence"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_detections_dropped_total{reason="quarantine"} 1"#),
+            "{out}"
+        );
+    }
+
+    /// A restart and a stall are different diagnoses: a stall that keeps
+    /// recurring on one source is a hardware fault, a restart that does not is
+    /// a flaky link. Counting them together would lose that.
+    #[test]
+    fn capture_restarts_and_stalls_are_separate_series() {
+        let out = rendered(|r| {
+            r.inc_capture_restart("mic");
+            r.inc_capture_restart("mic");
+            r.inc_capture_stall("mic");
+        });
+        assert!(
+            out.contains(r#"birdnet_capture_restarts_total{source="mic"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_capture_stalls_total{source="mic"} 1"#),
+            "{out}"
+        );
+    }
+
+    /// Status *class*, not status code: a per-code counter grows a label value
+    /// for every 4xx a scanner can provoke, and "is anything 5xx-ing?" does
+    /// not need more.
+    #[test]
+    fn http_responses_are_bucketed_by_class_not_code() {
+        let out = rendered(|r| {
+            r.observe_http(200, 0.01);
+            r.observe_http(204, 0.01);
+            r.observe_http(404, 0.01);
+            r.observe_http(503, 0.2);
+        });
+        assert!(
+            out.contains(r#"birdnet_http_responses_total{class="2xx"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_http_responses_total{class="4xx"} 1"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_http_responses_total{class="5xx"} 1"#),
+            "{out}"
+        );
+        assert!(
+            !out.contains(r#"class="204""#),
+            "individual codes must not become label values: {out}"
+        );
+        assert!(
+            out.contains("birdnet_http_request_duration_seconds_count 4"),
+            "every response must also feed the latency histogram: {out}"
+        );
+    }
+
+    /// The whole rendered document has to stay valid exposition. A stray
+    /// newline or an unescaped label would make Prometheus drop the *scrape*,
+    /// not just the offending series.
+    #[test]
+    fn the_rendered_document_is_well_formed() {
+        let out = rendered(|r| {
+            r.set_occurrence_filter(true, Some(1));
+            r.inc_detection_dropped("quality");
+            r.inc_capture_restart(r#"weird"source"#);
+            r.observe_http(200, 0.01);
+        });
+        for line in out.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
+            let (_, value) = line
+                .rsplit_once(' ')
+                .unwrap_or_else(|| panic!("no value on `{line}`"));
+            assert!(
+                value.parse::<f64>().is_ok(),
+                "`{line}` does not end in a number"
+            );
+        }
+        assert!(
+            out.contains(r#"source="weird\"source""#),
+            "label values must be escaped: {out}"
         );
     }
 }

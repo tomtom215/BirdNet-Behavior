@@ -9,6 +9,7 @@ use super::get_setting;
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let apprise = get_setting(s, "apprise_url", "");
     let apprise_cfg = get_setting(s, "apprise_config", "");
+    let notify_urls = get_setting(s, "notify_urls", "");
     let bw = get_setting(s, "birdweather_token", "");
     let nconf = get_setting(s, "notify_confidence", "0.80");
     let ncool = get_setting(s, "notify_cooldown", "300");
@@ -37,7 +38,21 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let weekly_opts = render_weekly_options(weekly);
     write!(out, r#"
   <section class="card" id="set-notifications" aria-labelledby="set-notifications-h">
-    <h2 class="section-title" id="set-notifications-h">Notifications (Apprise)</h2>
+    <h2 class="section-title" id="set-notifications-h">Notifications</h2>
+    <div>
+      <label for="notify_urls">Notification URLs</label>
+      <textarea id="notify_urls" name="notify_urls" rows="3" spellcheck="false"
+        placeholder="discord://{{webhook_id}}/{{webhook_token}}&#10;ntfy://my-garden-topic">{notify_urls}</textarea>
+      <p class="hint">
+        One per line, in Apprise URL syntax — but sent directly, so no Apprise
+        installation is needed. Supported here:
+        <code>discord://</code>, <code>slack://</code>, <code>tgram://</code>,
+        <code>ntfy://</code>, <code>gotify://</code>, <code>pover://</code>,
+        <code>json://</code> (and their TLS forms). Anything else needs the
+        Apprise config file below.
+      </p>
+    </div>
+    <h3 class="mt-md">Apprise (for everything else)</h3>
     <div class="grid-2">
       <div>
         <label for="apprise_url">Apprise Server URL</label>
