@@ -272,6 +272,15 @@ pub struct AudioSource {
     pub schedule_quiet: Option<(String, String)>,
     /// Audio pipeline feature flags for this source.
     pub pipeline: PipelineFlags,
+    /// Filter chain specification, in the form
+    /// `birdnet_core::audio::eq::EqChain` parses.
+    ///
+    /// Empty means "fall back to [`PipelineFlags::high_pass`] and
+    /// [`PipelineFlags::dc_removal`]", which is what every station carries
+    /// until an operator edits it. Stored as written rather than normalised,
+    /// so an operator's comments and spacing survive a round trip through the
+    /// form.
+    pub eq_chain: String,
     /// ISO-8601 timestamp at which this source was soft-deleted, if any.
     pub disabled_at: Option<String>,
     /// ISO-8601 timestamp when this row was first inserted.
@@ -305,6 +314,8 @@ pub struct NewAudioSource {
     pub schedule_quiet: Option<(String, String)>,
     /// Audio pipeline feature flags.
     pub pipeline: PipelineFlags,
+    /// Filter chain specification; empty falls back to the pipeline flags.
+    pub eq_chain: String,
 }
 
 impl NewAudioSource {
@@ -325,6 +336,7 @@ impl NewAudioSource {
             rtsp_transport: RtspTransport::Auto,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
+            eq_chain: String::new(),
         }
     }
 }
@@ -349,6 +361,9 @@ pub struct AudioSourcePatch {
     pub rtsp_transport: Option<RtspTransport>,
     /// Replacement quiet schedule; `Some(None)` clears the existing schedule.
     pub schedule_quiet: Option<Option<(String, String)>>,
+    /// Replacement filter chain; `Some(String::new())` clears it back to the
+    /// pipeline flags.
+    pub eq_chain: Option<String>,
     /// Replacement pipeline flags (all four are replaced atomically).
     pub pipeline: Option<PipelineFlags>,
 }
@@ -482,7 +497,8 @@ impl AudioSourceStore for Connection {
             "SELECT id, kind, device_id, label, sample_rate, channels, bit_depth,
                     gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
                     pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
-                    pipeline_rtsp_keepalive, disabled_at, created_at, updated_at
+                    pipeline_rtsp_keepalive, disabled_at, created_at, updated_at,
+                    eq_chain
              FROM audio_sources
              WHERE disabled_at IS NULL
              ORDER BY created_at ASC",
@@ -498,7 +514,8 @@ impl AudioSourceStore for Connection {
             "SELECT id, kind, device_id, label, sample_rate, channels, bit_depth,
                     gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
                     pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
-                    pipeline_rtsp_keepalive, disabled_at, created_at, updated_at
+                    pipeline_rtsp_keepalive, disabled_at, created_at, updated_at,
+                    eq_chain
              FROM audio_sources WHERE id = ?1",
             params![id],
             row_to_source,
@@ -522,8 +539,8 @@ impl AudioSourceStore for Connection {
                 id, kind, device_id, label, sample_rate, channels, bit_depth,
                 gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
                 pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
-                pipeline_rtsp_keepalive
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                pipeline_rtsp_keepalive, eq_chain
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 new.id,
                 new.kind.as_str(),
@@ -540,6 +557,7 @@ impl AudioSourceStore for Connection {
                 i32::from(new.pipeline.dc_removal),
                 i32::from(new.pipeline.agc),
                 i32::from(new.pipeline.rtsp_keepalive),
+                new.eq_chain,
             ],
         )?;
         self.get(&new.id)?
@@ -611,6 +629,9 @@ impl AudioSourceStore for Connection {
             };
             push!("schedule_quiet_start", s);
             push!("schedule_quiet_end", e);
+        }
+        if let Some(chain) = patch.eq_chain.as_ref() {
+            push!("eq_chain", rusqlite::types::Value::Text(chain.clone()));
         }
         if let Some(p) = patch.pipeline {
             push!(
@@ -700,6 +721,7 @@ fn row_to_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<AudioSource> {
             agc: row.get::<_, i64>(13)? != 0,
             rtsp_keepalive: row.get::<_, i64>(14)? != 0,
         },
+        eq_chain: row.get(18)?,
         disabled_at: row.get(15)?,
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
@@ -873,6 +895,84 @@ mod tests {
         for t in [RtspTransport::Auto, RtspTransport::Tcp, RtspTransport::Udp] {
             assert_eq!(t.as_str().parse::<RtspTransport>().unwrap(), t);
         }
+    }
+
+    /// A chain that survives storage has to come back byte-for-byte: it is
+    /// re-parsed into filter coefficients on the capture path, so a truncated
+    /// or column-shifted read is a silently different filter, not an error.
+    #[test]
+    fn an_eq_chain_survives_insert_and_is_read_back_from_both_queries() {
+        let conn = open_db();
+        let mut new = sample_new("src_eq", SourceKind::UsbAlsa, "hw:1,0");
+        new.eq_chain = "highpass:120; notch:50:20; peaking:3500:1:4".to_string();
+
+        let inserted = conn.insert(&new).unwrap();
+        assert_eq!(
+            inserted.eq_chain,
+            "highpass:120; notch:50:20; peaking:3500:1:4"
+        );
+
+        let fetched = conn.get("src_eq").unwrap().expect("row present");
+        assert_eq!(fetched.eq_chain, new.eq_chain);
+
+        let listed = conn.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].eq_chain, new.eq_chain);
+    }
+
+    /// The default is a flat chain, so a station that never opens the editor
+    /// keeps the audio path it had before the column existed.
+    #[test]
+    fn a_source_created_with_defaults_has_no_eq() {
+        let conn = open_db();
+        let inserted = conn
+            .insert(&sample_new("src_flat", SourceKind::UsbAlsa, "hw:1,0"))
+            .unwrap();
+        assert_eq!(inserted.eq_chain, "");
+    }
+
+    /// Clearing the chain and leaving it alone are different requests, and the
+    /// patch has to tell them apart: `Some("")` writes an empty chain, `None`
+    /// touches nothing.
+    #[test]
+    fn patching_an_eq_chain_can_set_it_and_clear_it_again() {
+        let conn = open_db();
+        conn.insert(&sample_new("src_eq", SourceKind::UsbAlsa, "hw:1,0"))
+            .unwrap();
+
+        let set = conn
+            .update(
+                "src_eq",
+                &AudioSourcePatch {
+                    eq_chain: Some("lowshelf:200:0.7:-6".to_string()),
+                    ..AudioSourcePatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(set.eq_chain, "lowshelf:200:0.7:-6");
+
+        // A patch that names other columns must not disturb the chain.
+        let untouched = conn
+            .update(
+                "src_eq",
+                &AudioSourcePatch {
+                    gain_db: Some(3.0),
+                    ..AudioSourcePatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(untouched.eq_chain, "lowshelf:200:0.7:-6");
+
+        let cleared = conn
+            .update(
+                "src_eq",
+                &AudioSourcePatch {
+                    eq_chain: Some(String::new()),
+                    ..AudioSourcePatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(cleared.eq_chain, "");
     }
 
     #[test]

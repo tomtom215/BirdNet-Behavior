@@ -1528,6 +1528,33 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_dynamic_thresholds_expiry
             ON dynamic_thresholds(expires_at_ms);",
     },
+    Migration {
+        version: 39,
+        description: "Give each audio source a real filter chain instead of three fixed switches",
+        // `pipeline_high_pass` and `pipeline_dc_removal` are a high-pass at a
+        // fixed 120 Hz and one at a fixed 5 Hz. That is a compromise chosen for
+        // a garden, and it is wrong in a different direction at most sites: a
+        // station beside a motorway needs a steeper cut than one section, and a
+        // station with mains hum needs a *notch*, which no high-pass can
+        // provide without also removing everything below it.
+        //
+        // `eq_chain` holds the specification parsed by
+        // `birdnet_core::audio::eq::EqChain` — `kind:freq[:q[:gain[:passes]]]`,
+        // stages separated by `;`. Empty means "use the two boolean columns",
+        // so this migration changes nothing on its own and every existing
+        // station keeps hearing exactly what it heard before. The columns stay
+        // rather than being dropped: they are the fallback, and a chain an
+        // operator later clears returns to them.
+        //
+        // Text rather than JSON. The value is short, an operator edits it by
+        // hand in the admin form, and a parse error has to name the offending
+        // stage — which a JSON blob makes harder, not easier.
+        //
+        // `pipeline_agc` is untouched. It is a dynamic-range process, not a
+        // filter, and it has no place in a chain of biquads.
+        up_sql: "ALTER TABLE audio_sources
+                     ADD COLUMN eq_chain TEXT NOT NULL DEFAULT '';",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2687,6 +2714,48 @@ mod tests {
             rule.action,
             crate::alert_rules::AlertAction::Webhook { auth: None, .. }
         ));
+    }
+
+    #[test]
+    fn migration_39_leaves_an_existing_source_on_its_old_filter_path() {
+        // The no-op-upgrade guarantee. A station that upgrades mid-season must
+        // keep hearing exactly what it heard yesterday: the same two fixed
+        // high-passes it had before the chain existed. An empty `eq_chain` is
+        // what selects that fallback, so the default has to be `''` and not,
+        // say, a chain that reproduces the two switches — the latter would
+        // look equivalent and would not be, because the boolean columns are
+        // still editable and would then be silently overridden.
+        let conn = memory_db();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 39) {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO audio_sources (id, kind, device_id, pipeline_high_pass)
+             VALUES ('legacy_mic', 'usb-alsa', 'plughw:1,0', 1);",
+        )
+        .unwrap();
+
+        let m39 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 39)
+            .expect("migration 39 exists");
+        conn.execute_batch(m39.up_sql).unwrap();
+
+        let chain: String = conn
+            .query_row(
+                "SELECT eq_chain FROM audio_sources WHERE id = 'legacy_mic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(chain, "", "a pre-existing source must carry no chain");
+
+        // And the row still loads through the store, with its switches intact.
+        let source = crate::audio_sources::AudioSourceStore::get(&conn, "legacy_mic")
+            .unwrap()
+            .expect("the source survived the migration");
+        assert_eq!(source.eq_chain, "");
+        assert!(source.pipeline.high_pass);
     }
 
     #[test]

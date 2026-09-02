@@ -3,7 +3,8 @@
 use super::bands::{
     CENTRE_FREQUENCIES_HZ, THIRD_OCTAVE_EDGE_RATIO, a_weighting_db, band_label, exact_centre_hz,
 };
-use super::filter::{BiquadError, ThirdOctaveBand};
+use super::filter::ThirdOctaveBand;
+use crate::audio::biquad::BiquadError;
 
 /// Lowest level the meter will report, in decibels relative to full scale.
 ///

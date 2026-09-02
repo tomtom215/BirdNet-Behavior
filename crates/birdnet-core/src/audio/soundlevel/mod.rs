@@ -44,14 +44,12 @@ mod bands;
 mod filter;
 mod meter;
 
+pub use crate::audio::biquad::{Biquad, BiquadError};
 pub use bands::{
     CENTRE_FREQUENCIES_HZ, THIRD_OCTAVE_EDGE_RATIO, a_weighting_db, band_edges, band_label,
     exact_centre_hz, third_octave_q,
 };
-pub use filter::{
-    Biquad, BiquadError, THIRD_OCTAVE_SECTIONS, ThirdOctaveBand, section_bandwidth_octaves,
-    section_q,
-};
+pub use filter::{THIRD_OCTAVE_SECTIONS, ThirdOctaveBand, section_bandwidth_octaves, section_q};
 pub use meter::{
     BandLevel, Calibration, FLOOR_DBFS, NYQUIST_MARGIN, SoundLevelMeter, SoundLevelReading,
     db_to_power, label_for, power_to_db,

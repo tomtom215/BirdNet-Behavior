@@ -751,6 +751,7 @@ mod tests {
             rtsp_transport: RtspTransport::Auto,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
+            eq_chain: String::new(),
             disabled_at: None,
             created_at: "2026-05-01".to_string(),
             updated_at: "2026-05-01".to_string(),

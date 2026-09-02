@@ -1106,6 +1106,7 @@ mod tests {
             rtsp_transport: birdnet_db::audio_sources::RtspTransport::Auto,
             schedule_quiet: None,
             pipeline: birdnet_db::audio_sources::PipelineFlags::default(),
+            eq_chain: String::new(),
             disabled_at: None,
             created_at: "2026-08-11".to_string(),
             updated_at: "2026-08-11".to_string(),
