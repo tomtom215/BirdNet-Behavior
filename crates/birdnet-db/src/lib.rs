@@ -17,6 +17,7 @@ pub mod phantoms;
 pub mod resilience;
 pub mod settings;
 pub mod sound_levels;
+pub mod species_tracking;
 pub mod sqlite;
 pub mod thresholds;
 pub mod weather;

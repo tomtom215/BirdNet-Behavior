@@ -16,6 +16,90 @@ pub fn router() -> Router<AppState> {
         .route("/species/search", get(search_species))
         .route("/species/activity", get(hourly_activity))
         .route("/species/detail", get(species_detail))
+        .route("/species/tracking", get(species_tracking))
+}
+
+/// Query for [`species_tracking`].
+#[derive(Deserialize)]
+struct TrackingQuery {
+    /// Date to report, `YYYY-MM-DD`. Defaults to today.
+    date: Option<String>,
+    /// Return only species with something notable about them.
+    notable_only: Option<bool>,
+}
+
+/// `GET /api/v2/species/tracking` — what is notable about today's species.
+///
+/// First-ever, first-of-the-year, first-of-the-season, and returning after an
+/// absence, for every species detected on the date.
+///
+/// The windows are reported alongside the species, and not as a courtesy: a
+/// bare "first this season" is unreadable without knowing which season the
+/// station thinks it is in, and that depends on the latitude it was given. A
+/// station with no latitude reports `season: null`, which is the honest
+/// answer — it has no seasons, and nothing will ever be new in one.
+async fn species_tracking(
+    State(state): State<AppState>,
+    Query(q): Query<TrackingQuery>,
+) -> Json<Value> {
+    let date = q
+        .date
+        .filter(|d| is_iso_date(d))
+        .unwrap_or_else(crate::routes::pages::today_date_string);
+    let notable_only = q.notable_only.unwrap_or(false);
+
+    let (windows, rows) = state.with_read_db(|conn| {
+        let windows = crate::tracking::resolve_windows(conn, &date);
+        let rows =
+            birdnet_db::species_tracking::statuses_for_date(conn, &date, windows.as_windows())
+                .unwrap_or_default();
+        (windows, rows)
+    });
+
+    let species: Vec<Value> = rows
+        .iter()
+        .filter(|r| !notable_only || r.status.is_notable())
+        .map(|r| {
+            json!({
+                "sci_name": r.sci_name,
+                "com_name": r.com_name,
+                "headline": r.status.headline(),
+                "new_ever": r.status.new_ever,
+                "new_this_year": r.status.new_this_year,
+                "new_this_season": r.status.new_this_season,
+                "returning_after_absence": r.status.returning_after_absence,
+                "days_since_previous": r.status.days_since_previous,
+            })
+        })
+        .collect();
+
+    Json(json!({
+        "date": date,
+        "year_start": windows.year_start,
+        "season": windows.season,
+        "season_start": windows.season_start,
+        "absence_days": windows.absence_days,
+        "species": species,
+    }))
+}
+
+/// Whether `s` is a plausible `YYYY-MM-DD`.
+///
+/// Shape only. The query is parameterised so a malformed date is not a
+/// injection risk; the check is here so a typo returns an empty day rather
+/// than silently answering for today, which would look like a working page
+/// showing the wrong data.
+fn is_iso_date(s: &str) -> bool {
+    s.len() == 10
+        && s.as_bytes()[4] == b'-'
+        && s.as_bytes()[7] == b'-'
+        && s.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
 }
 
 #[derive(Deserialize)]
