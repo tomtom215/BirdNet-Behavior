@@ -23,6 +23,8 @@ use super::live::PcmSpec;
 use super::segment::{SegmentClock, SegmentWriter};
 use super::tee::{self, Shaping, Tee};
 use super::types::{AudioFormat, CaptureError, CaptureSource, RecordingConfig, recording_filename};
+#[cfg(test)]
+use crate::audio::eq::EqChain;
 
 /// A running audio capture process.
 #[derive(Debug)]
@@ -301,15 +303,20 @@ pub fn gain_volume_filter(gain_db: f32) -> Option<String> {
 pub fn audio_filter_chain(
     gain_db: f32,
     pipeline: crate::audio::capture::types::AudioPipeline,
+    eq: &crate::audio::eq::EqChain,
 ) -> Option<String> {
     use crate::audio::capture::types::{DC_BLOCK_CUTOFF_HZ, HIGH_PASS_CUTOFF_HZ};
 
     let mut stages: Vec<String> = Vec::new();
-    if pipeline.dc_removal {
-        stages.push(format!("highpass=f={DC_BLOCK_CUTOFF_HZ:.0}"));
-    }
-    if pipeline.high_pass {
-        stages.push(format!("highpass=f={HIGH_PASS_CUTOFF_HZ:.0}"));
+    if eq.is_empty() {
+        if pipeline.dc_removal {
+            stages.push(format!("highpass=f={DC_BLOCK_CUTOFF_HZ:.0}"));
+        }
+        if pipeline.high_pass {
+            stages.push(format!("highpass=f={HIGH_PASS_CUTOFF_HZ:.0}"));
+        }
+    } else {
+        stages.extend(eq.ffmpeg_filters());
     }
     if let Some(gain) = gain_volume_filter(gain_db) {
         stages.push(gain);
@@ -329,8 +336,9 @@ fn apply_audio_filters(
     cmd: &mut Command,
     gain_db: f32,
     pipeline: crate::audio::capture::types::AudioPipeline,
+    eq: &crate::audio::eq::EqChain,
 ) {
-    if let Some(chain) = audio_filter_chain(gain_db, pipeline) {
+    if let Some(chain) = audio_filter_chain(gain_db, pipeline, eq) {
         cmd.arg("-af").arg(chain);
     }
 }
@@ -484,6 +492,7 @@ fn start_teed_alsa_microphone(
         Shaping {
             gain_db: config.gain_db,
             pipeline: config.pipeline,
+            eq: config.eq_chain.clone(),
             spec,
             pick: channel_pick,
         },
@@ -538,7 +547,7 @@ fn start_avfoundation_microphone(
         .arg(spec.sample_rate.to_string())
         .arg("-ac")
         .arg(spec.channels.to_string());
-    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline);
+    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
     cmd.arg("-f")
         .arg("segment")
         .arg("-segment_time")
@@ -615,7 +624,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
         .arg(sample_rate.to_string())
         .arg("-ac")
         .arg(channels.to_string());
-    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline);
+    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
     let mut child = cmd
         .arg("-f")
         .arg("segment")
@@ -687,7 +696,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
         .arg("48000")
         .arg("-ac")
         .arg("1");
-    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline);
+    apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
     let mut child = cmd
         .arg("-f")
         .arg("segment")
@@ -878,6 +887,7 @@ mod tests {
             format: AudioFormat::Wav,
             gain_db: 0.0,
             pipeline: AudioPipeline::none(),
+            eq_chain: crate::audio::eq::EqChain::default(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         };
@@ -920,6 +930,7 @@ mod tests {
             Shaping {
                 gain_db: 0.0,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec,
                 pick: None,
             },
@@ -1015,6 +1026,7 @@ mod tests {
             format: AudioFormat::Wav,
             gain_db: 0.0,
             pipeline: AudioPipeline::none(),
+            eq_chain: crate::audio::eq::EqChain::default(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         };
@@ -1179,7 +1191,7 @@ mod tests {
         // exactly the `-af volume=...dB` pair. We assert on the rendered argv.
         let argv = |gain: f32| -> Vec<String> {
             let mut cmd = Command::new("ffmpeg");
-            apply_audio_filters(&mut cmd, gain, AudioPipeline::none());
+            apply_audio_filters(&mut cmd, gain, AudioPipeline::none(), &EqChain::default());
             cmd.get_args()
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect()
@@ -1210,7 +1222,10 @@ mod pipeline_filter_tests {
 
     #[test]
     fn every_stage_off_and_unity_gain_produces_no_filter_chain() {
-        assert_eq!(audio_filter_chain(0.0, AudioPipeline::none()), None);
+        assert_eq!(
+            audio_filter_chain(0.0, AudioPipeline::none(), &EqChain::default()),
+            None
+        );
     }
 
     /// The pre-fix behaviour, kept as a gate: gain alone still yields exactly
@@ -1218,7 +1233,7 @@ mod pipeline_filter_tests {
     #[test]
     fn gain_alone_is_unchanged() {
         assert_eq!(
-            audio_filter_chain(12.0, AudioPipeline::none()).as_deref(),
+            audio_filter_chain(12.0, AudioPipeline::none(), &EqChain::default()).as_deref(),
             Some("volume=12.00dB")
         );
     }
@@ -1234,6 +1249,7 @@ mod pipeline_filter_tests {
                 agc: false,
                 rtsp_stall_timeout: false,
             },
+            &EqChain::default(),
         )
         .expect("high-pass alone must produce a chain");
         assert_eq!(hp, "highpass=f=120");
@@ -1246,6 +1262,7 @@ mod pipeline_filter_tests {
                 agc: false,
                 rtsp_stall_timeout: false,
             },
+            &EqChain::default(),
         )
         .expect("dc removal alone must produce a chain");
         assert_eq!(dc, "highpass=f=5");
@@ -1258,6 +1275,7 @@ mod pipeline_filter_tests {
                 agc: true,
                 rtsp_stall_timeout: false,
             },
+            &EqChain::default(),
         )
         .expect("agc alone must produce a chain");
         assert!(agc.starts_with("dynaudnorm"), "got {agc}");
@@ -1277,6 +1295,56 @@ mod pipeline_filter_tests {
                 agc: true,
                 rtsp_stall_timeout: false,
             },
+            &EqChain::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            chain,
+            "highpass=f=5,highpass=f=120,volume=6.00dB,dynaudnorm=f=500:g=15"
+        );
+    }
+
+    /// A chain replaces the two fixed high-passes rather than stacking on
+    /// them, and leaves the gain and AGC where they were.
+    ///
+    /// Stacking is the easy mistake: an operator who writes their own 120 Hz
+    /// corner would silently get two, 12 dB/octave where they asked for 12
+    /// and got 24. The flags stay *set* in this test precisely so that a
+    /// stacking implementation would show up.
+    #[test]
+    fn a_chain_supersedes_the_fixed_high_passes() {
+        let chain = audio_filter_chain(
+            6.0,
+            AudioPipeline {
+                high_pass: true,
+                dc_removal: true,
+                agc: true,
+                rtsp_stall_timeout: false,
+            },
+            &EqChain::parse("highpass:80; notch:50:20").expect("parses"),
+        )
+        .expect("a chain always produces a filter chain");
+        assert_eq!(
+            chain,
+            "highpass=f=80:width_type=q:width=0.70710677,\
+bandreject=f=50:width_type=q:width=20,\
+volume=6.00dB,dynaudnorm=f=500:g=15"
+        );
+    }
+
+    /// The empty chain is the no-op-upgrade guarantee on this backend: byte
+    /// for byte the argument every existing RTSP station already gets.
+    #[test]
+    fn an_empty_chain_reproduces_the_flags_exactly() {
+        let chain = audio_filter_chain(
+            6.0,
+            AudioPipeline {
+                high_pass: true,
+                dc_removal: true,
+                agc: true,
+                rtsp_stall_timeout: false,
+            },
+            &EqChain::default(),
         )
         .unwrap();
         assert_eq!(
@@ -1302,6 +1370,7 @@ mod pipeline_filter_tests {
                 agc: true,
                 rtsp_stall_timeout: false,
             },
+            &EqChain::default(),
         )
         .unwrap();
 

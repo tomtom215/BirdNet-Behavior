@@ -200,11 +200,22 @@ pub struct RecordingConfig {
     pub gain_db: f32,
     /// Per-source signal conditioning applied before analysis.
     ///
-    /// Like [`Self::gain_db`], *where* it is applied depends on the backend —
-    /// an ffmpeg source gets filters in its `-af` chain, a teed microphone gets
-    /// the equivalent stages in this process — but the conditioning is the
-    /// same either way.
+    /// *Where* it is applied depends on the backend: an ffmpeg source gets
+    /// filters in its `-af` chain, a teed microphone gets the equivalent
+    /// stages in this process. Equivalent, not identical — see
+    /// [`AudioPipeline`], which now says by how much they differ.
+    ///
+    /// Superseded per source by a non-empty [`Self::eq_chain`], which both
+    /// backends render from the same specification and so cannot diverge.
     pub pipeline: AudioPipeline,
+    /// The operator's filter chain, replacing the fixed high-passes in
+    /// [`Self::pipeline`] when it is non-empty.
+    ///
+    /// Empty is the default and means "use the flags", so a station that never
+    /// opens the equaliser hears exactly what it heard before this field
+    /// existed. `agc` is unaffected either way: it is a dynamic-range process,
+    /// not a filter, and has no place in a chain of biquads.
+    pub eq_chain: crate::audio::eq::EqChain,
     /// The station's live UTC offset, used to stamp segment filenames with
     /// local civil time. See [`LocalOffset`] for why it is shared rather than
     /// copied.
@@ -619,6 +630,30 @@ mod tests {
 /// | `high_pass` | `highpass=f=…` in the `-af` chain | one-pole IIR in the tee |
 /// | `dc_removal` | `highpass=f=…` at 5 Hz | one-pole IIR in the tee |
 /// | `agc` | `dynaudnorm` | peak normaliser in the tee |
+///
+/// # The two are not the same filter
+///
+/// ffmpeg's `highpass` defaults to two poles (12 dB/octave); the tee's
+/// [`OnePoleHighPass`](super::tee) has one (6 dB/octave). From the identical
+/// `high_pass` flag a microphone therefore gets materially less rejection than
+/// an RTSP camera, measured on this filter pair at 48 kHz:
+///
+/// | Hz | tee (one pole) | ffmpeg (two poles) |
+/// |----|---------------|--------------------|
+/// | 20 | −15.68 dB | −31.13 dB |
+/// | 30 | −12.31 dB | −24.10 dB |
+/// | 50 | −8.31 dB | −15.34 dB |
+/// | 60 | −7.00 dB | −12.30 dB |
+/// | 80 | −5.14 dB | −7.83 dB |
+/// | 120 | −3.04 dB | −3.01 dB |
+///
+/// They agree only at the corner. This is left as it stands rather than
+/// quietly corrected, because both filters have been in the field and
+/// changing either one changes what every existing station of that kind
+/// records. An operator who wants the two backends to agree sets an explicit
+/// [`RecordingConfig::eq_chain`], which is rendered for both from one
+/// specification and is verified to match across them by
+/// `audio::eq`'s `the_two_backends_agree_on_real_audio`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct AudioPipeline {
@@ -654,6 +689,15 @@ pub struct AudioPipeline {
 ///
 /// 120 Hz sits below the fundamental of essentially every passerine song while
 /// still inside the band where wind, traffic and handling noise dominate.
+///
+/// It is *not* true, as this comment previously claimed, that "nothing BirdNET
+/// classifies lives down there: the model's mel bank starts well above it".
+/// [`crate::audio::spectrogram::MelConfig::default`] has `fmin: 0.0`, and the
+/// V2.4 path feeds the model raw samples (`[1, 144_000]`) with no filtering of
+/// its own — so energy below this corner does reach the classifier, on both
+/// model generations. The corner is a judgement about signal-to-noise, not a
+/// free lunch, which is the reason a steeper one is offered rather than
+/// imposed.
 pub const HIGH_PASS_CUTOFF_HZ: f32 = 120.0;
 
 /// High-pass corner used for DC removal.

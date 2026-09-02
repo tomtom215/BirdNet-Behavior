@@ -189,6 +189,7 @@ pub fn start_capture_manager(
                 source,
                 gain_db: 0.0,
                 pipeline: birdnet_core::audio::capture::AudioPipeline::none(),
+                eq_chain: birdnet_core::audio::eq::EqChain::default(),
                 quiet: None,
             })
             .collect()
@@ -243,6 +244,7 @@ pub fn start_capture_manager(
                 source,
                 gain_db,
                 pipeline,
+                eq_chain,
                 quiet,
             } = resolved;
             let label = source_gauge_label(&source);
@@ -252,6 +254,7 @@ pub fn start_capture_manager(
                 high_pass = pipeline.high_pass,
                 dc_removal = pipeline.dc_removal,
                 agc = pipeline.agc,
+                eq = %eq_chain.to_spec(),
                 quiet = quiet.is_some(),
                 "audio source configured"
             );
@@ -262,6 +265,7 @@ pub fn start_capture_manager(
                 format: AudioFormat::Wav,
                 gain_db,
                 pipeline,
+                eq_chain,
                 local_offset: local_offset.clone(),
                 live_audio: live_audio.cloned(),
             };

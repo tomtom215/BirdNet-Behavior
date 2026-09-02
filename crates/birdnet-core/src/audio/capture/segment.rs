@@ -710,6 +710,7 @@ mod tests {
             format: AudioFormat::Wav,
             gain_db: 0.0,
             pipeline: crate::audio::capture::types::AudioPipeline::none(),
+            eq_chain: crate::audio::eq::EqChain::default(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         });
@@ -737,6 +738,7 @@ mod tests {
             format: AudioFormat::Wav,
             gain_db: 0.0,
             pipeline: crate::audio::capture::types::AudioPipeline::none(),
+            eq_chain: crate::audio::eq::EqChain::default(),
             local_offset: LocalOffset::utc(),
             live_audio: None,
         });

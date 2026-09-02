@@ -46,6 +46,7 @@ use std::thread::JoinHandle;
 use super::live::{BYTES_PER_SAMPLE, LiveTap, PcmSpec};
 use super::segment::SegmentWriter;
 use super::types::{AudioPipeline, DC_BLOCK_CUTOFF_HZ, HIGH_PASS_CUTOFF_HZ};
+use crate::audio::eq::{EqChain, EqProcessor};
 
 /// Size of the reader's staging buffer.
 ///
@@ -60,12 +61,16 @@ const READ_BUFFER_BYTES: usize = 16 * 1024;
 /// and always come from the same source row — and because a five-argument
 /// audio path is where a caller eventually passes the sample rate where the
 /// channel count belongs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Shaping {
     /// Software capture gain in dB; `0.0` is unity and costs nothing.
     pub gain_db: f32,
     /// Per-source conditioning: DC block, high-pass, AGC.
     pub pipeline: AudioPipeline,
+    /// The operator's filter chain. Non-empty replaces the two high-passes in
+    /// `pipeline`; `agc` is unaffected. Empty is the default and leaves this
+    /// path byte-identical to what it was before the chain existed.
+    pub eq: EqChain,
     /// The PCM format arriving from the capture tool, needed to size the
     /// filters' per-channel state and their coefficients.
     pub spec: PcmSpec,
@@ -154,45 +159,94 @@ fn through_float(sample: i16, f: impl FnOnce(f32) -> f32) -> i16 {
 /// worse for the quality gate than the rumble it removes.
 #[derive(Debug)]
 struct PreConditioner {
-    /// One DC blocker per channel, when `dc_removal` is on.
-    dc: Option<Vec<OnePoleHighPass>>,
-    /// One high-pass per channel, when `high_pass` is on.
-    hp: Option<Vec<OnePoleHighPass>>,
+    stages: PreStages,
     walker: SampleWalker,
 }
 
+/// Which of the two conditioning designs this source is running.
+///
+/// An enum rather than three `Option` fields because they are exclusive: an
+/// operator's chain *replaces* the fixed high-passes, and a shape that could
+/// hold both would eventually hold both.
+#[derive(Debug)]
+enum PreStages {
+    /// The two fixed one-pole high-passes selected by the pipeline flags.
+    Flags {
+        /// One DC blocker per channel, when `dc_removal` is on.
+        dc: Option<Vec<OnePoleHighPass>>,
+        /// One high-pass per channel, when `high_pass` is on.
+        hp: Option<Vec<OnePoleHighPass>>,
+    },
+    /// The operator's chain, one independent processor per channel.
+    Chain(Vec<EqProcessor>),
+}
+
 impl PreConditioner {
-    /// `None` when neither stage is enabled, so the untouched path stays
-    /// byte-exact and allocation-free — the contract [`Gain`] keeps at unity.
-    fn new(pipeline: AudioPipeline, sample_rate: u32, channels: usize) -> Option<Self> {
+    /// `None` when nothing is enabled, so the untouched path stays byte-exact
+    /// and allocation-free — the contract [`Gain`] keeps at unity.
+    ///
+    /// A chain that cannot be built at this sample rate (a stage above Nyquist
+    /// on a 16 kHz source, say) falls back to the flags rather than failing.
+    /// A station is better off recording with the wrong filter than not
+    /// recording, and the fallback is loud in the log.
+    fn new(
+        pipeline: AudioPipeline,
+        eq: &EqChain,
+        sample_rate: u32,
+        channels: usize,
+    ) -> Option<Self> {
+        let lanes = channels.max(1);
+        if !eq.is_empty() {
+            match eq.build(sample_rate) {
+                Ok(proto) => {
+                    return Some(Self {
+                        stages: PreStages::Chain(vec![proto; lanes]),
+                        walker: SampleWalker::new(channels),
+                    });
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    spec = %eq.to_spec(),
+                    sample_rate,
+                    "equaliser chain rejected at this sample rate; using the pipeline flags"
+                ),
+            }
+        }
         if !pipeline.dc_removal && !pipeline.high_pass {
             return None;
         }
         let per_channel = |cutoff| {
-            (0..channels.max(1))
+            (0..lanes)
                 .map(|_| OnePoleHighPass::new(sample_rate, cutoff))
                 .collect::<Vec<_>>()
         };
         Some(Self {
-            dc: pipeline.dc_removal.then(|| per_channel(DC_BLOCK_CUTOFF_HZ)),
-            hp: pipeline.high_pass.then(|| per_channel(HIGH_PASS_CUTOFF_HZ)),
+            stages: PreStages::Flags {
+                dc: pipeline.dc_removal.then(|| per_channel(DC_BLOCK_CUTOFF_HZ)),
+                hp: pipeline.high_pass.then(|| per_channel(HIGH_PASS_CUTOFF_HZ)),
+            },
             walker: SampleWalker::new(channels),
         })
     }
 
     fn apply(&mut self, input: &[u8]) -> &[u8] {
-        let Self { dc, hp, walker } = self;
-        walker.walk(input, |sample, ch| {
-            through_float(sample, |mut x| {
-                if let Some(dc) = dc.as_mut() {
-                    x = dc[ch].step(x);
-                }
-                if let Some(hp) = hp.as_mut() {
-                    x = hp[ch].step(x);
-                }
-                x
-            })
-        })
+        let Self { stages, walker } = self;
+        match stages {
+            PreStages::Flags { dc, hp } => walker.walk(input, |sample, ch| {
+                through_float(sample, |mut x| {
+                    if let Some(dc) = dc.as_mut() {
+                        x = dc[ch].step(x);
+                    }
+                    if let Some(hp) = hp.as_mut() {
+                        x = hp[ch].step(x);
+                    }
+                    x
+                })
+            }),
+            PreStages::Chain(lanes) => walker.walk(input, |sample, ch| {
+                through_float(sample, |x| lanes[ch].process(x))
+            }),
+        }
     }
 }
 
@@ -568,12 +622,13 @@ fn run<R: Read>(
     let Shaping {
         gain_db,
         pipeline,
+        eq,
         spec,
         pick,
     } = shaping;
     let mut gain = super::process::gain_is_active(gain_db).then(|| Gain::new(gain_db));
     let channels = spec.channels as usize;
-    let mut pre = PreConditioner::new(pipeline, spec.sample_rate, channels);
+    let mut pre = PreConditioner::new(pipeline, &eq, spec.sample_rate, channels);
     let mut agc = AgcStage::new(pipeline, spec.sample_rate, channels);
     let mut selector = pick.map(ChannelSelector::new);
     let mut buf = vec![0u8; READ_BUFFER_BYTES];
@@ -888,6 +943,7 @@ mod tests {
             Shaping {
                 gain_db: 0.0,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec: TINY,
                 pick: None,
             },
@@ -913,6 +969,7 @@ mod tests {
             Shaping {
                 gain_db: 0.0,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec: TINY,
                 pick: None,
             },
@@ -936,6 +993,7 @@ mod tests {
             Shaping {
                 gain_db: 0.0,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec: TINY,
                 pick: None,
             },
@@ -976,6 +1034,7 @@ mod tests {
             Shaping {
                 gain_db: 0.0,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec: TINY,
                 pick: None,
             },
@@ -1016,6 +1075,7 @@ mod tests {
             Shaping {
                 gain_db: 6.0206,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec: TINY,
                 pick: None,
             },
@@ -1076,6 +1136,7 @@ mod tests {
             Shaping {
                 gain_db: 0.0,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec: TINY,
                 pick: None,
             },
@@ -1124,6 +1185,7 @@ mod tests {
             Shaping {
                 gain_db: 0.0,
                 pipeline: AudioPipeline::none(),
+                eq: EqChain::default(),
                 spec: TINY,
                 pick: None,
             },
@@ -1209,14 +1271,15 @@ mod conditioning_tests {
     /// byte-exact — the same contract `Gain` keeps at unity.
     #[test]
     fn all_stages_off_constructs_no_stage() {
-        assert!(PreConditioner::new(AudioPipeline::none(), SR, 1).is_none());
+        assert!(PreConditioner::new(AudioPipeline::none(), &EqChain::default(), SR, 1).is_none());
         assert!(AgcStage::new(AudioPipeline::none(), SR, 1).is_none());
     }
 
     /// DC removal removes a constant offset.
     #[test]
     fn dc_removal_converges_a_constant_offset_to_zero() {
-        let mut pre = PreConditioner::new(only(false, true, false), SR, 1).unwrap();
+        let mut pre =
+            PreConditioner::new(only(false, true, false), &EqChain::default(), SR, 1).unwrap();
         let input = pcm(&vec![8_000_i16; SR as usize]); // 1 s of pure DC
         let out = unpcm(pre.apply(&input));
 
@@ -1240,7 +1303,8 @@ mod conditioning_tests {
     fn high_pass_cuts_rumble_and_keeps_the_bird_band() {
         let n = SR as usize / 2;
         let attenuation = |hz: f32| {
-            let mut pre = PreConditioner::new(only(true, false, false), SR, 1).unwrap();
+            let mut pre =
+                PreConditioner::new(only(true, false, false), &EqChain::default(), SR, 1).unwrap();
             let input = tone(hz, n, 0.5);
             let out = unpcm(pre.apply(&pcm(&input)));
             // Skip the settling transient.
@@ -1267,10 +1331,12 @@ mod conditioning_tests {
     fn output_is_identical_whether_split_across_reads() {
         let input = pcm(&tone(200.0, 4_000, 0.4));
 
-        let mut whole = PreConditioner::new(only(true, true, false), SR, 1).unwrap();
+        let mut whole =
+            PreConditioner::new(only(true, true, false), &EqChain::default(), SR, 1).unwrap();
         let a = whole.apply(&input).to_vec();
 
-        let mut split = PreConditioner::new(only(true, true, false), SR, 1).unwrap();
+        let mut split =
+            PreConditioner::new(only(true, true, false), &EqChain::default(), SR, 1).unwrap();
         // 777 is deliberately odd, so a sample straddles the boundary.
         let mut b = split.apply(&input[..777]).to_vec();
         b.extend_from_slice(split.apply(&input[777..]));
@@ -1283,7 +1349,8 @@ mod conditioning_tests {
     /// right, which is exactly what a per-source stereo microphone would show.
     #[test]
     fn stereo_channels_do_not_bleed_into_each_other() {
-        let mut pre = PreConditioner::new(only(false, true, false), SR, 2).unwrap();
+        let mut pre =
+            PreConditioner::new(only(false, true, false), &EqChain::default(), SR, 2).unwrap();
         // Left carries a large DC offset; right is silent.
         let frames: Vec<i16> = (0..SR as usize).flat_map(|_| [12_000_i16, 0]).collect();
         let out = unpcm(pre.apply(&pcm(&frames)));
@@ -1332,6 +1399,202 @@ mod conditioning_tests {
             clipped < tail.len() / 100,
             "a loud input must not be driven into the rail: {clipped} clipped of {}",
             tail.len()
+        );
+    }
+}
+
+#[cfg(test)]
+mod eq_chain_tests {
+    use super::*;
+    use crate::audio::biquad::Biquad;
+    use std::f32::consts::{FRAC_1_SQRT_2, TAU};
+
+    const SR: u32 = 48_000;
+
+    fn pipeline(high_pass: bool, dc_removal: bool) -> AudioPipeline {
+        AudioPipeline {
+            high_pass,
+            dc_removal,
+            agc: false,
+            rtsp_stall_timeout: false,
+        }
+    }
+
+    /// Response of a filter *as it actually runs*, by measuring the audio,
+    /// rather than from its coefficients. Four seconds, second half only, so
+    /// the start-up transient is gone.
+    fn measured_db(mut step: impl FnMut(f32) -> f32, hz: f32) -> f64 {
+        let n = SR as usize * 4;
+        let out: Vec<f32> = (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let x = (TAU * hz * i as f32 / SR as f32).sin();
+                step(x)
+            })
+            .collect();
+        let tail = &out[n / 2..];
+        let rms = (tail
+            .iter()
+            .map(|s| f64::from(*s) * f64::from(*s))
+            .sum::<f64>()
+            / f64::from(u32::try_from(tail.len()).expect("tail fits")))
+        .sqrt();
+        20.0 * (rms * std::f64::consts::SQRT_2).log10()
+    }
+
+    /// The divergence table in [`AudioPipeline`]'s documentation, pinned.
+    ///
+    /// Two backends implement `high_pass` from the same flag and they are not
+    /// the same filter: the tee has one pole, ffmpeg's `highpass` defaults to
+    /// two. Writing that down is only worth anything if the numbers are real,
+    /// and a doc comment cannot be run — so the table is asserted here, to
+    /// 0.05 dB, and a reader who changes either filter finds out immediately.
+    ///
+    /// The ffmpeg column is computed from the RBJ two-pole high-pass at
+    /// Q = 1/√2, which is what `af_biquads.c` implements for `highpass` at its
+    /// default `poles=2, width_type=q, width=0.707`. It is not a measurement
+    /// of the installed ffmpeg, which is not present on every machine that
+    /// runs this suite.
+    #[test]
+    fn the_two_backends_high_pass_differently_and_by_how_much() {
+        let table = [
+            (20.0_f32, -15.68_f64, -31.13_f64),
+            (30.0, -12.31, -24.10),
+            (50.0, -8.31, -15.34),
+            (60.0, -7.00, -12.30),
+            (80.0, -5.14, -7.83),
+            (120.0, -3.04, -3.01),
+        ];
+        for (hz, want_one, want_two) in table {
+            let mut one = OnePoleHighPass::new(SR, HIGH_PASS_CUTOFF_HZ);
+            let got_one = measured_db(|x| one.step(x), hz);
+            let got_two = 20.0
+                * Biquad::high_pass(HIGH_PASS_CUTOFF_HZ, SR, FRAC_1_SQRT_2)
+                    .expect("designs")
+                    .magnitude_at(hz, SR)
+                    .log10();
+            assert!(
+                (got_one - want_one).abs() < 0.05,
+                "tee one-pole at {hz} Hz: documented {want_one:.2} dB, measured {got_one:.2} dB"
+            );
+            assert!(
+                (got_two - want_two).abs() < 0.05,
+                "ffmpeg two-pole at {hz} Hz: documented {want_two:.2} dB, computed {got_two:.2} dB"
+            );
+        }
+    }
+
+    /// An empty chain is not "a chain that does nothing" — it selects the
+    /// flags. The distinction is the whole no-op-upgrade guarantee: every
+    /// station that has never opened the equaliser must keep the audio path it
+    /// had, one pole and all.
+    #[test]
+    fn an_empty_chain_leaves_the_pipeline_flags_in_charge() {
+        let mut with = PreConditioner::new(pipeline(true, false), &EqChain::default(), SR, 1)
+            .expect("the high-pass flag alone builds a conditioner");
+        assert!(matches!(with.stages, PreStages::Flags { .. }));
+
+        // And it is the one-pole, measured through the real byte path.
+        let hz = 30.0_f32;
+        let n = SR as usize * 4;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let x = (TAU * hz * i as f32 / SR as f32).sin();
+            #[allow(clippy::cast_possible_truncation)]
+            let s = (x * f32::from(i16::MAX) * 0.5) as i16;
+            out.extend_from_slice(with.apply(&s.to_le_bytes()));
+        }
+        let samples: Vec<f32> = out
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| f32::from(i16::from_le_bytes(*p)) / (f32::from(i16::MAX) * 0.5))
+            .collect();
+        let tail = &samples[n / 2..];
+        let rms = (tail
+            .iter()
+            .map(|s| f64::from(*s) * f64::from(*s))
+            .sum::<f64>()
+            / f64::from(u32::try_from(tail.len()).expect("tail fits")))
+        .sqrt();
+        let db = 20.0 * (rms * std::f64::consts::SQRT_2).log10();
+        assert!(
+            (db + 12.31).abs() < 0.2,
+            "an empty chain must still give the one-pole's -12.31 dB at 30 Hz, got {db:.2}"
+        );
+    }
+
+    /// A chain *replaces* the fixed high-passes rather than stacking on them.
+    /// Stacking would be the easy mistake and the wrong one: an operator who
+    /// writes their own 120 Hz corner would silently get two.
+    #[test]
+    fn a_chain_replaces_the_flags_it_supersedes() {
+        let chain = EqChain::parse("highpass:120").expect("parses");
+        let pre = PreConditioner::new(pipeline(true, true), &chain, SR, 1)
+            .expect("a chain always builds a conditioner");
+        match &pre.stages {
+            PreStages::Chain(lanes) => {
+                assert_eq!(lanes.len(), 1);
+                assert_eq!(lanes[0].section_count(), 1, "one stage, not three");
+            }
+            PreStages::Flags { .. } => panic!("the chain must win over the flags"),
+        }
+    }
+
+    /// Each channel needs its own filter state. Sharing one would cross-couple
+    /// a stereo pair — the left channel's history colouring the right — which
+    /// is inaudible on noise and obvious on a hard-panned call.
+    #[test]
+    fn every_channel_gets_its_own_state() {
+        let chain = EqChain::parse("highpass:500:2").expect("parses");
+        let mut pre = PreConditioner::new(pipeline(false, false), &chain, SR, 2)
+            .expect("a chain always builds a conditioner");
+
+        // Left silent, right a step. With shared state the left channel would
+        // pick up the right channel's ringing.
+        let mut left_energy = 0.0_f64;
+        for _ in 0..2000 {
+            let frame = [0_i16, 20_000];
+            let bytes: Vec<u8> = frame.iter().flat_map(|s| s.to_le_bytes()).collect();
+            let out = pre.apply(&bytes);
+            let got: Vec<i16> = out
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|p| i16::from_le_bytes(*p))
+                .collect();
+            left_energy = f64::from(got[0]).mul_add(f64::from(got[0]), left_energy);
+        }
+        assert!(
+            left_energy < 1.0,
+            "a silent channel must stay silent; leaked energy {left_energy}"
+        );
+    }
+
+    /// A chain that cannot be realised at this rate must not silence the
+    /// station. An 8 kHz source has a 4 kHz Nyquist, so a 6 kHz stage is
+    /// undesignable — capture keeps running on the flags.
+    #[test]
+    fn an_unbuildable_chain_falls_back_to_the_flags() {
+        let chain = EqChain::parse("peaking:6000:1:3").expect("parses");
+        let pre = PreConditioner::new(pipeline(true, false), &chain, 8_000, 1)
+            .expect("the flags still build a conditioner");
+        assert!(
+            matches!(pre.stages, PreStages::Flags { .. }),
+            "an undesignable chain must fall back, not take over"
+        );
+    }
+
+    /// ...and when the flags are off too, the fallback is "no conditioning at
+    /// all" rather than a half-built chain. The counterpart to the test above:
+    /// without it, `Flags` would look like the answer to everything.
+    #[test]
+    fn an_unbuildable_chain_with_no_flags_conditions_nothing() {
+        let chain = EqChain::parse("peaking:6000:1:3").expect("parses");
+        assert!(
+            PreConditioner::new(pipeline(false, false), &chain, 8_000, 1).is_none(),
+            "nothing to do means no conditioner, and no allocation"
         );
     }
 }
