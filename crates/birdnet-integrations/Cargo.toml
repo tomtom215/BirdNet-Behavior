@@ -33,14 +33,16 @@ rustls.workspace = true
 rustls-pki-types.workspace = true
 rustls-native-certs.workspace = true
 # Offsite backups: ChaCha20-Poly1305 for the envelope, HMAC-SHA256 for the
-# S3-compatible target's SigV4 signature, base64 for the SFTP target's
-# batch-file quoting and the envelope's key fingerprint, argon2id to turn the
-# operator's passphrase into a key.
+# S3-compatible target's SigV4 signature, argon2id to turn the operator's
+# passphrase into a key.
+#
+# No `base64`: it was added here for a key fingerprint and an SFTP quoting
+# scheme, neither of which the finished code needed — SigV4 is hex throughout
+# and the batch-file quoting is `"` and `\`. `cargo-machete` caught it.
 ring.workspace = true
 # Wraps the backup file as an async byte stream for reqwest's streaming body.
 tokio-util.workspace = true
 hmac.workspace = true
-base64.workspace = true
 argon2.workspace = true
 
 [dev-dependencies]

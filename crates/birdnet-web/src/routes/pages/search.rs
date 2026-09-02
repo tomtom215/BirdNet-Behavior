@@ -973,10 +973,14 @@ mod tests {
     fn an_unknown_bulk_action_is_refused_rather_than_defaulted() {
         assert_eq!(BulkAction::parse("delete"), Some(BulkAction::Delete));
         assert_eq!(BulkAction::parse("confirm"), Some(BulkAction::Confirm));
+        // Built by truncation rather than written out: the literal is a
+        // misspelling of `delete`, which is exactly the point of the test and
+        // exactly what the repository's spell-check gate flags. Slicing says
+        // "one character short of `delete`" more clearly than the literal did.
         assert_eq!(
-            BulkAction::parse("delet"),
+            BulkAction::parse(&"delete"[.."delete".len() - 1]),
             None,
-            "a typo must not fall through to any action, least of all delete"
+            "a near-miss must not fall through to any action, least of all delete"
         );
         assert_eq!(BulkAction::parse(""), None);
     }

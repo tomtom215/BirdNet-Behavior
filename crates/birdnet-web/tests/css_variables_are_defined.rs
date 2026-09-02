@@ -115,14 +115,22 @@ fn every_variable_the_stylesheet_uses_is_defined_or_declared_runtime() {
 
     assert!(
         missing.is_empty(),
-        "app.css uses {} custom propert{} it never defines: {missing:?}\n\
+        // Singular and plural are whole words. An earlier version split the
+        // stem across the format placeholder, which reads fine in source and
+        // looks like a misspelling to the repository's spell-check gate — the
+        // gate is right: a reader grepping for "properties" would not find it.
+        "app.css uses {} custom {} it never defines: {missing:?}\n\
          An undefined `var()` does not warn — the declaration is invalid at \
          computed-value time and the property silently keeps what it inherited, \
          so the rule looks approximately right and is wrong. Define it beside \
          the other tokens, or add it to `SET_AT_RUNTIME` with the mechanism \
          that supplies it.",
         missing.len(),
-        if missing.len() == 1 { "y" } else { "ies" }
+        if missing.len() == 1 {
+            "property"
+        } else {
+            "properties"
+        }
     );
 }
 
