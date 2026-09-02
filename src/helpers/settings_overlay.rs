@@ -90,6 +90,11 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         Wiring::Bridged("PRIVACY_THRESHOLD"),
         SettingsCategory::Detection,
     ),
+    (
+        "confirmation_level",
+        Wiring::Bridged("CONFIRMATION_LEVEL"),
+        SettingsCategory::Detection,
+    ),
     // ── Audio capture (consumed in `crate::capture`) ───────────────────────
     (
         "alsa_device",

@@ -2,6 +2,7 @@
 //!
 //! Defines the core detection data structures and the watch -> analyze -> report pipeline.
 
+pub mod corroboration;
 pub mod daemon;
 pub mod nocturnal;
 pub mod noise;
@@ -27,26 +28,43 @@ pub struct ChunkFilters {
     pub privacy: privacy::PrivacyFilter,
     /// Suppresses chunks containing a watched non-bird noise class.
     pub noise: noise::NoiseFilter,
+    /// Requires a species to be heard in enough nearby windows before it is
+    /// recorded. Runs last, and has to: the other two remove whole chunks, and
+    /// counting corroboration across chunks a filter has already emptied would
+    /// credit a species with evidence that was thrown away.
+    pub confirmation: corroboration::ConfirmationLevel,
 }
 
 impl ChunkFilters {
-    /// Apply both filters, privacy first.
+    /// Apply every filter in order: privacy, noise, then corroboration.
+    ///
+    /// `starts[i]` is the start time in seconds of the chunk whose predictions
+    /// are `predictions[i]`; it is only read by the corroboration stage, which
+    /// needs to know which chunks are near each other.
     #[must_use]
-    pub fn apply(&self, predictions: &[Vec<types::Detection>]) -> Vec<Vec<types::Detection>> {
+    pub fn apply(
+        &self,
+        starts: &[f32],
+        predictions: &[Vec<types::Detection>],
+    ) -> Vec<Vec<types::Detection>> {
         let after_privacy = self.privacy.filter_predictions(predictions);
-        self.noise.filter_predictions(&after_privacy)
+        let after_noise = self.noise.filter_predictions(&after_privacy);
+        corroboration::corroborate(self.confirmation, starts, &after_noise)
     }
 
-    /// Whether either filter will suppress anything.
+    /// Whether any filter will suppress anything.
     #[must_use]
     pub fn any_enabled(&self) -> bool {
-        self.privacy.is_enabled() || self.noise.is_enabled()
+        self.privacy.is_enabled() || self.noise.is_enabled() || self.confirmation.enabled()
     }
 }
 
 #[cfg(test)]
 mod chunk_filter_tests {
-    use super::{ChunkFilters, noise::NoiseFilter, privacy::PrivacyFilter, types::Detection};
+    use super::{
+        ChunkFilters, corroboration::ConfirmationLevel, noise::NoiseFilter, privacy::PrivacyFilter,
+        types::Detection,
+    };
 
     /// A detection with the given names and confidence.
     fn d(sci: &str, com: &str, confidence: f32) -> Detection {
@@ -68,6 +86,7 @@ mod chunk_filter_tests {
         ChunkFilters {
             privacy: PrivacyFilter::new(0.03),
             noise: NoiseFilter::with_default_classes(0.5),
+            confirmation: ConfirmationLevel::Off,
         }
     }
 
@@ -91,7 +110,10 @@ mod chunk_filter_tests {
         // which is exactly how the first version of this test was wrong.
         let neighbour = vec![d("Parus major", "Great Tit", 0.9)];
 
-        let out = both().apply(&[neighbour.clone(), both_present, neighbour]);
+        let out = both().apply(
+            &[0.0, 3.0, 6.0],
+            &[neighbour.clone(), both_present, neighbour],
+        );
         assert!(out[1].is_empty(), "the chunk itself must be suppressed");
         assert!(
             out[0].is_empty() && out[2].is_empty(),
@@ -113,8 +135,9 @@ mod chunk_filter_tests {
         let noise_only = ChunkFilters {
             privacy: PrivacyFilter::new(0.0),
             noise: NoiseFilter::with_default_classes(0.5),
+            confirmation: ConfirmationLevel::Off,
         };
-        let out = noise_only.apply(&[bark.clone(), voice]);
+        let out = noise_only.apply(&[0.0, 3.0], &[bark.clone(), voice]);
         assert!(out[0].is_empty());
         assert_eq!(out[1].len(), 1, "the privacy filter acted while disabled");
 
@@ -122,9 +145,55 @@ mod chunk_filter_tests {
         let privacy_only = ChunkFilters {
             privacy: PrivacyFilter::new(0.03),
             noise: NoiseFilter::with_default_classes(0.0),
+            confirmation: ConfirmationLevel::Off,
         };
-        let out = privacy_only.apply(&[bark, quiet]);
+        let out = privacy_only.apply(&[0.0, 3.0], &[bark, quiet]);
         assert_eq!(out[0].len(), 2, "the noise filter acted while disabled");
+    }
+
+    #[test]
+    fn corroboration_runs_after_the_chunk_filters_and_not_before() {
+        // The ordering `apply` fixes, in the direction that can actually go
+        // wrong. Corroboration counts how many nearby chunks carry a species;
+        // if it runs before the filters that empty whole chunks, it counts
+        // evidence that is about to be thrown away.
+        //
+        // Three chunks at 3 s steps. A blackbird sings through all three; a dog
+        // barks over the first. `Strict` needs 70% of the neighbourhood, and
+        // the middle chunk's neighbourhood is all three, so it needs all three.
+        //
+        //   filters then corroborate (correct): the bark empties chunk 0, the
+        //     blackbird is left with 2 of 3, and the middle chunk drops it.
+        //   corroborate then filters (wrong): the blackbird has 3 of 3 and
+        //     survives — and the bark, being alone, is itself corroborated away
+        //     before the noise filter ever sees it.
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::with_default_classes(0.5),
+            confirmation: ConfirmationLevel::Strict,
+        };
+        let out = filters.apply(
+            &[0.0, 3.0, 6.0],
+            &[
+                vec![d("Dog", "Dog", 0.91), d("Turdus merula", "Blackbird", 0.82)],
+                vec![d("Turdus merula", "Blackbird", 0.82)],
+                vec![d("Turdus merula", "Blackbird", 0.82)],
+            ],
+        );
+        assert!(
+            out[1].is_empty(),
+            "corroboration credited the blackbird with a chunk the noise filter \
+             had already emptied: {out:?}"
+        );
+        // Counterpart, so the gate is not satisfied by a filter that simply
+        // suppresses everything: the last chunk's neighbourhood is only two
+        // wide, and both of those carry the blackbird.
+        assert_eq!(
+            out[2].len(),
+            1,
+            "the trailing chunk was corroborated by its own neighbourhood and \
+             should have survived: {out:?}"
+        );
     }
 
     #[test]
@@ -132,6 +201,7 @@ mod chunk_filter_tests {
         let off = ChunkFilters {
             privacy: PrivacyFilter::new(0.0),
             noise: NoiseFilter::with_default_classes(0.0),
+            confirmation: ConfirmationLevel::Off,
         };
         assert!(!off.any_enabled());
         assert!(both().any_enabled());
@@ -139,9 +209,19 @@ mod chunk_filter_tests {
             ChunkFilters {
                 privacy: PrivacyFilter::new(0.0),
                 noise: NoiseFilter::with_default_classes(0.5),
+                confirmation: ConfirmationLevel::Off,
             }
             .any_enabled(),
             "the noise filter alone must count as enabled"
+        );
+        assert!(
+            ChunkFilters {
+                privacy: PrivacyFilter::new(0.0),
+                noise: NoiseFilter::with_default_classes(0.0),
+                confirmation: ConfirmationLevel::Balanced,
+            }
+            .any_enabled(),
+            "corroboration alone must count as enabled"
         );
     }
 }

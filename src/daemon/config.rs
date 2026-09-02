@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use birdnet_core::audio::extraction::{AudioFormat, ExtractionConfig};
+use birdnet_core::detection::corroboration::ConfirmationLevel;
 use birdnet_core::detection::pipeline::PipelineConfig;
 use birdnet_core::inference::model::ModelConfig;
 use birdnet_core::inference::species_filter::{SpeciesFilterConfig, SpeciesLists};
@@ -43,7 +44,7 @@ use crate::helpers::resolve;
 /// value (the operator's override) wins.
 #[must_use]
 #[allow(clippy::float_cmp)] // see docs above — `==` is the contract here.
-pub(super) fn resolve_f32_with_default(
+pub fn resolve_f32_with_default(
     cli_value: f32,
     cli_default: f32,
     config_value: Option<f32>,
@@ -178,6 +179,42 @@ pub(super) fn resolve_noise_classes(
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// Resolve the repeat-confirmation level from the flag and the config file.
+///
+/// Same precedence as every other flag here — the config key is consulted only
+/// when the flag was left at clap's default — but the value is a name rather
+/// than a number, so it can be misspelled. A misspelling is reported and
+/// treated as `off` rather than aborting startup: this filter's whole job is
+/// to *discard* detections, so failing open records more than the operator
+/// asked for, while failing closed would take a station off the air over a
+/// typo in an optional tuning key.
+///
+/// Returns the level and, when something was rejected, the text to log. The
+/// warning is returned rather than logged here so a unit test can see it; the
+/// caller does the `tracing::warn!`.
+#[must_use]
+pub fn resolve_confirmation_level(
+    cli_value: &str,
+    cli_default: &str,
+    config_value: Option<&str>,
+) -> (ConfirmationLevel, Option<String>) {
+    let chosen = if cli_value == cli_default {
+        config_value.unwrap_or(cli_value)
+    } else {
+        cli_value
+    };
+    match ConfirmationLevel::parse(chosen) {
+        Ok(level) => (level, None),
+        Err(why) => (
+            ConfirmationLevel::Off,
+            Some(format!(
+                "`{why}` is not a confirmation level; repeat-confirmation filtering \
+                 is OFF and every detection that passes the other filters is recorded"
+            )),
+        ),
+    }
 }
 
 /// Build the [`PipelineConfig`] used by the daemon's audio pipeline.
@@ -945,6 +982,60 @@ mod tests {
         );
         let cfg = config_with(&[("SENSITIVITY", "1.4")]);
         assert!((resolve_sensitivity(Some(&cfg)) - 1.4).abs() < f32::EPSILON);
+    }
+
+    // ── repeat-confirmation level ───────────────────────────────────────
+
+    #[test]
+    fn the_config_key_is_read_only_when_the_flag_was_left_alone() {
+        // All four cells of the precedence table, because the two that agree
+        // hide the two that do not.
+        let (level, warn) = resolve_confirmation_level("off", "off", Some("strict"));
+        assert_eq!(level, ConfirmationLevel::Strict, "config key ignored");
+        assert!(warn.is_none());
+
+        assert_eq!(
+            resolve_confirmation_level("moderate", "off", Some("strict")).0,
+            ConfirmationLevel::Moderate,
+            "the config key beat an explicit flag"
+        );
+        assert_eq!(
+            resolve_confirmation_level("moderate", "off", None).0,
+            ConfirmationLevel::Moderate
+        );
+        assert_eq!(
+            resolve_confirmation_level("off", "off", None).0,
+            ConfirmationLevel::Off
+        );
+    }
+
+    #[test]
+    fn a_misspelled_level_fails_open_and_says_so() {
+        // Failing closed here would take a station off the air over a typo in
+        // an optional tuning key; failing open silently would let an operator
+        // believe a filter is running that is not. So: off, and a warning that
+        // names the value.
+        let (level, warn) = resolve_confirmation_level("off", "off", Some("strictt"));
+        assert_eq!(level, ConfirmationLevel::Off);
+        let warn = warn.expect("a rejected value must be reported");
+        assert!(
+            warn.contains("strictt"),
+            "the warning must name the value that was rejected: {warn}"
+        );
+        assert!(
+            warn.contains("OFF"),
+            "the warning must say what happens instead: {warn}"
+        );
+    }
+
+    #[test]
+    fn an_accepted_level_is_reported_silently() {
+        // Counterpart to the gate above: a warning on every startup is a
+        // warning nobody reads.
+        for token in ["off", "lenient", "moderate", "balanced", "strict"] {
+            let (_, warn) = resolve_confirmation_level(token, "off", None);
+            assert!(warn.is_none(), "`{token}` was rejected: {warn:?}");
+        }
     }
 
     // ── noise-filter watch list ─────────────────────────────────────────

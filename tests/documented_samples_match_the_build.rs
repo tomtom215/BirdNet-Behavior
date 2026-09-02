@@ -81,3 +81,174 @@ fn the_version_matcher_actually_finds_the_sample() {
          matcher is picking up the wrong string"
     );
 }
+
+// ── The tuning guide's confirmation-level table ──────────────────────────────
+//
+// `docs/book/guides/tuning.md` prints, for each confirmation level, the
+// fraction it demands, the span it looks across, and the smallest overlap at
+// which it demands anything at all. Every one of those numbers is derived —
+// `ConfirmationLevel::minimum_overlap` searches for it by asking the filter the
+// same question the filter will ask at run time — so the table is a transcript
+// of an answer that can change without anyone editing the prose.
+//
+// That is the failure this repository has had twice: a doc comment on
+// `load_icu()` asserting a linkage that did not exist, and `aligned_sum`
+// documented as summing when it averaged. Both misled the next reader. Here the
+// next reader is an operator deciding what to put in their config, and a stale
+// row would tell them to set an overlap that does nothing — the exact defect
+// the whole feature warns about.
+
+/// The tuning guide, compiled in.
+const TUNING_DOC: &str = include_str!("../docs/book/guides/tuning.md");
+
+/// One parsed row of the confirmation-level table.
+struct LevelRow<'a> {
+    level: &'a str,
+    percent: u32,
+    span_secs: u32,
+    /// `None` for "any" — the level bites at every overlap.
+    minimum_overlap: Option<f32>,
+    /// `(needs, of)` from an "already N of M" note, when the row carries one.
+    already: Option<(usize, usize)>,
+}
+
+/// Pull the rows out of the table under the confirmation-level heading.
+///
+/// Returns an empty vector if the table moved or was reshaped, which the caller
+/// treats as a failure rather than a pass — a matcher that quietly finds
+/// nothing is how a gate like this becomes decorative.
+fn documented_levels() -> Vec<LevelRow<'static>> {
+    let Some(section) = TUNING_DOC.split("BIRDNET_CONFIRMATION_LEVEL=").nth(1) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in section.lines() {
+        let line = line.trim();
+        if !line.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        if cells.len() != 4 {
+            continue;
+        }
+        let level = cells[0].trim_matches('`');
+        if !matches!(level, "lenient" | "moderate" | "balanced" | "strict") {
+            continue;
+        }
+        let Ok(percent) = cells[1].trim_end_matches('%').parse::<u32>() else {
+            continue;
+        };
+        let Ok(span_secs) = cells[2].trim_end_matches(" s").parse::<u32>() else {
+            continue;
+        };
+        let last = cells[3];
+        let minimum_overlap = if last.starts_with("any") {
+            None
+        } else {
+            match last.trim_matches('`').parse::<f32>() {
+                Ok(v) => Some(v),
+                Err(_) => continue,
+            }
+        };
+        let already = last.split("already ").nth(1).and_then(|rest| {
+            let mut parts = rest.trim_end_matches(')').split(" of ");
+            Some((
+                parts.next()?.trim().parse().ok()?,
+                parts.next()?.trim().parse().ok()?,
+            ))
+        });
+        out.push(LevelRow {
+            level,
+            percent,
+            span_secs,
+            minimum_overlap,
+            already,
+        });
+    }
+    out
+}
+
+#[test]
+fn the_tuning_guides_confirmation_table_matches_the_filter() {
+    use birdnet_core::detection::corroboration::{
+        ConfirmationLevel, REFERENCE_SPAN, required_confirmations,
+    };
+
+    let rows = documented_levels();
+    assert_eq!(
+        rows.len(),
+        4,
+        "docs/book/guides/tuning.md must still carry a four-row table of \
+         confirmation levels under the BIRDNET_CONFIRMATION_LEVEL example — if \
+         the table moved or was reshaped, retarget this gate rather than \
+         deleting it. Parsed {} row(s).",
+        rows.len()
+    );
+
+    // The window length the table's numbers are written for. Not operator
+    // tunable at the config layer, so a literal here is honest; it is the same
+    // value `check_confirmation_filter` reports against.
+    let chunk_secs =
+        birdnet_core::detection::pipeline::PipelineConfig::default().chunk_duration_secs;
+
+    for row in rows {
+        let level = ConfirmationLevel::parse(row.level).expect("filtered to the four names above");
+
+        #[allow(clippy::cast_precision_loss)]
+        let documented_fraction = row.percent as f32 / 100.0;
+        assert!(
+            (documented_fraction - level.required_fraction()).abs() < 1e-6,
+            "the guide says `{}` demands {}%, the filter demands {}%",
+            row.level,
+            row.percent,
+            level.required_fraction() * 100.0
+        );
+
+        #[allow(clippy::cast_precision_loss)]
+        let documented_span = row.span_secs as f32;
+        assert!(
+            (documented_span - REFERENCE_SPAN).abs() < 1e-6,
+            "the guide says `{}` looks across {} s, the filter uses {REFERENCE_SPAN} s",
+            row.level,
+            row.span_secs
+        );
+
+        let actual = level
+            .minimum_overlap(chunk_secs)
+            .expect("an enabled level has one");
+        match row.minimum_overlap {
+            Some(documented) => assert!(
+                (documented - actual).abs() < 1e-6,
+                "the guide tells operators `{}` needs at least {documented}s of \
+                 overlap; the filter starts demanding a second opinion at {actual}s",
+                row.level
+            ),
+            None => assert!(
+                actual == 0.0,
+                "the guide says `{}` bites at any overlap; the filter needs {actual}s",
+                row.level
+            ),
+        }
+
+        if let Some((needs, of)) = row.already {
+            assert_eq!(
+                level.required_confirmations_at(0.0, chunk_secs),
+                needs,
+                "the guide says `{}` is already {needs} of {of} at zero overlap",
+                row.level
+            );
+            // And the other half of "N of M": M is the number of windows the
+            // filter actually sees at zero overlap, so feeding M back through
+            // the same arithmetic must reproduce N. A row claiming "2 of 5"
+            // would pass the check above and fail this one.
+            assert_eq!(
+                required_confirmations(level, of),
+                needs,
+                "the guide says `{}` is {needs} of {of} at zero overlap, but {of} \
+                 windows at that level is {}",
+                row.level,
+                required_confirmations(level, of)
+            );
+        }
+    }
+}

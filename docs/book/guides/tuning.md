@@ -140,6 +140,46 @@ polar summer all mean "keep everything".
 and warblers calling overhead are exactly what it would quarantine — or name
 those genera in `BIRDNET_NIGHT_EXTRA_NOCTURNAL`.
 
+### 10. Asking for a second opinion
+
+A real bird sings across more than one analysis window. A classifier artefact —
+a car door, a squeak of the mount, a fragment of speech — usually fires in
+exactly one. The repeat-confirmation filter uses that: a species is recorded
+only if enough of the windows around it heard the same thing.
+
+```text
+BIRDNET_OVERLAP=2.0                 # required — see below
+BIRDNET_CONFIRMATION_LEVEL=lenient  # off | lenient | moderate | balanced | strict
+```
+
+Each level names the fraction of the windows within six seconds that must carry
+the species — 20%, 30%, 50%, 70% — rounded up, and never fewer than the
+detection itself.
+
+**It does nothing without `BIRDNET_OVERLAP`.** With no overlap, six seconds is
+two 3-second windows, and 20% of two rounds up to one — which every detection
+already satisfies. How much overlap each level needs:
+
+| Level | Fraction | Windows it looks at | Minimum useful `OVERLAP` |
+|---|---|---|---|
+| `lenient` | 20% | 6 s | `2.0` |
+| `moderate` | 30% | 6 s | `1.5` |
+| `balanced` | 50% | 6 s | any (already 2 of 3) |
+| `strict` | 70% | 6 s | any (already 3 of 3) |
+
+`--doctor` reports which of these you are in, and the daemon logs a warning at
+startup when the level you set cannot reject anything at your overlap — so a
+setting that does nothing tells you, rather than looking like the filter
+working.
+
+Overlap is not free: `OVERLAP=2.0` triples the number of windows and therefore
+the inference work per recording. On a Pi 4 or smaller, check the analysis
+backlog under Station → Health after turning it on.
+
+Start at `lenient`. `strict` on a station recording distant or intermittent
+singers will lose real detections — a bird that calls once and moves on is
+indistinguishable, to this filter, from an artefact.
+
 ## Letting the station tune itself
 
 Two places on the web UI turn your own review history into advice. Both only

@@ -161,8 +161,11 @@ pub fn process_and_infer_filtered(
         all_predictions.push(detections);
     }
 
-    // Apply the whole-chunk filters: human speech, then non-bird noise.
-    let filtered_predictions = chunk_filters.apply(&all_predictions);
+    // Apply the whole-chunk filters: human speech, then non-bird noise, then
+    // corroboration — which needs to know where each chunk sits in the
+    // recording to tell which chunks are neighbours.
+    let starts: Vec<f32> = chunks.iter().map(|c| c.start_secs).collect();
+    let filtered_predictions = chunk_filters.apply(&starts, &all_predictions);
 
     // Build the allowed species set from the species filter.
     //
@@ -218,6 +221,7 @@ pub fn process_and_infer_filtered(
         total_ms = total.as_millis(),
         privacy = chunk_filters.privacy.is_enabled(),
         noise = chunk_filters.noise.is_enabled(),
+        confirmation = chunk_filters.confirmation.as_str(),
         species_filter = species_filter.has_model(),
         "filtered file processing complete"
     );

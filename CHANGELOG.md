@@ -209,9 +209,29 @@ both satisfied by a fixture where the middleware never has to decide anything.
 
 ### Added — detection quality
 
-All five are **off by default**: each changes how many rows a station records,
+All six are **off by default**: each changes how many rows a station records,
 and doing that silently on upgrade would put a visible step in every chart.
 
+- **A repeat-confirmation filter** (`BIRDNET_CONFIRMATION_LEVEL`, and a
+  "Repeat Confirmation" select on the settings page). A real bird sings across
+  more than one analysis window; a car door, a squeaking mount or a fragment of
+  speech usually fires in exactly one. `lenient`, `moderate`, `balanced` and
+  `strict` ask for 20%, 30%, 50% and 70% of the windows within six seconds to
+  agree, rounded up.
+
+  **It does nothing without `BIRDNET_OVERLAP`**, and the whole feature is built
+  around saying so. With no overlap a six-second neighbourhood is two 3-second
+  windows and 20% of two rounds to one, which every detection already meets.
+  So: the option text on the settings page carries the overlap each level needs,
+  `--doctor` reports which side of that line the station is on, and the daemon
+  logs a warning at startup when the level it was given cannot reject anything.
+  All three numbers are computed from the filter rather than written down, and a
+  test pins the manual's table against it.
+
+  Runs last of the three chunk filters, after privacy and noise. That ordering
+  is load-bearing and gated: corroboration counts how many nearby windows
+  carried a species, so running it first would credit a species with evidence
+  from a chunk the noise filter was about to discard.
 - **A noise-class filter** (`BIRDNET_NOISE_THRESHOLD`). A dog barking near the
   microphone is broadband, so the classifier scores whatever species it most
   resembles — and because the barking is regular, the phantom accumulates until

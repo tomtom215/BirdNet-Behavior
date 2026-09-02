@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, mpsc};
 
+use crate::detection::corroboration::ConfirmationLevel;
 use crate::detection::pipeline::{self, PipelineConfig};
 use crate::detection::types::Detection;
 use crate::inference::model::{InferenceError, ModelConfig};
@@ -150,6 +151,14 @@ pub struct DaemonConfig {
     pub noise_threshold: f32,
     /// Non-bird label names the noise filter watches.
     pub noise_classes: Vec<String>,
+    /// How much corroboration from neighbouring windows a species needs before
+    /// it is recorded ([`ConfirmationLevel::Off`] = disabled).
+    ///
+    /// Only does anything when the analysis windows overlap: with no overlap a
+    /// six-second neighbourhood holds two windows, and the two gentler levels
+    /// round down to "itself". [`ConfirmationLevel::is_effective_at`] says so
+    /// for a given overlap, and the daemon warns at startup when it is not.
+    pub confirmation: ConfirmationLevel,
     /// Station latitude (for species occurrence filtering).
     pub latitude: Option<f64>,
     /// Station longitude (for species occurrence filtering).
@@ -249,6 +258,7 @@ mod tests {
             privacy_threshold: 0.0,
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
+            confirmation: ConfirmationLevel::Off,
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),

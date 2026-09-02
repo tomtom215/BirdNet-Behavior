@@ -33,6 +33,7 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
+| `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (needs `OVERLAP`) |
 | `BIRDNET_DUPLICATE_INTERVAL_SECS` | `--duplicate-interval-secs` | `DUPLICATE_INTERVAL_SECS` | `0` |
 | `BIRDNET_NIGHT_FILTER` | `--night-filter` | `NIGHT_FILTER` | off |
 | `BIRDNET_NIGHT_MARGIN_MINS` | `--night-margin-mins` | `NIGHT_MARGIN_MINS` | `60` |

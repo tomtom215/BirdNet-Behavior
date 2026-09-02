@@ -263,6 +263,7 @@ fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
     let chunk_filters = ChunkFilters {
         privacy: PrivacyFilter::new(0.0),
         noise: NoiseFilter::with_default_classes(0.0),
+        confirmation: birdnet_core::detection::corroboration::ConfirmationLevel::Off,
     };
     let mut filter = SpeciesFilter::new_passthrough(SpeciesFilterConfig {
         exclude_list: exclude,

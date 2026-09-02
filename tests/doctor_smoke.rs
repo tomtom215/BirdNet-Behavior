@@ -184,3 +184,71 @@ fn doctor_json_has_no_stdout_log_noise() {
         )
     });
 }
+
+/// A confirmation level that cannot reject anything must say so, and one that
+/// can must not.
+///
+/// The inert case is the whole reason this check exists: `lenient` with the
+/// default overlap of zero is accepted, logged as enabled, and rejects nothing,
+/// because a six-second neighbourhood holds two 3-second windows and 20% of two
+/// rounds up to one — which every detection already satisfies. An operator who
+/// set it and saw no change has no way to tell that from the filter working.
+///
+/// Run through the compiled binary rather than against the check function, so
+/// it also fails if the check is written and never registered in `collect()` —
+/// a diagnostic nobody calls is the same as no diagnostic.
+#[test]
+fn doctor_reports_an_inert_confirmation_level_and_passes_an_effective_one() {
+    let line = |args: &[&str]| -> String {
+        let (stdout, _stderr, _code) = run(args);
+        stdout
+            .lines()
+            .find(|l| l.contains("Repeat-confirmation filter"))
+            .unwrap_or_else(|| {
+                panic!("doctor never mentioned the repeat-confirmation filter:\n{stdout}")
+            })
+            .to_owned()
+    };
+
+    let inert = line(&[
+        "--doctor",
+        "--config",
+        "/nonexistent/birdnet.conf",
+        "--confirmation-level",
+        "lenient",
+    ]);
+    assert!(
+        inert.contains("[ WARN ]") && inert.contains("rejects nothing"),
+        "an inert confirmation level must be reported, not passed: {inert}"
+    );
+
+    // Counterpart: a level that does bite at this overlap must be a plain
+    // pass, or the warning above is a blanket alarm rather than a discriminator.
+    let effective = line(&[
+        "--doctor",
+        "--config",
+        "/nonexistent/birdnet.conf",
+        "--confirmation-level",
+        "strict",
+    ]);
+    assert!(
+        effective.contains("[ PASS ]"),
+        "`strict` rejects at any overlap and must not be warned about: {effective}"
+    );
+
+    // And the same level becomes effective once the windows overlap enough,
+    // which is the fix the warning tells the operator to apply.
+    let fixed = line(&[
+        "--doctor",
+        "--config",
+        "/nonexistent/birdnet.conf",
+        "--confirmation-level",
+        "lenient",
+        "--overlap",
+        "2.0",
+    ]);
+    assert!(
+        fixed.contains("[ PASS ]"),
+        "the fix the warning recommends must actually clear it: {fixed}"
+    );
+}

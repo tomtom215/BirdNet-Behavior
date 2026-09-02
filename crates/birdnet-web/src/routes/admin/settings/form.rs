@@ -37,6 +37,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "overlap",
     "sf_thresh",
     "privacy_threshold",
+    "confirmation_level",
     // Notifications
     "apprise_url",
     "apprise_config",
@@ -129,6 +130,10 @@ pub struct SettingsForm {
     /// Confidence threshold below which detections are written to the privacy-filtered log
     /// rather than the main detections table.
     pub privacy_threshold: Option<String>,
+    /// How much agreement from neighbouring analysis windows a species needs
+    /// before it is recorded: `off`, `lenient`, `moderate`, `balanced` or
+    /// `strict`. Only bites when `overlap` is set.
+    pub confirmation_level: Option<String>,
     // Notifications
     /// Apprise notification URL (e.g. `tgram://token/chat_id`). Supports any scheme
     /// Apprise understands.

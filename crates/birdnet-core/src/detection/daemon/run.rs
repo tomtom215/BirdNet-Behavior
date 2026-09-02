@@ -165,6 +165,7 @@ pub fn run_daemon(
     let chunk_filters = ChunkFilters {
         privacy: PrivacyFilter::new(config.privacy_threshold),
         noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone()),
+        confirmation: config.confirmation,
     };
 
     if chunk_filters.privacy.is_enabled() {
@@ -179,6 +180,36 @@ pub fn run_daemon(
             classes = ?chunk_filters.noise.classes(),
             "noise filter enabled"
         );
+    }
+    if chunk_filters.confirmation.enabled() {
+        let overlap = config.pipeline.chunk_overlap_secs;
+        let chunk_secs = config.pipeline.chunk_duration_secs;
+        if chunk_filters
+            .confirmation
+            .is_effective_at(overlap, chunk_secs)
+        {
+            tracing::info!(
+                level = chunk_filters.confirmation.as_str(),
+                overlap,
+                required = chunk_filters
+                    .confirmation
+                    .required_confirmations_at(overlap, chunk_secs),
+                "repeat-confirmation filter enabled"
+            );
+        } else {
+            // Not a hard error: the level is still honoured, it just cannot
+            // reject anything at this overlap, so a station that set it and
+            // saw no change would otherwise have nothing to read.
+            tracing::warn!(
+                level = chunk_filters.confirmation.as_str(),
+                overlap,
+                chunk_secs,
+                minimum_overlap = ?chunk_filters.confirmation.minimum_overlap(chunk_secs),
+                "repeat-confirmation filter will not reject anything at this overlap: \
+                 a single window is already the whole neighbourhood it is asked to \
+                 agree with. Raise the analysis overlap or the confirmation level."
+            );
+        }
     }
 
     let lat = config.latitude;
@@ -469,6 +500,7 @@ mod tests {
             privacy_threshold: 0.0,
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
+            confirmation: crate::detection::corroboration::ConfirmationLevel::Off,
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),

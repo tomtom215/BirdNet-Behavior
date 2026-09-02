@@ -432,6 +432,18 @@ Options:
 
           [env: BIRDNET_NOISE_CLASSES=]
 
+      --confirmation-level <CONFIRMATION_LEVEL>
+          How much agreement from neighbouring analysis windows a species needs before it is recorded: `off`, `lenient`, `moderate`, `balanced` or `strict`.
+
+          A real bird sings across more than one window; a classifier artefact usually fires once. Each level names the fraction of the windows within six seconds that must carry the same species — 20%, 30%, 50%, 70% — rounded up, and never less than the detection itself.
+
+          **This does nothing without `--overlap`.** With no overlap a six-second neighbourhood holds two 3-second windows, and 20% or 30% of two rounds to one, which every detection already satisfies. `--doctor` reports the overlap each level needs, and the daemon warns at startup when the level it was given cannot reject anything.
+
+          Off by default: it removes rows, so switching it on puts a visible step in every chart. Config key: `CONFIRMATION_LEVEL`.
+
+          [env: BIRDNET_CONFIRMATION_LEVEL=]
+          [default: off]
+
       --duplicate-interval-secs <DUPLICATE_INTERVAL_SECS>
           Suppress a repeat of the same species within this many seconds (0 = disabled).
 
