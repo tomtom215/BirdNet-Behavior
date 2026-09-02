@@ -9,6 +9,7 @@ mod convert;
 mod extractor;
 mod format;
 pub mod metadata;
+mod span;
 mod wav;
 
 use std::fmt;
@@ -20,6 +21,7 @@ pub use config::ExtractionConfig;
 pub use extractor::Extractor;
 pub use format::AudioFormat;
 pub use metadata::{DetectionMeta, MetaError, embed_wav_metadata};
+pub use span::{CONTIGUITY_TOLERANCE_SECS, SpannedWindow, read_window};
 pub use wav::generate_spectrogram;
 
 // ---------------------------------------------------------------------------

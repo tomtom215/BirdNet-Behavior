@@ -428,6 +428,18 @@ pub(super) fn build_extraction_config(
     )
     .clamp(1.0, 60.0);
 
+    // Extra lead-in beyond the symmetric spacer. Clamped rather than validated
+    // away: a value longer than a whole segment cannot be satisfied even with
+    // boundary spanning (it would need two predecessors), and 30 seconds is
+    // already far beyond any call this is for.
+    // No CLI flag: this is a per-station tuning choice rather than something
+    // an operator flips per run, so it lives in the config file alone.
+    let pre_capture_secs = config
+        .and_then(|c| c.get_parsed::<f32>("PRE_CAPTURE_SECS").ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
+        .clamp(0.0, 30.0);
+
     ExtractionConfig {
         extraction_length,
         target_format: AudioFormat::parse(&cli.audio_format),
@@ -435,6 +447,7 @@ pub(super) fn build_extraction_config(
         output_dir: recordings_dir.to_path_buf(),
         recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz,
+        pre_capture_secs,
     }
 }
 
