@@ -1442,6 +1442,63 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
         CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
     },
+    Migration {
+        version: 37,
+        description: "Record third-octave band levels, so the station measures its soundscape",
+        // ## What this stores that `audio_levels` does not
+        //
+        // `audio_levels` keeps one broadband noise floor and SNR per source per
+        // hour, which is enough to notice a microphone going deaf and not
+        // enough to say what changed. This keeps a level per **band**, so the
+        // shape of the change is visible: the top bands alone (a failing
+        // capsule), one band alone (an oscillating preamp), everything under
+        // 200 Hz (wind, or a mount resonating).
+        //
+        // ## Why the band is a column and not a row per band
+        //
+        // A row per (date, hour, source, band) is 30 rows an hour per source
+        // rather than one — about 260 000 rows a year for a single-microphone
+        // station. That is still small, and it is the shape that survives the
+        // band set changing: a station running at 22.05 kHz measures 27 bands
+        // and one at 48 kHz measures 30, so a fixed 30-column table would carry
+        // three columns that are NULL for some stations and not others, and a
+        // 32 kHz station added later would need a migration to widen it.
+        //
+        // Accumulated the same way `audio_levels` is — running sums plus a
+        // count, folded by `INSERT ... ON CONFLICT DO UPDATE` — so an hour is
+        // one row that each observation updates in place, and a restart mid-
+        // hour loses nothing.
+        //
+        // `mean_power_sum` rather than `mean_db_sum`: decibels are logarithmic
+        // and the mean of the interval must be an energy mean (see
+        // `birdnet_core::audio::soundlevel::BandLevel::mean_db`). Summing the
+        // dB values and dividing would answer a different question, ~43 dB
+        // away from this one for a band with a transient in it.
+        up_sql: "CREATE TABLE IF NOT EXISTS sound_levels (
+            date            TEXT    NOT NULL,
+            hour            INTEGER NOT NULL,
+            source          TEXT    NOT NULL,
+            band_hz         REAL    NOT NULL,
+            samples         INTEGER NOT NULL,
+            mean_power_sum  REAL    NOT NULL,
+            min_db          REAL    NOT NULL,
+            max_db          REAL    NOT NULL,
+            PRIMARY KEY (date, hour, source, band_hz)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_sound_levels_date ON sound_levels(date);
+
+        CREATE TABLE IF NOT EXISTS sound_level_broadband (
+            date            TEXT    NOT NULL,
+            hour            INTEGER NOT NULL,
+            source          TEXT    NOT NULL,
+            samples         INTEGER NOT NULL,
+            a_power_sum     REAL    NOT NULL,
+            z_power_sum     REAL    NOT NULL,
+            calibration_db  REAL    NOT NULL DEFAULT 0.0,
+            PRIMARY KEY (date, hour, source)
+        ) WITHOUT ROWID;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

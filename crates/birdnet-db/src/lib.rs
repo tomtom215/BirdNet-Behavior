@@ -15,6 +15,7 @@ pub mod outbound_queue;
 pub mod phantoms;
 pub mod resilience;
 pub mod settings;
+pub mod sound_levels;
 pub mod sqlite;
 pub mod thresholds;
 pub mod weather;

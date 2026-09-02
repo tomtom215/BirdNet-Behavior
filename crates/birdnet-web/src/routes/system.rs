@@ -1,8 +1,9 @@
-//! System API endpoints: health, version, diagnostics.
+//! System API endpoints: health, version, diagnostics, soundscape.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::state::AppState;
@@ -14,6 +15,76 @@ pub fn router() -> Router<AppState> {
         .route("/health", get(health))
         .route("/stats", get(stats))
         .route("/system/disk", get(disk_info))
+        .route("/soundlevel", get(sound_level))
+}
+
+/// Query for [`sound_level`].
+#[derive(Debug, Deserialize)]
+struct SoundLevelQuery {
+    /// Capture source label. Defaults to the source with the newest reading.
+    source: Option<String>,
+}
+
+/// `GET /api/v2/soundlevel` — the newest third-octave spectrum for one source.
+///
+/// Returns the band levels of the most recent hour that has any, with the
+/// broadband A- and Z-weighted figures beside them, and the **unit** those
+/// figures are in.
+///
+/// The unit is in the payload rather than assumed by the caller because it can
+/// genuinely be either: an uncalibrated station reports dBFS (negative,
+/// station-relative, fine for tracking change at one place) and a calibrated
+/// one reports dB SPL. A chart that labels the first as the second is
+/// publishing a measurement the station never made.
+async fn sound_level(
+    State(state): State<AppState>,
+    Query(q): Query<SoundLevelQuery>,
+) -> Json<Value> {
+    let broadband = state
+        .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24))
+        .unwrap_or_default();
+
+    // Default to whichever source reported most recently, so a single-
+    // microphone station needs no query string and a multi-source one gets a
+    // sensible landing view.
+    let source = q
+        .source
+        .or_else(|| broadband.first().map(|b| b.source.clone()));
+    let Some(source) = source else {
+        return Json(json!({
+            "source": Value::Null,
+            "unit": "dBFS",
+            "bands": [],
+            "note": "no sound level observations yet",
+        }));
+    };
+
+    let bands = state
+        .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source))
+        .unwrap_or_default();
+    let latest = broadband.iter().find(|b| b.source == source);
+    let calibration_db = latest.map_or(0.0, |b| b.calibration_db);
+
+    Json(json!({
+        "source": source,
+        "date": bands.first().map(|b| b.date.clone()),
+        "hour": bands.first().map(|b| b.hour),
+        "samples": bands.first().map_or(0, |b| b.samples),
+        "unit": if calibration_db == 0.0 { "dBFS" } else { "dB SPL" },
+        "calibration_db": calibration_db,
+        "a_weighted_db": latest.map(|b| b.a_weighted_db),
+        "z_weighted_db": latest.map(|b| b.z_weighted_db),
+        "bands": bands
+            .iter()
+            .map(|b| json!({
+                "band_hz": b.band_hz,
+                "label": birdnet_core::audio::soundlevel::label_for(b.band_hz),
+                "mean_db": b.mean_db,
+                "min_db": b.min_db,
+                "max_db": b.max_db,
+            }))
+            .collect::<Vec<_>>(),
+    }))
 }
 
 async fn root() -> Json<Value> {
