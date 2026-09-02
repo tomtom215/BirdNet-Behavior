@@ -61,6 +61,64 @@ is what will happen.
 An allow list whose entries match no species this model knows is ignored, and a
 warning is logged, rather than being taken literally and suppressing everything.
 
+## Species photographs
+
+Each species page shows a photograph, cached on disk so the station works
+offline after the first fetch. Two sources are available.
+
+**Wikipedia** (the default) needs no key and covers most species. For a long
+tail it has no photograph at all, and for many others it has a museum skin, an
+egg, or a range map rather than a living bird.
+
+**Flickr** searches Flickr first and falls back to Wikipedia when Flickr has
+nothing, so turning it on can only add coverage — it never leaves a species
+blank that Wikipedia could have filled. It needs a free API key from
+[Flickr's app page](https://www.flickr.com/services/apps/create/apply/):
+
+```bash
+IMAGE_PROVIDER=flickr
+FLICKR_API_KEY=your-key-here
+```
+
+### Showing your own photographs
+
+Set `FLICKR_FILTER_EMAIL` to the email address on your Flickr account and the
+search is restricted to your own photostream — your pictures of the birds your
+own station heard. Wikipedia still fills in the species you have not
+photographed, which is the whole point of the fallback: a filtered stream has a
+few dozen species in it, not nine thousand.
+
+```bash
+IMAGE_PROVIDER=flickr
+FLICKR_API_KEY=your-key-here
+FLICKR_FILTER_EMAIL=you@example.com
+```
+
+### Licensing
+
+Only the Creative Commons licences that permit commercial use are requested —
+CC BY, CC BY-SA, CC BY-ND, CC0, Public Domain Mark, Flickr Commons, and US
+Government works. Your station's page may end up published; the station cannot
+know whether that counts as commercial, so it asks only for photographs where
+the answer does not matter.
+
+Attribution is not optional under CC BY and CC BY-SA, so every photograph is
+shown with its photographer's name and a link to the Flickr page carrying the
+licence terms. A photograph Flickr returns with no photographer named is
+skipped rather than shown uncredited.
+
+### Notes
+
+- Switching provider does **not** re-download anything: the cache is keyed on
+  the species name alone, so images already on disk are kept.
+- A wrong or revoked API key is reported in the log and the station falls back
+  to Wikipedia rather than showing nothing.
+- `FLICKR_API_KEY` is masked in support bundles, and so is the local part of
+  `FLICKR_FILTER_EMAIL` (`you@example.com` becomes `***@example.com`) — the
+  domain stays because it is the diagnostic half.
+- Neither source is used at all in offline mode, or when the image cache is
+  disabled with an empty `IMAGE_CACHE_DIR`.
+
 ## Other categories
 
 The Settings sidebar also covers **Location**, **Audio** (see [Audio & Microphones](./audio.md)), **Notifications & Email** (see [Notifications & Integrations](./notifications.md)), **MQTT / Home Assistant**, and **System**.

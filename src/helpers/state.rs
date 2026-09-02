@@ -90,18 +90,42 @@ pub fn init_image_cache(
 
     let cache_dir = configured.unwrap_or_else(|| default_image_cache_dir(db_path));
 
-    match birdnet_integrations::species_images::ImageCache::with_wikipedia(&cache_dir) {
+    let get = |key: &str| config.and_then(|c| c.get(key));
+    let provider = get("IMAGE_PROVIDER").unwrap_or("wikipedia");
+
+    match birdnet_integrations::species_images::ImageCache::from_settings(
+        &cache_dir,
+        provider,
+        get("FLICKR_API_KEY"),
+        get("FLICKR_FILTER_EMAIL"),
+        birdnet_integrations::species_images::wikipedia::DEFAULT_THUMB_WIDTH,
+    ) {
         Ok(cache) => {
             tracing::info!(
                 path = %cache_dir.display(),
                 cached = cache.cached_count(),
+                provider,
                 "species image cache enabled"
             );
             state.with_image_cache(cache)
         }
         Err(e) => {
-            tracing::warn!(error = %e, "species image cache not available (non-fatal)");
-            state
+            // A misconfigured Flickr key lands here. Falling back to Wikipedia
+            // rather than to *nothing*: the operator asked for photographs, and
+            // the setting they got wrong is which source, not whether. The
+            // error is logged at warn so it is still visible and fixable.
+            tracing::warn!(
+                error = %e,
+                provider,
+                "configured image provider unavailable; falling back to Wikipedia"
+            );
+            match birdnet_integrations::species_images::ImageCache::with_wikipedia(&cache_dir) {
+                Ok(cache) => state.with_image_cache(cache),
+                Err(e) => {
+                    tracing::warn!(error = %e, "species image cache not available (non-fatal)");
+                    state
+                }
+            }
         }
     }
 }

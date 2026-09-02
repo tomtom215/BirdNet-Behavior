@@ -29,11 +29,15 @@
 //! | `cache`      | `DiskCache` — on-disk image storage and indexing     |
 
 pub mod cache;
+pub mod chain;
+pub mod flickr;
 pub mod provider;
 pub mod types;
 pub mod wikipedia;
 
 pub use cache::DiskCache;
+pub use chain::FallbackProvider;
+pub use flickr::FlickrClient;
 pub use provider::ImageProvider;
 pub use types::{ImageError, SpeciesImage};
 pub use wikipedia::WikipediaClient;
@@ -157,6 +161,50 @@ impl ImageCache {
         Self::new(cache_dir, Arc::new(client), width)
     }
 
+    /// Build the provider a configuration asks for, and the cache around it.
+    ///
+    /// `provider` is `"flickr"` or anything else, which means Wikipedia — the
+    /// default has to be the one that needs no key, so a station with a typo in
+    /// this setting still shows photographs.
+    ///
+    /// Choosing Flickr gives a *chain*, not a replacement: Flickr first,
+    /// Wikipedia behind it. See [`chain`] for why "choose one" is the wrong
+    /// shape, and note that the cache key is the species name alone, so a
+    /// station that switches provider keeps every image it has already
+    /// downloaded rather than re-fetching nine thousand thumbnails.
+    ///
+    /// # Errors
+    ///
+    /// [`ImageError::Api`] when Flickr is selected without a usable key — a
+    /// failure the operator can act on, rather than a station that silently
+    /// shows nothing. [`ImageError::Http`] or [`ImageError::CacheDir`] if the
+    /// HTTP client or the cache directory cannot be created.
+    pub fn from_settings(
+        cache_dir: &Path,
+        provider: &str,
+        flickr_api_key: Option<&str>,
+        flickr_filter_email: Option<&str>,
+        thumb_width: u32,
+    ) -> Result<Self, ImageError> {
+        if !provider.trim().eq_ignore_ascii_case("flickr") {
+            return Self::new(
+                cache_dir,
+                Arc::new(WikipediaClient::with_thumb_width(thumb_width)?),
+                thumb_width,
+            );
+        }
+        let key = flickr_api_key.unwrap_or_default();
+        let mut flickr = FlickrClient::new(key)?.with_thumb_width(thumb_width);
+        if let Some(email) = flickr_filter_email {
+            flickr = flickr.with_filter_email(email);
+        }
+        let chained = FallbackProvider::new(
+            Box::new(flickr),
+            Box::new(WikipediaClient::with_thumb_width(thumb_width)?),
+        );
+        Self::new(cache_dir, Arc::new(chained), thumb_width)
+    }
+
     /// Get the image for a species, fetching from the provider if not cached.
     ///
     /// # Errors
@@ -244,6 +292,58 @@ impl ImageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmpdir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("birdnet_imagecache_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// The default has to be the source that needs no key, so a station with a
+    /// typo in `IMAGE_PROVIDER` still shows photographs instead of nothing.
+    #[test]
+    fn an_unrecognised_provider_falls_back_to_wikipedia() {
+        for name in ["wikipedia", "", "  ", "flickerr", "WIKIPEDIA"] {
+            assert!(
+                ImageCache::from_settings(&tmpdir("prov"), name, None, None, 300).is_ok(),
+                "{name:?} should build a working cache"
+            );
+        }
+    }
+
+    /// Flickr selected without a key is an error the operator can act on, not
+    /// a station that quietly shows nothing on every species page.
+    #[test]
+    fn flickr_without_a_key_is_refused_rather_than_silently_empty() {
+        let err = ImageCache::from_settings(&tmpdir("nokey"), "flickr", None, None, 300)
+            .expect_err("no key must be refused");
+        assert!(
+            err.to_string().contains("FLICKR_API_KEY"),
+            "and name the setting to fix: {err}"
+        );
+        assert!(
+            ImageCache::from_settings(&tmpdir("key"), "flickr", Some("k"), None, 300).is_ok(),
+            "the same request with a key builds"
+        );
+    }
+
+    /// Case and surrounding whitespace in a hand-edited config file must not
+    /// decide whether the operator gets the provider they asked for.
+    #[test]
+    fn the_provider_name_is_read_leniently() {
+        for name in ["flickr", "Flickr", "FLICKR", " flickr "] {
+            assert!(
+                ImageCache::from_settings(&tmpdir("case"), name, Some("k"), None, 300).is_ok(),
+                "{name:?} should select Flickr"
+            );
+            // ...and it really did select Flickr: without a key the same name
+            // is refused, which only the Flickr branch does.
+            assert!(
+                ImageCache::from_settings(&tmpdir("case2"), name, None, None, 300).is_err(),
+                "{name:?} did not reach the Flickr branch"
+            );
+        }
+    }
 
     #[test]
     fn cache_key_lowercases_and_normalises() {

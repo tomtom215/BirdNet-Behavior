@@ -472,8 +472,8 @@ against the code it was written for, per `CLAUDE.md`.
 | 6 | Pre-capture across segment boundaries | G‑3 | **Done** | Fixes a silent, invisible data-quality defect in clips we already ship and upload. |
 | 7 | Reverse-proxy base path | G‑19 | In progress | Deployment blocker for a whole class of user; mechanical but must be done exhaustively. |
 | 8 | Solar quiet hours | G‑4 | **Done** | The solar maths already exists; this is wiring plus a schedule-format migration. |
-| 9 | Flickr image provider | N‑1 | To do | The provider seam was built for this and has stood empty. |
-| 10 | Live-stream frequency shift | N‑2 | To do | Accessibility parity; shares the re-encode seam with G‑21. |
+| 9 | Flickr image provider | N‑1 | **Done** | The provider seam was built for this and has stood empty. |
+| 10 | Live-stream frequency shift | N‑2 | In progress | Accessibility parity; shares the re-encode seam with G‑21. |
 
 ### Tier 2 — next
 
