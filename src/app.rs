@@ -158,6 +158,14 @@ async fn serve(
 
     // Build app state.
     let addr: std::net::SocketAddr = cli.listen.parse()?;
+
+    // Decide the TLS shape now, before any expensive setup: a station asked for
+    // HTTPS that cannot have it must say so and stop, not quietly come up on
+    // plain HTTP with the operator believing otherwise.
+    let tls_plan = helpers::tls::plan(&cli, config.as_ref(), addr, &db_path)?;
+    for warning in &tls_plan.warnings {
+        tracing::warn!("{warning}");
+    }
     let server_config = birdnet_web::server::ServerConfig {
         addr,
         db_path: db_path.clone(),
@@ -447,6 +455,27 @@ async fn serve(
         });
     }
 
+    // Load or mint the certificate. Deliberately not at the top of `run`: it
+    // writes to disk in self-signed mode, and doing that before the database
+    // and configuration have been validated would leave material behind from a
+    // start that never completed.
+    let tls_server_config = match birdnet_web::tls::server_config(&tls_plan.settings) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(format!(
+                "TLS is enabled (--tls-mode {}) but the certificate could not be prepared: {e}",
+                tls_plan.settings.mode
+            )
+            .into());
+        }
+    };
+    if tls_plan.settings.mode == birdnet_web::tls::TlsMode::SelfSigned {
+        tracing::info!(
+            ca = %birdnet_web::tls::ca_certificate_path(&tls_plan.settings.state_dir).display(),
+            "self-signed HTTPS: import this CA file once to stop the browser warning"
+        );
+    }
+
     // Keep a handle to the state so the graceful-shutdown hook can wake live
     // WebSocket/SSE handlers (`begin_shutdown`); `build_router` moves `state`.
     let shutdown_state = state.clone();
@@ -532,7 +561,38 @@ async fn serve(
         clip_retention_days,
     );
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    // Bind every listener the plan calls for before telling systemd we are up:
+    // `Type=notify` treats READY=1 as "the socket is accepting", and a station
+    // that reports ready and then fails to bind 8503 is a worse outcome than
+    // one that fails to start at all.
+    let listener = if tls_plan.wants_plain_listener() {
+        Some(tokio::net::TcpListener::bind(addr).await?)
+    } else {
+        None
+    };
+
+    let https = match (tls_plan.https_addr, tls_server_config) {
+        (Some(https_addr), Some((config, resolver))) => {
+            let listener = tokio::net::TcpListener::bind(https_addr).await?;
+            // Only `manual` mode has files somebody else rewrites; the
+            // self-signed pair only ever changes when this process changes it.
+            if tls_plan.settings.mode == birdnet_web::tls::TlsMode::Manual
+                && let (Some(cert), Some(key)) = (
+                    tls_plan.settings.cert.clone(),
+                    tls_plan.settings.key.clone(),
+                )
+            {
+                birdnet_web::tls::spawn_reloader(resolver, cert, key);
+            }
+            tracing::info!(
+                addr = %https_addr,
+                mode = %tls_plan.settings.mode,
+                "HTTPS listening"
+            );
+            Some((listener, config))
+        }
+        _ => None,
+    };
 
     // The web server is bound — notify systemd that startup is complete and
     // begin pinging the watchdog. If we are not running under systemd these
@@ -553,19 +613,71 @@ async fn serve(
         .map(birdnet_core::detection::daemon::DaemonHandle::heartbeat);
     sd_notify::spawn_watchdog_pinger(Some(metrics_for_watchdog), detection_heartbeat);
 
-    // Use `into_make_service_with_connect_info` so the per-IP rate limiter
-    // can read the client socket address from request extensions.
-    let axum_serve = axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(async move {
-        shutdown_signal().await;
-        // Wake live WebSocket/SSE handlers (dashboard, spectrogram, admin logs)
-        // so they close their sockets and axum's drain finishes in
-        // milliseconds, instead of every restart waiting out SHUTDOWN_GRACE.
-        shutdown_state.begin_shutdown();
+    // One shutdown signal, fanned out: with TLS configured there are two
+    // listeners, and both have to drain. The hook also wakes live WebSocket /
+    // SSE handlers (dashboard, spectrogram, admin logs) so they close their
+    // sockets and the drain finishes in milliseconds, instead of every restart
+    // waiting out SHUTDOWN_GRACE.
+    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+    {
+        let tx = shutdown_tx.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            shutdown_state.begin_shutdown();
+            let _ = tx.send(());
+        });
+    }
+    let signalled = move |mut rx: tokio::sync::broadcast::Receiver<()>| async move {
+        // `recv` errors only if every sender is dropped, which happens on the
+        // way out anyway; either way it means "stop".
+        let _ = rx.recv().await;
+    };
+
+    let https_task = https.map(|(listener, config)| {
+        let app = app.clone();
+        let shutdown = signalled(shutdown_tx.subscribe());
+        tokio::spawn(async move {
+            birdnet_web::tls::serve(listener, config, app, shutdown)
+                .await
+                .map_err(|e| e.to_string())
+        })
     });
+
+    let plain_task = listener.map(|listener| {
+        // With `--tls-redirect` the plain port stops serving the application
+        // and answers only "the same URL, over HTTPS".
+        let router = if tls_plan.redirect {
+            let port = tls_plan
+                .https_addr
+                .map_or_else(|| addr.port(), |a| a.port());
+            tracing::info!(addr = %addr, https_port = port, "HTTP redirecting to HTTPS");
+            birdnet_web::tls::redirect_router(port)
+        } else {
+            app.clone()
+        };
+        let shutdown = signalled(shutdown_tx.subscribe());
+        tokio::spawn(async move {
+            // `into_make_service_with_connect_info` so the per-IP rate limiter
+            // can read the client socket address from request extensions.
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown)
+            .await
+            .map_err(|e| e.to_string())
+        })
+    });
+
+    let drain = async {
+        for task in [https_task, plain_task].into_iter().flatten() {
+            match task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!(error = %e, "web server stopped with an error"),
+                Err(e) => tracing::error!(error = %e, "web server task panicked"),
+            }
+        }
+    };
 
     // Backstop the graceful drain. The hook above signals live WebSocket /
     // event-stream clients (the dashboard keeps one open) to close, so the
@@ -573,7 +685,7 @@ async fn serve(
     // connection ignores the signal — without it a stuck client would hang the
     // process until systemd SIGKILLs it at TimeoutStopSec.
     tokio::select! {
-        res = axum_serve => res?,
+        () = drain => {}
         () = shutdown_grace_backstop() => {
             tracing::warn!(
                 grace_secs = SHUTDOWN_GRACE.as_secs(),

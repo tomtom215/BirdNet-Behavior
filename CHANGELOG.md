@@ -7,10 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Two clusters: removing the Apprise dependency for the services most stations
-actually use, and giving the detection pipeline the quality controls that
-separate a station's real records from its model's artefacts. Plus one latent
-data-loss bug found while adding a quarantine reason.
+Three clusters: HTTPS in the listener itself, removing the Apprise dependency
+for the services most stations actually use, and giving the detection pipeline
+the quality controls that separate a station's real records from its model's
+artefacts. Plus one latent data-loss bug found while adding a quarantine
+reason.
+
+### Added — HTTPS, without a reverse proxy
+
+Until now the server spoke plain HTTP and the documentation told you to put
+Caddy or nginx in front. That is a correct answer and a bad default: a second
+daemon and a second config file on a box whose whole point is that it is one
+binary. Both projects this one is measured against ship TLS; now so does this
+one. **Off by default** — nothing changes for an existing station until
+`--tls-mode` is set.
+
+- **`--tls-mode self-signed`.** Generates a small local CA and a server
+  certificate it signs, under `--tls-dir` (default: a `tls` directory beside
+  the database). HTTPS comes up on 8503; plain HTTP keeps answering on 8502
+  unless you say otherwise. Import the CA file once — the startup log and
+  `--doctor` both print its path — and the browser warning stops for good: the
+  CA lives ten years, the certificate it signs 397 days and rotates a month
+  early, so a rotation does not send you back to the trust store.
+
+  Not one self-signed certificate, which is the obvious design and does not
+  work. Observed against rustls-webpki before it was written the other way:
+  with `CA:FALSE` a client that trusts the file rejects the handshake
+  (`BadSignature`), and with `CA:TRUE` it rejects the same file for being a
+  `CaUsedAsEndEntity`. Splitting the CA from the leaf satisfies both.
+
+- **`--tls-mode manual`.** Serves `--tls-cert` and `--tls-key`. Both are
+  re-read when they change on disk, so `certbot renew` at 03:00 is picked up on
+  the next handshake with no restart and no deploy hook — the common failure
+  mode for anyone who has wired an ACME client to a long-lived server.
+
+- **`--tls-listen` and `--tls-redirect`.** HTTPS defaults to `--listen`'s host
+  on port 8503. Point it at `--listen` to serve only HTTPS on the one port, or
+  set `--tls-redirect` to have the plain port answer `308` to the HTTPS origin
+  (`308`, not `301`, so a POSTed settings form is not silently downgraded to a
+  GET). Setting both is contradictory; the redirect is dropped with a warning
+  rather than silently.
+
+- **A `--doctor` check** that does exactly what startup does: parses the
+  configured material, verifies the key matches the certificate, and names the
+  CA to import. A mistyped `--tls-cert` is a `[ FAIL ]` in the diagnostic
+  rather than a service that restart-loops after you have gone back inside.
+
+  It also reports plain HTTP on a routable address as a `[ WARN ]` — and on a
+  loopback bind as a `[ PASS ]`, because a station behind a proxy is a good
+  deployment and nagging every operator would train them to ignore the report.
+
+- **No ACME client.** Deliberate: it needs a reachable name, an open port 80 or
+  a DNS credential, and an account key to look after, and a station on a home
+  LAN has none of those. `manual` mode plus the reload above is the supported
+  path for anyone who does.
+
+**Dependency cost, counted rather than asserted.** Five new direct edges:
+`tokio-rustls`, `hyper` and `hyper-util` were already resolved in the graph
+(via reqwest/lettre and axum), so those are edges only. `rustls-pemfile` and
+`rcgen` are new. Diffing `Cargo.lock` and intersecting with `cargo tree -e
+normal` puts the real figure at **ten newly compiled crates** — `rcgen`,
+`rustls-pemfile`, `pem`, `yasna`, `time` (+ `time-core`, `deranged`,
+`num-conv`, `powerfmt`) and `futures-macro` — with a further nine appearing in
+the lockfile as optional dependencies that are never built (`x509-parser` and
+its ASN.1 stack). `rcgen` uses the `ring` backend already in the tree rather
+than `aws-lc-rs`, for the same cross-compilation reason `rustls` does.
+
+`time` arriving in *every* build configuration falsified a premise
+`birdnet-db`'s `clock_premise` test had been guarding since it was written; the
+design note in `crates/birdnet-db/src/clock.rs` and the test now record it, in
+both directions.
 
 ### Added — notifications without Apprise
 

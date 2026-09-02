@@ -15,6 +15,64 @@ Options:
           [env: BIRDNET_LISTEN=]
           [default: 0.0.0.0:8502]
 
+      --tls-mode <TLS_MODE>
+          How the dashboard terminates TLS: `off`, `self-signed`, or `manual`.
+
+          `off` (the default) serves plain HTTP, exactly as every release before this one did.
+
+          `self-signed` generates a small local CA and a server certificate it signs, both kept in `--tls-dir` and rotated before they expire. Browsers warn until you import the CA file once (the startup log prints its path); after that they stop, and a later certificate rotation does not bring the warning back.
+
+          `manual` serves `--tls-cert` and `--tls-key`. Both are re-read when they change on disk, so an ACME client renewing them in the small hours is picked up without a restart.
+
+          [env: BIRDNET_TLS_MODE=]
+          [default: off]
+
+      --tls-cert <TLS_CERT>
+          Certificate chain (PEM) for `--tls-mode manual`
+
+          [env: BIRDNET_TLS_CERT=]
+
+      --tls-key <TLS_KEY>
+          Private key (PEM) for `--tls-mode manual`
+
+          [env: BIRDNET_TLS_KEY=]
+
+      --tls-listen <TLS_LISTEN>
+          Where HTTPS listens. Defaults to `--listen`'s host on port 8503.
+
+          Set this equal to `--listen` to serve **only** HTTPS on the one port; otherwise plain HTTP keeps answering on `--listen` (see `--tls-redirect`).
+
+          [env: BIRDNET_TLS_LISTEN=]
+
+      --tls-redirect
+          Answer plain HTTP with a redirect to HTTPS instead of serving the app.
+
+          Ignored when HTTPS shares the one socket with `--listen`, because then there is no plain port to redirect from.
+
+          [env: BIRDNET_TLS_REDIRECT=]
+
+      --tls-hostnames <TLS_HOSTNAMES>
+          Names the generated certificate should cover, comma-separated.
+
+          Defaults to `localhost`, this machine's hostname and `<hostname>.local`, the bound address, and `127.0.0.1` — the three ways a station is normally reached. Adding a name here regenerates the certificate.
+
+          [env: BIRDNET_TLS_HOSTNAMES=]
+
+      --tls-dir <TLS_DIR>
+          Directory for the generated CA and server certificate.
+
+          Defaults to a `tls` directory beside the database.
+
+          [env: BIRDNET_TLS_DIR=]
+
+      --tls-days <TLS_DAYS>
+          How many days a generated server certificate is valid for.
+
+          The local CA that signs it lives for ten years regardless, so rotating the server certificate never invalidates a trust-store import.
+
+          [env: BIRDNET_TLS_DAYS=]
+          [default: 397]
+
       --web-only
           Run only the web server (skip analysis daemon)
 

@@ -96,6 +96,67 @@ pub struct Cli {
     #[arg(long, default_value = "0.0.0.0:8502", env = "BIRDNET_LISTEN")]
     pub listen: String,
 
+    /// How the dashboard terminates TLS: `off`, `self-signed`, or `manual`.
+    ///
+    /// `off` (the default) serves plain HTTP, exactly as every release before
+    /// this one did.
+    ///
+    /// `self-signed` generates a small local CA and a server certificate it
+    /// signs, both kept in `--tls-dir` and rotated before they expire. Browsers
+    /// warn until you import the CA file once (the startup log prints its
+    /// path); after that they stop, and a later certificate rotation does not
+    /// bring the warning back.
+    ///
+    /// `manual` serves `--tls-cert` and `--tls-key`. Both are re-read when they
+    /// change on disk, so an ACME client renewing them in the small hours is
+    /// picked up without a restart.
+    #[arg(long, default_value = "off", env = "BIRDNET_TLS_MODE")]
+    pub tls_mode: String,
+
+    /// Certificate chain (PEM) for `--tls-mode manual`.
+    #[arg(long, env = "BIRDNET_TLS_CERT")]
+    pub tls_cert: Option<PathBuf>,
+
+    /// Private key (PEM) for `--tls-mode manual`.
+    #[arg(long, env = "BIRDNET_TLS_KEY")]
+    pub tls_key: Option<PathBuf>,
+
+    /// Where HTTPS listens. Defaults to `--listen`'s host on port 8503.
+    ///
+    /// Set this equal to `--listen` to serve **only** HTTPS on the one port;
+    /// otherwise plain HTTP keeps answering on `--listen` (see
+    /// `--tls-redirect`).
+    #[arg(long, env = "BIRDNET_TLS_LISTEN")]
+    pub tls_listen: Option<String>,
+
+    /// Answer plain HTTP with a redirect to HTTPS instead of serving the app.
+    ///
+    /// Ignored when HTTPS shares the one socket with `--listen`, because then
+    /// there is no plain port to redirect from.
+    #[arg(long, env = "BIRDNET_TLS_REDIRECT")]
+    pub tls_redirect: bool,
+
+    /// Names the generated certificate should cover, comma-separated.
+    ///
+    /// Defaults to `localhost`, this machine's hostname and `<hostname>.local`,
+    /// the bound address, and `127.0.0.1` — the three ways a station is
+    /// normally reached. Adding a name here regenerates the certificate.
+    #[arg(long, env = "BIRDNET_TLS_HOSTNAMES")]
+    pub tls_hostnames: Option<String>,
+
+    /// Directory for the generated CA and server certificate.
+    ///
+    /// Defaults to a `tls` directory beside the database.
+    #[arg(long, env = "BIRDNET_TLS_DIR")]
+    pub tls_dir: Option<PathBuf>,
+
+    /// How many days a generated server certificate is valid for.
+    ///
+    /// The local CA that signs it lives for ten years regardless, so rotating
+    /// the server certificate never invalidates a trust-store import.
+    #[arg(long, default_value_t = 397, env = "BIRDNET_TLS_DAYS")]
+    pub tls_days: u32,
+
     /// Run only the web server (skip analysis daemon).
     #[arg(long)]
     pub web_only: bool,

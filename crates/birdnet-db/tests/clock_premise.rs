@@ -68,11 +68,17 @@ fn a_time_zone_database_reader_is_already_in_the_tree() {
 
 /// The counterpart, so the gate above is a discrimination rather than "the
 /// lockfile is non-empty": a package that is genuinely absent must read as
-/// absent. `time` and `jiff` are the two crates the note says the workspace does
-/// not carry, and it is right about those.
+/// absent.
+///
+/// `time` used to be on this list and no longer is. It arrived with `rcgen`
+/// when `birdnet-web` grew HTTPS — `rcgen` types certificate validity bounds
+/// with `time::OffsetDateTime` — and the note above now says so. Its departure
+/// from this list is itself the lesson the file exists for: the assertion
+/// failed on the commit that added the dependency, which is exactly when
+/// somebody needed to be told the paragraph had gone stale.
 #[test]
 fn the_crates_the_note_says_are_absent_really_are() {
-    for absent in ["time", "jiff", "chrono-tz"] {
+    for absent in ["jiff", "chrono-tz"] {
         assert!(
             !locks(absent),
             "`{absent}` is now in the tree — `clock.rs`'s note distinguishes it \
@@ -80,6 +86,24 @@ fn the_crates_the_note_says_are_absent_really_are() {
              revisiting"
         );
     }
+}
+
+/// And `time`, which the note now names, is genuinely there — so a future
+/// reader chasing that citation lands somewhere real, and its removal prompts
+/// the same paragraph fix in the other direction.
+#[test]
+fn time_arrives_with_the_certificate_generator() {
+    assert!(
+        locks("time"),
+        "`time` has left the dependency tree. That is fine — but `clock.rs`'s \
+         note now cites it as arriving through `rcgen`, so that paragraph is \
+         wrong. Fix the comment, then this test."
+    );
+    assert!(
+        locks("rcgen"),
+        "`clock.rs` cites `rcgen` as the route `time` takes into the binary, \
+         and it is no longer there"
+    );
 }
 
 /// And the reason it is in the tree is still the reason the note gives, so a

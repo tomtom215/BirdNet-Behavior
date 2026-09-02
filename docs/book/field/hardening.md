@@ -43,10 +43,15 @@ Auth enforced by the binary itself.** Treat reachability as the primary control.
   ```
 
   in the journal, either set `CADDY_PWD` (below) or bind to `127.0.0.1`.
-- **Never port-forward `8502` to the internet.** The built-in server speaks
-  plain HTTP with no TLS. Put it behind a reverse proxy (Caddy/nginx) that
-  terminates HTTPS and adds authentication, or use a mesh VPN
-  (Tailscale/WireGuard). See
+- **Encrypt the LAN traffic.** `--tls-mode self-signed` brings HTTPS up on 8503
+  and generates a local CA to import once; `--tls-mode manual` serves your own
+  certificate and reloads it when your ACME client renews it. Off by default.
+  `--doctor` verifies the whole setup before startup does.
+- **Never port-forward `8502`/`8503` to the internet.** Built-in HTTPS encrypts
+  the traffic; it does not add a login lockout or a WAF, and a self-signed
+  certificate carries no publicly-trusted name. Put it behind a reverse proxy
+  (Caddy/nginx) that terminates HTTPS with a real certificate and adds
+  authentication, or use a mesh VPN (Tailscale/WireGuard). See
   [Remote Access & Security](../admin/remote-access.md) for proxy configs.
 
 ---
@@ -75,9 +80,10 @@ internet-reachable, keep it set (and add TLS off-LAN).
   from `birdnet.conf` — the systemd unit sets no `EnvironmentFile`, so on a
   bare-metal install the sign-in name stays `admin`.
 
-  This is compatible with the BirdNET-Pi `CADDY_PWD` convention. It is **still
-  plain HTTP** — only rely on it behind TLS or on a trusted LAN. **Clearing
-  `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard.
+  This is compatible with the BirdNET-Pi `CADDY_PWD` convention. The password
+  crosses the wire in clear text unless TLS is on — turn on `--tls-mode`, put a
+  proxy in front, or keep the station on a trusted LAN. **Clearing `CADDY_PWD`
+  leaves `/admin` open** to anyone who can reach the dashboard.
 - **Reverse-proxy auth** (recommended for internet exposure): terminate TLS and
   require a password at the proxy (Caddy `basic_auth`, nginx `auth_basic`), so
   credentials never cross the wire in clear text.
@@ -209,6 +215,7 @@ only opens the ports you actually use.
 ## Checklist for an exposed deployment
 
 - [ ] Restrict the bind to `127.0.0.1` (+ SSH/VPN) if you don't need LAN access; for off-LAN access, put a TLS reverse proxy in front.
+- [ ] Turn on `--tls-mode self-signed` if the dashboard is reachable by anyone else on the network.
 - [ ] Keep `CADDY_PWD` set (a fresh install generates one) — or use proxy/VPN auth. Don't clear it on a non-loopback bind.
 - [ ] Leave CORS at its same-origin default unless you genuinely need a second origin.
 - [ ] Set `BIRDNET_PRIVACY_THRESHOLD` if voices may be captured.

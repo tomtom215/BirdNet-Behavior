@@ -21,6 +21,19 @@ pub fn cli_with_explicit(ids: &[&str]) -> Cli {
     cli
 }
 
+/// A `Cli` parsed from `args`, with `explicit` populated exactly as it is at
+/// startup.
+///
+/// `default_cli` and `cli_with_explicit` between them cover "no flags" and
+/// "pretend this flag was passed"; this covers the third case a precedence rule
+/// needs — a real argv, where clap decides what was supplied and what merely
+/// has a default. Anything asserting on `--tls-*` needs that distinction,
+/// because `--tls-mode` has a `default_value` and reading it without consulting
+/// `explicit` would hand the CLI an unconditional win over the config file.
+pub fn cli_from(args: &[&str]) -> Cli {
+    Cli::parse_tracked_from(args.iter().copied())
+}
+
 /// A `Config` parsed from the given `KEY=value` entries (no file I/O).
 pub fn config_with(entries: &[(&str, &str)]) -> birdnet_core::config::Config {
     let content = entries

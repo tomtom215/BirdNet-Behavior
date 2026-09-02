@@ -48,6 +48,20 @@ reqwest.workspace = true
 # blocks) and for the HTTP compression layer.
 flate2.workspace = true
 
+# HTTPS for the dashboard's own listener. `axum::serve` takes a plain
+# `TcpListener` and has no seam for a TLS acceptor, so `tls.rs` runs the accept
+# loop itself over hyper-util's auto builder.
+rustls.workspace = true
+rustls-pki-types.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+rcgen.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+# The manual accept loop calls `Service::call` on the router directly, which
+# needs the trait in scope; tower-http does not re-export it.
+tower.workspace = true
+
 # Share-link token signing (O-07 — public rare-bird permalinks).
 hmac.workspace = true
 sha2.workspace = true
@@ -60,8 +74,9 @@ password-hash.workspace = true
 
 [dev-dependencies]
 # `tower::ServiceExt::oneshot` drives the admin router in the nav route-parity
-# test (admin_router_serves_every_nav_destination). Test-only — the production
-# code reaches tower's middleware through tower-http, as the dep comment notes.
+# test (admin_router_serves_every_nav_destination). Also a normal dependency
+# now — `tls.rs`'s accept loop calls `Service::call` on the router directly —
+# but kept declared here too so the dev-only `ServiceExt` usage is explicit.
 tower.workspace = true
 
 [lints]

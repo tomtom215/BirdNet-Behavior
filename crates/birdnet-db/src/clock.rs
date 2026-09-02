@@ -31,6 +31,14 @@
 //! compiled and linked into the thing on the Pi. Only the slim
 //! `--no-default-features` build is without it.
 //!
+//! `time` is in the tree too, in **every** configuration: `birdnet-web`'s
+//! HTTPS support uses `rcgen` to mint the self-signed certificate, and `rcgen`
+//! types a certificate's validity bounds with `time::OffsetDateTime`. Nothing
+//! in this workspace depends on `time` *directly* — `birdnet_web::tls` reaches
+//! it only through `rcgen::date_time_ymd`, so the calendar arithmetic stays
+//! shared with `birdnet_core::civil` — but the crate is compiled and linked
+//! regardless, which is the fact this paragraph is about.
+//!
 //! That does not make this module wrong — the agreement argument above is the
 //! real reason and it stands on its own. It makes the *cost* argument wrong:
 //! reaching for a date/time crate here would add no build time and no binary
