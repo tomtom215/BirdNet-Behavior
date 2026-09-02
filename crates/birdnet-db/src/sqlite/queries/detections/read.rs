@@ -423,7 +423,8 @@ pub fn todays_detections(
     super::filter::search_detections(conn, &conn_filter(date, search, filter), limit, offset)
 }
 
-/// The [`DetectionFilter`] equivalent of this function's four arguments.
+/// The [`super::filter::DetectionFilter`] equivalent of this function's four
+/// arguments.
 ///
 /// Extracted so the two entry points below cannot drift: they used to be two
 /// copies of the same three-armed `match`, and a fix applied to one of them was

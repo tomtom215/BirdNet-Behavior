@@ -9,6 +9,7 @@
 //! itself, and `ConnectInfo` reaches the handlers (without it the per-IP rate
 //! limiter degrades to one global bucket, silently).
 
+use rustls_pki_types::pem::PemObject as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -69,7 +70,7 @@ async fn start_tls(
 fn client_config(state_dir: &std::path::Path) -> Arc<rustls::ClientConfig> {
     let pem = std::fs::read(tls::ca_certificate_path(state_dir)).expect("read CA");
     let mut roots = rustls::RootCertStore::empty();
-    for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+    for cert in rustls_pki_types::CertificateDer::pem_slice_iter(&pem) {
         roots.add(cert.expect("parse CA")).expect("trust CA");
     }
     Arc::new(

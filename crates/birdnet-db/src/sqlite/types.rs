@@ -90,7 +90,7 @@ pub struct DetectionRecord<'a> {
 /// fields it cares about and inherit the rest — adding a column to this struct
 /// broke five hand-written fixtures across `birdnet-web`, which is a cost paid
 /// every time the shape grows and buys nothing. Production code constructs rows
-/// from the database through [`map_detection_row`]; nothing should be reaching
+/// from the database through `map_detection_row`; nothing should be reaching
 /// for `default()` outside a test.
 #[derive(Debug, Clone, serde::Serialize, Default)]
 pub struct DetectionRow {

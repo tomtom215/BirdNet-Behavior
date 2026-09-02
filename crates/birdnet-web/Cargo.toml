@@ -54,7 +54,6 @@ flate2.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 tokio-rustls.workspace = true
-rustls-pemfile.workspace = true
 rcgen.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true

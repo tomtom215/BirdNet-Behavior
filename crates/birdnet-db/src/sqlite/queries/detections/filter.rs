@@ -21,7 +21,7 @@
 //! optional fragments is precisely the bug this design exists to make
 //! impossible. With positional `?` the fragment that adds the placeholder is the
 //! fragment that pushes the value, so the two cannot drift — and
-//! [`tests::every_filter_combination_binds_exactly_its_placeholders`] walks a
+//! `every_filter_combination_binds_exactly_its_placeholders` (below) walks a
 //! generated matrix of filter combinations asserting `placeholders == params`,
 //! which is a gate on the whole class rather than on the cases someone
 //! remembered.
@@ -31,7 +31,7 @@
 //! Operator strings — the search box, species names, source labels — are always
 //! *values*, never fragments. The only things interpolated into the statement
 //! are `&'static str` fragments selected by an enum.
-//! [`tests::operator_text_never_reaches_the_statement`] asserts that against
+//! `operator_text_never_reaches_the_statement` (below) asserts that against
 //! deliberately hostile input, because "we always bind" is a claim worth
 //! checking rather than repeating.
 

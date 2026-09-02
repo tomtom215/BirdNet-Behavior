@@ -60,6 +60,7 @@ use axum::extract::ConnectInfo;
 use rustls::ServerConfig;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
+use rustls_pki_types::pem::PemObject as _;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -216,6 +217,8 @@ pub enum TlsError {
     Io(PathBuf, io::Error),
     /// A PEM file parsed but contained nothing usable.
     Empty(PathBuf, &'static str),
+    /// A PEM file could not be parsed.
+    Pem(PathBuf, rustls_pki_types::pem::Error),
     /// rustls refused the keypair — most often because the key does not match
     /// the certificate.
     Rustls(rustls::Error),
@@ -235,6 +238,7 @@ impl fmt::Display for TlsError {
             Self::MissingPath(what) => write!(f, "TLS mode 'manual' needs {what}"),
             Self::Io(p, e) => write!(f, "{}: {e}", p.display()),
             Self::Empty(p, what) => write!(f, "{} contains no {what}", p.display()),
+            Self::Pem(p, e) => write!(f, "{} is not readable PEM: {e}", p.display()),
             Self::Rustls(e) => write!(f, "rustls rejected the certificate/key: {e}"),
             Self::Generate(m) => write!(f, "could not generate a self-signed certificate: {m}"),
             Self::Serve(e) => write!(f, "TLS listener failed: {e}"),
@@ -247,6 +251,7 @@ impl std::error::Error for TlsError {
         match self {
             Self::Io(_, e) | Self::Serve(e) => Some(e),
             Self::Rustls(e) => Some(e),
+            Self::Pem(_, e) => Some(e),
             Self::Mode(_) | Self::MissingPath(_) | Self::Empty(..) | Self::Generate(_) => None,
         }
     }
@@ -275,16 +280,25 @@ fn load_pair(cert_path: &Path, key_path: &Path) -> Result<Arc<CertifiedKey>, Tls
     let cert_pem = std::fs::read(cert_path).map_err(|e| TlsError::Io(cert_path.into(), e))?;
     let key_pem = std::fs::read(key_path).map_err(|e| TlsError::Io(key_path.into(), e))?;
 
-    let chain: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_pem.as_slice())
+    // `rustls_pki_types::pem`, not `rustls-pemfile`: the latter was archived in
+    // August 2025 (RUSTSEC-2025-0134) and its final release is a thin wrapper
+    // around exactly this code. Same parser, one fewer crate, no advisory.
+    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_pem)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| TlsError::Io(cert_path.into(), e))?;
+        .map_err(|e| TlsError::Pem(cert_path.into(), e))?;
     if chain.is_empty() {
         return Err(TlsError::Empty(cert_path.into(), "certificate"));
     }
 
-    let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_pem.as_slice())
-        .map_err(|e| TlsError::Io(key_path.into(), e))?
-        .ok_or_else(|| TlsError::Empty(key_path.into(), "private key"))?;
+    let key: PrivateKeyDer<'static> = PrivateKeyDer::from_pem_slice(&key_pem).map_err(|e| {
+        // An empty file and a malformed one are different operator problems,
+        // and the PEM parser reports both as `NoItemsFound`.
+        if key_pem.iter().all(u8::is_ascii_whitespace) {
+            TlsError::Empty(key_path.into(), "private key")
+        } else {
+            TlsError::Pem(key_path.into(), e)
+        }
+    })?;
 
     let certified = CertifiedKey::from_der(chain, key, &provider()).map_err(TlsError::Rustls)?;
     Ok(Arc::new(certified))

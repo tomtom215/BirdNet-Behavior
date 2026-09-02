@@ -19,7 +19,7 @@
 //! them.
 //!
 //! The nine criteria all live in
-//! [`DetectionFilter`](birdnet_db::sqlite::DetectionFilter), which composes them
+//! [`birdnet_db::sqlite::DetectionFilter`], which composes them
 //! into one statement; this module is the translation from a query string to
 //! that type, plus the HTML.
 //!

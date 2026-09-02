@@ -101,7 +101,10 @@ rustls-native-certs = "0.8"
 # `axum::serve` cannot wrap a TLS acceptor, so `birdnet-web::tls` runs the
 # accept loop over hyper-util's auto (h1+h2) builder itself.
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
-rustls-pemfile = "2"
+# PEM parsing for `--tls-mode manual` comes from `rustls-pki-types` (already
+# above) rather than `rustls-pemfile`: that crate was archived in August 2025
+# (RUSTSEC-2025-0134) and its last release is a thin wrapper around the same
+# code. `PemObject` is the maintained home for it.
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "tokio"] }
 # Self-signed certificate generation (`--tls-mode self-signed`). `ring` rather
