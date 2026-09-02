@@ -247,6 +247,55 @@ pub(super) fn build_model_config(sensitivity: f32, confidence_threshold: f32) ->
     }
 }
 
+/// Resolve the dynamic-threshold configuration from the environment.
+///
+/// Every key is optional and off is the default. A malformed value falls back
+/// to the default for that field rather than failing the start: a station that
+/// mistyped a threshold should keep detecting birds.
+#[must_use]
+pub(super) fn resolve_dynamic_threshold(
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig {
+    use birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig;
+    let defaults = DynamicThresholdConfig::default();
+
+    let flag = |key: &str| -> Option<bool> {
+        let raw = std::env::var(key)
+            .ok()
+            .or_else(|| config.and_then(|c| c.get(key).map(str::to_owned)))?;
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        }
+    };
+    let number = |key: &str| -> Option<f32> {
+        std::env::var(key)
+            .ok()
+            .or_else(|| config.and_then(|c| c.get(key).map(str::to_owned)))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+    };
+
+    DynamicThresholdConfig {
+        enabled: flag("BIRDNET_DYNAMIC_THRESHOLD").unwrap_or(defaults.enabled),
+        trigger: number("BIRDNET_DYNAMIC_THRESHOLD_TRIGGER")
+            .filter(|v| (0.0..=1.0).contains(v))
+            .unwrap_or(defaults.trigger),
+        min: number("BIRDNET_DYNAMIC_THRESHOLD_MIN")
+            .filter(|v| (0.0..=1.0).contains(v))
+            .unwrap_or(defaults.min),
+        valid_hours: number("BIRDNET_DYNAMIC_THRESHOLD_HOURS")
+            .filter(|v| *v >= 1.0 && *v <= 8760.0)
+            .map_or(defaults.valid_hours, |v| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                {
+                    v as u32
+                }
+            }),
+    }
+}
+
 /// Build the [`SpeciesFilterConfig`] used by the metadata-model species filter.
 ///
 /// `lists` are the operator's include/exclude entries from `/admin/species`.

@@ -4,6 +4,7 @@
 
 pub mod corroboration;
 pub mod daemon;
+pub mod dynamic_threshold;
 pub mod nocturnal;
 pub mod noise;
 pub mod pipeline;

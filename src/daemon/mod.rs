@@ -113,6 +113,23 @@ pub fn start_detection_daemon(
     let sensitivity = resolve_sensitivity(config);
     let confidence = resolve_confidence(config);
 
+    // The classifier applies its own threshold before the pipeline sees a
+    // detection, so a lowered per-species threshold reaches nothing unless the
+    // model is told to run at the floor. Getting this wrong is silent: the
+    // feature would be on, configured, and reach zero detections, because the
+    // ones it exists to recover were discarded inside the model.
+    let dynamic_config = crate::daemon::config::resolve_dynamic_threshold(config);
+    let model_confidence = dynamic_config.model_floor(confidence);
+    if dynamic_config.enabled && !dynamic_config.is_effective_at(confidence) {
+        tracing::warn!(
+            floor = dynamic_config.min,
+            global = confidence,
+            "dynamic thresholds are enabled but the floor is at or above the global \
+             threshold, so no species can be adjusted. Lower BIRDNET_DYNAMIC_THRESHOLD_MIN \
+             or raise the global confidence."
+        );
+    }
+
     let metadata_model_path = cli
         .metadata_model
         .clone()
@@ -203,7 +220,7 @@ pub fn start_detection_daemon(
         model_path,
         labels_path,
         pipeline: build_pipeline_config(watch_dir, overlap),
-        model: build_model_config(sensitivity, confidence),
+        model: build_model_config(sensitivity, model_confidence),
         process_existing: cli.process_existing,
         metadata_model_path,
         metadata_labels_path,
@@ -263,6 +280,9 @@ pub fn start_detection_daemon(
                     extractor,
                     duplicate_interval_secs,
                     daylight,
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                        dynamic_config,
+                    ),
                 );
             });
             Some(handle)

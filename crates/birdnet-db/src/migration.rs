@@ -1499,6 +1499,35 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (date, hour, source)
         ) WITHOUT ROWID;",
     },
+    Migration {
+        version: 38,
+        description: "Remember which species the station has confirmed present, for dynamic thresholds",
+        // A species confirmed present at a site gets an easier threshold for a
+        // while (`birdnet_core::detection::dynamic_threshold`). Held in memory
+        // by the event processor; persisted here so a restart does not forget
+        // what the site contains — a station that reboots nightly for a backup
+        // would otherwise never accumulate anything.
+        //
+        // `expires_at_ms` is an absolute epoch, not a duration: the lease is
+        // "until", and storing a remaining-time would make a restart's clock
+        // skew extend every lease it loaded.
+        //
+        // No CHECK on `level`. The vocabulary is the Rust type's, and a CHECK
+        // here would be a second copy of it that could disagree — which is how
+        // the quarantine `reason` constraint came to be silently dropping rows
+        // (migration 36).
+        up_sql: "CREATE TABLE IF NOT EXISTS dynamic_thresholds (
+            sci_name          TEXT    PRIMARY KEY,
+            level             INTEGER NOT NULL,
+            confirmations     INTEGER NOT NULL,
+            expires_at_ms     INTEGER NOT NULL,
+            first_learned_ms  INTEGER NOT NULL,
+            last_confirmed_ms INTEGER NOT NULL
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_dynamic_thresholds_expiry
+            ON dynamic_thresholds(expires_at_ms);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

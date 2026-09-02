@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+use birdnet_core::detection::dynamic_threshold::DynamicThresholds;
+
 /// Truncating cast of a probability in `[0, 1]` to a 0–100 percentage.
 ///
 /// Matches the historical behaviour of the inline `(confidence * 100.0)
@@ -116,6 +118,22 @@ pub(super) enum DispositionDecision {
 ///   the gate. Detections below it are dropped silently because the model
 ///   already applied the same gate; this is a belt-and-braces check.
 ///
+/// `dynamic` may lower — never raise — whichever of those two the detection is
+/// being judged against, for a species the station has already confirmed
+/// present. Passing `None` is the same as passing a disabled tracker, and is
+/// what every caller that does not have one should do rather than constructing
+/// an empty one, so "no adjustment configured" and "adjustment configured but
+/// this species has none" stay distinguishable at the call site.
+///
+/// Note that the quarantine boundary moves with the adjustment: a species with
+/// an operator-set threshold of 0.9 that the station has confirmed is judged
+/// against the lowered figure, so the same detection can be accepted here that
+/// would have been quarantined an hour ago. That is the intended behaviour —
+/// the operator's number says how sure to be about a species in general, and
+/// the adjustment says this one is known to be here — but it is the part a
+/// reader is most likely to be surprised by, so it is stated rather than left
+/// to be discovered.
+///
 /// Comparisons are done in `f64` because per-species thresholds come from
 /// SQLite REAL columns (f64) and we don't want a single-precision rounding
 /// step to flip a `==`-on-boundary case.
@@ -124,17 +142,47 @@ pub(super) fn decide_disposition(
     sci_name: &str,
     per_species_thresholds: &HashMap<String, f64>,
     global_confidence: f32,
+    dynamic: Option<&DynamicThresholds>,
+    now_ms: i64,
 ) -> DispositionDecision {
+    // The adjustment is applied in `f64` and to the *stored* value, not to an
+    // `f32` round-trip of it. Taking the threshold through `f32` and back turns
+    // a stored 0.8 into 0.800000011920929, which then appears on the quarantine
+    // row an operator reads — the same single-precision rounding this
+    // function's `f64` comparison exists to avoid.
+    let adjustment = dynamic.and_then(|d| d.adjustment(sci_name, now_ms));
+    let adjust = |base: f64| -> f64 { adjustment.map_or(base, |a| a.apply(base)) };
+
     if let Some(&threshold) = per_species_thresholds.get(sci_name) {
-        if f64::from(confidence) < threshold {
-            return DispositionDecision::Quarantine { threshold };
+        let effective = adjust(threshold);
+        if f64::from(confidence) < effective {
+            return DispositionDecision::Quarantine {
+                threshold: effective,
+            };
         }
         return DispositionDecision::Accept;
     }
-    if confidence < global_confidence {
+    if f64::from(confidence) < adjust(f64::from(global_confidence)) {
         return DispositionDecision::DropBelowGlobal;
     }
     DispositionDecision::Accept
+}
+
+/// Wall-clock milliseconds since the Unix epoch.
+///
+/// The dynamic-threshold tracker takes time as a parameter so its rules are
+/// testable without a clock; this is the one place the real clock is read, so
+/// there is one answer per event rather than a fresh `now` at each comparison.
+///
+/// A clock before the epoch is not a case worth branching on — it means the
+/// RTC has failed, and every date in the database is already wrong — so it
+/// saturates at zero, which makes every learned level look lapsed and turns
+/// the feature off rather than producing arbitrary leases.
+#[must_use]
+pub(super) fn epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Derive a stable audio-source label from a recording's filename.
@@ -167,10 +215,109 @@ mod tests {
     use super::*;
     use crate::daemon::test_support::thresholds;
 
+    // ── dynamic thresholds ──────────────────────────────────────────────
+
+    /// A tracker that has confirmed `sci_name` once.
+    fn confirmed(sci_name: &str) -> DynamicThresholds {
+        use birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig;
+        let mut d = DynamicThresholds::new(DynamicThresholdConfig {
+            enabled: true,
+            trigger: 0.80,
+            min: 0.10,
+            valid_hours: 24,
+        });
+        d.observe(sci_name, 0.95, 0);
+        d
+    }
+
+    /// A confirmed species is accepted at a confidence that would otherwise
+    /// have been dropped.
+    #[test]
+    fn a_confirmed_species_is_accepted_below_the_global_threshold() {
+        let d = confirmed("Strix aluco");
+        // 0.60 is under the 0.70 global but over 0.70 * 0.75 = 0.525.
+        let got = decide_disposition(0.60, "Strix aluco", &thresholds(&[]), 0.70, Some(&d), 1000);
+        assert_eq!(got, DispositionDecision::Accept);
+    }
+
+    /// And an unconfirmed species at the same confidence is still dropped.
+    ///
+    /// The counterpart, and the one that matters: an adjustment applied to
+    /// everything would pass the test above and would be a global threshold
+    /// cut wearing a disguise.
+    #[test]
+    fn an_unconfirmed_species_is_still_dropped_at_the_same_confidence() {
+        let d = confirmed("Strix aluco");
+        let got = decide_disposition(
+            0.60,
+            "Turdus merula",
+            &thresholds(&[]),
+            0.70,
+            Some(&d),
+            1000,
+        );
+        assert_eq!(got, DispositionDecision::DropBelowGlobal);
+    }
+
+    /// Passing no tracker leaves every decision exactly as it was.
+    #[test]
+    fn without_a_tracker_the_decision_is_unchanged() {
+        assert_eq!(
+            decide_disposition(0.60, "Strix aluco", &thresholds(&[]), 0.70, None, 1000),
+            DispositionDecision::DropBelowGlobal
+        );
+    }
+
+    /// The adjustment moves the per-species quarantine boundary too, and the
+    /// threshold reported on the quarantine row is the one actually applied.
+    ///
+    /// A quarantine row recording the configured threshold while the pipeline
+    /// judged against a different one would make the review queue unreadable:
+    /// the operator sees "below 0.90" on a detection that was in fact measured
+    /// against 0.675.
+    #[test]
+    fn a_quarantine_reports_the_threshold_that_was_actually_applied() {
+        let d = confirmed("Strix aluco");
+        let t = thresholds(&[("Strix aluco", 0.90)]);
+
+        // 0.70 clears 0.90 * 0.75 = 0.675, so it is now accepted.
+        assert_eq!(
+            decide_disposition(0.70, "Strix aluco", &t, 0.50, Some(&d), 1000),
+            DispositionDecision::Accept
+        );
+
+        // 0.60 does not, and the row must say 0.675 rather than 0.90.
+        match decide_disposition(0.60, "Strix aluco", &t, 0.50, Some(&d), 1000) {
+            DispositionDecision::Quarantine { threshold } => assert!(
+                (threshold - 0.675).abs() < 1e-4,
+                "quarantine recorded {threshold}, but the detection was judged against 0.675"
+            ),
+            other => panic!("expected a quarantine, got {other:?}"),
+        }
+    }
+
+    /// A lapsed confirmation restores the original decision.
+    #[test]
+    fn a_lapsed_confirmation_restores_the_original_decision() {
+        let d = confirmed("Strix aluco");
+        let past_lease = 25 * 3_600_000;
+        assert_eq!(
+            decide_disposition(
+                0.60,
+                "Strix aluco",
+                &thresholds(&[]),
+                0.70,
+                Some(&d),
+                past_lease
+            ),
+            DispositionDecision::DropBelowGlobal
+        );
+    }
+
     #[test]
     fn no_per_species_threshold_accepts_above_global() {
         // global=0.5, detection=0.7 → accept (no per-species).
-        let d = decide_disposition(0.7, "Pica pica", &thresholds(&[]), 0.5);
+        let d = decide_disposition(0.7, "Pica pica", &thresholds(&[]), 0.5, None, 0);
         assert_eq!(d, DispositionDecision::Accept);
     }
 
@@ -178,7 +325,7 @@ mod tests {
     fn no_per_species_threshold_drops_below_global() {
         // global=0.5, detection=0.4 → drop (no per-species; model already
         // gated, but the double-check fires here too).
-        let d = decide_disposition(0.4, "Pica pica", &thresholds(&[]), 0.5);
+        let d = decide_disposition(0.4, "Pica pica", &thresholds(&[]), 0.5, None, 0);
         assert_eq!(d, DispositionDecision::DropBelowGlobal);
     }
 
@@ -186,7 +333,7 @@ mod tests {
     fn per_species_threshold_accepts_when_met() {
         // per-species=0.8, detection=0.85 → accept.
         let t = thresholds(&[("Pica pica", 0.8)]);
-        let d = decide_disposition(0.85, "Pica pica", &t, 0.5);
+        let d = decide_disposition(0.85, "Pica pica", &t, 0.5, None, 0);
         assert_eq!(d, DispositionDecision::Accept);
     }
 
@@ -196,7 +343,7 @@ mod tests {
         // The whole point of the quarantine workflow is to keep these
         // detections around for review rather than silently dropping them.
         let t = thresholds(&[("Pica pica", 0.8)]);
-        let d = decide_disposition(0.6, "Pica pica", &t, 0.5);
+        let d = decide_disposition(0.6, "Pica pica", &t, 0.5, None, 0);
         assert_eq!(d, DispositionDecision::Quarantine { threshold: 0.8 });
     }
 
@@ -207,7 +354,7 @@ mod tests {
         // would also have failed the global gate — the operator-configured
         // threshold is the gate that decides quarantine vs. drop.
         let t = thresholds(&[("Pica pica", 0.8)]);
-        let d = decide_disposition(0.4, "Pica pica", &t, 0.5);
+        let d = decide_disposition(0.4, "Pica pica", &t, 0.5, None, 0);
         assert_eq!(d, DispositionDecision::Quarantine { threshold: 0.8 });
     }
 
@@ -215,7 +362,7 @@ mod tests {
     fn per_species_threshold_only_applies_to_named_species() {
         // Threshold for Pica pica; detection for Corvus corax → no override.
         let t = thresholds(&[("Pica pica", 0.95)]);
-        let d = decide_disposition(0.6, "Corvus corax", &t, 0.5);
+        let d = decide_disposition(0.6, "Corvus corax", &t, 0.5, None, 0);
         // 0.6 > 0.5 global, no override → accept.
         assert_eq!(d, DispositionDecision::Accept);
     }
@@ -223,7 +370,7 @@ mod tests {
     #[test]
     fn boundary_at_threshold_is_accept_for_global() {
         // The check uses `<` so equality passes. Pin the contract.
-        let d = decide_disposition(0.5, "Pica pica", &thresholds(&[]), 0.5);
+        let d = decide_disposition(0.5, "Pica pica", &thresholds(&[]), 0.5, None, 0);
         assert_eq!(d, DispositionDecision::Accept);
     }
 
@@ -239,7 +386,7 @@ mod tests {
         // `0.5 <= 0.5` is true — the assertion below catches the
         // boundary mutation.
         let t = thresholds(&[("Pica pica", 0.5)]);
-        let d = decide_disposition(0.5, "Pica pica", &t, 0.25);
+        let d = decide_disposition(0.5, "Pica pica", &t, 0.25, None, 0);
         assert_eq!(d, DispositionDecision::Accept);
     }
 
@@ -248,9 +395,9 @@ mod tests {
         // Defensive: a malformed detection with no species name should
         // hit the no-override path; whether it accepts or drops depends
         // on confidence.
-        let d = decide_disposition(0.9, "", &thresholds(&[]), 0.5);
+        let d = decide_disposition(0.9, "", &thresholds(&[]), 0.5, None, 0);
         assert_eq!(d, DispositionDecision::Accept);
-        let d2 = decide_disposition(0.1, "", &thresholds(&[]), 0.5);
+        let d2 = decide_disposition(0.1, "", &thresholds(&[]), 0.5, None, 0);
         assert_eq!(d2, DispositionDecision::DropBelowGlobal);
     }
 
