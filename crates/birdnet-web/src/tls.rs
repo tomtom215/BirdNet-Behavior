@@ -1483,4 +1483,49 @@ mod tests {
             "x"
         )));
     }
+
+    /// An empty file and a corrupt one are different operator problems.
+    ///
+    /// The PEM parser reports both as `NoItemsFound`, so `load_pair` decides
+    /// between them itself — and a discrimination with no test is a coin flip.
+    /// "your key file is empty" sends an operator to whatever was supposed to
+    /// write it; "not valid PEM" sends them to what is in it.
+    #[test]
+    fn an_empty_key_reads_as_empty_and_a_corrupt_one_as_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_self_signed(dir.path(), &names(&["localhost"]), 30).expect("generate");
+        let cert = dir.path().join(LEAF_CERT);
+
+        let blank = dir.path().join("blank.key");
+        std::fs::write(&blank, "  \n\t\n").unwrap();
+        let err = load_pair(&cert, &blank).expect_err("an empty file is not a key");
+        assert!(
+            matches!(&err, TlsError::Empty(p, "private key") if p == &blank),
+            "{err:?}"
+        );
+
+        let junk = dir.path().join("junk.key");
+        std::fs::write(&junk, "-----BEGIN PRIVATE KEY-----\nnot base64!\n").unwrap();
+        let err = load_pair(&cert, &junk).expect_err("a corrupt file is not a key");
+        assert!(matches!(&err, TlsError::Pem(p, _) if p == &junk), "{err:?}");
+    }
+
+    /// The same question on the certificate side, which reaches the answer by
+    /// a different route: `pem_slice_iter` yields nothing for an empty file
+    /// rather than failing, so emptiness is a separate statement here and can
+    /// rot on its own.
+    #[test]
+    fn an_empty_certificate_file_reads_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_self_signed(dir.path(), &names(&["localhost"]), 30).expect("generate");
+        let key = dir.path().join(LEAF_KEY);
+
+        let blank = dir.path().join("blank.crt");
+        std::fs::write(&blank, "").unwrap();
+        let err = load_pair(&blank, &key).expect_err("an empty file is not a chain");
+        assert!(
+            matches!(&err, TlsError::Empty(p, "certificate") if p == &blank),
+            "{err:?}"
+        );
+    }
 }

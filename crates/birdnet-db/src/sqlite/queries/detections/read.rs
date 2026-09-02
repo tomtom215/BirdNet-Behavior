@@ -1747,4 +1747,106 @@ mod tests {
                 .is_empty()
         );
     }
+
+    /// `detection_at` must hand back the row that is actually there.
+    ///
+    /// The detail page renders whatever this returns, so `Ok(None)` reads as a
+    /// 404 on a detection that plainly exists, and `Ok(Some(Default::default()))`
+    /// renders a nameless bird at 0.00 confidence under the URL of a real one.
+    /// Both are plausible enough to survive a glance, and both survived
+    /// mutation testing: this function had no test in this crate at all, and
+    /// its only caller lives in `birdnet-web`, which the mutation gate's
+    /// `--lib` scope never runs.
+    #[test]
+    fn detection_at_returns_the_row_recorded_at_that_instant() {
+        let (_tmp, conn) = temp_db_with_data();
+
+        let row = detection_at(&conn, "2026-03-11", "06:45:00", None)
+            .unwrap()
+            .expect("a detection was recorded at 06:45 on 2026-03-11");
+        assert_eq!(row.com_name, "European Robin");
+        assert_eq!(row.sci_name, "Erithacus rubecula");
+        assert!(
+            (row.confidence - 0.92).abs() < 1e-9,
+            "the row's own confidence, not a placeholder: {}",
+            row.confidence
+        );
+
+        // And nothing at a second nobody sang in. Without this half, a
+        // `detection_at` that always answered `None` would pass the test above
+        // by never being asked a question it could get wrong.
+        assert!(
+            detection_at(&conn, "2026-03-11", "06:44:00", None)
+                .unwrap()
+                .is_none(),
+            "no detection was recorded at 06:44"
+        );
+    }
+
+    /// The `com_name` argument picks between two species heard in the same
+    /// second — the case the doc comment describes, and the reason the
+    /// three-parameter branch exists. Nothing exercised it.
+    #[test]
+    fn detection_at_picks_the_named_bird_when_two_share_a_second() {
+        let (_tmp, conn) = temp_db_with_data();
+        // A second blackbird at the robin's exact wall clock.
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+             VALUES ('2026-03-11', '06:45:00', 'Turdus merula', 'Eurasian Blackbird', 0.55)",
+            [],
+        )
+        .unwrap();
+
+        for want in ["European Robin", "Eurasian Blackbird"] {
+            let row = detection_at(&conn, "2026-03-11", "06:45:00", Some(want))
+                .unwrap()
+                .unwrap_or_else(|| panic!("{want} was recorded at 06:45"));
+            assert_eq!(
+                row.com_name, want,
+                "the name asked for decides which of the two comes back"
+            );
+        }
+
+        assert!(
+            detection_at(&conn, "2026-03-11", "06:45:00", Some("Great Tit"))
+                .unwrap()
+                .is_none(),
+            "naming a bird that was not heard then must not fall back to one \
+             that was"
+        );
+    }
+
+    /// `com_name_for` must name the bird the row actually carries.
+    ///
+    /// It exists so a bulk review cannot take the browser's word for which
+    /// species it is reviewing. `Ok(None)` makes every key look nonexistent
+    /// and the bulk path skip silently; `Ok(Some(String::new()))` and
+    /// `Ok(Some("xyzzy".into()))` write a review row naming a different bird
+    /// from the detection it reviews — precisely the quiet corruption of the
+    /// curation record this lookup was added to prevent. All three mutants
+    /// survived, because nothing in this crate called the function.
+    #[test]
+    fn com_name_for_names_the_bird_the_row_actually_carries() {
+        let (_tmp, conn) = temp_db_with_data();
+
+        assert_eq!(
+            com_name_for(&conn, "2026-03-11", "06:45:00", "Erithacus rubecula").unwrap(),
+            Some("European Robin".to_string())
+        );
+
+        // Right instant, wrong species: the mismatch the bulk path checks for,
+        // and the half that stops "always `Some(some name)`" from passing.
+        assert_eq!(
+            com_name_for(&conn, "2026-03-11", "06:45:00", "Turdus merula").unwrap(),
+            None,
+            "the blackbird was not the bird heard at 06:45"
+        );
+
+        // Right species, wrong instant.
+        assert_eq!(
+            com_name_for(&conn, "2026-03-11", "06:44:00", "Erithacus rubecula").unwrap(),
+            None,
+            "no detection was recorded at 06:44"
+        );
+    }
 }

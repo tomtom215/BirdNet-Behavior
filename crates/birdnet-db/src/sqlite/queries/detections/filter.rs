@@ -1019,4 +1019,101 @@ mod tests {
         // than a row of empty strings.
         assert!(known_sources(&conn).unwrap().is_empty());
     }
+
+    /// Tag a seeded row with an audio source.
+    fn set_source(conn: &Connection, time: &str, source: Option<&str>) {
+        conn.execute(
+            "UPDATE detections SET Source = ?1 WHERE Time = ?2",
+            rusqlite::params![source, time],
+        )
+        .expect("tag the row with a source");
+    }
+
+    /// Record a review verdict against a seeded row.
+    fn set_verdict(conn: &Connection, time: &str, verdict: &str) {
+        conn.execute(
+            "UPDATE detections SET review_verdict = ?1 WHERE Time = ?2",
+            rusqlite::params![verdict, time],
+        )
+        .expect("record a review verdict");
+    }
+
+    /// The other half of `known_sources_lists_only_real_ones`.
+    ///
+    /// That test asserts the picker offers nothing when no row carries a
+    /// source — which `Ok(vec![])` satisfies for free. Mutation testing found
+    /// it doing exactly that: `replace known_sources ... with Ok(vec![])`
+    /// survived, because the sole assertion about this function was that its
+    /// answer was empty. An `is_empty` check is a blanket alarm; this is the
+    /// discriminator, and the two are only worth anything together.
+    #[test]
+    fn known_sources_are_distinct_sorted_and_skip_the_untagged() {
+        let conn = test_conn();
+        for (time, com, sci) in [
+            ("05:00:00", "European Robin", "Erithacus rubecula"),
+            ("06:00:00", "Tawny Owl", "Strix aluco"),
+            ("07:00:00", "Great Tit", "Parus major"),
+            ("08:00:00", "Common Blackbird", "Turdus merula"),
+            ("09:00:00", "Common Chaffinch", "Fringilla coelebs"),
+        ] {
+            insert_test_detection(&conn, "2026-06-01", time, com, sci, 0.9);
+        }
+        // Two rows share a source, so `DISTINCT` has something to collapse;
+        // one is the empty string and one was never tagged at all. Both of
+        // those are stations that predate source tagging, and neither is a
+        // thing an operator can usefully pick.
+        set_source(&conn, "05:00:00", Some("cam2"));
+        set_source(&conn, "06:00:00", Some("MIC_1"));
+        set_source(&conn, "07:00:00", Some("cam2"));
+        set_source(&conn, "08:00:00", Some(""));
+        // 09:00:00 keeps `Source` NULL.
+
+        assert_eq!(
+            known_sources(&conn).unwrap(),
+            // SQLite's default collation is binary, so `MIC_1` sorts ahead of
+            // `cam2` on the uppercase `M`.
+            vec!["MIC_1".to_string(), "cam2".to_string()],
+            "distinct and ordered, with neither the empty string nor the \
+             untagged row offered as something to filter on"
+        );
+    }
+
+    /// `Confirmed` and `Rejected` must select opposite rows.
+    ///
+    /// Both arms emit the same `review_verdict = ?` fragment and differ only
+    /// in the value bound to it, so nothing reading the SQL text can tell them
+    /// apart — and no fixture in this file had ever set `review_verdict`, so
+    /// every verdict filter matched zero rows, and matched zero rows just as
+    /// happily with the two strings swapped. Mutation testing found it:
+    /// `replace == with != in DetectionFilter::where_clause` survived.
+    #[test]
+    fn confirmed_and_rejected_select_opposite_rows() {
+        let conn = test_conn();
+        for (time, com, sci) in [
+            ("05:00:00", "European Robin", "Erithacus rubecula"),
+            ("06:00:00", "Tawny Owl", "Strix aluco"),
+            ("07:00:00", "Great Tit", "Parus major"),
+        ] {
+            insert_test_detection(&conn, "2026-06-01", time, com, sci, 0.9);
+        }
+        set_verdict(&conn, "05:00:00", "confirmed");
+        set_verdict(&conn, "06:00:00", "rejected");
+        // 07:00:00 keeps `review_verdict` NULL — nobody has looked at it.
+
+        let under = |verdict| {
+            let f = DetectionFilter {
+                verdict,
+                ..DetectionFilter::default()
+            };
+            names(&search_detections(&conn, &f, 50, 0).unwrap())
+        };
+        assert_eq!(under(VerdictFilter::Confirmed), ["European Robin"]);
+        assert_eq!(under(VerdictFilter::Rejected), ["Tawny Owl"]);
+        assert_eq!(under(VerdictFilter::Unreviewed), ["Great Tit"]);
+        assert_eq!(
+            under(VerdictFilter::Any).len(),
+            3,
+            "`Any` adds no clause, so it sees the whole table"
+        );
+    }
 }
