@@ -16,6 +16,34 @@ page (and the phone bottom bar).
 | `/reports` | **Reports** | weekly recap · year in review · history |
 | `/station` | **Settings** | health (public) + the gated admin task groups |
 
+### Searching the whole log
+
+`/search` is the detection log across all time rather than one day. Every filter
+lives in the query string, so a search worth repeating is a bookmark:
+
+```text
+/search?q=Turdus&from=2026-03-01&to=2026-03-31&conf_min=80&sort=confidence
+```
+
+| Parameter | Takes | Notes |
+|---|---|---|
+| `q` | free text | matches common **and** scientific name; a leading `NOT ` inverts it |
+| `species` | one name | exact, rather than `q`'s substring match |
+| `from`, `to` | `YYYY-MM-DD` | inclusive both ends |
+| `hour_from`, `hour_to` | `0`–`23` | `hour_from` above `hour_to` asks for a window *through* midnight |
+| `conf_min`, `conf_max` | `0`–`100` | a percentage, because that is what the UI shows everywhere else |
+| `source` | audio source label | which microphone or stream |
+| `verdict` | `confirmed` · `rejected` · `unreviewed` | |
+| `locked` | `locked` · `unlocked` | whether the clip is protected from retention |
+| `category` | the Today log's four shortcuts | rare, new, verified, quarantined |
+| `sort` | `oldest` · `confidence` · `confidence-asc` · `species` · `species-desc` | newest first when absent |
+| `offset` | a row number | 50 rows per page |
+
+With an admin session it also carries **bulk review**: tick rows and confirm,
+reject or delete up to 100 at once. Those actions are `POST`s on the gated
+router, so a logged-out visitor sees the same search results and none of the
+buttons.
+
 Tabs within a home are selected by a query parameter, e.g.
 `/patterns?tab=dawn`, `/reports?tab=history`, `/species?view=lifelist`,
 `/recordings?view=live`.

@@ -21,6 +21,8 @@
 //!  right: "0.15.0"
 //! ```
 
+use std::path::{Path, PathBuf};
+
 /// The manual, compiled in — so the test moves with the file rather than
 /// depending on the working directory a runner happens to use.
 const API_DOC: &str = include_str!("../docs/book/reference/api.md");
@@ -338,27 +340,261 @@ fn the_backups_page_documents_every_offsite_key_and_no_others() {
     );
 }
 
+// ── Claims the manual makes that shipping something made false ──────────────
+//
+// Twice in one release cycle a page said, in plain words, that a feature did
+// not exist — and was right when it was written:
+//
+//   * `admin/backups.md`: "the station has no built-in upload to S3, a NAS, or
+//     email", until `OFFSITE_BACKUP` landed.
+//   * `guides/recipes.md`: "the built-in server is plain HTTP", until
+//     `--tls-mode` landed.
+//
+// Neither was caught by anything. A test that names the *sentence* is the only
+// kind that can catch this class, because there is nothing structural about a
+// paragraph that says a feature is absent — it reads exactly like a paragraph
+// that says one is present.
+//
+// So: a table of retired claims, checked across the whole manual and the
+// README, each paired with the flag or key that retired it. The pairing is not
+// decoration — [`retired_claims_name_something_that_actually_ships`] checks
+// that the retiring feature still exists, so an entry cannot outlive the thing
+// that made it stale and quietly forbid a sentence that has become true again.
+
+/// A sentence the manual must no longer contain, and what made it false.
+struct RetiredClaim {
+    /// Lowercase phrase to search for.
+    phrase: &'static str,
+    /// The `--flag` or `CONFIG_KEY` whose arrival retired it.
+    retired_by: &'static str,
+    /// Where it was found, for the failure message.
+    was_in: &'static str,
+}
+
+const RETIRED_CLAIMS: &[RetiredClaim] = &[
+    RetiredClaim {
+        phrase: "no built-in upload",
+        retired_by: "OFFSITE_BACKUP",
+        was_in: "admin/backups.md",
+    },
+    RetiredClaim {
+        phrase: "snapshots are not off-site",
+        retired_by: "OFFSITE_BACKUP",
+        was_in: "admin/backups.md",
+    },
+    RetiredClaim {
+        phrase: "the built-in server is plain http",
+        retired_by: "--tls-mode",
+        was_in: "guides/recipes.md",
+    },
+];
+
+/// Every markdown file in the manual, plus the README, as (path, text).
+fn manual_pages() -> Vec<(PathBuf, String)> {
+    let mut out = Vec::new();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Ok(readme) = std::fs::read_to_string(root.join("README.md")) {
+        out.push((PathBuf::from("README.md"), readme));
+    }
+    collect_markdown(&root.join("docs/book"), &root, &mut out);
+    out
+}
+
+fn collect_markdown(dir: &Path, root: &Path, out: &mut Vec<(PathBuf, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // `_generated/` is machine-written from the binary itself, so it
+            // cannot contain a stale human claim.
+            if path.file_name().is_some_and(|n| n == "_generated") {
+                continue;
+            }
+            collect_markdown(&path, root, out);
+        } else if path.extension().is_some_and(|e| e == "md")
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
+            let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            out.push((rel, text));
+        }
+    }
+}
+
 #[test]
-fn the_backups_page_no_longer_claims_there_is_no_offsite_upload() {
-    // The specific sentence that was true for years and then silently was not.
-    // Pinned by its distinctive phrase rather than by position, so moving the
-    // paragraph does not break the check and restoring the claim does.
-    let lowered = BACKUPS_DOC.to_lowercase();
-    for stale in [
-        "no built-in upload",
-        "snapshots are not off-site",
-        "the station has no built-in upload to s3",
-    ] {
+fn the_manual_does_not_still_say_a_shipped_feature_is_missing() {
+    let pages = manual_pages();
+    assert!(
+        pages.len() > 20,
+        "the page walker found only {} markdown files — it has stopped working \
+         and this gate is vacuous",
+        pages.len()
+    );
+
+    let mut found = Vec::new();
+    for (path, text) in &pages {
+        let lowered = text.to_lowercase();
+        for claim in RETIRED_CLAIMS {
+            if lowered.contains(claim.phrase) {
+                found.push(format!(
+                    "{}: {:?} — retired by `{}` (was in {})",
+                    path.display(),
+                    claim.phrase,
+                    claim.retired_by,
+                    claim.was_in
+                ));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "the manual tells readers a shipped feature does not exist:\n  {}",
+        found.join("\n  ")
+    );
+}
+
+#[test]
+fn retired_claims_name_something_that_actually_ships() {
+    // The counterpart, and what keeps the table above from becoming a list of
+    // arbitrary forbidden words. Each entry says a feature retired the claim;
+    // if that feature is gone, the sentence may be true again and the entry
+    // should go with it.
+    let cli = include_str!("../src/cli.rs");
+    let offsite = include_str!("../src/helpers/offsite.rs");
+    let haystack = format!("{cli}{offsite}");
+
+    assert!(
+        !RETIRED_CLAIMS.is_empty(),
+        "an empty table would pass every check above for free"
+    );
+    for claim in RETIRED_CLAIMS {
         assert!(
-            !lowered.contains(stale),
-            "the backups page still says {stale:?}, which stopped being true when \
-             OFFSITE_BACKUP landed"
+            haystack.contains(claim.retired_by),
+            "`{}` retires {:?}, but nothing in the CLI or the offsite planner \
+             mentions it any more. If the feature was removed, drop the entry — \
+             the manual may be allowed to say that again",
+            claim.retired_by,
+            claim.phrase
         );
     }
-    // Counterpart: it has to say something about the feature, or deleting the
-    // whole section would satisfy the check above.
+}
+
+#[test]
+fn the_backups_page_documents_the_offsite_feature_at_all() {
+    // The other half of the staleness check: forbidding the old sentence is
+    // satisfied by deleting the whole section, so require the new one.
     assert!(
         BACKUPS_DOC.contains("OFFSITE_BACKUP"),
         "the backups page must document the offsite feature"
+    );
+    assert!(
+        BACKUPS_DOC.contains("--decrypt-backup"),
+        "a backup format with no documented restore path is not documented"
+    );
+}
+
+// ── The README's test count ─────────────────────────────────────────────────
+//
+// It said "1,690+" while the workspace carried nearly twice that. Nobody lied;
+// the number was written once and the suite kept growing, which is what every
+// hand-maintained number in a README does.
+//
+// Counted statically, from the `#[test]` attributes themselves, rather than by
+// running the suite: a test that runs the suite to count it cannot run inside
+// the suite. That undercounts — `proptest!` blocks and `#[test_case]`-style
+// expansions are one attribute for many cases — which is the right direction
+// for a floor.
+
+/// The README, compiled in.
+const README: &str = include_str!("../README.md");
+
+/// `#[test]` and `#[tokio::test]` attributes across the workspace.
+fn declared_tests() -> usize {
+    let mut count = 0;
+    for (_, text) in rust_sources() {
+        for line in text.lines() {
+            let line = line.trim();
+            if line == "#[test]" || line == "#[tokio::test]" {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Every `.rs` file under `src/`, `crates/` and `tests/`.
+fn rust_sources() -> Vec<(PathBuf, String)> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut out = Vec::new();
+    for top in ["src", "crates", "tests", "benches"] {
+        collect_rust(&root.join(top), &root, &mut out);
+    }
+    out
+}
+
+fn collect_rust(dir: &Path, root: &Path, out: &mut Vec<(PathBuf, String)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == "target") {
+                continue;
+            }
+            collect_rust(&path, root, out);
+        } else if path.extension().is_some_and(|e| e == "rs")
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
+            out.push((path.strip_prefix(root).unwrap_or(&path).to_path_buf(), text));
+        }
+    }
+}
+
+/// The `N,NNN+` figure from the README's Tests bullet.
+fn claimed_test_count() -> Option<usize> {
+    let bullet = README
+        .split("**Tests**")
+        .nth(1)?
+        .trim_start_matches([' ', '—', '-']);
+    let digits: String = bullet
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',')
+        .filter(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+#[test]
+fn the_readmes_test_count_is_not_an_overstatement() {
+    let claimed = claimed_test_count().expect(
+        "the README's Tests bullet must still open with a number — if it was \
+         reworded, retarget this gate rather than deleting it",
+    );
+    let declared = declared_tests();
+    assert!(
+        declared >= 500,
+        "the attribute scanner found only {declared} tests, which cannot be \
+         right — it has stopped matching and this gate is vacuous"
+    );
+    assert!(
+        claimed <= declared,
+        "the README claims {claimed}+ tests; only {declared} `#[test]` \
+         attributes exist. The claim has drifted above reality"
+    );
+    // And the other direction: a claim far below the truth is not false, but it
+    // is the state this gate was written to fix, so it has to be caught.
+    //
+    // The tolerance is two-thirds, chosen against the case that prompted this:
+    // "1,690+" beside 3,103 real tests. A factor of two — the first thing
+    // written here — let that exact number through, which would have made the
+    // assertion a decoration. Two-thirds catches it and still leaves room for
+    // the suite to grow by half before anyone is nagged.
+    assert!(
+        claimed * 3 >= declared * 2,
+        "the README claims {claimed}+ tests but there are {declared}. That is \
+         not false, but it is what \"1,690+\" looked like while the suite grew \
+         past three thousand — round the claim up to something near {declared}"
     );
 }

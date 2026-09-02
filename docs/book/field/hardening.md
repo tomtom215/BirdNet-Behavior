@@ -158,8 +158,27 @@ fails fast with an actionable journal entry instead of a restart loop.
 
 - **Database backups.** Take a hot backup from **Admin → Backups** or
   `birdnet-behavior --backup-db`; the periodic maintenance task also rotates
-  backups beside the database. Copy them **off the device** — an SD card that
-  fails takes its local backups with it.
+  backups beside the database. Those are on the same card as the database, so
+  they cover a corrupt page and not a dead card.
+- **Get a copy off the device automatically.** Set `OFFSITE_BACKUP=s3` or
+  `OFFSITE_BACKUP=sftp` and each weekly snapshot is encrypted on the station —
+  argon2id + ChaCha20-Poly1305, not optional — and uploaded. The passphrase is
+  the only thing that opens it, is stored nowhere, and is not recoverable:
+  **write it down somewhere that is not this station.**
+
+  Give the station its own credentials, scoped to the one prefix it writes to.
+  For S3 that is `PutObject`, `ListBucket` and `DeleteObject`, nothing more; the
+  station never reads a backup back. For SFTP it is a dedicated key on a
+  dedicated account, and host key checking that cannot be turned off — `yes`, or
+  `accept-new` for the first connection on a network you control.
+
+  Secrets have no command-line flags on purpose: an argument is visible in `ps`
+  to every user on the box and is copied into the journal by `ExecStart=`. Put
+  them in the config file (mode `0600`, owned by the service user) or the unit's
+  environment. `--doctor` reports what is missing, and checks the SSH key's mode
+  — OpenSSH refuses a key others can read, and says so only on its own stderr.
+
+  See [Backups & Recovery](../admin/backups.md#offsite-backups).
 - **Integrity & recovery.** On startup the database is integrity-checked; a
   corrupt database that cannot be recovered from a backup is quarantined aside
   and a fresh one is started so the station keeps recording (the quarantined
@@ -220,6 +239,7 @@ only opens the ports you actually use.
 - [ ] Restrict the bind to `127.0.0.1` (+ SSH/VPN) if you don't need LAN access; for off-LAN access, put a TLS reverse proxy in front.
 - [ ] Turn on `--tls-mode self-signed` if the dashboard is reachable by anyone else on the network.
 - [ ] Keep `CADDY_PWD` set (a fresh install generates one) — or use proxy/VPN auth. Don't clear it on a non-loopback bind.
+- [ ] Set `OFFSITE_BACKUP` (with `OFFSITE_PASSPHRASE`) so a dead SD card is not the end of the records — and store the passphrase somewhere other than the station.
 - [ ] Leave CORS at its same-origin default unless you genuinely need a second origin.
 - [ ] Set `BIRDNET_PRIVACY_THRESHOLD` if voices may be captured.
 - [ ] Back up the database **off the device** and test a restore.

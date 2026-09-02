@@ -35,6 +35,8 @@ Two things are deliberately configured elsewhere:
 - **Sensitivity (0.5–1.5)** — the BirdNET sensitivity parameter (also `SENSITIVITY` in `birdnet.conf` for BirdNET-Pi compatibility).
 - **Species-frequency filter** — uses your location and the week of the year to down-weight birds that shouldn't be present, with a configurable `SF_THRESH`.
 - **Quality pre-filter** — optionally drops segments dominated by rain, wind or other broadband noise before they reach the model.
+- **Analysis overlap (0–2.9 s)** — how far consecutive 3-second analysis windows overlap. Higher catches calls that straddle a window boundary, and costs CPU in proportion: `2.0` triples the inference work per recording.
+- **Repeat confirmation** — record a species only when enough of the windows within six seconds heard the same thing. A real bird sings across several windows; a car door or a squeak of the mount usually fires in exactly one. **It needs the overlap above** — with none, there is only one other window to agree with, and each option in the dropdown prints the overlap it needs. Off by default. See [Tuning](../guides/tuning.md#10-asking-for-a-second-opinion).
 
 ## Species & quarantine
 

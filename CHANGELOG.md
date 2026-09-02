@@ -283,6 +283,44 @@ loopback port with generated keys. When that harness first ran, `sshd` never
 started, and two of its four tests passed on "connection refused"; the harness
 now asserts the port is listening before handing back a server.
 
+### Changed — the manual, and a gate for the way it goes wrong
+
+Documentation for everything above, and a sweep for the pages the work made
+untrue. Two had said, in plain words, that a feature did not exist — and both
+were right when they were written:
+
+- `admin/backups.md`: *"The station has no built-in upload to S3, a NAS, or
+  email."*
+- `guides/recipes.md`: *"the built-in server is plain HTTP"*
+
+Nothing caught either. There is nothing structural about a paragraph saying a
+feature is absent — it reads exactly like one saying it is present — so
+`the_manual_does_not_still_say_a_shipped_feature_is_missing` names the
+sentences, scans the whole book and the README, and pairs each with the flag
+that retired it. `retired_claims_name_something_that_actually_ships` checks the
+pairing in the other direction, so an entry cannot outlive the feature and
+quietly forbid a sentence that has become true again. Both were observed
+failing by restoring the two real sentences, and by hiding one in an unrelated
+page.
+
+Also updated:
+
+- **`admin/settings.md`** — the Analysis Overlap and Repeat Confirmation
+  controls, which the settings page had grown without the manual noticing.
+- **`reference/web-api.md`** — `/search`, with every query parameter it takes.
+  The page had shipped with no reference entry at all. The parameter names were
+  read off `SearchParams` rather than remembered: it is `conf_min`, not
+  `min_conf`, and the sort tokens are `confidence`/`species`, which a first
+  draft of the table got wrong.
+- **`field/hardening.md`** and **`field/deployment.md`** — the runbooks now say
+  how to get a copy off the device rather than only that you should, including
+  the least-privilege credential shape for each destination.
+- **`guides/faq.md`** — two new entries: what happens when the SD card dies,
+  and why turning on repeat confirmation appeared to change nothing.
+- **`README.md`** — HTTPS, offsite backups and search in the feature list and
+  the BirdNET-Pi comparison; the test count corrected from a badly stale
+  "1,690+", and pinned by a gate so it cannot drift again.
+
 ### Added — notifications without Apprise
 
 - **Native senders for seven scheme families.** `discord://`, `slack://`,
