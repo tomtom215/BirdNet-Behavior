@@ -466,7 +466,7 @@ jobs:
           echo "Disk after:"; df -h /
 
       - name: Cache the mutants build tree
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Cache ONLY the `mutants` profile tree — the sole build dir this
           # job populates since the profile/scoping overhaul. The previous
@@ -514,7 +514,7 @@ jobs:
             ${{ runner.os }}-mutants-v2-${{ matrix.label }}-
 
       - name: Cache the Cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Shared across every row on purpose: the dependency downloads are
           # identical whatever file a row mutates, and pooling them is what
