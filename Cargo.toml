@@ -153,10 +153,19 @@ ndarray = "0.17"
 # lockfile already vets.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 
-# Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
+# Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07),
+# and AWS SigV4 request signing for the S3-compatible offsite backup target.
 hmac = "0.13"
 sha2 = "0.11"
 base64 = "0.23"
+
+# AEAD for the offsite backup envelope (ChaCha20-Poly1305) and its CSPRNG.
+# `ring` is already compiled in the tree — rustls's provider, chosen over
+# aws-lc-rs for the cross-compilation reason recorded above — so this is a
+# direct edge and no new compiled crate. Used through `LessSafeKey` because the
+# envelope constructs its own nonces (a STREAM chunk counter); see the module
+# doc for why that is the safe form here.
+ring = "0.17"
 
 # Password hashing — argon2id for the O-14 / O-15 cookie auth wire flip.
 # The basic-auth path stays compatible (it reads CADDY_PWD in plaintext)
