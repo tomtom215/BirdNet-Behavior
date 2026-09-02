@@ -33,6 +33,9 @@ use birdnet_db::audio_sources::{
     PipelineFlags, RtspTransport, SourceKind,
 };
 
+use birdnet_core::audio::eq::EqChain;
+
+use super::eq_curve;
 use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
@@ -52,6 +55,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/admin/audio/sources/{id}/edit", get(edit_form))
         .route("/admin/audio/sources/{id}/probe", get(probe))
+        .route("/admin/audio/sources/{id}/eq-preview", get(eq_preview))
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +179,11 @@ struct CreateForm {
     /// Without it, a PATCH from any other form would silently clear all four.
     #[serde(default)]
     pipeline_present: Option<String>,
+    /// The parametric chain, as `kind:freq[:q[:gain[:passes]]]` stages joined
+    /// by `;`. A `<textarea>` always submits, even when empty, so unlike the
+    /// checkboxes this needs no presence marker: `Some("")` means "clear it".
+    #[serde(default)]
+    eq_chain: Option<String>,
 }
 
 /// The four conditioning toggles as submitted, or `None` when the form did not
@@ -307,6 +316,34 @@ fn is_hhmm(s: &str) -> bool {
     matches!((h.parse::<u32>(), m.parse::<u32>()), (Ok(h), Ok(m)) if h < 24 && m < 60)
 }
 
+/// Validate a submitted equaliser specification against the source's own
+/// sample rate.
+///
+/// Two checks, and the second is the one worth having: `EqChain::parse` catches
+/// a malformed stage, and `build` catches a stage that parses but cannot be
+/// realised at this rate — a 6 kHz bell on an 8 kHz source, say, whose Nyquist
+/// is 4 kHz. Without it the operator would save happily and the capture path
+/// would quietly fall back to the pipeline flags at start-up, with nothing but
+/// a log line to say why the filter they wrote is not doing anything.
+///
+/// `Ok(None)` means "the form did not carry the field", which leaves the stored
+/// value alone; `Ok(Some(""))` means the operator cleared it.
+fn parse_eq_field(raw: Option<&str>, sample_rate: u32) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let chain = EqChain::parse(raw).map_err(|e| format!("“{}”: {}.", e.stage, e.reason))?;
+    if let Err(e) = chain.build(sample_rate) {
+        return Err(format!(
+            "That chain cannot run at {} Hz: {e}. The highest usable frequency \
+             for this source is {} Hz.",
+            sample_rate,
+            sample_rate / 2
+        ));
+    }
+    Ok(Some(chain.to_spec()))
+}
+
 async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> Response {
     let _ = form.scope;
     let device_id = form.device_id.trim().to_string();
@@ -365,6 +402,12 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
         Ok(QuietChoice::Set(a, b)) => new.schedule_quiet = Some((a, b)),
         Ok(QuietChoice::Absent | QuietChoice::Clear) => {}
         Err(msg) => return validation_response(msg),
+    }
+    // After `sample_rate`, which the check depends on.
+    match parse_eq_field(form.eq_chain.as_deref(), new.sample_rate) {
+        Ok(Some(spec)) => new.eq_chain = spec,
+        Ok(None) => {}
+        Err(msg) => return validation_response(&msg),
     }
 
     let result = state.with_db(|conn| conn.insert(&new));
@@ -477,6 +520,27 @@ async fn update(
         Ok(QuietChoice::Absent) => {}
         Err(msg) => return validation_response(msg),
     }
+    // Against the rate the row will *have* after this PATCH, not the rate it
+    // has now: a submission that lowers the sample rate and keeps a chain the
+    // new rate cannot carry has to be caught here, not at the next restart.
+    if form.eq_chain.is_some() {
+        let effective_rate = match patch.sample_rate {
+            Some(rate) => rate,
+            None => match state.with_db(|conn| conn.get(&id)) {
+                Ok(Some(row)) => row.sample_rate,
+                Ok(None) => return not_found_row(&id),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source get failed");
+                    return internal_response("Could not update the source.");
+                }
+            },
+        };
+        match parse_eq_field(form.eq_chain.as_deref(), effective_rate) {
+            Ok(Some(spec)) => patch.eq_chain = Some(spec),
+            Ok(None) => {}
+            Err(msg) => return validation_response(&msg),
+        }
+    }
 
     let result = state.with_db(|conn| conn.update(&id, &patch));
     match result {
@@ -496,6 +560,70 @@ async fn update(
             internal_response("Could not update the source.")
         }
     }
+}
+
+/// Query for the live response-curve preview.
+#[derive(Debug, Deserialize)]
+struct EqPreviewQuery {
+    /// The specification as currently typed. Absent (or empty) draws the flat
+    /// line, which is what an operator who has just cleared the box should see.
+    #[serde(default)]
+    eq_chain: String,
+}
+
+/// Draw the response curve for a specification as it is being typed.
+///
+/// Server-rendered rather than computed in the browser, for the reason the
+/// module doc gives: the curve has to come from the same coefficients the
+/// audio does, and duplicating the RBJ cookbook in JavaScript is how the
+/// picture and the filter start to disagree. It costs one small request per
+/// keystroke-pause, on a page an operator visits to change one setting.
+///
+/// A specification that does not parse is not an error here — it is a
+/// half-typed one. The panel says what is wrong and keeps the last good curve
+/// on screen, rather than flashing a 400 at someone mid-word.
+async fn eq_preview(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<EqPreviewQuery>,
+) -> Response {
+    let sample_rate = match state.with_db(|conn| conn.get(&id)) {
+        Ok(Some(row)) => row.sample_rate,
+        Ok(None) => return not_found_row(&id),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source get failed");
+            return internal_response("Could not load that source.");
+        }
+    };
+    let body = match EqChain::parse(&q.eq_chain) {
+        Ok(chain) => match chain.build(sample_rate) {
+            Ok(_) => format!(
+                r#"<div id="eq-preview-{id}" class="eq-preview">{}</div>"#,
+                eq_curve::render(&chain, sample_rate),
+                id = escape_html(&id)
+            ),
+            Err(e) => eq_preview_problem(
+                &id,
+                &format!(
+                    "Not usable at {sample_rate} Hz: {e}. This source tops out at {} Hz.",
+                    sample_rate / 2
+                ),
+            ),
+        },
+        Err(e) => eq_preview_problem(&id, &format!("“{}”: {}", e.stage, e.reason)),
+    };
+    Html(body).into_response()
+}
+
+/// The preview panel in its "cannot draw this yet" state.
+fn eq_preview_problem(id: &str, message: &str) -> String {
+    format!(
+        r#"<div id="eq-preview-{id}" class="eq-preview eq-preview--problem">
+  <p class="hint" role="status">{message}</p>
+</div>"#,
+        id = escape_html(id),
+        message = escape_html(message)
+    )
 }
 
 async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Response {
@@ -682,7 +810,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         .as_ref()
         .map_or(("", ""), |(a, b)| (a.as_str(), b.as_str()));
     format!(
-        r#"<li class="audio-source" data-source-id="{id}">
+        r##"<li class="audio-source" data-source-id="{id}">
   <form hx-patch="/admin/audio/sources/{id}"
         hx-target="closest li"
         hx-swap="outerHTML"
@@ -737,6 +865,27 @@ fn render_edit_form(row: &AudioSource) -> String {
       <p class="hint">Applied to this source before analysis. The first three also
         shape what you hear on the live stream; the last one affects RTSP only.</p>
     </div>
+    <div class="aud-edit-eq">
+      <span class="bnb-eyebrow">Equaliser</span>
+      <label class="sr-only" for="eq-{id}">Filter chain</label>
+      <textarea id="eq-{id}" name="eq_chain" rows="2" class="mono aud-edit-eq-spec"
+                spellcheck="false" placeholder="highpass:120; notch:50:20"
+                hx-get="/admin/audio/sources/{id}/eq-preview"
+                hx-trigger="keyup changed delay:400ms, load"
+                hx-target="#eq-preview-{id}"
+                hx-swap="outerHTML">{eq_chain}</textarea>
+      <div id="eq-preview-{id}" class="eq-preview"></div>
+      <p class="hint">One stage per <code>;</code>, each
+        <code>kind:frequency</code> then optional <code>:q</code>,
+        <code>:gain</code> and <code>:passes</code>. Kinds:
+        <code>highpass</code>, <code>lowpass</code>, <code>bandpass</code>,
+        <code>notch</code>, <code>peaking</code>, <code>lowshelf</code>,
+        <code>highshelf</code>. For example
+        <code>highpass:120; notch:50:20</code> cuts rumble and kills 50&nbsp;Hz
+        mains hum. Leave it empty to use the checkboxes above instead —
+        a chain <em>replaces</em> the high-pass and DC controls, and leaves
+        automatic gain control alone.</p>
+    </div>
     <div class="audio-source__right aud-edit-right">
       <button type="submit" class="bnb-btn moss">Save</button>
       <button type="button" class="bnb-btn ghost"
@@ -745,7 +894,7 @@ fn render_edit_form(row: &AudioSource) -> String {
               hx-swap="outerHTML">Cancel</button>
     </div>
   </form>
-</li>"#,
+</li>"##,
         id = escape_html(&row.id),
         kind = row.kind.as_str(),
         kind_class = kind_css(row.kind),
@@ -754,6 +903,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         device_id = escape_html(&row.device_id),
         quiet_start = escape_html(quiet.0),
         quiet_end = escape_html(quiet.1),
+        eq_chain = escape_html(&row.eq_chain),
         high_pass_checked = high_pass_checked,
         dc_removal_checked = dc_removal_checked,
         agc_checked = agc_checked,
@@ -937,6 +1087,237 @@ mod tests {
     /// column, a parser and supervisor enforcement, and *nothing wrote it* —
     /// every construction site in the tree passed `None` — so the feature was
     /// reachable only by direct SQL. This is the gate that the wiring exists.
+    fn eq_form(kind: &str, device: &str) -> CreateForm {
+        CreateForm {
+            high_pass: None,
+            dc_removal: None,
+            agc: None,
+            rtsp_keepalive: None,
+            pipeline_present: None,
+            eq_chain: None,
+            scope: String::new(),
+            kind: kind.to_string(),
+            device_id: device.to_string(),
+            label: None,
+            sample_rate: None,
+            rtsp_transport: None,
+            quiet_start: None,
+            quiet_end: None,
+        }
+    }
+
+    fn stored_chain(state: &crate::state::AppState, device: &str) -> String {
+        state
+            .with_db(birdnet_db::audio_sources::AudioSourceStore::list)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| s.device_id == device)
+            .expect("source exists")
+            .eq_chain
+    }
+
+    /// The chain an operator types has to reach the row, and a refused one has
+    /// to leave the row alone — a half-typed spec that wipes a working filter
+    /// is worse than one that is rejected.
+    #[tokio::test]
+    async fn an_eq_chain_typed_on_the_form_reaches_the_database() {
+        let (_d, state) = fixture();
+        let mut form = eq_form("usb-alsa", "plughw:3,0");
+        form.eq_chain = Some("highpass:120; notch:50:20".to_string());
+        assert_eq!(
+            create(State(state.clone()), Form(form)).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            stored_chain(&state, "plughw:3,0"),
+            "highpass:120; notch:50:20"
+        );
+
+        let id = state
+            .with_db(birdnet_db::audio_sources::AudioSourceStore::list)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| s.device_id == "plughw:3,0")
+            .expect("source")
+            .id;
+
+        let mut bad = eq_form("usb-alsa", "plughw:3,0");
+        bad.eq_chain = Some("wobblepass:120".to_string());
+        let refused = update(State(state.clone()), Path(id.clone()), Form(bad)).await;
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            stored_chain(&state, "plughw:3,0"),
+            "highpass:120; notch:50:20",
+            "a refused edit must not have changed anything"
+        );
+
+        // An empty field clears it, which is how an operator goes back to the
+        // checkboxes.
+        let mut clear = eq_form("usb-alsa", "plughw:3,0");
+        clear.eq_chain = Some(String::new());
+        assert_eq!(
+            update(State(state.clone()), Path(id), Form(clear))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(stored_chain(&state, "plughw:3,0"), "");
+    }
+
+    /// A stage above the source's Nyquist parses fine and cannot be built. It
+    /// has to be refused at save time: accepted, it would sit in the database
+    /// looking applied while the capture path silently fell back to the flags
+    /// at the next restart, with only a log line to say why.
+    #[tokio::test]
+    async fn a_chain_the_sources_rate_cannot_carry_is_refused_at_save_time() {
+        let (_d, state) = fixture();
+        let mut form = eq_form("usb-alsa", "plughw:4,0");
+        form.sample_rate = Some(8_000);
+        form.eq_chain = Some("peaking:6000:1:3".to_string());
+        let refused = create(State(state.clone()), Form(form)).await;
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // The counterpart: the same stage on a source that *can* carry it is
+        // accepted, so the rejection is about the rate and not about the stage.
+        let mut ok = eq_form("usb-alsa", "plughw:5,0");
+        ok.sample_rate = Some(48_000);
+        ok.eq_chain = Some("peaking:6000:1:3".to_string());
+        assert_eq!(
+            create(State(state.clone()), Form(ok)).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(stored_chain(&state, "plughw:5,0"), "peaking:6000:1:3");
+    }
+
+    /// Lowering a source's sample rate while keeping a chain the new rate
+    /// cannot carry is the same trap arriving by a different route, and the
+    /// check has to run against the rate the row will *have*, not the one it
+    /// has now.
+    #[tokio::test]
+    async fn lowering_the_rate_under_an_existing_chain_is_refused() {
+        let (_d, state) = fixture();
+        let mut form = eq_form("usb-alsa", "plughw:6,0");
+        form.sample_rate = Some(48_000);
+        form.eq_chain = Some("peaking:6000:1:3".to_string());
+        assert_eq!(
+            create(State(state.clone()), Form(form)).await.status(),
+            StatusCode::OK
+        );
+        let id = state
+            .with_db(birdnet_db::audio_sources::AudioSourceStore::list)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| s.device_id == "plughw:6,0")
+            .expect("source")
+            .id;
+
+        let mut down = eq_form("usb-alsa", "plughw:6,0");
+        down.sample_rate = Some(8_000);
+        down.eq_chain = Some("peaking:6000:1:3".to_string());
+        let refused = update(State(state.clone()), Path(id), Form(down)).await;
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the check must use the rate this PATCH sets, not the stored one"
+        );
+        assert_eq!(stored_chain(&state, "plughw:6,0"), "peaking:6000:1:3");
+    }
+
+    /// The preview draws for a good spec, and explains itself for a bad one
+    /// rather than erroring — the operator is mid-word, not mistaken.
+    #[tokio::test]
+    async fn the_preview_draws_a_curve_and_narrates_a_bad_spec() {
+        let (_d, state) = fixture();
+        assert_eq!(
+            create(
+                State(state.clone()),
+                Form(eq_form("usb-alsa", "plughw:7,0"))
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let id = state
+            .with_db(birdnet_db::audio_sources::AudioSourceStore::list)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| s.device_id == "plughw:7,0")
+            .expect("source")
+            .id;
+
+        let body = |r: Response| async move {
+            let bytes = axum::body::to_bytes(r.into_body(), 1 << 20)
+                .await
+                .expect("body");
+            String::from_utf8(bytes.to_vec()).expect("utf8")
+        };
+
+        let good = eq_preview(
+            State(state.clone()),
+            Path(id.clone()),
+            axum::extract::Query(EqPreviewQuery {
+                eq_chain: "peaking:2000:1:9".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(good.status(), StatusCode::OK);
+        let html = body(good).await;
+        assert!(html.contains("<svg"), "a curve is drawn:\n{html}");
+        assert!(html.contains("1 stage"), "and described:\n{html}");
+
+        let bad = eq_preview(
+            State(state.clone()),
+            Path(id),
+            axum::extract::Query(EqPreviewQuery {
+                eq_chain: "wobblepass:120".to_string(),
+            }),
+        )
+        .await;
+        assert_eq!(
+            bad.status(),
+            StatusCode::OK,
+            "a half-typed spec is not an error"
+        );
+        let html = body(bad).await;
+        assert!(!html.contains("<svg"), "no curve for a bad spec:\n{html}");
+        assert!(
+            html.contains("wobblepass:120"),
+            "the offending stage is named:\n{html}"
+        );
+    }
+
+    /// The edit form has to carry the stored chain back into the textarea, or
+    /// an operator opening it sees an empty box and saves the filter away.
+    #[test]
+    fn the_edit_form_carries_the_stored_eq_chain() {
+        let row = AudioSource {
+            id: "src_eq".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "hw:1,0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            eq_chain: "highpass:120; notch:50:20".to_string(),
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        };
+        let html = render_edit_form(&row);
+        assert!(
+            html.contains(">highpass:120; notch:50:20</textarea>"),
+            "the stored chain must be the textarea's content:\n{html}"
+        );
+        assert!(
+            html.contains(r#"name="eq_chain""#),
+            "and submit under the name the handler reads"
+        );
+    }
+
     #[tokio::test]
     async fn a_quiet_window_set_on_the_form_reaches_the_database() {
         let (_d, state) = fixture();
@@ -946,6 +1327,7 @@ mod tests {
             agc: None,
             rtsp_keepalive: None,
             pipeline_present: None,
+            eq_chain: None,
             scope: String::new(),
             kind: "usb-alsa".to_string(),
             device_id: "plughw:2,0".to_string(),
@@ -1025,6 +1407,7 @@ mod tests {
             agc: None,
             rtsp_keepalive: None,
             pipeline_present: None,
+            eq_chain: None,
             scope: String::new(),
             kind: "usb-alsa".to_string(),
             device_id: "plughw:1,0".to_string(),

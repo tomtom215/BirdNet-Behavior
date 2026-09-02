@@ -3461,6 +3461,48 @@ input.aud-edit-time {
   color-scheme: light dark;
 }
 
+/* Per-source equaliser. Spans the row for the same reason the quiet window
+   does: a monospace spec field plus a 560×180 response curve does not fit
+   beside the device fields. The curve is server-rendered SVG (see
+   `admin::eq_curve`) and inherits the theme through `currentColor` and the
+   `--fg-*` tokens, so it follows light/dark without a second palette. */
+.aud-edit-eq {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.aud-edit-eq .hint { margin: 2px 0 0; }
+textarea.aud-edit-eq-spec {
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 0.5px solid var(--border-2);
+  background: var(--bg-2);
+  color: var(--fg);
+  resize: vertical;
+  min-height: 2.6em;
+}
+.eq-preview { min-height: 4px; }
+.eq-preview--problem .hint { color: var(--rare); margin: 0; }
+svg.eq-curve {
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  background: var(--surface-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-sm);
+}
+svg.eq-curve .eqc-grid  { stroke: var(--hairline); stroke-width: 1; }
+svg.eq-curve .eqc-zero  { stroke: var(--border-2); stroke-width: 1; }
+svg.eq-curve .eqc-line  { fill: none; stroke: var(--moss); stroke-width: 1.75;
+                          stroke-linejoin: round; stroke-linecap: round; }
+svg.eq-curve text       { font-family: var(--font-mono); font-size: 8.5px; fill: var(--fg-4); }
+svg.eq-curve .eqc-xlabel { text-anchor: middle; }
+svg.eq-curve .eqc-ylabel { text-anchor: end; }
+
 /* admin/mod.rs — admin shell nav + sign-out. */
 a.am-nav-active   { color: var(--moss-ink); font-weight: 500; }
 /* v3 spine: the shell nav is grouped into the six Station task clusters. The
