@@ -367,7 +367,8 @@
     // by a reverse proxy) fall back silently to the idle baseline.
     try {
         var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var ws = new WebSocket(proto + '//' + location.host + '/api/v2/ws/spectrogram');
+        var base = (document.body && document.body.dataset.basePath) || '';
+        var ws = new WebSocket(proto + '//' + location.host + base + '/api/v2/ws/spectrogram');
         ws.onmessage = function (ev) {
             try {
                 var msg = JSON.parse(ev.data);

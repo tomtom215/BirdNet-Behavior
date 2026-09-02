@@ -314,7 +314,10 @@ pub fn build_set_cookie(token: &str, ttl_ms: u64, public_url: Option<&str>) -> S
     } else {
         ""
     };
-    format!("{COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}{secure}")
+    format!(
+        "{COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path={path}; Max-Age={max_age_secs}{secure}",
+        path = crate::base_path::current().cookie_path()
+    )
 }
 
 /// Build a `Set-Cookie` header value that immediately clears the cookie.
@@ -325,7 +328,10 @@ pub fn build_clear_cookie(public_url: Option<&str>) -> String {
     } else {
         ""
     };
-    format!("{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{secure}")
+    format!(
+        "{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path={path}; Max-Age=0{secure}",
+        path = crate::base_path::current().cookie_path()
+    )
 }
 
 /// Extract the `bnb-session` cookie value from a request's `Cookie` header.

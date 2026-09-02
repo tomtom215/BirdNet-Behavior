@@ -4,6 +4,7 @@
 
 pub mod analytics_cache;
 pub mod auth_middleware;
+pub mod base_path;
 pub mod client_ip;
 pub mod db_pool;
 pub mod metrics;

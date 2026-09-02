@@ -458,18 +458,22 @@ against the code it was written for, per `CLAUDE.md`.
 
 ### Tier 1 — land first
 
-| # | Item | Finding | Why first |
-|---|---|---|---|
-| 1 | Trusted-proxy client IP | G‑18 | A correctness defect with a security edge, in code that already exists. Small, self-contained, and every later access-control feature builds on a correct client identity. |
-| 2 | Sound level monitoring | G‑1 | Largest new capability per line of code, no dependencies, pure DSP, and it builds the biquad primitive that G‑2 needs. |
-| 3 | Dynamic per-species threshold | G‑12 | Highest detection-quality yield available without the multi-model programme. |
-| 4 | Species tracking (year/season/return) | G‑16 | Highest *user-visible* yield on the list; the data is already in the database. |
-| 5 | Per-source parametric EQ | G‑2 | Reuses the biquad from #2; replaces three fixed toggles with something a site can actually be tuned with. |
-| 6 | Pre-capture across segment boundaries | G‑3 | Fixes a silent, invisible data-quality defect in clips we already ship and upload. |
-| 7 | Reverse-proxy base path | G‑19 | Deployment blocker for a whole class of user; mechanical but must be done exhaustively. |
-| 8 | Solar quiet hours | G‑4 | The solar maths already exists; this is wiring plus a schedule-format migration. |
-| 9 | Flickr image provider | N‑1 | The provider seam was built for this and has stood empty. |
-| 10 | Live-stream frequency shift | N‑2 | Accessibility parity; shares the re-encode seam with G‑21. |
+> **Status** is kept current as work lands. "Done" means implemented,
+> gated by tests that were each observed failing against the code they guard,
+> and documented — not merely written.
+
+| # | Item | Finding | Status | Why first |
+|---|---|---|---|---|
+| 1 | Trusted-proxy client IP | G‑18 | **Done** | A correctness defect with a security edge, in code that already exists. Small, self-contained, and every later access-control feature builds on a correct client identity. |
+| 2 | Sound level monitoring | G‑1 | **Done** | Largest new capability per line of code, no dependencies, pure DSP, and it builds the biquad primitive that G‑2 needs. |
+| 3 | Dynamic per-species threshold | G‑12 | **Done** | Highest detection-quality yield available without the multi-model programme. |
+| 4 | Species tracking (year/season/return) | G‑16 | **Done** | Highest *user-visible* yield on the list; the data is already in the database. |
+| 5 | Per-source parametric EQ | G‑2 | **Done** | Reuses the biquad from #2; replaces three fixed toggles with something a site can actually be tuned with. |
+| 6 | Pre-capture across segment boundaries | G‑3 | **Done** | Fixes a silent, invisible data-quality defect in clips we already ship and upload. |
+| 7 | Reverse-proxy base path | G‑19 | In progress | Deployment blocker for a whole class of user; mechanical but must be done exhaustively. |
+| 8 | Solar quiet hours | G‑4 | **Done** | The solar maths already exists; this is wiring plus a schedule-format migration. |
+| 9 | Flickr image provider | N‑1 | To do | The provider seam was built for this and has stood empty. |
+| 10 | Live-stream frequency shift | N‑2 | To do | Accessibility parity; shares the re-encode seam with G‑21. |
 
 ### Tier 2 — next
 
