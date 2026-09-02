@@ -58,6 +58,10 @@ enum Action {
     /// `--doctor` / `--doctor-json`: print diagnostics and exit with a
     /// status-derived code. Carries the chosen render format.
     Doctor(doctor::Format),
+    /// `--decrypt-backup`: turn an offsite `.bnb` file back into a database
+    /// and exit. Paths are read from the CLI at dispatch rather than carried
+    /// here, so `Action` stays `Copy`.
+    DecryptBackup,
     /// `--support-bundle`: collect a redacted diagnostic archive and exit.
     /// The destination is read from the CLI at dispatch rather than carried
     /// here, so `Action` stays `Copy`.
@@ -88,6 +92,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::MigrationReport
     } else if cli.rebuild_species_summary {
         Action::RebuildSpeciesSummary
+    } else if cli.decrypt_backup.is_some() {
+        Action::DecryptBackup
     } else if cli.support_bundle.is_some() {
         Action::SupportBundle
     } else if cli.doctor || cli.doctor_json || cli.fix {
@@ -208,6 +214,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Action::Doctor(format) => {
             let code = doctor::run_with_format(&cli, config.as_ref(), format);
+            std::process::exit(code);
+        }
+        Action::DecryptBackup => {
+            let code = helpers::offsite::run_decrypt(&cli, config.as_ref());
             std::process::exit(code);
         }
         Action::SupportBundle => {

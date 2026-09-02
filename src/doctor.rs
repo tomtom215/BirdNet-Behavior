@@ -41,6 +41,7 @@ mod disk;
 mod environment;
 mod fix;
 mod model;
+mod offsite;
 mod paths;
 mod render;
 mod tls;
@@ -198,6 +199,7 @@ fn collect(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     checks.extend(tls::check_tls(cli, config));
     checks.extend(clock::check_clock(cli, config));
     checks.extend(database::check_database(cli, config));
+    checks.extend(offsite::check_offsite(cli, config));
     checks.extend(paths::check_paths(cli, config));
     checks.extend(audio::check_audio_source(cli, config));
     checks.extend(model::check_model(cli, config));

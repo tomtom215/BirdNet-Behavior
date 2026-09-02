@@ -305,6 +305,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libasound2t64 \
         libgcc-s1 \
         libstdc++6 \
+        openssh-client \
         procps \
         sox \
         tini \

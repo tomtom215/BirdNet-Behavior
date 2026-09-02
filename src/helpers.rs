@@ -21,6 +21,7 @@
 mod auth;
 mod db;
 pub mod egress;
+pub mod offsite;
 pub mod resolve;
 mod settings_overlay;
 mod state;

@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Four clusters: HTTPS in the listener itself, a searchable detection log with
-bulk review, removing the Apprise dependency for the services most stations
-actually use, and giving the detection pipeline the quality controls that
-separate a station's real records from its model's artefacts.
+Five clusters: HTTPS in the listener itself, a searchable detection log with
+bulk review, backups that leave the SD card they were written on, removing the
+Apprise dependency for the services most stations actually use, and giving the
+detection pipeline the quality controls that separate a station's real records
+from its model's artefacts.
 
 Plus four bugs that were found the same way each time — by running the thing
 rather than by reading it. Thirteen state-changing endpoints with no login,
@@ -177,6 +178,110 @@ any non-safe method appears in the public router, if a gated route stops being
 mounted at all, or if a write is accepted without a session on a station that
 has a password set. The three cover different regressions: the first two are
 both satisfied by a fixture where the middleware never has to decide anything.
+
+### Added — backups that survive the SD card
+
+Until now every backup a station took lived beside the database it came from,
+on the same card. That covers a corrupt page, a bad import, an interrupted
+write — and none of the failures that actually end a station's records: the
+card wears out, the enclosure floods, the Pi is stolen. The manual said so, in
+bold, and told operators to pull a full backup from another machine on a
+schedule they would have to build themselves.
+
+`OFFSITE_BACKUP=s3` or `OFFSITE_BACKUP=sftp` now sends each weekly snapshot
+somewhere else. **Off by default**, and the local snapshots and their 14-file
+rotation are untouched — this only ever adds a copy.
+
+- **Encrypted on the station, and not optionally.** A station's database is a
+  log of what is around a house and when somebody is home. "Server-side
+  encryption" on a bucket means the provider holds the key; an SFTP host means
+  its administrator does. So the file is sealed before it leaves — argon2id
+  over the operator's passphrase, then ChaCha20-Poly1305 — and there is no
+  setting to turn that off. `OFFSITE_PASSPHRASE` has no command-line flag
+  either: an argument is visible in `ps` to every user on the machine and is
+  copied into the journal by systemd.
+
+  Two details carry the weight. The 52-byte header is the AAD of every chunk,
+  so an attacker with write access to the storage host cannot lower the argon2
+  cost to 8 KiB and hand the file back still decrypting. And the nonces are a
+  STREAM counter with a final-chunk flag rather than random, so removing the
+  tail is *detected* — random per-chunk nonces authenticate every chunk and
+  still let a backup restore cleanly, missing last March.
+
+- **`--decrypt-backup <file> --out <path>`.** An encrypted backup with no
+  working restore path is worse than no backup, because it looks like insurance
+  for a year and then does not pay out. Refuses to overwrite an existing file
+  (the likely `--out` on a station is the live `birds.db`) and leaves nothing
+  behind when it fails.
+
+- **S3-compatible, without the SDK.** AWS S3, Backblaze B2, Cloudflare R2,
+  Wasabi, MinIO, Ceph RGW and Garage. `SigV4` written out rather than pulled
+  in: for one PUT, one `GET ?list-type=2` and one DELETE the AWS SDK would
+  bring a dependency tree larger than the rest of this binary, onto a board
+  whose release build is already dominated by ONNX Runtime and DuckDB. It is
+  checked against botocore rather than against a reading of the spec — see
+  below.
+
+- **Any SSH host**, through OpenSSH's own `sftp` in batch mode rather than an
+  in-process SSH stack: a second place for key handling, host-key policy and
+  cipher selection to be subtly wrong is not worth the subprocess it saves.
+  Host key checking has no "off" — `yes` or `accept-new`, nothing else —
+  because an SFTP backup with it disabled encrypts the upload to whoever
+  answers. Uploads land as `<name>.part` and are renamed, so a power cut never
+  leaves something a restore would reach for.
+
+- **Retention by the station's own clock.** `OFFSITE_KEEP` (default 8, `0`
+  keeps everything) orders by the timestamp in the filename, not the store's
+  `LastModified`: a station uploading a backlog writes four backups in one
+  minute, and pruning by upload time would keep an arbitrary four. Files this
+  station did not write are never removed, so a shared bucket stays shared.
+
+- **A `--doctor` check** that reports the destination, the retention, and — for
+  SSH — whether the key exists, whether its mode is one OpenSSH will accept
+  (`0644` is a silent refusal on the client's own stderr, once a week), and
+  whether the host is known. It opens no connection: `--doctor` runs on every
+  start, and a diagnostic that dials a remote host fails whenever the uplink is
+  down.
+
+  A half-configured destination is a `[ FAIL ]` listing *every* missing key, not
+  a silent fall back to "off". That fallback is the shape of the defect that
+  leaves an operator believing they have offsite copies for a year.
+
+#### How this was checked
+
+Every gate was observed failing against the code it was written for; the
+interesting ones are the four that were observed *passing* when they should not
+have been.
+
+- The envelope's "a plain file is not an envelope" test passed a 25-byte string,
+  so `read_exact` hit end-of-file and returned `NotAnEnvelope` before the magic
+  was ever compared. It stayed green with the magic check deleted.
+- The `SigV4` query-sort test used `b+c` against `b-c`, where the raw and
+  encoded orders agree, so sorting before encoding passed. `-` against `:` is
+  where they differ.
+- The CLI truncation test cut 200 bytes off a single-chunk file, which breaks
+  that chunk's own tag — the weaker property. It stayed green with the
+  final-chunk flag deleted. The fixture is now two chunks and the cut removes a
+  whole one.
+- `container_can_run_what_the_daemon_spawns` never saw `sftp` at all: its
+  scanner matched `Command::new("literal")` only, and this code names its binary
+  in a constant. Removing `sftp` from the classification table left the file
+  green. The scanner now resolves same-file `const NAME: &str` too, and has a
+  test of its own.
+
+`SigV4` is checked against vectors generated by **botocore**, the signer inside
+the AWS CLI, by a script committed beside them. The chain is anchored: one
+vector is AWS's own published "Example: GET Object", whose signature
+`f0e8bdb8…6036bdb41` appears in the S3 documentation, and botocore reproduces it
+byte for byte.
+
+Both transports run end to end. `s3_loopback` drives a store that recomputes
+the signature from what arrived on the wire and rejects a mismatch the way
+MinIO would — catching the class the vector test cannot, where the request sent
+is not the request signed. `sftp_loopback` stands up a real `sshd` on a
+loopback port with generated keys. When that harness first ran, `sshd` never
+started, and two of its four tests passed on "connection refused"; the harness
+now asserts the port is listening before handing back a server.
 
 ### Added — notifications without Apprise
 

@@ -620,6 +620,44 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_NOISE_CLASSES")]
     pub noise_classes: Option<String>,
 
+    /// Decrypt an offsite backup file and exit.
+    ///
+    /// The counterpart to `--offsite-backup`: takes a `.bnb` file downloaded
+    /// from the bucket or the SSH server and writes the plain database to
+    /// `--out`. The result is an ordinary `SQLite` file — stop the service and
+    /// put it in place of `birds.db`, as with any snapshot.
+    ///
+    /// The passphrase comes from `OFFSITE_PASSPHRASE` (config or
+    /// `BIRDNET_OFFSITE_PASSPHRASE`), never from a flag: an argument on a
+    /// command line is visible in `ps` to every user on the machine. There is
+    /// no recovery without it.
+    #[arg(long, value_name = "FILE")]
+    pub decrypt_backup: Option<PathBuf>,
+
+    /// Where `--decrypt-backup` writes the plain database.
+    ///
+    /// Refused if the file already exists: a restore that silently overwrote
+    /// the database you were about to compare against would be worse than one
+    /// that failed.
+    #[arg(long, value_name = "PATH", requires = "decrypt_backup")]
+    pub out: Option<PathBuf>,
+
+    /// Send each weekly backup to an offsite destination: `off`, `s3` or
+    /// `sftp`.
+    ///
+    /// A station's rolling backups live beside its database, on the same card.
+    /// That covers a corrupt page and a bad VACUUM; it does not cover the card
+    /// wearing out, the enclosure flooding, or the Pi being stolen.
+    ///
+    /// Everything is encrypted on the station before it leaves, and that is not
+    /// configurable — so this needs `OFFSITE_PASSPHRASE`, plus the destination's
+    /// own settings. **Those are config-file or environment keys only, never
+    /// flags**: an argument on a command line is visible in `ps` to every user
+    /// on the box and is copied into the journal by systemd. `--doctor` lists
+    /// what is missing. Config key: `OFFSITE_BACKUP`.
+    #[arg(long, env = "BIRDNET_OFFSITE_BACKUP")]
+    pub offsite_backup: Option<String>,
+
     /// How much agreement from neighbouring analysis windows a species needs
     /// before it is recorded: `off`, `lenient`, `moderate`, `balanced` or
     /// `strict`.

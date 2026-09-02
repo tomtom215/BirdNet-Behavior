@@ -553,12 +553,39 @@ async fn serve(
             .and_then(|c| c.get_parsed::<u32>("CLIP_RETENTION_DAYS").ok())
             .unwrap_or(0)
     };
+    // Offsite backups. A broken configuration is reported here and the station
+    // carries on: it must keep recording birds either way, and `--doctor` is
+    // where the operator is told in full.
+    let offsite = match crate::helpers::offsite::plan(&cli, config.as_ref()) {
+        crate::helpers::offsite::OffsitePlan::Off => None,
+        crate::helpers::offsite::OffsitePlan::On(c) => {
+            tracing::info!(
+                destination = %c.destination.describe(),
+                keep = c.keep,
+                "offsite backups enabled"
+            );
+            Some(std::sync::Arc::new(*c))
+        }
+        crate::helpers::offsite::OffsitePlan::Broken(problems) => {
+            for problem in &problems {
+                tracing::error!("offsite backup is configured but cannot run: {problem}");
+            }
+            tracing::error!(
+                count = problems.len(),
+                "offsite backups are OFF; backups will stay on this station. \
+                 Run `birdnet-behavior --doctor` for the whole list"
+            );
+            None
+        }
+    };
+
     maintenance::spawn_database_maintenance(
         db_path.clone(),
         backup_dir.clone(),
         recordings_dir_for_maintenance,
         species_cap,
         clip_retention_days,
+        offsite,
     );
 
     // Bind every listener the plan calls for before telling systemd we are up:

@@ -34,6 +34,23 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
 | `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (needs `OVERLAP`) |
+| `BIRDNET_OFFSITE_BACKUP` | `--offsite-backup` | `OFFSITE_BACKUP` | `off` |
+| `BIRDNET_OFFSITE_PASSPHRASE` | — (deliberately no flag) | `OFFSITE_PASSPHRASE` | — |
+| `BIRDNET_OFFSITE_KEEP` | — | `OFFSITE_KEEP` | `8` |
+| `BIRDNET_OFFSITE_S3_ENDPOINT` | — | `OFFSITE_S3_ENDPOINT` | — |
+| `BIRDNET_OFFSITE_S3_BUCKET` | — | `OFFSITE_S3_BUCKET` | — |
+| `BIRDNET_OFFSITE_S3_PREFIX` | — | `OFFSITE_S3_PREFIX` | (none) |
+| `BIRDNET_OFFSITE_S3_REGION` | — | `OFFSITE_S3_REGION` | `us-east-1` |
+| `BIRDNET_OFFSITE_S3_ACCESS_KEY` | — | `OFFSITE_S3_ACCESS_KEY` | — |
+| `BIRDNET_OFFSITE_S3_SECRET_KEY` | — (deliberately no flag) | `OFFSITE_S3_SECRET_KEY` | — |
+| `BIRDNET_OFFSITE_S3_ADDRESSING` | — | `OFFSITE_S3_ADDRESSING` | `auto` |
+| `BIRDNET_OFFSITE_SFTP_HOST` | — | `OFFSITE_SFTP_HOST` | — |
+| `BIRDNET_OFFSITE_SFTP_PORT` | — | `OFFSITE_SFTP_PORT` | `22` |
+| `BIRDNET_OFFSITE_SFTP_USER` | — | `OFFSITE_SFTP_USER` | — |
+| `BIRDNET_OFFSITE_SFTP_DIR` | — | `OFFSITE_SFTP_DIR` | — |
+| `BIRDNET_OFFSITE_SFTP_IDENTITY` | — | `OFFSITE_SFTP_IDENTITY` | — |
+| `BIRDNET_OFFSITE_SFTP_KNOWN_HOSTS` | — | `OFFSITE_SFTP_KNOWN_HOSTS` | beside the identity file |
+| `BIRDNET_OFFSITE_SFTP_HOST_KEY_POLICY` | — | `OFFSITE_SFTP_HOST_KEY_POLICY` | `yes` |
 | `BIRDNET_DUPLICATE_INTERVAL_SECS` | `--duplicate-interval-secs` | `DUPLICATE_INTERVAL_SECS` | `0` |
 | `BIRDNET_NIGHT_FILTER` | `--night-filter` | `NIGHT_FILTER` | off |
 | `BIRDNET_NIGHT_MARGIN_MINS` | `--night-margin-mins` | `NIGHT_MARGIN_MINS` | `60` |

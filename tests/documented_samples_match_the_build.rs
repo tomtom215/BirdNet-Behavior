@@ -252,3 +252,113 @@ fn the_tuning_guides_confirmation_table_matches_the_filter() {
         }
     }
 }
+
+// ── The offsite-backup manual against the planner ────────────────────────────
+//
+// `docs/book/admin/backups.md` is where an operator learns what to put in their
+// config, and every key it names is one `helpers::offsite::plan` has to read.
+// The two drift in the obvious direction: a key gets renamed in code and the
+// manual keeps telling people the old name, which reads as "offsite backups do
+// not work" rather than as "the manual is stale".
+//
+// Before this feature existed the same page said, in bold, that the station has
+// no built-in upload to S3 or a NAS. That sentence was true when it was written
+// and wrong the day the code landed, and nothing would have caught it.
+
+/// The backups page, compiled in.
+const BACKUPS_DOC: &str = include_str!("../docs/book/admin/backups.md");
+
+/// Every `OFFSITE_*` key the manual mentions.
+fn documented_offsite_keys() -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for (idx, _) in BACKUPS_DOC.match_indices("OFFSITE_") {
+        let rest = &BACKUPS_DOC[idx..];
+        let end = rest
+            .char_indices()
+            .position(|(_, c)| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(rest.len());
+        out.insert(rest[..end].trim_end_matches('_').to_string());
+    }
+    out
+}
+
+/// Every `OFFSITE_*` key the planner and the decrypt path actually read.
+///
+/// Two things the first version of this got wrong, both of which made it report
+/// dozens of "undocumented keys" that were not keys at all:
+///
+/// * it took everything up to the next quote, so `"OFFSITE_BACKUP=s3"` from a
+///   test fixture and `"OFFSITE_SFTP_PORT is `{v}`, which is not a port"` from
+///   an error message both counted. A key literal ends *at* the closing quote,
+///   so that is what is required here.
+/// * it scanned the whole file, test module included. Only the production half
+///   describes what the binary reads.
+fn implemented_offsite_keys() -> std::collections::BTreeSet<String> {
+    let src = include_str!("../src/helpers/offsite.rs");
+    let production = src.split_once("#[cfg(test)]").map_or(src, |(head, _)| head);
+    let mut out = std::collections::BTreeSet::new();
+    for (idx, _) in production.match_indices("\"OFFSITE_") {
+        let rest = &production[idx + 1..];
+        let end = rest
+            .char_indices()
+            .position(|(_, c)| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+            .unwrap_or(rest.len());
+        // A literal is `"OFFSITE_X"`; anything else is prose that happens to
+        // begin with the prefix.
+        if rest[end..].starts_with('"') {
+            out.insert(rest[..end].to_string());
+        }
+    }
+    out
+}
+
+#[test]
+fn the_backups_page_documents_every_offsite_key_and_no_others() {
+    let documented = documented_offsite_keys();
+    let implemented = implemented_offsite_keys();
+
+    assert!(
+        implemented.len() >= 10,
+        "the key scanner found only {} keys in src/helpers/offsite.rs — it has \
+         stopped matching, and this whole gate is now vacuous: {implemented:?}",
+        implemented.len()
+    );
+
+    let undocumented: Vec<&String> = implemented.difference(&documented).collect();
+    assert!(
+        undocumented.is_empty(),
+        "these offsite keys exist but the backups page never names them, so an \
+         operator has no way to discover them: {undocumented:?}"
+    );
+
+    let stale: Vec<&String> = documented.difference(&implemented).collect();
+    assert!(
+        stale.is_empty(),
+        "the backups page tells operators to set keys nothing reads: {stale:?}"
+    );
+}
+
+#[test]
+fn the_backups_page_no_longer_claims_there_is_no_offsite_upload() {
+    // The specific sentence that was true for years and then silently was not.
+    // Pinned by its distinctive phrase rather than by position, so moving the
+    // paragraph does not break the check and restoring the claim does.
+    let lowered = BACKUPS_DOC.to_lowercase();
+    for stale in [
+        "no built-in upload",
+        "snapshots are not off-site",
+        "the station has no built-in upload to s3",
+    ] {
+        assert!(
+            !lowered.contains(stale),
+            "the backups page still says {stale:?}, which stopped being true when \
+             OFFSITE_BACKUP landed"
+        );
+    }
+    // Counterpart: it has to say something about the feature, or deleting the
+    // whole section would satisfy the check above.
+    assert!(
+        BACKUPS_DOC.contains("OFFSITE_BACKUP"),
+        "the backups page must document the offsite feature"
+    );
+}
