@@ -366,6 +366,43 @@ pub fn looks_signed_in(headers: &axum::http::HeaderMap) -> bool {
         .is_some()
 }
 
+// ---------------------------------------------------------------------------
+// Device fingerprint
+// ---------------------------------------------------------------------------
+
+/// Bytes of the truncated IP MAC stored in `sessions.ip_hash`.
+///
+/// Sixteen bytes — the same 128-bit margin the session cookie and the share
+/// links use. There is nothing to brute-force here (the input space is 2^32
+/// addresses, so any hash of an IP is reversible by enumeration to anyone
+/// holding the key), which is exactly why the key is the session secret and
+/// not a constant: without the secret the column is opaque, and with it the
+/// operator can confirm "was this session mine" without the database ever
+/// storing a visitor's address in the clear.
+const IP_HASH_BYTES: usize = 16;
+
+/// Hash a resolved client address for storage in `sessions.ip_hash`.
+///
+/// Keyed on the session secret, so rotating the admin password invalidates
+/// these alongside the cookies they belong to — the column would otherwise
+/// outlive the sessions it describes and become a standing record of who
+/// connected from where.
+///
+/// # Panics
+///
+/// Only if `Hmac<Sha256>` were to reject a key length, which its contract
+/// says it never does — the same `expect` the token path takes.
+#[must_use]
+pub fn hash_client_ip(ip: std::net::IpAddr) -> String {
+    let mut mac = HmacSha256::new_from_slice(&secret()).expect("HMAC accepts any key length");
+    // Hash the canonical textual form. An IPv4-mapped IPv6 address is
+    // unmapped before it reaches here (`client_ip::TrustedProxies`), so one
+    // address has one spelling and therefore one hash.
+    mac.update(ip.to_string().as_bytes());
+    let tag = mac.finalize().into_bytes();
+    URL_SAFE_NO_PAD.encode(&tag[..IP_HASH_BYTES])
+}
+
 #[cfg(test)]
 mod tests {
     // Tests use the per-process random secret (no env vars set), which is

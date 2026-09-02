@@ -19,7 +19,7 @@
 
 use axum::Form;
 use axum::Router;
-use axum::extract::{Request, State};
+use axum::extract::{Extension, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -27,6 +27,7 @@ use serde::Deserialize;
 
 use birdnet_db::accounts::{self, SessionStore, UserStore};
 
+use crate::client_ip::ClientIp;
 use crate::routes::pages::escape_html;
 use crate::session;
 use crate::state::AppState;
@@ -69,8 +70,14 @@ async fn login_page(req: Request) -> Html<String> {
 ///    map onto the seed admin row. This is what makes the wire flip
 ///    survive the case where the bootstrap hasn't run yet.
 /// 3. Anything else → `?error=1`.
-async fn login_submit(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Response {
+async fn login_submit(
+    State(state): State<AppState>,
+    client: Option<Extension<ClientIp>>,
+    headers: axum::http::HeaderMap,
+    Form(form): Form<LoginForm>,
+) -> Response {
     let next = sanitize_next(form.next.as_deref()).to_string();
+    let device = DeviceFingerprint::from_request(client.as_deref(), &headers);
     let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
         (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
         _ => None,
@@ -93,7 +100,7 @@ async fn login_submit(State(state): State<AppState>, Form(form): Form<LoginForm>
                 .with_db(|conn| conn.find_user_by_name("admin"))
                 .is_ok_and(|u| accounts::is_legacy_password_hash(&u.pwd_argon2))
         {
-            return open_bypass_redirect(&state, &next);
+            return open_bypass_redirect(&state, &next, &device);
         }
         let query = format!("?error=1&next={}", urlencode_path(&next));
         return Redirect::to(&format!("/login{query}")).into_response();
@@ -108,8 +115,15 @@ async fn login_submit(State(state): State<AppState>, Form(form): Form<LoginForm>
     // Mint a fresh session id, persist a row, and emit the bound v2 cookie.
     let session_id = session::generate_session_id();
     let expires_at = expires_at_for_ttl(ttl_ms);
-    let create_result = state
-        .with_db(|conn| conn.create_session(&session_id, auth_user_id, &expires_at, None, None));
+    let create_result = state.with_db(|conn| {
+        conn.create_session(
+            &session_id,
+            auth_user_id,
+            &expires_at,
+            device.user_agent.as_deref(),
+            device.ip_hash.as_deref(),
+        )
+    });
     if let Err(e) = create_result {
         tracing::error!(error = %e, "create_session failed during login");
         let query = format!("?error=1&next={}", urlencode_path(&next));
@@ -163,19 +177,55 @@ fn authenticate(
     None
 }
 
+/// What we record about the device a session was minted on.
+///
+/// Both fields exist as columns and both were written as `NULL` at every call
+/// site, so `/admin/accounts` listed every session as an anonymous row and the
+/// "is one of these not mine?" question the page exists to answer could not be
+/// asked. Filling them is the point of resolving a client address correctly:
+/// an `ip_hash` taken from the peer would say "the reverse proxy" for every
+/// session on every proxied station, which is worse than `NULL` because it
+/// looks like an answer.
+struct DeviceFingerprint {
+    user_agent: Option<String>,
+    ip_hash: Option<String>,
+}
+
+impl DeviceFingerprint {
+    /// `client` is [`ClientIp`] as resolved by the rate-limit layer. It is
+    /// `None` only when that layer did not run — a handler called directly in
+    /// a test — and then no address is recorded rather than a wrong one.
+    fn from_request(client: Option<&ClientIp>, headers: &axum::http::HeaderMap) -> Self {
+        Self {
+            user_agent: headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.chars().take(255).collect()),
+            ip_hash: client.map(|c| session::hash_client_ip(c.0)),
+        }
+    }
+}
+
 /// "Anyone can sign in" bypass — issued only when neither `CADDY_PWD` nor
 /// a DB-stored admin password is configured. Mirrors the basic-auth
 /// shape from #89: the surface is reachable on a freshly provisioned
 /// station before the operator has chosen a password.
-fn open_bypass_redirect(state: &AppState, next: &str) -> Response {
+fn open_bypass_redirect(state: &AppState, next: &str, device: &DeviceFingerprint) -> Response {
     let session_id = session::generate_session_id();
     let Ok(admin) = state.with_db(|conn| conn.find_user_by_name("admin")) else {
         return Redirect::to(next).into_response();
     };
     let admin_id = admin.id;
     let expires_at = expires_at_for_ttl(session::default_ttl_ms());
-    let _ =
-        state.with_db(|conn| conn.create_session(&session_id, admin_id, &expires_at, None, None));
+    let _ = state.with_db(|conn| {
+        conn.create_session(
+            &session_id,
+            admin_id,
+            &expires_at,
+            device.user_agent.as_deref(),
+            device.ip_hash.as_deref(),
+        )
+    });
     let token = session::issue_token(&session_id, session::default_ttl_ms());
     redirect_with_cookie(&token, session::default_ttl_ms(), next)
 }

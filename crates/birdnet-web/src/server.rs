@@ -72,8 +72,39 @@ impl std::error::Error for ServerError {}
 /// `pwd_argon2`), and the middleware open-bypasses when no admin password
 /// is configured — matching the fresh-Pi "no password = open admin" contract.
 pub fn build_router(state: AppState) -> Router {
-    // Rate limiter: 30 req/s sustained, 60-request burst per IP.
-    build_router_with_rate_limit(state, RateLimitConfig::default())
+    // Rate limiter: 30 req/s sustained, 60-request burst per IP, keyed on the
+    // client address that `BIRDNET_TRUSTED_PROXIES` resolves.
+    build_router_with_rate_limit(
+        state,
+        RateLimitConfig {
+            trusted_proxies: trusted_proxies_from_env(),
+            ..RateLimitConfig::default()
+        },
+    )
+}
+
+/// Read the trusted-proxy list from `BIRDNET_TRUSTED_PROXIES`.
+///
+/// Unset falls back to [`TrustedProxies::default`] (loopback plus the private
+/// ranges). A value that does not parse is **not** silently ignored: it logs
+/// the offending entry and falls back to loopback only, which is the safe
+/// direction — a station whose trust list did not load records real peer
+/// addresses and rate-limits each separately, rather than believing headers on
+/// the strength of a list that failed to build.
+fn trusted_proxies_from_env() -> crate::client_ip::TrustedProxies {
+    let Ok(spec) = std::env::var("BIRDNET_TRUSTED_PROXIES") else {
+        return crate::client_ip::TrustedProxies::default();
+    };
+    match crate::client_ip::TrustedProxies::parse(&spec) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "BIRDNET_TRUSTED_PROXIES did not parse; trusting loopback only.                  Forwarded client-IP headers from any other peer will be ignored."
+            );
+            crate::client_ip::TrustedProxies::loopback_only()
+        }
+    }
 }
 
 /// Build the router with an explicit rate-limit configuration.
@@ -361,7 +392,7 @@ mod tests {
             crate::rate_limit::RateLimitConfig {
                 requests_per_second: 100_000.0,
                 burst_capacity: 100_000,
-                trust_x_forwarded_for: false,
+                trusted_proxies: crate::client_ip::TrustedProxies::default(),
             },
         );
         assert!(
