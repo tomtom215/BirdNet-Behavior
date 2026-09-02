@@ -187,8 +187,6 @@ password-hash = { version = "0.5", features = ["getrandom"] }
 # File watching
 notify = "8"
 
-# Config
-configparser = "3.1"
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }

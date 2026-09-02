@@ -598,3 +598,215 @@ fn the_readmes_test_count_is_not_an_overstatement() {
          past three thousand — round the claim up to something near {declared}"
     );
 }
+
+// ── the dependency ADR names crates that still exist ───────────────────────
+
+/// The dependency ADR, compiled in.
+const DEPS_DOC: &str = include_str!("../docs/architecture/04-dependencies.md");
+
+/// The lockfile, compiled in — the only honest answer to "does this build
+/// actually have that crate".
+const LOCKFILE: &str = include_str!("../Cargo.lock");
+
+/// The header cell that marks a column as naming crates this project uses.
+const CRATE_HEADER: &str = "Crate";
+
+/// The header cell that marks the one table whose crates are deliberately
+/// absent. Checking *those* against the lockfile would assert the opposite of
+/// what the table says.
+const EXCLUSION_HEADER: &str = "Reason for exclusion";
+
+/// Names in a `Crate` column that are not crates.
+///
+/// Kept to things that read like a crate name and are not one; each costs a
+/// line and a reason, which is the point. A dropped dependency must never be
+/// silenced by adding it here — that is the failure this gate exists to catch.
+const NOT_OUR_CRATES: &[(&str, &str)] = &[(
+    "aead",
+    "a `ring` feature, listed in parentheses beside the crate that provides it",
+)];
+
+/// Is this row the `|---|---|` rule under a header?
+fn is_separator(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|')
+        && trimmed
+            .chars()
+            .all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+}
+
+/// Split a Markdown table row into trimmed cells.
+fn cells_of(line: &str) -> Vec<&str> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect()
+}
+
+/// Could this token name a crate at all?
+///
+/// Shape, not allowlist: a crate name is lowercase letters, digits, `-` and
+/// `_`, so a version string or a capitalised acronym that wanders into a
+/// `Crate` cell is dropped without anybody having to enumerate it.
+fn could_name_a_crate(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+/// Every crate named in a `Crate` column of the ADR, with the row it sits in.
+///
+/// Driven by each table's own header rather than by a fixed column index: the
+/// ADR has five tables and `Crate` is the second column in two of them and the
+/// first in the rest, so a fixed index reads prose out of the wrong cell and
+/// needs an allowlist to make up for it. The rejected-alternatives table is
+/// skipped by its header, because a crate listed there is *supposed* to be
+/// missing from the lockfile.
+///
+/// Returns an empty vector if the tables moved or were reshaped, which the
+/// caller treats as a failure rather than a pass: a matcher that quietly finds
+/// nothing is how a gate like this becomes decorative.
+fn documented_crates() -> Vec<(&'static str, &'static str)> {
+    let lines: Vec<&'static str> = DEPS_DOC.lines().collect();
+    let mut found = Vec::new();
+    let mut crate_col: Option<usize> = None;
+
+    for (i, line) in lines.iter().enumerate() {
+        if !line.trim_start().starts_with('|') {
+            crate_col = None; // a table ends where the pipes stop
+            continue;
+        }
+        if is_separator(line) {
+            continue;
+        }
+        let cells = cells_of(line);
+
+        // A header is a pipe row sitting directly above the separator rule.
+        if lines.get(i + 1).is_some_and(|next| is_separator(next)) {
+            crate_col = if cells.contains(&EXCLUSION_HEADER) {
+                None
+            } else {
+                cells.iter().position(|c| *c == CRATE_HEADER)
+            };
+            continue;
+        }
+
+        let (Some(col), Some(row)) = (crate_col, cells.first()) else {
+            continue;
+        };
+        let Some(cell) = cells.get(col) else { continue };
+        for token in cell.split('`').skip(1).step_by(2) {
+            if could_name_a_crate(token) {
+                found.push((*row, token));
+            }
+        }
+    }
+    found
+}
+
+/// The ADR must not advertise a crate this build does not have.
+///
+/// Nothing structural connects that table to `Cargo.lock`, so a dropped
+/// dependency leaves its row behind reading as current. It has happened twice:
+/// `rustls-pemfile` went on being named as the thing that parses PEM after it
+/// was replaced by `rustls_pki_types::pem`, and `configparser` was named as
+/// the config parser while `birdnet-core::config` had always hand-rolled it —
+/// the crate was declared in `[workspace.dependencies]`, used by no member,
+/// and had therefore never even reached the lockfile.
+///
+/// The manual-staleness gate above cannot see either. It matches sentences
+/// claiming a feature is *missing*; a table naming a crate that is *gone* has
+/// no sentence to match.
+#[test]
+fn the_dependency_adr_names_no_crate_this_build_does_not_have() {
+    let documented = documented_crates();
+    assert!(
+        !documented.is_empty(),
+        "no crate names were read out of docs/architecture/04-dependencies.md \
+         — the tables moved or were reshaped; retarget this gate rather than \
+         deleting it"
+    );
+
+    let missing: Vec<String> = documented
+        .iter()
+        .filter(|(_, krate)| !NOT_OUR_CRATES.iter().any(|(name, _)| name == krate))
+        .filter(|(_, krate)| !LOCKFILE.contains(&format!("name = \"{krate}\"")))
+        .map(|(row, krate)| format!("`{krate}` (row: {row})"))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "docs/architecture/04-dependencies.md names {} crate(s) that are not in \
+         Cargo.lock:\n  {}\nEither the dependency was dropped and the row is now \
+         false, or the name is not a crate — in which case add it to \
+         NOT_OUR_CRATES with the reason.",
+        missing.len(),
+        missing.join("\n  ")
+    );
+}
+
+/// The counterpart, kept green: the gate above is worth nothing if its matcher
+/// reads no rows, and worth little if it reads only some of the tables.
+///
+/// Names one crate from each table shape — `Crate` second, `Crate` first — so
+/// a matcher that silently stopped reading one of them fails here. Asserts
+/// membership rather than the full list, so ordinary churn need not touch it.
+#[test]
+fn the_dependency_adr_matcher_actually_reads_every_table() {
+    let found = documented_crates();
+    assert!(
+        found.len() >= 30,
+        "only {} crate names read out of the ADR, which is fewer than one \
+         table's worth — the matcher is losing rows: {found:?}",
+        found.len()
+    );
+    for expected in ["axum", "tokio", "rusqlite", "ort", "birdnet-core"] {
+        assert!(
+            found.iter().any(|(_, krate)| *krate == expected),
+            "`{expected}` is named in a Crate column of the ADR but the matcher \
+             did not find it: {found:?}"
+        );
+    }
+}
+
+/// The rejected-alternatives table must stay out of scope.
+///
+/// Its crates are the ones this project deliberately does *not* depend on, so
+/// they are absent from the lockfile by design. If the skip ever stopped
+/// working the gate above would demand the project take on `russh`.
+#[test]
+fn the_rejected_alternatives_table_is_not_checked_against_the_lockfile() {
+    assert!(
+        DEPS_DOC.contains(EXCLUSION_HEADER),
+        "the rejected-alternatives table is gone or renamed; this gate skips it \
+         by its `{EXCLUSION_HEADER}` header, so retarget the skip"
+    );
+    let found = documented_crates();
+    for rejected in ["russh", "ssh2", "aws-sdk-s3"] {
+        assert!(
+            !found.iter().any(|(_, krate)| *krate == rejected),
+            "`{rejected}` is a deliberately rejected crate and must not be \
+             checked against the lockfile"
+        );
+    }
+}
+
+/// And backwards, so an allowlist entry cannot outlive the row it excuses.
+///
+/// `NOT_OUR_CRATES` suppresses a name; once the row naming it is gone the entry
+/// is dead weight that would silently excuse the same name if it came back
+/// meaning something else.
+#[test]
+fn no_allowlisted_non_crate_has_outlived_its_row() {
+    let documented = documented_crates();
+    for (name, why) in NOT_OUR_CRATES {
+        assert!(
+            documented.iter().any(|(_, krate)| krate == name),
+            "NOT_OUR_CRATES still excuses `{name}` ({why}), but no Crate column \
+             in docs/architecture/04-dependencies.md names it any more — drop \
+             the entry"
+        );
+    }
+}

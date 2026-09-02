@@ -33,14 +33,14 @@
 | Serialization | `serde` + `serde_json` | Derive-based, zero-overhead |
 | Logging | `tracing` + `tracing-subscriber` | Structured, async-aware |
 | CLI | `clap` | Argument parsing with derive |
-| Config parsing | `configparser` | INI-style parser for birdnet.conf |
+| Config parsing | *(none — hand-rolled)* | `birdnet.conf` is `KEY=VALUE` with `#` comments and no sections; `birdnet-core::config::Config::load_from` parses it in about thirty lines rather than taking a crate for it |
 | HTTP client | `reqwest` (rustls) | BirdWeather API calls; no OpenSSL |
 | Web framework | `axum` 0.8 | Tower-based, minimal |
 | Async runtime | `tokio` | Only in web/app crates |
 | Middleware | `tower`, `tower-http` | CORS, tracing, static files |
 | Async streaming | `tokio-util` | `ReaderStream` for file downloads, SSE |
 | Email (SMTP) | `lettre` (rustls) | Pure Rust SMTP client; no OpenSSL |
-| Dashboard HTTPS | `tokio-rustls`, `hyper`, `hyper-util`, `rustls-pemfile` | `--tls-mode` serves the dashboard directly. `axum::serve` cannot wrap a TLS acceptor, so the accept loop runs over hyper-util's h1+h2 auto builder |
+| Dashboard HTTPS | `tokio-rustls`, `hyper`, `hyper-util`, `rustls-pki-types` | `--tls-mode` serves the dashboard directly. `axum::serve` cannot wrap a TLS acceptor, so the accept loop runs over hyper-util's h1+h2 auto builder. PEM parsing is `rustls_pki_types::pem` — `rustls-pemfile` was archived in August 2025 (RUSTSEC-2025-0134) and wrapped the same parser |
 | Self-signed certificates | `rcgen` (ring) | Generates the local CA and the leaf it signs for `--tls-mode self-signed` |
 | Backup encryption | `ring` (`aead`, `rand`) | ChaCha20-Poly1305 for the offsite backup envelope. Already compiled as rustls's provider, so a direct edge rather than a new crate |
 | Backup key derivation | `argon2` | argon2id over the operator's passphrase; already present for the admin password hash |
@@ -118,7 +118,7 @@ Direct dependencies (excluding universal `serde` and `tracing`):
 
 | Crate | Key direct dependencies |
 |-------|-------------------------|
-| `birdnet-core` | symphonia, rubato, realfft, notify, configparser, ort, ndarray, hound |
+| `birdnet-core` | symphonia, rubato, realfft, notify, ort, ndarray, hound |
 | `birdnet-db` | rusqlite |
 | `birdnet-web` | axum, tower, tower-http, tokio, tokio-util, tokio-stream, sysinfo, reqwest, rustls, tokio-rustls, hyper, hyper-util, rcgen |
 | `birdnet-integrations` | reqwest, tokio, lettre, rustls, ring, hmac, base64, argon2, tokio-util |

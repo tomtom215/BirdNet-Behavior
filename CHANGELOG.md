@@ -71,14 +71,24 @@ one. **Off by default** — nothing changes for an existing station until
 
 **Dependency cost, counted rather than asserted.** Five new direct edges:
 `tokio-rustls`, `hyper` and `hyper-util` were already resolved in the graph
-(via reqwest/lettre and axum), so those are edges only. `rustls-pemfile` and
-`rcgen` are new. Diffing `Cargo.lock` and intersecting with `cargo tree -e
-normal` puts the real figure at **ten newly compiled crates** — `rcgen`,
-`rustls-pemfile`, `pem`, `yasna`, `time` (+ `time-core`, `deranged`,
-`num-conv`, `powerfmt`) and `futures-macro` — with a further nine appearing in
-the lockfile as optional dependencies that are never built (`x509-parser` and
-its ASN.1 stack). `rcgen` uses the `ring` backend already in the tree rather
-than `aws-lc-rs`, for the same cross-compilation reason `rustls` does.
+(via reqwest/lettre and axum) and `rustls-pki-types` arrives under `rustls`,
+so those four are edges only. `rcgen` is the one new crate anybody chose.
+Diffing `Cargo.lock` against `main` and intersecting with `cargo tree -e
+normal --all-features` puts the real figure at **nine newly compiled
+crates** — `rcgen`, `pem`, `yasna`, `time` (+ `time-core`, `deranged`,
+`num-conv`, `powerfmt`) and `futures-macro` — with a further ten appearing in
+the lockfile but never built (`x509-parser` and its ASN.1 stack, plus
+`time-macros` and `wasm-streams`). `rcgen` uses the `ring` backend already in
+the tree rather than `aws-lc-rs`, for the same cross-compilation reason
+`rustls` does.
+
+PEM parsing is `rustls_pki_types::pem`, not `rustls-pemfile`. The latter was
+archived in August 2025 (RUSTSEC-2025-0134) and its final release is a thin
+wrapper around the same parser, so taking it would have bought an advisory
+and a compiled crate for nothing. One consequence is visible to operators:
+the `pki-types` parser reports an empty key file and a corrupt one
+identically, so `--tls-mode manual` tells them apart itself and still says
+which it was.
 
 `time` arriving in *every* build configuration falsified a premise
 `birdnet-db`'s `clock_premise` test had been guarding since it was written; the
