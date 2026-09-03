@@ -38,6 +38,51 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the "Test notifications" button tested a path the alerts do not use
+
+Two defects in one button, and the second is why the first went unnoticed.
+
+**It tested a path nothing else uses.** The handler built a fresh
+`reqwest::Client` and `POST`ed `{apprise_url}/notify` itself. That is not how
+an alert about the station is delivered: `announce::flush` locks the shared
+`apprise::Client` and calls `send_operational_alert`, which walks the native
+`ntfy://` / `discord://` / `slack://` routes delivered in-process, falls back
+to the `apprise` CLI for a config file, and puts every destination through a
+circuit breaker and a rate limiter first. None of that was under the button, so
+a green "test notification sent" said nothing about whether the deadman alert
+would leave the box — which is exactly what the alert-latching defect above
+turned out to be.
+
+**And it was disabled for the configuration most stations have.** The button
+was enabled only when `apprise_url` — an Apprise API *server* — was set, so a
+station configured with `NOTIFY_URLS` alone saw "Not configured" and a dead
+button while its alerts worked fine.
+
+The web layer now holds the *same* client the three alert loops hold, and the
+button makes the identical call `flush` makes. It is live whenever any
+destination resolved — native routes, an Apprise server, or a config file the
+CLI would be run for — and the page lists what this station resolved rather
+than what is typed into the settings form, which is a different question when a
+value was saved after the last restart. The labels come from
+`dispatch::label_for` and are credential-free by construction.
+
+An operator now gets the notifier's own answer, which is the point: *"every
+destination was skipped (1 with an open circuit, 0 rate-limited)"* is a
+different problem from a delivery that was tried and failed, and the old test
+could report neither.
+
+Eleven gates. The one that matters is the discrimination: with the circuit
+already open on the station's destination, the button must **report** that and
+not force a send. A fix that read the notifier's routes and then sent them with
+a client of its own would pass every other gate and fail that one — verified by
+making `Gate::admit_priority` admit unconditionally and watching exactly that
+gate go red. The counterpart, a station that resolved nothing at all, passes
+against both the old and the new code, which is what stops "enable it whenever
+a route resolved" from becoming "enable it always".
+
+Email and MQTT still have no test of any kind; that half is recorded as an open
+item rather than quietly folded in.
+
 ### Fixed — a notification status the database refused to store, and the alerts nothing logged
 
 Two defects, found together. The second was found by running the first one's
