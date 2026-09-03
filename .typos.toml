@@ -61,6 +61,17 @@ extend-ignore-re = [
     # a commit are normal here (CHANGELOG, RELEASING, the release plan), so
     # match the shape rather than allow-listing each SHA as it appears.
     '`[0-9a-f]{7,40}`',
+    # An ordinal suffix attached to digits: 100ths, 4th, 2nd, 1000ths. typos
+    # splits the token at the digit and reads the tail as a word, so `100ths`
+    # becomes "ths" — flagged as a typo for "the"/"this". Same shape as the
+    # `PNGs` and `flate2` cases above, and never a real typo in any spelling of
+    # English, so it is matched as a rule rather than allow-listed once.
+    #
+    # It first fired on a verbatim quotation of BirdNET-Pi's own
+    # `install_config.sh` in `audio/extraction/convert.rs`, which is the
+    # primary-source evidence that the frequency shift runs downward. Editing a
+    # quotation to please a spell-checker would falsify the evidence.
+    '[0-9]+(st|nd|rd|th)s?\b',
     # `installer/test/service-unit.sh` misspells a systemd directive on purpose:
     # its counterpart section proves `systemd-analyze verify` reports an unknown
     # key name — and reports it while still exiting 0, which is why that test

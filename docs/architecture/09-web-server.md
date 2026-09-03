@@ -266,8 +266,8 @@ The scan matches an attribute *name* from a fixed list followed by `="/`, not
 a bare `/` — matching values alone would rewrite paths in prose and in embedded
 JSON. It does not track whether it is inside a tag, and `base_path`'s tests say
 why: doing so means toggling on `<` and `>`, which appear inside the inline
-scripts this application ships, and a mis-toggle there is a *missed* link,
-which breaks navigation rather than displaying one word oddly.
+scripts this application ships, and toggling wrongly there produces a *missed*
+link, which breaks navigation rather than displaying one word oddly.
 
 Three things sit outside that pass and are handled explicitly: `Location`
 headers (not HTML), the session cookie's `Path` (which keeps a trailing slash,

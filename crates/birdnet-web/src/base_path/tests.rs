@@ -188,8 +188,8 @@ fn every_url_attribute_is_prefixed() {
 /// shape ` href="/x"` — a URL attribute's name, preceded by whitespace, in
 /// text content — would be rewritten. That is deliberate: adding tag tracking
 /// would mean toggling on `<` and `>`, which appear inside the inline scripts
-/// this application ships (`a > b`), and a mis-toggle there is a *missed*
-/// link, which breaks navigation rather than displaying one wrong word.
+/// this application ships (`a > b`), and toggling wrongly there produces a
+/// *missed* link, which breaks navigation rather than one wrong word.
 #[test]
 fn nothing_but_a_url_attribute_is_touched() {
     let b = base("/birdnet");

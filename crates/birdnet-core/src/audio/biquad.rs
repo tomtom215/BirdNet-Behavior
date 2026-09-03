@@ -570,7 +570,7 @@ mod tests {
     /// can predict — but note it does *not* constrain the slope, which is what
     /// the next test is for.
     #[test]
-    fn a_shelfs_corner_is_half_its_gain() {
+    fn the_corner_of_a_shelf_is_half_its_gain() {
         for (gain, q) in [
             (-9.0_f32, 0.4_f32),
             (-9.0, 0.707),
@@ -613,7 +613,7 @@ mod tests {
     /// reaches −9.25 dB below the corner (past the −9 dB it is heading for)
     /// and +0.25 dB above it.
     #[test]
-    fn a_shelfs_q_sets_its_steepness() {
+    fn the_q_of_a_shelf_sets_its_steepness() {
         let at =
             |q: f32, hz: f32| db_at(&Biquad::low_shelf(300.0, SR, q, -9.0).expect("designs"), hz);
         let gentle = at(0.4, 150.0);
