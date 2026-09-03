@@ -27,8 +27,11 @@ const fn ffmpeg_codec_args(format: AudioFormat) -> Option<&'static [&'static str
 ///
 /// ffmpeg's `asetrate` filter reinterprets the sample rate (speeding up or
 /// slowing down the audio), which shifts pitch; `aresample` then restores
-/// the original rate. A positive `shift_hz` raises pitch, making calls
-/// audible to listeners with high-frequency hearing loss.
+/// the original rate. A positive `shift_hz` raises pitch and a negative one
+/// lowers it.
+///
+/// **For hearing loss, the useful direction is *down*.** See
+/// [`ACCESSIBILITY_SHIFT_HZ`]; this comment used to say the opposite.
 ///
 /// Pulled out of [`apply_freq_shift`] so the arithmetic (the `*`, `+`, `/`
 /// that cargo-mutants flips) is observable in a unit test rather than only
@@ -158,6 +161,58 @@ fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), Extractio
     }
 }
 
+/// The shift that makes birdsong audible to a listener with age-related
+/// high-frequency hearing loss: **down**, by 3 kHz.
+///
+/// # This project documented the opposite, in five places
+///
+/// Five doc comments said a *positive* (upward) shift "makes calls accessible
+/// to people with high-frequency hearing loss", including the `--freq-shift-hz`
+/// CLI help an operator reads before choosing a value. That is backwards, and
+/// following it moves the song further out of the listener's hearing rather
+/// than into it.
+///
+/// Presbycusis attenuates the *top* of the range first. A warbler or kinglet at
+/// 8 kHz is already above it; shifting up moves it further away. What restores
+/// it is moving it *down*, into a band that still works.
+///
+/// The upstream this feature was ported from agrees, and is the primary source
+/// checked before changing these comments — `BirdNET-Pi`'s
+/// `scripts/install_config.sh` ships:
+///
+/// ```text
+/// # Configuration of the frequency shifting feature, useful for earing impaired people.
+/// # If the tool is ffmpeg, you have to define a freq. shift from HI to LO:
+/// FREQSHIFT_HI=6000
+/// FREQSHIFT_LO=3000
+/// # If the tool is sox, you have to define the pitch shift (amount of 100ths of semintone)
+/// FREQSHIFT_PITCH=-1500
+/// ```
+///
+/// `livestream.sh` builds `rubberband=pitch=${FREQSHIFT_LO}/${FREQSHIFT_HI}`,
+/// so the ratio is 3000/6000 = 0.5 — down one octave. The sox pitch is
+/// negative for the same reason. Both directions agree, from two independent
+/// settings.
+///
+/// −3000 Hz rather than upstream's halving because this project's shift is
+/// linear (`asetrate`) rather than a ratio: it moves an 8 kHz song to 5 kHz
+/// while leaving a 2 kHz blackbird at a strange but still recognisable pitch.
+/// It is a starting point offered in the UI, not a limit — any value is
+/// accepted.
+pub const ACCESSIBILITY_SHIFT_HZ: i32 = -3000;
+
+/// The sign of [`ACCESSIBILITY_SHIFT_HZ`], enforced at compile time.
+///
+/// A test would be the weaker guard here: the value is a constant, so this
+/// fails the build rather than a run, and it cannot be skipped by a filtered
+/// `cargo test`. The sign is the whole content of the constant — five doc
+/// comments in this project had it backwards — so it is worth a hard stop.
+const _: () = assert!(
+    ACCESSIBILITY_SHIFT_HZ < 0,
+    "the accessibility shift must be downward: hearing loss takes the top of \
+     the range, so high song is restored by moving it down, not up"
+);
+
 /// Hard cap (in seconds) on freq-shift output length.
 ///
 /// An `asetrate`/`aresample` pitch shift is duration-preserving, so a shift of
@@ -189,7 +244,8 @@ pub(super) fn apply_freq_shift(
 
     // ffmpeg approach: use asetrate to shift the sample rate, then resample back.
     // This is equivalent to speeding up/slowing down, shifting all frequencies.
-    // shift_hz > 0 shifts up (makes calls accessible to those with high-freq hearing loss).
+    // shift_hz > 0 shifts up, < 0 shifts down; down is the accessibility
+    // direction (see `ACCESSIBILITY_SHIFT_HZ`).
     let new_rate = freq_shift_resample_rate(sample_rate, shift_hz);
     let filter = format!("asetrate={new_rate},aresample={sample_rate}");
     let max_secs = MAX_FREQ_SHIFT_OUTPUT_SECS.to_string();

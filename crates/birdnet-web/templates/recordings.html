@@ -322,7 +322,50 @@
   var btn = document.getElementById('rc-listen-btn');
   var glyph = document.getElementById('rc-listen-glyph');
   var label = document.getElementById('rc-listen-label');
-  function srcFor(v) { return (!v) ? '/stream' : '/stream?source_id=' + encodeURIComponent(v); }
+  var shiftSel = document.getElementById('rc-freq-shift');
+
+  // The pitch shift belongs to the listener, not to the station: hearing loss
+  // is a property of a person, and this station serves one stream per
+  // connection rather than one broadcast for everyone (which is why upstream's
+  // equivalent had to be a station-wide setting). So the choice is remembered
+  // per browser, and two people listening to the same station at the same time
+  // can each have their own.
+  var SHIFT_KEY = 'bnb.liveFreqShiftHz';
+  function loadShift() {
+    if (!shiftSel) return;
+    var first = shiftSel.options.length ? shiftSel.options[0].value : '0';
+    try {
+      var v = window.localStorage.getItem(SHIFT_KEY);
+      if (v === null) return;
+      shiftSel.value = v;
+      // Assigning a value that is not one of the options leaves `.value` as
+      // the empty string. That would show a blank control and stick, because
+      // the empty string is then what gets stored back — so fall back to the
+      // first option and rewrite the stored value.
+      if (shiftSel.value === '' || shiftSel.selectedIndex < 0) {
+        shiftSel.value = first;
+        saveShift();
+      }
+    } catch (_) { /* private mode, or site data blocked */ }
+  }
+  function saveShift() {
+    try {
+      if (shiftSel) window.localStorage.setItem(SHIFT_KEY, shiftSel.value);
+    } catch (_) {}
+  }
+  function shiftHz() {
+    var n = shiftSel ? parseInt(shiftSel.value, 10) : 0;
+    return Number.isFinite(n) ? n : 0;
+  }
+  loadShift();
+
+  function srcFor(v) {
+    var q = [];
+    if (v) q.push('source_id=' + encodeURIComponent(v));
+    var hz = shiftHz();
+    if (hz !== 0) q.push('freq_shift_hz=' + encodeURIComponent(String(hz)));
+    return q.length ? '/stream?' + q.join('&') : '/stream';
+  }
 
   // `play()` sets `audio.paused` to false synchronously, but its promise only
   // resolves once the browser has buffered enough to start — around a second on
@@ -372,6 +415,14 @@
 
   if (sel && audio) sel.addEventListener('change', function () {
     if (!audio.paused) start();
+  });
+  // Changing the pitch mid-listen reconnects, because the shift is applied by
+  // the encoder on the station and cannot be changed on a stream already open.
+  // Restarting is a second of silence; the alternative is a control that
+  // appears to do nothing until you stop and start again yourself.
+  if (shiftSel && audio) shiftSel.addEventListener('change', function () {
+    saveShift();
+    if (!audio.paused || connecting) start();
   });
   if (btn && audio) btn.addEventListener('click', function () {
     if (connecting) return;   // mid-connect: ignore the click rather than cancel

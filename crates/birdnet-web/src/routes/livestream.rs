@@ -68,11 +68,13 @@ static STREAM_SLOTS: LazyLock<Arc<Semaphore>> =
 /// Query parameters for the live audio stream.
 #[derive(Debug, Deserialize)]
 pub struct StreamParams {
-    /// Frequency shift in Hz applied to the live stream (positive = shift up).
+    /// Frequency shift in Hz applied to the live stream. Positive raises the
+    /// pitch, negative lowers it; clamped to ±[`MAX_STREAM_SHIFT_HZ`].
     ///
-    /// Uses ffmpeg `asetrate` + `aresample` filter chain. Useful for accessibility
-    /// (hearing loss compensation) or monitoring bat calls shifted into audible range.
-    /// BirdNET-Pi equivalent: rubberband pitch shift filter.
+    /// Uses the ffmpeg `asetrate` + `aresample` filter chain. **Negative** is
+    /// the accessibility direction — see [`freq_shift_filter`].
+    /// BirdNET-Pi equivalent: the `rubberband` pitch filter its `livestream.sh`
+    /// applies, whose shipped ratio is likewise below 1.
     #[serde(default)]
     pub freq_shift_hz: i32,
     /// Optional `audio_sources.id` selecting which configured source to
@@ -94,15 +96,38 @@ pub fn stream_router() -> Router<AppState> {
     Router::new().route("/stream", get(livestream))
 }
 
+/// The widest shift the stream will apply, in either direction.
+///
+/// The query parameter is an unbounded `i32` from an unauthenticated request.
+/// Without a ceiling, `freq_shift_hz=2000000000` asks ffmpeg to resample from
+/// ~2 GHz to 44.1 kHz — a ratio of 45 000:1 — which is a CPU burn a stranger
+/// on the LAN can start, four at a time, up to `MAX_CONCURRENT_STREAMS`.
+///
+/// ±24 kHz is far beyond anything a listener wants (it inverts the whole
+/// audible band) and still leaves every useful setting reachable, so clamping
+/// here costs nothing an operator would notice.
+const MAX_STREAM_SHIFT_HZ: i32 = 24_000;
+
 /// Build the ffmpeg filter string for an optional frequency shift.
 ///
 /// A non-zero shift applies `asetrate` (reinterpret sample rate) followed by
 /// `aresample` (resample back to 44100 Hz), which shifts the perceived pitch
 /// without stretching duration — equivalent to BirdNET-Pi's rubberband filter.
+///
+/// **Negative is the accessibility direction**: age-related hearing loss takes
+/// the top of the range first, so bringing 8 kHz song *down* is what restores
+/// it. See [`birdnet_core::audio::extraction::ACCESSIBILITY_SHIFT_HZ`], which
+/// records the upstream settings this was checked against — several comments in
+/// this project used to claim the opposite.
+///
+/// The shift is clamped to ±[`MAX_STREAM_SHIFT_HZ`] and the resulting rate to a
+/// floor of 8 kHz, so no query parameter can ask ffmpeg for a degenerate
+/// resample ratio.
 fn freq_shift_filter(base_rate: u32, shift_hz: i32) -> Option<String> {
     if shift_hz == 0 {
         return None;
     }
+    let shift_hz = shift_hz.clamp(-MAX_STREAM_SHIFT_HZ, MAX_STREAM_SHIFT_HZ);
     // Use i64 arithmetic to avoid overflow then clamp to a safe minimum.
     let shifted = i64::from(base_rate) + i64::from(shift_hz);
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -725,18 +750,87 @@ mod tests {
         assert!(freq_shift_filter(44_100, 0).is_none());
     }
 
+    /// The 8 kHz floor on the reinterpreted rate.
+    ///
+    /// This used to be exercised with `-50_000` at 44.1 kHz. The ±24 kHz clamp
+    /// on the shift itself put that out of reach — 44100 − 24000 = 20100 — so
+    /// the case is now driven at a rate where the floor is still reachable
+    /// rather than deleted, because the floor is the last guard on a
+    /// degenerate resample ratio and other callers may pass other rates.
     #[test]
     fn freq_shift_filter_clamps_to_minimum() {
-        // 44100 - 50000 = -5900 → clamped to 8000.
-        let filter = freq_shift_filter(44_100, -50_000).expect("non-zero shift returns filter");
-        assert!(filter.contains("asetrate=8000"));
-        assert!(filter.contains(",aresample=44100"));
+        let filter = freq_shift_filter(16_000, -24_000).expect("non-zero shift returns filter");
+        assert!(filter.contains("asetrate=8000"), "{filter}");
+        assert!(filter.contains(",aresample=16000"), "{filter}");
     }
 
     #[test]
     fn freq_shift_filter_shifts_up_correctly() {
         let filter = freq_shift_filter(44_100, 3_000).expect("non-zero shift returns filter");
         assert!(filter.contains("asetrate=47100"));
+    }
+
+    /// Negative lowers the pitch, which is the direction that helps.
+    ///
+    /// Age-related hearing loss takes the top of the range first, so a warbler
+    /// at 8 kHz is restored by moving it *down*. Five doc comments in this
+    /// project used to say the opposite, and the CLI help was one of them — a
+    /// listener following it would have shifted the song further out of reach.
+    /// The upstream this was ported from ships `FREQSHIFT_LO=3000` /
+    /// `FREQSHIFT_HI=6000` (a rubberband ratio of 0.5) and a sox
+    /// `FREQSHIFT_PITCH=-1500`: both downward, from two independent settings.
+    ///
+    /// Pinned as a *relation*, not a string, so it survives a change of filter
+    /// syntax: the reinterpreted rate has to be below the base rate.
+    #[test]
+    fn a_negative_shift_lowers_the_rate_and_a_positive_one_raises_it() {
+        let rate_of = |shift| {
+            let f = freq_shift_filter(44_100, shift).expect("non-zero shift returns filter");
+            let start = f.find("asetrate=").expect("asetrate present") + "asetrate=".len();
+            let end = f[start..].find(',').expect("comma") + start;
+            f[start..end].parse::<u32>().expect("a number")
+        };
+        assert!(
+            rate_of(-3_000) < 44_100,
+            "a downward shift must reinterpret at a *lower* rate, got {}",
+            rate_of(-3_000)
+        );
+        assert!(
+            rate_of(3_000) > 44_100,
+            "and an upward one at a higher rate, got {}",
+            rate_of(3_000)
+        );
+        // The constant the UI offers as its accessibility preset points the
+        // same way, so the two cannot drift apart. Its *sign* is guarded at
+        // compile time beside the constant itself; what this adds is that the
+        // filter agrees with it.
+        assert!(rate_of(birdnet_core::audio::extraction::ACCESSIBILITY_SHIFT_HZ) < 44_100);
+    }
+
+    /// The query parameter is an unbounded `i32` from an unauthenticated
+    /// request. Unclamped, `freq_shift_hz=2000000000` asks ffmpeg to resample
+    /// from ~2 GHz down to 44.1 kHz, four times over — a CPU burn a stranger on
+    /// the LAN can start.
+    #[test]
+    fn an_absurd_shift_is_clamped_rather_than_handed_to_ffmpeg() {
+        for shift in [i32::MAX, 2_000_000_000, 100_000] {
+            let f = freq_shift_filter(44_100, shift).expect("non-zero shift returns filter");
+            assert!(
+                f.contains(&format!("asetrate={}", 44_100 + MAX_STREAM_SHIFT_HZ)),
+                "shift {shift} was not clamped: {f}"
+            );
+        }
+        for shift in [i32::MIN, -2_000_000_000, -100_000] {
+            let f = freq_shift_filter(44_100, shift).expect("non-zero shift returns filter");
+            assert!(
+                f.contains(&format!("asetrate={}", 44_100 - MAX_STREAM_SHIFT_HZ)),
+                "shift {shift} was not clamped: {f}"
+            );
+        }
+        // The counterpart: a shift inside the range is passed through exactly,
+        // so the clamp is a ceiling and not a constant.
+        let f = freq_shift_filter(44_100, -3_000).expect("filter");
+        assert!(f.contains("asetrate=41100"), "{f}");
     }
 
     #[test]

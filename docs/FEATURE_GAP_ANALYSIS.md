@@ -63,9 +63,10 @@ gaps and a handful of deliberate divergences.
 | | |
 |---|---|
 | **Upstream** | `scripts/livestream.sh:15` — `if [ "$ACTIVATE_FREQSHIFT_IN_LIVESTREAM" == "true" ]; then FREQSHIFT_OPT='-af rubberband=pitch='${FREQSHIFT_LO}'/'${FREQSHIFT_HI}; fi`, applied to the Icecast MP3 source. |
-| **Ours** | `crates/birdnet-core/src/audio/extraction/convert.rs` shifts **saved clips** only (`freq_shift_hz`, exposed at `admin/settings/render/audio.rs:64`). `crates/birdnet-web/src/routes/livestream.rs` streams the raw tap unshifted. |
-| **Why it matters** | This is an accessibility feature, not a novelty. Age-related high-frequency hearing loss starts around 8 kHz; a great deal of warbler and kinglet song lives above it. Upstream added it because listeners who cannot hear their own garden can hear it shifted down. Shifting the archive but not the live stream means the one place a person listens in real time is the one place it does not work. |
-| **Plan** | Move the shift out of the extraction module into a reusable `audio::freq_shift` unit, then apply it in the live tap's encode stage in `routes/livestream.rs` behind a `freq_shift_livestream` setting (default off, so an operator who wants archive-only shifting keeps it). Because our live path already re-encodes to MP3, this is one filter stage in an existing pipeline rather than a new process. |
+| **Ours** | **This row was wrong when first written, and the correction is the finding.** It said "`routes/livestream.rs` streams the raw tap unshifted". It does not: `livestream.rs:250` builds `freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz)` and passes it to ffmpeg as `-af`, so `/stream?freq_shift_hz=N` has always worked. What was missing is that **nothing in the UI ever sent it** — `recordings.html`'s `srcFor()` built `/stream` or `/stream?source_id=…` and never a shift — so the feature was reachable only by hand-editing a URL. |
+| **And a defect the re-check found** | Five doc comments, including the `--freq-shift-hz` CLI help an operator reads before choosing a value, said a **positive** (upward) shift "makes calls accessible to people with high-frequency hearing loss". That is backwards. Presbycusis takes the *top* of the range first, so an 8 kHz warbler is restored by moving it **down**. Upstream agrees and was checked as the primary source: `install_config.sh` ships `FREQSHIFT_HI=6000` / `FREQSHIFT_LO=3000` (a `rubberband` ratio of 0.5) and a sox `FREQSHIFT_PITCH=-1500` — two independent settings, both downward. A listener following our documentation would have shifted the song further out of their hearing. |
+| **Why it matters** | This is an accessibility feature, not a novelty. Age-related high-frequency hearing loss starts around 8 kHz; a great deal of warbler and kinglet song lives above it. A feature that works only if you know to hand-edit a query string is not available to the people it is for, and one documented in the wrong direction is worse than absent. |
+| **Resolution** | A pitch control beside the Listen button on `/recordings`, with downward presets (the accessibility direction) and one upward option; the choice is remembered per browser in `localStorage`. Per-listener rather than upstream's station-wide flag, and deliberately: hearing loss is a property of a person, and this station serves one ffmpeg per connection rather than one Icecast broadcast for everyone, so it can do better than upstream here. All five doc comments corrected against the primary source, with `ACCESSIBILITY_SHIFT_HZ` naming the direction and a `const` assertion failing the *build* if its sign is ever flipped back. The `freq_shift_hz` query parameter is now clamped to ±24 kHz — it was an unbounded `i32` from an unauthenticated request, and `freq_shift_hz=2000000000` asked ffmpeg to resample from ~2 GHz, four streams at a time. |
 
 ### N‑3 · Choosing which RTSP source feeds the live stream — GAP (minor)
 
@@ -470,10 +471,10 @@ against the code it was written for, per `CLAUDE.md`.
 | 4 | Species tracking (year/season/return) | G‑16 | **Done** | Highest *user-visible* yield on the list; the data is already in the database. |
 | 5 | Per-source parametric EQ | G‑2 | **Done** | Reuses the biquad from #2; replaces three fixed toggles with something a site can actually be tuned with. |
 | 6 | Pre-capture across segment boundaries | G‑3 | **Done** | Fixes a silent, invisible data-quality defect in clips we already ship and upload. |
-| 7 | Reverse-proxy base path | G‑19 | In progress | Deployment blocker for a whole class of user; mechanical but must be done exhaustively. |
+| 7 | Reverse-proxy base path | G‑19 | **Done** | Deployment blocker for a whole class of user; mechanical but must be done exhaustively. |
 | 8 | Solar quiet hours | G‑4 | **Done** | The solar maths already exists; this is wiring plus a schedule-format migration. |
 | 9 | Flickr image provider | N‑1 | **Done** | The provider seam was built for this and has stood empty. |
-| 10 | Live-stream frequency shift | N‑2 | In progress | Accessibility parity; shares the re-encode seam with G‑21. |
+| 10 | Live-stream frequency shift | N‑2 | **Done** | Accessibility parity; shares the re-encode seam with G‑21. |
 
 ### Tier 2 — next
 

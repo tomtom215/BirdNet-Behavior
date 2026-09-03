@@ -241,6 +241,30 @@ Two things follow from this that are worth knowing:
 Live audio still needs `ffmpeg` installed: the station uses it to encode the
 stream as MP3 for the browser. `--doctor` warns if it is missing.
 
+## If you cannot hear the high notes
+
+Age-related hearing loss takes the top of the range first, and a great deal of
+warbler, kinglet and treecreeper song lives above 8 kHz — where a station can
+hear it perfectly well and its owner cannot.
+
+The **pitch** control beside the Listen button on `/recordings` shifts the live
+audio **down**, into a band that still works. Choose one of the downward
+presets, and your choice is remembered in that browser: hearing is a property
+of a person, so two people listening to the same station at the same time each
+get their own setting. (There is also one upward option, which is what you want
+for bat calls rather than for hearing loss.)
+
+Changing the pitch reconnects the stream — the shift is applied by the encoder
+on the station, not in your browser — so expect about a second of silence.
+
+For **saved clips** the equivalent is `--freq-shift-hz` (config key
+`FREQ_SHIFT`), applied when the clip is written. The same rule applies:
+**negative** shifts down and is the direction that helps.
+
+> Releases before this one documented that setting backwards, saying a positive
+> value helped high-frequency hearing loss. It does the opposite. If you set a
+> positive value on that advice, negate it.
+
 ## Common pitfalls
 
 - USB hubs can drop audio under load — prefer a direct port on the Pi.

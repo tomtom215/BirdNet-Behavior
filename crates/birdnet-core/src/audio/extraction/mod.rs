@@ -18,6 +18,7 @@ use crate::audio::decode::DecodeError;
 
 // Re-export public API.
 pub use config::ExtractionConfig;
+pub use convert::ACCESSIBILITY_SHIFT_HZ;
 pub use extractor::Extractor;
 pub use format::AudioFormat;
 pub use metadata::{DetectionMeta, MetaError, embed_wav_metadata};

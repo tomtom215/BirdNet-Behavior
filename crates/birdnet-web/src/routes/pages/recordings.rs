@@ -497,10 +497,25 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
       <select id="rc-source" aria-label="Audio source">{options}</select>
     </span>
     <span class="mono bnb-meta" id="rc-frames">— frames</span>
+    <span class="rc-shift">
+      <span class="bnb-meta rc-src-label">pitch</span>
+      <select id="rc-freq-shift" aria-label="Shift the pitch of the live audio">
+        <option value="0">as heard</option>
+        <option value="-1500">down 1.5 kHz</option>
+        <option value="-3000">down 3 kHz</option>
+        <option value="-4500">down 4.5 kHz</option>
+        <option value="-6000">down 6 kHz</option>
+        <option value="2000">up 2 kHz</option>
+      </select>
+    </span>
     <button type="button" id="rc-listen-btn" class="bnb-btn rc-listen-btn"><span id="rc-listen-glyph" aria-hidden="true">▶</span> <span id="rc-listen-label">Listen (audio)</span></button>
     <audio id="rc-audio" preload="none" class="rc-audio-hidden"></audio>
   </div>
 </div>
+<p class="hint rc-shift-hint">Age-related hearing loss takes the top of the range
+  first, and a great deal of warbler and kinglet song lives above 8&nbsp;kHz.
+  Shifting the live audio <b>down</b> moves it back into a band you can hear.
+  Your choice is remembered in this browser.</p>
 <div class="rc-trickle">
   <div class="section-header">
     <div><div class="bnb-eyebrow">As it happens</div><h3>Live detections</h3></div>
@@ -576,6 +591,51 @@ async fn delete_clip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The live panel offers the pitch control, and its presets point the way
+    /// the accessibility case needs.
+    ///
+    /// Before this, the shift existed on `/stream` as a query parameter and
+    /// nothing in the UI ever sent it — the feature was reachable only by
+    /// hand-editing a URL, which is not a feature a person with hearing loss
+    /// can use. The gap analysis recorded this as "streams the raw tap
+    /// unshifted", which was wrong about the mechanism and right about the
+    /// outcome.
+    #[tokio::test]
+    async fn the_live_panel_offers_a_pitch_control_that_shifts_downward() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = AppState::new(dir.path().join("birds.db")).expect("state");
+        let html = live_view(&state, None).await;
+
+        assert!(
+            html.contains(r#"id="rc-freq-shift""#),
+            "the control must be on the page:\n{html}"
+        );
+        assert!(
+            html.contains(r#"aria-label="Shift the pitch of the live audio""#),
+            "and be reachable without sight of the label"
+        );
+        assert!(
+            html.contains(r#"<option value="0">"#),
+            "with an unshifted default"
+        );
+
+        // Every non-zero preset except the one deliberate upward option is
+        // negative — downward is the direction that restores high song to a
+        // listener who has lost the top of their range.
+        let downward = html.matches(r#"<option value="-"#).count();
+        assert!(
+            downward >= 3,
+            "expected several downward presets, found {downward}:\n{html}"
+        );
+        assert!(
+            html.contains(&format!(
+                r#"<option value="{}">"#,
+                birdnet_core::audio::extraction::ACCESSIBILITY_SHIFT_HZ
+            )),
+            "the documented accessibility shift must be one of the presets"
+        );
+    }
 
     #[test]
     fn base_name_strips_directories() {

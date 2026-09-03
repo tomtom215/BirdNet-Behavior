@@ -19,8 +19,10 @@ pub struct ExtractionConfig {
     pub recording_length: f32,
     /// Frequency shift in Hz applied to extracted clips (0 = disabled).
     ///
-    /// Shifts the audio pitch upward by the specified Hz, making high-frequency
-    /// bird calls accessible to people with high-frequency hearing loss.
+    /// Positive raises the pitch, negative lowers it. For high-frequency
+    /// hearing loss the useful direction is negative — see
+    /// [`super::ACCESSIBILITY_SHIFT_HZ`], which records why, and what this
+    /// comment used to claim.
     /// Implemented via ffmpeg `asetrate`+`aresample` filter or sox `pitch` effect.
     ///
     /// BirdNET-Pi equivalent: `FREQ_SHIFT` config option with sox/rubberband.

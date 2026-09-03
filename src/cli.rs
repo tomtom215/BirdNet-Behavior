@@ -838,10 +838,17 @@ pub struct Cli {
 
     /// Frequency shift applied to extracted audio clips in Hz (0 = disabled).
     ///
-    /// Shifts the pitch of saved detection clips upward by the given number of Hz,
-    /// making high-frequency bird calls accessible to people with high-frequency
-    /// hearing loss. Requires ffmpeg or sox. Typical values: 1000–4000 Hz.
-    /// `BirdNET-Pi` equivalent: `FREQ_SHIFT` + `FREQ_SHIFT_AMOUNT` config options.
+    /// Shifts the pitch of saved detection clips by the given number of Hz.
+    /// Positive raises the pitch, negative lowers it.
+    ///
+    /// For age-related high-frequency hearing loss the useful direction is
+    /// **negative**: it brings warbler and kinglet song, which lives above
+    /// 8 kHz, down into a band that is still audible. Typical value: -3000.
+    /// (Earlier releases documented this backwards — see
+    /// `birdnet_core::audio::extraction::ACCESSIBILITY_SHIFT_HZ`.)
+    ///
+    /// Requires ffmpeg or sox. `BirdNET-Pi` equivalent: `FREQ_SHIFT` +
+    /// `FREQ_SHIFT_AMOUNT` config options.
     #[arg(long, default_value = "0", env = "BIRDNET_FREQ_SHIFT_HZ")]
     pub freq_shift_hz: i32,
 

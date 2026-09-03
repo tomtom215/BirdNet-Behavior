@@ -4046,6 +4046,12 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .rc-live-foot .mono { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
 .rc-src { display: inline-flex; align-items: center; gap: 6px; }
 .rc-src select { font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 5px 9px; }
+/* The live pitch shift, styled as the source picker's sibling: they sit in the
+   same row and do the same kind of job (choose how you listen), so they should
+   not look like two different kinds of control. */
+.rc-shift { display: inline-flex; align-items: center; gap: 6px; }
+.rc-shift select { font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 5px 9px; }
+.rc-shift-hint { margin: 6px 0 0; max-width: 62ch; }
 .rc-listen-btn { margin-left: auto; font-size: 12px; }
 .rc-audio-hidden { display: none; }
 .rc-trickle { margin-top: 18px; }
