@@ -169,8 +169,12 @@ async fn run_loop(
         )
         .await
         {
+            // The species cap is a *count*, not a date, so it is safe with any
+            // clock. Clip retention is a date cutoff and is not.
             run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
-            run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
+            if clock_is_safe_for_retention() {
+                run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
+            }
             mark_ran(&db_path, JOB_SPECIES_CAP, &mut attempted).await;
         }
         if due(
@@ -181,7 +185,9 @@ async fn run_loop(
         )
         .await
         {
-            run_log_retention(&db_path).await;
+            if clock_is_safe_for_retention() {
+                run_log_retention(&db_path).await;
+            }
             mark_ran(&db_path, JOB_LOG_RETENTION, &mut attempted).await;
         }
         if due(
@@ -202,12 +208,12 @@ async fn run_loop(
     }
 }
 
-/// Prune the two append-only operational logs.
+/// Prune the append-only operational tables.
 ///
 /// # Why this is a scheduled job and was not
 ///
-/// `sessions` was pruned here from the start; `audit_log` and `notification_log`
-/// were not, and both grow with use rather than with time:
+/// `sessions` was pruned here from the start. Four other tables were not, and
+/// all of them grow with use rather than with time:
 ///
 /// * `AuditLog::prune` had **no production caller at all** — its only caller in
 ///   the tree was its own unit test. Every login, settings change and rule edit
@@ -215,16 +221,29 @@ async fn run_loop(
 /// * `prune_old_notifications` had exactly one caller, and it was the
 ///   `/admin/notifications` page handler. That prunes when an operator opens a
 ///   page, which is the one thing a sealed field station never does.
+/// * `sound_levels::prune` had **no production caller at all** either, so a
+///   station kept every ⅓-octave bucket it had ever measured — thirty bands an
+///   hour per source, for the life of the deployment. Its sibling
+///   `audio_levels::prune` *is* wired, from the acoustic-health loop, which is
+///   what makes this an oversight rather than a decision.
+/// * `prune_quarantine` likewise, under a doc comment reading "This prevents
+///   the table from growing unbounded on long-running stations" — which was
+///   true of no station.
 ///
-/// Both are best-effort and neither failure is fatal: a station that cannot
-/// prune its logs should keep recording birds.
+/// Only **reviewed** quarantine rows are pruned. An unreviewed one is the
+/// operator's queue, and deleting a decision nobody has made yet is the single
+/// thing this pass must never do; the counterpart test pins it.
+///
+/// All are best-effort and no failure is fatal: a station that cannot prune its
+/// logs should keep recording birds. The whole job is skipped when the clock is
+/// implausible — see `clock_is_safe_for_retention`.
 async fn run_log_retention(db_path: &Path) {
     if !db_path.exists() {
         tracing::debug!("log retention skipped: db not present yet");
         return;
     }
     let db_path = db_path.to_path_buf();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, u64), String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<LogRetention, String> {
         use birdnet_db::accounts::AuditLog as _;
         let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
         let audit = conn
@@ -235,19 +254,65 @@ async fn run_log_retention(db_path: &Path) {
             birdnet_db::sqlite::NOTIFICATION_RETENTION_DAYS,
         )
         .map_err(|e| e.to_string())?;
-        Ok((audit, notifications))
+        // Two more tables whose pruners had no production caller at all, so
+        // they grew for the life of the station — `sound_levels::prune`'s
+        // sibling `audio_levels::prune` was wired and these were not, which
+        // makes it an oversight rather than a decision, and
+        // `prune_quarantine`'s own doc comment claims it "prevents the table
+        // from growing unbounded on long-running stations".
+        let sound_levels =
+            birdnet_db::sound_levels::prune(&conn, birdnet_db::sqlite::SOUND_LEVEL_RETENTION_DAYS)
+                .map_err(|e| e.to_string())?;
+        let quarantine = birdnet_db::sqlite::prune_quarantine(
+            &conn,
+            birdnet_db::sqlite::QUARANTINE_RETENTION_DAYS,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(LogRetention {
+            audit,
+            notifications,
+            sound_levels,
+            quarantine,
+        })
     })
     .await;
 
     match result {
-        Ok(Ok((0, 0))) => tracing::debug!("log retention: nothing past the cutoff"),
-        Ok(Ok((audit, notifications))) => tracing::info!(
-            audit_rows = audit,
-            notification_rows = notifications,
+        Ok(Ok(pruned)) if pruned.is_empty() => {
+            tracing::debug!("log retention: nothing past the cutoff");
+        }
+        Ok(Ok(pruned)) => tracing::info!(
+            audit_rows = pruned.audit,
+            notification_rows = pruned.notifications,
+            sound_level_rows = pruned.sound_levels,
+            quarantine_rows = pruned.quarantine,
             "log retention pruned expired rows"
         ),
         Ok(Err(e)) => tracing::warn!(error = %e, "log retention failed"),
         Err(e) => tracing::warn!(error = %e, "log retention task panicked"),
+    }
+}
+
+/// What one log-retention pass removed, per table.
+///
+/// A struct rather than a tuple because there are now four numbers and a
+/// mis-ordered pair in a log line is the kind of thing nobody notices.
+#[derive(Debug, Default)]
+struct LogRetention {
+    /// `audit_log` rows.
+    audit: usize,
+    /// `notification_log` rows.
+    notifications: u64,
+    /// `sound_levels` + `sound_level_broadband` band rows.
+    sound_levels: usize,
+    /// Reviewed `quarantine` rows.
+    quarantine: u64,
+}
+
+impl LogRetention {
+    /// Whether this pass removed nothing at all.
+    const fn is_empty(&self) -> bool {
+        self.audit == 0 && self.notifications == 0 && self.sound_levels == 0 && self.quarantine == 0
     }
 }
 
@@ -323,6 +388,45 @@ async fn run_summary_audit(db_path: &Path) {
 }
 
 /// Current wall-clock time as Unix seconds.
+/// Whether the wall clock is trustworthy enough to delete things by date.
+///
+/// Every retention job in this loop computes its cutoff from `date('now')`.
+/// That is fine when the clock is right and catastrophic when it is not: a
+/// probe using `run_clip_retention`'s own cutoff expression reclaimed the entire
+/// clip library under a clock reading fifty years ahead, while the detection
+/// rows survived — so the loss is invisible in every count and chart the
+/// operator looks at.
+///
+/// A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the
+/// epoch, and on a station whose uplink is down that may be for weeks. In that
+/// state every cutoff is nonsense and nothing dated should be deleted; the
+/// station should keep recording and wait, which is what the capture supervisor
+/// already does for scheduling.
+///
+/// # What this does not cover
+///
+/// The floor catches a clock that is too *early*. A clock far in the *future* —
+/// a GPS week rollover upstream, a carrier NITZ date, a `date -s` typo — is the
+/// direction the probe demonstrated and is **not** caught here, because
+/// catching it needs a reference this function does not have. Distinguishing
+/// "the clock jumped forward nineteen years" from "nineteen years passed"
+/// requires comparing the wall clock against the monotonic clock across one
+/// process lifetime. That is recorded as the remaining half of NT-4 in
+/// `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` rather than half-built here.
+fn clock_is_safe_for_retention() -> bool {
+    let now = now_unix();
+    let plausible = u64::try_from(now).is_ok_and(birdnet_core::civil::clock_looks_plausible);
+    if !plausible {
+        tracing::warn!(
+            now_unix = now,
+            "skipping every date-based retention job: the clock reads before \
+             2024, so it has not been set or NTP-synced and every cutoff would \
+             be nonsense. Recording continues."
+        );
+    }
+    plausible
+}
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1163,6 +1267,25 @@ mod tests {
                  VALUES ('apprise', 'sent', datetime('now','-1 days'));",
         )
         .unwrap();
+        // The two tables whose pruners shipped with no production caller at
+        // all. `sound_levels` needs a matching broadband row per bucket, and
+        // `quarantine` distinguishes reviewed from unreviewed: an unreviewed
+        // row is the operator's queue and must survive any age.
+        conn.execute_batch(
+            "INSERT INTO sound_level_broadband (date, hour, source, samples, a_power_sum, z_power_sum)
+                 VALUES (date('now','localtime','-500 days'), 6, 'local', 60, 1.0, 1.0);
+             INSERT INTO sound_levels (date, hour, source, band_hz, samples, mean_power_sum, min_db, max_db)
+                 VALUES (date('now','localtime','-500 days'), 6, 'local', 1000.0, 60, 1.0, -65.0, -45.0);
+             INSERT INTO sound_level_broadband (date, hour, source, samples, a_power_sum, z_power_sum)
+                 VALUES (date('now','localtime','-1 days'), 6, 'local', 60, 1.0, 1.0);
+             INSERT INTO sound_levels (date, hour, source, band_hz, samples, mean_power_sum, min_db, max_db)
+                 VALUES (date('now','localtime','-1 days'), 6, 'local', 1000.0, 60, 1.0, -65.0, -45.0);
+             INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason, reviewed, created_at)
+                 VALUES ('2024-01-01', '06:00:00', 'Pica pica', 'Eurasian Magpie', 0.9, 'low_confidence', 1, datetime('now','-365 days'));
+             INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason, reviewed, created_at)
+                 VALUES ('2024-01-02', '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, 'low_confidence', 0, datetime('now','-365 days'));",
+        )
+        .unwrap();
         db
     }
 
@@ -1181,6 +1304,12 @@ mod tests {
     ///
     ///     assertion `left == right` failed: the 365-day-old audit row must be gone
     ///       left: 2   right: 1
+    ///
+    /// And again, with only the two new pruners removed, for the two tables
+    /// that shipped with pruners no caller ever reached:
+    ///
+    ///     assertion `left == right` failed: the 500-day-old third-octave
+    ///     bucket must be gone   left: 2   right: 1
     #[tokio::test]
     async fn log_retention_drops_expired_rows_from_both_logs() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1197,6 +1326,25 @@ mod tests {
             count(&db, "notification_log"),
             1,
             "the 365-day-old notification row must be gone"
+        );
+        assert_eq!(
+            count(&db, "sound_levels"),
+            1,
+            "the 500-day-old third-octave bucket must be gone: `sound_levels::prune` \
+             had no production caller at all, so the table grew for the life of \
+             the station"
+        );
+        assert_eq!(
+            count(&db, "sound_level_broadband"),
+            1,
+            "the broadband row for that bucket must go with it"
+        );
+        assert_eq!(
+            count(&db, "quarantine"),
+            1,
+            "the 365-day-old *reviewed* quarantine row must be gone: \
+             `prune_quarantine`'s own doc comment claims it prevents this table \
+             growing unbounded, and nothing called it"
         );
     }
 
@@ -1217,6 +1365,20 @@ mod tests {
             .unwrap();
         assert_eq!(action, "recent", "the recent row is the one that survived");
         assert_eq!(count(&db, "notification_log"), 1);
+        assert_eq!(count(&db, "sound_levels"), 1, "the recent bucket survives");
+        assert_eq!(count(&db, "sound_level_broadband"), 1);
+
+        // The one row that must survive any age: an *unreviewed* quarantine
+        // entry is the operator's queue, and deleting a decision nobody has
+        // made yet is the single thing this pass must never do. The fixture
+        // dates it 365 days back precisely so age alone cannot save it.
+        let reviewed: i64 = conn
+            .query_row("SELECT reviewed FROM quarantine", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            reviewed, 0,
+            "the surviving quarantine row must be the unreviewed one"
+        );
     }
 
     /// A `species_summary` that disagrees with the detections it summarises must

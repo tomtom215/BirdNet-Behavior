@@ -24,6 +24,60 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — two clock floors 1 461 days apart, and retention that ran on an unset clock
+
+`--doctor` and the capture supervisor each had a `CLOCK_SYNCED_FLOOR_SECS`. The
+doctor's was `2020-01-01`; the supervisor's was `2024-01-01`; the doctor's
+carried a comment saying it *"mirrors the capture supervisor's"*. It did not.
+For any reading in those four years the diagnostic printed
+`[ PASS ] System clock — set to a plausible current time` while the supervisor
+treated the same reading as untrustworthy and disabled the recording schedule
+and every quiet window. An operator reading the diagnostic was told the opposite
+of what the station was doing.
+
+Both sides had tests. Each tested its own constant, so neither could see the
+gap. There is one constant now, `birdnet_core::civil::CLOCK_PLAUSIBLE_FLOOR_SECS`,
+in the module that already owns the calendar arithmetic both of them use — and
+a gate that sweeps 2018 to 2030 weekly and asserts the two answer identically at
+every point, which is what the previous arrangement could not have had.
+
+**And every date-based retention job now refuses to run on an implausible
+clock.** Each one computes its cutoff from `date('now')`, which is fine when the
+clock is right and catastrophic when it is not. A Raspberry Pi has no
+battery-backed RTC: before NTP lands it reads the epoch, and on a station whose
+uplink is down that may be for weeks. Clip retention and log retention are
+skipped with a warning in that state; the species cap is not, because it is a
+count rather than a date and is safe with any clock. Recording continues
+throughout — the station waits for the clock rather than stopping.
+
+This covers the clock that is too *early*. A clock far in the **future** — a GPS
+week rollover upstream, a carrier NITZ date, a `date -s` typo — is the direction
+a probe demonstrated reclaiming an entire clip library in one pass, and it is
+**not** covered here, because catching it needs a reference the floor does not
+have. That is stated in the code rather than implied, and carried in
+`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` as the remaining half of NT-4.
+
+### Fixed — two more tables grew for the life of the station
+
+`sound_levels::prune` and `prune_quarantine` had **no production caller at
+all** — the same shape as `AuditLog::prune` before it was wired, and in
+`prune_quarantine`'s case under a doc comment reading "This prevents the table
+from growing unbounded on long-running stations", which was true of no station.
+`sound_levels`' sibling `audio_levels::prune` *is* called, from the
+acoustic-health loop, which is what makes this an oversight rather than a
+decision: a station kept every ⅓-octave bucket it had ever measured — thirty
+bands an hour per source, for the life of the deployment.
+
+Both now run in the daily log-retention pass, at 400 days for the soundscape
+buckets (matching `audio_levels`) and 90 days for **reviewed** quarantine rows.
+Unreviewed rows are never pruned at any age: they are the operator's queue, and
+deleting a decision nobody has made yet is the one thing that pass must not do.
+
+Gates: the existing log-retention pair, extended. With the two new pruners
+removed — the state this shipped in — both fail on the new tables; with the
+quarantine pruner's `reviewed = 1` condition removed, the counterpart fails on
+the surviving row, which is the discrimination rather than the alarm.
+
 ### Fixed — one wedged upload was the last thing the maintenance loop ever did
 
 `offsite::s3::client()` set `connect_timeout(30 s)` and nothing else, under a

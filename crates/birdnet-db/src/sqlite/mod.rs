@@ -39,7 +39,8 @@ pub use queries::imports::{
 pub use queries::maintenance::{
     AUDIT_RETENTION_DAYS, BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM,
     JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION, JOB_SESSION_PRUNE, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
-    NOTIFICATION_RETENTION_DAYS, last_run_result, last_run_unix, record_run, record_run_result,
+    NOTIFICATION_RETENTION_DAYS, QUARANTINE_RETENTION_DAYS, SOUND_LEVEL_RETENTION_DAYS,
+    last_run_result, last_run_unix, record_run, record_run_result,
 };
 pub use queries::{
     ALL_QUARANTINE_REASONS, CLIP_AVAILABLE, DateRange, DetectionFilter, HourWindow, ImageBlacklist,

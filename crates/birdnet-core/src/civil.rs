@@ -387,6 +387,47 @@ pub fn birdnet_week_from_date(date: &str) -> Option<u32> {
     Some(birdnet_week(civil.month, civil.day))
 }
 
+/// Unix-time floor below which the system clock is not trusted for anything
+/// that depends on knowing the date.
+///
+/// A Raspberry Pi has no battery-backed RTC, so before NTP lands it commonly
+/// reports the epoch or a stale build-time value. `2024-01-01T00:00:00Z` is
+/// safely before this project's deployment era and far above any unset-clock
+/// reading, so a value below it means "time is not trustworthy yet".
+///
+/// # Why this lives here
+///
+/// There used to be two of these, **1 461 days apart**: the capture
+/// supervisor's, at this value, and `--doctor`'s, at `2020-01-01`, under a
+/// comment claiming it *"mirrors the capture supervisor's"*. It did not. For
+/// any reading between them the doctor printed
+/// `[ PASS ] System clock — set to a plausible current time` while the
+/// supervisor treated the same reading as untrustworthy and disabled the
+/// recording schedule and every quiet window. An operator reading the
+/// diagnostic was told the opposite of what the station was doing.
+///
+/// One constant, in the module that already owns the calendar arithmetic both
+/// of them use.
+pub const CLOCK_PLAUSIBLE_FLOOR_SECS: u64 = 1_704_067_200;
+
+/// Whether a Unix timestamp is late enough to be a real current time.
+///
+/// Pure, so the boundary is testable without a clock. A `false` result means
+/// the caller should not make a dated decision: the capture supervisor fails
+/// *open* on it (keep recording rather than trust a bogus date for solar
+/// scheduling), and every destructive retention job refuses to run.
+///
+/// This is a **floor, not a range**. A clock reading far in the *future* is
+/// also wrong and is not caught here, because catching it needs a reference
+/// this function does not have — see `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
+/// (NT-4). What the floor does cover is the common case on this hardware: an
+/// RTC-less board that boots at the epoch and stays there until the network
+/// comes back, which on a field station may be never.
+#[must_use]
+pub const fn clock_looks_plausible(secs: u64) -> bool {
+    secs >= CLOCK_PLAUSIBLE_FLOOR_SECS
+}
+
 #[cfg(test)]
 mod tests {
     use super::{days_in_month, is_leap_year};
@@ -1111,6 +1152,57 @@ mod birdnet_week_tests {
             "2026-1-1",
         ] {
             assert_eq!(birdnet_week_from_date(bad), None, "{bad} must not parse");
+        }
+    }
+}
+
+#[cfg(test)]
+mod clock_floor_tests {
+    use super::{CLOCK_PLAUSIBLE_FLOOR_SECS, civil_from_unix_secs, clock_looks_plausible};
+
+    /// The constant must be the date its documentation claims. A floor whose
+    /// comment and value disagree is how the two divergent copies survived.
+    #[test]
+    fn the_floor_is_the_date_it_says_it_is() {
+        let t = civil_from_unix_secs(i64::try_from(CLOCK_PLAUSIBLE_FLOOR_SECS).expect("fits"));
+        assert_eq!((t.year, t.month, t.day), (2024, 1, 1));
+        assert_eq!((t.hour, t.minute, t.second), (0, 0, 0));
+    }
+
+    /// Both sides of the boundary, because a gate that only asserts the
+    /// rejecting side passes just as well against a predicate that rejects
+    /// everything.
+    #[test]
+    fn the_boundary_is_inclusive_and_discriminating() {
+        assert!(
+            !clock_looks_plausible(0),
+            "the epoch is not a plausible now"
+        );
+        assert!(!clock_looks_plausible(CLOCK_PLAUSIBLE_FLOOR_SECS - 1));
+        assert!(clock_looks_plausible(CLOCK_PLAUSIBLE_FLOOR_SECS));
+        assert!(clock_looks_plausible(CLOCK_PLAUSIBLE_FLOOR_SECS + 1));
+        // A reading from this project's actual deployment era.
+        assert!(clock_looks_plausible(1_788_480_000));
+    }
+
+    /// The years the two old constants disagreed about.
+    ///
+    /// `--doctor`'s floor was 2020-01-01 and the capture supervisor's was
+    /// 2024-01-01, so for any reading in these four years the diagnostic said
+    /// the clock was fine while the supervisor disabled the schedule. With one
+    /// constant there is no such window, and this sweeps it to say so.
+    #[test]
+    fn the_four_years_the_two_old_floors_disagreed_about_are_all_implausible() {
+        const OLD_DOCTOR_FLOOR: u64 = 1_577_836_800; // 2020-01-01
+        const { assert!(OLD_DOCTOR_FLOOR < CLOCK_PLAUSIBLE_FLOOR_SECS) };
+        let mut secs = OLD_DOCTOR_FLOOR;
+        while secs < CLOCK_PLAUSIBLE_FLOOR_SECS {
+            assert!(
+                !clock_looks_plausible(secs),
+                "{secs} was plausible to the doctor and implausible to the \
+                 supervisor; one constant must answer once"
+            );
+            secs += 86_400 * 7;
         }
     }
 }

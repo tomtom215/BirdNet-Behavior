@@ -160,21 +160,20 @@ fn resolve_location(cli: &Cli, config: Option<&birdnet_core::config::Config>) ->
     Location::new(lat, lon).ok()
 }
 
-/// Unix-time floor below which the system clock is treated as unsynced.
-///
-/// A Raspberry Pi has no battery-backed RTC, so before NTP syncs it commonly
-/// reports the epoch or a stale build-time value. `2024-01-01T00:00:00Z` is
-/// safely before this project's deployment era yet far above any unset-clock
-/// reading, so a value below it means "time isn't trustworthy yet".
-const CLOCK_SYNCED_FLOOR_SECS: u64 = 1_704_067_200;
-
 /// Whether the system clock (as a Unix timestamp in seconds) looks NTP-synced.
+///
+/// The floor lives in [`birdnet_core::civil::CLOCK_PLAUSIBLE_FLOOR_SECS`], not
+/// here. There used to be a second copy in `src/doctor/clock.rs`, 1 461 days
+/// lower, under a comment claiming it mirrored this one — so for four years'
+/// worth of readings the diagnostic printed "set to a plausible current time"
+/// about a clock this module distrusted enough to disable the recording
+/// schedule for.
 ///
 /// Pure so the boundary is unit-testable. A `false` result tells callers to
 /// fail *open* — keep recording rather than trust a bogus date for solar
 /// scheduling — until the clock becomes plausible.
-pub(super) const fn secs_look_synced(secs: u64) -> bool {
-    secs >= CLOCK_SYNCED_FLOOR_SECS
+pub const fn secs_look_synced(secs: u64) -> bool {
+    birdnet_core::civil::clock_looks_plausible(secs)
 }
 
 /// Convert a Unix timestamp (seconds since 1970-01-01 UTC) into
@@ -193,8 +192,8 @@ pub(super) fn civil_from_unix_secs(secs: u64) -> (u32, u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CLOCK_SYNCED_FLOOR_SECS, civil_from_unix_secs, parse_fixed_window, parse_hhmm,
-        parse_schedule_config, resolve_location, secs_look_synced,
+        civil_from_unix_secs, parse_fixed_window, parse_hhmm, parse_schedule_config,
+        resolve_location, secs_look_synced,
     };
     use crate::cli::Cli;
     use crate::helpers::test_support::{cli_with_explicit, config_with, default_cli};
@@ -436,12 +435,16 @@ mod tests {
     #[test]
     fn clock_below_floor_is_unsynced() {
         assert!(!secs_look_synced(0)); // epoch — the classic unset-RTC reading
-        assert!(!secs_look_synced(CLOCK_SYNCED_FLOOR_SECS - 1));
+        assert!(!secs_look_synced(
+            birdnet_core::civil::CLOCK_PLAUSIBLE_FLOOR_SECS - 1
+        ));
     }
 
     #[test]
     fn clock_at_or_above_floor_is_synced() {
-        assert!(secs_look_synced(CLOCK_SYNCED_FLOOR_SECS));
+        assert!(secs_look_synced(
+            birdnet_core::civil::CLOCK_PLAUSIBLE_FLOOR_SECS
+        ));
         assert!(secs_look_synced(1_900_000_000)); // year 2030
     }
 

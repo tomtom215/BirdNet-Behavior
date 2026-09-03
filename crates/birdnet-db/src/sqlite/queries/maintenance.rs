@@ -34,6 +34,27 @@ pub const JOB_SUMMARY_AUDIT: &str = "summary_audit";
 /// caller at all and the table grew for the life of the station.
 pub const AUDIT_RETENTION_DAYS: u32 = 180;
 
+/// How long a `sound_levels` / `sound_level_broadband` bucket is kept.
+///
+/// 400 days, matching `audio_levels`' own retention, so a full year of
+/// soundscape plus a margin survives and a two-year station does not carry
+/// four years of ⅓-octave buckets on an SD card.
+///
+/// Like `AUDIT_RETENTION_DAYS` before it, this constant had a pruner and no
+/// caller: `sound_levels::prune` was reachable from nowhere, so both tables
+/// grew for the life of the station despite a doc comment saying otherwise.
+pub const SOUND_LEVEL_RETENTION_DAYS: u32 = 400;
+
+/// How long a **reviewed** quarantine row is kept.
+///
+/// Unreviewed rows are never pruned: they are the operator's queue, and
+/// deleting a decision nobody has made yet is the one thing this must not do.
+/// 90 days after review matches `NOTIFICATION_RETENTION_DAYS`, and the same
+/// "there was a pruner and no caller" applies — `prune_quarantine`'s own doc
+/// comment says "This prevents the table from growing unbounded on long-running
+/// stations", which was not true of any station.
+pub const QUARANTINE_RETENTION_DAYS: u32 = 90;
+
 /// How long a `notification_log` row is kept.
 ///
 /// 90 days, matching the number `/admin/notifications` already passes — which
