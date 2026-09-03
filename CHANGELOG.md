@@ -7,12 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Six clusters: HTTPS in the listener itself, a searchable detection log with
+Seven clusters: HTTPS in the listener itself, a searchable detection log with
 bulk review, backups that leave the SD card they were written on, removing the
 Apprise dependency for the services most stations actually use, giving the
 detection pipeline the quality controls that separate a station's real records
-from its model's artefacts, and closing the ten highest-priority gaps against
-the two projects this one is measured against.
+from its model's artefacts, closing the ten highest-priority gaps against the
+two projects this one is measured against, and — the largest — making a station
+nobody can log into able to say what is wrong with it.
+
+That last cluster is the subject of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`, and
+its findings share one shape: **a mechanism built end to end and never
+connected to the thing that was supposed to drive it.** The audit log had a
+table, a store, a page and a 180-day pruner, and the one function that writes a
+row had no callers. The live log viewer had a channel, a page and an SSE
+endpoint, and no `tracing` layer. Home Assistant discovery registered a
+"Station Status" entity, and nothing ever published to the topic it read.
+`MqttConfig::qos` had no reader anywhere. `NotifStatus::Queued` had a
+production writer and a schema that refused it. Each was silent, and each
+looked from the outside exactly like a healthy station with nothing to report.
 
 Plus bugs that were found the same way each time — by running the thing rather
 than by reading it. Thirteen state-changing endpoints with no login, found while
@@ -20,9 +32,11 @@ adding a fourteenth. A checkbox group that could not be submitted at all, found
 by posting a real form. Five CSS variables that had never been defined, found by
 looking at a screenshot. One latent data-loss bug found while adding a
 quarantine reason. Every detection clip silently truncated at a segment
-boundary, found by reading a waveform rather than a code path. And an
+boundary, found by reading a waveform rather than a code path. An
 accessibility feature documented in the wrong direction for its entire life,
-found by checking upstream's own config file instead of trusting a comment.
+found by checking upstream's own config file instead of trusting a comment. And
+a notification status the database had refused to store since the day it was
+added, found because a gate written for something else would not go green.
 
 ### Fixed — a notification status the database refused to store, and the alerts nothing logged
 

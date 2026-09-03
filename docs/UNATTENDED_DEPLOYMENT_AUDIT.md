@@ -532,9 +532,10 @@ because nobody applied.
 
 **All five P0s are closed**, each with a gate observed failing against the code
 it was written for and the failure text recorded in the commit message. The
-workspace suite went from 3 425 passing at the branch point to 3 502 with Stage
-2 in progress (3 465 at the end of Stage 1); the installer suite from eight test
-files to ten, all passing.
+workspace suite went from 3 425 passing at the branch point to **3 567** with
+seven Stage 2 items landed (3 465 at the end of Stage 1); the installer suite
+from eight test files to ten, all passing. Every figure here is from a
+`cargo test --workspace` run, not a running total.
 
 | # | Item | Finding | Gate, observed failing first |
 |---|---|---|---|
@@ -583,11 +584,11 @@ person 40 km away learns that it stopped.
 | 2.2 | Latch an episode only on a *delivered* alert; let operational alerts bypass the detection rate limiter | **OB-5** | 25 gates. Deleting the `(0, None)` arm fails four, one printing *"a notification that reached nobody was reported as sent"*. `admit_priority` delegating to `admit` fails *"an operational alert was dropped by the detection rate limit"*; returning `Send` unconditionally fails the counterpart, which is what stops the fix from hammering a retired webhook. `Outbox::settle` dropping the alert whatever happened — the shipped latch-on-attempt — fails *"an undelivered alert stays and is offered again"*. |
 | 2.3 | Record the backup's verdict; alert on a *failed* integrity check, not only a stale one; give offsite a job key | **OB-7**, **PS-16** | Verdict ignored (the shipped code): *"a recorded failure is a fault the moment it is recorded"*. The counterpart — alert on every recorded run — fails with *"a successful run must produce nothing"*, which is the rule that would page a healthy station weekly. |
 | 2.5 | A runtime clock-sync condition and gauge | **OB-14** | 9 gates. The first mutation — deleting `check_clock` from `evaluate`, which is the shipped state — **killed nothing**: every gate tested the policy function and none tested that anything called it. That hole is the finding inside the finding, and it is why `evaluate` now runs a named `CHECKS` table that `every_documented_condition_is_actually_checked` reads. Re-run against the table, the same mutation fails that gate alone. Five more killed: `Unknown` treated as broken (every Docker station would alert about its host's clock), the two clock faults given different episode keys, the plausibility floor skipped, the probe answering `Unsynced` when it cannot tell, and a tri-state gauge rendering `0` instead of being absent. |
-| 2.7 | Write the audit log | **O-2** | 15 gates, 6 mutations killed. `audit()` writing nothing — the shipped state — fails 6 and leaves the two "must record nothing" gates green. The rest each fail one: login recording `fail` whatever happened, a settings save recording every submission, metadata carrying values (`rtsp_url`'s `user:pass@` is the fixture), a failure row not naming who was tried, and a typo'd action name (`"species.treshold.set"`), which the source-scanning vocabulary gate catches — the same lesson as 2.5's `CHECKS` table: a set expressed only as scattered call sites cannot be checked. |
-| 2.15 | Operational alerts reach the notification log | **OB-13**, and **NL-1** found while doing it | 11 gates, 6 mutations killed. `flush` recording nothing — the shipped state — fails 4 and leaves `no_notifier_configured_writes_nothing` green. Then: `Queued` written as `Failed`, a row per retry instead of one per episode, placeholder species columns, a loop sending inline again (the pre-2.2 shape, caught by the source scanner), and the CHECK left un-widened — `"the schema rejects the `queued` status this code writes: CHECK constraint failed"`. That last one is **NL-1**: the two behavioural gates were written, run, and failed against the shipped schema before the migration existed. |
-| 2.10 | One disk denominator, everywhere | **OB-6**, **PR-14** | 6 gates. 4 mutations killed. The shipped predicates fail the reproduction (`a disk 76.6 % full is not critical (was: 9167069184 available < 13527658700 = total/20)`) and the swept property gate; `is_critical` returning `false` unconditionally fails the two full-disk counterparts, so the fix is not "stop reporting"; a `CRITICAL_PERCENT` of 98 fails the purge-threshold coherence gate. The fourth is the instructive one: making `used_percent()` divide by `total` **as well** leaves the property gate green — two surfaces agreeing on the same wrong number — and is caught only by the reproduction, which pins the answer to what `df` says. |
 | 2.6 | Wire a `tracing` layer to the log broadcaster; persist ERROR/WARN to a file the bundle carries | **O-3** | 12 gates. 6 mutations killed: no layer publishing (the shipped state — 5 fail, `left: 0, right: 1`), `with_log_broadcaster` made a no-op, which is the shipped *arrangement* (only the wiring gate fails, every layer gate stays green — so it tests the wiring, not the layer), fields dropped from the message, every level persisted (`only ERROR and WARN persist: {"level":"INFO",…}`), no URL redaction (`cannot reach rtsp://admin:hunter2@cam.local/stream`), and an uncapped file. |
+| 2.7 | Write the audit log | **O-2** | 15 gates, 6 mutations killed. `audit()` writing nothing — the shipped state — fails 6 and leaves the two "must record nothing" gates green. The rest each fail one: login recording `fail` whatever happened, a settings save recording every submission, metadata carrying values (`rtsp_url`'s `user:pass@` is the fixture), a failure row not naming who was tried, and a typo'd action name (`"species.treshold.set"`), which the source-scanning vocabulary gate catches — the same lesson as 2.5's `CHECKS` table: a set expressed only as scattered call sites cannot be checked. |
+| 2.10 | One disk denominator, everywhere | **OB-6**, **PR-14** | 6 gates. 4 mutations killed. The shipped predicates fail the reproduction (`a disk 76.6 % full is not critical (was: 9167069184 available < 13527658700 = total/20)`) and the swept property gate; `is_critical` returning `false` unconditionally fails the two full-disk counterparts, so the fix is not "stop reporting"; a `CRITICAL_PERCENT` of 98 fails the purge-threshold coherence gate. The fourth is the instructive one: making `used_percent()` divide by `total` **as well** leaves the property gate green — two surfaces agreeing on the same wrong number — and is caught only by the reproduction, which pins the answer to what `df` says. |
 | 2.14 | Publish the MQTT status topic that discovery already advertises, with a last will | **OB-8** | 9 gates against a broker stub that *decodes* CONNECT and PUBLISH rather than matching bytes. 8 mutations killed, each by one gate: no will (`"a will was registered"`), a will on the stateless publish too (only the discrimination test fails), the will written after the username — a well-formed packet that publishes the password to whatever the broker reads as the topic — `ping` that writes and never reads (`"an unanswered ping must fail"`), `config.qos` ignored, which is the shipped code (`"an unacknowledged QoS 1 publish must not report success"`, while the `QoS` 0 counterpart stays green — the fix is not "every publish now blocks"), the retain override ignored, also shipped (`"override honoured"`), `shutdown` that disconnects without saying offline (`left: 1, right: 2`), and an unretained will. |
+| 2.15 | Operational alerts reach the notification log | **OB-13**, and **NL-1** found while doing it | 11 gates, 6 mutations killed. `flush` recording nothing — the shipped state — fails 4 and leaves `no_notifier_configured_writes_nothing` green. Then: `Queued` written as `Failed`, a row per retry instead of one per episode, placeholder species columns, a loop sending inline again (the pre-2.2 shape, caught by the source scanner), and the CHECK left un-widened — `"the schema rejects the `queued` status this code writes: CHECK constraint failed"`. That last one is **NL-1**: the two behavioural gates were written, run, and failed against the shipped schema before the migration existed. |
 
 **Still to do:**
 
@@ -733,9 +734,16 @@ completeness.
 * **No real power cut.** **NT-1**, **NT-4** and **NT-9** are each reasoned from
   an isolated probe plus the code, not from a capture → inference → insert
   reproduction across a real `date -s` or a DST boundary.
-* **The alert paths were not exercised on the wire.** **OB-5** and **OB-8** are
-  read from the code, not reproduced against a real Apprise destination, MQTT
-  broker or Healthchecks.io endpoint.
+* ~~**The alert paths were not exercised on the wire.**~~ **No longer true, and
+  the correction is the point of this bullet.** **OB-8** is now driven against
+  a stub broker that *decodes* CONNECT and PUBLISH — which is how the
+  positional §3.1.3 payload trap was caught, since a will written after the
+  username is a well-formed packet that publishes the station's password.
+  **OB-5** and **OB-13** deliver to a real loopback HTTP destination, which is
+  how **NL-1** surfaced: a `queued` row was asserted and the schema refused it.
+  Still unexercised: a real Apprise *API server*, a real Healthchecks.io
+  endpoint, and TLS to a real broker (the TLS half has its own loopback
+  coverage in `mqtt_over_tls.rs` but not against a third-party broker).
 * **No web server under concurrent load**, and none of it against a database
   larger than the fixtures.
 * **Accessibility was not compared** against upstream; determining which is
@@ -743,3 +751,72 @@ completeness.
 * **The DuckDB extension install's own retry budget was not measured.** The
   load-bearing claim in **NT-13** is only that this repository sets none and the
   call is on the startup path.
+
+---
+
+## 6. Handoff
+
+Written for whoever picks this up next, including a later session of the same
+author. Everything below is a statement about the branch as it stands, not a
+plan.
+
+### Where the numbers come from
+
+`cargo test --workspace` on x86_64 in a container: **3 567 passed, 0 failed,
+106 suites**. `cargo fmt --check --all` and
+`cargo clippy --workspace --all-targets -- -D warnings` both exit 0.
+
+Two gates in the template's list are **not** verified here, and should not be
+claimed:
+
+* `cargo deny check` — `cargo-deny` is not installed in this environment.
+* `birdnet-behavior --doctor` exits **1**, not 0, in this container: 8 passed,
+  9 warnings, 0 errors. Exit 1 means "worst severity is Warn"
+  (`doctor/render.rs::summarise`), and the warnings are all
+  unconfigured-environment ones — no admin password, no audio source, no
+  HTTPS, no offsite backup, under 1 GiB free. Reaching 0 needs a configured
+  station, which this container is not.
+
+### What to do first
+
+1. **2.16 (`OB-9`) — make "Test notifications" use the path the alerts use.**
+   The highest-value remaining item, and not because it is a feature: it is the
+   gate that would have caught **OB-5** and **OB-8** before this pass did. It
+   currently builds a fresh client and POSTs directly, exercising neither the
+   native routes, nor the CLI fallback, nor the circuit breaker, nor the rate
+   limiter — and its button is disabled for the configuration most stations
+   have.
+2. **2.8 (`OB-16`) — re-notify open episodes on a widening schedule.** The
+   posture after 2.2 is still *one delivered push, ever, per fault*. For a
+   fault lasting four months that is the wrong side of the trade.
+3. Then the rest of Stage 2 in any order; nothing in it blocks anything else.
+
+### Two claims in this document that were found to be wrong
+
+Recorded because a corrections log is worth more than a clean one:
+
+* **`O-3` said three `LogBroadcaster::new()` calls were "three distinct
+  channels anyway".** They are three *alternative* constructors — `AppState::new`,
+  `new_with_analytics`, `from_connection` — and one run builds one `AppState`
+  (`src/app.rs:184`). There was one channel and nothing wrote to it. The count
+  was never the defect and no deduplication was needed.
+* **`OB-14` treated its two NTP signals as peers.**
+  `/run/systemd/timesync/synchronized` is created on first sync and never
+  removed if sync is later lost, so it answers "synced at some point since
+  boot" — which is precisely the question this check must not ask, given that
+  the failure it exists for is a Pi whose NTP has been unreachable for months.
+  It is a fallback, not an authority.
+
+### One lesson worth carrying, from 2.5
+
+The first mutation applied to the clock work — deleting `check_clock` from
+`evaluate`, which was the shipped state — **killed nothing**. All 31 tests
+passed. Every gate exercised the policy function; none checked that anything
+called it, and a check dropped in a refactor produces no failure, no warning
+and no condition, which is what a healthy station produces.
+
+`evaluate` now runs a named `CHECKS` table that a gate reads against the six
+conditions the module doc promises. The audit-log work reuses the same shape: a
+source scanner reads every action literal and compares it against a documented
+list. **A set expressed only as scattered call sites cannot be checked**, so
+write it down once.
