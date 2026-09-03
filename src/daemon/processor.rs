@@ -339,8 +339,8 @@ pub(super) fn event_processor(
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
             };
-            if let Err(e) =
-                state.with_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+            if let Some(Err(e)) =
+                state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
             {
                 tracing::warn!(
                     correlation_id,
@@ -386,8 +386,8 @@ pub(super) fn event_processor(
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
             };
-            if let Err(e) =
-                state.with_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+            if let Some(Err(e)) =
+                state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
             {
                 tracing::warn!(
                     correlation_id,
@@ -439,8 +439,8 @@ pub(super) fn event_processor(
                     lon: None,
                     week: week_str.parse::<i32>().ok(),
                 };
-                if let Err(e) =
-                    state.with_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+                if let Some(Err(e)) = state
+                    .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
                 {
                     tracing::warn!(
                         correlation_id,
@@ -592,8 +592,26 @@ pub(super) fn event_processor(
         metrics.set_source_up(&source_label, true);
 
         let db_start = std::time::Instant::now();
-        let insert_result =
-            state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record));
+        // `with_ingest_db`, not `with_db`: PS-5. A database that has failed its
+        // daily integrity check stops taking detection rows, and this is one of
+        // the three writes that stop.
+        let Some(insert_result) =
+            state.with_ingest_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record))
+        else {
+            // Not a database failure — a refusal. Counted through the same
+            // metric anyway, because that metric's contract is "a classified
+            // detection was lost after the model agreed it was real", and this
+            // is exactly that. An operator already alerting on it should hear
+            // about this too.
+            metrics.inc_detection_write_failed();
+            tracing::warn!(
+                correlation_id,
+                species = %detection.scientific_name,
+                "detection classified but not recorded: this station's database \
+                 failed its integrity check and detection writes are halted"
+            );
+            continue;
+        };
         metrics.observe_db_write_seconds(db_start.elapsed().as_secs_f64());
         if let Err(e) = insert_result {
             // Counted, not just logged. This is the only place a classified
@@ -932,7 +950,7 @@ pub(super) fn event_processor(
                 };
                 let _ = tokio::task::spawn_blocking(move || {
                     let now = crate::integrations::unix_now_secs();
-                    queue_state.with_db(|conn| {
+                    queue_state.with_ingest_db(|conn| {
                         if let Err(e) = birdnet_db::outbound_queue::enqueue(
                             conn,
                             birdnet_integrations::birdweather::QUEUE_KIND,
@@ -1626,6 +1644,130 @@ mod tests {
                 .ok();
             (detections, quarantined, reason)
         })
+    }
+
+    /// Drive one detection through the real `event_processor` with the ingest
+    /// latch in the given state, and return the row count it left behind.
+    ///
+    /// Today's date, because the clock-plausibility gate (`NT-1`) must not be
+    /// what decides this — `run_one_dated` uses fixed dates for the opposite
+    /// reason.
+    async fn detections_after_one_event(halted: bool) -> i64 {
+        use birdnet_core::audio::extraction::ExtractionConfig;
+        use birdnet_core::detection::daemon::DetectionEvent;
+        use birdnet_core::detection::types::Detection;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        if halted {
+            state
+                .ingest_halt_flag()
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let broadcast = state.detection_broadcast();
+
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
+        let civil = birdnet_core::civil::civil_from_unix_secs(
+            now + birdnet_db::clock::local_utc_offset_secs(),
+        );
+        let date = format!("{:04}-{:02}-{:02}", civil.year, civil.month, civil.day);
+
+        let (event_tx, event_rx) = mpsc::channel::<DetectionEvent>();
+        event_tx
+            .send(DetectionEvent {
+                detection: Detection {
+                    date,
+                    time: "09:00:00".into(),
+                    scientific_name: "Pica pica".into(),
+                    common_name: "Eurasian Magpie".into(),
+                    confidence: 0.95,
+                    start: 0.0,
+                    stop: 3.0,
+                    week: 19,
+                    file_name_extr: None,
+                },
+                source_file: tmp.path().join("nonexistent.wav"),
+                latency_ms: 100,
+                correlation_id: "ps5-gate".into(),
+            })
+            .unwrap();
+        drop(event_tx);
+
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let state_for_processor = state.clone();
+        let rt_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                None,
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+            );
+        })
+        .await
+        .unwrap();
+
+        state.with_db(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM detections", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_or(-1)
+        })
+    }
+
+    /// The control for the gate below. Without it, "no row was written" proves
+    /// nothing about the halt.
+    #[tokio::test]
+    async fn a_healthy_station_records_the_detection() {
+        assert_eq!(
+            detections_after_one_event(false).await,
+            1,
+            "the fixture must record a detection when nothing is halted, or the \
+             gate below is measuring a broken pipeline rather than the halt"
+        );
+    }
+
+    /// `PS-5`. A station whose database failed its daily integrity check must
+    /// record nothing further into it.
+    ///
+    /// The shipped behaviour was to log one `error!` and keep inserting, for
+    /// months, while `backup_database` — which refuses a corrupt source —
+    /// quietly stopped producing restore points. See
+    /// `crates/birdnet-web/tests/a_corrupt_database_stops_taking_detections.rs`
+    /// for the other half: that an *administrative* write still succeeds, which
+    /// is what makes this narrower than a read-only connection.
+    #[tokio::test]
+    async fn a_halted_station_records_nothing() {
+        assert_eq!(
+            detections_after_one_event(true).await,
+            0,
+            "the detection was written to a database already known to be \
+             corrupt — which is PS-5: the daily check found it, said so once, \
+             and changed nothing"
+        );
     }
 
     /// A detection recorded before the clock was set must never reach the

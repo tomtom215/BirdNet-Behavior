@@ -241,7 +241,7 @@ Findings marked **[FIXED]** landed on this branch; the commit is named.
 | **PS-2** | **P0** | VERIFIED | A **zero-length `birds.db` returns `quick_check = ok`**, so `check_and_recover` logs "database healthy", `migrate()` builds a fresh schema, and the station records into an empty database with five good backups beside it that rotate out in 35 days. | **[FIXED]** — `check_integrity` now requires SQLite's sixteen-byte magic before asking SQLite anything. |
 | **PS-3** | P1 | VERIFIED | Weekly `VACUUM` writes **3.0× the file size** (274.7 MB measured for 91.3 MB), stages a full copy in the `PrivateTmp` tmpfs inside `MemoryMax=1G`, and holds the write lock; a detection blocked past `busy_timeout=5000` returns `database is locked` and is logged "it is lost". | `PRAGMA incremental_vacuum` with `auto_vacuum=INCREMENTAL`, or `VACUUM INTO` on the data partition; raise `busy_timeout` for the writer. |
 | **PS-4** | P1 | VERIFIED | **82.6 KB written to the block layer per detection** against 577 B of row — measured at 12 k/52 k/202 k/502 k rows. ~1.05 GB/day at 1 000 detections/day, ~3.05 GB/day on a mature busy station. 55 % is database machinery. | Batch inserts inside one transaction; `PRAGMA wal_autocheckpoint` tuning; document the real card-wear budget. |
-| **PS-5** | P1 | READ | The daily integrity check detects corruption, logs one `error!`, and the daemon **keeps writing to the corrupt file** until someone reboots it. The "never write to a corrupt database" policy exists only at startup. | On a failed check, quarantine and restore in place, or stop the writer and go read-only with a loud health state. |
+| **PS-5** | P1 | READ | The daily integrity check detects corruption, logs one `error!`, and the daemon **keeps writing to the corrupt file** until someone reboots it. The "never write to a corrupt database" policy exists only at startup. **[FIXED — the second option, narrowed]** The remedy's second branch, with one deliberate narrowing: **not** `PRAGMA query_only`. Login sessions are rows in this database, so a read-only writer would lock the operator out of the admin UI that exists to tell them what is wrong, and would stop the notification log recording the alerts about the corruption — self-defeating on exactly the station this audit is about. The line is drawn at the writes that *record a detection event* (`insert_detection`, `insert_quarantine`, `outbound_queue::enqueue`), through `AppState::with_ingest_db`; settings, sessions, the audit log, the notification log and the maintenance-run record that makes the health endpoint go red all keep working. `/api/v2/health` reports `"detection_writes": "halted"` and answers 503. The latch is one-way — a file does not heal itself, and a flapping check would flap the station — so recovery is a restart, where the startup path restores from backup or quarantines. One thing the finding did not reach: `backup_database` refuses to snapshot a corrupt source, so during all of that the backup ring had *also* stopped producing restore points, which is why every hour of it made recovery worse rather than better. | Done; see Stages 0 and 1 landed. The first branch of the remedy — quarantine and restore *in place*, at runtime — is not done and is now unblocked by this: stopping the ingest writer is its prerequisite. |
 | **PS-6** | P1 | READ | A quarantined `birds.db.corrupt.<ts>` — total history loss — is matched by **no** doctor scan (`doctor/analytics.rs:130` matches `.duckdb.corrupt.` only, and its test asserts the SQLite name is *not* matched), no `station_health` condition, and no prune. It sits on the card for ever. **[FIXED IN PART — "Alert on a backup that fails, not only on one that stops"]** The doctor scan now matches `.db.corrupt.` as well as `.duckdb.corrupt.` (excluding `-wal`/`-shm` sidecars), and `check_quarantined_stores` raises a condition whose title distinguishes a lost detection history from a rebuilt analytics store. **The prune is still not done**: a quarantined file still sits on the card for ever, which on a 32 GB card is the difference between one bad week and a full disk. That half is item 2.11. | Remaining: prune quarantined stores on a retention schedule. |
 | **PS-7** | P1 | READ | `sync_all` appears **twice in the whole workspace**, neither in the audio path. Clips and segments are written non-atomically under their final names, so a power cut leaves truncated files the database points at for ever; and because both retention passes are database-driven, a clip whose row was lost is never deleted except by the 95 %-full purge. | Write to `.part` + `rename` + `sync_all` (the pattern `docker/entrypoint.sh:239` already uses); add an orphan-clip reconciliation pass (**S-14**). |
 | **PS-8** | P1 | READ | `--doctor`'s only disk check and its "Recordings directory" check both read `--watch-dir` first, which the shipped unit **always** sets to the tmpfs — so the preflight measures a RAM disk while `/api/v2/system/disk` correctly measures the card. | Check the data partition explicitly, and report both. |
@@ -554,6 +554,7 @@ until both were taken again at the merge commit.
 | 1.7 | The model is verified, and a partial download resumed | **LC-2** (P0) | "the truncated model was skipped — this is the defect", for the model and for the labels. The counterpart — a verified model must not be re-downloaded — passes either way. |
 | 1.8 | A reachable red on `/api/v2/health` | **OB-4**, **PR-5** | Against the previous status logic, `left: 200, right: 503`; against a version making every request strict, `left: 503, right: 200` — the change that would put field stations into a Docker restart loop. |
 | — | Two pruners with no production caller | **NT-18** | Both tables shrink; with the `reviewed = 1` condition removed the counterpart fails on the surviving row. |
+| 1.9 | A database that failed its check stops taking detections | **PS-5** | 8 gates. Against the shipped write path — `with_ingest_db` never refusing, which is what `with_db` did — `a_halted_station_records_nothing` fails `left: 1, right: 0` and the discrimination test fails its own vacuity guard (*"the ingest gate must be closed, or this test is vacuous"*), while the control `a_healthy_station_records_the_detection` stays green. Against the shipped *maintenance* behaviour — the verdict changing nothing — two of the three decision gates fail and `nothing_else_halts_the_detection_writes` stays green, which is the counterpart that keeps a transient `Err` from stopping a station. The third mutation is the structural one: putting a single per-detection write back on `with_db` is invisible to every behavioural gate and is caught only by the source scan, by name and file — *"src/daemon/processor.rs: enqueue"*. |
 
 > **What 1.5 does not do.** The floor catches a clock that is too *early*, which
 > is the common case on RTC-less hardware. A clock far in the **future** — the
@@ -568,7 +569,6 @@ until both were taken again at the merge commit.
 
 | # | Item | Finding | Why here |
 |---|---|---|---|
-| 1.9 | Never write to a database known to be corrupt | **PS-5** | Detected daily, then written to anyway until someone reboots. |
 | 1.10 | Atomic clip and segment writes | **PS-7**, **S-4** | `.part` + `rename` + `sync_all`; the pattern is already in `entrypoint.sh`. |
 | 1.11 | The monotonic-versus-wall step detector | **NT-4**, remaining half | The forward-jump direction 1.5 does not cover. |
 | 1.12 | Raise `doctor/model.rs` off its one-megabyte threshold | **LC-2**, remaining half | The installer no longer *produces* a truncated model; the doctor still cannot *detect* one that arrived another way. |
@@ -766,8 +766,8 @@ plan.
 
 ### Where the numbers come from
 
-`cargo test --workspace` on x86_64 in a container: **3 593 passed, 0 failed,
-107 suites**. `cargo fmt --check --all` and
+`cargo test --workspace` on x86_64 in a container: **3 601 passed, 0 failed,
+109 suites**. `cargo fmt --check --all` and
 `cargo clippy --workspace --all-targets -- -D warnings` both exit 0. The same
 command at the branch point `f33eb9e` reports 3 570 in 106 suites, so the
 difference is this pass's own gates and nothing else. (This block read "3 567,
@@ -819,10 +819,12 @@ else, so any of them can be taken next; §4's **Stage 2 — still to do** table 
 the list, and it is not repeated here because two copies of a work queue is how
 one of them goes stale.
 
-Stage 1 also still has 1.9 (`PS-5`), 1.10 (`PS-7`/`S-4`), 1.11 (`NT-4`
-remaining half) and 1.12 (`LC-2` remaining half) outstanding. Those are about
-*keeping the data*, which outranks everything in Stage 2 on a station that is
-already failing — take them first if you have no other reason to choose.
+Stage 1 still has 1.10 (`PS-7`/`S-4`), 1.11 (`NT-4` remaining half) and 1.12
+(`LC-2` remaining half) outstanding. Those are about *keeping the data*, which
+outranks everything in Stage 2 on a station that is already failing — take them
+first if you have no other reason to choose. 1.9 (`PS-5`) is done, in its
+narrowed form; the runtime quarantine-and-restore branch of that remedy is not,
+and stopping the ingest writer was its prerequisite.
 
 ### A gap in the mutation matrix — a proposal, not a change
 

@@ -124,6 +124,12 @@ struct AppStateInner {
     /// parallel one of its own (`OB-9`). `None` when nothing is configured to
     /// notify, and in tooling.
     notifier: Option<Notifier>,
+    /// Set when the database has been found corrupt while the station is
+    /// running, at which point the per-detection writes stop. See
+    /// [`AppState::with_ingest_db`]. An `Arc<AtomicBool>` for the same reason
+    /// `detection_daemon_running` is one: the maintenance loop that discovers
+    /// the corruption holds only a clone, taken before the state was shared.
+    ingest_halted: Arc<AtomicBool>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -199,6 +205,7 @@ impl AppState {
                 capture_status: None,
                 live_audio: None,
                 notifier: None,
+                ingest_halted: Arc::new(AtomicBool::new(false)),
             }),
         })
     }
@@ -389,6 +396,7 @@ impl AppState {
                 capture_status: None,
                 live_audio: None,
                 notifier: None,
+                ingest_halted: Arc::new(AtomicBool::new(false)),
             }),
         })
     }
@@ -423,6 +431,7 @@ impl AppState {
                 capture_status: None,
                 live_audio: None,
                 notifier: None,
+                ingest_halted: Arc::new(AtomicBool::new(false)),
             }),
         }
     }
@@ -986,6 +995,66 @@ impl AppState {
     #[must_use]
     pub fn notifier(&self) -> Option<&Notifier> {
         self.inner.notifier.as_ref()
+    }
+
+    /// Shared handle to the ingest-halt latch, for the maintenance loop to set
+    /// when the daily integrity check confirms the database is corrupt.
+    ///
+    /// The same shape as [`AppState::detection_status_flag`], and for the same
+    /// reason: the loop that flips it is spawned after the state has been
+    /// cloned, so it cannot use a builder.
+    #[must_use]
+    pub fn ingest_halt_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.inner.ingest_halted)
+    }
+
+    /// Whether the per-detection writes are currently refused.
+    #[must_use]
+    pub fn ingest_halted(&self) -> bool {
+        self.inner.ingest_halted.load(Ordering::Relaxed)
+    }
+
+    /// Run `f` against the writer **unless** the database is known to be
+    /// corrupt, in which case nothing runs and this returns `None`.
+    ///
+    /// # What "ingest" means here, and why it is not every write (`PS-5`)
+    ///
+    /// The daily `PRAGMA integrity_check` used to detect corruption, log one
+    /// `error!`, and change nothing: the daemon kept inserting into the corrupt
+    /// file until somebody rebooted it, and `backup_database` — which refuses
+    /// to snapshot a corrupt source — had quietly stopped producing new restore
+    /// points, so every hour of that made recovery worse rather than better.
+    /// The "never write to a corrupt database" policy existed only at startup.
+    ///
+    /// This is the runtime half of it, and it is deliberately **not** a
+    /// `PRAGMA query_only` on the whole connection. Login sessions are rows in
+    /// this database: making it read-only would lock the operator out of the
+    /// admin UI that exists to tell them what is wrong, and would stop the
+    /// notification log recording the very alerts about the corruption. The
+    /// line is drawn at the writes that *record a detection event* — the
+    /// high-volume ones, the ones that grow the file, and the ones whose loss
+    /// is the point of noticing the corruption at all:
+    ///
+    /// * `sqlite::insert_detection`
+    /// * `sqlite::insert_quarantine`
+    /// * `outbound_queue::enqueue`
+    ///
+    /// Everything else — settings, sessions, the audit log, the notification
+    /// log, the maintenance-run record that makes the health endpoint go red —
+    /// keeps working, because a station that cannot say what is wrong with it
+    /// is the failure this whole subsystem exists to prevent.
+    ///
+    /// That list is not a comment to be trusted: `the_ingest_writes_are_gated`
+    /// reads it back out of the source, for the reason 2.5 records — a set
+    /// expressed only as scattered call sites cannot be checked.
+    pub fn with_ingest_db<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce(&Connection) -> T,
+    {
+        if self.ingest_halted() {
+            return None;
+        }
+        Some(self.with_db(f))
     }
 
     /// The shared short-TTL cache for heavy-analytics fragments.

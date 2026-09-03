@@ -38,6 +38,51 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a database found corrupt was written to for months
+
+The "never write to a corrupt database" policy existed only at startup. There
+it is thorough: before the state is built, the daemon verifies the file,
+restores from the newest backup that itself verifies, and — failing that —
+quarantines it rather than opening it.
+
+The *daily* check had none of that. It ran `PRAGMA integrity_check` and, on
+failure, did two things: wrote one `error!` line, and recorded the verdict. The
+station then kept inserting detections into the corrupt file until somebody
+rebooted it, which on an unattended station is months. Compounding it, and not
+noted in the audit finding: `backup_database` refuses to snapshot a corrupt
+source, so throughout all of that the backup ring had stopped producing new
+restore points. Every hour made the recovery *worse* rather than better,
+silently.
+
+A confirmed corrupt verdict now stops the writes that record a detection —
+`insert_detection`, `insert_quarantine`, and the BirdWeather upload queue —
+through one gate, `AppState::with_ingest_db`.
+
+**Deliberately not a read-only connection.** Login sessions are rows in this
+database. `PRAGMA query_only` would honour the policy to the letter and lock the
+operator out of the admin UI that exists to tell them what is wrong, while
+silencing the notification log that records the alerts about the corruption.
+Settings, sessions, the audit log, the notification log and the maintenance-run
+record that turns the health endpoint red all keep working. `/api/v2/health`
+reports `"detection_writes": "halted"` and answers 503, and the existing
+station-health condition for a failing integrity check already alerts — and,
+after the change above, keeps saying so weekly.
+
+Only a *confirmed* corrupt verdict halts. A check that could not be completed
+is "no verdict", not a failure: a transient I/O error must not stop a working
+station from recording a season. The latch is one-way, because a file does not
+heal itself and a check that flapped would flap the station with it; recovery
+is a restart, where the startup path restores or quarantines. The log line says
+exactly that.
+
+Eight gates. The one worth naming is structural rather than behavioural: a
+fourth per-detection write added later through the ungated writer would produce
+no failure, no warning and no alert — which is what a healthy station produces.
+The gated set is therefore written down once, in the gate's own doc comment,
+and a source scan reads it back and checks every name, in every production file
+in the workspace. Put one call site back on the ungated writer and it names the
+file and the function.
+
 ### Fixed — a fault was announced once and then never mentioned again
 
 Alert storms are well prevented here — a three-poll debounce, one episode per
