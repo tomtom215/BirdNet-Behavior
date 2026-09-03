@@ -534,8 +534,9 @@ because nobody applied.
 it was written for and the failure text recorded in the commit message. The
 workspace suite went from 3 425 passing at the branch point to **3 567** with
 seven Stage 2 items landed (3 465 at the end of Stage 1); the installer suite
-from eight test files to ten, all passing. Every figure here is from a
-`cargo test --workspace` run, not a running total.
+from eight tests to eleven (`installer/test/*.sh`, excluding the `run-ci.sh`
+harness), all passing. Every figure here is from a run, not a running total —
+this sentence said "eight to ten" until the count was taken again.
 
 | # | Item | Finding | Gate, observed failing first |
 |---|---|---|---|
