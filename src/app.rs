@@ -268,7 +268,7 @@ async fn serve(
     // Teed capture sources publish their live PCM here, and `/stream` reads it
     // instead of opening the audio device a second time — which an ALSA
     // microphone refuses with `Device or resource busy` while it is being
-    // recorded. Must be the last builder call before the state is cloned.
+    // recorded.
     let live_audio = birdnet_core::audio::capture::new_live_audio_hub();
     let state = state.with_live_audio(std::sync::Arc::clone(&live_audio));
 
@@ -292,6 +292,18 @@ async fn serve(
     let mqtt_presence_client = mqtt_client.clone();
     let notification_filter = integrations::create_notification_filter(&cli, config.as_ref());
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
+
+    // OB-9: give the web layer the *same* notifier the alert loops deliver
+    // through, so "Test notifications" exercises the native routes, the
+    // `apprise` CLI fallback, the circuit breaker and the rate limiter — the
+    // machinery that decides whether a deadman alert leaves the box — instead
+    // of a fresh client of its own. The last builder call: `AppState`'s
+    // builders abort if the state has already been cloned, and the loops below
+    // clone it.
+    let state = match apprise_client.clone() {
+        Some(handle) => state.with_notifier(birdnet_web::notifier::Notifier::attach(handle).await),
+        None => state,
+    };
 
     // Start weekly report scheduler (if Apprise is configured).
     if let Some(ref apprise) = apprise_client {

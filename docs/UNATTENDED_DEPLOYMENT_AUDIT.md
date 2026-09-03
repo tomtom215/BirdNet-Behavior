@@ -382,7 +382,7 @@ unscraped Prometheus series is **not surfaced**.
 | **OB-3** | P2 | VERIFIED | The shipped Grafana dashboard has **`alert: []`** — not one rule — covers 8 of 21 metric families, omits `birdnet_detection_silence_seconds` (which the manual names first as the series to alert on) and 12 others, and labels a memory threshold at **half** the unit's real `MemoryHigh`. | Ship `alerting_rules.yml` with the four rules the docs already argue for; a CI gate that every name in the dashboard exists in the rendered exposition and vice-versa — which would also have caught **OB-1**. |
 | **OB-6** | P2 | VERIFIED | Three surfaces grade the same disk three ways; one returned **HTTP 503 "critical" on a 69.6 %-full filesystem** whose own JSON body said 69.6 %. Every ext4 default has a 5 % root reserve, so a monitor polling that endpoint pages the operator on a healthy station — which is how a channel gets muted before the real alert arrives. Same as **PR-14**. **[FIXED]** With **PR-14**; see there. One thing the finding did not name: an existing unit test, `disk_usage_percent_with_reserved_space`, **asserted the defect** — same fixture, `assert!(u.is_critical(), "7/252 available is critical")` — which is what made `available < total / 20` look like a choice rather than a slip. The fixture is kept and the assertion inverted. |
 | **OB-8** | P2 | VERIFIED | Home Assistant discovery advertises a `binary_sensor` with `device_class: connectivity` on `{prefix}/status`, and `publish_status()` / `publish_daily_stats()` have **zero production call sites**. Every station with discovery on registers a "Station Status" entity that is permanently unknown, so the obvious automation — *notify me when the station goes offline* — can never fire. There is also **no MQTT last-will**, and structurally cannot be: `publish()` opens a fresh connection per message at QoS 0, so no session exists for a broker to notice dying. **[FIXED — "Give the broker something to report when the station dies"]** Taken as prescribed, first option. A `PresenceSession` holds one otherwise-idle connection carrying a will (`{prefix}/status` = `offline`, retained, `QoS` 1) with a 30 s keepalive, so the broker publishes the will ~45 s after a station stops answering; the station publishes `online` retained on connect and `offline` retained on a clean stop. `publish_daily_stats` is fed from the same loop. Two things the finding did not reach: discovery configs were published **unretained**, so Home Assistant lost all four entities whenever *it* restarted — they are now always retained regardless of `MQTT_RETAIN`; and `MqttConfig::qos` had **zero readers** in the workspace while `publisher.rs`'s own module doc claimed a `QoS`-1-to-0 downgrade "after logging a warning" that did not exist, so `QoS` 1 now genuinely waits for a PUBACK. | Done; see Stage 2 landed. |
-| **OB-9** | P2 | READ | "Test notifications" tests a code path the alerts do not use, and is **disabled for the configuration most stations have**: its button is enabled only when `apprise_url` (an Apprise *API server*) is set, so a station using native `ntfy://`/`discord://` routes sees "Not configured" and a disabled button while its alerts work fine. When enabled it builds a fresh client and POSTs directly, exercising neither the native routes, nor the CLI fallback, nor the circuit breaker, nor the rate limiter — i.e. none of the machinery that decides whether **OB-5**'s deadman alert leaves the box. No test at all for email or MQTT. | Route the test through the same handle the alert paths hold; enable it whenever any route resolved. |
+| **OB-9** | P2 | READ | "Test notifications" tests a code path the alerts do not use, and is **disabled for the configuration most stations have**: its button is enabled only when `apprise_url` (an Apprise *API server*) is set, so a station using native `ntfy://`/`discord://` routes sees "Not configured" and a disabled button while its alerts work fine. When enabled it builds a fresh client and POSTs directly, exercising neither the native routes, nor the CLI fallback, nor the circuit breaker, nor the rate limiter — i.e. none of the machinery that decides whether **OB-5**'s deadman alert leaves the box. No test at all for email or MQTT. **[FIXED — the push half; "Test notifications" now sends what an alert sends]** Taken as prescribed. `src/app.rs` hands the *same* `Arc<Mutex<apprise::Client>>` the three alert loops hold to the web layer as `birdnet_web::notifier::Notifier`, and the handler locks it and calls `send_operational_alert` — the identical call `announce::flush` makes, so the native routes, the `apprise` CLI fallback, the circuit breaker and the operational rate-limit bypass are all under the button. The button is enabled on *any* resolved destination, and the page names them (the labels are credential-free by construction). **The email and MQTT half is not done**: those channels still have no test of any kind, and this item did not add one. | Push done; see Stage 2 landed. Email and MQTT tests remain — 2.20. |
 | **OB-10** | P2 | VERIFIED | The support bundle publishes `HEARTBEAT_URL` and `APPRISE_URL` **verbatim** — both bearer credentials carried as a path segment, which the name-based and `user:pass@`-based redactors both miss — in a file the tool invites the operator to attach to a bug report. Partly **[FIXED]**: the heartbeat URL is no longer logged at `INFO`, so it is out of `journal.log`; the `config.redacted` half remains. | Redact by shape: for any `scheme://host/rest`, keep scheme and host. Extend the existing `every_secret_key_is_redacted_from_the_support_bundle` gate. |
 | **OB-11** | P2 | VERIFIED | Chaining the email redactor after the URL redactor **mangles every RTSP URL with a dotted host** into `***@host/path`, destroying the scheme and the username the first redactor deliberately kept. On an RTSP station that is the most diagnostic setting in the file. The gate is green only because its fixture hostname (`cam`) has no dot — the one hostname shape that never occurs in the field. | Apply the email redactor only when the value contains no `://`; re-point the fixture at `cam.example.com` and an IP. |
 | **NL-1** | P1 | VERIFIED | **`NotifStatus::Queued` could not be stored, and had a production writer.** Migration 4 created `notification_log.status` with `CHECK(status IN ('sent','failed','skipped'))`. `Queued` was added to the enum later, documented at length — "accepted by this station but not yet delivered", parked for replay, deliberately distinct from `Failed` because *"an operator looking at a wall of red needs to know which one they are looking at before they go and climb a hill"* — and written in production by `daemon/processor.rs`'s store-and-forward path. Every insert was rejected by the CHECK, and `record_notification` discards the error at `debug!`, which the default filter drops. So a field station on flaky LTE produced exactly the bursts that comment describes and the Notification Center showed none of them: the distinction it draws was between one status that existed and one that never did. Found by running the code, not reading it — a new gate for the alert path asserted a `queued` row and got none. **[FIXED]** Migration 41 rebuilds the table (SQLite cannot alter a CHECK in place), and `every_notification_status_is_accepted_by_the_schema` enumerates `ALL_NOTIF_STATUSES` so a sixth status without a migration fails in CI. | Done. |
@@ -532,11 +532,13 @@ because nobody applied.
 
 **All five P0s are closed**, each with a gate observed failing against the code
 it was written for and the failure text recorded in the commit message. The
-workspace suite went from 3 425 passing at the branch point to **3 567** with
-seven Stage 2 items landed (3 465 at the end of Stage 1); the installer suite
-from eight tests to eleven (`installer/test/*.sh`, excluding the `run-ci.sh`
-harness), all passing. Every figure here is from a run, not a running total —
-this sentence said "eight to ten" until the count was taken again.
+workspace suite went from 3 425 passing at the branch point to **3 570** where
+that work merged (`f33eb9e`), with nine Stage 2 items landed (3 465 at the end
+of Stage 1); the installer suite from eight tests to eleven
+(`installer/test/*.sh`, excluding the `run-ci.sh` harness), all passing. Every
+figure here is from a run, not a running total — this sentence said "eight to
+ten" until the count was taken again, and said "3 567 with seven Stage 2 items"
+until both were taken again at the merge commit.
 
 | # | Item | Finding | Gate, observed failing first |
 |---|---|---|---|
@@ -590,6 +592,7 @@ person 40 km away learns that it stopped.
 | 2.10 | One disk denominator, everywhere | **OB-6**, **PR-14** | 6 gates. 4 mutations killed. The shipped predicates fail the reproduction (`a disk 76.6 % full is not critical (was: 9167069184 available < 13527658700 = total/20)`) and the swept property gate; `is_critical` returning `false` unconditionally fails the two full-disk counterparts, so the fix is not "stop reporting"; a `CRITICAL_PERCENT` of 98 fails the purge-threshold coherence gate. The fourth is the instructive one: making `used_percent()` divide by `total` **as well** leaves the property gate green — two surfaces agreeing on the same wrong number — and is caught only by the reproduction, which pins the answer to what `df` says. |
 | 2.14 | Publish the MQTT status topic that discovery already advertises, with a last will | **OB-8** | 9 gates against a broker stub that *decodes* CONNECT and PUBLISH rather than matching bytes. 8 mutations killed, each by one gate: no will (`"a will was registered"`), a will on the stateless publish too (only the discrimination test fails), the will written after the username — a well-formed packet that publishes the password to whatever the broker reads as the topic — `ping` that writes and never reads (`"an unanswered ping must fail"`), `config.qos` ignored, which is the shipped code (`"an unacknowledged QoS 1 publish must not report success"`, while the `QoS` 0 counterpart stays green — the fix is not "every publish now blocks"), the retain override ignored, also shipped (`"override honoured"`), `shutdown` that disconnects without saying offline (`left: 1, right: 2`), and an unretained will. |
 | 2.15 | Operational alerts reach the notification log | **OB-13**, and **NL-1** found while doing it | 11 gates, 6 mutations killed. `flush` recording nothing — the shipped state — fails 4 and leaves `no_notifier_configured_writes_nothing` green. Then: `Queued` written as `Failed`, a row per retry instead of one per episode, placeholder species columns, a loop sending inline again (the pre-2.2 shape, caught by the source scanner), and the CHECK left un-widened — `"the schema rejects the `queued` status this code writes: CHECK constraint failed"`. That last one is **NL-1**: the two behavioural gates were written, run, and failed against the shipped schema before the migration existed. |
+| 2.16 | "Test notifications" sends what an alert sends, and is live whenever a destination resolved | **OB-9** | 11 gates — 5 behavioural against a local destination through the real admin router, 6 at the renderer. Against the shipped handler four of the five behavioural gates fail: the button reaches nothing (`left: 0, right: 1` requests at the station's own destination), it renders `class="btn-disabled" … disabled` for a station whose native route is working, an open circuit is reported as *"Apprise URL not configured"*, and the module holds two HTTP clients (`left: 2, right: 1`). The fifth — no notifier at all still yields a disabled button and an error, not a send — passes **both** ways, which is what stops the fix being "always enabled". The discrimination is the open circuit: with `Gate::admit_priority` returning `Send` unconditionally the other four stay green and that one fails, so this is a test that goes through the shared guards rather than one that merely reaches the destination. |
 
 **Still to do:**
 
@@ -601,10 +604,10 @@ person 40 km away learns that it stopped.
 | 2.11 | Prune quarantined stores on a retention schedule (detection and the condition landed with 2.3) | **PS-6**, remaining half |
 | 2.12 | Read-only-remount detection | **PS-9** |
 | 2.13 | `--doctor` measures the card, not the RAM disk | **PS-8** |
-| 2.16 | "Test notifications" tests the path the alerts use | **OB-9** |
 | 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10**, **OB-11** |
 | 2.18 | journald drop-in; demote the two per-file INFO lines | **OB-15**, **PS-19**, **O-9** — the volatile-journal half of **OB-15** is now partly covered by `errors.jsonl` (2.6), which survives the reboot; the 1.6–2.8 GB/year of INFO is not |
 | 2.19 | `GET /admin/doctor.json` and a support bundle over HTTP | §3.6 |
+| 2.20 | A "Test notifications" path for email and MQTT | **OB-9**, remaining half |
 
 
 ### Stage 3 — a station survives its own maintenance and its own operator
@@ -763,34 +766,48 @@ plan.
 
 ### Where the numbers come from
 
-`cargo test --workspace` on x86_64 in a container: **3 567 passed, 0 failed,
-106 suites**. `cargo fmt --check --all` and
-`cargo clippy --workspace --all-targets -- -D warnings` both exit 0.
+`cargo test --workspace` on x86_64 in a container: **3 578 passed, 0 failed,
+107 suites**. `cargo fmt --check --all` and
+`cargo clippy --workspace --all-targets -- -D warnings` both exit 0. The same
+command at the branch point `f33eb9e` reports 3 570 in 106 suites, so the
+difference is this pass's own gates and nothing else. (This block read "3 567,
+106 suites" until both were taken again; that figure predated the last commit
+of the previous pass.)
 
 Two gates in the template's list are **not** verified here, and should not be
-claimed:
+claimed as local results:
 
-* `cargo deny check` — `cargo-deny` is not installed in this environment.
+* `cargo deny check` — `cargo-deny` is still not installed in this
+  environment, and neither are `cargo-audit`, `cargo-machete`,
+  `cargo-llvm-cov` or `cross`. The supply-chain question is nevertheless
+  **answered, by CI rather than here**: the `Supply chain` workflow run on the
+  merge commit `f33eb9e`
+  ([33778570446](https://github.com/tomtom215/BirdNet-Behavior/actions/runs/33778570446))
+  reports all six jobs green — `cargo-deny`, `cargo-audit`, `cargo-machete`,
+  `Spelling (typos)`, `shellcheck (bootstrap scripts)` and `installer unit
+  tests`. Read that from the run, not from this sentence, before relying on
+  it; and note it is a statement about `f33eb9e`, not about whatever is in
+  your working tree.
 * `birdnet-behavior --doctor` exits **1**, not 0, in this container: 8 passed,
   9 warnings, 0 errors. Exit 1 means "worst severity is Warn"
   (`doctor/render.rs::summarise`), and the warnings are all
   unconfigured-environment ones — no admin password, no audio source, no
   HTTPS, no offsite backup, under 1 GiB free. Reaching 0 needs a configured
-  station, which this container is not.
+  station, which this container is not. **Still true**, and still not to be
+  ticked off without one.
 
 ### What to do first
 
-1. **2.16 (`OB-9`) — make "Test notifications" use the path the alerts use.**
-   The highest-value remaining item, and not because it is a feature: it is the
-   gate that would have caught **OB-5** and **OB-8** before this pass did. It
-   currently builds a fresh client and POSTs directly, exercising neither the
-   native routes, nor the CLI fallback, nor the circuit breaker, nor the rate
-   limiter — and its button is disabled for the configuration most stations
-   have.
-2. **2.8 (`OB-16`) — re-notify open episodes on a widening schedule.** The
+1. **2.8 (`OB-16`) — re-notify open episodes on a widening schedule.** The
    posture after 2.2 is still *one delivered push, ever, per fault*. For a
    fault lasting four months that is the wrong side of the trade.
-3. Then the rest of Stage 2 in any order; nothing in it blocks anything else.
+2. Then the rest of Stage 2 in any order; nothing in it blocks anything else.
+
+**2.16 (`OB-9`) is done** and is no longer at the head of this list: the push
+test now locks the notifier the alert loops hold and calls
+`send_operational_alert` on it, and the button is live for any resolved
+destination. Its remaining half — email and MQTT have no test of any kind — is
+item **2.20**, and is a smaller thing than the one that was fixed.
 
 ### Two claims in this document that were found to be wrong
 

@@ -10,6 +10,7 @@ use birdnet_core::i18n::I18nManager;
 
 use crate::analytics_cache::AnalyticsCache;
 use crate::db_pool::ReaderPool;
+use crate::notifier::Notifier;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -118,6 +119,11 @@ struct AppStateInner {
     /// `None` in web-only mode and tooling, where `/stream` falls back to
     /// opening the device itself.
     live_audio: Option<LiveAudioHubHandle>,
+    /// The notifier the station's alert loops deliver through, so
+    /// `/admin/notifications/test` can exercise that path rather than a
+    /// parallel one of its own (`OB-9`). `None` when nothing is configured to
+    /// notify, and in tooling.
+    notifier: Option<Notifier>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -192,6 +198,7 @@ impl AppState {
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
                 live_audio: None,
+                notifier: None,
             }),
         })
     }
@@ -381,6 +388,7 @@ impl AppState {
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
                 live_audio: None,
+                notifier: None,
             }),
         })
     }
@@ -414,6 +422,7 @@ impl AppState {
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
                 live_audio: None,
+                notifier: None,
             }),
         }
     }
@@ -524,6 +533,22 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_live_audio");
         Self {
             inner: rebuild_inner(inner, |s| s.live_audio = Some(hub)),
+        }
+    }
+
+    /// Attach the notifier the alert loops deliver through, so the admin
+    /// "Test notifications" button exercises the path an alert about the
+    /// station actually takes — native routes, `apprise` CLI fallback, circuit
+    /// breaker and rate limiter included.
+    ///
+    /// Without this the test page has no handle and falls back to saying so;
+    /// with a *fresh* client, as it used to build, a green test would say
+    /// nothing about whether a deadman alert leaves the box (`OB-9`).
+    #[must_use]
+    pub fn with_notifier(self, notifier: Notifier) -> Self {
+        let inner = unwrap_inner(self.inner, "with_notifier");
+        Self {
+            inner: rebuild_inner(inner, |s| s.notifier = Some(notifier)),
         }
     }
 
@@ -951,6 +976,16 @@ impl AppState {
     #[must_use]
     pub fn live_audio(&self) -> Option<LiveAudioHubHandle> {
         self.inner.live_audio.clone()
+    }
+
+    /// The notifier the alert loops deliver through, if the station has one.
+    ///
+    /// `None` means no destination resolved at startup — not that the operator
+    /// left a settings field blank, which is the distinction the test page got
+    /// wrong before `OB-9`.
+    #[must_use]
+    pub fn notifier(&self) -> Option<&Notifier> {
+        self.inner.notifier.as_ref()
     }
 
     /// The shared short-TTL cache for heavy-analytics fragments.
