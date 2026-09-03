@@ -19,7 +19,7 @@ use super::disposition::{
 use birdnet_db::notifications::NotifStatus;
 use birdnet_integrations::webhook::dispatch_webhook;
 
-use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
+use crate::integrations::{AppriseHandle, EmailHandle, MqttHandle};
 
 /// The learned per-species thresholds, and their persistence.
 ///
@@ -256,7 +256,6 @@ pub(super) fn event_processor(
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
-    heartbeat: Option<HeartbeatHandle>,
     mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
@@ -918,16 +917,6 @@ pub(super) fn event_processor(
             });
         }
 
-        // Heartbeat ping after processing.
-        if let Some(ref hb) = heartbeat {
-            let hb = Arc::clone(hb);
-            rt_handle.spawn(async move {
-                if let Err(e) = hb.ping().await {
-                    tracing::debug!(error = %e, "heartbeat ping failed");
-                }
-            });
-        }
-
         // MQTT publish. Fire-and-forget on the blocking pool — the same
         // discipline as the BirdWeather/Apprise/email/heartbeat dispatches
         // above. `publish_detection` opens a fresh TCP connection bounded by
@@ -1314,7 +1303,6 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
                 filter,
                 template,
                 rt_handle,
@@ -1515,7 +1503,6 @@ mod tests {
                 event_rx,
                 state_for_processor,
                 broadcast,
-                None,
                 None,
                 None,
                 None,

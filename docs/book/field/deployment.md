@@ -417,9 +417,21 @@ sudo systemctl start birdnet-behavior
 Once the unit is sealed and shipped, the loop is:
 
 1. **Heartbeat URL** (`HEARTBEAT_URL=`) — set to a free
-   <https://healthchecks.io> check. The daemon pings it after every
-   analysis cycle. You get an email if it stops within your configured
-   grace period (recommend: 15 min).
+   <https://healthchecks.io> check. The daemon pings it **every five
+   minutes**, whether or not it has heard a bird, and pings once
+   immediately at startup so a station clears its alarm within seconds of
+   coming back from a power cut. You get an email if the pings stop for
+   longer than your grace period (recommend: 15 min — three missed pings,
+   so one dropped packet on a 4G bearer does not page you).
+
+   This signal answers exactly one question: *is the box still there?* It
+   deliberately says nothing about whether the station is hearing
+   anything — a December night at 55° N is sixteen hours long, and a
+   heartbeat that only fired on a detection could not tell a quiet night
+   from a dead Pi. "Has it stopped detecting?" is
+   `birdnet_detection_silence_seconds` and the detection deadman
+   (`DEADMAN_HOURS`); "is it degrading?" is the station-health alerts.
+   Three signals, three meanings; wire up all three.
 2. **`/api/v2/health`** — pulled by your monitoring (Uptime Kuma,
    Healthchecks remote endpoints, custom cron) over the LAN or via a
    port-forward.

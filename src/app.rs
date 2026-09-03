@@ -304,6 +304,15 @@ async fn serve(
         integrations::spawn_birdweather_drainer(state.clone(), bw.clone());
     }
 
+    // External liveness ping. Runs regardless of `--web-only`: "is this box
+    // still there" is a question a web-only station has too, and it is the only
+    // one of the three health signals that an outside observer can answer when
+    // the box is gone. See `integrations::heartbeat` for why it is a timer and
+    // not, as it was, a line inside the per-detection loop.
+    if let Some(hb) = heartbeat_client.clone() {
+        integrations::spawn_heartbeat(hb);
+    }
+
     // Detection deadman: end-to-end "is the station actually detecting?"
     // freshness gauge + once-per-episode alert. Resolution: CLI/env, then
     // the DEADMAN_HOURS config key, then the 24 h default; 0 disables the
@@ -374,7 +383,6 @@ async fn serve(
             apprise_client,
             birdweather_client,
             email_notifier,
-            heartbeat_client,
             mqtt_client,
             notification_filter,
             notification_template,

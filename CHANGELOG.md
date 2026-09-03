@@ -24,6 +24,54 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — the dead-man only fired when a bird sang
+
+`HEARTBEAT_URL` is the station's one *push-based* liveness signal: the only
+thing that can tell an operator 40 km away that the box is gone, because when
+the box is gone nothing on it can report anything and the alarm has to be the
+*absence* of an expected ping. It had exactly one call site in the workspace,
+inside the per-detection loop in `src/daemon/processor.rs`, after every early
+`continue`. A quiet night sent nothing.
+
+So the absence of a ping meant "the box is dead **or** no bird sang", and those
+cannot be told apart — which is fatal for the one signal whose entire job is
+that distinction. A grace period wide enough not to false-alarm on a December
+night at 55° N (sixteen hours of darkness, longer through a week of storms) is
+far too wide to notice a dead box; one tight enough to notice a dead box pages
+the operator every winter night until they mute the channel — the same channel
+that carries the detection deadman. `docs/book/field/deployment.md` recommended
+15 minutes, which is the second of those.
+
+The ping is now a five-minute timer, matching the deadman, station-health and
+acoustic-health loops, and fires once immediately at startup so a station coming
+back from a power cut clears its monitor within seconds. It is spawned whether
+or not `--web-only` is set: "is this box still there" is a question a web-only
+station has too. The heartbeat handle is no longer threaded through the
+detection daemon at all.
+
+Failures now use the same episode semantics as the other loops — one `warn!`
+when pinging starts failing, one when it recovers, `debug!` in between — instead
+of a `debug!` line per detection that nobody would ever read.
+
+Three signals, three meanings, and the manual now says so: this one is *"the box
+is there"*; `birdnet_detection_silence_seconds` and `DEADMAN_HOURS` are *"it has
+stopped detecting"*; the station-health alerts are *"it is degrading"*.
+
+Also: the ping URL is no longer logged in full. `https://hc-ping.com/<uuid>` is
+a bearer credential — anyone holding it can ping the monitor, which is exactly
+how you make a dead station look alive, and on Healthchecks.io it carries a
+`/fail` sibling that can page the operator at will. It was logged at `INFO` on
+every start and so reached `journal.log` inside every support bundle. Only
+`scheme://host` is logged now.
+
+Gates, each observed failing first: three loopback tests drive the real ping
+loop with no detection pipeline present. Against a stub with no loop — the old
+code's behaviour on a quiet station — all three fail; against a one-shot startup
+ping, the "a ping arrives" test passes and the "it repeats" and "a failing
+monitor does not stop the loop" tests fail, which is the discrimination that
+matters. Four more cover the URL redactor; against a redactor returning its
+input — the previous logging — three of them fail.
+
 ### Fixed — `/api/v2/metrics` was not a document a Prometheus parser accepts
 
 `birdnet_detections_total` was emitted **twice in one response body**: as an

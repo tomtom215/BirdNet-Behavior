@@ -29,7 +29,7 @@ pub use birdweather::create_birdweather_client;
 pub use deadman::{DEFAULT_DEADMAN_HOURS, spawn_detection_deadman};
 pub use effort::spawn_effort_recorder;
 pub use email::{EmailHandle, create_email_notifier};
-pub use heartbeat::{HeartbeatHandle, create_heartbeat_client};
+pub use heartbeat::{create_heartbeat_client, spawn_heartbeat};
 pub use mqtt::{MqttHandle, create_mqtt_client, get_mqtt_client_ref, publish_ha_discovery};
 pub use notification::{create_notification_filter, create_notification_template};
 pub use station_health::spawn_station_health;

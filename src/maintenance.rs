@@ -5,8 +5,7 @@
 //! module fills that gap with a single supervised tokio task that:
 //!
 //!   * Runs a **`PRAGMA integrity_check`** once per day at a fixed UTC
-//!     offset from boot, logging WARN on failure (also pinged to the
-//!     heartbeat URL in future versions).
+//!     offset from boot, logging WARN on failure.
 //!   * Prunes **expired login sessions** on the same daily tick so the
 //!     `sessions` table stays compact over months of continuous use.
 //!   * Runs **`VACUUM`** once per week to reclaim space from deletes

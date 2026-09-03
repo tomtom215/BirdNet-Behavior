@@ -21,7 +21,7 @@ use birdnet_core::audio::extraction::Extractor;
 use birdnet_integrations::notification::{NotificationFilter, NotificationTemplate};
 
 use crate::cli::Cli;
-use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
+use crate::integrations::{AppriseHandle, EmailHandle, MqttHandle};
 
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
@@ -107,7 +107,6 @@ pub fn start_detection_daemon(
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
-    heartbeat: Option<HeartbeatHandle>,
     mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
@@ -298,7 +297,6 @@ pub fn start_detection_daemon(
                     apprise,
                     birdweather,
                     email,
-                    heartbeat,
                     mqtt,
                     notification_filter,
                     notification_template,
@@ -441,7 +439,7 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, None, filter, template,
+            &cli, None, state, broadcast, None, None, None, None, filter, template,
         );
 
         assert!(
@@ -493,7 +491,7 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, None, filter, template,
+            &cli, None, state, broadcast, None, None, None, None, filter, template,
         );
 
         assert!(
@@ -527,7 +525,7 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, None, filter, template,
+            &cli, None, state, broadcast, None, None, None, None, filter, template,
         );
         assert!(
             handle.is_none(),
