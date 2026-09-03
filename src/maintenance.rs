@@ -782,12 +782,26 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
     }
 }
 
+/// Longest an offsite upload may take before the maintenance loop abandons it.
+///
+/// See the comment inside [`run_offsite`]: this is not a performance budget, it
+/// is the bound that stops one wedged transfer from being the last thing this
+/// loop ever does.
+const OFFSITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
 /// Send one freshly-created backup to the configured offsite destination.
 ///
 /// Best-effort, like every other job in this loop: a station that cannot reach
 /// its bucket must still VACUUM, still record birds, and still keep its local
 /// backups. The failure is logged at `warn` with the destination named, and
 /// `--doctor` reports the configuration that produced it.
+///
+/// That paragraph described an intention rather than a behaviour until the
+/// budget below existed. A station whose *upload wedged* — as opposed to
+/// failing — did not still VACUUM: this function was awaited inline with no
+/// bound, so one stalled socket was the last thing the maintenance loop ever
+/// did. The comment is kept because the intention was right; the timeout is
+/// what makes it true.
 ///
 /// The ciphertext is staged in the backup directory rather than `/tmp`, so it
 /// lands on the same filesystem as the snapshot it is a copy of: on a station
@@ -796,7 +810,38 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
 /// does not fail at all.
 async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) {
     let started = std::time::Instant::now();
-    match birdnet_integrations::offsite::run(config, backup, scratch).await {
+    // The last line of defence for the loop this runs inside.
+    //
+    // Each transport has its own stall detector now — a read timeout on the S3
+    // client, `ServerAliveInterval`/`ServerAliveCountMax` on the SFTP session —
+    // and each is the right instrument, because both bound *inactivity* and so
+    // leave a slow-but-progressing rural uplink alone. This bounds the whole
+    // job anyway, because the failure it guards against is not "the upload was
+    // slow" but "this loop never ran again": `run_offsite` is awaited inline
+    // and everything after it in `run_loop` — the daily integrity check,
+    // `VACUUM`, clip retention, the per-species cap, log retention — waits on
+    // it. A transport that finds a new way to hang must cost one weekly upload,
+    // not every remaining maintenance run.
+    //
+    // Two hours preserves the intent the transport timeouts also preserve: a
+    // station on a rural uplink may legitimately spend a long time on one
+    // upload. Nothing honest takes longer.
+    let outcome = tokio::time::timeout(
+        OFFSITE_BUDGET,
+        birdnet_integrations::offsite::run(config, backup, scratch),
+    )
+    .await;
+    let Ok(outcome) = outcome else {
+        tracing::warn!(
+            destination = %config.destination.describe(),
+            budget_s = OFFSITE_BUDGET.as_secs(),
+            elapsed_s = started.elapsed().as_secs(),
+            "offsite backup exceeded its budget and was abandoned; the local \
+             backup is unaffected and the rest of the maintenance run continues"
+        );
+        return;
+    };
+    match outcome {
         Ok(report) => tracing::info!(
             destination = %config.destination.describe(),
             uploaded = %report.uploaded,

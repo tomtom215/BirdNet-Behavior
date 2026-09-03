@@ -24,6 +24,61 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — one wedged upload was the last thing the maintenance loop ever did
+
+`offsite::s3::client()` set `connect_timeout(30 s)` and nothing else, under a
+comment that said so deliberately: *"No overall request timeout: a station on a
+rural uplink can legitimately spend an hour on one upload… A wedged connection
+is caught by this instead."*
+
+The first half of that reasoning is right and is kept. The last sentence was
+false. `connect_timeout` bounds the connect and TLS handshake only; a socket
+that *establishes* and then stalls part-way through — the ordinary 4G failure,
+and the ordinary behaviour of a middlebox that has dropped the flow without
+RST-ing — is not bounded by it at all. A probe against a server that sends
+headers, one byte, and then holds confirmed it: still waiting past 45 seconds.
+
+`run_offsite` is awaited **inline** in `src/maintenance.rs`'s single sequential
+loop, so one wedged socket stopped the daily `PRAGMA integrity_check`, `VACUUM`,
+the local backup, clip retention, the per-species cap and log retention — for
+the life of the process, with the `warn!` sitting on an error path that was
+never reached. Nothing logged it, because nothing failed. SFTP had the same
+shape: `ConnectTimeout=30` and a `child.wait_with_output()` with no timeout of
+its own.
+
+Three bounds, at three levels, each of which alone would have been enough and
+none of which is the same instrument:
+
+* **S3** gains a 120-second `read_timeout`. A read timeout is the right
+  instrument because it bounds *inactivity*: it resets on every successful
+  read, so a slow-but-progressing transfer is untouched however long it takes.
+  A total `timeout()` would have broken exactly the case the original comment
+  set out to protect.
+* **SFTP** gains `ServerAliveInterval=30` and `ServerAliveCountMax=6` —
+  OpenSSH's own stall detector, three minutes of complete silence. This is the
+  transport-level counterpart to the `BatchMode=yes` already there, which
+  closes the other way this hung: a prompt nobody would ever answer.
+* **The maintenance loop** wraps the whole job in a two-hour budget, because the
+  failure it guards against is not "the upload was slow" but "this loop never
+  ran again". A transport that finds a new way to hang must cost one weekly
+  upload, not every remaining maintenance run.
+
+`run_offsite`'s own doc comment already claimed that a station which cannot
+reach its bucket "must still VACUUM, still record birds, and still keep its
+local backups". That was an intention, not a behaviour. It is kept, with a note
+saying which of the two it was.
+
+Gates: four. The stall test drives the real constructor against a server that
+completes the handshake and then holds the socket, with a two-second timeout
+injected so it runs in seconds; against the previous `connect_timeout`-only
+client and the real 20-second budget it failed with *"the offsite client
+returned headers but then waited past 20s for a body that never came"*. Two
+counterparts — a server that answers promptly, and one that dribbles a byte
+every 400 ms for far longer than any single gap — both pass, which is what makes
+this a stall detector rather than a shorter deadline. The fourth pins the
+shipped constant, and the existing SFTP option test pins both keepalive options
+in the one place an option can go missing.
+
 ### Fixed — a zero-length database passed the integrity check
 
 SQLite opens a **zero-length file as a brand-new empty database**. That is by

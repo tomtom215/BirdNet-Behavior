@@ -52,6 +52,28 @@ pub const SFTP_BINARY: &str = "sftp";
 /// Seconds to wait for the TCP connection, passed through as `ConnectTimeout`.
 const CONNECT_TIMEOUT_SECS: u32 = 30;
 
+/// Seconds between SSH keepalive probes on an idle connection.
+///
+/// `ConnectTimeout` bounds the connect only. A session that establishes and
+/// then stalls — a 4G bearer that has lost its far side, a middlebox that has
+/// dropped the flow without RST-ing — is invisible to it, and the upload is
+/// awaited with `child.wait_with_output()`, which has no timeout of its own.
+/// One wedged session therefore stopped every other maintenance job for the
+/// life of the process.
+///
+/// `ServerAliveInterval` × `ServerAliveCountMax` is OpenSSH's own stall
+/// detector: probes that go unanswered this many times tear the session down.
+/// 30 × 6 = three minutes of complete silence, which is far longer than any
+/// legitimate gap in an SFTP transfer and far shorter than "for ever".
+///
+/// This is the transport-level counterpart to the `BatchMode=yes` below, which
+/// closes the *other* way this hung — a prompt nobody would ever answer.
+const SERVER_ALIVE_INTERVAL_SECS: u32 = 30;
+
+/// How many unanswered keepalives end the session. See
+/// [`SERVER_ALIVE_INTERVAL_SECS`].
+const SERVER_ALIVE_COUNT_MAX: u32 = 6;
+
 /// Suffix an in-flight upload carries until it is renamed into place.
 pub const PART_SUFFIX: &str = ".part";
 
@@ -269,6 +291,10 @@ impl SftpTarget {
             format!("UserKnownHostsFile={}", self.known_hosts.display()),
             "-o".to_owned(),
             format!("ConnectTimeout={CONNECT_TIMEOUT_SECS}"),
+            "-o".to_owned(),
+            format!("ServerAliveInterval={SERVER_ALIVE_INTERVAL_SECS}"),
+            "-o".to_owned(),
+            format!("ServerAliveCountMax={SERVER_ALIVE_COUNT_MAX}"),
         ]
     }
 
@@ -539,6 +565,12 @@ mod tests {
             "StrictHostKeyChecking=yes",
             "UserKnownHostsFile=/var/lib/birdnet/ssh/known_hosts",
             "ConnectTimeout=30",
+            // The stall detector. ConnectTimeout bounds the connect only, and
+            // the upload is awaited with no timeout of its own, so without
+            // these a session that establishes and then goes quiet stops every
+            // other maintenance job for the life of the process.
+            "ServerAliveInterval=30",
+            "ServerAliveCountMax=6",
             "-P 2222",
             "-i /var/lib/birdnet/ssh/id_ed25519",
         ] {

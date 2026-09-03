@@ -40,12 +40,37 @@ use super::sigv4::{self, Credentials, Request, hex};
 pub const MAX_SINGLE_PUT: u64 = 5 * 1024 * 1024 * 1024;
 
 /// How long to wait for the TCP connection and TLS handshake.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the transfer may make **no progress at all** before it is dead.
 ///
-/// No overall request timeout: a station on a rural uplink can legitimately
-/// spend an hour on one upload, and a deadline that killed it would turn a slow
-/// link into a station with no offsite backups at all. A wedged connection is
-/// caught by this instead.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Still no overall request timeout, and for the reason the previous comment
+/// gave: a station on a rural uplink can legitimately spend an hour on one
+/// upload, and a deadline that killed it would turn a slow link into a station
+/// with no offsite backups at all. That half was right.
+///
+/// What the previous comment got wrong was the sentence after it — "a wedged
+/// connection is caught by [`CONNECT_TIMEOUT`] instead". It is not.
+/// `connect_timeout` bounds the connect and handshake only; a socket that
+/// *establishes* and then stalls part-way through the exchange is not bounded
+/// by it at all, which a probe against a server that sends headers, one byte,
+/// and then holds confirmed by hanging past 45 seconds. That is the ordinary
+/// 4G failure and the ordinary behaviour of a middlebox that has lost the far
+/// side.
+///
+/// It mattered far beyond a missed upload: `run_offsite` is awaited inline in
+/// the single sequential maintenance loop, so one wedged socket stopped the
+/// daily integrity check, `VACUUM`, the local backup and every retention job
+/// for the life of the process — with the `warn!` sitting on an error path that
+/// was never reached.
+///
+/// A *read* timeout is the right instrument because it bounds inactivity rather
+/// than duration: it resets on every successful read, so a slow-but-progressing
+/// transfer is untouched however long it takes, while one that has gone quiet
+/// for two minutes is called dead. Two minutes is generous for the gap between
+/// the last byte of a `PUT` body and the first byte of the store's response,
+/// which is the longest legitimate silence in this protocol.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How a bucket is addressed in the URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,8 +475,22 @@ pub fn parse_error(xml: &str) -> (String, String) {
 ///
 /// [`S3Error::Transport`] if the TLS stack will not initialise.
 pub fn client() -> Result<reqwest::Client, S3Error> {
+    client_with_timeouts(CONNECT_TIMEOUT, READ_TIMEOUT)
+}
+
+/// [`client`] with the timeouts injected.
+///
+/// Exists so a test can watch the stall detector fire in two seconds rather
+/// than in two minutes. Production always goes through [`client`], which is a
+/// one-line delegation, so the two cannot drift apart.
+///
+/// # Errors
+///
+/// [`S3Error::Transport`] if the TLS stack will not initialise.
+pub fn client_with_timeouts(connect: Duration, read: Duration) -> Result<reqwest::Client, S3Error> {
     reqwest::Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
+        .connect_timeout(connect)
+        .read_timeout(read)
         .user_agent(concat!("BirdNet-Behavior/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| S3Error::Transport(e.to_string()))
