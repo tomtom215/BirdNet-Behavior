@@ -175,6 +175,16 @@ pub struct MetricsRegistry {
     /// readings it taught were unavailable. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`.
     detections_dropped: RwLock<HashMap<String, AtomicU64>>,
     /// Capture processes the supervisor has restarted, per source.
+    /// Audio files the detection pipeline finished analysing, by source.
+    ///
+    /// The one series that separates "the model is answering nothing" from
+    /// "the pipeline is not running". Every other signal is downstream of a
+    /// prediction the model actually made, so on a station with a wrong label
+    /// file, a wrong sample rate, or a model swapped by a bad update, all of
+    /// them are flat and empty — exactly as they are on a station where
+    /// inference never started. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
+    /// (OB-12).
+    files_analysed: RwLock<HashMap<String, AtomicU64>>,
     capture_restarts: RwLock<HashMap<String, AtomicU64>>,
     /// Capture processes found alive but producing no segments, per source.
     /// Distinct from a restart: this is the *diagnosis*, and a stall that keeps
@@ -215,6 +225,7 @@ impl MetricsRegistry {
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
             detections_dropped: RwLock::new(HashMap::new()),
+            files_analysed: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
             occurrence_filter_active: AtomicU64::new(0),
@@ -261,6 +272,17 @@ impl MetricsRegistry {
     /// label cardinality cannot grow with traffic.
     pub fn inc_detection_dropped(&self, reason: &str) {
         Self::bump(&self.detections_dropped, reason);
+    }
+
+    /// Record that the pipeline finished analysing one audio file.
+    ///
+    /// A healthy station analysing 15-second segments emits about 5 760 of
+    /// these a day per source, so a *flat* counter alongside
+    /// `birdnet_audio_source_up == 1` means capture is writing files nothing is
+    /// analysing, and a *rising* counter with no detections means the model is
+    /// answering nothing. Neither of those was distinguishable from outside.
+    pub fn inc_file_analysed(&self, source: &str) {
+        Self::bump(&self.files_analysed, source);
     }
 
     /// Record that a capture process was restarted.
@@ -445,6 +467,7 @@ impl MetricsRegistry {
             outbound_queue,
             detection_silence_secs: self.detection_silence_secs(),
             detections_dropped: Self::read_map(&self.detections_dropped),
+            files_analysed: Self::read_map(&self.files_analysed),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
             occurrence_filter_active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
@@ -486,6 +509,8 @@ pub struct MetricsSnapshot {
     pub detection_silence_secs: Option<u64>,
     /// Discarded classifications by reason.
     pub detections_dropped: Vec<(String, u64)>,
+    /// Audio files the pipeline finished analysing, per source.
+    pub files_analysed: Vec<(String, u64)>,
     /// Capture restarts per source.
     pub capture_restarts: Vec<(String, u64)>,
     /// Silent stalls diagnosed per source.
@@ -546,6 +571,16 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
             out,
             "birdnet_detections_dropped_total{{reason=\"{}\"}} {count}",
             escape_label(reason)
+        );
+    }
+
+    out.push_str("# HELP birdnet_files_analysed_total Audio files the detection pipeline finished analysing, per source. Flat while birdnet_audio_source_up is 1 means capture is writing files nothing analyses; rising with no detections means the model is answering nothing.\n");
+    out.push_str("# TYPE birdnet_files_analysed_total counter\n");
+    for (source, count) in &snap.files_analysed {
+        let _ = writeln!(
+            out,
+            "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
+            escape_label(source)
         );
     }
 
@@ -893,6 +928,67 @@ mod operational_metrics_tests {
         let reg = MetricsRegistry::new();
         f(&reg);
         render_runtime_metrics(&reg.snapshot())
+    }
+
+    /// The one series that separates "the model is answering nothing" from
+    /// "the pipeline is not running".
+    ///
+    /// Nothing counted throughput. `birdnet_inference_duration_seconds` is
+    /// observed once per **stored detection** — its own `# HELP` says so — so
+    /// on a station with a wrong label file, a wrong sample rate, or a model
+    /// swapped by a bad update, every latency series is flat and empty, exactly
+    /// as it is on a station where inference never started. The four
+    /// drop-reason labels do not separate them either: all of them live
+    /// downstream of a prediction the model actually made.
+    ///
+    /// Observed failing before `inc_file_analysed` existed: the exposition
+    /// carried no `birdnet_files_analysed_total` at all.
+    #[test]
+    fn analysed_files_are_counted_per_source() {
+        let out = rendered(|r| {
+            r.inc_file_analysed("local");
+            r.inc_file_analysed("local");
+            r.inc_file_analysed("cam1");
+        });
+        assert!(
+            out.contains(r#"birdnet_files_analysed_total{source="local"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_files_analysed_total{source="cam1"} 1"#),
+            "the per-source label is what tells a dead microphone on a \
+             two-source station from a dead pipeline: {out}"
+        );
+        assert!(
+            out.contains("# TYPE birdnet_files_analysed_total counter"),
+            "it must be declared, and as a counter: {out}"
+        );
+    }
+
+    /// The discrimination this series exists for, spelled out as an assertion:
+    /// a station that analysed files and detected nothing must look different
+    /// from one that analysed nothing.
+    #[test]
+    fn analysing_without_detecting_looks_different_from_not_analysing() {
+        let answering_nothing = rendered(|r| {
+            for _ in 0..10 {
+                r.inc_file_analysed("local");
+            }
+            // No detections, no latency observations — the exact state a wrong
+            // label file produces.
+        });
+        let not_running = rendered(|_| {});
+
+        assert!(answering_nothing.contains(r#"birdnet_files_analysed_total{source="local"} 10"#));
+        assert!(
+            !not_running.contains("birdnet_files_analysed_total{"),
+            "a station that analysed nothing must emit no sample for it"
+        );
+        assert_ne!(
+            answering_nothing, not_running,
+            "these two stations were indistinguishable from every series the \
+             exposition carried, which is the whole finding"
+        );
     }
 
     /// The gauge that would have made the inert-filter defect visible. Zero is

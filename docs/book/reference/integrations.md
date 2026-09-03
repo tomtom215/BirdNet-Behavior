@@ -58,6 +58,7 @@ With discovery enabled, the station publishes Home Assistant **MQTT discovery** 
 | `birdnet_species_distinct` | gauge | Distinct species detected, excluding rejected detections. |
 | `birdnet_inference_duration_seconds` | histogram | Per-chunk inference latency (decode → prediction). |
 | `birdnet_db_write_duration_seconds` | histogram | SQLite insert latency for one detection row. |
+| `birdnet_files_analysed_total` | counter | Audio files the pipeline finished analysing, labeled by `source`. **The series that separates "the model is answering nothing" from "the pipeline is not running"** — every other signal is downstream of a prediction the model made, so both states leave them flat and empty. A 15-second segment length gives about 5 760 a day per source. |
 | `birdnet_audio_source_up` | gauge | `1` if an audio source is producing samples, else `0`, labeled by `source` (e.g. `local`, `cam1`). One series per capture source. |
 | `birdnet_detection_silence_seconds` | gauge | Seconds since the most recent stored detection — the end-to-end "is it actually detecting?" freshness signal (see [System Health](../admin/system.md)). Absent until the first measurement / on a station with no detections yet. |
 | `birdnet_outbound_queue_depth` | gauge | Store-and-forward uploads parked for replay after a network failure, labeled by `kind` (e.g. `birdweather`). A depth that only grows means the uplink or token has been broken for a while. |
@@ -76,6 +77,15 @@ With discovery enabled, the station publishes Home Assistant **MQTT discovery** 
 > keeps the `_total` name that the convention reserves for it. Update any
 > dashboard or alert rule that referenced the old gauge names — the bundled
 > `docs/grafana-dashboard.json` already is.
+
+`GET /api/v2/health?strict=1` is the probe to point a **pager** at. The plain
+`/api/v2/health` answers `200` whenever the database is serving, which is right
+for the container health check — Docker restarts an unhealthy container, and a
+station whose detection daemon is down is exactly the one that must stay up to
+be diagnosed. The strict form additionally returns `503` when the detection
+daemon is not running, so a monitor that should wake a human can get a red out
+of the same endpoint. Both report `detection_daemon` and
+`detection_silence_secs` in the body either way.
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:

@@ -130,6 +130,84 @@ async fn health_endpoint_returns_healthy() {
     assert_eq!(json["database"], "unchecked");
 }
 
+/// A monitor must be able to get a **red** out of this endpoint for a station
+/// that is not detecting.
+///
+/// The status code used to be `db_ok` and nothing else, so `/api/v2/health`
+/// answered `200 "healthy"` on a station whose own response body said
+/// `"detection_daemon": "stopped"` — verified against the running binary. That
+/// is the endpoint the container `HEALTHCHECK` polls and the one every
+/// off-the-shelf monitor gets pointed at, so a station that had recorded
+/// nothing since March looked green to all of them.
+///
+/// Observed failing before `?strict`: the strict request returned 200.
+#[tokio::test]
+async fn strict_health_is_degraded_when_the_detection_daemon_is_not_running() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/health?strict=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a station with no detection daemon must be reportable as down"
+    );
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "degraded");
+    assert_eq!(json["detection_daemon"], "stopped");
+    assert_eq!(
+        json["strict"], true,
+        "the response must say which mode it answered in"
+    );
+}
+
+/// The discrimination, and the reason the default did not simply change.
+///
+/// Docker restarts an unhealthy container, and a station whose daemon is down is
+/// exactly the station that must stay up to be diagnosed — restarting it in a
+/// loop destroys the journal that says why. So the same station, asked without
+/// the flag, must still answer 200. A change that made every caller strict would
+/// pass the test above and put field stations into a restart loop.
+#[tokio::test]
+async fn the_default_health_probe_stays_green_so_the_container_is_not_restarted() {
+    for uri in [
+        "/api/v2/health",
+        "/api/v2/health?strict=0",
+        "/api/v2/health?strict=false",
+    ] {
+        let response = app()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "{uri} must stay 200 on a station whose daemon is not running"
+        );
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "healthy", "{uri}");
+        assert_eq!(
+            json["detection_daemon"], "stopped",
+            "{uri}: the body must still say so — the fact was always there, \
+             only the status code was not"
+        );
+    }
+}
+
 /// …and once the daily check has recorded a pass, it says so.
 ///
 /// The counterpart to the assertion above, so "unchecked" cannot quietly become

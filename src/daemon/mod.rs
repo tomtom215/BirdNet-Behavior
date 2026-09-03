@@ -261,6 +261,19 @@ pub fn start_detection_daemon(
                 move |active, candidates| metrics.set_occurrence_filter(active, candidates)
             },
         )),
+        // Count what the pipeline actually gets through. Nothing did, and
+        // without it a station whose model answers nothing is indistinguishable
+        // from one whose pipeline is not running: every other series is
+        // downstream of a prediction the model made, so both are flat and
+        // empty. The label is derived here rather than in `birdnet-core`
+        // because `derive_source_label` is the one place that knows the
+        // convention.
+        on_file_analysed: Some(birdnet_core::detection::daemon::ThroughputObserver::new({
+            let metrics = state.metrics();
+            move |path| {
+                metrics.inc_file_analysed(&crate::daemon::disposition::derive_source_label(path));
+            }
+        })),
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,

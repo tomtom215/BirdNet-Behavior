@@ -24,6 +24,52 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Added — the station can now say it has stopped detecting
+
+Two signals, because between them they separate the three states an outside
+observer previously could not tell apart.
+
+**`birdnet_files_analysed_total{source}`** counts audio files the pipeline
+finished analysing. Nothing counted throughput before.
+`birdnet_inference_duration_seconds` is observed once per *stored detection* —
+its own `# HELP` says so — so on a station with a wrong label file, a wrong
+sample rate, or a model swapped by a bad update, every latency series was flat
+and empty, **identical** to a station where inference never started. The four
+drop-reason labels did not separate them either: all of them live downstream of
+a prediction the model actually made.
+
+A 15-second segment length gives about 5 760 of these a day per source, so a
+flat counter alongside `birdnet_audio_source_up == 1` means capture is writing
+files nothing analyses, and a rising counter with no detections means the model
+is answering nothing.
+
+**`GET /api/v2/health?strict=1`** returns 503 when the detection daemon is not
+running. The status code used to be the database verdict and nothing else, so
+this endpoint answered `200 "healthy"` on a station whose own response body said
+`"detection_daemon": "stopped"`. That is the endpoint the container
+`HEALTHCHECK` polls and the one every off-the-shelf monitor gets pointed at.
+
+The default stays 200, deliberately. Docker restarts an unhealthy container, and
+a station whose daemon is down is exactly the one that must stay up to be
+diagnosed — restarting it in a loop destroys the journal that says why. The
+strict form is for the monitor that should wake a human, which is a different
+consumer with a different correct answer. Both report `detection_daemon` and
+`detection_silence_secs` in the body either way, and the response now echoes
+which mode it answered in.
+
+Gates: four. The two metric tests include the discrimination as an explicit
+assertion — a station that analysed ten files and detected nothing must not
+render identically to one that analysed none. The two health tests were observed
+failing against the previous status logic (`left: 200, right: 503`) and against
+a version that made every request strict (`left: 503, right: 200`), which is the
+change that would have put field stations into a restart loop.
+
+The `run.rs` call sites are not covered by a CI-runnable gate: reaching them
+needs the 541 MB model, the same limit `tests/species_filter_e2e.rs` documents
+for its own second layer. What keeps them honest is that both sit in the `Ok`
+arm of `process_and_infer_filtered`, so "analysed" cannot drift to mean
+"attempted". This is stated in the code rather than left to be discovered.
+
 ### Fixed — the installer deleted the working binary before writing the new one
 
 `install_binary` ended with `install -m 0755 src dst`. That is not atomic and

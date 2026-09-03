@@ -157,6 +157,7 @@ pub fn run_daemon(
     };
 
     let filter_observer = config.on_species_filter_state.clone();
+    let throughput = config.on_file_analysed.clone();
     if let Some(observer) = filter_observer.as_ref() {
         observer.report(species_filter.has_model(), None);
     }
@@ -261,6 +262,7 @@ pub fn run_daemon(
                 &chunk_filters,
                 &mut species_filter,
                 filter_observer.as_ref(),
+                throughput.as_ref(),
                 lat,
                 lon,
                 &event_tx,
@@ -351,6 +353,14 @@ pub fn run_daemon(
                     &correlation_id,
                 ) {
                     Ok(events) => {
+                        // Counted here and not before the call: this says
+                        // "analysed", and a file the pipeline failed on was
+                        // not. The counter is the only thing that separates a
+                        // model answering nothing from a pipeline that is not
+                        // running, so it must mean exactly one thing.
+                        if let Some(observer) = throughput.as_ref() {
+                            observer.analysed(&path);
+                        }
                         for event in events {
                             if event_tx.send(event).is_err() {
                                 tracing::warn!(
@@ -388,6 +398,7 @@ fn process_existing_files(
     chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&super::SpeciesFilterObserver>,
+    throughput: Option<&super::ThroughputObserver>,
     lat: Option<f64>,
     lon: Option<f64>,
     event_tx: &mpsc::SyncSender<DetectionEvent>,
@@ -428,6 +439,9 @@ fn process_existing_files(
             &correlation_id,
         ) {
             Ok(events) => {
+                if let Some(observer) = throughput {
+                    observer.analysed(&path);
+                }
                 for event in events {
                     // Surface a closed receiver instead of swallowing it: with
                     // the prior `let _ =` a consumer that dropped mid-backlog
@@ -493,6 +507,7 @@ mod tests {
             metadata_model_path: None,
             metadata_labels_path: None,
             on_species_filter_state: None,
+            on_file_analysed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

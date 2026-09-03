@@ -18,136 +18,260 @@
   ],
   "security": [],
   "tags": [
-    { "name": "system", "description": "Health, metrics and station status." },
-    { "name": "detections", "description": "The raw detection log." },
-    { "name": "species", "description": "Per-species rollups, search and images." },
-    { "name": "recordings", "description": "Saved audio clips and their spectrograms." },
-    { "name": "analytics", "description": "DuckDB behavioral analytics (sessions, retention, funnels, sequences)." },
-    { "name": "timeseries", "description": "DuckDB time-series aggregations (trend, diversity, peaks, gaps)." },
-    { "name": "export", "description": "Bulk export of detections and species." },
-    { "name": "meta", "description": "API metadata." }
+    {
+      "name": "system",
+      "description": "Health, metrics and station status."
+    },
+    {
+      "name": "detections",
+      "description": "The raw detection log."
+    },
+    {
+      "name": "species",
+      "description": "Per-species rollups, search and images."
+    },
+    {
+      "name": "recordings",
+      "description": "Saved audio clips and their spectrograms."
+    },
+    {
+      "name": "analytics",
+      "description": "DuckDB behavioral analytics (sessions, retention, funnels, sequences)."
+    },
+    {
+      "name": "timeseries",
+      "description": "DuckDB time-series aggregations (trend, diversity, peaks, gaps)."
+    },
+    {
+      "name": "export",
+      "description": "Bulk export of detections and species."
+    },
+    {
+      "name": "meta",
+      "description": "API metadata."
+    }
   ],
   "paths": {
     "/openapi.json": {
       "get": {
-        "tags": ["meta"],
+        "tags": [
+          "meta"
+        ],
         "summary": "This OpenAPI document",
         "description": "The machine-readable description of this API (this very document).",
         "operationId": "openapiSpec",
         "responses": {
           "200": {
             "description": "The OpenAPI 3.1 document.",
-            "content": { "application/json": { "schema": { "type": "object" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
         }
       }
     },
     "/health": {
       "get": {
-        "tags": ["system"],
+        "tags": [
+          "system"
+        ],
         "summary": "Liveness / health check",
-        "description": "Use for monitoring. `status` is `healthy` (HTTP 200) or `degraded` (HTTP 503 — the database integrity check failed), so an alert can key on the status code alone.",
+        "description": "Use for monitoring. `status` is `healthy` (HTTP 200) or `degraded` (HTTP 503), so an alert can key on the status code alone.\n\nWithout `strict`, only a database that is unreachable or has a recorded failed integrity check is degraded. This is the right answer for a container health check: Docker restarts an unhealthy container, and a station whose detection daemon is down is exactly the one that must stay up to be diagnosed.\n\nWith `strict`, a stopped detection daemon is degraded too. Point a pager at this form — otherwise a station that has recorded nothing for months answers 200.",
         "operationId": "health",
         "responses": {
           "200": {
             "description": "Station is healthy.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
           },
           "503": {
             "description": "Station is degraded (database integrity check failed).",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "strict",
+            "in": "query",
+            "required": false,
+            "description": "Also report 503 when the detection daemon is not running. Accepts an empty value, `1`, `true`, `yes` or `on`.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "1"
+          }
+        ]
       }
     },
     "/stats": {
       "get": {
-        "tags": ["system"],
+        "tags": [
+          "system"
+        ],
         "summary": "Summary counts",
         "description": "Total detections, unique species, the latest detection and a confidence distribution.",
         "operationId": "stats",
         "responses": {
           "200": {
             "description": "Summary statistics.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stats" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Stats"
+                }
+              }
+            }
           }
         }
       }
     },
     "/system/disk": {
       "get": {
-        "tags": ["system"],
+        "tags": [
+          "system"
+        ],
         "summary": "Disk usage",
         "description": "Disk usage for the volume holding the data directory.",
         "operationId": "diskInfo",
         "responses": {
           "200": {
             "description": "Disk usage.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DiskUsage" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiskUsage"
+                }
+              }
+            }
           },
           "503": {
             "description": "Disk is critically full.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DiskUsage" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiskUsage"
+                }
+              }
+            }
           }
         }
       }
     },
     "/metrics": {
       "get": {
-        "tags": ["system"],
+        "tags": [
+          "system"
+        ],
         "summary": "Prometheus metrics",
         "description": "Runtime metrics in the Prometheus text exposition format (not JSON).",
         "operationId": "metrics",
         "responses": {
           "200": {
             "description": "Prometheus metrics.",
-            "content": { "text/plain": { "schema": { "type": "string" } } }
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }
     },
     "/detections": {
       "get": {
-        "tags": ["detections"],
+        "tags": [
+          "detections"
+        ],
         "summary": "List detections",
         "description": "Paginated detection log, newest first. When `limit`/`offset` are supplied the response also carries `total_count`.",
         "operationId": "listDetections",
         "parameters": [
-          { "$ref": "#/components/parameters/Date" },
-          { "$ref": "#/components/parameters/Species" },
-          { "$ref": "#/components/parameters/Limit" },
-          { "$ref": "#/components/parameters/Offset" }
+          {
+            "$ref": "#/components/parameters/Date"
+          },
+          {
+            "$ref": "#/components/parameters/Species"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
         ],
         "responses": {
           "200": {
             "description": "A page of detections.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionList" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionList"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid `date` (expected YYYY-MM-DD).",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
     },
     "/detections/recent": {
       "get": {
-        "tags": ["detections"],
+        "tags": [
+          "detections"
+        ],
         "summary": "Most recent detections",
         "description": "The last N detections, newest first.",
         "operationId": "recentDetections",
-        "parameters": [ { "$ref": "#/components/parameters/Limit" } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Recent detections.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DetectionList" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionList"
+                }
+              }
+            }
           }
         }
       }
     },
     "/detections/daily": {
       "get": {
-        "tags": ["detections"],
+        "tags": [
+          "detections"
+        ],
         "summary": "Daily detection counts",
         "description": "Per-day detection totals over the last `days` days, for trend charts.",
         "operationId": "dailyDetections",
@@ -157,7 +281,13 @@
             "in": "query",
             "description": "How many days back to include (default 7, clamped to 365).",
             "required": false,
-            "schema": { "type": "integer", "format": "int32", "minimum": 1, "maximum": 365, "default": 7 }
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1,
+              "maximum": 365,
+              "default": 7
+            }
           }
         ],
         "responses": {
@@ -168,8 +298,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "daily": { "type": "array", "items": { "$ref": "#/components/schemas/DailyCount" } },
-                    "total": { "type": "integer" }
+                    "daily": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/DailyCount"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
                   }
                 }
               }
@@ -180,22 +317,36 @@
     },
     "/species/top": {
       "get": {
-        "tags": ["species"],
+        "tags": [
+          "species"
+        ],
         "summary": "Top species",
         "description": "Most-detected species with counts and mean confidence.",
         "operationId": "topSpecies",
-        "parameters": [ { "$ref": "#/components/parameters/Limit" } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Top species.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeciesList" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeciesList"
+                }
+              }
+            }
           }
         }
       }
     },
     "/species/search": {
       "get": {
-        "tags": ["species"],
+        "tags": [
+          "species"
+        ],
         "summary": "Search species",
         "description": "Case-insensitive search over common and scientific names.",
         "operationId": "searchSpecies",
@@ -205,25 +356,44 @@
             "in": "query",
             "description": "Search query (max 200 characters).",
             "required": true,
-            "schema": { "type": "string", "maxLength": 200 }
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
           },
-          { "$ref": "#/components/parameters/Limit" }
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
         ],
         "responses": {
           "200": {
             "description": "Matching species.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeciesList" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeciesList"
+                }
+              }
+            }
           },
           "400": {
             "description": "Query too long.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
     },
     "/species/detail": {
       "get": {
-        "tags": ["species"],
+        "tags": [
+          "species"
+        ],
         "summary": "Per-species detail",
         "description": "Summary statistics plus hourly activity for one species.",
         "operationId": "speciesDetail",
@@ -233,7 +403,9 @@
             "in": "query",
             "description": "Common or scientific name of the species.",
             "required": true,
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -244,8 +416,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "species": { "$ref": "#/components/schemas/SpeciesSummary" },
-                    "hourly_activity": { "type": "array", "items": { "$ref": "#/components/schemas/HourlyCount" } }
+                    "species": {
+                      "$ref": "#/components/schemas/SpeciesSummary"
+                    },
+                    "hourly_activity": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/HourlyCount"
+                      }
+                    }
                   }
                 }
               }
@@ -253,14 +432,22 @@
           },
           "404": {
             "description": "No such species.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
     },
     "/species/activity": {
       "get": {
-        "tags": ["species"],
+        "tags": [
+          "species"
+        ],
         "summary": "Hourly activity for a date",
         "description": "Detections per hour (00-23) across all species on a given calendar day.",
         "operationId": "hourlyActivity",
@@ -270,7 +457,10 @@
             "in": "query",
             "description": "Calendar day (YYYY-MM-DD).",
             "required": true,
-            "schema": { "type": "string", "format": "date" }
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
           }
         ],
         "responses": {
@@ -281,7 +471,12 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "activity": { "type": "array", "items": { "$ref": "#/components/schemas/HourlyCount" } }
+                    "activity": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/HourlyCount"
+                      }
+                    }
                   }
                 }
               }
@@ -289,69 +484,126 @@
           },
           "400": {
             "description": "Invalid `date`.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
     },
     "/species/image/{scientific_name}": {
       "get": {
-        "tags": ["species"],
+        "tags": [
+          "species"
+        ],
         "summary": "Species image metadata",
         "description": "Metadata for a cached Wikipedia/Wikimedia image of the species (URL, attribution, cache status). Fetches and caches on a miss.",
         "operationId": "speciesImageInfo",
-        "parameters": [ { "$ref": "#/components/parameters/ScientificName" } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ScientificName"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Image metadata.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpeciesImage" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeciesImage"
+                }
+              }
+            }
           }
         }
       }
     },
     "/species/image/{scientific_name}/file": {
       "get": {
-        "tags": ["species"],
+        "tags": [
+          "species"
+        ],
         "summary": "Species image bytes",
         "description": "The cached image itself. Checks a configured custom image directory first, then the Wikipedia cache.",
         "operationId": "speciesImageFile",
-        "parameters": [ { "$ref": "#/components/parameters/ScientificName" } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ScientificName"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Image bytes.",
             "content": {
-              "image/png": { "schema": { "type": "string", "format": "binary" } },
-              "image/jpeg": { "schema": { "type": "string", "format": "binary" } },
-              "image/webp": { "schema": { "type": "string", "format": "binary" } }
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           },
-          "404": { "description": "No cached image available." }
+          "404": {
+            "description": "No cached image available."
+          }
         }
       }
     },
     "/recordings": {
       "get": {
-        "tags": ["recordings"],
+        "tags": [
+          "recordings"
+        ],
         "summary": "List recordings",
         "description": "Audio clips in the recording directory, most-recently-modified first.",
         "operationId": "listRecordings",
         "parameters": [
-          { "$ref": "#/components/parameters/Species" },
+          {
+            "$ref": "#/components/parameters/Species"
+          },
           {
             "name": "limit",
             "in": "query",
             "description": "Maximum results (default 50, max 500).",
             "required": false,
-            "schema": { "type": "integer", "minimum": 0, "maximum": 500, "default": 50 }
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 500,
+              "default": 50
+            }
           },
-          { "$ref": "#/components/parameters/Offset" }
+          {
+            "$ref": "#/components/parameters/Offset"
+          }
         ],
         "responses": {
           "200": {
             "description": "Recording metadata.",
             "content": {
               "application/json": {
-                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/RecordingMeta" } }
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecordingMeta"
+                  }
+                }
               }
             }
           }
@@ -360,274 +612,961 @@
     },
     "/recordings/{filename}": {
       "get": {
-        "tags": ["recordings"],
+        "tags": [
+          "recordings"
+        ],
         "summary": "Stream a recording",
         "description": "Streams a single audio file, honouring HTTP `Range` requests (so an `<audio>` element can seek). The filename is the basename only; path separators and `..` are rejected.",
         "operationId": "serveRecording",
-        "parameters": [ { "$ref": "#/components/parameters/Filename" } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Filename"
+          }
+        ],
         "responses": {
           "200": {
             "description": "The full audio file.",
             "content": {
-              "audio/wav": { "schema": { "type": "string", "format": "binary" } },
-              "audio/mpeg": { "schema": { "type": "string", "format": "binary" } },
-              "audio/flac": { "schema": { "type": "string", "format": "binary" } }
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "audio/flac": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           },
-          "206": { "description": "A requested byte range (Range request)." },
-          "400": { "description": "Invalid filename." },
-          "404": { "description": "Recording not found." },
-          "416": { "description": "Requested range not satisfiable." }
+          "206": {
+            "description": "A requested byte range (Range request)."
+          },
+          "400": {
+            "description": "Invalid filename."
+          },
+          "404": {
+            "description": "Recording not found."
+          },
+          "416": {
+            "description": "Requested range not satisfiable."
+          }
         }
       }
     },
     "/spectrogram/{filename}": {
       "get": {
-        "tags": ["recordings"],
+        "tags": [
+          "recordings"
+        ],
         "summary": "Spectrogram PNG for a recording",
         "description": "Renders (and caches) a mel spectrogram PNG of a recording. Optional label parameters overlay the species, confidence and time.",
         "operationId": "serveSpectrogram",
         "parameters": [
-          { "$ref": "#/components/parameters/Filename" },
-          { "name": "species", "in": "query", "required": false, "description": "Overlay species label.", "schema": { "type": "string" } },
-          { "name": "confidence", "in": "query", "required": false, "description": "Overlay confidence (0-100).", "schema": { "type": "integer", "minimum": 0, "maximum": 100 } },
-          { "name": "time", "in": "query", "required": false, "description": "Overlay time label.", "schema": { "type": "string" } }
+          {
+            "$ref": "#/components/parameters/Filename"
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "Overlay species label.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "confidence",
+            "in": "query",
+            "required": false,
+            "description": "Overlay confidence (0-100).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "required": false,
+            "description": "Overlay time label.",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Spectrogram image.",
-            "content": { "image/png": { "schema": { "type": "string", "format": "binary" } } }
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
           },
-          "400": { "description": "Invalid filename." },
-          "404": { "description": "Recording not found." },
-          "422": { "description": "Could not render a spectrogram for this recording." },
-          "503": { "description": "Renderer temporarily unavailable (too many concurrent renders)." }
+          "400": {
+            "description": "Invalid filename."
+          },
+          "404": {
+            "description": "Recording not found."
+          },
+          "422": {
+            "description": "Could not render a spectrogram for this recording."
+          },
+          "503": {
+            "description": "Renderer temporarily unavailable (too many concurrent renders)."
+          }
         }
       }
     },
     "/analytics/sessions": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Detection sessions",
         "description": "Groups consecutive detections of a species into sessions split by an inactivity gap.",
         "operationId": "analyticsSessions",
         "parameters": [
-          { "$ref": "#/components/parameters/Species" },
-          { "name": "gap", "in": "query", "required": false, "description": "Inactivity gap, minutes, that ends a session.", "schema": { "type": "integer", "default": 30 } },
-          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "maximum": 10000, "default": 100 } }
+          {
+            "$ref": "#/components/parameters/Species"
+          },
+          {
+            "name": "gap",
+            "in": "query",
+            "required": false,
+            "description": "Inactivity gap, minutes, that ends a session.",
+            "schema": {
+              "type": "integer",
+              "default": 30
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "default": 100
+            }
+          }
         ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
       }
     },
     "/analytics/retention": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Retention analysis",
         "operationId": "analyticsRetention",
         "parameters": [
-          { "name": "min_detections", "in": "query", "required": false, "schema": { "type": "integer", "default": 5 } }
+          {
+            "name": "min_detections",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5
+            }
+          }
         ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
       }
     },
     "/analytics/funnel": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Window funnel",
         "description": "Ordered window-funnel over a comma-separated species list.",
         "operationId": "analyticsFunnel",
-        "parameters": [ { "$ref": "#/components/parameters/SpeciesList" }, { "$ref": "#/components/parameters/Window" }, { "$ref": "#/components/parameters/HourStart" }, { "$ref": "#/components/parameters/HourEnd" } ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } }
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpeciesList"
+          },
+          {
+            "$ref": "#/components/parameters/Window"
+          },
+          {
+            "$ref": "#/components/parameters/HourStart"
+          },
+          {
+            "$ref": "#/components/parameters/HourEnd"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
       }
     },
     "/analytics/funnel-events": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Window funnel events",
         "operationId": "analyticsFunnelEvents",
-        "parameters": [ { "$ref": "#/components/parameters/SpeciesList" }, { "$ref": "#/components/parameters/Window" }, { "$ref": "#/components/parameters/HourStart" }, { "$ref": "#/components/parameters/HourEnd" } ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } }
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpeciesList"
+          },
+          {
+            "$ref": "#/components/parameters/Window"
+          },
+          {
+            "$ref": "#/components/parameters/HourStart"
+          },
+          {
+            "$ref": "#/components/parameters/HourEnd"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
       }
     },
     "/analytics/patterns": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Sequence pattern matches",
         "operationId": "analyticsPatterns",
-        "parameters": [ { "$ref": "#/components/parameters/SpeciesList" }, { "$ref": "#/components/parameters/MaxGap" }, { "$ref": "#/components/parameters/HourStart" }, { "$ref": "#/components/parameters/HourEnd" } ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } }
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpeciesList"
+          },
+          {
+            "$ref": "#/components/parameters/MaxGap"
+          },
+          {
+            "$ref": "#/components/parameters/HourStart"
+          },
+          {
+            "$ref": "#/components/parameters/HourEnd"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
       }
     },
     "/analytics/sequence-count": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Sequence occurrence count",
         "operationId": "analyticsSequenceCount",
-        "parameters": [ { "$ref": "#/components/parameters/SpeciesList" }, { "$ref": "#/components/parameters/MaxGap" }, { "$ref": "#/components/parameters/HourStart" }, { "$ref": "#/components/parameters/HourEnd" } ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } }
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpeciesList"
+          },
+          {
+            "$ref": "#/components/parameters/MaxGap"
+          },
+          {
+            "$ref": "#/components/parameters/HourStart"
+          },
+          {
+            "$ref": "#/components/parameters/HourEnd"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
       }
     },
     "/analytics/sequence-match-events": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Sequence match events",
         "operationId": "analyticsSequenceMatchEvents",
-        "parameters": [ { "$ref": "#/components/parameters/SpeciesList" }, { "$ref": "#/components/parameters/MaxGap" }, { "$ref": "#/components/parameters/HourStart" }, { "$ref": "#/components/parameters/HourEnd" } ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } }
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SpeciesList"
+          },
+          {
+            "$ref": "#/components/parameters/MaxGap"
+          },
+          {
+            "$ref": "#/components/parameters/HourStart"
+          },
+          {
+            "$ref": "#/components/parameters/HourEnd"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
       }
     },
     "/analytics/next-species": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Predict the next species",
         "description": "Given a trigger species, the species most likely to be heard next within a time window.",
         "operationId": "analyticsNextSpecies",
         "parameters": [
-          { "name": "after", "in": "query", "required": true, "description": "Trigger species (common or scientific name).", "schema": { "type": "string" } },
-          { "name": "window", "in": "query", "required": false, "schema": { "type": "integer", "default": 60 } },
-          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "maximum": 1000, "default": 10 } }
+          {
+            "name": "after",
+            "in": "query",
+            "required": true,
+            "description": "Trigger species (common or scientific name).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 10
+            }
+          }
         ],
-        "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } }
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
       }
     },
     "/analytics/status": {
       "get": {
-        "tags": ["analytics"],
+        "tags": [
+          "analytics"
+        ],
         "summary": "Analytics engine status",
         "description": "Whether the DuckDB analytics engine is compiled in and configured. Always available.",
         "operationId": "analyticsStatus",
         "responses": {
           "200": {
             "description": "Analytics availability.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineStatus" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineStatus"
+                }
+              }
+            }
           }
         }
       }
     },
     "/timeseries/hourly": {
-      "get": { "tags": ["timeseries"], "summary": "Hourly activity", "operationId": "tsHourly", "parameters": [ { "$ref": "#/components/parameters/Days" }, { "$ref": "#/components/parameters/Species" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Hourly activity",
+        "operationId": "tsHourly",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Days"
+          },
+          {
+            "$ref": "#/components/parameters/Species"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/daily": {
-      "get": { "tags": ["timeseries"], "summary": "Daily activity", "operationId": "tsDaily", "parameters": [ { "$ref": "#/components/parameters/Days" }, { "$ref": "#/components/parameters/Species" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Daily activity",
+        "operationId": "tsDaily",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Days"
+          },
+          {
+            "$ref": "#/components/parameters/Species"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/weekly": {
-      "get": { "tags": ["timeseries"], "summary": "Weekly activity", "operationId": "tsWeekly", "parameters": [ { "$ref": "#/components/parameters/Weeks" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Weekly activity",
+        "operationId": "tsWeekly",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Weeks"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/heatmap": {
-      "get": { "tags": ["timeseries"], "summary": "Hour-by-day heatmap", "operationId": "tsHeatmap", "parameters": [ { "$ref": "#/components/parameters/Days" }, { "$ref": "#/components/parameters/Species" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Hour-by-day heatmap",
+        "operationId": "tsHeatmap",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Days"
+          },
+          {
+            "$ref": "#/components/parameters/Species"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/trend": {
-      "get": { "tags": ["timeseries"], "summary": "Moving-average trend", "operationId": "tsTrend", "parameters": [ { "$ref": "#/components/parameters/Window" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" }, { "$ref": "#/components/parameters/Species" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Moving-average trend",
+        "operationId": "tsTrend",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Window"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/Species"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/timeseries/anomalies": {
-      "get": { "tags": ["timeseries"], "summary": "Anomaly detection", "operationId": "tsAnomalies", "parameters": [ { "name": "z", "in": "query", "required": false, "description": "z-score threshold.", "schema": { "type": "number", "default": 2.0 } }, { "$ref": "#/components/parameters/Window" }, { "$ref": "#/components/parameters/Days" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Anomaly detection",
+        "operationId": "tsAnomalies",
+        "parameters": [
+          {
+            "name": "z",
+            "in": "query",
+            "required": false,
+            "description": "z-score threshold.",
+            "schema": {
+              "type": "number",
+              "default": 2.0
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Window"
+          },
+          {
+            "$ref": "#/components/parameters/Days"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/year-over-year": {
-      "get": { "tags": ["timeseries"], "summary": "Year-over-year comparison", "operationId": "tsYearOverYear", "parameters": [ { "$ref": "#/components/parameters/Weeks" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Year-over-year comparison",
+        "operationId": "tsYearOverYear",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Weeks"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/diversity": {
-      "get": { "tags": ["timeseries"], "summary": "Species diversity", "description": "Species richness and (optionally) Shannon diversity over time.", "operationId": "tsDiversity", "parameters": [ { "$ref": "#/components/parameters/Days" }, { "name": "shannon", "in": "query", "required": false, "schema": { "type": "boolean", "default": true } } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Species diversity",
+        "description": "Species richness and (optionally) Shannon diversity over time.",
+        "operationId": "tsDiversity",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Days"
+          },
+          {
+            "name": "shannon",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/accumulation": {
-      "get": { "tags": ["timeseries"], "summary": "Life-list accumulation curve", "operationId": "tsAccumulation", "parameters": [ { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Life-list accumulation curve",
+        "operationId": "tsAccumulation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/timeseries/peak-windows": {
-      "get": { "tags": ["timeseries"], "summary": "Peak activity windows", "operationId": "tsPeakWindows", "parameters": [ { "$ref": "#/components/parameters/Window" }, { "name": "hop", "in": "query", "required": false, "schema": { "type": "integer", "default": 5 } }, { "$ref": "#/components/parameters/Days" }, { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 10 } } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Peak activity windows",
+        "operationId": "tsPeakWindows",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Window"
+          },
+          {
+            "name": "hop",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 5
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Days"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          }
+        }
+      }
     },
     "/timeseries/sessions": {
-      "get": { "tags": ["timeseries"], "summary": "Activity sessions", "operationId": "tsSessions", "parameters": [ { "name": "gap", "in": "query", "required": false, "schema": { "type": "integer", "default": 30 } }, { "$ref": "#/components/parameters/Date" }, { "$ref": "#/components/parameters/Days" }, { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 100 } } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Activity sessions",
+        "operationId": "tsSessions",
+        "parameters": [
+          {
+            "name": "gap",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Date"
+          },
+          {
+            "$ref": "#/components/parameters/Days"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/timeseries/gaps": {
-      "get": { "tags": ["timeseries"], "summary": "Quiet gaps", "operationId": "tsGaps", "parameters": [ { "$ref": "#/components/parameters/Date" }, { "name": "threshold", "in": "query", "required": false, "schema": { "type": "integer", "default": 30 } }, { "$ref": "#/components/parameters/Days" } ], "responses": { "200": { "$ref": "#/components/responses/AnalyticsResult" }, "400": { "$ref": "#/components/responses/BadRequest" } } }
+      "get": {
+        "tags": [
+          "timeseries"
+        ],
+        "summary": "Quiet gaps",
+        "operationId": "tsGaps",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Date"
+          },
+          {
+            "name": "threshold",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Days"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     },
     "/timeseries/status": {
       "get": {
-        "tags": ["timeseries"],
+        "tags": [
+          "timeseries"
+        ],
         "summary": "Time-series engine status",
         "operationId": "tsStatus",
         "responses": {
           "200": {
             "description": "Time-series availability.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EngineStatus" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineStatus"
+                }
+              }
+            }
           }
         }
       }
     },
     "/detections/export": {
       "get": {
-        "tags": ["export"],
+        "tags": [
+          "export"
+        ],
         "summary": "Export detections",
         "description": "The full detection history as CSV (default) or JSON.",
         "operationId": "exportDetections",
-        "parameters": [ { "$ref": "#/components/parameters/Format" }, { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Format"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Exported detections.",
             "content": {
-              "text/csv": { "schema": { "type": "string" } },
-              "application/json": { "schema": { "$ref": "#/components/schemas/DetectionList" } }
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DetectionList"
+                }
+              }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "413": { "description": "Result set too large (over 1,000,000 rows)." }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "Result set too large (over 1,000,000 rows)."
+          }
         }
       }
     },
     "/species/export": {
       "get": {
-        "tags": ["export"],
+        "tags": [
+          "export"
+        ],
         "summary": "Export species",
         "description": "Species totals as CSV (default) or JSON.",
         "operationId": "exportSpecies",
-        "parameters": [ { "$ref": "#/components/parameters/Format" }, { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer", "default": 100000 } } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Format"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100000
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Exported species.",
             "content": {
-              "text/csv": { "schema": { "type": "string" } },
-              "application/json": { "schema": { "$ref": "#/components/schemas/SpeciesList" } }
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeciesList"
+                }
+              }
             }
           },
-          "413": { "description": "Result set too large (over 1,000,000 rows)." }
+          "413": {
+            "description": "Result set too large (over 1,000,000 rows)."
+          }
         }
       }
     },
     "/detections/export/ebird": {
       "get": {
-        "tags": ["export"],
+        "tags": [
+          "export"
+        ],
         "summary": "Export detections (eBird CSV)",
         "description": "An eBird Record Format CSV for one day, suitable for import into eBird.",
         "operationId": "exportEbird",
         "parameters": [
-          { "$ref": "#/components/parameters/Date" },
-          { "name": "lat", "in": "query", "required": false, "schema": { "type": "number" } },
-          { "name": "lon", "in": "query", "required": false, "schema": { "type": "number" } },
-          { "name": "location", "in": "query", "required": false, "schema": { "type": "string" } }
+          {
+            "$ref": "#/components/parameters/Date"
+          },
+          {
+            "name": "lat",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "lon",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
-          "200": { "description": "eBird CSV.", "content": { "text/csv": { "schema": { "type": "string" } } } },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "413": { "description": "Result set too large." }
+          "200": {
+            "description": "eBird CSV.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "Result set too large."
+          }
         }
       }
     },
     "/detections/export/birddb": {
       "get": {
-        "tags": ["export"],
+        "tags": [
+          "export"
+        ],
         "summary": "Export detections (BirdNET-Pi BirdDB.txt)",
         "description": "The BirdNET-Pi legacy `BirdDB.txt` tab-separated format, for tooling that expects it.",
         "operationId": "exportBirddb",
-        "parameters": [ { "$ref": "#/components/parameters/From" }, { "$ref": "#/components/parameters/To" } ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          }
+        ],
         "responses": {
-          "200": { "description": "BirdDB.txt.", "content": { "text/plain": { "schema": { "type": "string" } } } },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "413": { "description": "Result set too large." }
+          "200": {
+            "description": "BirdDB.txt.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "Result set too large."
+          }
         }
       }
     },
     "/languages": {
       "get": {
-        "tags": ["meta"],
+        "tags": [
+          "meta"
+        ],
         "summary": "Available languages",
         "description": "The installed common-name translation packs.",
         "operationId": "languages",
@@ -639,8 +1578,23 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "languages": { "type": "array", "items": { "type": "object", "properties": { "code": { "type": "string" }, "name": { "type": "string" } } } },
-                    "count": { "type": "integer" }
+                    "languages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
                   }
                 }
               }
@@ -652,27 +1606,188 @@
   },
   "components": {
     "parameters": {
-      "Limit": { "name": "limit", "in": "query", "required": false, "description": "Maximum number of results.", "schema": { "type": "integer", "format": "int32", "minimum": 0, "default": 20 } },
-      "Offset": { "name": "offset", "in": "query", "required": false, "description": "Number of results to skip (pagination).", "schema": { "type": "integer", "format": "int32", "minimum": 0, "default": 0 } },
-      "Date": { "name": "date", "in": "query", "required": false, "description": "Calendar day filter (YYYY-MM-DD).", "schema": { "type": "string", "format": "date" } },
-      "Species": { "name": "species", "in": "query", "required": false, "description": "Filter to one species (common or scientific name).", "schema": { "type": "string" } },
-      "SpeciesList": { "name": "species", "in": "query", "required": false, "description": "Comma-separated ordered species list.", "schema": { "type": "string" } },
-      "Days": { "name": "days", "in": "query", "required": false, "description": "How many days back to include.", "schema": { "type": "integer", "format": "int32", "minimum": 1 } },
-      "Weeks": { "name": "weeks", "in": "query", "required": false, "description": "How many weeks back to include.", "schema": { "type": "integer", "format": "int32", "minimum": 1, "default": 52 } },
-      "Window": { "name": "window", "in": "query", "required": false, "description": "Window size (minutes or samples, per endpoint).", "schema": { "type": "integer", "format": "int32", "minimum": 1 } },
-      "MaxGap": { "name": "max_gap", "in": "query", "required": false, "description": "Maximum gap, minutes, between steps in a sequence.", "schema": { "type": "integer", "format": "int32", "minimum": 1 } },
-      "HourStart": { "name": "hour_start", "in": "query", "required": false, "description": "Restrict to detections at or after this hour (0-23).", "schema": { "type": "integer", "minimum": 0, "maximum": 23 } },
-      "HourEnd": { "name": "hour_end", "in": "query", "required": false, "description": "Restrict to detections before this hour (0-23).", "schema": { "type": "integer", "minimum": 0, "maximum": 23 } },
-      "From": { "name": "from", "in": "query", "required": false, "description": "Start of the date range (YYYY-MM-DD).", "schema": { "type": "string", "format": "date" } },
-      "To": { "name": "to", "in": "query", "required": false, "description": "End of the date range (YYYY-MM-DD).", "schema": { "type": "string", "format": "date" } },
-      "Format": { "name": "format", "in": "query", "required": false, "description": "Output format.", "schema": { "type": "string", "enum": ["csv", "json"], "default": "csv" } },
-      "Filename": { "name": "filename", "in": "path", "required": true, "description": "Recording filename (basename only; no path separators or `..`).", "schema": { "type": "string" } },
-      "ScientificName": { "name": "scientific_name", "in": "path", "required": true, "description": "Scientific name of the species.", "schema": { "type": "string" } }
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "Maximum number of results.",
+        "schema": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 0,
+          "default": 20
+        }
+      },
+      "Offset": {
+        "name": "offset",
+        "in": "query",
+        "required": false,
+        "description": "Number of results to skip (pagination).",
+        "schema": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "Date": {
+        "name": "date",
+        "in": "query",
+        "required": false,
+        "description": "Calendar day filter (YYYY-MM-DD).",
+        "schema": {
+          "type": "string",
+          "format": "date"
+        }
+      },
+      "Species": {
+        "name": "species",
+        "in": "query",
+        "required": false,
+        "description": "Filter to one species (common or scientific name).",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "SpeciesList": {
+        "name": "species",
+        "in": "query",
+        "required": false,
+        "description": "Comma-separated ordered species list.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Days": {
+        "name": "days",
+        "in": "query",
+        "required": false,
+        "description": "How many days back to include.",
+        "schema": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 1
+        }
+      },
+      "Weeks": {
+        "name": "weeks",
+        "in": "query",
+        "required": false,
+        "description": "How many weeks back to include.",
+        "schema": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 1,
+          "default": 52
+        }
+      },
+      "Window": {
+        "name": "window",
+        "in": "query",
+        "required": false,
+        "description": "Window size (minutes or samples, per endpoint).",
+        "schema": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 1
+        }
+      },
+      "MaxGap": {
+        "name": "max_gap",
+        "in": "query",
+        "required": false,
+        "description": "Maximum gap, minutes, between steps in a sequence.",
+        "schema": {
+          "type": "integer",
+          "format": "int32",
+          "minimum": 1
+        }
+      },
+      "HourStart": {
+        "name": "hour_start",
+        "in": "query",
+        "required": false,
+        "description": "Restrict to detections at or after this hour (0-23).",
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 23
+        }
+      },
+      "HourEnd": {
+        "name": "hour_end",
+        "in": "query",
+        "required": false,
+        "description": "Restrict to detections before this hour (0-23).",
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 23
+        }
+      },
+      "From": {
+        "name": "from",
+        "in": "query",
+        "required": false,
+        "description": "Start of the date range (YYYY-MM-DD).",
+        "schema": {
+          "type": "string",
+          "format": "date"
+        }
+      },
+      "To": {
+        "name": "to",
+        "in": "query",
+        "required": false,
+        "description": "End of the date range (YYYY-MM-DD).",
+        "schema": {
+          "type": "string",
+          "format": "date"
+        }
+      },
+      "Format": {
+        "name": "format",
+        "in": "query",
+        "required": false,
+        "description": "Output format.",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "csv",
+            "json"
+          ],
+          "default": "csv"
+        }
+      },
+      "Filename": {
+        "name": "filename",
+        "in": "path",
+        "required": true,
+        "description": "Recording filename (basename only; no path separators or `..`).",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ScientificName": {
+        "name": "scientific_name",
+        "in": "path",
+        "required": true,
+        "description": "Scientific name of the species.",
+        "schema": {
+          "type": "string"
+        }
+      }
     },
     "responses": {
       "BadRequest": {
         "description": "Invalid request parameters.",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       },
       "AnalyticsResult": {
         "description": "Analytics result. The exact shape depends on the endpoint; each carries a top-level array of rows plus a `total` count. When the analytics engine is disabled the body is `{\"status\":\"unavailable\"}` instead.",
@@ -691,31 +1806,93 @@
       "Health": {
         "type": "object",
         "properties": {
-          "status": { "type": "string", "enum": ["healthy", "degraded"] },
-          "version": { "type": "string" },
-          "database": { "type": "string", "enum": ["ok", "unchecked", "error"], "examples": ["ok"] },
-          "analytics": { "type": "boolean" },
-          "detection_daemon": { "type": "string", "enum": ["running", "stopped"] },
-          "detection_silence_secs": { "type": ["integer", "null"], "description": "Seconds since the most recent stored detection, or null before the first measurement." }
+          "status": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unchecked",
+              "error"
+            ],
+            "examples": [
+              "ok"
+            ]
+          },
+          "analytics": {
+            "type": "boolean"
+          },
+          "detection_daemon": {
+            "type": "string",
+            "enum": [
+              "running",
+              "stopped"
+            ]
+          },
+          "detection_silence_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the most recent stored detection, or null before the first measurement."
+          },
+          "strict": {
+            "type": "boolean",
+            "description": "Which mode this response answered in."
+          }
         }
       },
       "Stats": {
         "type": "object",
         "properties": {
-          "total_detections": { "type": "integer" },
-          "unique_species": { "type": "integer" },
-          "latest_detection": { "type": ["object", "null"], "additionalProperties": true },
-          "confidence_distribution": { "type": "object", "additionalProperties": true }
+          "total_detections": {
+            "type": "integer"
+          },
+          "unique_species": {
+            "type": "integer"
+          },
+          "latest_detection": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "confidence_distribution": {
+            "type": "object",
+            "additionalProperties": true
+          }
         }
       },
       "DiskUsage": {
         "type": "object",
         "properties": {
-          "status": { "type": "string" },
-          "total_bytes": { "type": "integer", "format": "int64" },
-          "used_bytes": { "type": "integer", "format": "int64" },
-          "available_bytes": { "type": "integer", "format": "int64" },
-          "used_percent": { "type": "string" }
+          "status": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "available_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "used_percent": {
+            "type": "string"
+          }
         }
       },
       "EngineStatus": {
@@ -727,110 +1904,303 @@
         "type": "object",
         "description": "One detection. Optional fields are omitted when unknown (historical / imported rows).",
         "properties": {
-          "date": { "type": "string", "format": "date", "examples": ["2026-05-22"] },
-          "time": { "type": "string", "examples": ["21:10:31"] },
-          "sci_name": { "type": "string", "examples": ["Melospiza melodia"] },
-          "com_name": { "type": "string", "examples": ["Song Sparrow"] },
-          "confidence": { "type": "number", "format": "double", "minimum": 0, "maximum": 1 },
-          "lat": { "type": ["number", "null"] },
-          "lon": { "type": ["number", "null"] },
-          "cutoff": { "type": ["number", "null"] },
-          "week": { "type": ["integer", "null"] },
-          "sens": { "type": ["number", "null"] },
-          "overlap": { "type": ["number", "null"] },
-          "file_name": { "type": ["string", "null"] },
-          "correlation_id": { "type": "string" },
-          "source": { "type": "string", "description": "Audio source/stream label (e.g. `cam1` or `local`)." },
-          "duration_secs": { "type": "number", "description": "Length of the saved clip in seconds." }
+          "date": {
+            "type": "string",
+            "format": "date",
+            "examples": [
+              "2026-05-22"
+            ]
+          },
+          "time": {
+            "type": "string",
+            "examples": [
+              "21:10:31"
+            ]
+          },
+          "sci_name": {
+            "type": "string",
+            "examples": [
+              "Melospiza melodia"
+            ]
+          },
+          "com_name": {
+            "type": "string",
+            "examples": [
+              "Song Sparrow"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "lat": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lon": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cutoff": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "week": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sens": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "overlap": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "file_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "Audio source/stream label (e.g. `cam1` or `local`)."
+          },
+          "duration_secs": {
+            "type": "number",
+            "description": "Length of the saved clip in seconds."
+          }
         },
-        "required": ["date", "time", "sci_name", "com_name", "confidence"]
+        "required": [
+          "date",
+          "time",
+          "sci_name",
+          "com_name",
+          "confidence"
+        ]
       },
       "DetectionList": {
         "type": "object",
         "properties": {
-          "detections": { "type": "array", "items": { "$ref": "#/components/schemas/DetectionRow" } },
-          "count": { "type": "integer" },
-          "total": { "type": "integer" },
-          "total_count": { "type": "integer", "description": "Total matching rows (present on paginated responses)." },
-          "limit": { "type": "integer" },
-          "offset": { "type": "integer" }
+          "detections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetectionRow"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "total_count": {
+            "type": "integer",
+            "description": "Total matching rows (present on paginated responses)."
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          }
         },
-        "required": ["detections"]
+        "required": [
+          "detections"
+        ]
       },
       "SpeciesCount": {
         "type": "object",
         "properties": {
-          "com_name": { "type": "string" },
-          "sci_name": { "type": "string" },
-          "count": { "type": "integer" },
-          "avg_confidence": { "type": "number", "format": "double" }
+          "com_name": {
+            "type": "string"
+          },
+          "sci_name": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "avg_confidence": {
+            "type": "number",
+            "format": "double"
+          }
         },
-        "required": ["com_name", "sci_name", "count", "avg_confidence"]
+        "required": [
+          "com_name",
+          "sci_name",
+          "count",
+          "avg_confidence"
+        ]
       },
       "SpeciesList": {
         "type": "object",
         "properties": {
-          "species": { "type": "array", "items": { "$ref": "#/components/schemas/SpeciesCount" } },
-          "total": { "type": "integer" }
+          "species": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpeciesCount"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
         },
-        "required": ["species"]
+        "required": [
+          "species"
+        ]
       },
       "SpeciesSummary": {
         "type": "object",
         "properties": {
-          "com_name": { "type": "string" },
-          "sci_name": { "type": "string" },
-          "count": { "type": "integer" },
-          "avg_confidence": { "type": "number", "format": "double" },
-          "first_seen": { "type": "string", "format": "date" },
-          "last_seen": { "type": "string", "format": "date" }
+          "com_name": {
+            "type": "string"
+          },
+          "sci_name": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "avg_confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date"
+          }
         }
       },
       "HourlyCount": {
         "type": "object",
         "properties": {
-          "hour": { "type": "string", "examples": ["06"] },
-          "count": { "type": "integer" }
+          "hour": {
+            "type": "string",
+            "examples": [
+              "06"
+            ]
+          },
+          "count": {
+            "type": "integer"
+          }
         },
-        "required": ["hour", "count"]
+        "required": [
+          "hour",
+          "count"
+        ]
       },
       "DailyCount": {
         "type": "object",
         "properties": {
-          "date": { "type": "string", "format": "date" },
-          "count": { "type": "integer" }
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "count": {
+            "type": "integer"
+          }
         },
-        "required": ["date", "count"]
+        "required": [
+          "date",
+          "count"
+        ]
       },
       "RecordingMeta": {
         "type": "object",
         "properties": {
-          "filename": { "type": "string" },
-          "size_bytes": { "type": "integer", "format": "int64" },
-          "modified_secs": { "type": "integer", "format": "int64" },
-          "content_type": { "type": "string" }
+          "filename": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "modified_secs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_type": {
+            "type": "string"
+          }
         },
-        "required": ["filename", "size_bytes", "modified_secs", "content_type"]
+        "required": [
+          "filename",
+          "size_bytes",
+          "modified_secs",
+          "content_type"
+        ]
       },
       "SpeciesImage": {
         "type": "object",
         "properties": {
-          "status": { "type": "string" },
-          "scientific_name": { "type": "string" },
-          "url": { "type": "string" },
-          "cached": { "type": "boolean" },
-          "description": { "type": "string" },
-          "wiki_url": { "type": "string" },
-          "width": { "type": ["integer", "null"] }
+          "status": {
+            "type": "string"
+          },
+          "scientific_name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "cached": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "wiki_url": {
+            "type": "string"
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
         }
       },
       "Error": {
         "type": "object",
         "properties": {
-          "error": { "type": "string", "examples": ["not found"] },
-          "path": { "type": "string", "examples": ["/api/v2/nope"] }
+          "error": {
+            "type": "string",
+            "examples": [
+              "not found"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "examples": [
+              "/api/v2/nope"
+            ]
+          }
         },
-        "required": ["error"]
+        "required": [
+          "error"
+        ]
       }
     }
   }

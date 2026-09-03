@@ -163,7 +163,26 @@ pub(crate) fn db_health(state: &AppState) -> DbHealth {
     }
 }
 
-async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+/// Query parameters for [`health`].
+#[derive(Debug, Default, Deserialize)]
+pub struct HealthQuery {
+    /// When set, a stopped detection daemon is a 503 rather than body text.
+    #[serde(default)]
+    strict: Option<String>,
+}
+
+/// Is this truthy as a query flag? `?strict`, `?strict=1`, `?strict=true`.
+fn flag_is_set(v: Option<&String>) -> bool {
+    v.is_some_and(|s| {
+        let s = s.trim();
+        s.is_empty() || matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    })
+}
+
+async fn health(
+    State(state): State<AppState>,
+    Query(q): Query<HealthQuery>,
+) -> (StatusCode, Json<Value>) {
     let health = tokio::task::spawn_blocking({
         let state = state.clone();
         move || db_health(&state)
@@ -172,27 +191,46 @@ async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     .unwrap_or(DbHealth::Error);
     let db_ok = health.is_serving();
 
-    let status = if db_ok {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-
     // End-to-end freshness, fed by the deadman task (None until its first
     // pass, or on a station with no detections yet). Surfaced here so remote
     // monitors get "is it actually detecting" from the same probe they
     // already poll — the gap every per-component gauge leaves open.
     let detection_silence_secs = state.metrics().detection_silence_secs();
+    let daemon_running = state.detection_daemon_running();
+
+    // ## Why `?strict` and not a changed default
+    //
+    // The status code was `db_ok` and nothing else, so this endpoint answered
+    // `200 "healthy"` on a station whose own response body said
+    // `"detection_daemon": "stopped"` — verified against the running binary.
+    // That is the endpoint the container `HEALTHCHECK` polls and the one every
+    // off-the-shelf monitor gets pointed at, so a station that has recorded
+    // nothing since March looked green to all of them.
+    //
+    // The default stays 200 deliberately. Docker restarts an unhealthy
+    // container, and a station whose daemon is down is exactly the station that
+    // must stay up to be diagnosed — restarting it in a loop destroys the
+    // journal that says why. `?strict=1` is for the monitor that should page a
+    // human, which is a different consumer with a different correct answer.
+    let strict = flag_is_set(q.strict.as_ref());
+    let degraded = !db_ok || (strict && !daemon_running);
+
+    let status = if degraded {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
 
     (
         status,
         Json(json!({
-            "status": if db_ok { "healthy" } else { "degraded" },
+            "status": if degraded { "degraded" } else { "healthy" },
             "version": env!("CARGO_PKG_VERSION"),
             "database": health.as_str(),
             "analytics": state.has_analytics(),
-            "detection_daemon": if state.detection_daemon_running() { "running" } else { "stopped" },
+            "detection_daemon": if daemon_running { "running" } else { "stopped" },
             "detection_silence_secs": detection_silence_secs,
+            "strict": strict,
         })),
     )
 }
