@@ -53,7 +53,7 @@ looks healthy.
 | `GET /api/v2/health` | JSON liveness/health check (use for monitoring). |
 | `GET /api/v2/metrics` | Prometheus metrics (text format) — see [Integrations](./integrations.md#prometheus-metrics). |
 | `GET /api/v2/stats` | Summary counts (detections, species, today). |
-| `GET /api/v2/system/disk` | Disk usage for the data directory. |
+| `GET /api/v2/system/disk` | Disk usage for the data directory. Answers 503 when the disk is critical (95 % used) and 200 otherwise. Fullness is measured against the space this user can actually reach — `used / (used + available)`, the same figure `df`'s `Use%` column reports — not against the raw device size, which on any ext4 with its default 5 % root reserve, or inside a container quota, is larger than anything the station can use. |
 
 ## Detections
 

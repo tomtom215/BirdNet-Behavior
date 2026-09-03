@@ -44,14 +44,49 @@ impl DiskUsage {
         self.used_bytes as f64 / reachable as f64 * 100.0
     }
 
-    /// Whether the disk is critically low (< 5 % available).
-    pub const fn is_critical(&self) -> bool {
-        self.available_bytes < self.total_bytes / 20
+    /// Used percentage at or above which the disk is "critical".
+    ///
+    /// The same number as `DiskManagerConfig::purge_threshold`'s default, and
+    /// deliberately so: "critical" means the purger is now deleting
+    /// recordings to stay under it, which is a thing that has happened rather
+    /// than a thing that might.
+    pub const CRITICAL_PERCENT: f64 = 95.0;
+
+    /// Used percentage at or above which the disk is "getting low".
+    ///
+    /// Shared with the station-health disk condition, so the badge on the page
+    /// and the alert in the operator's inbox change colour at the same
+    /// reading. They used to agree only by coincidence.
+    pub const LOW_PERCENT: f64 = 90.0;
+
+    /// Whether the disk is critically full.
+    ///
+    /// # Why this reads `used_percent` rather than `available / total`
+    ///
+    /// It used to be `available_bytes < total_bytes / 20`, nine lines below a
+    /// doc comment forbidding exactly that denominator. The two disagree
+    /// whenever part of the device is invisible to this user — an ext4 root
+    /// reserve (5 % by default on every Pi image), a container quota, an
+    /// overlay — because there `total > used + available`.
+    ///
+    /// Measured on the filesystem this was written on: `df` reported 77 %
+    /// used, `used_percent()` agreed at 76.6 %, and `is_critical()` returned
+    /// **true**, because 8.5 GiB of available space is less than a twentieth
+    /// of a 252 GiB device that only has 37 GiB reachable. `/api/v2/system/disk`
+    /// therefore served HTTP 503 "critical" with a body saying 76.6 %. A
+    /// monitor pointed at that endpoint pages the operator on a healthy
+    /// station, which is how a channel gets muted before the real alert
+    /// arrives.
+    #[must_use]
+    pub fn is_critical(&self) -> bool {
+        self.used_percent() >= Self::CRITICAL_PERCENT
     }
 
-    /// Whether the disk is getting low (< 10 % available).
-    pub const fn is_low(&self) -> bool {
-        self.available_bytes < self.total_bytes / 10
+    /// Whether the disk is getting low. See [`Self::is_critical`] for why the
+    /// denominator is not `total_bytes`.
+    #[must_use]
+    pub fn is_low(&self) -> bool {
+        self.used_percent() >= Self::LOW_PERCENT
     }
 }
 
@@ -214,13 +249,31 @@ mod tests {
     /// user can reach — or the UI shows "11% used" beside "critically low".
     #[test]
     fn disk_usage_percent_with_reserved_space() {
+        // This test's second assertion was `assert!(u.is_critical(), "7/252
+        // available is critical")` — the same fixture, the opposite verdict.
+        // It encoded the defect rather than a requirement, and it is what made
+        // the defect look deliberate: a reader finding `available < total / 20`
+        // would see a passing test beside it and conclude the denominator was
+        // a choice.
+        //
+        // It is not a defensible one. The first assertion here says `df` would
+        // report this filesystem as 80 % used, so the station has a fifth of
+        // its reachable space free; calling that critical made
+        // `/api/v2/system/disk` answer HTTP 503 with a body saying 80 %, and a
+        // monitor polling it pages the operator on a healthy station. The
+        // fixture is kept and the assertion inverted, so the history shows
+        // which way this flipped.
         let u = DiskUsage {
             total_bytes: 252_000_000,
             used_bytes: 28_000_000,
             available_bytes: 7_000_000, // quota: most of "total" is unreachable
         };
         assert!((u.used_percent() - 80.0).abs() < 0.01);
-        assert!(u.is_critical(), "7/252 available is critical");
+        assert!(
+            !u.is_critical(),
+            "80 % used is not critical, whatever fraction of an unreachable \
+             `total` the available bytes happen to be"
+        );
     }
 
     /// Degenerate zero-sized readings must not divide by zero.
@@ -366,5 +419,148 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let removed = cleanup_old_recordings(dir.path(), 30).unwrap();
         assert_eq!(removed, 0);
+    }
+}
+
+#[cfg(test)]
+mod one_denominator {
+    //! Every disk verdict is measured against the space this user can reach.
+    //!
+    //! The three surfaces that grade a disk — the JSON endpoint's HTTP status,
+    //! the Station Health badge, and the operator alert — used to disagree,
+    //! because `used_percent()` divides by `used + available` while
+    //! `is_critical`/`is_low` divided by `total`. Those are the same number
+    //! only on a filesystem with nothing held back, which no ext4 default and
+    //! no container quota is.
+
+    use super::DiskUsage;
+
+    /// The filesystem this was written on: `df -Pk /` reported
+    /// 264 212 084 total, 29 896 308 used, 8 952 216 available (1 K blocks),
+    /// i.e. 77 % used with 85 % of the device unreachable.
+    fn quota_filesystem() -> DiskUsage {
+        DiskUsage {
+            total_bytes: 264_212_084 * 1024,
+            used_bytes: 29_896_308 * 1024,
+            available_bytes: 8_952_216 * 1024,
+        }
+    }
+
+    #[test]
+    fn a_quota_filesystem_is_not_graded_against_space_it_cannot_reach() {
+        // The reproduction. Against `available < total / 20` this returned
+        // critical, so `/api/v2/system/disk` served HTTP 503 with a body
+        // saying 76.6 % used — and a monitor pointed at it paged the operator
+        // about a healthy station.
+        let d = quota_filesystem();
+        let pct = d.used_percent();
+        assert!(
+            (76.0..77.0).contains(&pct),
+            "df said 77 %; used_percent says {pct:.1}"
+        );
+        assert!(
+            !d.is_critical(),
+            "a disk 76.6 % full is not critical (was: {} available < {} = total/20)",
+            d.available_bytes,
+            d.total_bytes / 20
+        );
+        assert!(!d.is_low(), "nor low");
+    }
+
+    #[test]
+    fn a_genuinely_full_disk_is_still_critical() {
+        // The counterpart that stops the fix being "return false always".
+        let d = DiskUsage {
+            total_bytes: 100,
+            used_bytes: 96,
+            available_bytes: 4,
+        };
+        assert!(d.is_critical(), "{:.1} %", d.used_percent());
+        assert!(d.is_low());
+    }
+
+    #[test]
+    fn a_full_disk_behind_a_root_reserve_is_still_critical() {
+        // The shape that matters on a Pi: ext4 holds back 5 %, so `total`
+        // exceeds `used + available` on a card that really is out of room.
+        // Both denominators call this critical, which is why it cannot stand
+        // in for the reproduction above — it is here to prove the fix did not
+        // simply stop reporting.
+        let d = DiskUsage {
+            total_bytes: 100,
+            used_bytes: 94,
+            available_bytes: 1,
+        };
+        assert!(d.total_bytes > d.used_bytes + d.available_bytes, "reserved");
+        assert!(d.is_critical(), "{:.1} %", d.used_percent());
+    }
+
+    #[test]
+    fn every_verdict_agrees_with_the_percentage_it_is_shown_beside() {
+        // The property, swept rather than sampled: whatever the shape of the
+        // filesystem — reserve, quota, neither — a verdict and the number
+        // rendered next to it must never contradict each other. This is the
+        // gate the three surfaces failed.
+        for total in [100_u64, 1_000, 264_212_084] {
+            for used in (0..=total).step_by((total / 37).max(1) as usize) {
+                for hidden_pct in [0_u64, 5, 50, 85] {
+                    let hidden = total * hidden_pct / 100;
+                    let Some(available) = total.checked_sub(used + hidden) else {
+                        continue;
+                    };
+                    let d = DiskUsage {
+                        total_bytes: total,
+                        used_bytes: used,
+                        available_bytes: available,
+                    };
+                    let pct = d.used_percent();
+                    assert_eq!(
+                        d.is_critical(),
+                        pct >= DiskUsage::CRITICAL_PERCENT,
+                        "critical disagrees with {pct:.2} % for {d:?}"
+                    );
+                    assert_eq!(
+                        d.is_low(),
+                        pct >= DiskUsage::LOW_PERCENT,
+                        "low disagrees with {pct:.2} % for {d:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The warning has to arrive before the deleting starts.
+    const _: () = assert!(DiskUsage::LOW_PERCENT < DiskUsage::CRITICAL_PERCENT);
+
+    #[test]
+    fn critical_means_the_purger_is_already_running() {
+        // "Critical" is not a spare adjective: it is the reading at which
+        // `DiskManagerConfig`'s default threshold starts deleting recordings.
+        // If these drift apart, the badge says critical while nothing is being
+        // purged, or recordings vanish while the page is still amber.
+        //
+        // Exact equality is right here: both sides are literal constants, not
+        // the result of any arithmetic.
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(
+                DiskUsage::CRITICAL_PERCENT,
+                f64::from(super::DiskManagerConfig::default().purge_threshold),
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_reading_is_not_a_full_disk() {
+        // `df` on a pseudo-filesystem can report zeroes. Dividing by
+        // `used + available` there must not produce a verdict at all.
+        let d = DiskUsage {
+            total_bytes: 0,
+            used_bytes: 0,
+            available_bytes: 0,
+        };
+        assert!(d.used_percent().abs() < f64::EPSILON);
+        assert!(!d.is_critical());
+        assert!(!d.is_low());
     }
 }

@@ -75,13 +75,15 @@ const REQUIRED_CONSECUTIVE_POLLS: u32 = 3;
 /// Minutes of continuous fault before an alert, for use in alert copy.
 const DEBOUNCE_MINUTES: u64 = (POLL_EVERY.as_secs() * REQUIRED_CONSECUTIVE_POLLS as u64) / 60;
 
-/// Disk usage at which recordings are being purged to make room.
+/// Disk usage at which the station is close enough to purging to say so.
 ///
-/// Matches the capture layer's own default purge threshold. Above this the
-/// station is still working, but it is discarding audio to stay alive — which
-/// is exactly the kind of degradation an operator would want to hear about
-/// while there is still time to fit a bigger card.
-const DISK_ALERT_PERCENT: f64 = 90.0;
+/// The same constant the disk badge on the Station Health page turns amber at,
+/// so the page and the operator's inbox change at one reading rather than
+/// agreeing by coincidence. This doc comment used to claim it "matches the
+/// capture layer's own default purge threshold"; that threshold is **95**, and
+/// the gap is the point — the alert has to arrive while there is still time to
+/// fit a bigger card, not once recordings are already being deleted.
+const DISK_ALERT_PERCENT: f64 = birdnet_core::audio::capture::DiskUsage::LOW_PERCENT;
 
 /// CPU temperature at which a Raspberry Pi begins throttling.
 ///

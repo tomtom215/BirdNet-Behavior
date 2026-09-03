@@ -24,6 +24,46 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — `/api/v2/system/disk` returned 503 "critical" on a disk it called 76 % full
+
+`used_percent()` carries a doc comment explaining, at length, that fullness is
+`used / (used + available)` and *not* `used / total`, because the two diverge
+whenever part of the device is invisible to this user. Nine lines below it,
+`is_critical` read `available_bytes < total_bytes / 20` and `is_low` read
+`available_bytes < total_bytes / 10`.
+
+Reproduced on the filesystem this was written on. `df -Pk /` reported 264 212 084
+blocks total, 29 896 308 used, 8 952 216 available — 77 % used, with 85 % of the
+device unreachable behind a quota. `used_percent()` agreed at 76.6 %.
+`is_critical()` returned **true**, because 8.5 GiB is less than a twentieth of a
+252 GiB device. So the endpoint served HTTP 503 with a body saying 76.6 %, and
+a monitor pointed at it pages the operator on a healthy station — which is how
+a channel gets muted before the real alert arrives. Every ext4 default has a
+5 % root reserve, so this is not an exotic shape; it is every Pi image.
+
+Both predicates now read `used_percent()`, and the thresholds are named:
+`DiskUsage::CRITICAL_PERCENT` (95) and `LOW_PERCENT` (90). Critical is the
+reading at which the purger starts deleting recordings — the same number as
+`DiskManagerConfig`'s default, now asserted rather than duplicated — and low is
+what the station-health alert and the Station Health badge both use, so the
+page and the operator's inbox change at one reading instead of agreeing by
+coincidence. The station-health constant's own doc comment claimed it "matches
+the capture layer's own default purge threshold"; that threshold is 95 and the
+constant was 90. The gap is right and the sentence was wrong: the warning has
+to arrive while there is still time to fit a bigger card.
+
+**An existing test asserted the defect.** `disk_usage_percent_with_reserved_space`
+built exactly this fixture, checked `used_percent()` was 80.0, and then asserted
+`is_critical()` — with the justification `"7/252 available is critical"`. That
+is what made `available < total / 20` look like a deliberate choice: a reader
+finding it would see a passing test beside it. The fixture is kept and the
+assertion inverted, so the history shows which way it flipped.
+
+Six gates, four mutations killed. The instructive one is the fourth: making
+`used_percent()` divide by `total` **as well** leaves the swept property gate
+green — two surfaces agreeing on the same wrong number is still agreement — and
+is caught only by the reproduction, which pins the answer to what `df` says.
+
 ### Added — a station now notices its own clock drifting
 
 Runtime clock correctness was never re-checked. `--doctor`'s clock checks run
