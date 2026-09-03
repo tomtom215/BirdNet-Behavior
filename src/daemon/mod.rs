@@ -62,6 +62,34 @@ mod test_support;
 /// consumer keeps up.
 const DETECTION_EVENT_CHANNEL_CAP: usize = 1024;
 
+/// Whether the dynamic-threshold feature is switched on but cannot change any
+/// decision at this global confidence.
+///
+/// The station warns in exactly this case: the operator has enabled the
+/// feature, and its floor sits at or above the global threshold, so every
+/// level is clamped straight back to where it started and no species is ever
+/// adjusted. Silent, and indistinguishable from "the birds just did not turn
+/// up".
+///
+/// # Why this is a named function and not the `if` it used to be
+///
+/// It was written inline as `enabled && !is_effective_at(confidence)`, in a
+/// branch whose only effect is a log line — so cargo-mutants could flip the
+/// `&&` to `||` (warn always) or drop the `!` (warn exactly when the feature
+/// *is* working) and no test could see it. Both survived a full CI run.
+///
+/// Naming it also removes a redundancy that the inline form hid.
+/// `is_effective_at` is itself `enabled && min < threshold`, so the leading
+/// `enabled &&` is doing less than it appears: the whole expression reduces to
+/// `enabled && min >= threshold`. The truth table in the tests states all four
+/// combinations rather than leaving that to be re-derived.
+fn is_enabled_but_inert(
+    config: birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig,
+    global_confidence: f32,
+) -> bool {
+    config.enabled && !config.is_effective_at(global_confidence)
+}
+
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
@@ -120,7 +148,7 @@ pub fn start_detection_daemon(
     // ones it exists to recover were discarded inside the model.
     let dynamic_config = crate::daemon::config::resolve_dynamic_threshold(config);
     let model_confidence = dynamic_config.model_floor(confidence);
-    if dynamic_config.enabled && !dynamic_config.is_effective_at(confidence) {
+    if is_enabled_but_inert(dynamic_config, confidence) {
         tracing::warn!(
             floor = dynamic_config.min,
             global = confidence,
@@ -297,6 +325,57 @@ pub fn start_detection_daemon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The full truth table for the "enabled but inert" warning.
+    ///
+    /// Both of this branch's mutants — `&&` to `||`, and dropping the `!` —
+    /// survived a complete CI run, because the branch only writes a log line
+    /// and nothing observed it. Stating all four combinations is what makes
+    /// each one visible:
+    ///
+    /// | enabled | floor below the global threshold | warn? |
+    /// |---------|----------------------------------|-------|
+    /// | no      | —                                | no    |
+    /// | yes     | yes (the feature works)          | no    |
+    /// | yes     | no, equal                        | yes   |
+    /// | yes     | no, above                        | yes   |
+    ///
+    /// `||` in place of `&&` makes the whole expression a tautology and warns
+    /// on row 1; dropping the `!` inverts rows 2 and 3.
+    #[test]
+    fn the_inert_warning_fires_only_when_the_feature_is_on_and_cannot_act() {
+        use birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig;
+        const GLOBAL: f32 = 0.7;
+        let cfg = |enabled: bool, min: f32| DynamicThresholdConfig {
+            enabled,
+            trigger: 0.9,
+            min,
+            valid_hours: 24,
+        };
+
+        assert!(
+            !is_enabled_but_inert(cfg(false, 0.3), GLOBAL),
+            "the feature is off; there is nothing to warn about"
+        );
+        assert!(
+            !is_enabled_but_inert(cfg(false, 0.9), GLOBAL),
+            "still off, even with a floor that would be inert if it were on"
+        );
+        assert!(
+            !is_enabled_but_inert(cfg(true, 0.3), GLOBAL),
+            "on, and the floor is below the global threshold — this is the \
+             working configuration and must stay silent"
+        );
+        assert!(
+            is_enabled_but_inert(cfg(true, GLOBAL), GLOBAL),
+            "a floor exactly at the global threshold adjusts nothing: `min < \
+             threshold` is false, so this must warn"
+        );
+        assert!(
+            is_enabled_but_inert(cfg(true, 0.9), GLOBAL),
+            "and a floor above it certainly must"
+        );
+    }
     use clap::Parser;
 
     // ── start_detection_daemon: in-process happy path ───────────────────
