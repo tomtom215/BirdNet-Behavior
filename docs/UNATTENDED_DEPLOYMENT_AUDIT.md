@@ -788,13 +788,27 @@ claimed as local results:
   tests`. Read that from the run, not from this sentence, before relying on
   it; and note it is a statement about `f33eb9e`, not about whatever is in
   your working tree.
-* `birdnet-behavior --doctor` exits **1**, not 0, in this container: 8 passed,
-  9 warnings, 0 errors. Exit 1 means "worst severity is Warn"
-  (`doctor/render.rs::summarise`), and the warnings are all
-  unconfigured-environment ones — no admin password, no audio source, no
-  HTTPS, no offsite backup, under 1 GiB free. Reaching 0 needs a configured
-  station, which this container is not. **Still true**, and still not to be
-  ticked off without one.
+
+  A container fact worth carrying: `typos`, `shellcheck` and `cargo-mutants`
+  are **not** in the base image either. They were installed by hand in this
+  session (`cargo install typos-cli`, `cargo install cargo-mutants`, and the
+  0.10.0 release tarball for `shellcheck`) and all three gates then pass
+  locally — `typos` 1.50.1 against `./.typos.toml`, `shellcheck` 0.10.0 at
+  `--severity=warning -x` over the 26 files CI checks, `cargo-mutants` 27.1.0.
+  A previous handoff recorded them as "installed here"; they are not, and the
+  next session will have to install them again before it can claim them.
+* `birdnet-behavior --doctor` exits **1**, not 0, in a container. Exit 1 means
+  "worst severity is Warn" (`doctor/render.rs::summarise`), and every warning
+  is an unconfigured-environment one. **Still true**, and still not to be
+  ticked off without a configured station.
+
+  The *counts* move with the container, so do not carry them forward: this
+  block recorded "8 passed, 9 warnings" and a re-run gives **9 passed, 8
+  warnings, 0 errors, 5 skipped**. The one that moved is `Disk space`, which
+  warned at under 1 GiB free on the earlier container and passes with 13 GiB
+  here. The eight warnings now are: configuration file, station location,
+  species occurrence filter, admin authentication, HTTPS, database directory,
+  offsite backup, audio source. Re-run it rather than quoting this list.
 
 ### What to do first
 
@@ -809,6 +823,75 @@ Stage 1 also still has 1.9 (`PS-5`), 1.10 (`PS-7`/`S-4`), 1.11 (`NT-4`
 remaining half) and 1.12 (`LC-2` remaining half) outstanding. Those are about
 *keeping the data*, which outranks everything in Stage 2 on a station that is
 already failing — take them first if you have no other reason to choose.
+
+### A gap in the mutation matrix — a proposal, not a change
+
+`.github/workflows/mutation.yml` has 25 rows covering **ten** file patterns:
+
+| Package | Pattern |
+|---|---|
+| `birdnet-core` | `config/validate.rs`, `inference/model.rs`, `audio/extraction/{extractor,convert}.rs`, `civil.rs` |
+| `birdnet-db` | `migration.rs`, `sqlite/queries/detections/*.rs` |
+| `birdnet-behavior` | `src/daemon/*.rs`, `src/capture/{schedule,supervisor}.rs` |
+
+**Nothing in `crates/birdnet-integrations/` or `src/integrations/` is mutated**,
+and both hold delivery decisions the covered code branches on.
+
+This is not hypothetical. In the previous pass a mutant survived at
+`src/daemon/processor.rs`'s `if !e.nothing_was_attempted()` call site. The
+tempting fix was to move the decision onto `AppriseError` as a positively-named
+predicate — which would have made the mutant **vanish by relocating it into an
+unmutated file**, turning the gate green while testing less. It was rejected and
+the test written instead, but the hazard is structural: `apprise.rs`'s
+`drop_reason` and `nothing_was_attempted`, and `announce.rs`'s `Outbox::settle`
+and `flush`, are exactly the shape of decision a survivor can be hidden in.
+
+Counts, from `cargo mutants --list --package P --file F | wc -l`
+(cargo-mutants 27.1.0), not estimated:
+
+| Package | File | Mutants |
+|---|---|---|
+| `birdnet-integrations` | `src/apprise.rs` | **93** |
+| `birdnet-integrations` | `src/dispatch/limit.rs` | 36 |
+| `birdnet-integrations` | `src/dispatch/parse.rs` | 23 |
+| `birdnet-integrations` | `src/dispatch/plan.rs` | 17 |
+| `birdnet-behavior` | `src/integrations/station_health.rs` | 65 |
+| `birdnet-behavior` | `src/integrations/acoustic_health.rs` | 55 |
+| `birdnet-behavior` | `src/integrations/reminder.rs` | 31 |
+| `birdnet-behavior` | `src/integrations/announce.rs` | 21 |
+| `birdnet-behavior` | `src/integrations/deadman.rs` | 16 |
+
+**The proposal, for the maintainer to accept or decline** — six new jobs is real
+CI time, and that is not a call to make unilaterally:
+
+* `crates/birdnet-integrations/src/apprise.rs`, **4 shards**. It is a library
+  row: `birdnet-integrations` depends on `birdnet-db` (bundled `rusqlite`) but
+  **not** on `birdnet-behavioral`, so no DuckDB and no ONNX are linked, and it
+  belongs in the same cost class as `db/migration.rs` — which the matrix sizes
+  at ~28 mutants a shard. 93 over 4 measures **24 24 24 21**
+  (`--list --shard k/4`, every shard non-empty); the empty-tail guard the CI
+  config check enforces is `3 × 24 = 72 < 93`. Three shards also works and
+  measures **31 31 31**, slightly above the documented slice size.
+* `src/integrations/announce.rs`, **2 shards**. A binary-crate row, so every
+  mutant relinks DuckDB and ONNX and the matrix sizes those at ~13 a shard. 21
+  over 2 measures **11 10**; guard `1 × 11 = 11 < 21`.
+
+Both need their paths adding to the workflow's two `paths:` filters as well, or
+a PR touching them will not run the job.
+
+Two things not measured here, and neither should be guessed at:
+
+* **Per-mutant wall-clock for these files.** No sweep was run — the container's
+  disk does not have room for `target/mutants` beside a 16 GB `target/`. The
+  shard counts above come from the matrix's own documented slice sizes, not from
+  a timing of these files.
+* **The first run is not a measurement.** The workflow's own comment on
+  `civil.rs` records that a *new* matrix label has no cache and restores an
+  arbitrary other row's `target/mutants/`; eight rows once spent 45 minutes each
+  learning that. Expect one bad run after adding these, and size nothing from it.
+
+The remaining files in the table are listed so the next person does not have to
+re-derive them, not as part of the proposal.
 
 ### Two claims in this document that were found to be wrong
 
