@@ -845,6 +845,81 @@ describe_existing_install() {
 # single SHA256SUMS file is attached to each GitHub Release for verification.
 # ---------------------------------------------------------------------------
 
+
+# Put the new binary in place without the path ever being absent or short.
+#
+# `install -m 0755 src dst` is not atomic and does not fsync. Traced with
+# strace, it does:
+#
+#     unlinkat(AT_FDCWD, "dst", 0)                            = 0
+#     openat(AT_FDCWD, "src", O_RDONLY)                       = 3
+#     openat(AT_FDCWD, "dst", O_WRONLY|O_CREAT|O_EXCL, 0600)  = 4
+#
+# — the working binary is unlinked *first*, then a fresh file is created at the
+# same path and filled. Writing ~100 MB to an SD card is a multi-second window,
+# and an upgrade is exactly when a solar or battery-backed box browns out.
+# Afterwards `ExecStartPre` and `ExecStart` both fail, `Restart=always` with
+# `StartLimitIntervalSec=0` retries every five minutes for ever, there is no web
+# UI left to say so, and the previous binary was deleted rather than kept.
+#
+# That last part also made the *documented* recovery impossible:
+# `docs/book/field/deployment.md` tells operators to "keep the previous binary
+# in ${INSTALL_DIR}/${BINARY_NAME}.prev so a one-line `mv` rollback is
+# possible", and nothing in the product ever created that file.
+#
+# So: keep the old one as `.prev`, write the new one beside it, flush it,
+# prove it runs, and `mv` — `rename(2)` within one filesystem is atomic, so a
+# reader either sees the whole old binary or the whole new one and never a hole.
+#
+# The in-tree Rust updater (`crates/birdnet-integrations/src/auto_update/`)
+# already does exactly this. The installer, which is the path every real
+# upgrade takes, did none of it.
+install_binary_atomically() {
+    local src="$1"
+    local dst="${INSTALL_DIR}/${BINARY_NAME}"
+    local staged="${dst}.new.$$"
+    local prev="${dst}.prev"
+
+    # Keep the outgoing binary before anything touches the path. `cp` rather
+    # than `mv` so the live path stays valid until the rename below.
+    if [ -f "${dst}" ]; then
+        if cp -f "${dst}" "${prev}" 2>/dev/null; then
+            chmod 0755 "${prev}" 2>/dev/null || true
+        else
+            warn "Could not save the previous binary to ${prev}; rollback will not be available."
+        fi
+    fi
+
+    if ! install -m 0755 "${src}" "${staged}"; then
+        rm -f "${staged}"
+        fatal "Could not write the new binary to ${staged}."
+    fi
+
+    # Get it onto the medium before it becomes the live path. Without this a
+    # completed install can still be partially persisted when the power goes a
+    # moment later, which is the same failure with a longer fuse.
+    sync "${staged}" 2>/dev/null || sync || true
+
+    # Prove it runs before it becomes the thing that has to run. Catches a
+    # wrong architecture, a truncated extraction, and a missing shared library
+    # — while the working binary is still one `mv` away.
+    if ! "${staged}" --version >/dev/null 2>&1; then
+        rm -f "${staged}"
+        fatal "The new binary would not start (\`${BINARY_NAME} --version\` failed); \
+keeping the existing one at ${dst}."
+    fi
+
+    if ! mv -f "${staged}" "${dst}"; then
+        rm -f "${staged}"
+        fatal "Could not move the new binary into place at ${dst}."
+    fi
+
+    success "Binary installed to ${dst}"
+    if [ -f "${prev}" ]; then
+        info "Previous binary kept at ${prev} — roll back with: sudo mv ${prev} ${dst} && sudo systemctl restart ${SERVICE_NAME}"
+    fi
+}
+
 install_binary() {
     local version="$1"
     local arch="$2"
@@ -957,8 +1032,7 @@ install_binary() {
     # remaining obstacle is ETXTBSY, which is what the stop is for.
     stop_running_service_for_swap
 
-    install -m 0755 "${extracted_binary}" "${INSTALL_DIR}/${BINARY_NAME}"
-    success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
+    install_binary_atomically "${extracted_binary}"
 
     # Install the bundled operator manual (mdBook) if this release ships it, so
     # the dashboard's /help/* links work fully offline. The service points
@@ -1089,13 +1163,49 @@ geomodel_origins() {
         "upstream birdnet-team/geomodel ${GEOMODEL_VERSION}" "${GEOMODEL_UPSTREAM_BASE}/${filename}"
 }
 
+# Is FILE present *and* the file it claims to be?
+#
+# The distinction this draws is the whole finding. Every guard here used to ask
+# `[ -f "${dest}" ]`, and a partial download is a file. So:
+#
+#   1. a 541 MB fetch drops at 60 % and `fetch_verified_model` fails;
+#   2. the failure path deliberately KEEPS the partial and prints "Re-run this
+#      installer to resume from where it stopped";
+#   3. the operator re-runs, and the presence guard skips the fetch entirely;
+#   4. the installer prints "Model already downloaded — skipping" and
+#      "Validation passed";
+#   5. `--doctor` passes it, because `src/doctor/model.rs` accepts any file over
+#      one megabyte;
+#   6. the daemon logs "failed to start detection daemon", returns `None`, and
+#      `app.rs` carries on and serves the web UI;
+#   7. `/api/v2/health` answers `200 "healthy"`, because its status is SQLite's
+#      and nothing else.
+#
+# The operator seals the box, drives it forty kilometres out, and gets a green
+# dashboard that never records a bird. Reproduced end to end against the real
+# `download_model` with only the network helpers stubbed: `exit=0`, one call
+# (for the labels), model left at 29 bytes.
+#
+# Presence is not verification. Costs one sha256 of the cached file per install
+# or repair run, which is seconds even on a Pi, and is the only thing that can
+# tell a finished download from an abandoned one.
+model_file_is_verified() {
+    local file="$1" expected="$2"
+    [ -f "${file}" ] || return 1
+    verify_model_sha256 "${file}" "${expected}"
+}
+
 download_model() {
     local model_dest="${MODEL_DIR}/${MODEL_FILE}"
     local labels_dest="${MODEL_DIR}/${LABELS_FILE}"
 
-    # Skip if already present (re-running installer).
-    if [ -f "${model_dest}" ] && [ -f "${labels_dest}" ]; then
-        success "Model already downloaded at ${MODEL_DIR} — skipping."
+    # Skip only if both files are present *and* verify. See
+    # `model_file_is_verified`: a partial download is a file, and this guard
+    # asking only whether one existed is what let a truncated model survive
+    # every re-run, every repair and every downstream check.
+    if model_file_is_verified "${model_dest}" "${MODEL_SHA256}" &&
+       model_file_is_verified "${labels_dest}" "${LABELS_SHA256}"; then
+        success "Model already downloaded and verified at ${MODEL_DIR} — skipping."
         return
     fi
 
@@ -1121,7 +1231,7 @@ download_model() {
 
     # Model (~541 MB) — resumable so a dropped connection picks up where it left
     # off on the next run instead of restarting from 0 MB.
-    if [ ! -f "${model_dest}" ]; then
+    if ! model_file_is_verified "${model_dest}" "${MODEL_SHA256}"; then
         local model_origins
         mapfile -t model_origins < <(classifier_origins "${MODEL_FILE}")
         if ! fetch_verified_model "${model_dest}" "${MODEL_SHA256}" \
@@ -1129,7 +1239,9 @@ download_model() {
             warn "Model download failed or could not be verified from any source."
             warn "Any partial file is kept at:"
             warn "  ${model_dest}"
-            warn "Re-run this installer to resume from where it stopped."
+            warn "Re-run this installer to resume from where it stopped — the"
+            warn "guard above checks the checksum, not merely that a file exists,"
+            warn "so a partial is resumed rather than mistaken for a finished one."
             warn "Common causes: no internet connection, GitHub/Zenodo temporarily"
             warn "down, or disk full."
             fatal "Model download failed. Check the cause above and retry."
@@ -1139,7 +1251,7 @@ download_model() {
     fi
 
     # Labels (small file — no resume needed).
-    if [ ! -f "${labels_dest}" ]; then
+    if ! model_file_is_verified "${labels_dest}" "${LABELS_SHA256}"; then
         local labels_origins
         mapfile -t labels_origins < <(classifier_origins "${LABELS_FILE}")
         if ! fetch_verified_model "${labels_dest}" "${LABELS_SHA256}" \
@@ -2335,12 +2447,14 @@ do_repair() {
     create_directories
     setup_tmpfs_streaming
 
-    if [ -f "${MODEL_DIR}/${MODEL_FILE}" ] && [ -f "${MODEL_DIR}/${LABELS_FILE}" ]; then
-        success "Model present — skipping download."
-    else
-        warn "Model files missing — downloading."
-        download_model
-    fi
+    # `repair` is the documented wizard for a broken install, so it must be
+    # able to repair the commonest broken install there is: a model whose
+    # download was interrupted. It used to check presence only, print "Model
+    # present — skipping download", and compute no checksum — so the one
+    # subcommand named for fixing this could not fix it. `download_model`'s own
+    # guard now verifies, so handing the decision to it is both correct and one
+    # fewer place for the two to disagree.
+    download_model
 
     # A repair run is how a station installed before the geomodel shipped picks
     # it up: download_geomodel is a no-op when both files are already there.

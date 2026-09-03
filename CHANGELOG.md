@@ -24,6 +24,80 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — the installer deleted the working binary before writing the new one
+
+`install_binary` ended with `install -m 0755 src dst`. That is not atomic and
+does not fsync. Traced with `strace`:
+
+```text
+unlinkat(AT_FDCWD, "dst", 0)                            = 0
+openat(AT_FDCWD, "src", O_RDONLY)                       = 3
+openat(AT_FDCWD, "dst", O_WRONLY|O_CREAT|O_EXCL, 0600)  = 4
+```
+
+The working binary is unlinked **first**, then a fresh file is created at the
+same path and filled. Writing ~100 MB to an SD card is a multi-second window,
+and an upgrade is exactly when a solar or battery-backed box browns out.
+Afterwards `ExecStartPre` and `ExecStart` both fail, `Restart=always` with
+`StartLimitIntervalSec=0` retries every five minutes for ever, there is no web
+UI left to say so, and the previous binary was deleted rather than kept.
+
+That last part also made the *documented* recovery impossible.
+`docs/book/field/deployment.md` tells operators to keep the previous binary at
+`.prev` "so a one-line `mv` rollback is possible". Nothing in the product ever
+created that file.
+
+The swap now copies the outgoing binary to `.prev`, writes the new one to a
+sibling temp path, `sync`s it, runs `--version` against it, and `mv`s it into
+place — `rename(2)` within one filesystem is atomic, so a reader sees either the
+whole old binary or the whole new one and never a hole. The smoke test catches a
+wrong architecture, a truncated extraction and a missing shared library while
+the working binary is still one `mv` away. The in-tree Rust updater already did
+all of this; the installer, which is the path every real upgrade takes, did none
+of it.
+
+Gate: `installer/test/binary-swap-atomicity.sh`, driving the shipping function.
+Against `install -m 0755`, seven of its ten assertions fail, including *"the
+live binary was unlinked; a power cut here leaves no binary at all"* and *"the
+working binary was replaced by one that cannot start"*.
+
+### Fixed — a partial model download was never resumed and never verified
+
+Every guard around the model asked `[ -f "${dest}" ]`, and a partial download is
+a file. So a 541 MB fetch drops at 60 %; `fetch_verified_model` fails; the
+failure path deliberately **keeps** the partial and prints *"Re-run this
+installer to resume from where it stopped"*; the operator re-runs; and the
+presence guard skips the fetch entirely. The installer then reports *"Model
+already downloaded — skipping"* and *"Validation passed"*.
+
+`install.sh repair` — the documented wizard for a broken install — said *"Model
+present — skipping download"* and computed no checksum, so the one subcommand
+named for fixing this could not fix it. And four downstream checks pass on a
+200 MB truncation of a 541 MB file: `--doctor` accepts any model file over
+**one megabyte**, `validate_install` takes the doctor's exit code, the daemon
+logs a failure and carries on serving the web UI, and `/api/v2/health` answers
+`200 "healthy"` because its status is SQLite's and nothing else.
+
+The operator seals the box, drives it forty kilometres out, and gets a green
+dashboard that never records a bird.
+
+Every guard now verifies the pinned sha256 rather than asking whether a file
+exists, so a partial is resumed — `fetch_verified_model` already passes
+`curl -C -` — instead of being mistaken for a finished download. `repair` hands
+the decision to `download_model` rather than keeping a second, weaker copy of
+it. Presence is not verification; the cost is one checksum of the cached file
+per install or repair run.
+
+Gate: `installer/test/model-resume.sh`, driving the shipping `download_model`
+with only the network stubbed. Against the presence-only guards it fails with
+*"the truncated model was skipped — this is the defect"* for both the model and
+the labels, while the counterpart — a verified model must **not** be
+re-downloaded, or every re-run costs 541 MB — passes either way and is what
+makes the fix a verification rather than an unconditional refetch.
+
+Both new tests are registered in `installer/test/run-ci.sh`, whose accounting
+rule fails the suite if a test file is neither run nor excluded with a reason.
+
 ### Fixed — detections recorded before the clock was set were filed under 1970, permanently
 
 A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the epoch;

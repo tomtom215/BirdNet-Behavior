@@ -62,10 +62,15 @@ run_install_binary() {
 
     (
         set -euo pipefail
-        # The real function, sourced from the real module, so this test cannot
+        # The real functions, sourced from the real module, so this test cannot
         # pass against a copy that has drifted from what ships.
+        # `install_binary_atomically` is the swap itself — staged write, sync,
+        # `--version` smoke test, atomic rename — and is pulled in beside its
+        # caller for the same reason.
         # shellcheck disable=SC1090
         source <(sed -n '/^install_binary()/,/^}/p' "${BINARY_LIB}")
+        # shellcheck disable=SC1090
+        source <(sed -n '/^install_binary_atomically()/,/^}/p' "${BINARY_LIB}")
 
         info()    { echo "[INFO] $*"; }
         success() { echo "[OK] $*"; }
@@ -88,6 +93,9 @@ run_install_binary() {
         INSTALL_DIR="${sandbox}/bin"
         # shellcheck disable=SC2034
         HELP_DIR="${sandbox}/help"
+        # Named in the rollback hint `install_binary_atomically` prints.
+        # shellcheck disable=SC2034
+        SERVICE_NAME="birdnet-behavior.service"
         mkdir -p "${INSTALL_DIR}"
 
         install_binary 9.9.9 x86_64
