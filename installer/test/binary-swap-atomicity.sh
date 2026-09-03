@@ -68,11 +68,17 @@ run_swap() {
         warn()    { echo "[WARN] $*"; }
         fatal()   { echo "[FATAL] $*"; exit 1; }
 
+        # install.sh globals read by the `install_binary_atomically` body
+        # sourced above — 50-binary.sh reads INSTALL_DIR and BINARY_NAME at 43.
+        # Invisible to shellcheck: the body arrives through
+        # `source <(sed -n ...)` and `-x` does not follow a process
+        # substitution, so a global the sourced code reads looks unused here.
         # shellcheck disable=SC2034
+        {
         BINARY_NAME="birdnet-behavior"
         INSTALL_DIR="${sandbox}/bin"
-        # shellcheck disable=SC2034
         SERVICE_NAME="birdnet-behavior.service"
+        }
 
         install_binary_atomically "${src}"
     ) >"${sandbox}/out.log" 2>&1

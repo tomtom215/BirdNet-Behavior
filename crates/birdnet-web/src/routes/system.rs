@@ -163,7 +163,7 @@ pub(crate) fn db_health(state: &AppState) -> DbHealth {
     }
 }
 
-/// Query parameters for [`health`].
+/// Query parameters for the `health` handler below.
 #[derive(Debug, Default, Deserialize)]
 pub struct HealthQuery {
     /// When set, a stopped detection daemon is a 503 rather than body text.

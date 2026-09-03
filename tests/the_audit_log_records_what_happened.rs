@@ -260,7 +260,7 @@ async fn the_admin_audit_page_shows_what_was_recorded() {
 ///
 /// `/admin/audit` filters with SQL `LIKE`, so an operator selects a family
 /// with a prefix (`auth.%`, `species.%`). That only works while the names are
-/// hierarchical and stable, and a typo — `auth.login.faill` — would ship
+/// hierarchical and stable, and a name with one letter wrong would ship
 /// silently: the row is written, the page renders it, and only the filter that
 /// was supposed to catch it comes back empty.
 ///

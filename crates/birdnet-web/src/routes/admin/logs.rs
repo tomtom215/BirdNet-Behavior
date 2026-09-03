@@ -9,7 +9,7 @@
 //! This paragraph described that layer for a long time before one existed. It
 //! did not, `AppState` held a channel nothing published to, and this endpoint
 //! replayed an empty backlog and then emitted keep-alives for ever. The
-//! channel is also **bounded** at [`LOG_CHANNEL_CAPACITY`], not unbounded as
+//! channel is also **bounded** at `LOG_CHANNEL_CAPACITY`, not unbounded as
 //! the same paragraph claimed: a slow client lags and is told so rather than
 //! growing the buffer until the station runs out of memory.
 //!

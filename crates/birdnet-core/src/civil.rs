@@ -354,21 +354,39 @@ pub fn shift_datetime(date: &str, time: &str, offset_secs: f64) -> Option<(Strin
 /// plausible week is a better failure than a panic in the capture path. Callers
 /// that need to know a date was malformed should parse it with
 /// [`parse_civil`] first, which rejects rather than guesses.
+/// # Why the clamps are written this way
+///
+/// This was `if month < 1 { 1 } else if month > 12 { 12 }`, plus
+/// `if w > 4 { 4 }`. Behaviourally identical to what is below — and all three
+/// comparisons were **unkillable by any test**, because each clamped to the
+/// value it compared against: `month < 1 => 1` and `month <= 1 => 1` are the
+/// same function, as are `month > 12 => 12` and `month >= 12 => 12`, and
+/// `w > 4 => 4` and `w >= 4 => 4`. No input distinguishes either pair, so
+/// `cargo-mutants` reported three survivors on a file whose gate allows none,
+/// and the repo's policy for that is to refactor until the boundary is
+/// observable rather than to lift the threshold.
+///
+/// So: the lower clamps became `saturating_sub`, which has no comparison to
+/// mutate, and each remaining boundary is now one past the value it produces
+/// (`>= 13` yielding 11, `>= 5` yielding 4). Flipping either by one is then a
+/// visible difference — `month >= 13` weakened to `> 13` returns week 49 for
+/// 1 January of month 13, outside the model's domain, which is the defect the
+/// clamp exists to prevent.
 #[must_use]
 pub const fn birdnet_week(month: u32, day: u32) -> u32 {
-    let month = if month < 1 {
-        1
-    } else if month > 12 {
-        12
+    // 0-based month. `saturating_sub` covers the `month == 0` case without a
+    // comparison: 0 and 1 both give index 0, which is what clamping to 1 did.
+    let month_index = if month >= 13 {
+        11
     } else {
-        month
+        month.saturating_sub(1)
     };
-    let day = if day < 1 { 1 } else { day };
     let week_in_month = {
-        let w = (day - 1) / 7 + 1;
-        if w > 4 { 4 } else { w }
+        // Days 29-31 (and anything larger) land in week 4 of their month.
+        let w = day.saturating_sub(1) / 7 + 1;
+        if w >= 5 { 4 } else { w }
     };
-    (month - 1) * 4 + week_in_month
+    month_index * 4 + week_in_month
 }
 
 /// The BirdNET week for a `YYYY-MM-DD` date string, or `None` if it does not parse.
@@ -1159,6 +1177,40 @@ mod birdnet_week_tests {
         assert_eq!(birdnet_week(13, 31), 48);
         assert_eq!(birdnet_week(1, 0), 1);
         assert_eq!(birdnet_week(6, 99), 24);
+    }
+
+    #[test]
+    fn each_clamp_boundary_is_observable() {
+        // These two comparisons replaced three that no test could ever have
+        // pinned: the old code clamped to the value it compared against, so
+        // `month > 12 => 12` and `month >= 12 => 12` were the same function.
+        // A mutation gate reported them as survivors on a file that allows
+        // none. The boundaries below are deliberately one past their result,
+        // which is what makes a one-step flip visible — so this test exists to
+        // keep that property, not merely to check two numbers.
+
+        // `month >= 13 => index 11`. Weakened to `> 13`, month 13 would index
+        // 12 and produce week 49 or more — outside the model's 1..=48 domain,
+        // which is the defect the clamp is for.
+        assert_eq!(birdnet_week(12, 1), 45, "month 12 is not clamped");
+        assert_eq!(birdnet_week(13, 1), 45, "month 13 clamps onto month 12");
+        assert_eq!(birdnet_week(13, 31), 48, "and cannot exceed 48");
+
+        // `w >= 5 => 4`. Weakened to `> 5`, day 29 would give week 5 of its
+        // month and push the year to 49 weeks.
+        assert_eq!(birdnet_week(1, 28), 4, "day 28 reaches week 4 on its own");
+        assert_eq!(birdnet_week(1, 29), 4, "and day 29 is clamped into it");
+        assert_eq!(
+            birdnet_week(12, 29),
+            48,
+            "the case birdnet-go recorded as a real defect: 29 December must \
+             not be week 49"
+        );
+
+        // The lower ends have no comparison left to flip — `saturating_sub`
+        // handles them — but they must still answer as they did before.
+        assert_eq!(birdnet_week(0, 0), 1);
+        assert_eq!(birdnet_week(0, 31), 4, "a zero month keeps the day's week");
     }
 
     #[test]

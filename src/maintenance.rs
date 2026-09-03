@@ -321,8 +321,8 @@ async fn run_log_retention(db_path: &Path) {
 
 /// What one log-retention pass removed, per table.
 ///
-/// A struct rather than a tuple because there are now four numbers and a
-/// mis-ordered pair in a log line is the kind of thing nobody notices.
+/// A struct rather than a tuple because there are now four numbers, and a
+/// pair swapped in a log line is the kind of thing nobody notices.
 #[derive(Debug, Default)]
 struct LogRetention {
     /// `audit_log` rows.

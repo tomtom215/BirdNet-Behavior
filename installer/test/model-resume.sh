@@ -98,18 +98,32 @@ run_download_model() {
             return 0
         }
 
-        # install.sh globals (10-config.sh).
+        # install.sh globals (10-config.sh), read by the `download_model` body
+        # sourced above — 55-model.sh reads MODEL_DIR at 145, MODEL_SHA256 at
+        # 152, LABELS_SHA256 at 153 and BIRDNET_SKIP_MODEL at 163.
+        #
+        # Every one is invisible to shellcheck, and the reason is worth stating
+        # once rather than five times: the function bodies arrive through
+        # `source <(sed -n ...)`, and `-x` does not follow a process
+        # substitution, so a global the sourced code reads looks unused here.
+        # SC2034 is therefore blanket-disabled for this block. Two of these
+        # assignments were reported by CI and three more were only found by
+        # running shellcheck locally, because the CI log was read from its
+        # tail.
+        #
+        # BIRDNET_SKIP_MODEL is 0 deliberately: this test must exercise the
+        # download path, not the air-gapped skip.
+        # shellcheck disable=SC2034
+        {
         MODEL_DIR="${sandbox}/models"
         MODEL_FILE="BirdNET_V3.onnx"
         LABELS_FILE="labels.csv"
         MODEL_SHA256="${MODEL_SHA}"
         LABELS_SHA256="${LABELS_SHA}"
-        # shellcheck disable=SC2034
         SERVICE_USER="birdnet"
-        # Named only in the progress messages; the stub network ignores them.
-        # shellcheck disable=SC2034
         MODEL_RELEASE_TAG="models-test"
         BIRDNET_SKIP_MODEL=0
+        }
 
         # `install -d -o birdnet` needs root; this test does not run as root.
         install() { command install "${@/#-o birdnet/}" 2>/dev/null || command mkdir -p "${!#}"; }

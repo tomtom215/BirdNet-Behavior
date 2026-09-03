@@ -134,9 +134,9 @@ no actor is the whole reason `audit_log.user_id` is nullable.
 Fifteen gates, six mutations killed. `audit()` writing nothing — the shipped
 state — fails six of them and correctly leaves the two "must record nothing"
 gates green. One gate is a source scanner: it reads every action literal out of
-the web crate and compares it against a documented list, so a typo like
-`species.treshold.set` fails the build instead of shipping a row that renders
-fine and is invisible to the prefix filter meant to catch it. That is the same
+the web crate and compares it against a documented list, so an action name
+with `threshold` misspelled fails the build instead of shipping a row that
+renders fine and is invisible to the prefix filter meant to catch it. That is the same
 lesson the station-health `CHECKS` table records — a set expressed only as
 scattered call sites cannot be checked, so it is written down once.
 
@@ -294,8 +294,9 @@ for the life of the project — so two of the four entities were permanently
 It could not be fixed where it looked like it should be. A last will is
 discarded by the broker when the client sends DISCONNECT (MQTT 3.1.1 §3.14),
 and DISCONNECT is how every one of this station's publishes ends — the
-publisher opens a TCP connection per message. Setting the will flags on those
-CONNECTs would have produced a will that fires on a mid-publish network blip
+publisher opens a TCP connection per message. Setting the will flags on each
+of those CONNECT packets would have produced a will that fires on a
+mid-publish network blip
 and never on the power cut it exists for: worse than none, because it looks
 like it works.
 
