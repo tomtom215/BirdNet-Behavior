@@ -5,8 +5,7 @@
 //! module fills that gap with a single supervised tokio task that:
 //!
 //!   * Runs a **`PRAGMA integrity_check`** once per day at a fixed UTC
-//!     offset from boot, logging WARN on failure (also pinged to the
-//!     heartbeat URL in future versions).
+//!     offset from boot, logging WARN on failure.
 //!   * Prunes **expired login sessions** on the same daily tick so the
 //!     `sessions` table stays compact over months of continuous use.
 //!   * Runs **`VACUUM`** once per week to reclaim space from deletes
@@ -170,8 +169,12 @@ async fn run_loop(
         )
         .await
         {
+            // The species cap is a *count*, not a date, so it is safe with any
+            // clock. Clip retention is a date cutoff and is not.
             run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
-            run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
+            if clock_is_safe_for_retention() {
+                run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
+            }
             mark_ran(&db_path, JOB_SPECIES_CAP, &mut attempted).await;
         }
         if due(
@@ -182,7 +185,9 @@ async fn run_loop(
         )
         .await
         {
-            run_log_retention(&db_path).await;
+            if clock_is_safe_for_retention() {
+                run_log_retention(&db_path).await;
+            }
             mark_ran(&db_path, JOB_LOG_RETENTION, &mut attempted).await;
         }
         if due(
@@ -197,18 +202,44 @@ async fn run_loop(
             mark_ran(&db_path, JOB_SUMMARY_AUDIT, &mut attempted).await;
         }
         if due(&db_path, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await {
-            run_backup_and_vacuum(&db_path, &backup_dir, offsite.as_deref()).await;
-            mark_ran(&db_path, JOB_BACKUP_VACUUM, &mut attempted).await;
+            // The verdict, not merely the fact that the loop reached this line.
+            //
+            // `mark_ran` was called unconditionally here, and the station-health
+            // check reads `last_run_unix` while ignoring the `ok` column — so a
+            // backup that failed every week for a year refreshed its timestamp
+            // every week and never once looked stale. The only thing that check
+            // could ever detect was the maintenance loop having *stopped*.
+            let outcome = run_backup_and_vacuum(&db_path, &backup_dir, offsite.as_deref()).await;
+            mark_ran_with(
+                &db_path,
+                JOB_BACKUP_VACUUM,
+                &mut attempted,
+                Some(outcome.local),
+            )
+            .await;
+            // Recorded under its own key so a health check can say *which*
+            // copy failed. Nothing recorded this before: an offsite failure
+            // produced one `warn!` and reached no counter, no
+            // `maintenance_runs` row, no health field and no alert.
+            if let Some(ok) = outcome.offsite {
+                mark_ran_with(
+                    &db_path,
+                    birdnet_db::sqlite::JOB_OFFSITE_BACKUP,
+                    &mut attempted,
+                    Some(ok),
+                )
+                .await;
+            }
         }
     }
 }
 
-/// Prune the two append-only operational logs.
+/// Prune the append-only operational tables.
 ///
 /// # Why this is a scheduled job and was not
 ///
-/// `sessions` was pruned here from the start; `audit_log` and `notification_log`
-/// were not, and both grow with use rather than with time:
+/// `sessions` was pruned here from the start. Four other tables were not, and
+/// all of them grow with use rather than with time:
 ///
 /// * `AuditLog::prune` had **no production caller at all** — its only caller in
 ///   the tree was its own unit test. Every login, settings change and rule edit
@@ -216,16 +247,29 @@ async fn run_loop(
 /// * `prune_old_notifications` had exactly one caller, and it was the
 ///   `/admin/notifications` page handler. That prunes when an operator opens a
 ///   page, which is the one thing a sealed field station never does.
+/// * `sound_levels::prune` had **no production caller at all** either, so a
+///   station kept every ⅓-octave bucket it had ever measured — thirty bands an
+///   hour per source, for the life of the deployment. Its sibling
+///   `audio_levels::prune` *is* wired, from the acoustic-health loop, which is
+///   what makes this an oversight rather than a decision.
+/// * `prune_quarantine` likewise, under a doc comment reading "This prevents
+///   the table from growing unbounded on long-running stations" — which was
+///   true of no station.
 ///
-/// Both are best-effort and neither failure is fatal: a station that cannot
-/// prune its logs should keep recording birds.
+/// Only **reviewed** quarantine rows are pruned. An unreviewed one is the
+/// operator's queue, and deleting a decision nobody has made yet is the single
+/// thing this pass must never do; the counterpart test pins it.
+///
+/// All are best-effort and no failure is fatal: a station that cannot prune its
+/// logs should keep recording birds. The whole job is skipped when the clock is
+/// implausible — see `clock_is_safe_for_retention`.
 async fn run_log_retention(db_path: &Path) {
     if !db_path.exists() {
         tracing::debug!("log retention skipped: db not present yet");
         return;
     }
     let db_path = db_path.to_path_buf();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, u64), String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<LogRetention, String> {
         use birdnet_db::accounts::AuditLog as _;
         let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
         let audit = conn
@@ -236,19 +280,65 @@ async fn run_log_retention(db_path: &Path) {
             birdnet_db::sqlite::NOTIFICATION_RETENTION_DAYS,
         )
         .map_err(|e| e.to_string())?;
-        Ok((audit, notifications))
+        // Two more tables whose pruners had no production caller at all, so
+        // they grew for the life of the station — `sound_levels::prune`'s
+        // sibling `audio_levels::prune` was wired and these were not, which
+        // makes it an oversight rather than a decision, and
+        // `prune_quarantine`'s own doc comment claims it "prevents the table
+        // from growing unbounded on long-running stations".
+        let sound_levels =
+            birdnet_db::sound_levels::prune(&conn, birdnet_db::sqlite::SOUND_LEVEL_RETENTION_DAYS)
+                .map_err(|e| e.to_string())?;
+        let quarantine = birdnet_db::sqlite::prune_quarantine(
+            &conn,
+            birdnet_db::sqlite::QUARANTINE_RETENTION_DAYS,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(LogRetention {
+            audit,
+            notifications,
+            sound_levels,
+            quarantine,
+        })
     })
     .await;
 
     match result {
-        Ok(Ok((0, 0))) => tracing::debug!("log retention: nothing past the cutoff"),
-        Ok(Ok((audit, notifications))) => tracing::info!(
-            audit_rows = audit,
-            notification_rows = notifications,
+        Ok(Ok(pruned)) if pruned.is_empty() => {
+            tracing::debug!("log retention: nothing past the cutoff");
+        }
+        Ok(Ok(pruned)) => tracing::info!(
+            audit_rows = pruned.audit,
+            notification_rows = pruned.notifications,
+            sound_level_rows = pruned.sound_levels,
+            quarantine_rows = pruned.quarantine,
             "log retention pruned expired rows"
         ),
         Ok(Err(e)) => tracing::warn!(error = %e, "log retention failed"),
         Err(e) => tracing::warn!(error = %e, "log retention task panicked"),
+    }
+}
+
+/// What one log-retention pass removed, per table.
+///
+/// A struct rather than a tuple because there are now four numbers, and a
+/// pair swapped in a log line is the kind of thing nobody notices.
+#[derive(Debug, Default)]
+struct LogRetention {
+    /// `audit_log` rows.
+    audit: usize,
+    /// `notification_log` rows.
+    notifications: u64,
+    /// `sound_levels` + `sound_level_broadband` band rows.
+    sound_levels: usize,
+    /// Reviewed `quarantine` rows.
+    quarantine: u64,
+}
+
+impl LogRetention {
+    /// Whether this pass removed nothing at all.
+    const fn is_empty(&self) -> bool {
+        self.audit == 0 && self.notifications == 0 && self.sound_levels == 0 && self.quarantine == 0
     }
 }
 
@@ -324,6 +414,45 @@ async fn run_summary_audit(db_path: &Path) {
 }
 
 /// Current wall-clock time as Unix seconds.
+/// Whether the wall clock is trustworthy enough to delete things by date.
+///
+/// Every retention job in this loop computes its cutoff from `date('now')`.
+/// That is fine when the clock is right and catastrophic when it is not: a
+/// probe using `run_clip_retention`'s own cutoff expression reclaimed the entire
+/// clip library under a clock reading fifty years ahead, while the detection
+/// rows survived — so the loss is invisible in every count and chart the
+/// operator looks at.
+///
+/// A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the
+/// epoch, and on a station whose uplink is down that may be for weeks. In that
+/// state every cutoff is nonsense and nothing dated should be deleted; the
+/// station should keep recording and wait, which is what the capture supervisor
+/// already does for scheduling.
+///
+/// # What this does not cover
+///
+/// The floor catches a clock that is too *early*. A clock far in the *future* —
+/// a GPS week rollover upstream, a carrier NITZ date, a `date -s` typo — is the
+/// direction the probe demonstrated and is **not** caught here, because
+/// catching it needs a reference this function does not have. Distinguishing
+/// "the clock jumped forward nineteen years" from "nineteen years passed"
+/// requires comparing the wall clock against the monotonic clock across one
+/// process lifetime. That is recorded as the remaining half of NT-4 in
+/// `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` rather than half-built here.
+fn clock_is_safe_for_retention() -> bool {
+    let now = now_unix();
+    let plausible = u64::try_from(now).is_ok_and(birdnet_core::civil::clock_looks_plausible);
+    if !plausible {
+        tracing::warn!(
+            now_unix = now,
+            "skipping every date-based retention job: the clock reads before \
+             2024, so it has not been set or NTP-synced and every cutoff would \
+             be nonsense. Recording continues."
+        );
+    }
+    plausible
+}
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -723,10 +852,19 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
     }
 }
 
-async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Option<&OffsiteConfig>) {
+async fn run_backup_and_vacuum(
+    db_path: &Path,
+    backup_dir: &Path,
+    offsite: Option<&OffsiteConfig>,
+) -> BackupOutcome {
     if !db_path.exists() {
         tracing::debug!("backup+vacuum skipped: db not present yet");
-        return;
+        // Nothing to back up is not a failed backup. A fresh station must not
+        // page its operator on its first tick.
+        return BackupOutcome {
+            local: true,
+            offsite: None,
+        };
     }
     let db_path_b = db_path.to_path_buf();
     let backup_dir_b = backup_dir.to_path_buf();
@@ -744,11 +882,17 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "scheduled backup failed");
             // Do not VACUUM if backup failed — preserve recoverability.
-            return;
+            return BackupOutcome {
+                local: false,
+                offsite: None,
+            };
         }
         Err(e) => {
             tracing::warn!(error = %e, "scheduled backup task panicked");
-            return;
+            return BackupOutcome {
+                local: false,
+                offsite: None,
+            };
         }
     };
 
@@ -757,9 +901,11 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
     // "the newest backup in the directory": those are the same thing right now,
     // and reading the directory again would make it possible to upload a
     // different file than the one this run created.
-    if let (Some(config), Some(path)) = (offsite, fresh.as_ref()) {
-        run_offsite(config, path, backup_dir).await;
-    }
+    let offsite_ok = if let (Some(config), Some(path)) = (offsite, fresh.as_ref()) {
+        Some(run_offsite(config, path, backup_dir).await)
+    } else {
+        None
+    };
 
     // Step 2: prune old backups.
     if let Err(e) = prune_old_backups(backup_dir, BACKUP_RETENTION).await {
@@ -781,7 +927,37 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
         Ok(Err(e)) => tracing::warn!(error = %e, "scheduled VACUUM failed"),
         Err(e) => tracing::warn!(error = %e, "scheduled VACUUM task panicked"),
     }
+
+    // The local verdict is the *backup's*, not the VACUUM's. A failed VACUUM
+    // costs disk space; a failed backup costs the ability to recover at all,
+    // and that is the value a health check keys on.
+    BackupOutcome {
+        local: true,
+        offsite: offsite_ok,
+    }
 }
+
+/// What one backup run achieved, per destination.
+///
+/// Two verdicts, because the two fail independently and mean different things.
+/// A failed **local** backup means the station has no recoverable snapshot at
+/// all. A failed **offsite** upload means the only copy is on the card the
+/// whole scheme exists to survive. Collapsing them into one boolean would make
+/// a health check unable to say which.
+#[derive(Debug, Clone, Copy)]
+struct BackupOutcome {
+    /// Did the local snapshot get written and verified?
+    local: bool,
+    /// Did the upload succeed? `None` when no offsite destination is configured.
+    offsite: Option<bool>,
+}
+
+/// Longest an offsite upload may take before the maintenance loop abandons it.
+///
+/// See the comment inside [`run_offsite`]: this is not a performance budget, it
+/// is the bound that stops one wedged transfer from being the last thing this
+/// loop ever does.
+const OFFSITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
 
 /// Send one freshly-created backup to the configured offsite destination.
 ///
@@ -790,29 +966,73 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
 /// backups. The failure is logged at `warn` with the destination named, and
 /// `--doctor` reports the configuration that produced it.
 ///
+/// That paragraph described an intention rather than a behaviour until the
+/// budget below existed. A station whose *upload wedged* — as opposed to
+/// failing — did not still VACUUM: this function was awaited inline with no
+/// bound, so one stalled socket was the last thing the maintenance loop ever
+/// did. The comment is kept because the intention was right; the timeout is
+/// what makes it true.
+///
 /// The ciphertext is staged in the backup directory rather than `/tmp`, so it
 /// lands on the same filesystem as the snapshot it is a copy of: on a station
 /// whose data disk is full, this fails while writing the temporary file instead
 /// of part-way through an upload, and on one whose `/tmp` is a small tmpfs it
 /// does not fail at all.
-async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) {
+async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) -> bool {
     let started = std::time::Instant::now();
-    match birdnet_integrations::offsite::run(config, backup, scratch).await {
-        Ok(report) => tracing::info!(
+    // The last line of defence for the loop this runs inside.
+    //
+    // Each transport has its own stall detector now — a read timeout on the S3
+    // client, `ServerAliveInterval`/`ServerAliveCountMax` on the SFTP session —
+    // and each is the right instrument, because both bound *inactivity* and so
+    // leave a slow-but-progressing rural uplink alone. This bounds the whole
+    // job anyway, because the failure it guards against is not "the upload was
+    // slow" but "this loop never ran again": `run_offsite` is awaited inline
+    // and everything after it in `run_loop` — the daily integrity check,
+    // `VACUUM`, clip retention, the per-species cap, log retention — waits on
+    // it. A transport that finds a new way to hang must cost one weekly upload,
+    // not every remaining maintenance run.
+    //
+    // Two hours preserves the intent the transport timeouts also preserve: a
+    // station on a rural uplink may legitimately spend a long time on one
+    // upload. Nothing honest takes longer.
+    let outcome = tokio::time::timeout(
+        OFFSITE_BUDGET,
+        birdnet_integrations::offsite::run(config, backup, scratch),
+    )
+    .await;
+    let Ok(outcome) = outcome else {
+        tracing::warn!(
+            destination = %config.destination.describe(),
+            budget_s = OFFSITE_BUDGET.as_secs(),
+            elapsed_s = started.elapsed().as_secs(),
+            "offsite backup exceeded its budget and was abandoned; the local \
+             backup is unaffected and the rest of the maintenance run continues"
+        );
+        return false;
+    };
+    match outcome {
+        Ok(report) => {
+            tracing::info!(
             destination = %config.destination.describe(),
             uploaded = %report.uploaded,
             bytes = report.bytes,
             pruned = report.pruned.len(),
             kept = report.kept,
-            elapsed_s = started.elapsed().as_secs(),
-            "offsite backup uploaded"
-        ),
-        Err(e) => tracing::warn!(
-            destination = %config.destination.describe(),
-            error = %e,
-            elapsed_s = started.elapsed().as_secs(),
-            "offsite backup failed; the local backup is unaffected"
-        ),
+                elapsed_s = started.elapsed().as_secs(),
+                "offsite backup uploaded"
+            );
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                destination = %config.destination.describe(),
+                error = %e,
+                elapsed_s = started.elapsed().as_secs(),
+                "offsite backup failed; the local backup is unaffected"
+            );
+            false
+        }
     }
 }
 
@@ -1119,6 +1339,25 @@ mod tests {
                  VALUES ('apprise', 'sent', datetime('now','-1 days'));",
         )
         .unwrap();
+        // The two tables whose pruners shipped with no production caller at
+        // all. `sound_levels` needs a matching broadband row per bucket, and
+        // `quarantine` distinguishes reviewed from unreviewed: an unreviewed
+        // row is the operator's queue and must survive any age.
+        conn.execute_batch(
+            "INSERT INTO sound_level_broadband (date, hour, source, samples, a_power_sum, z_power_sum)
+                 VALUES (date('now','localtime','-500 days'), 6, 'local', 60, 1.0, 1.0);
+             INSERT INTO sound_levels (date, hour, source, band_hz, samples, mean_power_sum, min_db, max_db)
+                 VALUES (date('now','localtime','-500 days'), 6, 'local', 1000.0, 60, 1.0, -65.0, -45.0);
+             INSERT INTO sound_level_broadband (date, hour, source, samples, a_power_sum, z_power_sum)
+                 VALUES (date('now','localtime','-1 days'), 6, 'local', 60, 1.0, 1.0);
+             INSERT INTO sound_levels (date, hour, source, band_hz, samples, mean_power_sum, min_db, max_db)
+                 VALUES (date('now','localtime','-1 days'), 6, 'local', 1000.0, 60, 1.0, -65.0, -45.0);
+             INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason, reviewed, created_at)
+                 VALUES ('2024-01-01', '06:00:00', 'Pica pica', 'Eurasian Magpie', 0.9, 'low_confidence', 1, datetime('now','-365 days'));
+             INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason, reviewed, created_at)
+                 VALUES ('2024-01-02', '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, 'low_confidence', 0, datetime('now','-365 days'));",
+        )
+        .unwrap();
         db
     }
 
@@ -1137,6 +1376,12 @@ mod tests {
     ///
     ///     assertion `left == right` failed: the 365-day-old audit row must be gone
     ///       left: 2   right: 1
+    ///
+    /// And again, with only the two new pruners removed, for the two tables
+    /// that shipped with pruners no caller ever reached:
+    ///
+    ///     assertion `left == right` failed: the 500-day-old third-octave
+    ///     bucket must be gone   left: 2   right: 1
     #[tokio::test]
     async fn log_retention_drops_expired_rows_from_both_logs() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1153,6 +1398,25 @@ mod tests {
             count(&db, "notification_log"),
             1,
             "the 365-day-old notification row must be gone"
+        );
+        assert_eq!(
+            count(&db, "sound_levels"),
+            1,
+            "the 500-day-old third-octave bucket must be gone: `sound_levels::prune` \
+             had no production caller at all, so the table grew for the life of \
+             the station"
+        );
+        assert_eq!(
+            count(&db, "sound_level_broadband"),
+            1,
+            "the broadband row for that bucket must go with it"
+        );
+        assert_eq!(
+            count(&db, "quarantine"),
+            1,
+            "the 365-day-old *reviewed* quarantine row must be gone: \
+             `prune_quarantine`'s own doc comment claims it prevents this table \
+             growing unbounded, and nothing called it"
         );
     }
 
@@ -1173,6 +1437,20 @@ mod tests {
             .unwrap();
         assert_eq!(action, "recent", "the recent row is the one that survived");
         assert_eq!(count(&db, "notification_log"), 1);
+        assert_eq!(count(&db, "sound_levels"), 1, "the recent bucket survives");
+        assert_eq!(count(&db, "sound_level_broadband"), 1);
+
+        // The one row that must survive any age: an *unreviewed* quarantine
+        // entry is the operator's queue, and deleting a decision nobody has
+        // made yet is the single thing this pass must never do. The fixture
+        // dates it 365 days back precisely so age alone cannot save it.
+        let reviewed: i64 = conn
+            .query_row("SELECT reviewed FROM quarantine", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            reviewed, 0,
+            "the surviving quarantine row must be the unreviewed one"
+        );
     }
 
     /// A `species_summary` that disagrees with the detections it summarises must

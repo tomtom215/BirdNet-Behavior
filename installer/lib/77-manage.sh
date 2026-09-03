@@ -112,12 +112,14 @@ do_repair() {
     create_directories
     setup_tmpfs_streaming
 
-    if [ -f "${MODEL_DIR}/${MODEL_FILE}" ] && [ -f "${MODEL_DIR}/${LABELS_FILE}" ]; then
-        success "Model present — skipping download."
-    else
-        warn "Model files missing — downloading."
-        download_model
-    fi
+    # `repair` is the documented wizard for a broken install, so it must be
+    # able to repair the commonest broken install there is: a model whose
+    # download was interrupted. It used to check presence only, print "Model
+    # present — skipping download", and compute no checksum — so the one
+    # subcommand named for fixing this could not fix it. `download_model`'s own
+    # guard now verifies, so handing the decision to it is both correct and one
+    # fewer place for the two to disagree.
+    download_model
 
     # A repair run is how a station installed before the geomodel shipped picks
     # it up: download_geomodel is a no-op when both files are already there.

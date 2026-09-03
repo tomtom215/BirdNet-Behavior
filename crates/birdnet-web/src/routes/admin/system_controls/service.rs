@@ -14,7 +14,14 @@ use axum::response::Html;
 /// nothing to bring us back, so we say so rather than kill the process and leave
 /// the operator staring at a dead server behind a misleading "restart sent".
 #[allow(clippy::unused_async)] // async required by axum's Handler trait
-pub(super) async fn service_restart() -> Html<String> {
+pub(super) async fn service_restart(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+) -> Html<String> {
+    // Before the SIGTERM, and before the systemd check, so the record survives
+    // the restart and exists even on a station where the restart is refused —
+    // "who kept pressing this?" is a question either outcome raises.
+    crate::audit::audit(&state, Some(&request_user), "system.restart", None, None);
     let under_systemd =
         std::env::var("INVOCATION_ID").is_ok() || std::env::var("JOURNAL_STREAM").is_ok();
 

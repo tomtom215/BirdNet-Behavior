@@ -3,10 +3,26 @@
 use axum::extract::State;
 use axum::response::Html;
 
+use crate::auth_middleware::RequestUser;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
-pub(super) async fn clear_detections(State(state): State<AppState>) -> Html<String> {
+pub(super) async fn clear_detections(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+) -> Html<String> {
+    // Recorded before the work, not after. This deletes the entire detection
+    // history; if the process dies mid-delete there is no "after" to record
+    // from, and a station whose history vanished with nothing in the audit log
+    // is indistinguishable from one that was never used.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "data.detections.clear",
+        None,
+        None,
+    );
+    let state = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         // `state.clear_detections`, not a bare `DELETE`: the analytics copy is
         // derived but incremental, so clearing only SQLite left every
@@ -41,7 +57,17 @@ pub(super) async fn clear_detections(State(state): State<AppState>) -> Html<Stri
     }
 }
 
-pub(super) async fn clear_extracted(State(state): State<AppState>) -> Html<String> {
+pub(super) async fn clear_extracted(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+) -> Html<String> {
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "data.recordings.clear",
+        None,
+        None,
+    );
     let rec_dir = state.recording_dir();
 
     let result = tokio::task::spawn_blocking(move || {

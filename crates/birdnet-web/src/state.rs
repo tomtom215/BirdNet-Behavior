@@ -485,6 +485,23 @@ impl AppState {
         }
     }
 
+    /// Use `broadcaster` for the admin log viewer instead of the empty one
+    /// each constructor makes.
+    ///
+    /// The `tracing` layer that fills it has to be installed before the
+    /// subscriber, which is before any `AppState` exists, so the application
+    /// builds the broadcaster first and hands it over here. Without this the
+    /// state holds a channel nothing publishes to and
+    /// `GET /admin/system/logs` streams keep-alives for ever, which is what it
+    /// did for the life of the feature.
+    #[must_use]
+    pub fn with_log_broadcaster(self, broadcaster: LogBroadcaster) -> Self {
+        let inner = unwrap_inner(self.inner, "with_log_broadcaster");
+        Self {
+            inner: rebuild_inner(inner, |s| s.log_broadcaster = broadcaster),
+        }
+    }
+
     /// Attach the capture supervisor's shared status handle, so the Station
     /// Health page can show live per-source state. The binary clones one handle
     /// into here and another into the supervisor thread.

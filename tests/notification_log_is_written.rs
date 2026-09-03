@@ -152,3 +152,55 @@ fn every_dispatched_channel_records_an_outcome() {
         );
     }
 }
+
+/// Alerts about the *station* must be logged too, not only bird traffic.
+///
+/// The log contained every robin and no deadman: the four channels above each
+/// recorded an outcome and the three alerting loops recorded nothing, so an
+/// operator who suspected they had missed an alert had no record to consult.
+///
+/// The three loops all deliver through `announce::flush`, so one writer covers
+/// them — which is what asking for it *there* rather than in each loop pins.
+#[test]
+fn alerts_about_the_station_record_an_outcome_too() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = non_test_source(&root.join("src/integrations/announce.rs"));
+    assert!(
+        src.contains("log_notification("),
+        "`announce::flush` is the one delivery path for every alert about the \
+         station, and it does not write notification_log — the Notification \
+         Center will show every detection and no deadman"
+    );
+    assert!(
+        src.contains("\"alert\""),
+        "operational alerts must carry one channel name, so `channel = 'alert'` \
+         selects the station's own history"
+    );
+}
+
+/// Every loop that raises an alert must deliver through the shared outbox.
+///
+/// A loop that sends inline would skip both the retry and the log row. This is
+/// the property that lets the single writer above be sufficient, so it is
+/// checked rather than assumed.
+#[test]
+fn every_alerting_loop_delivers_through_the_outbox() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for loop_file in [
+        "src/integrations/deadman.rs",
+        "src/integrations/station_health.rs",
+        "src/integrations/acoustic_health.rs",
+    ] {
+        let src = non_test_source(&root.join(loop_file));
+        assert!(
+            src.contains("announce::flush("),
+            "{loop_file} does not deliver through the shared outbox, so its \
+             alerts are neither retried nor logged"
+        );
+        assert!(
+            !src.contains("send_notification("),
+            "{loop_file} sends inline as well — that is the latch-on-attempt \
+             bug returning, and those sends reach no log"
+        );
+    }
+}

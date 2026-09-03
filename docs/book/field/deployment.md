@@ -417,16 +417,28 @@ sudo systemctl start birdnet-behavior
 Once the unit is sealed and shipped, the loop is:
 
 1. **Heartbeat URL** (`HEARTBEAT_URL=`) — set to a free
-   <https://healthchecks.io> check. The daemon pings it after every
-   analysis cycle. You get an email if it stops within your configured
-   grace period (recommend: 15 min).
+   <https://healthchecks.io> check. The daemon pings it **every five
+   minutes**, whether or not it has heard a bird, and pings once
+   immediately at startup so a station clears its alarm within seconds of
+   coming back from a power cut. You get an email if the pings stop for
+   longer than your grace period (recommend: 15 min — three missed pings,
+   so one dropped packet on a 4G bearer does not page you).
+
+   This signal answers exactly one question: *is the box still there?* It
+   deliberately says nothing about whether the station is hearing
+   anything — a December night at 55° N is sixteen hours long, and a
+   heartbeat that only fired on a detection could not tell a quiet night
+   from a dead Pi. "Has it stopped detecting?" is
+   `birdnet_detection_silence_seconds` and the detection deadman
+   (`DEADMAN_HOURS`); "is it degrading?" is the station-health alerts.
+   Three signals, three meanings; wire up all three.
 2. **`/api/v2/health`** — pulled by your monitoring (Uptime Kuma,
    Healthchecks remote endpoints, custom cron) over the LAN or via a
    port-forward.
 3. **`/api/v2/metrics`** — Prometheus text format. Scrape with
    Prometheus, Grafana Agent, or VictoriaMetrics. Key series:
-   `birdnet_uptime_seconds`, `birdnet_detections_total`,
-   `birdnet_process_resident_memory_bytes`, `birdnet_species_total`,
+   `birdnet_uptime_seconds`, `birdnet_detections_stored`,
+   `birdnet_process_resident_memory_bytes`, `birdnet_species_distinct`,
    and the two field-health gauges below.
 
    Also worth watching for an unattended station: **`birdnet_noise_floor_dbfs`**
@@ -506,11 +518,32 @@ detecting straight through:
 | Disk full enough that recordings are being purged | ≥ 90 % used |
 | CPU at or above the Pi throttling point | ≥ 80 °C |
 | Backup or integrity check not completed | > 21 days |
+| Clock not set, or not synchronised to a time source | 15 min continuous |
 
 Each alerts **once per episode**, with a recovery notice when it clears, through
 the same Apprise notifier as the deadman. Every condition must persist for three
 consecutive five-minute polls before it fires, so a mic that re-enumerates or a
 disk that spikes during clip extraction stays silent.
+
+Once per *delivered* alert. The loud journal line is written when the condition
+is first observed; the push is then retried at every five-minute poll until it
+actually reaches a destination, so a fault raised while the uplink was down is
+still announced when the uplink comes back. A recovery that happens before the
+onset alert got out replaces it, so you are never handed a fault that has
+already cleared. Alerts about the station are also exempt from
+`NOTIFY_RATE_PER_MINUTE`, which is sized for detections — a deadman crossing its
+threshold during a dawn chorus used to lose that race silently. Whatever still
+cannot be delivered is counted in `birdnet_notifications_dropped_total`.
+
+The clock check is the one that catches a silent loss rather than a visible
+one. A station whose NTP has been unreachable for months keeps recording, keeps
+detecting, and keeps every gauge green — while filing an entire season under
+the wrong hours. Nothing else notices, because a plausible-looking date passes
+every other check the station makes.
+
+It is deliberately silent where it cannot know: in Docker there is no systemd
+to ask, and the container's clock is the host's, so the condition never fires
+and `birdnet_clock_synced` is absent rather than `0`.
 
 A single-source station that goes fully down is deliberately *not* reported
 here — the deadman covers that, with better wording, and two notifications for

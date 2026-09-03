@@ -32,7 +32,7 @@ use birdnet_core::config::Config;
 
 use crate::cli::Cli;
 
-mod analytics;
+pub mod analytics;
 mod audio;
 mod clock;
 mod config;

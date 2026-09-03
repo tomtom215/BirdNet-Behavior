@@ -121,15 +121,26 @@ impl Breaker {
 
     /// Record a failure. Opens or re-opens the circuit once the threshold is
     /// reached, for a period that doubles per trip up to `OPEN_CAP`.
-    pub fn on_failure(&mut self, now: Instant) {
+    ///
+    /// Returns `Some(period)` when *this* failure is what opened the circuit,
+    /// and `None` otherwise. That distinction is the only place a destination
+    /// going down is a discrete event rather than a standing state, and it is
+    /// what lets the caller log the transition once at `warn` instead of
+    /// logging every suppressed send — which, at a detection every twenty
+    /// seconds, is four thousand lines a day and was therefore `debug`, which
+    /// the default filter drops entirely.
+    pub fn on_failure(&mut self, now: Instant) -> Option<Duration> {
         self.failures = self.failures.saturating_add(1);
         // A failed probe counts as a fresh trip: the destination is still down.
         if self.probe_issued || self.failures >= TRIP_AFTER {
             self.trips = self.trips.saturating_add(1);
             self.failures = 0;
             self.probe_issued = false;
-            self.open_until = Some(now + self.open_period());
+            let period = self.open_period();
+            self.open_until = Some(now + period);
+            return Some(period);
         }
+        None
     }
 
     /// How long the circuit stays open for the current trip count.
@@ -275,10 +286,37 @@ impl Gate {
         self.breaker.on_success();
     }
 
+    /// Decide whether to send an **operational** alert now.
+    ///
+    /// Same as [`Self::admit`] but without the rate limit. The bucket is sized
+    /// for detection notifications — a dawn chorus is thousands of them — and
+    /// an operational alert that lost the race with a blackbird is a station
+    /// that never told anyone it had stopped recording. There are at most a
+    /// handful of these a day: the deadman fires once per silence episode, and
+    /// station health once per condition per episode.
+    ///
+    /// The **breaker is still honoured**, deliberately. A destination that has
+    /// failed three times running is not going to accept this one either, and
+    /// the breaker already admits one probe per open period, so an alert whose
+    /// caller retries rides that schedule and lands as soon as the destination
+    /// comes back. Forcing a send past an open circuit would only add traffic
+    /// to a dead endpoint — which is what gets an address banned rather than
+    /// merely rate-limited.
+    pub fn admit_priority(&mut self, now: Instant) -> Admission {
+        match self.breaker.check(now) {
+            Verdict::Skip(wait) => Admission::CircuitOpen(wait),
+            Verdict::Probe => Admission::Probe,
+            Verdict::Send => Admission::Send,
+        }
+    }
+
     /// Record a failed delivery. Only call this for a send that was actually
     /// attempted: a rate-limited send is not evidence about the destination.
-    pub fn on_failure(&mut self, now: Instant) {
-        self.breaker.on_failure(now);
+    ///
+    /// Returns `Some(period)` when this failure is what opened the circuit; see
+    /// [`Breaker::on_failure`].
+    pub fn on_failure(&mut self, now: Instant) -> Option<Duration> {
+        self.breaker.on_failure(now)
     }
 }
 
@@ -537,6 +575,120 @@ mod tests {
         }
         // A minute later the bucket has refilled and the circuit is still shut.
         assert_eq!(g.admit(now + Duration::from_secs(60)), Admission::Send);
+    }
+
+    #[test]
+    fn only_the_failure_that_opens_the_circuit_reports_a_period() {
+        // The transition, not the state. A caller that logged whenever the
+        // circuit was open would write one line per suppressed send; a caller
+        // that logs this reports a destination going down exactly once.
+        let mut b = Breaker::new();
+        let now = t0();
+        assert_eq!(
+            b.on_failure(now),
+            None,
+            "the first failure is not an outage"
+        );
+        assert_eq!(b.on_failure(now), None, "nor is the second");
+        let opened = b.on_failure(now).expect("the third must open the circuit");
+        assert_eq!(opened, OPEN_BASE);
+    }
+
+    #[test]
+    fn a_success_between_failures_reports_no_transition() {
+        // Counterpart: a rule that returned `Some` on every third call
+        // regardless of state would satisfy the gate above.
+        let mut b = Breaker::new();
+        let now = t0();
+        for _ in 0..10 {
+            assert_eq!(b.on_failure(now), None);
+            assert_eq!(b.on_failure(now), None);
+            b.on_success();
+        }
+        assert!(!b.is_open(now));
+    }
+
+    #[test]
+    fn each_failed_probe_reports_a_longer_period() {
+        let mut b = Breaker::new();
+        let mut now = t0();
+        for _ in 0..TRIP_AFTER {
+            b.on_failure(now);
+        }
+        let mut previous = OPEN_BASE;
+        for _ in 0..4 {
+            now += Duration::from_secs(60 * 60);
+            assert_eq!(b.check(now), Verdict::Probe);
+            let reported = b.on_failure(now).expect("a failed probe re-opens");
+            assert!(
+                reported > previous || reported == OPEN_CAP,
+                "reported period did not grow: {reported:?} after {previous:?}"
+            );
+            previous = reported;
+        }
+    }
+
+    // ── operational alerts ──────────────────────────────────────────────
+
+    #[test]
+    fn an_operational_alert_is_not_held_back_by_an_empty_bucket() {
+        // The bucket is sized for detections. A station that has just notified
+        // its way through a dawn chorus must still be able to say it has
+        // stopped recording.
+        let now = t0();
+        let mut g = Gate::new(1, now);
+        assert_eq!(g.admit(now), Admission::Send);
+        assert_eq!(g.admit(now), Admission::RateLimited);
+        assert_eq!(
+            g.admit_priority(now),
+            Admission::Send,
+            "an operational alert was dropped by the detection rate limit"
+        );
+    }
+
+    #[test]
+    fn an_operational_alert_spends_no_token() {
+        // Counterpart to the exemption: bypassing the limit must not *consume*
+        // from it either, or a burst of alerts would silence the detections
+        // that follow them.
+        let now = t0();
+        let mut g = Gate::new(1, now);
+        for _ in 0..100 {
+            assert_eq!(g.admit_priority(now), Admission::Send);
+        }
+        assert_eq!(
+            g.admit(now),
+            Admission::Send,
+            "the priority sends drained the detection bucket"
+        );
+    }
+
+    #[test]
+    fn an_operational_alert_still_respects_an_open_circuit() {
+        // The discrimination. An `admit_priority` that returned `Send`
+        // unconditionally would satisfy both gates above and hammer a retired
+        // webhook every time a condition was re-evaluated.
+        let now = t0();
+        let mut g = Gate::new(0, now); // rate limit disabled: only the breaker
+        for _ in 0..TRIP_AFTER {
+            g.on_failure(now);
+        }
+        assert!(matches!(g.admit_priority(now), Admission::CircuitOpen(_)));
+    }
+
+    #[test]
+    fn an_operational_alert_takes_the_probe_when_the_open_period_elapses() {
+        // And so a caller that retries an undelivered alert lands it as soon as
+        // the destination comes back, rather than never.
+        let now = t0();
+        let mut g = Gate::new(0, now);
+        for _ in 0..TRIP_AFTER {
+            g.on_failure(now);
+        }
+        let later = now + OPEN_BASE + Duration::from_secs(1);
+        assert_eq!(g.admit_priority(later), Admission::Probe);
+        g.on_success();
+        assert_eq!(g.admit_priority(later), Admission::Send);
     }
 
     #[test]

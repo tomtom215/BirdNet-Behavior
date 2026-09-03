@@ -26,11 +26,18 @@ use crate::cli::Cli;
 
 use super::Check;
 
-/// Unix seconds at 2020-01-01 UTC. A clock reading earlier has almost certainly
-/// not been set or NTP-synced yet. Mirrors the capture supervisor's
-/// `CLOCK_SYNCED_FLOOR_SECS`, which fails recording *open* on an unsynced clock
-/// so a bogus boot-time date can't silence the station.
-const CLOCK_SYNCED_FLOOR_SECS: u64 = 1_577_836_800;
+/// The floor below which a clock reading is not trusted.
+///
+/// This used to be its own constant at `2020-01-01`, under a comment saying it
+/// *"mirrors the capture supervisor's"*. It did not: the supervisor's was
+/// `2024-01-01`, 1 461 days later. For any reading in those four years this
+/// check printed `[ PASS ] set to a plausible current time` while the
+/// supervisor treated the same reading as untrustworthy and disabled the
+/// recording schedule and every quiet window — the diagnostic telling an
+/// operator the opposite of what the station was doing.
+///
+/// One constant now, in the module that owns the calendar arithmetic.
+const CLOCK_SYNCED_FLOOR_SECS: u64 = birdnet_core::civil::CLOCK_PLAUSIBLE_FLOOR_SECS;
 
 /// Run the clock + timezone checks.
 pub(super) fn check_clock(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
@@ -282,7 +289,7 @@ fn clock_check_for(now: u64) -> Check {
     if now < CLOCK_SYNCED_FLOOR_SECS {
         Check::warn(
             "System clock",
-            "the clock reads before 2020 — it looks unset or not yet NTP-synced",
+            "the clock reads before 2024 — it looks unset or not yet NTP-synced",
             "detection timestamps will be wrong and the station records continuously until the \
              clock syncs; check `timedatectl status` and, on a Pi without an RTC, ensure network \
              time is reachable (`sudo timedatectl set-ntp true`)",
@@ -328,8 +335,65 @@ mod tests {
 
     #[test]
     fn current_time_passes() {
-        // ~2023-11-14; comfortably after the floor.
-        assert_eq!(clock_check_for(1_700_000_000).status, Status::Pass);
+        // 2026-05-03; comfortably after the floor.
+        //
+        // This used to read `1_700_000_000` — 2023-11-14 — described as
+        // "comfortably after the floor". It was, for *this* check's own floor
+        // of 2020-01-01, and it was four months *before* the capture
+        // supervisor's floor of 2024-01-01. A station whose clock read that
+        // was told by the diagnostic that its clock was fine while the
+        // supervisor disabled its recording schedule. The two now share one
+        // constant, so the fixture has to move with it.
+        assert_eq!(clock_check_for(1_777_000_000).status, Status::Pass);
+    }
+
+    /// The diagnostic and the capture supervisor must answer the same question
+    /// the same way, everywhere, not merely at one point each.
+    ///
+    /// This is the gate the previous arrangement did not have. Both sides had
+    /// tests; each tested its own constant, so neither could see that they were
+    /// 1 461 days apart. Sweeping a range that spans both old floors is what
+    /// makes a divergence impossible to reintroduce quietly.
+    #[test]
+    fn the_doctor_and_the_capture_supervisor_agree_about_every_clock_reading() {
+        use crate::capture::schedule::secs_look_synced;
+
+        // 2018-01-01 to 2030-01-01, weekly. Spans the old doctor floor
+        // (2020-01-01) and the old supervisor floor (2024-01-01), so any
+        // reintroduced gap between them lands inside this sweep.
+        let mut secs: u64 = 1_514_764_800;
+        let end: u64 = 1_893_456_000;
+        let mut passes = 0_u32;
+        let mut warns = 0_u32;
+        while secs < end {
+            let doctor_ok = clock_check_for(secs).status == Status::Pass;
+            let supervisor_ok = secs_look_synced(secs);
+            assert_eq!(
+                doctor_ok, supervisor_ok,
+                "at {secs}: --doctor says pass={doctor_ok} while the capture \
+                 supervisor says synced={supervisor_ok}. An operator reading \
+                 the diagnostic would be told the opposite of what the station \
+                 is doing."
+            );
+            if doctor_ok {
+                passes += 1;
+            } else {
+                warns += 1;
+            }
+            secs += 86_400 * 7;
+        }
+
+        // The discrimination: two predicates that both answered the same
+        // constant everywhere would agree vacuously. The sweep has to contain
+        // both answers.
+        assert!(
+            passes > 100,
+            "the sweep saw only {passes} plausible readings"
+        );
+        assert!(
+            warns > 100,
+            "the sweep saw only {warns} implausible readings"
+        );
     }
 
     #[test]

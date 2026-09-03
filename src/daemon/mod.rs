@@ -21,7 +21,7 @@ use birdnet_core::audio::extraction::Extractor;
 use birdnet_integrations::notification::{NotificationFilter, NotificationTemplate};
 
 use crate::cli::Cli;
-use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
+use crate::integrations::{AppriseHandle, EmailHandle, MqttHandle};
 
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
@@ -107,7 +107,6 @@ pub fn start_detection_daemon(
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
-    heartbeat: Option<HeartbeatHandle>,
     mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
@@ -262,6 +261,19 @@ pub fn start_detection_daemon(
                 move |active, candidates| metrics.set_occurrence_filter(active, candidates)
             },
         )),
+        // Count what the pipeline actually gets through. Nothing did, and
+        // without it a station whose model answers nothing is indistinguishable
+        // from one whose pipeline is not running: every other series is
+        // downstream of a prediction the model made, so both are flat and
+        // empty. The label is derived here rather than in `birdnet-core`
+        // because `derive_source_label` is the one place that knows the
+        // convention.
+        on_file_analysed: Some(birdnet_core::detection::daemon::ThroughputObserver::new({
+            let metrics = state.metrics();
+            move |path| {
+                metrics.inc_file_analysed(&crate::daemon::disposition::derive_source_label(path));
+            }
+        })),
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
@@ -298,7 +310,6 @@ pub fn start_detection_daemon(
                     apprise,
                     birdweather,
                     email,
-                    heartbeat,
                     mqtt,
                     notification_filter,
                     notification_template,
@@ -441,7 +452,7 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, None, filter, template,
+            &cli, None, state, broadcast, None, None, None, None, filter, template,
         );
 
         assert!(
@@ -493,7 +504,7 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, None, filter, template,
+            &cli, None, state, broadcast, None, None, None, None, filter, template,
         );
 
         assert!(
@@ -527,7 +538,7 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, None, filter, template,
+            &cli, None, state, broadcast, None, None, None, None, filter, template,
         );
         assert!(
             handle.is_none(),

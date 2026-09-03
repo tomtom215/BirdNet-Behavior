@@ -27,6 +27,7 @@ use crate::{capture, daemon, helpers, integrations, maintenance, sd_notify, week
 pub async fn run(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
+    log_broadcaster: birdnet_web::routes::admin::logs::LogBroadcaster,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Race ONLY the startup phases against an early SIGTERM/SIGINT. Without
     // this, a `systemctl restart` mid-startup — e.g. during a cold DuckDB
@@ -45,7 +46,7 @@ pub async fn run(
     // (observed live: "exiting cleanly" logged, process alive minutes later,
     // leaving systemd to SIGKILL at TimeoutStopSec).
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
-    let mut serve_fut = std::pin::pin!(serve(cli, config, started_tx));
+    let mut serve_fut = std::pin::pin!(serve(cli, config, log_broadcaster, started_tx));
 
     tokio::select! {
         biased;
@@ -72,6 +73,7 @@ pub async fn run(
 async fn serve(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
+    log_broadcaster: birdnet_web::routes::admin::logs::LogBroadcaster,
     started: tokio::sync::oneshot::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Fail fast on a misconfigured station: validate the loaded config and
@@ -186,8 +188,13 @@ async fn serve(
     };
 
     // Thread the active config path so the in-UI diagnostics page can re-read
-    // and validate it.
-    let state = state.with_config_path(cli.config.clone());
+    // and validate it, and the broadcaster the `tracing` layer installed in
+    // `main` is already writing to — without this the state holds the empty
+    // one its constructor made, and `GET /admin/system/logs` streams
+    // keep-alives for ever.
+    let state = state
+        .with_config_path(cli.config.clone())
+        .with_log_broadcaster(log_broadcaster);
 
     // O-14 / O-15 wire-flip prep: rotate the seed admin row's password
     // hash to a real argon2id digest of CADDY_PWD on first start (and
@@ -277,6 +284,12 @@ async fn serve(
     let email_notifier = integrations::create_email_notifier(&state);
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
+    // Cloned before the detection pipeline takes ownership: the presence
+    // session below needs the same broker settings but is spawned after the
+    // router is built, and it must run in web-only mode too — a station whose
+    // capture is off is still a station whose reachability an operator cares
+    // about.
+    let mqtt_presence_client = mqtt_client.clone();
     let notification_filter = integrations::create_notification_filter(&cli, config.as_ref());
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
 
@@ -302,6 +315,15 @@ async fn serve(
     // backlog from before this boot.
     if let Some(ref bw) = birdweather_client {
         integrations::spawn_birdweather_drainer(state.clone(), bw.clone());
+    }
+
+    // External liveness ping. Runs regardless of `--web-only`: "is this box
+    // still there" is a question a web-only station has too, and it is the only
+    // one of the three health signals that an outside observer can answer when
+    // the box is gone. See `integrations::heartbeat` for why it is a timer and
+    // not, as it was, a line inside the per-detection loop.
+    if let Some(hb) = heartbeat_client.clone() {
+        integrations::spawn_heartbeat(hb);
     }
 
     // Detection deadman: end-to-end "is the station actually detecting?"
@@ -374,7 +396,6 @@ async fn serve(
             apprise_client,
             birdweather_client,
             email_notifier,
-            heartbeat_client,
             mqtt_client,
             notification_filter,
             notification_template,
@@ -485,6 +506,13 @@ async fn serve(
     if let Some(ref mqtt) = integrations::get_mqtt_client_ref(&cli, config.as_ref()) {
         integrations::publish_ha_discovery(mqtt, &cli, config.as_ref());
     }
+
+    // Hold one MQTT connection open carrying a last will, so the "Station
+    // Status" entity that discovery has always advertised finally has
+    // something behind it. Without this the broker has no session to notice
+    // dying, and the entity stays `unknown` for the life of the station —
+    // which is the one state an offline alert cannot be built on.
+    integrations::spawn_mqtt_presence(shutdown_state.clone(), mqtt_presence_client);
 
     // Spawn daily auto-update check (logs result, does not auto-apply).
     //

@@ -29,7 +29,7 @@ use birdnet_web::metrics::SharedMetrics;
 use crate::cli::Cli;
 
 mod runloop;
-mod schedule;
+pub mod schedule;
 
 /// The resolved recording window for a given CLI + config pair.
 ///

@@ -45,8 +45,10 @@ pub mod publisher;
 pub mod types;
 
 pub use discovery::{HaDiscovery, HaDiscoveryConfig};
-pub use publisher::publish;
-pub use types::{ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel, TlsConfig};
+pub use publisher::{
+    KEEPALIVE_SECS, PRESENCE_OFFLINE, PRESENCE_ONLINE, PresenceSession, publish, publish_with,
+};
+pub use types::{ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel, TlsConfig, Will};
 
 /// High-level MQTT client for publishing bird detection events.
 ///
@@ -80,31 +82,17 @@ impl MqttClient {
         publish(&self.config, &topic, json.as_bytes())
     }
 
-    /// Publish a plain-text status message to `{prefix}/status`.
-    ///
-    /// Useful for online/offline notifications or periodic heartbeats.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MqttError`] if the connection or publish fails.
-    pub fn publish_status(&self, message: &str) -> Result<(), MqttError> {
-        let topic = self.config.status_topic();
-        publish(&self.config, &topic, message.as_bytes())
-    }
-
-    /// Publish a JSON `stats/today` payload for the Home Assistant discovery sensor.
-    ///
-    /// Sends `{"count": N}` to `{prefix}/stats/today`.  Call this once per
-    /// hour (or whenever the count changes) to keep the HA entity current.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MqttError`] if the connection or publish fails.
-    pub fn publish_daily_stats(&self, detection_count: i64) -> Result<(), MqttError> {
-        let topic = format!("{}/stats/today", self.config.topic_prefix);
-        let payload = format!(r#"{{"count":{detection_count}}}"#);
-        publish(&self.config, &topic, payload.as_bytes())
-    }
+    // `publish_status` and `publish_daily_stats` used to live here. Both had
+    // zero callers for the life of the project, which is why the two Home
+    // Assistant entities they fed were permanently `unknown`.
+    //
+    // They are not restored, they are replaced. Both topics are now owned by
+    // the presence session, which publishes them *retained* and at `QoS` 1 on
+    // a connection that carries a last will. A stateless `publish_status`
+    // beside that would be a second writer to `{prefix}/status` with a
+    // different retain flag — the one arrangement in which Home Assistant
+    // shows a live station as offline — so leaving it available was a trap
+    // rather than a convenience.
 
     /// Return a reference to the underlying configuration.
     #[must_use]

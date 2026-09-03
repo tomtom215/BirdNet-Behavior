@@ -100,6 +100,99 @@ impl SpeciesFilterObserver {
     }
 }
 
+/// Reports each audio file the daemon finished analysing.
+///
+/// # Why this exists
+///
+/// Nothing counted the pipeline's *throughput*. The only latency histogram is
+/// observed once per **stored detection** — its own `# HELP` says so — so on a
+/// station where inference runs perfectly and returns nothing (wrong labels,
+/// wrong sample rate, a model swapped by a bad update) every series was flat
+/// and empty, **identical** to a station where inference was not running at
+/// all. The four drop-reason labels do not separate them either: all of them
+/// live downstream of a prediction the model actually made.
+///
+/// One counter answers it. A station analysing 15-second segments produces
+/// about 5 760 files a day per source, so:
+///
+/// * counter flat while `birdnet_audio_source_up == 1` → capture is writing
+///   files and nothing is analysing them;
+/// * counter rising with no detections → the model is answering nothing.
+///
+/// The callback takes the file's path rather than a label because the
+/// source-label convention (`local`, or the RTSP id out of the filename) lives
+/// in the binary, next to every other use of it, and there should not be a
+/// second copy here.
+///
+/// # What is and is not gated
+///
+/// The metric and this type's contract are covered by CI-runnable tests. The
+/// two **call sites** in `run.rs` are not, because reaching them needs a loaded
+/// `BirdNetModel` and therefore the 541 MB model file — the same limit
+/// `tests/species_filter_e2e.rs` documents for its own second layer. What
+/// keeps them honest instead is that both sit in the `Ok` arm of
+/// `process_and_infer_filtered`, so "analysed" cannot drift to mean "attempted".
+#[derive(Clone)]
+pub struct ThroughputObserver(std::sync::Arc<dyn Fn(&std::path::Path) + Send + Sync>);
+
+impl std::fmt::Debug for ThroughputObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ThroughputObserver(..)")
+    }
+}
+
+impl ThroughputObserver {
+    /// Wrap a closure.
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(&std::path::Path) + Send + Sync + 'static,
+    {
+        Self(std::sync::Arc::new(f))
+    }
+
+    /// Report that one file finished analysis.
+    pub fn analysed(&self, path: &std::path::Path) {
+        (self.0)(path);
+    }
+}
+
+#[cfg(test)]
+mod throughput_observer_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::ThroughputObserver;
+
+    /// The observer must hand the caller the path it was given, unchanged.
+    ///
+    /// That is the whole contract: the source label is derived from the
+    /// filename on the binary side, where `derive_source_label` lives, so an
+    /// observer that dropped or rewrote the path would silently collapse every
+    /// source onto one series.
+    #[test]
+    fn the_path_reaches_the_callback_unchanged() {
+        let seen: Arc<Mutex<Vec<std::path::PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let observer = ThroughputObserver::new(move |p| sink.lock().unwrap().push(p.to_path_buf()));
+
+        observer.analysed(std::path::Path::new(
+            "/x/2026-05-19-birdnet-cam1-06:30:00.wav",
+        ));
+        observer.analysed(std::path::Path::new("/x/2026-05-19-birdnet-06:30:00.wav"));
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "every reported file must reach the callback");
+        assert_eq!(
+            seen[0],
+            std::path::Path::new("/x/2026-05-19-birdnet-cam1-06:30:00.wav")
+        );
+        assert_ne!(
+            seen[0], seen[1],
+            "two files from different sources must not arrive identical, or the \
+             per-source label the binary derives from them is meaningless"
+        );
+    }
+}
+
 /// Configuration for the detection daemon.
 #[derive(Debug, Clone)]
 pub struct DaemonConfig {
@@ -144,6 +237,13 @@ pub struct DaemonConfig {
     /// made an inert filter visible from a dashboard instead of from reading
     /// the code.
     pub on_species_filter_state: Option<SpeciesFilterObserver>,
+    /// Called once for every audio file the daemon finishes analysing.
+    ///
+    /// See [`ThroughputObserver`] for what this answers that nothing else did:
+    /// "the model returns nothing" and "the pipeline is not running" produce
+    /// identical, empty series without it. A callback for the same reason as
+    /// the field above — `birdnet-core` does not depend on the web crate.
+    pub on_file_analysed: Option<ThroughputObserver>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
     /// Confidence at or above which a watched non-bird noise class suppresses
@@ -253,6 +353,7 @@ mod tests {
             metadata_model_path: None,
             metadata_labels_path: None,
             on_species_filter_state: None,
+            on_file_analysed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

@@ -27,10 +27,12 @@ FAILED=0
 CI_TESTS=(
     admin-login-summary.sh
     alsa-device-detect.sh
+    binary-swap-atomicity.sh
     checksum-refusals.sh
     config-template.sh
     coord-parse.sh
     location-notice.sh
+    model-resume.sh
     pipefail-sigpipe.sh
     service-unit.sh
 )

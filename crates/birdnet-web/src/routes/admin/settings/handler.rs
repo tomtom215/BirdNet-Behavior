@@ -54,6 +54,7 @@ pub async fn settings_partial(State(state): State<AppState>) -> Result<Html<Stri
 /// Returns `StatusCode` on database or internal failures.
 pub async fn save_settings(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SettingsForm>,
 ) -> Result<Html<String>, StatusCode> {
     // Compare submitted values against the current DB state so we only
@@ -62,9 +63,24 @@ pub async fn save_settings(
     // exists) would silently overlay over the file config / env every
     // time *any* unrelated setting is saved.
     let existing = load_all_settings(&state);
+    let items = build_settings_items(&form, &existing);
+
+    // The audit metadata, computed before the write and from the same `items`
+    // the write uses, so the row cannot claim a key that was never submitted.
+    // Names only — a diff carrying `CADDY_PWD=hunter2` would put the admin
+    // password into a table `/admin/audit` renders.
+    let after: Vec<(String, String)> = items
+        .iter()
+        .map(|(k, v, _)| ((*k).to_owned(), v.clone()))
+        .collect();
+    let before: Vec<(String, String)> = after
+        .iter()
+        .filter_map(|(k, _)| existing.get(k).map(|v| (k.clone(), v.clone())))
+        .collect();
+    let changed = crate::audit::changed_keys(&before, &after);
+
     let result = state.with_db(|conn| {
         ensure_settings_table(conn)?;
-        let items = build_settings_items(&form, &existing);
         let refs: Vec<(&str, &str, SettingsCategory)> =
             items.iter().map(|(k, v, c)| (*k, v.as_str(), *c)).collect();
         set_many(conn, &refs)?;
@@ -73,6 +89,19 @@ pub async fn save_settings(
 
     match result {
         Ok(saved) => {
+            // Only when something actually changed. The settings page posts
+            // every field on every save, so recording each submission would
+            // turn the audit log into a click counter and bury the save that
+            // moved the recording schedule.
+            if let Some(keys) = changed {
+                crate::audit::audit(
+                    &state,
+                    Some(&request_user),
+                    "settings.update",
+                    None,
+                    Some(&keys),
+                );
+            }
             let body = Html(format!(
                 r#"<div class="alert alert-success" role="alert"
                     hx-swap-oob="true" id="settings-feedback">

@@ -102,6 +102,12 @@ async fn login_submit(
         {
             return open_bypass_redirect(&state, &next, &device);
         }
+        // The target carries the *submitted* username, not a verified one:
+        // "someone tried to sign in as admin sixty times last night" is the
+        // whole point, and a name that does not exist is as interesting as one
+        // that does. There is no actor id because there is no actor — that is
+        // why `audit_log.user_id` is nullable.
+        crate::audit::audit_user_id(&state, None, "auth.login.fail", Some(&form.username), None);
         let query = format!("?error=1&next={}", urlencode_path(&next));
         return Redirect::to(&format!("/login{query}")).into_response();
     };
@@ -129,6 +135,17 @@ async fn login_submit(
         let query = format!("?error=1&next={}", urlencode_path(&next));
         return Redirect::to(&format!("/login{query}")).into_response();
     }
+
+    // After the session row exists, so a success recorded here is one the
+    // operator actually got. Credentials that verified but whose session
+    // could not be persisted are a failed login from the outside.
+    crate::audit::audit_user_id(
+        &state,
+        Some(auth_user_id),
+        "auth.login.ok",
+        Some(&form.username),
+        None,
+    );
 
     let token = session::issue_token(&session_id, ttl_ms);
     redirect_with_cookie(&token, ttl_ms, &next)
@@ -274,8 +291,16 @@ async fn logout_submit(State(state): State<AppState>, req: Request) -> Response 
         .and_then(session::extract_token)
         && let Some(validated) = session::validate_token(token)
     {
+        // The user id comes from the session row rather than from a
+        // `RequestUser`: `/logout` is deliberately reachable without the auth
+        // middleware, so a stale cookie can still be cleared.
+        let user_id = state
+            .with_db(|conn| <_ as SessionStore>::find_active_session(conn, &validated.session_id))
+            .ok()
+            .map(|s| s.user_id);
         let _ =
             state.with_db(|conn| <_ as SessionStore>::revoke_session(conn, &validated.session_id));
+        crate::audit::audit_user_id(&state, user_id, "auth.logout", None, None);
     }
 
     let mut resp = Redirect::to("/").into_response();

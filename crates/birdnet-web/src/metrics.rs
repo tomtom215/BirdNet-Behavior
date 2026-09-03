@@ -153,15 +153,55 @@ pub struct MetricsRegistry {
     /// Seconds since the most recent stored detection, refreshed by the
     /// deadman task. `u64::MAX` = not yet measured / no detections ever.
     detection_silence_secs: AtomicU64,
+    /// Whether the system reports its clock as synchronised: `0` no, `1` yes,
+    /// `u64::MAX` = nothing here can answer, so the series is absent rather
+    /// than reporting a container's host clock as broken.
+    clock_synced: AtomicU64,
+    /// State of the MQTT presence connection: `0` down, `1` up,
+    /// `u64::MAX` = MQTT is not configured, so the series is absent rather
+    /// than reporting a broker that was never asked for as broken.
+    mqtt_connected: AtomicU64,
     /// Classifications the pipeline produced and then discarded, by reason.
     ///
     /// A station that is "detecting nothing" is either hearing nothing or
     /// throwing everything away, and from outside those look identical. The
-    /// reason label is what separates them: a spike in `quality` means the
-    /// microphone is in the wind, a spike in `occurrence` means the geomodel
-    /// disagrees with the classifier about where the station is.
+    /// reason label is what separates them.
+    ///
+    /// The reasons production actually emits, and what each one means when it
+    /// spikes: `confidence` (the model is unsure — a noisy site, or a threshold
+    /// set too high), `duplicate` (the same bird inside the deduplication
+    /// window, which is normal and only interesting if it dominates),
+    /// `quarantine` (below a per-species threshold, so the row is in the review
+    /// queue rather than gone), `implausible_hour` (a day bird at 2 a.m. —
+    /// worth looking at, and also in the queue), and `implausible_clock` (the
+    /// station is recording without knowing what day it is: NTP has not
+    /// reached it, and **nothing it records in this state can be filed**).
+    ///
+    /// This comment used to name `quality` and `occurrence` instead, and
+    /// explain what a spike in each would mean. Neither label is ever emitted
+    /// in production — both appear only in this file's own tests — so both
+    /// readings it taught were unavailable. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`.
     detections_dropped: RwLock<HashMap<String, AtomicU64>>,
     /// Capture processes the supervisor has restarted, per source.
+    /// Audio files the detection pipeline finished analysing, by source.
+    ///
+    /// The one series that separates "the model is answering nothing" from
+    /// "the pipeline is not running". Every other signal is downstream of a
+    /// prediction the model actually made, so on a station with a wrong label
+    /// file, a wrong sample rate, or a model swapped by a bad update, all of
+    /// them are flat and empty — exactly as they are on a station where
+    /// inference never started. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
+    /// (OB-12).
+    files_analysed: RwLock<HashMap<String, AtomicU64>>,
+    /// Notifications that never left the station, by why.
+    ///
+    /// Both guards on the outbound path — the per-destination circuit breaker
+    /// and the per-destination rate limit — drop a notification without
+    /// failing, and the skip was logged at `debug`, which the default filter
+    /// discards. A station could drop every alert it ever tried to send and
+    /// leave no evidence anywhere. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
+    /// (OB-5).
+    notifications_dropped: RwLock<HashMap<String, AtomicU64>>,
     capture_restarts: RwLock<HashMap<String, AtomicU64>>,
     /// Capture processes found alive but producing no segments, per source.
     /// Distinct from a restart: this is the *diagnosis*, and a stall that keeps
@@ -201,7 +241,11 @@ impl MetricsRegistry {
             detection_write_failures_total: AtomicU64::new(0),
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
+            clock_synced: AtomicU64::new(u64::MAX),
+            mqtt_connected: AtomicU64::new(u64::MAX),
             detections_dropped: RwLock::new(HashMap::new()),
+            files_analysed: RwLock::new(HashMap::new()),
+            notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
             occurrence_filter_active: AtomicU64::new(0),
@@ -248,6 +292,26 @@ impl MetricsRegistry {
     /// label cardinality cannot grow with traffic.
     pub fn inc_detection_dropped(&self, reason: &str) {
         Self::bump(&self.detections_dropped, reason);
+    }
+
+    /// Record that the pipeline finished analysing one audio file.
+    ///
+    /// A healthy station analysing 15-second segments emits about 5 760 of
+    /// these a day per source, so a *flat* counter alongside
+    /// `birdnet_audio_source_up == 1` means capture is writing files nothing is
+    /// analysing, and a *rising* counter with no detections means the model is
+    /// answering nothing. Neither of those was distinguishable from outside.
+    pub fn inc_file_analysed(&self, source: &str) {
+        Self::bump(&self.files_analysed, source);
+    }
+
+    /// Record a notification that never left the station.
+    ///
+    /// `reason` is a small closed vocabulary — `circuit_open`, `rate_limited`,
+    /// `send_failed`, `no_destination` — rather than free text, so the label
+    /// cardinality cannot grow with traffic.
+    pub fn inc_notification_dropped(&self, reason: &str) {
+        Self::bump(&self.notifications_dropped, reason);
     }
 
     /// Record that a capture process was restarted.
@@ -383,6 +447,43 @@ impl MetricsRegistry {
         }
     }
 
+    /// Record whether the system reports its clock as synchronised.
+    ///
+    /// `None` means the question could not be answered — no systemd to ask,
+    /// which is every Docker deployment — and renders as an absent series
+    /// rather than a `0` nobody can act on.
+    pub fn set_clock_synced(&self, synced: Option<bool>) {
+        self.clock_synced
+            .store(synced.map_or(u64::MAX, u64::from), Ordering::Relaxed);
+    }
+
+    /// Clock synchronisation state, when the system can report one.
+    #[must_use]
+    pub fn clock_synced(&self) -> Option<bool> {
+        match self.clock_synced.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v == 1),
+        }
+    }
+
+    /// Record whether the MQTT presence session is currently connected.
+    ///
+    /// Only the presence loop calls this, and only on a station with MQTT
+    /// configured — so the series exists exactly when there is a broker whose
+    /// reachability is a real question.
+    pub fn set_mqtt_connected(&self, up: bool) {
+        self.mqtt_connected.store(u64::from(up), Ordering::Relaxed);
+    }
+
+    /// MQTT presence connection state, or `None` when MQTT is not configured.
+    #[must_use]
+    pub fn mqtt_connected(&self) -> Option<bool> {
+        match self.mqtt_connected.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v == 1),
+        }
+    }
+
     /// Bump the watchdog ping counter.
     pub fn inc_watchdog_pings(&self) {
         self.watchdog_pings_total.fetch_add(1, Ordering::Relaxed);
@@ -431,7 +532,11 @@ impl MetricsRegistry {
             source_up,
             outbound_queue,
             detection_silence_secs: self.detection_silence_secs(),
+            clock_synced: self.clock_synced(),
+            mqtt_connected: self.mqtt_connected(),
             detections_dropped: Self::read_map(&self.detections_dropped),
+            files_analysed: Self::read_map(&self.files_analysed),
+            notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
             occurrence_filter_active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
@@ -471,8 +576,16 @@ pub struct MetricsSnapshot {
     pub outbound_queue: Vec<(String, u64)>,
     /// Seconds since the most recent stored detection (`None` = unknown).
     pub detection_silence_secs: Option<u64>,
+    /// Clock synchronisation state (`None` = the system cannot say).
+    pub clock_synced: Option<bool>,
+    /// MQTT presence connection state (`None` = MQTT not configured).
+    pub mqtt_connected: Option<bool>,
     /// Discarded classifications by reason.
     pub detections_dropped: Vec<(String, u64)>,
+    /// Audio files the pipeline finished analysing, per source.
+    pub files_analysed: Vec<(String, u64)>,
+    /// Notifications that never left the station, by reason.
+    pub notifications_dropped: Vec<(String, u64)>,
     /// Capture restarts per source.
     pub capture_restarts: Vec<(String, u64)>,
     /// Silent stalls diagnosed per source.
@@ -532,6 +645,26 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         let _ = writeln!(
             out,
             "birdnet_detections_dropped_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
+        );
+    }
+
+    out.push_str("# HELP birdnet_files_analysed_total Audio files the detection pipeline finished analysing, per source. Flat while birdnet_audio_source_up is 1 means capture is writing files nothing analyses; rising with no detections means the model is answering nothing.\n");
+    out.push_str("# TYPE birdnet_files_analysed_total counter\n");
+    for (source, count) in &snap.files_analysed {
+        let _ = writeln!(
+            out,
+            "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_notifications_dropped_total Notifications that never left the station, by reason: circuit_open (the destination is considered down), rate_limited (over the configured per-minute budget), send_failed (the destination refused or was unreachable), no_destination (nothing configured to send to).\n");
+    out.push_str("# TYPE birdnet_notifications_dropped_total counter\n");
+    for (reason, count) in &snap.notifications_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_notifications_dropped_total{{reason=\"{}\"}} {count}",
             escape_label(reason)
         );
     }
@@ -619,6 +752,24 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     // Emitted only once measured: an absent series reads as "unknown" in
     // Prometheus, which is the truth before the deadman task's first pass
     // (and on a station that has never detected anything).
+    if let Some(synced) = snap.clock_synced {
+        out.push_str(
+            "# HELP birdnet_clock_synced Whether the system reports its clock as synchronised to a time source (1) or not \
+             (0). Absent when nothing can answer, which is every container without systemd. A 0 here means timestamps are \
+             free-running: the dates stay plausible and every count and chart looks healthy while the hours drift.\n",
+        );
+        out.push_str("# TYPE birdnet_clock_synced gauge\n");
+        let _ = writeln!(out, "birdnet_clock_synced {}", u8::from(synced));
+    }
+    if let Some(up) = snap.mqtt_connected {
+        out.push_str(
+            "# HELP birdnet_mqtt_connected Whether the MQTT presence session is connected to the broker (1) or not (0). \
+             Absent when MQTT is not configured. While this is 0 the broker has published the station's last will, so \
+             Home Assistant already shows it offline.\n",
+        );
+        out.push_str("# TYPE birdnet_mqtt_connected gauge\n");
+        let _ = writeln!(out, "birdnet_mqtt_connected {}", u8::from(up));
+    }
     if let Some(secs) = snap.detection_silence_secs {
         out.push_str("# HELP birdnet_detection_silence_seconds Seconds since the most recent stored detection (end-to-end audio\u{2192}detection freshness).\n");
         out.push_str("# TYPE birdnet_detection_silence_seconds gauge\n");
@@ -880,6 +1031,117 @@ mod operational_metrics_tests {
         let reg = MetricsRegistry::new();
         f(&reg);
         render_runtime_metrics(&reg.snapshot())
+    }
+
+    /// The one series that separates "the model is answering nothing" from
+    /// "the pipeline is not running".
+    ///
+    /// Nothing counted throughput. `birdnet_inference_duration_seconds` is
+    /// observed once per **stored detection** — its own `# HELP` says so — so
+    /// on a station with a wrong label file, a wrong sample rate, or a model
+    /// swapped by a bad update, every latency series is flat and empty, exactly
+    /// as it is on a station where inference never started. The four
+    /// drop-reason labels do not separate them either: all of them live
+    /// downstream of a prediction the model actually made.
+    ///
+    /// Observed failing before `inc_file_analysed` existed: the exposition
+    /// carried no `birdnet_files_analysed_total` at all.
+    #[test]
+    fn analysed_files_are_counted_per_source() {
+        let out = rendered(|r| {
+            r.inc_file_analysed("local");
+            r.inc_file_analysed("local");
+            r.inc_file_analysed("cam1");
+        });
+        assert!(
+            out.contains(r#"birdnet_files_analysed_total{source="local"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_files_analysed_total{source="cam1"} 1"#),
+            "the per-source label is what tells a dead microphone on a \
+             two-source station from a dead pipeline: {out}"
+        );
+        assert!(
+            out.contains("# TYPE birdnet_files_analysed_total counter"),
+            "it must be declared, and as a counter: {out}"
+        );
+    }
+
+    /// The only number that says an alert never left the station.
+    ///
+    /// Both guards on the outbound path drop a notification *without failing* —
+    /// the circuit breaker when a destination is considered down, the token
+    /// bucket when it is over its per-minute budget — and the send then
+    /// returned `Ok(())`. The skip was logged at `debug`, which the default
+    /// filter discards, so a station could drop every alert it ever tried to
+    /// send and leave no evidence at all. See
+    /// `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` (OB-5).
+    ///
+    /// Observed failing before `inc_notification_dropped` existed: the
+    /// exposition carried no `birdnet_notifications_dropped_total` at all.
+    #[test]
+    fn dropped_notifications_are_counted_by_reason() {
+        let out = rendered(|r| {
+            r.inc_notification_dropped("rate_limited");
+            r.inc_notification_dropped("rate_limited");
+            r.inc_notification_dropped("circuit_open");
+        });
+        assert!(
+            out.contains(r#"birdnet_notifications_dropped_total{reason="rate_limited"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_notifications_dropped_total{reason="circuit_open"} 1"#),
+            "the reason is what separates a dead destination from a busy one, \
+             which need different fixes: {out}"
+        );
+        assert!(
+            out.contains("# TYPE birdnet_notifications_dropped_total counter"),
+            "it must be declared, and as a counter: {out}"
+        );
+    }
+
+    /// The counterpart: a station whose notifications all go out must not
+    /// publish a series suggesting otherwise.
+    #[test]
+    fn a_station_that_drops_nothing_publishes_no_drop_samples() {
+        let out = rendered(|_| {});
+        assert!(
+            out.contains("# TYPE birdnet_notifications_dropped_total counter"),
+            "the family is always declared, so a dashboard panel is never \
+             missing: {out}"
+        );
+        assert!(
+            !out.contains("birdnet_notifications_dropped_total{"),
+            "no drops means no samples, not a zero for every reason: {out}"
+        );
+    }
+
+    /// The discrimination this series exists for, spelled out as an assertion:
+    /// a station that analysed files and detected nothing must look different
+    /// from one that analysed nothing.
+    #[test]
+    fn analysing_without_detecting_looks_different_from_not_analysing() {
+        let answering_nothing = rendered(|r| {
+            for _ in 0..10 {
+                r.inc_file_analysed("local");
+            }
+            // No detections, no latency observations — the exact state a wrong
+            // label file produces.
+        });
+        let not_running = rendered(|_| {});
+
+        assert!(answering_nothing.contains(r#"birdnet_files_analysed_total{source="local"} 10"#));
+        assert!(
+            !not_running.contains("birdnet_files_analysed_total{"),
+            "a station that analysed nothing must emit no sample for it"
+        );
+        assert_ne!(
+            answering_nothing, not_running,
+            "these two stations were indistinguishable from every series the \
+             exposition carried, which is the whole finding"
+        );
     }
 
     /// The gauge that would have made the inert-filter defect visible. Zero is

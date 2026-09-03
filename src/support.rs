@@ -164,6 +164,23 @@ pub fn redacted_config(config: &Config) -> String {
 
 /// Run a command and capture its output, or a note explaining why not.
 ///
+/// The station's persisted ERROR/WARN lines, or a note saying why not.
+///
+/// A missing file is reported rather than staged empty: "this station has
+/// never logged a warning" and "the bundle could not find the log" are
+/// different answers, and only one of them is good news.
+fn read_error_log(config: Option<&Config>) -> String {
+    let path = crate::log_capture::error_log_path(&crate::helpers::db_path_from_config(config));
+    match std::fs::read_to_string(&path) {
+        Ok(s) if s.is_empty() => format!(
+            "(no warnings or errors logged; {} is empty)\n",
+            path.display()
+        ),
+        Ok(s) => s,
+        Err(e) => format!("(could not read {}: {e})\n", path.display()),
+    }
+}
+
 /// Never fails the bundle: a station without `journalctl` (a container, a
 /// non-systemd install) should still produce everything else, and "this tool
 /// was not available" is itself worth knowing when reading the bundle.
@@ -250,6 +267,17 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
         ),
     ));
 
+    // The station's own ERROR/WARN log. This is the member that matters on a
+    // default Raspberry Pi OS, where `/var/log/journal` does not exist and the
+    // journal is therefore volatile: `journal.log` below is empty for
+    // everything before the last boot, which is exactly the boot an operator
+    // is filing a bug about. `errors.jsonl` survives it.
+    push(stage(
+        &dir,
+        crate::log_capture::ERROR_LOG_NAME,
+        &read_error_log(config),
+    ));
+
     push(stage(&dir, "uname.txt", &capture("uname", &["-a"])));
     push(stage(&dir, "disk.txt", &capture("df", &["-h"])));
     push(stage(
@@ -294,7 +322,8 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
             );
             println!();
             println!("It contains the diagnostic report, the station's version, a redacted");
-            println!("copy of the configuration, and the last {JOURNAL_LINES} journal lines.");
+            println!("copy of the configuration, the station's own error log, and the last");
+            println!("{JOURNAL_LINES} journal lines.");
             println!("Passwords, tokens and URL credentials are masked as {REDACTED} —");
             println!("check it before posting anywhere public all the same.");
             let _ = std::io::stdout().flush();
@@ -524,6 +553,7 @@ FLICKR_FILTER_EMAIL=me@example.com",
             "version.txt",
             "config.redacted",
             "journal.log",
+            "errors.jsonl",
         ] {
             assert!(
                 listing.contains(member),
@@ -534,6 +564,33 @@ FLICKR_FILTER_EMAIL=me@example.com",
 
     /// The bundle must not carry the secret it was told about. This is the
     /// gate that would catch a future collector added without redaction.
+    #[test]
+    fn a_missing_error_log_says_so_rather_than_staging_nothing() {
+        // "this station has never logged a warning" and "the bundle could not
+        // find the log" are different answers, and only one is good news. An
+        // empty member reads as the first whichever it was.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(&format!("DB_PATH={}/birds.db", dir.path().display())).unwrap();
+        let text = read_error_log(Some(&cfg));
+        assert!(text.contains("could not read"), "{text}");
+        assert!(text.contains("errors.jsonl"), "{text}");
+    }
+
+    #[test]
+    fn an_existing_error_log_is_carried_verbatim() {
+        // Counterpart: the note must not replace real content.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(&format!("DB_PATH={}/birds.db", dir.path().display())).unwrap();
+        std::fs::write(
+            dir.path().join("errors.jsonl"),
+            "{\"level\":\"ERROR\",\"message\":\"database is corrupt\"}\n",
+        )
+        .unwrap();
+        let text = read_error_log(Some(&cfg));
+        assert!(text.contains("database is corrupt"), "{text}");
+        assert!(!text.contains("could not read"), "{text}");
+    }
+
     #[test]
     fn no_secret_reaches_the_archive() {
         use clap::Parser as _;

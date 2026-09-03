@@ -18,10 +18,14 @@
 //!   quietly discarding the audio a researcher would want to re-examine;
 //! * a failing integrity check or a backup that has not completed in weeks —
 //!   the two things standing between a corrupt database and a lost season;
-//! * the analytics database quarantined and rebuilt, which empties every
-//!   behavioural dashboard until someone notices;
+//! * either database quarantined and started over — the analytics store
+//!   rebuilt from SQLite, which empties every behavioural dashboard until it
+//!   finishes, or the detection store itself, which means no backup in the ring
+//!   verified and the whole history is in a file nothing else reports;
 //! * a Pi sitting at thermal-throttle temperature in a sealed enclosure in
-//!   July, losing inference throughput and shortening the SD card's life.
+//!   July, losing inference throughput and shortening the SD card's life;
+//! * a clock that has drifted off its time source, which files a whole season
+//!   under the wrong hour and looks, in every count and chart, like a good one.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -44,6 +48,7 @@ use std::time::Duration;
 use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
+use super::announce::{Alert, Outbox};
 
 /// How often the conditions are re-measured.
 ///
@@ -70,13 +75,15 @@ const REQUIRED_CONSECUTIVE_POLLS: u32 = 3;
 /// Minutes of continuous fault before an alert, for use in alert copy.
 const DEBOUNCE_MINUTES: u64 = (POLL_EVERY.as_secs() * REQUIRED_CONSECUTIVE_POLLS as u64) / 60;
 
-/// Disk usage at which recordings are being purged to make room.
+/// Disk usage at which the station is close enough to purging to say so.
 ///
-/// Matches the capture layer's own default purge threshold. Above this the
-/// station is still working, but it is discarding audio to stay alive — which
-/// is exactly the kind of degradation an operator would want to hear about
-/// while there is still time to fit a bigger card.
-const DISK_ALERT_PERCENT: f64 = 90.0;
+/// The same constant the disk badge on the Station Health page turns amber at,
+/// so the page and the operator's inbox change at one reading rather than
+/// agreeing by coincidence. This doc comment used to claim it "matches the
+/// capture layer's own default purge threshold"; that threshold is **95**, and
+/// the gap is the point — the alert has to arrive while there is still time to
+/// fit a bigger card, not once recordings are already being deleted.
+const DISK_ALERT_PERCENT: f64 = birdnet_core::audio::capture::DiskUsage::LOW_PERCENT;
 
 /// CPU temperature at which a Raspberry Pi begins throttling.
 ///
@@ -147,16 +154,146 @@ fn transitions(
     (broken, recovered)
 }
 
+/// One condition check: reads the station, appends whatever is wrong.
+type Check = fn(&AppState, &mut Vec<Condition>);
+
+/// Every check [`evaluate`] runs, paired with the name it is known by.
+///
+/// A table rather than a sequence of calls, so "which conditions does this
+/// station actually look for?" is one value that a test can read. The module
+/// doc above lists them in prose; this is the same list in code, and
+/// `every_documented_condition_is_actually_checked` is what stops the two
+/// drifting apart. A check dropped during a refactor is otherwise invisible:
+/// it produces no failure, no warning, and no condition — exactly what a
+/// healthy station produces.
+const CHECKS: [(&str, Check); 6] = [
+    ("sources", check_sources),
+    ("disk", check_disk),
+    ("thermal", |_state, out| check_thermal(out)),
+    ("maintenance", check_maintenance),
+    ("quarantined-stores", check_quarantined_stores),
+    ("clock", check_clock),
+];
+
 /// Everything currently wrong with the station, as of this poll.
 ///
-/// Runs on a blocking thread: it touches `SQLite`, `statvfs` and sysfs.
+/// Runs on a blocking thread: it touches `SQLite`, `statvfs`, sysfs, and — for
+/// the clock — one short-lived subprocess.
 fn evaluate(state: &AppState) -> Vec<Condition> {
     let mut out = Vec::new();
-    check_sources(state, &mut out);
-    check_disk(state, &mut out);
-    check_thermal(&mut out);
-    check_maintenance(state, &mut out);
+    for (_name, check) in CHECKS {
+        check(state, &mut out);
+    }
     out
+}
+
+/// What the system will say about its own clock synchronisation.
+///
+/// Three answers, not two. "Cannot tell" is its own case and must not collapse
+/// into "broken": a Docker container has no systemd to ask — `timedatectl`
+/// there fails with *"System has not been booted with systemd as init system"*
+/// — and its clock is the host's problem, not something this station can
+/// report on or fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NtpState {
+    /// The system reports its clock as synchronised to a time source.
+    Synced,
+    /// The system reports that it is not.
+    Unsynced,
+    /// Nothing here can answer the question.
+    Unknown,
+}
+
+/// Ask the system whether its clock is synchronised.
+///
+/// `timedatectl show -p NTPSynchronized --value` is the authority because it
+/// reports the state *now*, across whichever NTP implementation is installed.
+///
+/// `/run/systemd/timesync/synchronized` is only a fallback, and a weaker
+/// signal: it is created when `systemd-timesyncd` first synchronises and is
+/// **not** removed if synchronisation is later lost, so it answers "synced at
+/// some point since boot" rather than "synced now". That is precisely the
+/// distinction this check exists for — a Pi whose NTP has been unreachable for
+/// months — so it is consulted only when `timedatectl` cannot answer at all.
+///
+/// One subprocess per five-minute poll. On a Pi that is a few seconds of CPU a
+/// day, which is not worth caching state to avoid.
+fn probe_ntp_state() -> NtpState {
+    match std::process::Command::new("timedatectl")
+        .args(["show", "-p", "NTPSynchronized", "--value"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            return match String::from_utf8_lossy(&out.stdout).trim() {
+                "yes" => NtpState::Synced,
+                "no" => NtpState::Unsynced,
+                _ => NtpState::Unknown,
+            };
+        }
+        // A non-zero exit is the container case: the binary is present but
+        // there is no bus to ask. Fall through to the file, which will also be
+        // absent there, giving Unknown.
+        Ok(_) | Err(_) => {}
+    }
+    if std::path::Path::new("/run/systemd/timesync/synchronized").exists() {
+        NtpState::Synced
+    } else {
+        NtpState::Unknown
+    }
+}
+
+/// A clock that cannot be trusted to say what hour a recording belongs to.
+///
+/// Two signals, because they fail differently. The plausibility floor catches
+/// a clock that never got set — a Pi with no RTC that booted to 1970 — and is
+/// the one capture already refuses to schedule against. NTP state catches the
+/// slower failure the floor cannot see: a clock that *is* plausible and has
+/// been drifting away from real time for months, filing every detection under
+/// the wrong hour while every count and chart looks healthy.
+fn check_clock(state: &AppState, out: &mut Vec<Condition>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let ntp = probe_ntp_state();
+    state.metrics().set_clock_synced(match ntp {
+        NtpState::Synced => Some(true),
+        NtpState::Unsynced => Some(false),
+        NtpState::Unknown => None,
+    });
+    out.extend(clock_condition(now, ntp));
+}
+
+/// The clock policy, separated from the probes so it can be tested.
+///
+/// No extra grace period for a station that has just booted: the shared
+/// [`REQUIRED_CONSECUTIVE_POLLS`] debounce already means a clock has to look
+/// wrong for [`DEBOUNCE_MINUTES`] minutes before anyone is woken, which is
+/// longer than NTP takes on any station that has a route to a time server. A
+/// station that has none will alert once and stay in that episode, which is
+/// the correct report: its timestamps really are unverifiable.
+fn clock_condition(now: u64, ntp: NtpState) -> Option<Condition> {
+    // The floor first: a clock reading 1970 is wrong whatever NTP thinks, and
+    // saying so is more useful than "not synchronised".
+    if !crate::capture::schedule::secs_look_synced(now) {
+        return Some(Condition {
+            key: "clock".to_owned(),
+            title: "Station clock is not set".to_owned(),
+            body: format!(
+                "The system clock reads a date before this software existed (Unix time {now}),                  so every recording is being filed under the wrong day. Capture will not use                  the solar schedule until this is fixed. On a Raspberry Pi without a                  real-time clock this means network time has never been reached: check the                  uplink, then `sudo timedatectl set-ntp true`."
+            ),
+        });
+    }
+    // "Cannot tell" is not "broken" — see `NtpState`.
+    if ntp != NtpState::Unsynced {
+        return None;
+    }
+    Some(Condition {
+        key: "clock".to_owned(),
+        title: "Station clock is not synchronised".to_owned(),
+        body: format!(
+            "The system reports that its clock is not synchronised to a time source. The date              is still plausible, so nothing else will complain, but the station has been              free-running and every detection is being filed under whatever hour this clock              believes — which is the kind of loss that only shows up when someone tries to              compare a season against another station's. Check `timedatectl status` and the              station's route to its NTP server. Seen for {DEBOUNCE_MINUTES} minutes before              this alert was sent."
+        ),
+    })
 }
 
 /// Any configured audio source whose gauge has been down.
@@ -236,6 +373,58 @@ fn disk_condition(used: f64) -> Option<Condition> {
     })
 }
 
+/// A database that had to be quarantined and started over.
+///
+/// The fifth condition this module's own documentation says it exists for, and
+/// the one `evaluate` did not implement. Both stores are covered, and they cost
+/// very different things:
+///
+/// * `*.duckdb.corrupt.<ts>` — the analytics store was rebuilt from SQLite.
+///   Correct and automatic; every behavioural dashboard is empty until it
+///   finishes, and a file is sitting on the card.
+/// * `*.db.corrupt.<ts>` — **the detection history is gone.** `src/app.rs`
+///   moves the database aside and starts fresh only when no backup in the ring
+///   verifies, so this is the end of everything the station has ever heard.
+///
+/// Neither reached anything before: no scan matched the SQLite name, no
+/// condition existed for either, and no prune removes the file.
+fn check_quarantined_stores(state: &AppState, out: &mut Vec<Condition>) {
+    let dir = state.db_path().parent().map(std::path::Path::to_path_buf);
+    let found = crate::doctor::analytics::quarantined_files(dir.as_deref());
+    out.extend(quarantine_condition(&found));
+}
+
+/// The quarantine policy, separated from the filesystem so it can be tested.
+fn quarantine_condition(found: &[std::path::PathBuf]) -> Option<Condition> {
+    let names: Vec<String> = found
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    // A lost detection history and a rebuilt analytics store are not the same
+    // news, and an operator reading one line on a phone needs the difference in
+    // the title rather than three paragraphs down.
+    let history_lost = names.iter().any(|n| !n.contains(".duckdb.corrupt."));
+    let title = if history_lost {
+        "The detection database was quarantined — the station started over".to_owned()
+    } else {
+        "The analytics database was quarantined and rebuilt".to_owned()
+    };
+    Some(Condition {
+        key: "quarantined-store".to_owned(),
+        title,
+        body: format!(
+            "Found beside the live database: {}. A `.db.corrupt.*` file means no backup in the \
+             ring verified and the station began a fresh history; a `.duckdb.corrupt.*` file \
+             means only the analytics store was rebuilt. Copy the file off the station before \
+             anything reclaims the space, then see `birdnet-behavior --doctor`.",
+            names.join(", ")
+        ),
+    })
+}
+
 /// A CPU sitting at or above the throttling threshold.
 fn check_thermal(out: &mut Vec<Condition>) {
     out.extend(thermal_condition(
@@ -262,7 +451,22 @@ fn thermal_condition(temp: Option<f32>) -> Option<Condition> {
     })
 }
 
-/// A scheduled maintenance job that has not completed in far too long.
+/// A scheduled maintenance job that has failed, or has not completed in far
+/// too long.
+///
+/// # Why "failed" is a separate question from "stale"
+///
+/// This used to read `last_run_unix` alone. `mark_ran` was called
+/// unconditionally after every backup — success or failure — so a backup that
+/// failed **every week for a year** refreshed its timestamp every week and
+/// never once looked stale. The only thing this check could detect was the
+/// maintenance loop having *stopped*, which is not the failure the module doc
+/// promises to catch.
+///
+/// The recorded verdict answers it directly, and the integrity check has always
+/// recorded one: a `Some(false)` there means the database is corrupting, and it
+/// reached the operator as a `tracing::error!` and a red pixel on a page nobody
+/// has open. It pushed nothing.
 fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -270,9 +474,13 @@ fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
     for (job, label) in [
         (birdnet_db::sqlite::JOB_BACKUP_VACUUM, "backup"),
         (birdnet_db::sqlite::JOB_INTEGRITY_CHECK, "integrity check"),
+        (birdnet_db::sqlite::JOB_OFFSITE_BACKUP, "offsite backup"),
     ] {
-        let last =
-            state.with_db(|conn| birdnet_db::sqlite::last_run_unix(conn, job).ok().flatten());
+        let last = state.with_db(|conn| {
+            birdnet_db::sqlite::last_run_result(conn, job)
+                .ok()
+                .flatten()
+        });
         // `None` means "never run", which on a station that has just been
         // installed is normal and on one that has been up for weeks is not.
         // The maintenance loop records a run on its first tick, so a persistent
@@ -285,17 +493,40 @@ fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
 
 /// The maintenance policy, separated from the query so it can be tested.
 ///
-/// `last_run` of `None` means "never recorded", which produces no condition:
-/// on a fresh install that is normal, and there is no timestamp to measure
-/// staleness against. The maintenance loop records a run on its first tick, so
-/// a station that has been up long enough to be stale will have one.
+/// `recorded` is what `maintenance_runs` holds for the job: `None` for "never
+/// run", or `Some((when, verdict))` where the verdict is `None` for a job that
+/// records no pass/fail.
+///
+/// `None` produces no condition: on a fresh install that is normal, and there
+/// is no timestamp to measure staleness against. The maintenance loop records a
+/// run on its first tick, so a station that has been up long enough to be stale
+/// will have one.
+///
+/// A recorded **failure** produces a condition immediately, without waiting for
+/// staleness. That is the whole point: a job that fails on schedule is never
+/// stale, so the staleness rule alone could not see it.
 fn maintenance_condition(
     job: &str,
     label: &str,
-    last_run: Option<i64>,
+    recorded: Option<(i64, Option<bool>)>,
     now: i64,
 ) -> Option<Condition> {
-    let age = now.saturating_sub(last_run?);
+    let (last_run, verdict) = recorded?;
+
+    if verdict == Some(false) {
+        return Some(Condition {
+            key: format!("maintenance-failed:{job}"),
+            title: format!("Scheduled {label} is failing"),
+            body: format!(
+                "The station's {label} ran and did not succeed. It is on schedule, so it will \
+                 never look overdue — the timestamp is refreshed by the attempt, not by the \
+                 result. This is the job that stands between a corrupted database and a lost \
+                 season: journalctl -u birdnet-behavior | grep -i {label}"
+            ),
+        });
+    }
+
+    let age = now.saturating_sub(last_run);
     (age > MAINTENANCE_STALE_SECS).then(|| {
         let days = age / 86_400;
         Condition {
@@ -327,7 +558,15 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
             "station-health notifier started"
         );
         // key -> title, so a recovery notice can name what recovered.
+        //
+        // This latch means "the episode has been observed and logged", which is
+        // what keeps the loud line to one per episode. Whether the *push* went
+        // out is the outbox's business: it is retried at every poll until it
+        // lands, so a condition raised while the notifier was down is still
+        // announced when the notifier comes back.
         let mut alerted: BTreeMap<String, String> = BTreeMap::new();
+        // Alerts logged but not yet delivered, keyed by condition.
+        let mut outbox: Outbox<String> = Outbox::new();
         // How many consecutive polls each currently-faulty key has been seen
         // for; see REQUIRED_CONSECUTIVE_POLLS.
         let mut streak: BTreeMap<String, u32> = BTreeMap::new();
@@ -349,42 +588,35 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
                     "STATION HEALTH — {}",
                     condition.title
                 );
-                notify(
-                    apprise.as_ref(),
-                    &condition.title,
-                    &condition.body,
-                    birdnet_integrations::apprise::NotifyType::Warning,
-                )
-                .await;
+                outbox.queue(
+                    condition.key.clone(),
+                    Alert::new(
+                        &condition.title,
+                        &condition.body,
+                        birdnet_integrations::apprise::NotifyType::Warning,
+                    ),
+                );
                 alerted.insert(condition.key, condition.title);
             }
             for key in recovered {
                 let title = alerted.remove(&key).unwrap_or_else(|| key.clone());
                 tracing::info!(key = %key, "station health recovered: {title}");
-                notify(
-                    apprise.as_ref(),
-                    "Station health recovered",
-                    &format!("Resolved: {title}"),
-                    birdnet_integrations::apprise::NotifyType::Info,
-                )
-                .await;
+                // Keyed by the condition, so a recovery replaces an onset that
+                // is still stuck in the outbox: an operator whose uplink was
+                // down must not be told about a fault that has already cleared.
+                outbox.queue(
+                    key,
+                    Alert::new(
+                        "Station health recovered",
+                        format!("Resolved: {title}"),
+                        birdnet_integrations::apprise::NotifyType::Info,
+                    ),
+                );
             }
+
+            super::announce::flush(&mut outbox, apprise.as_ref(), &state).await;
         }
     });
-}
-
-/// Best-effort Apprise delivery; the WARN log is the guaranteed signal.
-async fn notify(
-    apprise: Option<&AppriseHandle>,
-    title: &str,
-    body: &str,
-    kind: birdnet_integrations::apprise::NotifyType,
-) {
-    let Some(handle) = apprise else { return };
-    let mut client = handle.lock().await;
-    if let Err(e) = client.send_notification(title, body, kind).await {
-        tracing::warn!(error = %e, "station-health notification failed to send");
-    }
 }
 
 #[cfg(test)]
@@ -410,6 +642,125 @@ mod tests {
     /// one, so shortening the constant fails the build instead of silently
     /// making that test vacuous.
     const _: () = assert!(REQUIRED_CONSECUTIVE_POLLS > 2);
+
+    #[test]
+    fn every_documented_condition_is_actually_checked() {
+        // The module doc promises six conditions. Deleting a `check_*` call
+        // from `evaluate` used to be undetectable — it produces no failure, no
+        // warning and no condition, which is indistinguishable from a healthy
+        // station. Removing `check_clock` was applied as a mutation and passed
+        // all 31 tests before this gate existed.
+        for name in [
+            "sources",
+            "disk",
+            "thermal",
+            "maintenance",
+            "quarantined-stores",
+            "clock",
+        ] {
+            assert!(
+                CHECKS.iter().any(|(n, _)| *n == name),
+                "`evaluate` no longer runs the {name} check, which the module doc promises"
+            );
+        }
+        assert_eq!(
+            CHECKS.len(),
+            6,
+            "a seventh check needs a line in the module doc and in this gate"
+        );
+    }
+
+    // ── the clock ───────────────────────────────────────────────────────
+
+    /// A timestamp comfortably inside the plausible range.
+    const PLAUSIBLE_NOW: u64 = 1_780_000_000; // 2026-06-08
+
+    #[test]
+    fn an_unset_clock_is_reported_as_unset_not_as_unsynchronised() {
+        // A Pi with no RTC boots to 1970. Saying "not synchronised" there
+        // sends the operator to `timedatectl status`, which will tell them
+        // what they already know; saying the clock is not *set* points at the
+        // uplink, which is the actual fault.
+        for ntp in [NtpState::Synced, NtpState::Unsynced, NtpState::Unknown] {
+            let c = clock_condition(0, ntp).expect("1970 is a condition whatever NTP says");
+            assert_eq!(c.key, "clock");
+            assert!(c.title.contains("not set"), "{}", c.title);
+        }
+    }
+
+    #[test]
+    fn a_plausible_but_unsynchronised_clock_is_the_slow_failure() {
+        // The one the floor cannot see: the date is fine, every count and
+        // chart looks healthy, and the hours have been drifting for months.
+        let c = clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("a condition");
+        assert_eq!(c.key, "clock");
+        assert!(c.title.contains("not synchronised"), "{}", c.title);
+        assert!(
+            c.body.contains("free-running"),
+            "the body must say what was lost: {}",
+            c.body
+        );
+    }
+
+    #[test]
+    fn a_healthy_clock_and_an_unanswerable_one_both_stay_quiet() {
+        // The discrimination, and the reason `NtpState` has three variants.
+        // Every Docker deployment lands on `Unknown` — `timedatectl` is
+        // present but there is no bus — and a container's clock is the host's
+        // to fix. Alerting there would train an entire class of operator to
+        // ignore this notifier.
+        assert!(clock_condition(PLAUSIBLE_NOW, NtpState::Synced).is_none());
+        assert!(clock_condition(PLAUSIBLE_NOW, NtpState::Unknown).is_none());
+    }
+
+    #[test]
+    fn both_clock_faults_share_one_episode_key() {
+        // A clock that is unset and then merely unsynchronised is one fault
+        // getting better, not two faults. Different keys would send a
+        // recovery notice for the first while opening an episode for the
+        // second, in the same poll.
+        let unset = clock_condition(0, NtpState::Unsynced).expect("unset");
+        let drifting = clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("drifting");
+        assert_eq!(unset.key, drifting.key);
+    }
+
+    #[test]
+    fn the_clock_condition_earns_its_alert_like_every_other() {
+        // It goes through the same debounce: a clock that reads wrong for one
+        // poll during an NTP step must not wake anyone.
+        let alerted = BTreeMap::new();
+        let mut streak = BTreeMap::new();
+        let now = vec![clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("condition")];
+        for poll in 1..REQUIRED_CONSECUTIVE_POLLS {
+            let (broken, _) = transitions(&alerted, &mut streak, &now);
+            assert!(broken.is_empty(), "poll {poll} must not alert yet");
+        }
+        let (broken, _) = transitions(&alerted, &mut streak, &now);
+        assert_eq!(
+            broken.len(),
+            1,
+            "and the {REQUIRED_CONSECUTIVE_POLLS}th does"
+        );
+    }
+
+    #[test]
+    fn probing_this_container_answers_unknown_rather_than_unsynced() {
+        // Not a mock: this test process runs without systemd as PID 1, which
+        // is the same shape as every Docker deployment. `timedatectl` is
+        // installed and exits non-zero with "System has not been booted with
+        // systemd as init system", and /run/systemd/timesync/ does not exist.
+        // If this ever returns Unsynced here, every containerised station
+        // starts alerting about its host's clock.
+        if std::path::Path::new("/run/systemd/timesync/synchronized").exists() {
+            eprintln!("running under systemd-timesyncd — probe test skipped");
+            return;
+        }
+        assert_ne!(
+            probe_ntp_state(),
+            NtpState::Unsynced,
+            "a system that cannot answer must not be reported as broken"
+        );
+    }
 
     /// Drive `polls` consecutive identical polls and return what alerted.
     fn after_polls(polls: u32, conditions: &[Condition]) -> Vec<String> {
@@ -646,15 +997,150 @@ mod tests {
     fn maintenance_alerts_only_once_genuinely_stale() {
         let now = 1_800_000_000_i64;
         // One day old: the backup job runs weekly, so this is healthy.
-        assert!(maintenance_condition("j", "backup", Some(now - 86_400), now).is_none());
+        assert!(maintenance_condition("j", "backup", Some((now - 86_400, None)), now).is_none());
         // Exactly at the threshold is not yet past it.
         assert!(
-            maintenance_condition("j", "backup", Some(now - MAINTENANCE_STALE_SECS), now).is_none()
+            maintenance_condition(
+                "j",
+                "backup",
+                Some((now - MAINTENANCE_STALE_SECS, None)),
+                now
+            )
+            .is_none()
         );
-        let stale = maintenance_condition("j", "backup", Some(now - 30 * 86_400), now)
+        let stale = maintenance_condition("j", "backup", Some((now - 30 * 86_400, None)), now)
             .expect("30 days is several missed weekly runs");
         assert!(stale.title.contains("30 days"), "{}", stale.title);
         assert!(stale.body.contains("journalctl"), "the fix is actionable");
+    }
+
+    /// A job that fails **on schedule** must alert, and this is the case the
+    /// previous check structurally could not see.
+    ///
+    /// `mark_ran` was called unconditionally after every backup, and this
+    /// function read `last_run_unix` while ignoring the `ok` column. So a
+    /// backup that failed every week for a year refreshed its timestamp every
+    /// week and was never stale: the only thing detectable was the maintenance
+    /// loop having *stopped*. The module's own doc promises to catch "a failing
+    /// integrity check or a backup that has not completed in weeks — the two
+    /// things standing between a corrupt database and a lost season", and
+    /// caught neither.
+    ///
+    /// Observed failing before the verdict was read: a fresh failed run
+    /// produced `None`.
+    #[test]
+    fn a_job_that_fails_on_schedule_alerts_without_waiting_to_go_stale() {
+        let now = 1_800_000_000_i64;
+        // Ran an hour ago and failed. Nowhere near stale.
+        let c = maintenance_condition(
+            "backup_vacuum",
+            "backup",
+            Some((now - 3_600, Some(false))),
+            now,
+        )
+        .expect("a recorded failure is a fault the moment it is recorded");
+        assert!(c.title.contains("failing"), "{}", c.title);
+        assert!(
+            c.key.contains("failed"),
+            "a failure and a staleness must be distinct episodes, or one \
+             recovering would clear the other: {}",
+            c.key
+        );
+        assert!(
+            c.body.contains("never look overdue"),
+            "the operator needs to know why nothing warned them sooner: {}",
+            c.body
+        );
+    }
+
+    /// A **failed integrity check** is the one that means the database is
+    /// corrupting, and it pushed nothing at all.
+    ///
+    /// It recorded its verdict correctly and that verdict correctly reddened a
+    /// badge and 503'd an endpoint — but the staleness-only rule here meant no
+    /// notification ever left the box.
+    #[test]
+    fn a_failed_integrity_check_is_a_condition() {
+        let now = 1_800_000_000_i64;
+        let c = maintenance_condition(
+            "integrity_check",
+            "integrity check",
+            Some((now - 60, Some(false))),
+            now,
+        )
+        .expect("a failed integrity check must reach the operator");
+        assert!(c.title.contains("integrity check"), "{}", c.title);
+    }
+
+    /// The discrimination: a job that ran recently and **passed** is not a
+    /// fault. A rule that alerted on every recorded run would satisfy both
+    /// tests above and page the operator weekly on a perfectly healthy station.
+    #[test]
+    fn a_job_that_ran_and_passed_is_not_a_fault() {
+        let now = 1_800_000_000_i64;
+        assert!(
+            maintenance_condition("j", "backup", Some((now - 3_600, Some(true))), now).is_none(),
+            "a successful run must produce nothing"
+        );
+        // And a passing job can still go stale, so the two rules compose.
+        let stale =
+            maintenance_condition("j", "backup", Some((now - 30 * 86_400, Some(true))), now)
+                .expect("a job that passed a month ago and not since is still overdue");
+        assert!(stale.title.contains("30 days"), "{}", stale.title);
+    }
+
+    /// The fifth condition this module's documentation promised and `evaluate`
+    /// did not implement.
+    ///
+    /// A `.db.corrupt.*` file means no backup in the ring verified and the
+    /// station began a fresh history — everything it had ever heard is in that
+    /// file and nowhere else. Nothing reported it: the doctor's scan matched
+    /// `.duckdb.corrupt.` only (and its test asserted the SQLite name was
+    /// excluded, on the stated grounds that it "belongs to the other check",
+    /// which did not exist), no condition here looked, and no prune removes it.
+    #[test]
+    fn a_quarantined_detection_database_says_the_history_was_lost() {
+        let c = quarantine_condition(&[std::path::PathBuf::from(
+            "/var/lib/birdnet/birds.db.corrupt.1700000000",
+        )])
+        .expect("a lost history must reach the operator");
+        assert!(
+            c.title.contains("started over"),
+            "the title is what an operator reads on a phone: {}",
+            c.title
+        );
+        assert!(
+            c.body.contains("birds.db.corrupt.1700000000"),
+            "it must name the file, because copying it off the station before \
+             anything reclaims the space is the only recovery: {}",
+            c.body
+        );
+    }
+
+    /// …and an analytics rebuild is different news, said differently.
+    ///
+    /// The discrimination: a condition that gave both the same title would
+    /// pass the test above and tell an operator their history was gone every
+    /// time a DuckDB version bump rebuilt the analytics store.
+    #[test]
+    fn a_quarantined_analytics_store_is_not_reported_as_a_lost_history() {
+        let c = quarantine_condition(&[std::path::PathBuf::from(
+            "/var/lib/birdnet/birds.duckdb.corrupt.1700000000",
+        )])
+        .expect("a rebuild is worth telling the operator about");
+        assert!(c.title.contains("analytics"), "{}", c.title);
+        assert!(
+            !c.title.contains("started over"),
+            "a rebuilt analytics store has not lost the detection history: {}",
+            c.title
+        );
+    }
+
+    /// A healthy station says nothing, which a condition that always fired
+    /// would not.
+    #[test]
+    fn no_quarantine_is_not_a_condition() {
+        assert!(quarantine_condition(&[]).is_none());
     }
 
     /// A clock that jumped backwards must not manufacture a fault.
@@ -666,7 +1152,7 @@ mod tests {
     #[test]
     fn a_backwards_clock_does_not_manufacture_staleness() {
         let now = 1_000_000_i64;
-        assert!(maintenance_condition("j", "backup", Some(now + 86_400), now).is_none());
+        assert!(maintenance_condition("j", "backup", Some((now + 86_400, None)), now).is_none());
     }
 
     /// The debounce copy must not outrun the debounce.

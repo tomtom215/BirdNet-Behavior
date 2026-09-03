@@ -15,13 +15,35 @@ BIRDNET_MQTT_HOST=192.168.1.10
 
 Topics are built from a configurable **prefix** (default `birdnet`):
 
-| Topic | Payload |
-|---|---|
-| `birdnet/detection/<Scientific_Name>` | A detection (JSON, below). Spaces in the name become underscores. |
-| `birdnet/status` | Online/offline status of the station. |
-| `birdnet/stats/today` | Rolling daily totals. |
+| Topic | Payload | Retained | Published by |
+|---|---|---|---|
+| `birdnet/detection/<Scientific_Name>` | A detection (JSON, below). Spaces in the name become underscores. | your `MQTT_RETAIN` setting | the station, per detection |
+| `birdnet/status` | `online` or `offline` | yes | see below |
+| `birdnet/stats/today` | `{"count": N}` — detections so far today, station-local | yes | the station, every 5 minutes |
 
 Subscribe to everything with `birdnet/detection/#`.
+
+### How the station reports that it is gone
+
+`birdnet/status` is not published by the detection stream. The station holds a
+second, otherwise idle connection to the broker whose only job is to carry an
+MQTT **last will**, and the two connections use different client identifiers
+(`<client_id>` and `<client_id>-presence`) because a broker must disconnect an
+existing session when a second one claims its identifier.
+
+| What happened | `birdnet/status` becomes | Who published it |
+|---|---|---|
+| The station started | `online` | the station |
+| `systemctl stop`, an upgrade, any clean exit | `offline` | the station |
+| Power cut, crash, cable pulled, Wi-Fi gone | `offline`, within ~45 s | **the broker**, from the will |
+| The broker itself went down | unchanged | nobody — see below |
+
+The last row is the honest limit, and it is why `birdnet_mqtt_connected` exists
+as a Prometheus gauge: a station cannot report on a broker that is not there,
+so that case needs a signal that does not travel through the broker.
+
+The keepalive is 30 seconds and the broker publishes the will after 1.5 of
+those, which is where the ~45 s comes from.
 
 ### Detection payload
 
@@ -44,7 +66,23 @@ BIRDNET_MQTT_HOST=192.168.1.10
 BIRDNET_MQTT_HA_DISCOVERY=1     # or the --mqtt-ha-discovery flag
 ```
 
-With discovery enabled, the station publishes Home Assistant **MQTT discovery** config under the `homeassistant/` prefix, so it registers itself automatically — no YAML to write. The latest detection (species, confidence) and the daily stats appear as entities you can drop on a dashboard or trigger automations from ("flash the porch light when an owl is heard after dark").
+With discovery enabled, the station publishes Home Assistant **MQTT discovery** config under the `homeassistant/` prefix, so it registers itself automatically — no YAML to write. Four entities appear:
+
+| Entity | Type | Reads |
+|---|---|---|
+| Last Detected Bird | `sensor` | `birdnet/detection/#` |
+| Detection Confidence | `sensor` | `birdnet/detection/#` |
+| **Station Status** | `binary_sensor` (`connectivity`) | `birdnet/status` |
+| Detections Today | `sensor` | `birdnet/stats/today` |
+
+Drop them on a dashboard or trigger automations from them — "flash the porch light when an owl is heard after dark", or, from Station Status, "tell me when the garden station stops answering".
+
+> **If you ran an earlier version.** Station Status and Detections Today were
+> registered but never fed, so both showed as *unknown* for the life of the
+> station and no automation could be built on either. Discovery configs were
+> also published unretained, which meant Home Assistant lost all four entities
+> every time **it** restarted, until the station was restarted too. Both are
+> fixed; the entities repopulate the next time the station starts.
 
 ## Prometheus metrics
 
@@ -53,15 +91,42 @@ With discovery enabled, the station publishes Home Assistant **MQTT discovery** 
 | Metric | Type | Meaning |
 |---|---|---|
 | `birdnet_detections_total` | counter | Total detections since start, labeled by `species` and integer `chunk_offset` (s). |
+| `birdnet_detections_stored` | gauge | Detection rows currently in the database, rejections included. Falls when rows are deleted or purged, which is why it is a gauge and does **not** wear a `_total` suffix. |
+| `birdnet_detections_rejected` | gauge | Of those, the ones a reviewer has marked rejected. `stored - rejected` is what the web UI displays. |
+| `birdnet_species_distinct` | gauge | Distinct species detected, excluding rejected detections. |
 | `birdnet_inference_duration_seconds` | histogram | Per-chunk inference latency (decode → prediction). |
 | `birdnet_db_write_duration_seconds` | histogram | SQLite insert latency for one detection row. |
+| `birdnet_files_analysed_total` | counter | Audio files the pipeline finished analysing, labeled by `source`. **The series that separates "the model is answering nothing" from "the pipeline is not running"** — every other signal is downstream of a prediction the model made, so both states leave them flat and empty. A 15-second segment length gives about 5 760 a day per source. |
 | `birdnet_audio_source_up` | gauge | `1` if an audio source is producing samples, else `0`, labeled by `source` (e.g. `local`, `cam1`). One series per capture source. |
 | `birdnet_detection_silence_seconds` | gauge | Seconds since the most recent stored detection — the end-to-end "is it actually detecting?" freshness signal (see [System Health](../admin/system.md)). Absent until the first measurement / on a station with no detections yet. |
 | `birdnet_outbound_queue_depth` | gauge | Store-and-forward uploads parked for replay after a network failure, labeled by `kind` (e.g. `birdweather`). A depth that only grows means the uplink or token has been broken for a while. |
 | `birdnet_watchdog_pings_total` | counter | Successful systemd `WATCHDOG=1` notifications sent. |
 | `birdnet_detection_write_failures_total` | counter | Detections the model produced and the database refused — a detection the station heard and could not keep. Should stay `0`; see below. |
+| `birdnet_clock_synced` | gauge | `1` when the system reports its clock as synchronised to a time source, `0` when it does not. **Absent** when nothing can answer — every container without systemd, where the clock belongs to the host. A `0` here is the quiet failure: the dates stay plausible, so every count and chart looks healthy while the hours drift, and a season filed under the wrong times only shows up when someone tries to compare it against another station. |
+| `birdnet_mqtt_connected` | gauge | `1` when the station's MQTT presence session is connected to the broker, `0` when it is not. Absent when MQTT is not configured. This is the one MQTT signal that does not travel through the broker, so it is what tells you the *broker* is down rather than the station — while it reads `0`, the broker has already published the station's last will and Home Assistant shows it offline, but nobody has told you which of the two failed. |
+| `birdnet_notifications_dropped_total` | counter | Notifications that never left the station, labeled by `reason`: `circuit_open` (the destination is considered down after three consecutive failures), `rate_limited` (over `NOTIFY_RATE_PER_MINUTE`), `send_failed` (the destination refused or was unreachable), `no_destination` (nothing configured that this station can deliver to). Detection notifications dominate this on a busy station; an alert about the station itself is exempt from the rate limit and is retried at every poll until it lands, so `circuit_open` rising while a health condition is open means the operator is not being told. |
 | `birdnet_noise_floor_dbfs` | gauge | The station's measured background noise floor per capture `source`, averaged over the last 7 days. Typical quiet outdoor background is −60 to −40 dBFS. |
 | `birdnet_noise_floor_drift_db` | gauge | How far a source's noise floor has moved against **its own** preceding 30-day average, in dB. Absent for a source with no baseline yet — "never measured" is not "unchanged". |
+
+> **Renamed.** Three gauges used to carry a `_total` suffix, and one
+> of them — `birdnet_detections_total` — collided with the per-species counter
+> above. A metric name may have only one type, so the exposition was rejected
+> outright by `promtool check metrics`, Telegraf's `inputs.prometheus` and the
+> Python client, and a Prometheus server silently merged a *decreasing* gauge
+> into the counter. The gauges are now `birdnet_detections_stored`,
+> `birdnet_detections_rejected` and `birdnet_species_distinct`; the counter
+> keeps the `_total` name that the convention reserves for it. Update any
+> dashboard or alert rule that referenced the old gauge names — the bundled
+> `docs/grafana-dashboard.json` already is.
+
+`GET /api/v2/health?strict=1` is the probe to point a **pager** at. The plain
+`/api/v2/health` answers `200` whenever the database is serving, which is right
+for the container health check — Docker restarts an unhealthy container, and a
+station whose detection daemon is down is exactly the one that must stay up to
+be diagnosed. The strict form additionally returns `503` when the detection
+daemon is not running, so a monitor that should wake a human can get a red out
+of the same endpoint. Both report `detection_daemon` and
+`detection_silence_secs` in the body either way.
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:

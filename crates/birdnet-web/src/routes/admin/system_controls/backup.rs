@@ -310,9 +310,20 @@ fn finalize_restore(db_path: &std::path::Path) -> Result<(), String> {
 
 pub(super) async fn restore_backup(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     mut multipart: axum::extract::Multipart,
 ) -> Html<String> {
     use tokio::io::AsyncWriteExt as _;
+
+    // Before the upload is even read: a restore replaces the detection history
+    // wholesale, and the row has to exist whether or not the restore finishes.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "data.database.restore",
+        None,
+        None,
+    );
 
     if RESTORE_IN_PROGRESS
         .compare_exchange(

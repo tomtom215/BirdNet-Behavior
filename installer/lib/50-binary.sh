@@ -9,6 +9,81 @@
 # single SHA256SUMS file is attached to each GitHub Release for verification.
 # ---------------------------------------------------------------------------
 
+
+# Put the new binary in place without the path ever being absent or short.
+#
+# `install -m 0755 src dst` is not atomic and does not fsync. Traced with
+# strace, it does:
+#
+#     unlinkat(AT_FDCWD, "dst", 0)                            = 0
+#     openat(AT_FDCWD, "src", O_RDONLY)                       = 3
+#     openat(AT_FDCWD, "dst", O_WRONLY|O_CREAT|O_EXCL, 0600)  = 4
+#
+# — the working binary is unlinked *first*, then a fresh file is created at the
+# same path and filled. Writing ~100 MB to an SD card is a multi-second window,
+# and an upgrade is exactly when a solar or battery-backed box browns out.
+# Afterwards `ExecStartPre` and `ExecStart` both fail, `Restart=always` with
+# `StartLimitIntervalSec=0` retries every five minutes for ever, there is no web
+# UI left to say so, and the previous binary was deleted rather than kept.
+#
+# That last part also made the *documented* recovery impossible:
+# `docs/book/field/deployment.md` tells operators to "keep the previous binary
+# in ${INSTALL_DIR}/${BINARY_NAME}.prev so a one-line `mv` rollback is
+# possible", and nothing in the product ever created that file.
+#
+# So: keep the old one as `.prev`, write the new one beside it, flush it,
+# prove it runs, and `mv` — `rename(2)` within one filesystem is atomic, so a
+# reader either sees the whole old binary or the whole new one and never a hole.
+#
+# The in-tree Rust updater (`crates/birdnet-integrations/src/auto_update/`)
+# already does exactly this. The installer, which is the path every real
+# upgrade takes, did none of it.
+install_binary_atomically() {
+    local src="$1"
+    local dst="${INSTALL_DIR}/${BINARY_NAME}"
+    local staged="${dst}.new.$$"
+    local prev="${dst}.prev"
+
+    # Keep the outgoing binary before anything touches the path. `cp` rather
+    # than `mv` so the live path stays valid until the rename below.
+    if [ -f "${dst}" ]; then
+        if cp -f "${dst}" "${prev}" 2>/dev/null; then
+            chmod 0755 "${prev}" 2>/dev/null || true
+        else
+            warn "Could not save the previous binary to ${prev}; rollback will not be available."
+        fi
+    fi
+
+    if ! install -m 0755 "${src}" "${staged}"; then
+        rm -f "${staged}"
+        fatal "Could not write the new binary to ${staged}."
+    fi
+
+    # Get it onto the medium before it becomes the live path. Without this a
+    # completed install can still be partially persisted when the power goes a
+    # moment later, which is the same failure with a longer fuse.
+    sync "${staged}" 2>/dev/null || sync || true
+
+    # Prove it runs before it becomes the thing that has to run. Catches a
+    # wrong architecture, a truncated extraction, and a missing shared library
+    # — while the working binary is still one `mv` away.
+    if ! "${staged}" --version >/dev/null 2>&1; then
+        rm -f "${staged}"
+        fatal "The new binary would not start (\`${BINARY_NAME} --version\` failed); \
+keeping the existing one at ${dst}."
+    fi
+
+    if ! mv -f "${staged}" "${dst}"; then
+        rm -f "${staged}"
+        fatal "Could not move the new binary into place at ${dst}."
+    fi
+
+    success "Binary installed to ${dst}"
+    if [ -f "${prev}" ]; then
+        info "Previous binary kept at ${prev} — roll back with: sudo mv ${prev} ${dst} && sudo systemctl restart ${SERVICE_NAME}"
+    fi
+}
+
 install_binary() {
     local version="$1"
     local arch="$2"
@@ -121,8 +196,7 @@ install_binary() {
     # remaining obstacle is ETXTBSY, which is what the stop is for.
     stop_running_service_for_swap
 
-    install -m 0755 "${extracted_binary}" "${INSTALL_DIR}/${BINARY_NAME}"
-    success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
+    install_binary_atomically "${extracted_binary}"
 
     # Install the bundled operator manual (mdBook) if this release ships it, so
     # the dashboard's /help/* links work fully offline. The service points

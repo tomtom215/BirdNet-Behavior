@@ -7,12 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Six clusters: HTTPS in the listener itself, a searchable detection log with
+Seven clusters: HTTPS in the listener itself, a searchable detection log with
 bulk review, backups that leave the SD card they were written on, removing the
 Apprise dependency for the services most stations actually use, giving the
 detection pipeline the quality controls that separate a station's real records
-from its model's artefacts, and closing the ten highest-priority gaps against
-the two projects this one is measured against.
+from its model's artefacts, closing the ten highest-priority gaps against the
+two projects this one is measured against, and — the largest — making a station
+nobody can log into able to say what is wrong with it.
+
+That last cluster is the subject of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`, and
+its findings share one shape: **a mechanism built end to end and never
+connected to the thing that was supposed to drive it.** The audit log had a
+table, a store, a page and a 180-day pruner, and the one function that writes a
+row had no callers. The live log viewer had a channel, a page and an SSE
+endpoint, and no `tracing` layer. Home Assistant discovery registered a
+"Station Status" entity, and nothing ever published to the topic it read.
+`MqttConfig::qos` had no reader anywhere. `NotifStatus::Queued` had a
+production writer and a schema that refused it. Each was silent, and each
+looked from the outside exactly like a healthy station with nothing to report.
 
 Plus bugs that were found the same way each time — by running the thing rather
 than by reading it. Thirteen state-changing endpoints with no login, found while
@@ -20,9 +32,902 @@ adding a fourteenth. A checkbox group that could not be submitted at all, found
 by posting a real form. Five CSS variables that had never been defined, found by
 looking at a screenshot. One latent data-loss bug found while adding a
 quarantine reason. Every detection clip silently truncated at a segment
-boundary, found by reading a waveform rather than a code path. And an
+boundary, found by reading a waveform rather than a code path. An
 accessibility feature documented in the wrong direction for its entire life,
-found by checking upstream's own config file instead of trusting a comment.
+found by checking upstream's own config file instead of trusting a comment. And
+a notification status the database had refused to store since the day it was
+added, found because a gate written for something else would not go green.
+
+### Fixed — a notification status the database refused to store, and the alerts nothing logged
+
+Two defects, found together. The second was found by running the first one's
+gates.
+
+**The notification log contained every robin and no deadman.** The four
+detection channels each recorded an outcome; the three alerting loops recorded
+nothing, so an operator who suspected they had missed a station alert had no
+record to consult. Because the 2.2 work had already made `announce::flush` the
+one delivery path for all three loops, this is a single writer rather than
+three. `channel = "alert"`, so `channel = 'alert'` selects the station's own
+history and `channel = 'apprise'` the bird traffic.
+
+An undelivered alert is logged as `Queued`, not `Failed` — that variant's own
+doc comment describes this exact situation, and the distinction it draws
+matters: *an operator looking at a wall of red needs to know which one they are
+looking at before they go and climb a hill*. One row per episode, not one per
+retry: the retry runs at every five-minute poll, so a notifier down for a day
+would write about 288 rows for one alert and bury the log it exists to be.
+Species columns stay empty, because an alert about a failing backup is not
+about a bird and a placeholder would make the Notification Center's species
+filter answer wrongly rather than not at all.
+
+**And then the gate for that would not go green.** `NotifStatus::Queued` could
+not be stored at all. Migration 4 created `notification_log.status` with
+`CHECK(status IN ('sent','failed','skipped'))`. `Queued` was added to the enum
+afterwards, documented at length, and written **in production** by
+`daemon/processor.rs`'s store-and-forward path — where every insert was rejected
+by the CHECK and the error discarded at `debug!`, which the default filter
+drops. A field station on flaky LTE produced exactly the bursts that doc
+comment describes, and the Notification Center showed none of them. The careful
+distinction between "not there yet" and "lost" was between one status that
+existed and one that never had.
+
+Migration 41 rebuilds the table, because SQLite cannot alter a CHECK constraint
+in place — the same reason migrations 36 and 40 rebuilt `quarantine`. Unlike
+those, the insert here is a plain `INSERT` rather than `INSERT OR IGNORE`, so
+the violation *was* returned as an error; it was the caller that threw it away.
+Both halves are fixed, and `ALL_NOTIF_STATUSES` now exists so
+`every_notification_status_is_accepted_by_the_schema` can enumerate the set
+rather than restate it — a sixth status without a migration fails in CI instead
+of on a station. Its counterpart checks the CHECK was *widened* and not deleted.
+
+Eleven gates, six mutations killed. Two of them are worth naming: a loop
+sending inline again — the pre-2.2 latch-on-attempt shape, whose sends reach no
+log — is caught by a source scanner rather than by behaviour, because the whole
+point of one writer is that the loops route through it; and the un-widened
+CHECK, which is not a hypothetical mutation but the shipped schema, reported as
+*"the schema rejects the `queued` status this code writes: CHECK constraint
+failed: status IN ('sent','failed','skipped')"*.
+
+### Fixed — the audit log was never written
+
+Table, store, admin page and 180-day pruner all existed. `AuditLog::record`
+had **zero production callers** — every call site was inside its own
+`#[cfg(test)]` block. `/admin/audit` was permanently empty, which on a shared
+station does not read as "the log is broken"; it reads as "nothing happened".
+
+The repo had already caught half of this once. The *pruner* was wired after
+being found to have no caller, and a retention constant was written for it: six
+months of retention on rows nobody wrote.
+
+Twenty-four actions are now recorded, across every mutating surface — sign-in
+and sign-out, account and password changes, session revocations, settings
+saves, species include/exclude lists and per-species thresholds, audio sources,
+alert rules, clearing detections or recordings, restoring a database, running a
+backup, restarting, and applying an update. Species filters and audio sources
+were not in the finding's list and belong there: they decide whether a gap in a
+season is a real absence or a filter somebody added in April.
+
+**Values are never recorded.** A settings save lists the names of the keys that
+changed and nothing else. The finding proposed redacting values "through the
+existing secret list"; `rtsp_url` is why that would not have been enough — an
+RTSP URL routinely carries `user:pass@` in its authority while its key name says
+nothing about a secret, which is precisely the trap `redact_url_credentials`
+exists for. Names only, and the question the log exists for — *who changed the
+recording schedule on the 3rd?* — is still answered.
+
+A save that changed nothing writes no row. The settings page posts every field
+on every submission, so recording each one would turn the audit log into a click
+counter and bury the save that moved the schedule.
+
+Destructive actions are recorded *before* the work rather than after: clearing
+detections, restoring a database, restarting, applying an update. If the process
+does not survive the operation there is no "after" to record from, and a station
+whose history vanished with nothing in the log is indistinguishable from one
+that was never used.
+
+A failed sign-in records the submitted username and no actor. "Someone tried to
+sign in as `admin` sixty times last night" is the thing worth knowing, a
+username that does not exist is as interesting as one that does, and there being
+no actor is the whole reason `audit_log.user_id` is nullable.
+
+Fifteen gates, six mutations killed. `audit()` writing nothing — the shipped
+state — fails six of them and correctly leaves the two "must record nothing"
+gates green. One gate is a source scanner: it reads every action literal out of
+the web crate and compares it against a documented list, so an action name
+with `threshold` misspelled fails the build instead of shipping a row that
+renders fine and is invisible to the prefix filter meant to catch it. That is the same
+lesson the station-health `CHECKS` table records — a set expressed only as
+scattered call sites cannot be checked, so it is written down once.
+
+### Fixed — `/api/v2/system/disk` returned 503 "critical" on a disk it called 76 % full
+
+`used_percent()` carries a doc comment explaining, at length, that fullness is
+`used / (used + available)` and *not* `used / total`, because the two diverge
+whenever part of the device is invisible to this user. Nine lines below it,
+`is_critical` read `available_bytes < total_bytes / 20` and `is_low` read
+`available_bytes < total_bytes / 10`.
+
+Reproduced on the filesystem this was written on. `df -Pk /` reported 264 212 084
+blocks total, 29 896 308 used, 8 952 216 available — 77 % used, with 85 % of the
+device unreachable behind a quota. `used_percent()` agreed at 76.6 %.
+`is_critical()` returned **true**, because 8.5 GiB is less than a twentieth of a
+252 GiB device. So the endpoint served HTTP 503 with a body saying 76.6 %, and
+a monitor pointed at it pages the operator on a healthy station — which is how
+a channel gets muted before the real alert arrives. Every ext4 default has a
+5 % root reserve, so this is not an exotic shape; it is every Pi image.
+
+Both predicates now read `used_percent()`, and the thresholds are named:
+`DiskUsage::CRITICAL_PERCENT` (95) and `LOW_PERCENT` (90). Critical is the
+reading at which the purger starts deleting recordings — the same number as
+`DiskManagerConfig`'s default, now asserted rather than duplicated — and low is
+what the station-health alert and the Station Health badge both use, so the
+page and the operator's inbox change at one reading instead of agreeing by
+coincidence. The station-health constant's own doc comment claimed it "matches
+the capture layer's own default purge threshold"; that threshold is 95 and the
+constant was 90. The gap is right and the sentence was wrong: the warning has
+to arrive while there is still time to fit a bigger card.
+
+**An existing test asserted the defect.** `disk_usage_percent_with_reserved_space`
+built exactly this fixture, checked `used_percent()` was 80.0, and then asserted
+`is_critical()` — with the justification `"7/252 available is critical"`. That
+is what made `available < total / 20` look like a deliberate choice: a reader
+finding it would see a passing test beside it. The fixture is kept and the
+assertion inverted, so the history shows which way it flipped.
+
+Six gates, four mutations killed. The instructive one is the fourth: making
+`used_percent()` divide by `total` **as well** leaves the swept property gate
+green — two surfaces agreeing on the same wrong number is still agreement — and
+is caught only by the reproduction, which pins the answer to what `df` says.
+
+### Added — a station now notices its own clock drifting
+
+Runtime clock correctness was never re-checked. `--doctor`'s clock checks run
+once, from `ExecStartPre`; at runtime capture tests only a plausibility floor
+and trusts anything above it absolutely. A Pi whose NTP has been unreachable
+for months keeps recording, keeps detecting, and keeps every gauge green while
+filing an entire season under the wrong hours — a loss that shows up only when
+someone tries to compare that season against another station's.
+
+Station health gained a sixth condition and `birdnet_clock_synced` a gauge,
+from two signals that fail differently. The plausibility floor catches a clock
+that was never set — a Pi with no RTC that booted to 1970 — and says so in
+those words, because "not synchronised" would send the operator to
+`timedatectl status` to be told what they already know when the actual fault is
+the uplink. NTP state catches the slow one the floor cannot see.
+
+The probe has three outcomes rather than two, and that is the part worth
+knowing: **"cannot tell" is not "broken"**. Every Docker deployment lands
+there — `timedatectl` is installed but there is no bus, so it exits non-zero
+with *"System has not been booted with systemd as init system"* — and a
+container's clock belongs to its host. Those stations produce no condition and
+no metric series at all, rather than a `0` that would page an operator about
+something they cannot fix from inside the container. The repo's own
+`container_can_run_what_the_daemon_spawns` gate caught the new subprocess
+immediately and required it to be classified, which is the entry that now
+records this reasoning.
+
+`/run/systemd/timesync/synchronized` is a fallback rather than a peer signal.
+It is created when `systemd-timesyncd` first synchronises and is *not* removed
+if synchronisation is later lost, so it answers "synced at some point since
+boot" — precisely the question this check must not ask, given the failure it
+exists for. `timedatectl show -p NTPSynchronized --value` reports the state
+now, so it is the authority and the file is consulted only when nothing else
+can answer.
+
+**A gap this found in its own gates.** The first mutation applied — deleting
+`check_clock` from `evaluate`, which is the shipped state — killed *nothing*.
+All 31 tests passed. Every gate exercised the policy function and none checked
+that anything called it, so a check dropped in a refactor would have been
+invisible: it produces no failure, no warning, and no condition, which is
+exactly what a healthy station produces. `evaluate` now runs a named `CHECKS`
+table, and a gate reads it against the six conditions the module doc promises.
+The same mutation now fails that gate alone.
+
+Not covered, and stated rather than implied: timezone drift. `doctor/clock.rs`
+still checks that only at `ExecStartPre`.
+
+### Fixed — the live log viewer streamed a channel nothing published to
+
+`routes/admin/logs.rs` opens by saying its lines "are captured by a custom
+`tracing` layer that broadcasts to an unbounded channel". No such layer existed
+anywhere in the workspace, and the channel is bounded at 512. `AppState` held a
+`LogBroadcaster` with no writer, so `GET /admin/system/logs` replayed an empty
+backlog and then emitted keep-alives for ever — on every station, since the
+feature was written. In Docker, where the operator has no `journalctl`, that
+page is the whole story.
+
+The audit that found this also said the three `LogBroadcaster::new()` calls in
+`state.rs` were "three distinct channels anyway". They are not: they are three
+*alternative* constructors — `AppState::new`, `new_with_analytics`,
+`from_connection` — and one run builds one `AppState`. There was a single
+channel and nothing wrote to it. The count was never the defect, and no
+deduplication was needed.
+
+`LogCapture` implements `tracing_subscriber::Layer` and is installed as a third
+`.with(...)` in `main`. It lives in the binary rather than in `birdnet-web`
+because which subscriber layers get installed is an application decision — the
+same one that owns the tokio runtime — and this keeps `tracing-subscriber` out
+of the web crate. The broadcaster is built before the subscriber and handed to
+the state through `AppState::with_log_broadcaster`, because the layer must
+exist at `init()` time and the state does not exist yet.
+
+Structured fields travel with the message. `tracing::warn!(error = %e, "publish
+failed")` carries its whole diagnosis in `error`, and a viewer showing only
+"publish failed" would be worse than the journal it stands in for.
+
+**And a log that survives the reboot.** A default Raspberry Pi OS has no
+`/var/log/journal`, so the journal is volatile: every watchdog bounce, power
+cut and update erases the evidence of what caused it, which is precisely the
+event an operator is trying to explain. `errors.jsonl` sits beside the
+database, takes ERROR and WARN only, is one JSON object per line, is capped at
+1 MB — a station failing in a loop must not fill the card the recordings live
+on — and is now a `--support-bundle` member. A missing file is reported in the
+bundle rather than staged empty, because "this station has never logged a
+warning" and "the bundle could not find the log" are different answers and only
+one is good news.
+
+URL credentials are stripped in the layer rather than at each call site.
+`errors.jsonl` travels in the support bundle, and `rtsp://user:pass@host/` in a
+warning is the shape that ends up in a public forum thread posted by an
+operator who was told the bundle was redacted.
+
+Nothing in the layer may log: a `tracing::warn!` raised while handling an event
+re-enters `on_event` and deadlocks on the file mutex. Write failures are
+counted and swallowed, deliberately.
+
+Twelve gates. Six mutations applied and watched go red, the important one being
+`with_log_broadcaster` made a no-op — the shipped arrangement — which fails the
+wiring gate alone while every layer gate stays green. A layer writing to one
+broadcaster while the state holds another passes any test of either half and
+still shows an operator nothing.
+
+### Fixed — the "Station Status" entity Home Assistant showed had nothing behind it
+
+Home Assistant discovery has always registered a `binary_sensor` with
+`device_class: connectivity` on `{prefix}/status`. Nothing ever published to
+that topic — `publish_status()` and `publish_daily_stats()` had zero call sites
+for the life of the project — so two of the four entities were permanently
+*unknown*, and the one automation an unattended station exists to support,
+*tell me when it stops answering*, could not be built.
+
+It could not be fixed where it looked like it should be. A last will is
+discarded by the broker when the client sends DISCONNECT (MQTT 3.1.1 §3.14),
+and DISCONNECT is how every one of this station's publishes ends — the
+publisher opens a TCP connection per message. Setting the will flags on each
+of those CONNECT packets would have produced a will that fires on a
+mid-publish network blip
+and never on the power cut it exists for: worse than none, because it looks
+like it works.
+
+So presence gets its own connection. `PresenceSession` holds one otherwise-idle
+socket open with a 30-second keepalive, carrying a will of `offline` (retained,
+`QoS` 1) on `{prefix}/status`. The station publishes `online` retained when it
+connects and `offline` retained on a clean stop; the broker publishes the will
+about 45 seconds after a station stops answering for any other reason. The two
+connections use different client identifiers — a broker must disconnect an
+existing session when a second claims its identifier (§3.1.3.1), so sharing one
+would have had every detection publish kick the presence session off and the
+station flap `online`/`offline` for as long as birds were singing.
+
+`birdnet_mqtt_connected` is the gauge for the case the topic structurally
+cannot cover: the broker itself being down. A station cannot report on a broker
+that is not there, so that signal has to travel by another road.
+
+Three more defects surfaced in the same module, all found by reading it rather
+than by the finding that sent us there:
+
+- **Discovery configs were published unretained.** Home Assistant builds its
+  entity list from what the broker replays when HA starts, so all four entities
+  vanished every time *Home Assistant* restarted, until the station was
+  restarted too. They are now always retained, whatever `MQTT_RETAIN` is set to
+  — that setting is a real preference for the detection stream and not one for
+  discovery.
+- **`MqttConfig::qos` had no reader anywhere in the workspace**, while
+  `publisher.rs`'s own module doc said `QoS` 1 "is sent at `QoS` 0 after logging
+  a warning". There was no warning and no branch. A station configured for
+  `QoS` 1 got `QoS` 0, where "the broker never received it" and "the broker has
+  it" are the same return value. `QoS` 1 now sends a packet identifier and waits
+  for the PUBACK, which is cheap here because the connection carries one message
+  and there is no in-flight window to track.
+- **`publish_status` is gone rather than wired.** The presence session owns
+  `{prefix}/status` now, and a stateless publisher beside it would be a second
+  writer to one topic with a different retain flag — the one arrangement in
+  which Home Assistant shows a live station as offline.
+
+Nine gates, against a broker stub that decodes CONNECT and PUBLISH rather than
+matching bytes, because the failure that matters here is semantic: §3.1.3 lays
+the CONNECT payload out positionally, so a will written after the username is a
+perfectly well-formed packet that publishes the station's password to whatever
+the broker reads next. Eight mutations were applied to the shipped code and
+watched go red, including that one.
+
+### Fixed — an alert nobody received counted as one that had been sent
+
+Every alert loop in the station latched its episode on the *attempt*, and the
+attempt could not fail. `Client::send_notification_with_image` ended with
+
+```rust
+return match (delivered, first_error) {
+    (0, Some(e)) => Err(e),
+    _ => Ok(()),
+};
+```
+
+`(0, None)` is the fully-skipped case — every destination refused by the rate
+limiter or the circuit breaker, no send attempted, no error to report. It
+returned `Ok(())`. Nothing had left the box.
+
+Both guards live on the same `dispatch::Gate` a detection notification uses, and
+its token bucket is sized for detections. So the sequence that matters is
+ordinary: a dawn chorus drains the minute's budget, the detection deadman
+crosses its 24-hour threshold at 06:00, `notify()` gets `Ok(())` from a send
+that never happened, the loop sets `alerted = true`, and `transition()` returns
+`Transition::None` for the rest of the silence. The station had stopped
+detecting, the one mechanism built to say so had said it, and the operator was
+never told. The same held for every station-health condition and every stream
+fault. The skip itself was logged at `debug`, and the default filter puts
+`birdnet_integrations` at `info`, so there was no evidence either.
+
+Four changes, and they are separable:
+
+**The send reports what happened.** `AppriseError::AllDestinationsSkipped
+{ circuit_open, rate_limited }` for a notification every destination refused,
+and `AppriseError::NoDestinations` for a client with nowhere to send — reachable
+today through `--notify-urls` whose every scheme lacks a native sender, where a
+startup warning was the only sign and every send since answered `Ok(())`.
+
+**An alert about the station outranks the bird traffic.**
+`Gate::admit_priority` bypasses the rate limit for `Priority::Operational`. It
+still honours the breaker, deliberately: a destination that has failed three
+times running will not accept this one either, the breaker already admits one
+probe per open period, and a caller that retries rides that schedule and lands
+as soon as the destination comes back. The weekly report moved to the same path
+— it is one message a week, and losing it to a blackbird stamped `last_sent_date`
+and skipped that week.
+
+**The episode is latched on delivery, without re-logging.** The loud journal
+line still happens once, where the state machine decides something changed; the
+push is parked in `src/integrations/announce.rs` and retried at every poll until
+it lands. Keying that outbox by episode makes supersession free — a recovery
+queued while its onset is still stuck replaces it, so nobody is handed a fault
+that has already cleared — and an alert delivered more than ten minutes late
+carries how long it waited, because everything in these bodies is present tense.
+
+**What still cannot be delivered is counted.**
+`birdnet_notifications_dropped_total{reason}` over `circuit_open`,
+`rate_limited`, `send_failed` and `no_destination`. A detection notification the
+limiter refuses is counted and writes no `notification_log` row: during a dawn
+chorus that would be thousands, for the same reason there is deliberately no
+`skipped` row beside it. The per-send circuit-open line stays at `debug` for
+detections — four thousand a day on a station with a retired webhook — and the
+`warn` moved to the transition, where `Breaker::on_failure` now reports the
+period it just opened for.
+
+Twenty-five gates, each observed failing first. Six mutations were applied to
+the shipped code and watched go red: `admit_priority` delegating to `admit`
+(the alert is dropped by the detection limit), `admit_priority` returning `Send`
+unconditionally (a dead destination gets hammered), `on_failure` never and
+always reporting a transition, deleting the `(0, None)` arm (four tests fail,
+one printing *"a notification that reached nobody was reported as sent"*),
+`Outbox::settle` dropping the alert whatever happened, `queue` refusing to
+replace, and the late-delivery note suppressed.
+
+### Fixed — a backup that failed every week never alerted, and a corrupt database pushed nothing
+
+`src/integrations/station_health.rs` opens by naming the five conditions it
+exists for, among them *"a failing integrity check or a backup that has not
+completed in weeks — the two things standing between a corrupt database and a
+lost season"*. It caught neither, and implemented four of the five.
+
+**The backup.** `mark_ran` was called unconditionally after
+`run_backup_and_vacuum`, and the health check read `last_run_unix` while
+ignoring the `ok` column. A backup that failed every week for a year therefore
+refreshed its timestamp every week and never once looked stale. The only thing
+that check could ever detect was the maintenance loop having *stopped*.
+
+**The integrity check.** It records its verdict correctly, and that verdict
+correctly reddens a badge and 503s an endpoint — but the staleness-only rule
+meant a `Some(false)`, which means the database is corrupting, sent no
+notification at all.
+
+**The offsite upload.** Invisible everywhere: no counter, no `maintenance_runs`
+row, no health field, no alert. A station whose only off-card copy had failed
+for twelve months looked identical to one whose uploads all succeeded.
+
+**The fifth condition.** A quarantined database reached nothing.
+`doctor/analytics.rs` matched `.duckdb.corrupt.` only, and its test asserted a
+quarantined `birds.db.corrupt.<ts>` was *not* counted, on the stated grounds
+that it "belongs to the other check" — which did not exist. So the one
+quarantine that means **the entire detection history is gone** was the one
+nothing looked for.
+
+Now: `run_backup_and_vacuum` returns a `BackupOutcome` with a verdict per
+destination, recorded through `mark_ran_with`; the offsite upload gets its own
+`JOB_OFFSITE_BACKUP` key, because "no recoverable snapshot at all" and "the only
+copy is on the card the scheme exists to survive" are different news; a recorded
+failure is a condition *immediately*, without waiting to go stale, under its own
+episode key so a failure and a staleness cannot clear each other; and both
+stores' quarantines are found and reported, with the title distinguishing a
+rebuilt analytics store from a lost history.
+
+Gates: six, three of them observed failing against the shipped behaviour —
+ignoring the verdict, alerting on every recorded run (which would page a healthy
+station weekly), and giving both quarantines the same title (which would tell an
+operator their history was gone every time a DuckDB version bump rebuilt the
+analytics store). The doctor's widened scan was observed failing at
+`left: 1, right: 2`.
+
+### Added — the station can now say it has stopped detecting
+
+Two signals, because between them they separate the three states an outside
+observer previously could not tell apart.
+
+**`birdnet_files_analysed_total{source}`** counts audio files the pipeline
+finished analysing. Nothing counted throughput before.
+`birdnet_inference_duration_seconds` is observed once per *stored detection* —
+its own `# HELP` says so — so on a station with a wrong label file, a wrong
+sample rate, or a model swapped by a bad update, every latency series was flat
+and empty, **identical** to a station where inference never started. The four
+drop-reason labels did not separate them either: all of them live downstream of
+a prediction the model actually made.
+
+A 15-second segment length gives about 5 760 of these a day per source, so a
+flat counter alongside `birdnet_audio_source_up == 1` means capture is writing
+files nothing analyses, and a rising counter with no detections means the model
+is answering nothing.
+
+**`GET /api/v2/health?strict=1`** returns 503 when the detection daemon is not
+running. The status code used to be the database verdict and nothing else, so
+this endpoint answered `200 "healthy"` on a station whose own response body said
+`"detection_daemon": "stopped"`. That is the endpoint the container
+`HEALTHCHECK` polls and the one every off-the-shelf monitor gets pointed at.
+
+The default stays 200, deliberately. Docker restarts an unhealthy container, and
+a station whose daemon is down is exactly the one that must stay up to be
+diagnosed — restarting it in a loop destroys the journal that says why. The
+strict form is for the monitor that should wake a human, which is a different
+consumer with a different correct answer. Both report `detection_daemon` and
+`detection_silence_secs` in the body either way, and the response now echoes
+which mode it answered in.
+
+Gates: four. The two metric tests include the discrimination as an explicit
+assertion — a station that analysed ten files and detected nothing must not
+render identically to one that analysed none. The two health tests were observed
+failing against the previous status logic (`left: 200, right: 503`) and against
+a version that made every request strict (`left: 503, right: 200`), which is the
+change that would have put field stations into a restart loop.
+
+The `run.rs` call sites are not covered by a CI-runnable gate: reaching them
+needs the 541 MB model, the same limit `tests/species_filter_e2e.rs` documents
+for its own second layer. What keeps them honest is that both sit in the `Ok`
+arm of `process_and_infer_filtered`, so "analysed" cannot drift to mean
+"attempted". This is stated in the code rather than left to be discovered.
+
+### Fixed — the installer deleted the working binary before writing the new one
+
+`install_binary` ended with `install -m 0755 src dst`. That is not atomic and
+does not fsync. Traced with `strace`:
+
+```text
+unlinkat(AT_FDCWD, "dst", 0)                            = 0
+openat(AT_FDCWD, "src", O_RDONLY)                       = 3
+openat(AT_FDCWD, "dst", O_WRONLY|O_CREAT|O_EXCL, 0600)  = 4
+```
+
+The working binary is unlinked **first**, then a fresh file is created at the
+same path and filled. Writing ~100 MB to an SD card is a multi-second window,
+and an upgrade is exactly when a solar or battery-backed box browns out.
+Afterwards `ExecStartPre` and `ExecStart` both fail, `Restart=always` with
+`StartLimitIntervalSec=0` retries every five minutes for ever, there is no web
+UI left to say so, and the previous binary was deleted rather than kept.
+
+That last part also made the *documented* recovery impossible.
+`docs/book/field/deployment.md` tells operators to keep the previous binary at
+`.prev` "so a one-line `mv` rollback is possible". Nothing in the product ever
+created that file.
+
+The swap now copies the outgoing binary to `.prev`, writes the new one to a
+sibling temp path, `sync`s it, runs `--version` against it, and `mv`s it into
+place — `rename(2)` within one filesystem is atomic, so a reader sees either the
+whole old binary or the whole new one and never a hole. The smoke test catches a
+wrong architecture, a truncated extraction and a missing shared library while
+the working binary is still one `mv` away. The in-tree Rust updater already did
+all of this; the installer, which is the path every real upgrade takes, did none
+of it.
+
+Gate: `installer/test/binary-swap-atomicity.sh`, driving the shipping function.
+Against `install -m 0755`, seven of its ten assertions fail, including *"the
+live binary was unlinked; a power cut here leaves no binary at all"* and *"the
+working binary was replaced by one that cannot start"*.
+
+### Fixed — a partial model download was never resumed and never verified
+
+Every guard around the model asked `[ -f "${dest}" ]`, and a partial download is
+a file. So a 541 MB fetch drops at 60 %; `fetch_verified_model` fails; the
+failure path deliberately **keeps** the partial and prints *"Re-run this
+installer to resume from where it stopped"*; the operator re-runs; and the
+presence guard skips the fetch entirely. The installer then reports *"Model
+already downloaded — skipping"* and *"Validation passed"*.
+
+`install.sh repair` — the documented wizard for a broken install — said *"Model
+present — skipping download"* and computed no checksum, so the one subcommand
+named for fixing this could not fix it. And four downstream checks pass on a
+200 MB truncation of a 541 MB file: `--doctor` accepts any model file over
+**one megabyte**, `validate_install` takes the doctor's exit code, the daemon
+logs a failure and carries on serving the web UI, and `/api/v2/health` answers
+`200 "healthy"` because its status is SQLite's and nothing else.
+
+The operator seals the box, drives it forty kilometres out, and gets a green
+dashboard that never records a bird.
+
+Every guard now verifies the pinned sha256 rather than asking whether a file
+exists, so a partial is resumed — `fetch_verified_model` already passes
+`curl -C -` — instead of being mistaken for a finished download. `repair` hands
+the decision to `download_model` rather than keeping a second, weaker copy of
+it. Presence is not verification; the cost is one checksum of the cached file
+per install or repair run.
+
+Gate: `installer/test/model-resume.sh`, driving the shipping `download_model`
+with only the network stubbed. Against the presence-only guards it fails with
+*"the truncated model was skipped — this is the defect"* for both the model and
+the labels, while the counterpart — a verified model must **not** be
+re-downloaded, or every re-run costs 541 MB — passes either way and is what
+makes the fix a verification rather than an unconditional refetch.
+
+Both new tests are registered in `installer/test/run-ci.sh`, whose accounting
+rule fails the suite if a test file is neither run nor excluded with a reason.
+
+### Fixed — detections recorded before the clock was set were filed under 1970, permanently
+
+A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the epoch;
+the capture tee stamps that reading into the segment filename, and a detection's
+`Date` and `Time` are parsed straight back out of that filename. Nothing
+checked. Every detection made before the clock was set was stored as
+`1970-01-01` — where it stayed:
+
+* `species_summary` files it under hour 00 for ever;
+* `MIN(Date)` makes every species touched in that window "first seen 1970", so
+  the first-of-the-year and first-of-the-season features report nonsense;
+* the history calendar acquires a 56-year span;
+* `detected_at_utc` of about zero sorts it before everything the station has
+  ever heard;
+* and clip retention later reclaims its audio for being older than any cutoff —
+  so the evidence goes and the poisoned row stays.
+
+On a station whose uplink is down, "before NTP lands" can be weeks.
+
+The write path now refuses such a row before anything else: it is quarantined
+with a new reason, `implausible_clock`, and counted as
+`birdnet_detections_dropped_total{reason="implausible_clock"}`. Quarantined
+rather than dropped, because something was genuinely heard and the operator
+should be able to see that their station spent a fortnight recording without
+knowing what day it was — and because `tests/clock_steps_backwards.rs` already
+pins that a naive "drop implausible dates" filter is the wrong answer.
+
+Migration 40 widens the quarantine `reason` CHECK for the fifth time. That is
+not optional bookkeeping: `insert_quarantine` uses `INSERT OR IGNORE`, which
+does not distinguish a CHECK violation from the `UNIQUE` collision it exists to
+absorb, so without the migration every clock-quarantined detection would have
+been swallowed silently and reported as success — exactly the defect migration
+36 was written for. The gate that catches it,
+`every_quarantine_reason_is_accepted_by_the_schema`, turned red the moment the
+enum gained a variant and before a line of the migration existed, which is the
+job it was added to do.
+
+Gates, both observed failing:
+
+* with the check disabled — the state this shipped in — a `1970-01-01`
+  detection produced `detections = 1, quarantine = 0`;
+* with the check replaced by `if true`, the counterpart failed with `a real
+  date must still be filed`, because a gate that quarantines everything would
+  satisfy the first test and stop the station recording at all.
+
+Also corrects `metrics.rs`'s explanation of the drop-reason labels. It named
+`quality` and `occurrence` and taught what a spike in each would mean; neither
+is ever emitted in production — both appear only in that file's own tests — so
+both readings it taught were unavailable. It now names the five reasons
+production actually emits.
+
+### Fixed — two clock floors 1 461 days apart, and retention that ran on an unset clock
+
+`--doctor` and the capture supervisor each had a `CLOCK_SYNCED_FLOOR_SECS`. The
+doctor's was `2020-01-01`; the supervisor's was `2024-01-01`; the doctor's
+carried a comment saying it *"mirrors the capture supervisor's"*. It did not.
+For any reading in those four years the diagnostic printed
+`[ PASS ] System clock — set to a plausible current time` while the supervisor
+treated the same reading as untrustworthy and disabled the recording schedule
+and every quiet window. An operator reading the diagnostic was told the opposite
+of what the station was doing.
+
+Both sides had tests. Each tested its own constant, so neither could see the
+gap. There is one constant now, `birdnet_core::civil::CLOCK_PLAUSIBLE_FLOOR_SECS`,
+in the module that already owns the calendar arithmetic both of them use — and
+a gate that sweeps 2018 to 2030 weekly and asserts the two answer identically at
+every point, which is what the previous arrangement could not have had.
+
+**And every date-based retention job now refuses to run on an implausible
+clock.** Each one computes its cutoff from `date('now')`, which is fine when the
+clock is right and catastrophic when it is not. A Raspberry Pi has no
+battery-backed RTC: before NTP lands it reads the epoch, and on a station whose
+uplink is down that may be for weeks. Clip retention and log retention are
+skipped with a warning in that state; the species cap is not, because it is a
+count rather than a date and is safe with any clock. Recording continues
+throughout — the station waits for the clock rather than stopping.
+
+This covers the clock that is too *early*. A clock far in the **future** — a GPS
+week rollover upstream, a carrier NITZ date, a `date -s` typo — is the direction
+a probe demonstrated reclaiming an entire clip library in one pass, and it is
+**not** covered here, because catching it needs a reference the floor does not
+have. That is stated in the code rather than implied, and carried in
+`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` as the remaining half of NT-4.
+
+### Fixed — two more tables grew for the life of the station
+
+`sound_levels::prune` and `prune_quarantine` had **no production caller at
+all** — the same shape as `AuditLog::prune` before it was wired, and in
+`prune_quarantine`'s case under a doc comment reading "This prevents the table
+from growing unbounded on long-running stations", which was true of no station.
+`sound_levels`' sibling `audio_levels::prune` *is* called, from the
+acoustic-health loop, which is what makes this an oversight rather than a
+decision: a station kept every ⅓-octave bucket it had ever measured — thirty
+bands an hour per source, for the life of the deployment.
+
+Both now run in the daily log-retention pass, at 400 days for the soundscape
+buckets (matching `audio_levels`) and 90 days for **reviewed** quarantine rows.
+Unreviewed rows are never pruned at any age: they are the operator's queue, and
+deleting a decision nobody has made yet is the one thing that pass must not do.
+
+Gates: the existing log-retention pair, extended. With the two new pruners
+removed — the state this shipped in — both fail on the new tables; with the
+quarantine pruner's `reviewed = 1` condition removed, the counterpart fails on
+the surviving row, which is the discrimination rather than the alarm.
+
+### Fixed — one wedged upload was the last thing the maintenance loop ever did
+
+`offsite::s3::client()` set `connect_timeout(30 s)` and nothing else, under a
+comment that said so deliberately: *"No overall request timeout: a station on a
+rural uplink can legitimately spend an hour on one upload… A wedged connection
+is caught by this instead."*
+
+The first half of that reasoning is right and is kept. The last sentence was
+false. `connect_timeout` bounds the connect and TLS handshake only; a socket
+that *establishes* and then stalls part-way through — the ordinary 4G failure,
+and the ordinary behaviour of a middlebox that has dropped the flow without
+RST-ing — is not bounded by it at all. A probe against a server that sends
+headers, one byte, and then holds confirmed it: still waiting past 45 seconds.
+
+`run_offsite` is awaited **inline** in `src/maintenance.rs`'s single sequential
+loop, so one wedged socket stopped the daily `PRAGMA integrity_check`, `VACUUM`,
+the local backup, clip retention, the per-species cap and log retention — for
+the life of the process, with the `warn!` sitting on an error path that was
+never reached. Nothing logged it, because nothing failed. SFTP had the same
+shape: `ConnectTimeout=30` and a `child.wait_with_output()` with no timeout of
+its own.
+
+Three bounds, at three levels, each of which alone would have been enough and
+none of which is the same instrument:
+
+* **S3** gains a 120-second `read_timeout`. A read timeout is the right
+  instrument because it bounds *inactivity*: it resets on every successful
+  read, so a slow-but-progressing transfer is untouched however long it takes.
+  A total `timeout()` would have broken exactly the case the original comment
+  set out to protect.
+* **SFTP** gains `ServerAliveInterval=30` and `ServerAliveCountMax=6` —
+  OpenSSH's own stall detector, three minutes of complete silence. This is the
+  transport-level counterpart to the `BatchMode=yes` already there, which
+  closes the other way this hung: a prompt nobody would ever answer.
+* **The maintenance loop** wraps the whole job in a two-hour budget, because the
+  failure it guards against is not "the upload was slow" but "this loop never
+  ran again". A transport that finds a new way to hang must cost one weekly
+  upload, not every remaining maintenance run.
+
+`run_offsite`'s own doc comment already claimed that a station which cannot
+reach its bucket "must still VACUUM, still record birds, and still keep its
+local backups". That was an intention, not a behaviour. It is kept, with a note
+saying which of the two it was.
+
+Gates: four. The stall test drives the real constructor against a server that
+completes the handshake and then holds the socket, with a two-second timeout
+injected so it runs in seconds; against the previous `connect_timeout`-only
+client and the real 20-second budget it failed with *"the offsite client
+returned headers but then waited past 20s for a body that never came"*. Two
+counterparts — a server that answers promptly, and one that dribbles a byte
+every 400 ms for far longer than any single gap — both pass, which is what makes
+this a stall detector rather than a shorter deadline. The fourth pins the
+shipped constant, and the existing SFTP option test pins both keepalive options
+in the one place an option can go missing.
+
+### Fixed — a zero-length database passed the integrity check
+
+SQLite opens a **zero-length file as a brand-new empty database**. That is by
+design — it is how every database in this project gets created — and it means
+`PRAGMA quick_check` answers `"ok"` for a `birds.db` that has been truncated to
+nothing. `check_integrity` ran that pragma and nothing else.
+
+So `check_and_recover` took its healthy branch, logged *"database healthy"*, and
+returned `RecoveryAction::None`. `migrate()` then built a fresh schema into the
+empty file, the station started recording into it, and five good backups sat
+beside it until the ring rotated them out about 35 days later.
+
+Truncation to zero is not exotic on the hardware this runs on: it is what a
+power cut during an SD card's wear-levelling relocation produces, what a
+filesystem repair leaves when an inode survives and its extents do not, and what
+a partly-restored backup leaves behind.
+
+`check_integrity` now requires the file to begin with SQLite's sixteen-byte
+magic before it asks SQLite anything. A file that is empty, too short to hold
+the header, or header-shaped-but-wrong is not a database, and `check_and_recover`
+walks the backup ring for it as it already does for a database that fails
+`quick_check`.
+
+Gate: five tests. Three shapes of "this is not a database" — empty, eight bytes,
+and right-length-wrong-magic — plus a recovery that must bring the history back,
+plus the discrimination that an ordinary healthy database still passes and is
+not restored over. Against the previous code four of the five fail, the first
+reporting `quick_check said "ok"` and the recovery one reporting `database
+integrity check passed`. The fifth passed before and after, which is what makes
+it worth keeping: a `check_integrity` that returned `false` for everything would
+satisfy the other four and quarantine every healthy station at its next boot.
+
+### Fixed — the weekly backup never finished on a station that was recording
+
+`backup_database` drove SQLite's online backup API with
+`run_to_completion(100, 50 ms)`: a loop of 100-page steps with a 50 ms sleep
+after each one. SQLite restarts an online backup **from page 0 whenever the
+source is written by a connection other than the backup's own**, and the source
+here is opened on its own read-only connection — so every detection the daemon
+stores is such a write, and the restart lands on the next step.
+
+A station recording a detection every twenty seconds therefore had a weekly
+backup that never returned. Measured on a 209 MB database under that load: still
+running after 300 seconds, eight restarts, reaching 77 % and dropping to 0 each
+time.
+
+The consequence is larger than a missing backup. `run_backup_and_vacuum` is
+awaited **inline** in the single sequential maintenance loop, so the daily
+`PRAGMA integrity_check`, `VACUUM`, clip retention, the per-species cap and log
+retention all stopped with it, for the life of the process — with no error path
+taken, and so nothing logged. The station kept recording birds, which is the
+right priority, and quietly stopped taking the snapshots that make a corrupt
+card recoverable. That turns "recoverable corruption" into "total data loss",
+which is the exact chain `src/maintenance.rs`'s own module documentation was
+written to prevent.
+
+The copy is now a single `sqlite3_backup_step(-1)`: every remaining page inside
+one step, holding one read transaction, so there is no next call for a write to
+restart. In WAL mode that read transaction is a snapshot and does not block the
+writer, so the station records straight through it. `Busy` and `Locked` are
+retried — they mean the step did not begin, so nothing is lost — under a
+ten-minute deadline, because a retry without a bound would reproduce the same
+"never returns" failure in a new shape.
+
+Gate: a 4 000-row database, a second connection inserting every 20 ms, and a
+30-second budget, with the backup on its own thread so the old code **fails**
+rather than hanging the suite. Against `run_to_completion` it timed out with
+1 368 rows written meanwhile; the fixed version completes the same work in
+0.65 s. The counterpart — the same fixture with no writer — passes either way,
+and is kept, because it is the reason the writer is the discrimination rather
+than decoration.
+
+### Fixed — the dead-man only fired when a bird sang
+
+`HEARTBEAT_URL` is the station's one *push-based* liveness signal: the only
+thing that can tell an operator 40 km away that the box is gone, because when
+the box is gone nothing on it can report anything and the alarm has to be the
+*absence* of an expected ping. It had exactly one call site in the workspace,
+inside the per-detection loop in `src/daemon/processor.rs`, after every early
+`continue`. A quiet night sent nothing.
+
+So the absence of a ping meant "the box is dead **or** no bird sang", and those
+cannot be told apart — which is fatal for the one signal whose entire job is
+that distinction. A grace period wide enough not to false-alarm on a December
+night at 55° N (sixteen hours of darkness, longer through a week of storms) is
+far too wide to notice a dead box; one tight enough to notice a dead box pages
+the operator every winter night until they mute the channel — the same channel
+that carries the detection deadman. `docs/book/field/deployment.md` recommended
+15 minutes, which is the second of those.
+
+The ping is now a five-minute timer, matching the deadman, station-health and
+acoustic-health loops, and fires once immediately at startup so a station coming
+back from a power cut clears its monitor within seconds. It is spawned whether
+or not `--web-only` is set: "is this box still there" is a question a web-only
+station has too. The heartbeat handle is no longer threaded through the
+detection daemon at all.
+
+Failures now use the same episode semantics as the other loops — one `warn!`
+when pinging starts failing, one when it recovers, `debug!` in between — instead
+of a `debug!` line per detection that nobody would ever read.
+
+Three signals, three meanings, and the manual now says so: this one is *"the box
+is there"*; `birdnet_detection_silence_seconds` and `DEADMAN_HOURS` are *"it has
+stopped detecting"*; the station-health alerts are *"it is degrading"*.
+
+Also: the ping URL is no longer logged in full. `https://hc-ping.com/<uuid>` is
+a bearer credential — anyone holding it can ping the monitor, which is exactly
+how you make a dead station look alive, and on Healthchecks.io it carries a
+`/fail` sibling that can page the operator at will. It was logged at `INFO` on
+every start and so reached `journal.log` inside every support bundle. Only
+`scheme://host` is logged now.
+
+Gates, each observed failing first: three loopback tests drive the real ping
+loop with no detection pipeline present. Against a stub with no loop — the old
+code's behaviour on a quiet station — all three fail; against a one-shot startup
+ping, the "a ping arrives" test passes and the "it repeats" and "a failing
+monitor does not stop the loop" tests fail, which is the discrimination that
+matters. Four more cover the URL redactor; against a redactor returning its
+input — the previous logging — three of them fail.
+
+### Fixed — `/api/v2/metrics` was not a document a Prometheus parser accepts
+
+`birdnet_detections_total` was emitted **twice in one response body**: as an
+unlabelled gauge counting rows in the database, and — from the runtime half of
+the exposition, appended a few lines later by a different module — as the
+genuine per-species counter. One name, two `# HELP` lines, two `# TYPE` lines,
+two meanings, one of them a gauge that falls when a row is deleted.
+
+The Prometheus text format forbids that, and the two common parsers disagree
+about how. `expfmt.TextParser` — `promtool check metrics`, Telegraf's
+`inputs.prometheus`, the Python client, most collection agents — rejects the
+**whole document** on the second `# HELP`, so a station monitored that way
+exported nothing at all, `birdnet_detection_silence_seconds` included: the one
+series that says the station has stopped detecting. A Prometheus server's own
+scrape parser accepts both series and keeps whichever `# TYPE` it saw last, so
+the bundled dashboard's `sum by (species)(rate(birdnet_detections_total[1m]))`
+folded a decreasing gauge in under `species=""`, where every purge reads as a
+counter reset and manufactures a spike — on the panel used to answer "is it
+still detecting?".
+
+The three gauges are renamed off the suffix the convention reserves for
+counters:
+
+| was | is |
+|---|---|
+| `birdnet_detections_total` (gauge) | `birdnet_detections_stored` |
+| `birdnet_detections_rejected_total` | `birdnet_detections_rejected` |
+| `birdnet_species_total` | `birdnet_species_distinct` |
+
+`birdnet_detections_total` now names only the counter it was always meant to.
+`docs/grafana-dashboard.json` is updated; an operator's own dashboards and alert
+rules need the same edit, and `docs/book/reference/integrations.md` says so.
+
+The gate parses the **composed** body — the bytes actually served, not either
+half alone, which is where the defect lived — and holds three structural rules:
+one `# TYPE` and one `# HELP` per name, every sample belonging to a declared
+family, and `_total` only on counters. It found a third offender the audit had
+not: `birdnet_species_total` was also a gauge wearing `_total`.
+
+### Fixed — the species-occurrence filter was asked about week 0, all year
+
+The `BirdNET` geomodel takes `(latitude, longitude, week)` and was trained on a
+48-week year, so its input domain is `1..=48`. The daemon passed a literal `0`
+at both of its call sites, each carrying the comment *"week will be computed by
+caller"* — and `run.rs` **is** the caller. Nothing computed it. `sf_thresh`
+defaults to `0.03`, so the filter is on by default: every station with
+coordinates has been filtering its species list against a point outside the
+model's domain, identically in June and December, for the life of the project.
+Every `Week` value ever written to `detections` is `0`.
+
+Nothing caught it because week 0 does not error — the model returns a different,
+plausible-looking occurrence vector — and because the one end-to-end test over
+that function passed a week of its own (`20`, which is not even the week of the
+recording it stages: 19 May is week 19), so it exercised the parameter rather
+than the daemon's use of it.
+
+The week is now derived from the *recording's own date*, never from the clock at
+analysis time: a backlog drained three days after a power cut is scored against
+the season it was recorded in. `process_and_infer_filtered` no longer takes a
+`week` argument at all, so there is no longer a position a constant can be
+passed in — the compiler enforces what a test could only observe.
+
+`birdnet_core::civil::birdnet_week` is the shared arithmetic, clamping days
+29–31 into week 4 of their month. That clamp is not decoration: `birdnet-go`
+records an un-clamped copy of the same formula returning week 49 for 29–31
+December and feeding it to a live range filter.
+
+Existing rows keep `Week = 0`. The value is a BirdNET-Pi compatibility column
+that only one internal query reads, so it is not backfilled here; the
+derivation from `Date` is available if that changes.
 
 ### Added — the ten gaps against BirdNET-Pi and birdnet-go
 

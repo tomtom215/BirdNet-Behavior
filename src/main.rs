@@ -15,6 +15,7 @@ mod daemon;
 mod doctor;
 mod helpers;
 mod integrations;
+mod log_capture;
 mod log_filter;
 mod maintenance;
 mod sd_notify;
@@ -141,11 +142,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(composed.clone()));
     let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
+
+    // The broadcaster is built here, before the subscriber, and handed to
+    // `AppState` further down — the layer has to exist at `init()` time and
+    // the state does not exist yet, so one of the two has to be created early.
+    // It is the same object both ends of the admin log viewer see; there is no
+    // second one anywhere.
+    let log_broadcaster = birdnet_web::routes::admin::logs::LogBroadcaster::new();
+    // The on-disk ERROR/WARN log only exists for the long-running server. A
+    // `--doctor` or `--support-bundle` invocation writing to it would put the
+    // act of *diagnosing* the station into the station's own evidence, and
+    // `--support-bundle` reads this very file.
+    let error_log = matches!(dispatch_subcommand(&cli), Action::RunServer)
+        .then(|| log_capture::error_log_path(&helpers::db_path_from_config(early_config.as_ref())));
+
     // Send logs to stderr (Unix convention) so stdout stays clean for
     // structured output like `--doctor-json`.
     tracing_subscriber::registry()
         .with(filter_layer)
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(log_capture::LogCapture::new(
+            log_broadcaster.clone(),
+            error_log,
+        ))
         .init();
 
     // Reported after the subscriber is installed so they land in the journal
@@ -228,7 +247,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let code = support::run(&cli, config.as_ref(), &dest);
             std::process::exit(code);
         }
-        Action::RunServer => app::run(cli, config).await,
+        Action::RunServer => app::run(cli, config, log_broadcaster).await,
     }
 }
 

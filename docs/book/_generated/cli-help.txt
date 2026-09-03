@@ -355,7 +355,9 @@ Options:
           [env: BIRDNET_POST_SUNSET_OFFSET=]
 
       --heartbeat-url <HEARTBEAT_URL>
-          Heartbeat URL to ping after each analysis cycle (e.g., uptime monitoring)
+          Uptime-monitor URL to ping every five minutes while the station runs.
+
+          A liveness signal for an external monitor (Healthchecks.io, Uptime Kuma): its *absence* is the alarm, so it must not depend on a bird singing. Whether the station is still detecting is a different question, answered by `--deadman-hours`.
 
           [env: BIRDNET_HEARTBEAT_URL=]
 

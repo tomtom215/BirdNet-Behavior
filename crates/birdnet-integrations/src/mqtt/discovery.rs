@@ -47,8 +47,21 @@
 //!
 //! <https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery>
 
-use super::publisher::publish;
+use super::publisher::publish_with;
 use super::types::{MqttConfig, MqttError};
+
+/// Discovery configs are always retained, whatever the station's
+/// [`MqttConfig::retain`] preference for its detection stream is.
+///
+/// Home Assistant subscribes to `homeassistant/#` when it starts and builds
+/// its entity list from whatever the broker replays. A config published
+/// without the retain flag is delivered once, to whoever happened to be
+/// listening, and is then gone — so every HA restart lost all four entities
+/// until the station was restarted too. The station's own `retain` setting
+/// is about detections, where retaining is a genuine preference (the "last
+/// detected bird" sensor survives a restart, at the cost of showing a stale
+/// bird); for discovery it is not a preference at all.
+const DISCOVERY_RETAIN: bool = true;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -123,7 +136,11 @@ impl HaDiscovery {
     /// Returns [`MqttError`] if any message fails to publish.
     pub fn remove_all(&self) -> Result<(), MqttError> {
         for topic in self.all_config_topics() {
-            publish(&self.mqtt, &topic, &[])?;
+            // An empty *retained* payload: retain=false would remove the
+            // entity from a running Home Assistant and leave the retained
+            // config on the broker, so it would come back at the next HA
+            // restart. A zero-length retained message clears the topic.
+            publish_with(&self.mqtt, &topic, &[], DISCOVERY_RETAIN)?;
         }
         Ok(())
     }
@@ -149,7 +166,7 @@ impl HaDiscovery {
             None,
         );
         let topic = self.config_topic("sensor", &unique_id);
-        publish(&self.mqtt, &topic, payload.as_bytes())
+        publish_with(&self.mqtt, &topic, payload.as_bytes(), DISCOVERY_RETAIN)
     }
 
     /// Publish discovery for the detection confidence sensor.
@@ -169,7 +186,7 @@ impl HaDiscovery {
             Some("%"),
         );
         let topic = self.config_topic("sensor", &unique_id);
-        publish(&self.mqtt, &topic, payload.as_bytes())
+        publish_with(&self.mqtt, &topic, payload.as_bytes(), DISCOVERY_RETAIN)
     }
 
     /// Publish discovery for the station online/offline binary sensor.
@@ -182,7 +199,7 @@ impl HaDiscovery {
         let state_topic = self.mqtt.status_topic();
         let payload = self.status_payload(&unique_id, &state_topic);
         let topic = self.config_topic("binary_sensor", &unique_id);
-        publish(&self.mqtt, &topic, payload.as_bytes())
+        publish_with(&self.mqtt, &topic, payload.as_bytes(), DISCOVERY_RETAIN)
     }
 
     /// Publish discovery for the "detections today" count sensor.
@@ -202,7 +219,7 @@ impl HaDiscovery {
             None,
         );
         let topic = self.config_topic("sensor", &unique_id);
-        publish(&self.mqtt, &topic, payload.as_bytes())
+        publish_with(&self.mqtt, &topic, payload.as_bytes(), DISCOVERY_RETAIN)
     }
 
     // -----------------------------------------------------------------------

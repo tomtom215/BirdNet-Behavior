@@ -332,6 +332,152 @@ pub fn shift_datetime(date: &str, time: &str, offset_secs: f64) -> Option<(Strin
     ))
 }
 
+/// The BirdNET "week of year" for a calendar month and day, always in `1..=48`.
+///
+/// BirdNET's metadata model — the geomodel this project feeds through
+/// [`crate::inference::species_filter::SpeciesFilter`] — takes
+/// `(latitude, longitude, week)` and was trained on a **48-week year**: four
+/// weeks per month, with days 29–31 clamped into week 4 of their month. It is
+/// not the ISO week and not the day-of-year ÷ 7; asking it about week 0 or
+/// week 52 is asking about a point outside its input domain.
+///
+/// Both reference implementations agree on this arithmetic and on the clamp:
+/// `tphakala/birdnet-go`'s `internal/inference/onnx/rangefilter.go`
+/// (`CalculateWeek`, documented "Result is always in `[1, 48]`") records that
+/// an un-clamped copy which produced week 49 for 29–31 December was a real
+/// defect fed into a live range filter.
+///
+/// # Panics
+///
+/// Never. `month` outside `1..=12` and `day` outside `1..=31` are clamped
+/// rather than rejected: this is the last step before a model input, and a
+/// plausible week is a better failure than a panic in the capture path. Callers
+/// that need to know a date was malformed should parse it with
+/// [`parse_civil`] first, which rejects rather than guesses.
+/// # Why the clamps are written this way
+///
+/// This was `if month < 1 { 1 } else if month > 12 { 12 }`, plus
+/// `if w > 4 { 4 }`. Behaviourally identical to what is below — and all three
+/// comparisons were **unkillable by any test**, because each clamped to the
+/// value it compared against: `month < 1 => 1` and `month <= 1 => 1` are the
+/// same function, as are `month > 12 => 12` and `month >= 12 => 12`, and
+/// `w > 4 => 4` and `w >= 4 => 4`. No input distinguishes either pair, so
+/// `cargo-mutants` reported three survivors on a file whose gate allows none,
+/// and the repo's policy for that is to refactor until the boundary is
+/// observable rather than to lift the threshold.
+///
+/// So: the lower clamps became `saturating_sub`, which has no comparison to
+/// mutate, and each remaining boundary is now one past the value it produces
+/// (`>= 13` yielding 11, `>= 5` yielding 4). Flipping either by one is then a
+/// visible difference — `month >= 13` weakened to `> 13` returns week 49 for
+/// 1 January of month 13, outside the model's domain, which is the defect the
+/// clamp exists to prevent.
+#[must_use]
+pub const fn birdnet_week(month: u32, day: u32) -> u32 {
+    // 0-based month. `saturating_sub` covers the `month == 0` case without a
+    // comparison: 0 and 1 both give index 0, which is what clamping to 1 did.
+    let month_index = if month >= 13 {
+        11
+    } else {
+        month.saturating_sub(1)
+    };
+    let week_in_month = {
+        // Days 29-31 (and anything larger) land in week 4 of their month.
+        let w = day.saturating_sub(1) / 7 + 1;
+        if w >= 5 { 4 } else { w }
+    };
+    month_index * 4 + week_in_month
+}
+
+/// The BirdNET week for a `YYYY-MM-DD` date string, or `None` if it does not parse.
+///
+/// The date a station files a detection under is the date in its *recording's*
+/// filename, not "now": a backlog drained three days after a power cut must be
+/// scored against the season it was recorded in, not the season it was
+/// analysed in. See [`birdnet_week`] for the arithmetic and why the domain
+/// matters.
+#[must_use]
+pub fn birdnet_week_from_date(date: &str) -> Option<u32> {
+    // `parse_civil` wants a time as well and validates both halves; midnight
+    // is a legitimate time of day, so it is the right filler for a date-only
+    // input and cannot make a bad date parse.
+    let civil = parse_civil(date, "00:00:00")?;
+    Some(birdnet_week(civil.month, civil.day))
+}
+
+/// Unix-time floor below which the system clock is not trusted for anything
+/// that depends on knowing the date.
+///
+/// A Raspberry Pi has no battery-backed RTC, so before NTP lands it commonly
+/// reports the epoch or a stale build-time value. `2024-01-01T00:00:00Z` is
+/// safely before this project's deployment era and far above any unset-clock
+/// reading, so a value below it means "time is not trustworthy yet".
+///
+/// # Why this lives here
+///
+/// There used to be two of these, **1 461 days apart**: the capture
+/// supervisor's, at this value, and `--doctor`'s, at `2020-01-01`, under a
+/// comment claiming it *"mirrors the capture supervisor's"*. It did not. For
+/// any reading between them the doctor printed
+/// `[ PASS ] System clock — set to a plausible current time` while the
+/// supervisor treated the same reading as untrustworthy and disabled the
+/// recording schedule and every quiet window. An operator reading the
+/// diagnostic was told the opposite of what the station was doing.
+///
+/// One constant, in the module that already owns the calendar arithmetic both
+/// of them use.
+pub const CLOCK_PLAUSIBLE_FLOOR_SECS: u64 = 1_704_067_200;
+
+/// Whether a Unix timestamp is late enough to be a real current time.
+///
+/// Pure, so the boundary is testable without a clock. A `false` result means
+/// the caller should not make a dated decision: the capture supervisor fails
+/// *open* on it (keep recording rather than trust a bogus date for solar
+/// scheduling), and every destructive retention job refuses to run.
+///
+/// This is a **floor, not a range**. A clock reading far in the *future* is
+/// also wrong and is not caught here, because catching it needs a reference
+/// this function does not have — see `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
+/// (NT-4). What the floor does cover is the common case on this hardware: an
+/// RTC-less board that boots at the epoch and stays there until the network
+/// comes back, which on a field station may be never.
+#[must_use]
+pub const fn clock_looks_plausible(secs: u64) -> bool {
+    secs >= CLOCK_PLAUSIBLE_FLOOR_SECS
+}
+
+/// Whether a `YYYY-MM-DD` date could be a real date this station recorded on.
+///
+/// Applies [`clock_looks_plausible`] to the date's own midnight, so it answers
+/// the same question about a recording's filename that the capture supervisor
+/// asks about the system clock.
+///
+/// A date that does not parse is **not** plausible. On the live capture path
+/// this cannot happen — `detection::pipeline::process_file` refuses a file
+/// whose name does not parse — so the `None` branch is the belt to that
+/// braces, and it fails closed because a detection that names no day cannot be
+/// filed under one.
+///
+/// # Why this exists
+///
+/// A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the
+/// epoch, the capture tee stamps that into the segment filename, and the
+/// detection's `Date` and `Time` are parsed straight back out of that filename.
+/// Nothing checked. Every detection produced before the clock was set was
+/// stored as `1970-01-01`, where it stays: `species_summary` files it under
+/// hour 00 for ever, `MIN(Date)` makes every species touched in that window
+/// "first seen 1970", the history calendar acquires a 56-year span, and
+/// `detected_at_utc` of about zero sorts it before everything. Retention then
+/// reclaims the audio, because it is older than any cutoff — so the evidence
+/// goes and the poisoned rows stay.
+#[must_use]
+pub fn date_looks_plausible(date: &str) -> bool {
+    let Some(civil) = parse_civil(date, "00:00:00") else {
+        return false;
+    };
+    u64::try_from(unix_secs_from_civil(&civil)).is_ok_and(clock_looks_plausible)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{days_in_month, is_leap_year};
@@ -944,5 +1090,241 @@ mod tests {
     fn a_time_that_names_nothing_has_no_instant() {
         assert!(unix_secs_from_local("", "", 0).is_none());
         assert!(unix_secs_from_local("not-a-date", "25:99:99", 0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod birdnet_week_tests {
+    use super::{birdnet_week, birdnet_week_from_date};
+
+    /// The domain contract, swept over every date a Gregorian year can hold.
+    ///
+    /// The geomodel was trained on `1..=48`. Anything outside it is a question
+    /// the model was never asked, and the answer it invents is not detectable
+    /// downstream — which is exactly how a hardcoded `0` survived in the
+    /// daemon's two call sites without a single failing test.
+    #[test]
+    fn every_day_of_every_month_lands_in_the_trained_domain() {
+        for month in 1..=12 {
+            for day in 1..=31 {
+                let w = birdnet_week(month, day);
+                assert!(
+                    (1..=48).contains(&w),
+                    "month {month} day {day} gave week {w}, outside the model's 1..=48 domain"
+                );
+            }
+        }
+    }
+
+    /// The four boundaries of the arithmetic, named individually so a mutant
+    /// that breaks one is not masked by the other three.
+    #[test]
+    fn the_corners_of_the_forty_eight_week_year() {
+        assert_eq!(birdnet_week(1, 1), 1, "the first day of the year is week 1");
+        assert_eq!(birdnet_week(1, 7), 1, "day 7 is still the first week");
+        assert_eq!(birdnet_week(1, 8), 2, "day 8 opens the second week");
+        assert_eq!(
+            birdnet_week(12, 31),
+            48,
+            "the last day of the year is week 48"
+        );
+    }
+
+    /// Days 29-31 clamp into week 4 rather than opening a week 5.
+    ///
+    /// This is the case `birdnet-go` records as a live defect in its own
+    /// history: an un-clamped copy returned 49 for 29-31 December and fed it
+    /// to the range filter.
+    #[test]
+    fn the_long_tail_of_a_month_clamps_into_week_four() {
+        for day in 29..=31 {
+            assert_eq!(
+                birdnet_week(12, day),
+                48,
+                "December {day} must clamp to week 48, not open a 49th"
+            );
+            assert_eq!(
+                birdnet_week(1, day),
+                4,
+                "January {day} must clamp to week 4"
+            );
+        }
+        // And the day before the clamp is genuinely week 4 too, so the clamp is
+        // not doing the work of the formula.
+        assert_eq!(birdnet_week(1, 22), 4);
+    }
+
+    /// Each month opens a new block of four weeks. Without this a mutant that
+    /// drops the `(month - 1) * 4` term still passes every within-month case.
+    #[test]
+    fn each_month_opens_the_next_block_of_four() {
+        for month in 1..=12 {
+            assert_eq!(
+                birdnet_week(month, 1),
+                (month - 1) * 4 + 1,
+                "the first day of month {month}"
+            );
+        }
+        // Adjacent months must differ, which a constant-returning mutant cannot do.
+        assert_ne!(birdnet_week(1, 15), birdnet_week(7, 15));
+    }
+
+    /// A malformed month or day is clamped, not panicked on: this runs in the
+    /// capture path.
+    #[test]
+    fn out_of_range_inputs_are_clamped_into_the_domain() {
+        assert_eq!(birdnet_week(0, 1), 1);
+        assert_eq!(birdnet_week(13, 31), 48);
+        assert_eq!(birdnet_week(1, 0), 1);
+        assert_eq!(birdnet_week(6, 99), 24);
+    }
+
+    #[test]
+    fn each_clamp_boundary_is_observable() {
+        // These two comparisons replaced three that no test could ever have
+        // pinned: the old code clamped to the value it compared against, so
+        // `month > 12 => 12` and `month >= 12 => 12` were the same function.
+        // A mutation gate reported them as survivors on a file that allows
+        // none. The boundaries below are deliberately one past their result,
+        // which is what makes a one-step flip visible — so this test exists to
+        // keep that property, not merely to check two numbers.
+
+        // `month >= 13 => index 11`. Weakened to `> 13`, month 13 would index
+        // 12 and produce week 49 or more — outside the model's 1..=48 domain,
+        // which is the defect the clamp is for.
+        assert_eq!(birdnet_week(12, 1), 45, "month 12 is not clamped");
+        assert_eq!(birdnet_week(13, 1), 45, "month 13 clamps onto month 12");
+        assert_eq!(birdnet_week(13, 31), 48, "and cannot exceed 48");
+
+        // `w >= 5 => 4`. Weakened to `> 5`, day 29 would give week 5 of its
+        // month and push the year to 49 weeks.
+        assert_eq!(birdnet_week(1, 28), 4, "day 28 reaches week 4 on its own");
+        assert_eq!(birdnet_week(1, 29), 4, "and day 29 is clamped into it");
+        assert_eq!(
+            birdnet_week(12, 29),
+            48,
+            "the case birdnet-go recorded as a real defect: 29 December must \
+             not be week 49"
+        );
+
+        // The lower ends have no comparison left to flip — `saturating_sub`
+        // handles them — but they must still answer as they did before.
+        assert_eq!(birdnet_week(0, 0), 1);
+        assert_eq!(birdnet_week(0, 31), 4, "a zero month keeps the day's week");
+    }
+
+    #[test]
+    fn a_date_string_resolves_to_its_week() {
+        assert_eq!(birdnet_week_from_date("2026-01-05"), Some(1));
+        assert_eq!(birdnet_week_from_date("2026-07-05"), Some(25));
+        assert_eq!(birdnet_week_from_date("2026-12-31"), Some(48));
+        // A leap day is an ordinary day to this arithmetic.
+        assert_eq!(birdnet_week_from_date("2028-02-29"), Some(8));
+    }
+
+    /// Unparseable dates are `None`, never a guessed week. The database's
+    /// `Date` column is free-form `TEXT` and an imported history holds values
+    /// that name no point in time.
+    #[test]
+    fn an_unparseable_date_has_no_week() {
+        for bad in [
+            "",
+            "not-a-date",
+            "2026-13-01",
+            "2026-01-32",
+            "26-01-01",
+            "2026-1-1",
+        ] {
+            assert_eq!(birdnet_week_from_date(bad), None, "{bad} must not parse");
+        }
+    }
+}
+
+#[cfg(test)]
+mod clock_floor_tests {
+    use super::{CLOCK_PLAUSIBLE_FLOOR_SECS, civil_from_unix_secs, clock_looks_plausible};
+
+    /// The constant must be the date its documentation claims. A floor whose
+    /// comment and value disagree is how the two divergent copies survived.
+    #[test]
+    fn the_floor_is_the_date_it_says_it_is() {
+        let t = civil_from_unix_secs(i64::try_from(CLOCK_PLAUSIBLE_FLOOR_SECS).expect("fits"));
+        assert_eq!((t.year, t.month, t.day), (2024, 1, 1));
+        assert_eq!((t.hour, t.minute, t.second), (0, 0, 0));
+    }
+
+    /// Both sides of the boundary, because a gate that only asserts the
+    /// rejecting side passes just as well against a predicate that rejects
+    /// everything.
+    #[test]
+    fn the_boundary_is_inclusive_and_discriminating() {
+        assert!(
+            !clock_looks_plausible(0),
+            "the epoch is not a plausible now"
+        );
+        assert!(!clock_looks_plausible(CLOCK_PLAUSIBLE_FLOOR_SECS - 1));
+        assert!(clock_looks_plausible(CLOCK_PLAUSIBLE_FLOOR_SECS));
+        assert!(clock_looks_plausible(CLOCK_PLAUSIBLE_FLOOR_SECS + 1));
+        // A reading from this project's actual deployment era.
+        assert!(clock_looks_plausible(1_788_480_000));
+    }
+
+    /// The years the two old constants disagreed about.
+    ///
+    /// `--doctor`'s floor was 2020-01-01 and the capture supervisor's was
+    /// 2024-01-01, so for any reading in these four years the diagnostic said
+    /// the clock was fine while the supervisor disabled the schedule. With one
+    /// constant there is no such window, and this sweeps it to say so.
+    #[test]
+    fn the_four_years_the_two_old_floors_disagreed_about_are_all_implausible() {
+        const OLD_DOCTOR_FLOOR: u64 = 1_577_836_800; // 2020-01-01
+        const { assert!(OLD_DOCTOR_FLOOR < CLOCK_PLAUSIBLE_FLOOR_SECS) };
+        let mut secs = OLD_DOCTOR_FLOOR;
+        while secs < CLOCK_PLAUSIBLE_FLOOR_SECS {
+            assert!(
+                !clock_looks_plausible(secs),
+                "{secs} was plausible to the doctor and implausible to the \
+                 supervisor; one constant must answer once"
+            );
+            secs += 86_400 * 7;
+        }
+    }
+}
+
+#[cfg(test)]
+mod date_plausibility_tests {
+    use super::date_looks_plausible;
+
+    #[test]
+    fn the_epoch_and_everything_near_it_is_implausible() {
+        for d in ["1970-01-01", "1970-01-02", "1999-12-31", "2023-12-31"] {
+            assert!(!date_looks_plausible(d), "{d} must not be filed");
+        }
+    }
+
+    #[test]
+    fn a_real_recording_date_is_plausible() {
+        for d in ["2024-01-01", "2026-05-19", "2030-12-31"] {
+            assert!(
+                date_looks_plausible(d),
+                "{d} is a date a station records on"
+            );
+        }
+    }
+
+    /// A date that names no day cannot be filed under one, and fails closed.
+    #[test]
+    fn an_unparseable_date_is_implausible() {
+        for d in ["", "not-a-date", "2026-13-01", "2026-01-32", "26-01-01"] {
+            assert!(!date_looks_plausible(d), "{d} must not parse");
+        }
+    }
+
+    /// The boundary, both sides, so a predicate that rejects everything cannot
+    /// pass the tests above.
+    #[test]
+    fn the_boundary_is_the_floors_own_day() {
+        assert!(!date_looks_plausible("2023-12-31"));
+        assert!(date_looks_plausible("2024-01-01"));
     }
 }

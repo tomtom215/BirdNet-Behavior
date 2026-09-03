@@ -26,6 +26,18 @@ pub const JOB_BACKUP_VACUUM: &str = "backup_vacuum";
 pub const JOB_LOG_RETENTION: &str = "log_retention";
 /// Job key for the daily `species_summary` drift check.
 pub const JOB_SUMMARY_AUDIT: &str = "summary_audit";
+/// Job key for the offsite upload of the weekly snapshot.
+///
+/// Separate from [`JOB_BACKUP_VACUUM`] because the two fail independently and
+/// mean different things: a local backup that fails means the station has no
+/// recoverable snapshot at all, and an offsite upload that fails means the only
+/// copy is on the card the scheme exists to survive. Recorded under its own key
+/// so a health check can tell an operator which one it is — before this, an
+/// offsite failure produced one `warn!` and reached no counter, no
+/// `maintenance_runs` row, no health field and no alert, so a station whose
+/// only off-card copy had failed for twelve months looked identical to one
+/// whose uploads all succeeded.
+pub const JOB_OFFSITE_BACKUP: &str = "offsite_backup";
 
 /// How long an `audit_log` row is kept.
 ///
@@ -33,6 +45,27 @@ pub const JOB_SUMMARY_AUDIT: &str = "summary_audit";
 /// constant had a scheduler behind it, `AuditLog::prune` had no production
 /// caller at all and the table grew for the life of the station.
 pub const AUDIT_RETENTION_DAYS: u32 = 180;
+
+/// How long a `sound_levels` / `sound_level_broadband` bucket is kept.
+///
+/// 400 days, matching `audio_levels`' own retention, so a full year of
+/// soundscape plus a margin survives and a two-year station does not carry
+/// four years of ⅓-octave buckets on an SD card.
+///
+/// Like `AUDIT_RETENTION_DAYS` before it, this constant had a pruner and no
+/// caller: `sound_levels::prune` was reachable from nowhere, so both tables
+/// grew for the life of the station despite a doc comment saying otherwise.
+pub const SOUND_LEVEL_RETENTION_DAYS: u32 = 400;
+
+/// How long a **reviewed** quarantine row is kept.
+///
+/// Unreviewed rows are never pruned: they are the operator's queue, and
+/// deleting a decision nobody has made yet is the one thing this must not do.
+/// 90 days after review matches `NOTIFICATION_RETENTION_DAYS`, and the same
+/// "there was a pruner and no caller" applies — `prune_quarantine`'s own doc
+/// comment says "This prevents the table from growing unbounded on long-running
+/// stations", which was not true of any station.
+pub const QUARANTINE_RETENTION_DAYS: u32 = 90;
 
 /// How long a `notification_log` row is kept.
 ///

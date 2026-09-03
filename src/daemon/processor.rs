@@ -19,7 +19,7 @@ use super::disposition::{
 use birdnet_db::notifications::NotifStatus;
 use birdnet_integrations::webhook::dispatch_webhook;
 
-use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
+use crate::integrations::{AppriseHandle, EmailHandle, MqttHandle};
 
 /// The learned per-species thresholds, and their persistence.
 ///
@@ -256,7 +256,6 @@ pub(super) fn event_processor(
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
-    heartbeat: Option<HeartbeatHandle>,
     mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
@@ -292,6 +291,67 @@ pub(super) fn event_processor(
 
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
+
+        // Does this recording name a day the station could have recorded on?
+        //
+        // First of every gate, because a row with an impossible date is worse
+        // than a wrong species: it cannot be corrected later and it cannot be
+        // deleted by anything the operator would think to run. Before NTP
+        // lands, an RTC-less Raspberry Pi reads the epoch; the capture tee
+        // stamps that into the segment filename, and `Date` and `Time` are
+        // parsed straight back out of it. Nothing checked. Such a row is filed
+        // under 1970-01-01 hour 00 for ever, makes `MIN(Date)` report every
+        // species touched in that window as "first seen 1970", stretches the
+        // history calendar across 56 years, and sorts before everything the
+        // station has ever heard. Retention then reclaims its audio for being
+        // older than any cutoff, so the evidence goes and the row stays.
+        //
+        // Quarantined rather than dropped: something was genuinely heard, and
+        // the operator should be able to see that their station spent a
+        // fortnight recording without knowing what day it was.
+        // `tests/clock_steps_backwards.rs` already pins that a naive "drop
+        // implausible dates" filter is the wrong answer.
+        if !birdnet_core::civil::date_looks_plausible(&detection.date) {
+            tracing::warn!(
+                correlation_id,
+                species = %detection.scientific_name,
+                date = %detection.date,
+                time = %detection.time,
+                "quarantining a detection whose recording date is not a real date: \
+                 the system clock was not set when this was captured"
+            );
+            let week_str = detection.week.to_string();
+            let file_str = event.source_file.to_string_lossy();
+            let q_record = birdnet_db::sqlite::QuarantineRecord {
+                date: &detection.date,
+                time: &detection.time,
+                sci_name: &detection.scientific_name,
+                com_name: &detection.common_name,
+                confidence: f64::from(detection.confidence),
+                sf_probability: None,
+                reason: birdnet_db::sqlite::QuarantineReason::ImplausibleClock,
+                file_name: if file_str.is_empty() {
+                    None
+                } else {
+                    Some(file_str.as_ref())
+                },
+                lat: None,
+                lon: None,
+                week: week_str.parse::<i32>().ok(),
+            };
+            if let Err(e) =
+                state.with_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+            {
+                tracing::warn!(
+                    correlation_id,
+                    error = %e,
+                    species = %detection.scientific_name,
+                    "failed to quarantine a detection with an unset clock"
+                );
+            }
+            state.metrics().inc_detection_dropped("implausible_clock");
+            continue;
+        }
 
         // Is this bird plausible at this hour? Runs before the threshold
         // gates so a night-time songbird is quarantined with the reason that
@@ -781,15 +841,28 @@ pub(super) fn event_processor(
                             None,
                         ),
                         Err(e) => {
-                            tracing::warn!(error = %e, "Apprise notification failed");
-                            record_notification(
-                                &log_state,
-                                "apprise",
-                                &log_subject,
-                                NotifStatus::Failed,
-                                Some(&title),
-                                Some(&e.to_string()),
-                            );
+                            log_state
+                                .metrics()
+                                .inc_notification_dropped(e.drop_reason());
+                            // A notification no destination was even tried for
+                            // — every one skipped by the rate limiter or an
+                            // open circuit, or none configured — is counted
+                            // and not logged as a row. During a dawn chorus
+                            // the limiter refuses thousands of these, and a
+                            // row each would bury the sends that matter, for
+                            // the same reason there is deliberately no
+                            // `skipped` row below.
+                            if !e.nothing_was_attempted() {
+                                tracing::warn!(error = %e, "Apprise notification failed");
+                                record_notification(
+                                    &log_state,
+                                    "apprise",
+                                    &log_subject,
+                                    NotifStatus::Failed,
+                                    Some(&title),
+                                    Some(&e.to_string()),
+                                );
+                            }
                         }
                     }
                 });
@@ -914,16 +987,6 @@ pub(super) fn event_processor(
                             Some(&e.to_string()),
                         );
                     }
-                }
-            });
-        }
-
-        // Heartbeat ping after processing.
-        if let Some(ref hb) = heartbeat {
-            let hb = Arc::clone(hb);
-            rt_handle.spawn(async move {
-                if let Err(e) = hb.ping().await {
-                    tracing::debug!(error = %e, "heartbeat ping failed");
                 }
             });
         }
@@ -1262,6 +1325,149 @@ mod tests {
         );
     }
 
+    /// Build an Apprise handle whose sends either fail for real or are never
+    /// attempted at all.
+    ///
+    /// `destination` = `Some(addr)` gives one native `json://` route, so a send
+    /// is genuinely tried and fails; `None` gives a client with nowhere to
+    /// send, which returns `NoDestinations` without touching the network.
+    fn apprise_that(destination: Option<&str>) -> crate::integrations::AppriseHandle {
+        let routes = destination.map_or_else(Vec::new, |addr| {
+            let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+                .expect("a json:// route parses");
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }]
+        });
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig::default(),
+        )
+        .expect("client")
+        .with_native_routes(routes, false);
+        std::sync::Arc::new(tokio::sync::Mutex::new(client))
+    }
+
+    /// Rows on the `apprise` channel, waited for rather than sampled.
+    ///
+    /// The notification is dispatched from a task `event_processor` spawns and
+    /// detaches, so it can still be in flight when `event_processor` returns.
+    /// Polling to a deadline is what makes this test about the decision under
+    /// test rather than about scheduling.
+    async fn apprise_rows_within(
+        state: &birdnet_web::state::AppState,
+        deadline: std::time::Duration,
+    ) -> usize {
+        let start = std::time::Instant::now();
+        loop {
+            let rows = state
+                .with_db(|conn| birdnet_db::notifications::recent_notifications(conn, 100, 0))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.channel == "apprise")
+                .count();
+            if rows > 0 || start.elapsed() >= deadline {
+                return rows;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Run one accepted detection through `event_processor` with `apprise`
+    /// attached, and return how many `apprise` rows it logged.
+    async fn apprise_rows_for_one_detection(apprise: crate::integrations::AppriseHandle) -> usize {
+        use birdnet_core::audio::extraction::ExtractionConfig;
+        use birdnet_core::detection::daemon::DetectionEvent;
+        use birdnet_core::detection::types::Detection;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+
+        let (event_tx, event_rx) = mpsc::channel::<DetectionEvent>();
+        event_tx
+            .send(DetectionEvent {
+                detection: Detection {
+                    date: "2026-05-19".into(),
+                    time: "09:00:00".into(),
+                    scientific_name: "Pica pica".into(),
+                    common_name: "Eurasian Magpie".into(),
+                    // Above NotifyConfig::default()'s 0.8 floor, so the
+                    // notification is genuinely dispatched.
+                    confidence: 0.95,
+                    start: 0.0,
+                    stop: 3.0,
+                    week: 20,
+                    file_name_extr: None,
+                },
+                source_file: tmp.path().join("nonexistent.wav"),
+                latency_ms: 100,
+                correlation_id: "test-corr-notify".into(),
+            })
+            .unwrap();
+        drop(event_tx);
+
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let rt_handle = tokio::runtime::Handle::current();
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(apprise),
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+            );
+        })
+        .await
+        .unwrap();
+
+        apprise_rows_within(&state, std::time::Duration::from_secs(20)).await
+    }
+
+    #[tokio::test]
+    async fn a_notification_that_failed_on_the_wire_is_logged() {
+        // Nothing was listening on port 1, so a destination was tried and the
+        // send genuinely failed. That is a delivery attempt, and the
+        // Notification Center exists to show it.
+        let rows = apprise_rows_for_one_detection(apprise_that(Some("127.0.0.1:1"))).await;
+        assert_eq!(rows, 1, "a real failed attempt must leave one row");
+    }
+
+    #[tokio::test]
+    async fn a_notification_no_destination_was_tried_for_is_not_logged() {
+        // The counterpart, and the discrimination `cargo-mutants` found
+        // untested: deleting the `!` from `if !e.nothing_was_attempted()`
+        // inverts these two outcomes, and until this pair existed nothing
+        // noticed. On a station whose Apprise routes are all rate-limited or
+        // circuit-open, that inversion writes a `Failed` row per detection —
+        // thousands a day, burying the sends that actually happened — while
+        // the genuine failures stop being recorded at all.
+        let rows = apprise_rows_for_one_detection(apprise_that(None)).await;
+        assert_eq!(
+            rows, 0,
+            "a notification no destination was tried for is counted in \
+             birdnet_notifications_dropped_total, not logged as an attempt"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn event_processor_inserts_row_for_accepted_event() {
         use birdnet_core::audio::extraction::ExtractionConfig;
@@ -1314,7 +1520,6 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
                 filter,
                 template,
                 rt_handle,
@@ -1342,6 +1547,128 @@ mod tests {
             .with_db(|conn| birdnet_db::sqlite::recent_detections(conn, 1).unwrap_or_default());
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].correlation_id.as_deref(), Some("test-corr-abc"));
+    }
+
+    /// Drive one detection through the real `event_processor` and report what
+    /// landed where.
+    ///
+    /// Returns `(rows in detections, rows in quarantine, quarantine reason)`.
+    async fn run_one_dated(date: &str) -> (i64, i64, Option<String>) {
+        use birdnet_core::audio::extraction::ExtractionConfig;
+        use birdnet_core::detection::daemon::DetectionEvent;
+        use birdnet_core::detection::types::Detection;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+
+        let (event_tx, event_rx) = mpsc::channel::<DetectionEvent>();
+        event_tx
+            .send(DetectionEvent {
+                detection: Detection {
+                    date: date.into(),
+                    time: "09:00:00".into(),
+                    scientific_name: "Pica pica".into(),
+                    common_name: "Eurasian Magpie".into(),
+                    confidence: 0.95,
+                    start: 0.0,
+                    stop: 3.0,
+                    week: 19,
+                    file_name_extr: None,
+                },
+                source_file: tmp.path().join("nonexistent.wav"),
+                latency_ms: 100,
+                correlation_id: "clock-gate".into(),
+            })
+            .unwrap();
+        drop(event_tx);
+
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let state_for_processor = state.clone();
+        let rt_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                None,
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+            );
+        })
+        .await
+        .unwrap();
+
+        state.with_db(|conn| {
+            let detections: i64 = conn
+                .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+                .unwrap_or(0);
+            let quarantined: i64 = conn
+                .query_row("SELECT COUNT(*) FROM quarantine", [], |r| r.get(0))
+                .unwrap_or(0);
+            let reason: Option<String> = conn
+                .query_row("SELECT reason FROM quarantine LIMIT 1", [], |r| r.get(0))
+                .ok();
+            (detections, quarantined, reason)
+        })
+    }
+
+    /// A detection recorded before the clock was set must never reach the
+    /// history.
+    ///
+    /// A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the
+    /// epoch, the capture tee stamps that into the segment filename, and the
+    /// detection's `Date` and `Time` are parsed straight back out of it.
+    /// Nothing checked, so such a row was stored as `1970-01-01` — permanently.
+    /// `species_summary` files it under hour 00 for ever; `MIN(Date)` makes
+    /// every species touched in that window "first seen 1970"; the history
+    /// calendar acquires a 56-year span. Retention then reclaims its audio for
+    /// being older than any cutoff, so the evidence goes and the row stays.
+    ///
+    /// Observed failing before the gate existed: `1970-01-01` produced
+    /// `detections = 1, quarantine = 0`.
+    #[tokio::test]
+    async fn a_detection_from_before_the_clock_was_set_is_quarantined_not_filed() {
+        let (detections, quarantined, reason) = run_one_dated("1970-01-01").await;
+        assert_eq!(
+            detections, 0,
+            "a 1970-dated detection must not reach the history"
+        );
+        assert_eq!(
+            quarantined, 1,
+            "it must be quarantined rather than dropped: something was heard, \
+             and the operator should see the station was recording blind"
+        );
+        assert_eq!(
+            reason.as_deref(),
+            Some("implausible_clock"),
+            "the reason is the whole value of the row — an operator reviewing \
+             the queue needs to know it was the clock and not the bird"
+        );
+    }
+
+    /// The discrimination. A gate that quarantined everything would satisfy the
+    /// test above and stop the station recording anything at all.
+    #[tokio::test]
+    async fn an_ordinary_detection_still_reaches_the_history() {
+        let (detections, quarantined, _) = run_one_dated("2026-05-19").await;
+        assert_eq!(detections, 1, "a real date must still be filed");
+        assert_eq!(quarantined, 0, "and must not be quarantined");
     }
 
     #[tokio::test]
@@ -1515,7 +1842,6 @@ mod tests {
                 event_rx,
                 state_for_processor,
                 broadcast,
-                None,
                 None,
                 None,
                 None,

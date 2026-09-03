@@ -49,9 +49,23 @@ async fn check_update() -> Result<Json<auto_update::UpdateInfo>, (StatusCode, St
 ///
 /// Reads the current executable path via `std::env::current_exe()` and
 /// delegates to `auto_update::apply_update`.
-async fn apply_update() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+async fn apply_update(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // First, check what the latest version is.
     let current = env!("CARGO_PKG_VERSION");
+
+    // Before the download. An update that bricks a station has to be
+    // attributable afterwards, and "afterwards" may be a binary that never
+    // starts — the row is written by the process that is still working.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "system.update.apply",
+        None,
+        Some(&format!("from={current}")),
+    );
 
     let info = tokio::task::spawn_blocking(move || auto_update::check_for_update(current))
         .await

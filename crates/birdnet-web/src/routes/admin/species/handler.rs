@@ -63,9 +63,20 @@ pub struct SpeciesNameForm {
 /// This function currently always returns `Ok`.
 pub async fn add_exclude(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
     modify_list(&state, "species_exclude", &form.name, &ListAction::Add);
+    // A filter list decides what the station is allowed to record. A season
+    // missing a species is otherwise indistinguishable from a season in which
+    // it was not heard.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "species.exclude.add",
+        Some(&form.name),
+        None,
+    );
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
@@ -77,9 +88,20 @@ pub async fn add_exclude(
 /// This function currently always returns `Ok`.
 pub async fn remove_exclude(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
     modify_list(&state, "species_exclude", &form.name, &ListAction::Remove);
+    // A filter list decides what the station is allowed to record. A season
+    // missing a species is otherwise indistinguishable from a season in which
+    // it was not heard.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "species.exclude.remove",
+        Some(&form.name),
+        None,
+    );
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
@@ -91,9 +113,20 @@ pub async fn remove_exclude(
 /// This function currently always returns `Ok`.
 pub async fn add_include(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
     modify_list(&state, "species_include", &form.name, &ListAction::Add);
+    // A filter list decides what the station is allowed to record. A season
+    // missing a species is otherwise indistinguishable from a season in which
+    // it was not heard.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "species.include.add",
+        Some(&form.name),
+        None,
+    );
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
@@ -105,9 +138,20 @@ pub async fn add_include(
 /// This function currently always returns `Ok`.
 pub async fn remove_include(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
     modify_list(&state, "species_include", &form.name, &ListAction::Remove);
+    // A filter list decides what the station is allowed to record. A season
+    // missing a species is otherwise indistinguishable from a season in which
+    // it was not heard.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "species.include.remove",
+        Some(&form.name),
+        None,
+    );
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
@@ -180,6 +224,7 @@ pub struct ThresholdForm {
 /// Returns `StatusCode::BAD_REQUEST` if the species name is empty or the threshold is out of range.
 pub async fn set_threshold(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ThresholdForm>,
 ) -> Result<Html<String>, StatusCode> {
     let sci_name = form.sci_name.trim().to_string();
@@ -192,6 +237,16 @@ pub async fn set_threshold(
     state.with_db(|conn| {
         birdnet_db::sqlite::set_species_threshold(conn, &sci_name, threshold).ok();
     });
+    // The threshold *is* the metadata here, unlike a settings value: it is a
+    // number that changes which detections are kept, and reconstructing "what
+    // was it set to in April?" from anything else is impossible.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "species.threshold.set",
+        Some(&sci_name),
+        Some(&format!("threshold={threshold}")),
+    );
     let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
     Ok(Html(render_thresholds_partial(&thresholds, &suggestions)))
 }
@@ -210,11 +265,19 @@ pub struct ThresholdDeleteForm {
 /// Returns `StatusCode::INTERNAL_SERVER_ERROR` if the database operation fails.
 pub async fn delete_threshold(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ThresholdDeleteForm>,
 ) -> Result<Html<String>, StatusCode> {
     state.with_db(|conn| {
         birdnet_db::sqlite::delete_species_threshold(conn, &form.sci_name).ok();
     });
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "species.threshold.delete",
+        Some(&form.sci_name),
+        None,
+    );
     let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
     Ok(Html(render_thresholds_partial(&thresholds, &suggestions)))
 }
