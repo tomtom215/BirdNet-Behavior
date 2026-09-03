@@ -33,6 +33,7 @@ use birdnet_db::alert_rules::{
     from_export, insert_rule, list_rules, to_export, toggle_rule,
 };
 
+use crate::auth_middleware::RequestUser;
 use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
@@ -176,6 +177,7 @@ fn plan_import(json: &str) -> Result<(Vec<Imported>, ImportOutcome), String> {
 /// existing rules would be unrecoverable from the same screen.
 async fn import_rules(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Form(form): Form<ImportForm>,
 ) -> Result<Html<String>, StatusCode> {
     let (ready, outcome) = match plan_import(&form.rules_json) {
@@ -188,6 +190,7 @@ async fn import_rules(
         }
     };
 
+    let audit_state = state.clone();
     let inserted = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let mut n = 0;
@@ -201,6 +204,19 @@ async fn import_rules(
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // The count, because an import is a bulk change: one row saying "12 rules
+    // arrived" beats twelve rows and is what an operator compares against the
+    // file they pasted.
+    if inserted > 0 {
+        crate::audit::audit(
+            &audit_state,
+            Some(&request_user),
+            "rule.import",
+            None,
+            Some(&format!("inserted={inserted}")),
+        );
+    }
 
     Ok(Html(render_import_outcome(inserted, &outcome)))
 }
@@ -454,6 +470,7 @@ async fn rules_list_partial(State(state): State<AppState>) -> Html<String> {
 
 async fn create_rule(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Form(form): Form<RuleForm>,
 ) -> Result<Html<String>, StatusCode> {
     // Normalise empty strings to None
@@ -504,10 +521,20 @@ async fn create_rule(
         action,
     };
 
+    let audit_state = state.clone();
     tokio::task::spawn_blocking(move || state.with_db(|conn| insert_rule(conn, &new_rule)))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // A rule can suppress detections or POST to a webhook, so "who added the
+    // one that has been swallowing owls since March?" is an audit question.
+    crate::audit::audit(
+        &audit_state,
+        Some(&request_user),
+        "rule.create",
+        Some(&rule_name),
+        None,
+    );
 
     // Return a success message; HTMX will trigger a reload of the list via hx-on
     let body = Html(format!(
@@ -524,12 +551,21 @@ async fn create_rule(
 
 async fn delete_rule_handler(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
+    let audit_state = state.clone();
     tokio::task::spawn_blocking(move || state.with_db(|conn| delete_rule(conn, id)))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::audit::audit(
+        &audit_state,
+        Some(&request_user),
+        "rule.delete",
+        Some(&format!("rule:{id}")),
+        None,
+    );
 
     // O-18: HTMX removes the row via outerHTML swap (response body is empty
     // after OOB extraction); the OOB toast confirms the action separately.
@@ -538,8 +574,10 @@ async fn delete_rule_handler(
 
 async fn toggle_rule_handler(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
+    let audit_state = state.clone();
     let new_state =
         tokio::task::spawn_blocking(move || state.with_db(|conn| toggle_rule(conn, id)))
             .await
@@ -547,6 +585,15 @@ async fn toggle_rule_handler(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let enabled = new_state.unwrap_or(false);
+    // The new state is the content: a rule silently disabled in October
+    // explains an empty November.
+    crate::audit::audit(
+        &audit_state,
+        Some(&request_user),
+        "rule.toggle",
+        Some(&format!("rule:{id}")),
+        Some(if enabled { "enabled" } else { "disabled" }),
+    );
     let label = if enabled { "Enabled" } else { "Disabled" };
     let cls = if enabled { "on" } else { "off" };
     let body = Html(format!(

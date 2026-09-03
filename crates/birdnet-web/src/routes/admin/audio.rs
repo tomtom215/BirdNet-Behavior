@@ -344,7 +344,11 @@ fn parse_eq_field(raw: Option<&str>, sample_rate: u32) -> Result<Option<String>,
     Ok(Some(chain.to_spec()))
 }
 
-async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> Response {
+async fn create(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Form(form): Form<CreateForm>,
+) -> Response {
     let _ = form.scope;
     let device_id = form.device_id.trim().to_string();
     if device_id.is_empty() {
@@ -413,6 +417,16 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
     let result = state.with_db(|conn| conn.insert(&new));
     match result {
         Ok(row) => {
+            // The device id, not the label: a label is cosmetic and a device
+            // id is what an operator matches against the hardware in front of
+            // them when asking why a channel appeared.
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "audio.source.create",
+                Some(&row.device_id),
+                Some(&format!("kind={}", row.kind)),
+            );
             let mut body = render_row(&row, daemon_status(&row, &state));
             // Refresh the section totals so adding the first (or Nth) source
             // visibly updates the "N mics / N streams" header, not just the list.
@@ -438,10 +452,23 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
     }
 }
 
-async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+async fn remove(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Path(id): Path<String>,
+) -> Response {
     let result = state.with_db(|conn| conn.soft_delete(&id));
     match result {
         Ok(()) => {
+            // A removed source is a channel that stops producing detections.
+            // Without this row the gap in the record has no explanation.
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "audio.source.delete",
+                Some(&id),
+                None,
+            );
             // The row's hx-swap removes it from the list; refresh both count
             // chips via OOB so the header totals drop in step.
             let mut body = count_oobs(&state);
@@ -477,9 +504,17 @@ async fn edit_form(State(state): State<AppState>, Path(id): Path<String>) -> Res
 
 async fn update(
     State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
     Path(id): Path<String>,
     Form(form): Form<CreateForm>,
 ) -> Response {
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "audio.source.update",
+        Some(&id),
+        None,
+    );
     let mut patch = AudioSourcePatch::default();
     let device_id = form.device_id.trim().to_string();
     if !device_id.is_empty() {
@@ -1028,6 +1063,22 @@ mod tests {
         (dir, state)
     }
 
+    /// The actor these handlers now record against.
+    ///
+    /// Built from the seed admin row the migration creates, so the audit
+    /// insert has a real `users.id` to reference rather than a synthetic one
+    /// the foreign key would reject.
+    fn actor(state: &AppState) -> crate::auth_middleware::RequestUser {
+        use birdnet_db::accounts::UserStore as _;
+        let user = state
+            .with_db(|conn| conn.find_user_by_name("admin"))
+            .expect("the seed admin row");
+        crate::auth_middleware::RequestUser {
+            user,
+            session_id: "test-session".to_owned(),
+        }
+    }
+
     fn insert_one(state: &AppState, id: &str, kind: SourceKind, device_id: &str) -> AudioSource {
         let new = NewAudioSource::defaults(id, kind, device_id);
         state
@@ -1125,7 +1176,9 @@ mod tests {
         let mut form = eq_form("usb-alsa", "plughw:3,0");
         form.eq_chain = Some("highpass:120; notch:50:20".to_string());
         assert_eq!(
-            create(State(state.clone()), Form(form)).await.status(),
+            create(State(state.clone()), actor(&state), Form(form))
+                .await
+                .status(),
             StatusCode::OK
         );
         assert_eq!(
@@ -1143,7 +1196,13 @@ mod tests {
 
         let mut bad = eq_form("usb-alsa", "plughw:3,0");
         bad.eq_chain = Some("wobblepass:120".to_string());
-        let refused = update(State(state.clone()), Path(id.clone()), Form(bad)).await;
+        let refused = update(
+            State(state.clone()),
+            actor(&state),
+            Path(id.clone()),
+            Form(bad),
+        )
+        .await;
         assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
             stored_chain(&state, "plughw:3,0"),
@@ -1156,7 +1215,7 @@ mod tests {
         let mut clear = eq_form("usb-alsa", "plughw:3,0");
         clear.eq_chain = Some(String::new());
         assert_eq!(
-            update(State(state.clone()), Path(id), Form(clear))
+            update(State(state.clone()), actor(&state), Path(id), Form(clear))
                 .await
                 .status(),
             StatusCode::OK
@@ -1174,7 +1233,7 @@ mod tests {
         let mut form = eq_form("usb-alsa", "plughw:4,0");
         form.sample_rate = Some(8_000);
         form.eq_chain = Some("peaking:6000:1:3".to_string());
-        let refused = create(State(state.clone()), Form(form)).await;
+        let refused = create(State(state.clone()), actor(&state), Form(form)).await;
         assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
         // The counterpart: the same stage on a source that *can* carry it is
@@ -1183,7 +1242,9 @@ mod tests {
         ok.sample_rate = Some(48_000);
         ok.eq_chain = Some("peaking:6000:1:3".to_string());
         assert_eq!(
-            create(State(state.clone()), Form(ok)).await.status(),
+            create(State(state.clone()), actor(&state), Form(ok))
+                .await
+                .status(),
             StatusCode::OK
         );
         assert_eq!(stored_chain(&state, "plughw:5,0"), "peaking:6000:1:3");
@@ -1200,7 +1261,9 @@ mod tests {
         form.sample_rate = Some(48_000);
         form.eq_chain = Some("peaking:6000:1:3".to_string());
         assert_eq!(
-            create(State(state.clone()), Form(form)).await.status(),
+            create(State(state.clone()), actor(&state), Form(form))
+                .await
+                .status(),
             StatusCode::OK
         );
         let id = state
@@ -1214,7 +1277,7 @@ mod tests {
         let mut down = eq_form("usb-alsa", "plughw:6,0");
         down.sample_rate = Some(8_000);
         down.eq_chain = Some("peaking:6000:1:3".to_string());
-        let refused = update(State(state.clone()), Path(id), Form(down)).await;
+        let refused = update(State(state.clone()), actor(&state), Path(id), Form(down)).await;
         assert_eq!(
             refused.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1231,6 +1294,7 @@ mod tests {
         assert_eq!(
             create(
                 State(state.clone()),
+                actor(&state),
                 Form(eq_form("usb-alsa", "plughw:7,0"))
             )
             .await
@@ -1342,7 +1406,9 @@ mod tests {
         form.quiet_start = Some("22:00".to_string());
         form.quiet_end = Some("06:00".to_string());
         assert_eq!(
-            create(State(state.clone()), Form(form)).await.status(),
+            create(State(state.clone()), actor(&state), Form(form))
+                .await
+                .status(),
             StatusCode::OK
         );
 
@@ -1373,7 +1439,13 @@ mod tests {
         let mut half = base();
         half.quiet_start = Some("23:00".to_string());
         half.quiet_end = Some(String::new());
-        let refused = update(State(state.clone()), Path(id.clone()), Form(half)).await;
+        let refused = update(
+            State(state.clone()),
+            actor(&state),
+            Path(id.clone()),
+            Form(half),
+        )
+        .await;
         assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(
             stored(&state),
@@ -1386,7 +1458,7 @@ mod tests {
         clear.quiet_start = Some(String::new());
         clear.quiet_end = Some(String::new());
         assert_eq!(
-            update(State(state.clone()), Path(id), Form(clear))
+            update(State(state.clone()), actor(&state), Path(id), Form(clear))
                 .await
                 .status(),
             StatusCode::OK
@@ -1417,9 +1489,9 @@ mod tests {
             quiet_start: None,
             quiet_end: None,
         };
-        let first = create(State(state.clone()), Form(form())).await;
+        let first = create(State(state.clone()), actor(&state), Form(form())).await;
         assert_eq!(first.status(), StatusCode::OK, "first add succeeds");
-        let second = create(State(state.clone()), Form(form())).await;
+        let second = create(State(state.clone()), actor(&state), Form(form())).await;
         assert_eq!(
             second.status(),
             StatusCode::UNPROCESSABLE_ENTITY,

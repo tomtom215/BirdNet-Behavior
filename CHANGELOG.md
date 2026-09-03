@@ -24,6 +24,57 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — the audit log was never written
+
+Table, store, admin page and 180-day pruner all existed. `AuditLog::record`
+had **zero production callers** — every call site was inside its own
+`#[cfg(test)]` block. `/admin/audit` was permanently empty, which on a shared
+station does not read as "the log is broken"; it reads as "nothing happened".
+
+The repo had already caught half of this once. The *pruner* was wired after
+being found to have no caller, and a retention constant was written for it: six
+months of retention on rows nobody wrote.
+
+Twenty-four actions are now recorded, across every mutating surface — sign-in
+and sign-out, account and password changes, session revocations, settings
+saves, species include/exclude lists and per-species thresholds, audio sources,
+alert rules, clearing detections or recordings, restoring a database, running a
+backup, restarting, and applying an update. Species filters and audio sources
+were not in the finding's list and belong there: they decide whether a gap in a
+season is a real absence or a filter somebody added in April.
+
+**Values are never recorded.** A settings save lists the names of the keys that
+changed and nothing else. The finding proposed redacting values "through the
+existing secret list"; `rtsp_url` is why that would not have been enough — an
+RTSP URL routinely carries `user:pass@` in its authority while its key name says
+nothing about a secret, which is precisely the trap `redact_url_credentials`
+exists for. Names only, and the question the log exists for — *who changed the
+recording schedule on the 3rd?* — is still answered.
+
+A save that changed nothing writes no row. The settings page posts every field
+on every submission, so recording each one would turn the audit log into a click
+counter and bury the save that moved the schedule.
+
+Destructive actions are recorded *before* the work rather than after: clearing
+detections, restoring a database, restarting, applying an update. If the process
+does not survive the operation there is no "after" to record from, and a station
+whose history vanished with nothing in the log is indistinguishable from one
+that was never used.
+
+A failed sign-in records the submitted username and no actor. "Someone tried to
+sign in as `admin` sixty times last night" is the thing worth knowing, a
+username that does not exist is as interesting as one that does, and there being
+no actor is the whole reason `audit_log.user_id` is nullable.
+
+Fifteen gates, six mutations killed. `audit()` writing nothing — the shipped
+state — fails six of them and correctly leaves the two "must record nothing"
+gates green. One gate is a source scanner: it reads every action literal out of
+the web crate and compares it against a documented list, so a typo like
+`species.treshold.set` fails the build instead of shipping a row that renders
+fine and is invisible to the prefix filter meant to catch it. That is the same
+lesson the station-health `CHECKS` table records — a set expressed only as
+scattered call sites cannot be checked, so it is written down once.
+
 ### Fixed — `/api/v2/system/disk` returned 503 "critical" on a disk it called 76 % full
 
 `used_percent()` carries a doc comment explaining, at length, that fullness is

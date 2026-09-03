@@ -302,7 +302,11 @@ struct CreateUserForm {
     label: Option<String>,
 }
 
-async fn create_user(State(state): State<AppState>, Form(form): Form<CreateUserForm>) -> Response {
+async fn create_user(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+    Form(form): Form<CreateUserForm>,
+) -> Response {
     if form.password.len() < 10 {
         return toast::oob_only(Toast::error("Password must be at least 10 characters."))
             .into_response();
@@ -330,6 +334,16 @@ async fn create_user(State(state): State<AppState>, Form(form): Form<CreateUserF
 
     match result {
         Ok(_) => {
+            // On success only: a rejected create is not an account change, and
+            // a log that records attempts alongside outcomes cannot answer
+            // "who has an account?" without the reader knowing which is which.
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "account.user.create",
+                Some(form.username.trim()),
+                None,
+            );
             // Re-render the full user list so the new row appears.
             let users = state.with_db(UserStore::list_users).unwrap_or_default();
             let body = Html(render_user_rows(&users));
@@ -360,10 +374,21 @@ async fn create_user(State(state): State<AppState>, Form(form): Form<CreateUserF
 // DELETE /admin/accounts/users/{id}
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn remove_user(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
+async fn remove_user(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+    Path(id): Path<i64>,
+) -> Response {
     let result = state.with_db(|conn| conn.delete_user(id));
     match result {
         Ok(()) => {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "account.user.delete",
+                Some(&format!("user:{id}")),
+                None,
+            );
             let users = state.with_db(UserStore::list_users).unwrap_or_default();
             let body = Html(render_user_rows(&users));
             toast::with(body, Toast::success("User removed.")).into_response()
@@ -390,6 +415,7 @@ struct PasswordForm {
 
 async fn set_password(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Path(id): Path<i64>,
     Form(form): Form<PasswordForm>,
 ) -> Response {
@@ -409,7 +435,19 @@ async fn set_password(
     };
     let result = state.with_db(|conn| conn.set_password(id, &pwd_argon2));
     match result {
-        Ok(()) => toast::oob_only(Toast::success("Password rotated.")).into_response(),
+        Ok(()) => {
+            // The target is the account whose password changed, which is not
+            // always the actor: an admin resetting someone else's password is
+            // the event this row exists to make visible.
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "account.password.set",
+                Some(&format!("user:{id}")),
+                None,
+            );
+            toast::oob_only(Toast::success("Password rotated.")).into_response()
+        }
         Err(AccountsError::NotFound(_)) => {
             toast::oob_only(Toast::warn("User no longer exists.")).into_response()
         }
@@ -434,6 +472,13 @@ async fn revoke_session_handler(
         tracing::error!(error = %e, "revoke_session failed");
         return toast::oob_only(Toast::error("Could not revoke that session.")).into_response();
     }
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "account.session.revoke",
+        Some(&id),
+        None,
+    );
     let current_session_id = request_user.session_id.clone();
     let body = state
         .with_db(|conn| -> Result<String, AccountsError> {
@@ -465,6 +510,15 @@ async fn revoke_others_handler(
                 .into_response();
         }
     };
+    // The count is the whole content of this event: "signed out 4 other
+    // devices" is what an operator checks against how many they expected.
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "account.session.revoke_others",
+        Some(&format!("user:{user_id}")),
+        Some(&format!("revoked={n}")),
+    );
     let body = state
         .with_db(|conn| -> Result<String, AccountsError> {
             let sessions = conn.list_sessions(user_id)?;

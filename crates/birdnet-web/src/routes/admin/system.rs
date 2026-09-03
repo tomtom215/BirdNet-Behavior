@@ -385,7 +385,11 @@ async fn render_status_partial(state: &AppState) -> String {
 // POST /admin/system/backup
 // ---------------------------------------------------------------------------
 
-async fn trigger_backup(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
+async fn trigger_backup(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+) -> Result<Html<String>, StatusCode> {
+    crate::audit::audit(&state, Some(&request_user), "data.backup.run", None, None);
     let db_path = state.db_path().to_path_buf();
     let backup_dir = db_path
         .parent()

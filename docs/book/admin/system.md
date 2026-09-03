@@ -54,3 +54,45 @@ birdnet-behavior --doctor-json | jq .
 > backing channel existed and the page connected to it, but no `tracing` layer
 > was ever installed, so it replayed an empty backlog and then emitted
 > keep-alives for ever. The page now shows what the station logged.
+
+## Audit log
+
+`/admin/audit` records who changed what. Rows are kept for 180 days and pruned
+by the maintenance loop.
+
+Actions are dotted and hierarchical, so the page's filter selects a family with
+a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
+
+| Family | Actions |
+|---|---|
+| `auth.` | `login.ok`, `login.fail`, `logout` |
+| `account.` | `user.create`, `user.delete`, `password.set`, `session.revoke`, `session.revoke_others` |
+| `settings.` | `update` |
+| `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `threshold.set`, `threshold.delete` |
+| `audio.` | `source.create`, `source.update`, `source.delete` |
+| `rule.` | `create`, `delete`, `toggle`, `import` |
+| `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run` |
+| `system.` | `restart`, `update.apply` |
+
+A failed sign-in records the *submitted* username and no actor — "someone tried
+to sign in as `admin` sixty times last night" is the thing worth knowing, and a
+username that does not exist is as interesting as one that does.
+
+**Values are never recorded.** A settings save lists the names of the keys that
+changed and nothing else. `rtsp_url` is why: an RTSP URL routinely carries
+`user:pass@` in its authority, and this page renders its rows verbatim. A save
+that changed nothing writes no row at all, because the settings form posts every
+field on every submission and recording each one would turn the log into a click
+counter.
+
+Destructive actions — clearing detections, restoring a database, restarting,
+applying an update — are recorded *before* the work starts, not after. If the
+process does not survive the operation there is no "after" to record from, and a
+station whose history vanished with nothing in the audit log is
+indistinguishable from one that was never used.
+
+> **If you ran an earlier version.** This page was permanently empty. The table,
+> the store, the page and the 180-day pruner all existed, and the one function
+> that writes a row had no callers outside its own tests — so on a shared
+> station the page did not read as "the log is broken", it read as "nothing
+> happened".
