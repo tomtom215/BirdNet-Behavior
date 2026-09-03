@@ -194,7 +194,14 @@ async fn serve(
     // keep-alives for ever.
     let state = state
         .with_config_path(cli.config.clone())
-        .with_log_broadcaster(log_broadcaster);
+        .with_log_broadcaster(log_broadcaster)
+        // Decided once, here, and carried on the state: whether anything would
+        // bring this process back if it exited. Both restart handlers read it
+        // rather than the environment, so a test binary that inherited
+        // `INVOCATION_ID` cannot reach the branch that signals.
+        .with_supervised_by_systemd(
+            birdnet_web::routes::admin::system_controls::supervised_by_systemd(),
+        );
 
     // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
     // token. Absent one — the default — those routes answer 404 and this

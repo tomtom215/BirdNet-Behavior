@@ -140,6 +140,32 @@ bearer-gated, and every other operation is documented as anonymous. Redocly's
 the document's default is anonymous, so a write documented without one would
 hand every generated client a `401` it had no way to anticipate.
 
+**And a worse one, found by CI.** The restart endpoint read
+`INVOCATION_ID`/`JOURNAL_STREAM` on every request, which made its behaviour a
+property of the calling process's environment. A GitHub Actions runner sets
+`INVOCATION_ID`, so in CI the endpoint took the *signalling* branch and the test
+binary sent itself `SIGTERM` 400 ms later. It surfaced only because one test
+asserted the environment before calling; `every_documented_route_is_mounted`, in
+the same binary, `POST`s every route in the table with a valid token and had no
+such guard.
+
+Whether systemd is supervising the process is a property of how it started and
+cannot change while it runs, so it is now read once by `supervised_by_systemd()`,
+recorded on `AppState` by `app.rs`, and read from there by both restart
+handlers. A state built without it is not supervised — the safe answer, and the
+one every test wants. Splitting the decision (`restart_outcome`) and the
+rendering (`restart_fragment`) out of the signalling makes both assertable
+without a test process killing itself, which they were not before.
+
+`tests/the_restart_endpoint_cannot_signal_a_test.rs` holds the two halves no
+behavioural test can see: that `app.rs` still records the answer — delete that
+one line and every station refuses every restart for ever, while the suite stays
+green because its states are all correctly unsupervised — and that nothing reads
+those variables for itself again. The exemption in the second is scoped to
+`supervised_by_systemd`'s own body rather than to the file it lives in, because
+the original defect was four lines below it; restoring that defect exactly is
+what the gate was observed failing against.
+
 **Found while doing it, and not fixed:** two things.
 
 The audit log's vocabulary gate finds action names by scanning for the literal

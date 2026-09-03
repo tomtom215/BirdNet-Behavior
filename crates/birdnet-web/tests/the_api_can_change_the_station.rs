@@ -652,19 +652,27 @@ async fn a_settings_write_is_audited_by_key_and_not_by_value() {
 
 /// A restart request answers honestly when nothing would restart the process.
 ///
-/// The `Signalled` branch cannot be exercised from a test: it is selected by
-/// `INVOCATION_ID`/`JOURNAL_STREAM` being present in the environment, and
-/// setting an environment variable is `unsafe` under edition 2024 while this
-/// workspace has `unsafe_code = "forbid"`. Reaching it would also send this
-/// process a real `SIGTERM`. What is asserted here is the branch a test *can*
-/// reach, plus the audit entry, which is written before the decision precisely
-/// so it exists in both.
+/// A station built without `with_supervised_by_systemd` is not supervised, so
+/// this reaches the refusing branch deterministically. It did not always: the
+/// handler used to read `INVOCATION_ID`/`JOURNAL_STREAM` per request, a GitHub
+/// Actions runner sets `INVOCATION_ID`, and in CI this test therefore took the
+/// *signalling* branch and had the test process `kill -TERM` itself 400 ms
+/// later. The decision now arrives on the state.
+///
+/// What still cannot be exercised end to end is the signalling branch itself,
+/// because reaching it through the router means a real `SIGTERM` to this
+/// process. Its decision and its rendering are asserted in `service.rs`'s unit
+/// tests, against the pure `restart_outcome` and `restart_fragment`.
+///
+/// The audit entry is asserted here because it is written before the decision,
+/// so it must exist on the refusing branch too.
 #[tokio::test]
 async fn a_restart_says_so_when_nothing_would_bring_the_station_back() {
     let (_dir, state) = station(true);
     assert!(
-        std::env::var_os("INVOCATION_ID").is_none() && std::env::var_os("JOURNAL_STREAM").is_none(),
-        "this test assumes it is not running under systemd"
+        !state.supervised_by_systemd(),
+        "a test station must never be marked supervised: the restart endpoint would \
+         then SIGTERM this test process"
     );
 
     let (status, body) = call(&state, "/api/v2/control/restart", Some(TOKEN), None, "{}").await;

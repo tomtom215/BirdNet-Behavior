@@ -770,8 +770,8 @@ plan.
 
 ### Where the numbers come from
 
-`cargo test --workspace` on x86_64 in a container: **3 629 passed, 0 failed,
-7 ignored, 110 suites**. `cargo fmt --check --all` and
+`cargo test --workspace` on x86_64 in a container: **3 633 passed, 0 failed,
+7 ignored, 111 suites**. `cargo fmt --check --all` and
 `cargo clippy --workspace --all-targets -- -D warnings` both exit 0. The same
 command at the branch point `f33eb9e` reports 3 570 in 106 suites, so the
 difference is this pass's own gates and nothing else. (This block read "3 567,

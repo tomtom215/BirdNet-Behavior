@@ -524,7 +524,7 @@ async fn restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     // refused — and before the SIGTERM, so it survives the restart.
     crate::audit::audit(&state, None, "system.restart", None, Some(VIA_API));
 
-    match request_restart() {
+    match request_restart(state.supervised_by_systemd()) {
         RestartOutcome::Signalled => (
             StatusCode::OK,
             Json(json!({

@@ -135,6 +135,17 @@ struct AppStateInner {
     /// means the bearer-authenticated mutating API is not enabled at all; see
     /// [`crate::api_token`].
     api_token: Option<ApiToken>,
+    /// Whether systemd is supervising this process, decided once at startup.
+    ///
+    /// `false` — the default — means a restart request is refused, because
+    /// nothing would bring the station back. It is here rather than read from
+    /// the environment at the point of use because it is a property of how the
+    /// process was started and cannot change while it runs, and because a
+    /// per-request environment read made the restart endpoint behave
+    /// differently under a test binary that inherited `INVOCATION_ID` — which
+    /// a GitHub Actions runner sets. See
+    /// `routes::admin::system_controls::service::supervised_by_systemd`.
+    supervised_by_systemd: bool,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -212,6 +223,7 @@ impl AppState {
                 notifier: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
+                supervised_by_systemd: false,
             }),
         })
     }
@@ -404,6 +416,7 @@ impl AppState {
                 notifier: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
+                supervised_by_systemd: false,
             }),
         })
     }
@@ -440,6 +453,7 @@ impl AppState {
                 notifier: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
+                supervised_by_systemd: false,
             }),
         }
     }
@@ -581,6 +595,20 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_api_token");
         Self {
             inner: rebuild_inner(inner, |s| s.api_token = Some(token)),
+        }
+    }
+
+    /// Record whether systemd is supervising this process.
+    ///
+    /// Called by the application with
+    /// `routes::admin::system_controls::service::supervised_by_systemd()`. Not
+    /// calling it leaves the answer `false`, which is what a test station and
+    /// any tooling should get: a restart is then refused rather than signalled.
+    #[must_use]
+    pub fn with_supervised_by_systemd(self, supervised: bool) -> Self {
+        let inner = unwrap_inner(self.inner, "with_supervised_by_systemd");
+        Self {
+            inner: rebuild_inner(inner, |s| s.supervised_by_systemd = supervised),
         }
     }
 
@@ -1024,6 +1052,16 @@ impl AppState {
     #[must_use]
     pub fn api_token(&self) -> Option<&ApiToken> {
         self.inner.api_token.as_ref()
+    }
+
+    /// Whether systemd is supervising this process, as recorded at startup.
+    ///
+    /// Read by both restart handlers. `false` on any state built without
+    /// [`Self::with_supervised_by_systemd`], so a test station refuses a
+    /// restart instead of signalling itself.
+    #[must_use]
+    pub fn supervised_by_systemd(&self) -> bool {
+        self.inner.supervised_by_systemd
     }
 
     /// Shared handle to the ingest-halt latch, for the maintenance loop to set
