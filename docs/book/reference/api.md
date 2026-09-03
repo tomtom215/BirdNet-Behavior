@@ -1,10 +1,12 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. All endpoints are read-only `GET`s unless noted.
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the four [write endpoints](#changing-a-station), which need a token.
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
-> **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every `/api/v2/*` endpoint, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+> **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+>
+> The **write** endpoints are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
 > **OpenAPI:** a complete, machine-readable **OpenAPI 3.1** description of this API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients.
 
@@ -21,6 +23,7 @@ curl http://localhost:8502/api/v2/health
   "database": "ok",
   "analytics": true,
   "detection_daemon": "running",
+  "detection_writes": "accepted",
   "detection_silence_secs": 142
 }
 ```
@@ -182,3 +185,71 @@ page:
 ## Export
 
 CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
+
+## Changing a station
+
+Four endpoints, and they are the only ones in `/api/v2` that change anything.
+They exist so Home Assistant, Node-RED or a shell script can *act* on a station
+rather than only read it — before them, every state change in the product was an
+HTMX form post returning HTML, which is not a contract anyone can build on.
+
+### Turning them on
+
+They are **off** by default. Set `BNB_API_TOKEN` in the config file or the
+environment and restart:
+
+```bash
+openssl rand -base64 48
+```
+
+Until you do, all four answer `404`: the write surface does not exist rather
+than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
+where an unset password leaves `/admin` *open* — an unset token leaves the write
+API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
+with a warning in the log and a warning from `birdnet-behavior --doctor`.
+
+### Identifying a detection
+
+There is no surrogate id. A detection is identified the way the database
+identifies it — by date, time and scientific name:
+
+```json
+{ "date": "2026-09-03", "time": "06:12:44", "sci_name": "Erithacus rubecula" }
+```
+
+A malformed key is `400`; a well-formed key matching no row is `404`.
+
+### The endpoints
+
+| Method | Path | Does |
+|---|---|---|
+| `POST` | `/api/v2/detections/review` | Record `confirmed` / `rejected`, or clear a verdict by omitting `status` |
+| `POST` | `/api/v2/detections/lock` | Protect the clip from the disk-full purge and retention sweep |
+| `POST` | `/api/v2/detections/unlock` | Return it to the ordinary purge rules |
+| `POST` | `/api/v2/detections/delete` | Remove the detection row |
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/review \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula","status":"confirmed"}'
+```
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/lock \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula"}'
+```
+
+Every change is written to the [audit log](../admin/system.md) as
+`detection.review` / `detection.lock` / `detection.unlock` / `detection.delete`,
+with no user and `via=api` in the metadata — a token is not a person, and the
+log says so rather than inventing one.
+
+### Cross-origin calls
+
+These endpoints are exempt from the dashboard's same-origin (CSRF) check,
+because a cross-site *form* cannot set an `Authorization` header — that is the
+whole premise of the check, so it has nothing to protect here. The exemption is
+scoped to these four paths; every other write in the product still has it.

@@ -9,6 +9,7 @@ use birdnet_core::audio::capture::{CaptureStatusHandle, LiveAudioHubHandle};
 use birdnet_core::i18n::I18nManager;
 
 use crate::analytics_cache::AnalyticsCache;
+use crate::api_token::ApiToken;
 use crate::db_pool::ReaderPool;
 use crate::notifier::Notifier;
 use birdnet_integrations::species_images::ImageCache;
@@ -130,6 +131,10 @@ struct AppStateInner {
     /// `detection_daemon_running` is one: the maintenance loop that discovers
     /// the corruption holds only a clone, taken before the state was shared.
     ingest_halted: Arc<AtomicBool>,
+    /// The station's API token, if one is configured. `None` — the default —
+    /// means the bearer-authenticated mutating API is not enabled at all; see
+    /// [`crate::api_token`].
+    api_token: Option<ApiToken>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -206,6 +211,7 @@ impl AppState {
                 live_audio: None,
                 notifier: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
+                api_token: None,
             }),
         })
     }
@@ -397,6 +403,7 @@ impl AppState {
                 live_audio: None,
                 notifier: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
+                api_token: None,
             }),
         })
     }
@@ -432,6 +439,7 @@ impl AppState {
                 live_audio: None,
                 notifier: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
+                api_token: None,
             }),
         }
     }
@@ -558,6 +566,21 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_notifier");
         Self {
             inner: rebuild_inner(inner, |s| s.notifier = Some(notifier)),
+        }
+    }
+
+    /// Enable the bearer-authenticated mutating API with `token`.
+    ///
+    /// Not calling this leaves the API off, which is the default and the
+    /// behaviour of every station that has not been given a `BNB_API_TOKEN`.
+    /// The token is resolved by `helpers::auth::resolve_api_token` — the
+    /// configuration file first, then the environment, the same precedence
+    /// `CADDY_PWD` uses.
+    #[must_use]
+    pub fn with_api_token(self, token: ApiToken) -> Self {
+        let inner = unwrap_inner(self.inner, "with_api_token");
+        Self {
+            inner: rebuild_inner(inner, |s| s.api_token = Some(token)),
         }
     }
 
@@ -995,6 +1018,12 @@ impl AppState {
     #[must_use]
     pub fn notifier(&self) -> Option<&Notifier> {
         self.inner.notifier.as_ref()
+    }
+
+    /// The station's API token, if the mutating API is enabled.
+    #[must_use]
+    pub fn api_token(&self) -> Option<&ApiToken> {
+        self.inner.api_token.as_ref()
     }
 
     /// Shared handle to the ingest-halt latch, for the maintenance loop to set

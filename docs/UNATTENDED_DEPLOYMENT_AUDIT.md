@@ -128,9 +128,10 @@ Two of the prior verdicts are wrong in a way that matters:
   *permanently undetectable*, not merely double-counted.
 
 And thirty-two findings are new, of which the sharpest is **O-1**: our entire
-`/api/v2` surface is read-only. A mechanical check — every `post(`/`put(`/
-`delete(`/`patch(` across all fourteen modules mounted under `/api/v2` — returns
-nothing. Every mutation in the product is an HTMX form post returning HTML, so
+`/api/v2` surface was read-only. A mechanical check — every `post(`/`put(`/
+`delete(`/`patch(` across all fourteen modules mounted under `/api/v2` — returned
+nothing. **Half closed**: four bearer-authenticated `/detections/*` write
+endpoints now exist (item 5.14 below); settings and restart do not yet. Every mutation in the product is an HTMX form post returning HTML, so
 no automation, Home Assistant action or scripted admin is possible without
 scraping fragments and forging an `Origin` header.
 
@@ -445,7 +446,7 @@ already what the bundle embeds).
 
 | ID | Sev | How | Finding | Fix |
 |---|---|---|---|---|
-| **O-1** | P1 | VERIFIED | **The `/api/v2` surface is 100 % read-only.** No mutating route method in any of the fourteen modules mounted under it. Every mutation is an HTMX form post returning HTML behind a same-origin check — trivially satisfied by any script that sets a matching `Origin`, and therefore not a contract anyone can build on. Upstream has 54 mutating routes. Consequences: no supported automation; Home Assistant and Node-RED can read but never act; and our own front end is the only client, so a fragment-markup change silently breaks whatever automation exists in the wild. | Port the ~8 with operational weight, reusing the handlers already behind the HTMX routes: review, lock, delete, batch, `GET` and `PUT /settings`, `POST /control/restart`. Bearer auth, and the CSRF guard must **skip** bearer-authenticated requests — a header token is not attachable by a cross-site form, which is the entire premise of the check. |
+| **O-1** | P1 | VERIFIED | **[FIXED — half of it]** Four bearer-authenticated write endpoints now exist — `POST /api/v2/detections/{review,lock,unlock,delete}` — in their own router, so `public_routes()` stays read-only, and behind `api_token::require_bearer`, so they never inherit the admin middleware's open-when-no-password bypass: a station with no `BNB_API_TOKEN` answers **404** on all four. That is the opposite default from `CADDY_PWD`, deliberately. The CSRF guard skips exactly these paths, because a cross-site form cannot set an `Authorization` header. **Not done:** `GET`/`PUT /settings`, `POST /control/restart`, and the batch endpoint — four of the remedy's eight. The original finding: **The `/api/v2` surface is 100 % read-only.** No mutating route method in any of the fourteen modules mounted under it. Every mutation is an HTMX form post returning HTML behind a same-origin check — trivially satisfied by any script that sets a matching `Origin`, and therefore not a contract anyone can build on. Upstream has 54 mutating routes. Consequences: no supported automation; Home Assistant and Node-RED can read but never act; and our own front end is the only client, so a fragment-markup change silently breaks whatever automation exists in the wild. | Port the ~8 with operational weight, reusing the handlers already behind the HTMX routes: review, lock, delete, batch, `GET` and `PUT /settings`, `POST /control/restart`. Bearer auth, and the CSRF guard must **skip** bearer-authenticated requests — a header token is not attachable by a cross-site form, which is the entire premise of the check. |
 | **O-2** | P1 | VERIFIED | **The audit log is never written.** Table, store, admin page and pruner all exist; `AuditLog::record` has **zero production callers** — every call site is inside its own `#[cfg(test)]` block. `/admin/audit` is permanently empty, which on a shared station reads as "nothing happened". The repo already caught half of this: the *pruner* was wired after being found to have no caller; the writer never was. **[FIXED — "Record who changed what"]** The helper as prescribed, called from every surface listed plus two the finding did not name: species filters and audio sources, which are what decide whether a season's gap is a real absence. 24 actions in all. One change to the prescription: settings values are not "redacted through the existing secret list", they are **never recorded at all** — only the names of the changed keys. `rtsp_url` is the reason a key-name allow-list would not have been enough: an RTSP URL carries `user:pass@` in its authority while its key name says nothing about a secret, which is the same trap `redact_url_credentials` exists for. A save that changed nothing writes no row, because the form posts every field every time. Destructive actions are recorded *before* the work, since a process that does not survive a restore has no "after" to write from. | Done; see Stage 2 landed. |
 | **O-3** | P1 | VERIFIED | **The admin log viewer streams a channel nothing publishes to.** `src/main.rs:146-148` installs exactly two layers and no `tracing_subscriber::Layer` implementation exists anywhere in the crate; `LogBroadcaster::new()` is called **three separate times** in `state.rs`, so they are three distinct channels anyway. `GET /admin/system/logs` replays an empty backlog and then emits keep-alives for ever. On Docker, where `journalctl` is unavailable to the user, this page is the whole story. **[FIXED — "Show the operator what the station logged"]** Taken as prescribed, with one correction to this row: **"three separate times ... so they are three distinct channels anyway" is wrong.** The three `LogBroadcaster::new()` calls are in three *alternative* constructors — `AppState::new`, `new_with_analytics`, `from_connection` — and a run builds exactly one `AppState` (`src/app.rs:184`). There was one channel, and nothing published to it; the count was never the defect. `LogCapture` now implements `Layer`, is installed as a third `.with(...)`, and the broadcaster is built in `main` *before* the subscriber and handed to the state, because the layer has to exist at `init()` time and the state does not exist yet. `errors.jsonl` sits beside the database, takes ERROR and WARN only, is capped at 1 MB, and is a bundle member. URL credentials are stripped in the layer rather than per call site, because that file travels in the support bundle. | Done; see Stage 2 landed. |
 | **O-4** | P1 | VERIFIED | **No private mode.** `grep` for `private_mode`/`public_access` returns zero hits. The dashboard, the whole API, the live audio stream and both WebSockets are unauthenticated with no configuration that changes it. On a station reachable through a tunnel or a port forward, anyone with the URL sees the full detection history and can **open a live microphone feed of somebody's garden**. `--listen 127.0.0.1` is not a substitute; that is what the tunnel connects to. The privacy argument used to decline Sentry applies here with more force, and this is on by default. | `BIRDNET_PRIVATE_MODE` plus `BIRDNET_PUBLIC_ACCESS=live_audio,share`, applied by moving `public_routes()` inside `auth_middleware::apply` with an exempt set. Gate both directions, including that an operator-minted share link keeps working. |
@@ -671,7 +672,7 @@ person 40 km away learns that it stopped.
 | 5.11 | Rollback after a bad update; a smoke test that runs `--doctor` | **NT-12** |
 | 5.12 | Cellular/CGNAT documentation, then a safe-mode boot | **NT-17** |
 | 5.13 | Correct the systemd documentation and gate it against the unit | **NT-8** |
-| 5.14 | Mutating endpoints under `/api/v2` with bearer auth | **O-1** |
+| 5.14 | Mutating endpoints under `/api/v2` with bearer auth — **half done**: the four `/detections/*` writes have landed, settings and restart and batch have not | **O-1** |
 | 5.15 | Configurable frame ancestors | **O-5** |
 | 5.16 | OpenAPI path-set equality | **O-8** |
 | 5.17 | HSTS and COOP, correctly conditioned | **O-10** |
@@ -766,8 +767,8 @@ plan.
 
 ### Where the numbers come from
 
-`cargo test --workspace` on x86_64 in a container: **3 601 passed, 0 failed,
-109 suites**. `cargo fmt --check --all` and
+`cargo test --workspace` on x86_64 in a container: **3 618 passed, 0 failed,
+110 suites**. `cargo fmt --check --all` and
 `cargo clippy --workspace --all-targets -- -D warnings` both exit 0. The same
 command at the branch point `f33eb9e` reports 3 570 in 106 suites, so the
 difference is this pass's own gates and nothing else. (This block read "3 567,
@@ -802,11 +803,12 @@ claimed as local results:
   is an unconfigured-environment one. **Still true**, and still not to be
   ticked off without a configured station.
 
-  The *counts* move with the container, so do not carry them forward: this
-  block recorded "8 passed, 9 warnings" and a re-run gives **9 passed, 8
-  warnings, 0 errors, 5 skipped**. The one that moved is `Disk space`, which
-  warned at under 1 GiB free on the earlier container and passes with 13 GiB
-  here. The eight warnings now are: configuration file, station location,
+  The *counts* move with the container **and** with the checks themselves, so
+  do not carry them forward: this block recorded "8 passed, 9 warnings"; a
+  re-run gave 9 passed, 8 warnings (`Disk space` warned at under 1 GiB free on
+  the earlier container and passes with 13 GiB here), and after 5.14 added an
+  `API write surface` check it is **10 passed, 8 warnings, 0 errors, 5
+  skipped**. The eight warnings now are: configuration file, station location,
   species occurrence filter, admin authentication, HTTPS, database directory,
   offsite backup, audio source. Re-run it rather than quoting this list.
 

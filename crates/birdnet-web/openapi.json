@@ -3,8 +3,8 @@
   "info": {
     "title": "BirdNet-Behavior HTTP API",
     "version": "0.15.0",
-    "summary": "Read-only JSON API for a BirdNet-Behavior acoustic monitoring station.",
-    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. All documented endpoints are read-only `GET`s.\n\n**Authentication.** The built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every `/api/v2/*` endpoint, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\n**Not described here.** A live detection WebSocket stream at `ws://<host>/api/v2/ws/detections`, the live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not GET-JSON endpoints; see the project docs.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
+    "summary": "JSON API for a BirdNet-Behavior acoustic monitoring station: open read-only endpoints, plus a small token-authenticated write surface.",
+    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the four `/detections/*` write endpoints, which require a bearer token.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **write** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every write endpoint — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** A live detection WebSocket stream at `ws://<host>/api/v2/ws/detections`, the live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not GET-JSON endpoints; see the project docs.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
     "license": {
       "name": "CC BY-NC-SA 4.0",
       "url": "https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE"
@@ -311,6 +311,294 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/detections/review": {
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Record or clear a review verdict",
+        "description": "Marks a detection confirmed or rejected, or clears an existing verdict when `status` is omitted. Writes to the same store the review UI uses, and mirrors into the analytics copy.",
+        "operationId": "reviewDetection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "date",
+                  "time",
+                  "sci_name"
+                ],
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "example": "2026-09-03",
+                    "description": "Local calendar date of the detection, `YYYY-MM-DD`."
+                  },
+                  "time": {
+                    "type": "string",
+                    "example": "06:12:44",
+                    "description": "Local time of the detection, `HH:MM:SS`."
+                  },
+                  "sci_name": {
+                    "type": "string",
+                    "example": "Erithacus rubecula",
+                    "description": "Scientific name exactly as the detection was recorded."
+                  },
+                  "com_name": {
+                    "type": "string",
+                    "description": "Common name stored alongside the verdict. Defaults to `sci_name`."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed",
+                      "rejected"
+                    ],
+                    "description": "Omit the field entirely to clear an existing verdict."
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "Free text to attach to the verdict."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The verdict was recorded (or cleared).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed, or `status` is not a recognised verdict."
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "No detection matches that date, time and scientific name — or this station has no `BNB_API_TOKEN`, in which case the write surface does not exist."
+          }
+        }
+      }
+    },
+    "/detections/lock": {
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Lock a detection against disk purges",
+        "description": "A locked detection's clip survives the disk-full purge and the retention sweep.",
+        "operationId": "lockDetection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "date",
+                  "time",
+                  "sci_name"
+                ],
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "example": "2026-09-03",
+                    "description": "Local calendar date of the detection, `YYYY-MM-DD`."
+                  },
+                  "time": {
+                    "type": "string",
+                    "example": "06:12:44",
+                    "description": "Local time of the detection, `HH:MM:SS`."
+                  },
+                  "sci_name": {
+                    "type": "string",
+                    "example": "Erithacus rubecula",
+                    "description": "Scientific name exactly as the detection was recorded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The detection is now locked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed, or `status` is not a recognised verdict."
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "No detection matches that date, time and scientific name — or this station has no `BNB_API_TOKEN`, in which case the write surface does not exist."
+          }
+        }
+      }
+    },
+    "/detections/unlock": {
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Unlock a detection",
+        "description": "Returns the detection's clip to the ordinary purge and retention rules.",
+        "operationId": "unlockDetection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "date",
+                  "time",
+                  "sci_name"
+                ],
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "example": "2026-09-03",
+                    "description": "Local calendar date of the detection, `YYYY-MM-DD`."
+                  },
+                  "time": {
+                    "type": "string",
+                    "example": "06:12:44",
+                    "description": "Local time of the detection, `HH:MM:SS`."
+                  },
+                  "sci_name": {
+                    "type": "string",
+                    "example": "Erithacus rubecula",
+                    "description": "Scientific name exactly as the detection was recorded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The detection is now unlocked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed, or `status` is not a recognised verdict."
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "No detection matches that date, time and scientific name — or this station has no `BNB_API_TOKEN`, in which case the write surface does not exist."
+          }
+        }
+      }
+    },
+    "/detections/delete": {
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Delete a detection",
+        "description": "Removes the detection row and mirrors the delete into the analytics copy. The audio clip itself is removed by the ordinary retention sweep.",
+        "operationId": "deleteDetection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "date",
+                  "time",
+                  "sci_name"
+                ],
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "example": "2026-09-03",
+                    "description": "Local calendar date of the detection, `YYYY-MM-DD`."
+                  },
+                  "time": {
+                    "type": "string",
+                    "example": "06:12:44",
+                    "description": "Local time of the detection, `HH:MM:SS`."
+                  },
+                  "sci_name": {
+                    "type": "string",
+                    "example": "Erithacus rubecula",
+                    "description": "Scientific name exactly as the detection was recorded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The detection was deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed, or `status` is not a recognised verdict."
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "No detection matches that date, time and scientific name — or this station has no `BNB_API_TOKEN`, in which case the write surface does not exist."
           }
         }
       }
@@ -1605,6 +1893,13 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The station's `BNB_API_TOKEN`, resolved from its configuration file and then its environment. Required by every write endpoint and accepted by none of the read-only ones."
+      }
+    },
     "parameters": {
       "Limit": {
         "name": "limit",

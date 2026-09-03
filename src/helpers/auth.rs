@@ -61,6 +61,64 @@ pub fn resolve_admin_password(config: Option<&Config>, env: Option<String>) -> O
         .or_else(|| env.filter(|pwd| !pwd.is_empty()))
 }
 
+/// Resolve the station's API token: file config first, then the environment —
+/// the same precedence, and for the same reason, as
+/// [`resolve_admin_password`].
+///
+/// # Why not a settings row
+///
+/// Because this project already decided credentials do not live there:
+/// [`purge_legacy_credential_settings`] *deletes* plaintext credential rows a
+/// previous build's settings form could write, and the dashboard that renders
+/// settings is unauthenticated on a default station (`O-4`). A token in
+/// `settings` would be a credential published on a public page.
+///
+/// # Why the environment value is a parameter
+///
+/// Identical to `resolve_admin_password`: `std::env::set_var` is `unsafe` in
+/// edition 2024 and this crate forbids `unsafe_code`, so a test cannot set the
+/// variable. Passing it in is what makes the precedence testable at all.
+///
+/// Returns the raw string; validating its length is
+/// [`birdnet_web::api_token::ApiToken::new`]'s job, so the rule lives with the
+/// type that enforces it rather than being restated here.
+#[must_use]
+pub fn resolve_api_token(config: Option<&Config>, env: Option<String>) -> Option<String> {
+    config
+        .and_then(|c| c.get(birdnet_web::api_token::API_TOKEN_KEY))
+        .map(str::to_owned)
+        .filter(|t| !t.is_empty())
+        .or_else(|| env.filter(|t| !t.is_empty()))
+}
+
+/// Build the station's [`ApiToken`], complaining loudly if one was configured
+/// and refused.
+///
+/// A token that is too short leaves the mutating API **off**, because enabling
+/// it weakly is the failure an operator cannot see. The warning names the knob
+/// and the floor.
+///
+/// [`ApiToken`]: birdnet_web::api_token::ApiToken
+#[must_use]
+pub fn build_api_token(config: Option<&Config>) -> Option<birdnet_web::api_token::ApiToken> {
+    use birdnet_web::api_token::{API_TOKEN_KEY, ApiToken};
+
+    let raw = resolve_api_token(config, std::env::var(API_TOKEN_KEY).ok())?;
+    match ApiToken::new(&raw) {
+        Ok(token) => {
+            tracing::info!("the mutating /api/v2 endpoints are enabled: {API_TOKEN_KEY} is set");
+            Some(token)
+        }
+        Err(e) => {
+            tracing::warn!(
+                "{e}; the mutating /api/v2 endpoints stay disabled. Generate one with \
+                 `openssl rand -base64 48`"
+            );
+            None
+        }
+    }
+}
+
 /// Run the one-shot admin-row password bootstrap. Idempotent across
 /// restarts.
 pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {

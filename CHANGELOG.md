@@ -38,6 +38,64 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a station can now be changed over its API, by something that is not a browser
+
+The `/api/v2` surface was entirely read-only. A grep for `post(`, `put(`,
+`delete(` and `patch(` across the fourteen routers nested under it returned
+nothing, against the reference implementation's fifty-four mutating routes.
+Every state change in this product was an HTMX form post that returned an HTML
+fragment, behind a same-origin check any script satisfies by setting a matching
+`Origin` header — so it was neither a security boundary nor a contract anyone
+could build on. Home Assistant and Node-RED could read a station and never act
+on one, and because our own front end was the only client, a change to fragment
+markup would silently break whatever automation existed in the wild.
+
+Four endpoints now exist, and they are the only ones under `/api/v2` that change
+anything:
+
+| Endpoint | Does |
+|---|---|
+| `POST /api/v2/detections/review` | record `confirmed` / `rejected`, or clear a verdict |
+| `POST /api/v2/detections/lock` | protect a clip from the purge and the retention sweep |
+| `POST /api/v2/detections/unlock` | return it to the ordinary rules |
+| `POST /api/v2/detections/delete` | remove the detection |
+
+**They are off by default, and the default is the safe one.** Set
+`BNB_API_TOKEN` — resolved from the config file then the environment, the same
+precedence `CADDY_PWD` uses — and each endpoint accepts
+`Authorization: Bearer <token>`. Leave it unset and all four answer `404`: the
+write surface does not exist rather than existing unprotected. That is
+deliberately the *opposite* default from `CADDY_PWD`, where an unset password
+leaves `/admin` open; these endpoints never touch that bypass. A token under 32
+bytes is refused, leaving the API off, and `--doctor` now says so — a knob that
+was set and silently ignored is the failure an operator cannot see.
+
+The token is not a settings row. This project already deletes plaintext
+credential rows a previous build's settings form could write, and the page that
+renders settings is unauthenticated on a default station; a token there would be
+a credential published on a public page. Only a SHA-256 digest of it is held in
+memory, because the state it would live in derives `Debug`.
+
+The endpoints are mounted in their own router rather than the public one, which
+is asserted read-only by the gate that exists because thirteen mutating routes
+once sat there. They are exempt from the same-origin CSRF check — a cross-site
+form cannot set an `Authorization` header, which is the whole premise of the
+check — and the exemption is scoped to those four paths, with a test that fails
+if it widens: a rule keyed on the header instead of the path lets a
+cross-origin page write through, and the test watches the detection actually
+disappear.
+
+Every change is written to the audit log with no user and `via=api`, because a
+token is not a person.
+
+**Found while doing it, and not fixed:** the audit log's vocabulary gate finds
+action names by scanning for the literal text of the `audit` call and reading
+string literals near it. A local helper that takes the action as a parameter
+compiles, works, and is invisible to it — which is how these four names first
+went undocumented, and how any future call site can. The calls here are written
+out at each site so the existing mechanism sees them, and the reason is stated
+in the source, but the gate itself still has the hole.
+
 ### Fixed — a database found corrupt was written to for months
 
 The "never write to a corrupt database" policy existed only at startup. There

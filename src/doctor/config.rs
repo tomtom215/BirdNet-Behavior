@@ -356,6 +356,50 @@ fn admin_exposure(listen: &str, password_configured: bool) -> Check {
     )
 }
 
+/// What the mutating `/api/v2` surface is doing (`O-1`).
+///
+/// Three answers, and the middle one is why this exists. A token that is
+/// *configured but refused* — too short — leaves the write API off, and the
+/// only sign of it is a `warn!` at startup that an operator who set the value
+/// and moved on will never read. `--doctor` is the tool the docs point them at.
+///
+/// Split from [`check_api_surface`] so the decision is unit-testable without a
+/// process environment, and resolution is shared with
+/// [`crate::helpers::resolve_api_token`] for the same reason
+/// [`check_admin_exposure`] shares `resolve_admin_password`: two copies of a
+/// credential-resolution rule is exactly how this project once shipped an open
+/// `/admin` that its own diagnostic called protected.
+fn api_surface(token: Option<&str>) -> Check {
+    const NAME: &str = "API write surface";
+    let Some(token) = token else {
+        return Check::pass(
+            NAME,
+            "off — the /api/v2 endpoints are read-only, which is the default",
+        );
+    };
+    match birdnet_web::api_token::ApiToken::new(token) {
+        Ok(_) => Check::pass(
+            NAME,
+            "on — the four /api/v2 write endpoints accept this station's bearer token",
+        ),
+        Err(e) => Check::warn(
+            NAME,
+            format!("{e}, so the /api/v2 write endpoints are OFF despite being configured"),
+            "generate a longer token with `openssl rand -base64 48` and set it as \
+             BNB_API_TOKEN in the config or the environment",
+        ),
+    }
+}
+
+/// Report what the mutating `/api/v2` surface is doing.
+pub(super) fn check_api_surface(config: Option<&Config>) -> Check {
+    let token = crate::helpers::resolve_api_token(
+        config,
+        std::env::var(birdnet_web::api_token::API_TOKEN_KEY).ok(),
+    );
+    api_surface(token.as_deref())
+}
+
 /// Report whether the admin panel is exposed without authentication.
 ///
 /// The station already logs this at startup (`src/app.rs`), but `--doctor` is
@@ -398,6 +442,44 @@ mod tests {
     }
 
     // ── admin exposure ─────────────────────────────────────────────────
+
+    // ── the API write surface ──────────────────────────────────────────
+
+    #[test]
+    fn no_token_is_a_pass_because_off_is_the_default() {
+        let check = api_surface(None);
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.message.contains("read-only"), "{}", check.message);
+    }
+
+    #[test]
+    fn a_usable_token_is_reported_as_on() {
+        let check = api_surface(Some(&"a".repeat(64)));
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.message.contains("on"), "{}", check.message);
+    }
+
+    #[test]
+    fn a_token_that_was_refused_is_a_warning_and_not_a_pass() {
+        // The case this check exists for: the operator set the knob, the
+        // station refused it, and the only other sign is one startup log line.
+        // Reporting "off — which is the default" here would be true and
+        // useless, because they did not choose off.
+        let check = api_surface(Some("too-short"));
+        assert_eq!(check.status, Status::Warn);
+        assert!(
+            check.message.contains("despite being configured"),
+            "the message must distinguish refused from unset: {}",
+            check.message
+        );
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("BNB_API_TOKEN")),
+            "remediation should name the knob that fixes it"
+        );
+    }
 
     #[test]
     fn admin_exposure_warns_on_open_network_bind() {

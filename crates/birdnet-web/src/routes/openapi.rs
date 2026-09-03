@@ -79,7 +79,17 @@ mod tests {
     async fn every_documented_path_is_routed() {
         let spec: serde_json::Value = serde_json::from_str(OPENAPI_JSON).unwrap();
         let paths = spec["paths"].as_object().unwrap();
-        let app = crate::routes::public_routes().with_state(test_state());
+        // The mutating endpoints (`O-1`) are documented here but are *not* in
+        // `public_routes()` — that router is asserted read-only by
+        // `tests/public_router_is_read_only.rs`, and these authenticate with a
+        // bearer token rather than a cookie. Merged in without their auth
+        // layer, because this gate asks whether a documented path is routed at
+        // all, not who may call it: a documented `POST` answers 405 to the
+        // `GET` below, which is not the "404 echoing its own URL" that means
+        // unrouted.
+        let app = crate::routes::public_routes()
+            .merge(crate::routes::api_write::router())
+            .with_state(test_state());
 
         for path in paths.keys() {
             // Fill path templates with throwaway-but-valid (URL-safe) values.

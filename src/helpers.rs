@@ -35,6 +35,7 @@ pub mod test_support;
 /// resolve `CADDY_PWD` through one implementation instead of two that drifted.
 pub use auth::resolve_admin_password;
 pub use auth::{bootstrap_admin_password, purge_legacy_credential_settings};
+pub use auth::{build_api_token, resolve_api_token};
 pub use db::{
     db_path_from_config, ensure_db_dir, run_backup, run_integrity_check, run_migration_report,
     run_rebuild_species_summary,

@@ -196,6 +196,14 @@ async fn serve(
         .with_config_path(cli.config.clone())
         .with_log_broadcaster(log_broadcaster);
 
+    // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
+    // token. Absent one — the default — those routes answer 404 and this
+    // station has no write API at all.
+    let state = match helpers::build_api_token(config.as_ref()) {
+        Some(token) => state.with_api_token(token),
+        None => state,
+    };
+
     // O-14 / O-15 wire-flip prep: rotate the seed admin row's password
     // hash to a real argon2id digest of CADDY_PWD on first start (and
     // refresh it whenever the env var changes vs the stored hash). The
