@@ -24,6 +24,61 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — the live log viewer streamed a channel nothing published to
+
+`routes/admin/logs.rs` opens by saying its lines "are captured by a custom
+`tracing` layer that broadcasts to an unbounded channel". No such layer existed
+anywhere in the workspace, and the channel is bounded at 512. `AppState` held a
+`LogBroadcaster` with no writer, so `GET /admin/system/logs` replayed an empty
+backlog and then emitted keep-alives for ever — on every station, since the
+feature was written. In Docker, where the operator has no `journalctl`, that
+page is the whole story.
+
+The audit that found this also said the three `LogBroadcaster::new()` calls in
+`state.rs` were "three distinct channels anyway". They are not: they are three
+*alternative* constructors — `AppState::new`, `new_with_analytics`,
+`from_connection` — and one run builds one `AppState`. There was a single
+channel and nothing wrote to it. The count was never the defect, and no
+deduplication was needed.
+
+`LogCapture` implements `tracing_subscriber::Layer` and is installed as a third
+`.with(...)` in `main`. It lives in the binary rather than in `birdnet-web`
+because which subscriber layers get installed is an application decision — the
+same one that owns the tokio runtime — and this keeps `tracing-subscriber` out
+of the web crate. The broadcaster is built before the subscriber and handed to
+the state through `AppState::with_log_broadcaster`, because the layer must
+exist at `init()` time and the state does not exist yet.
+
+Structured fields travel with the message. `tracing::warn!(error = %e, "publish
+failed")` carries its whole diagnosis in `error`, and a viewer showing only
+"publish failed" would be worse than the journal it stands in for.
+
+**And a log that survives the reboot.** A default Raspberry Pi OS has no
+`/var/log/journal`, so the journal is volatile: every watchdog bounce, power
+cut and update erases the evidence of what caused it, which is precisely the
+event an operator is trying to explain. `errors.jsonl` sits beside the
+database, takes ERROR and WARN only, is one JSON object per line, is capped at
+1 MB — a station failing in a loop must not fill the card the recordings live
+on — and is now a `--support-bundle` member. A missing file is reported in the
+bundle rather than staged empty, because "this station has never logged a
+warning" and "the bundle could not find the log" are different answers and only
+one is good news.
+
+URL credentials are stripped in the layer rather than at each call site.
+`errors.jsonl` travels in the support bundle, and `rtsp://user:pass@host/` in a
+warning is the shape that ends up in a public forum thread posted by an
+operator who was told the bundle was redacted.
+
+Nothing in the layer may log: a `tracing::warn!` raised while handling an event
+re-enters `on_event` and deadlocks on the file mutex. Write failures are
+counted and swallowed, deliberately.
+
+Twelve gates. Six mutations applied and watched go red, the important one being
+`with_log_broadcaster` made a no-op — the shipped arrangement — which fails the
+wiring gate alone while every layer gate stays green. A layer writing to one
+broadcaster while the state holds another passes any test of either half and
+still shows an operator nothing.
+
 ### Fixed — the "Station Status" entity Home Assistant showed had nothing behind it
 
 Home Assistant discovery has always registered a `binary_sensor` with

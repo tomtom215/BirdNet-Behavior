@@ -27,6 +27,7 @@ use crate::{capture, daemon, helpers, integrations, maintenance, sd_notify, week
 pub async fn run(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
+    log_broadcaster: birdnet_web::routes::admin::logs::LogBroadcaster,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Race ONLY the startup phases against an early SIGTERM/SIGINT. Without
     // this, a `systemctl restart` mid-startup — e.g. during a cold DuckDB
@@ -45,7 +46,7 @@ pub async fn run(
     // (observed live: "exiting cleanly" logged, process alive minutes later,
     // leaving systemd to SIGKILL at TimeoutStopSec).
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
-    let mut serve_fut = std::pin::pin!(serve(cli, config, started_tx));
+    let mut serve_fut = std::pin::pin!(serve(cli, config, log_broadcaster, started_tx));
 
     tokio::select! {
         biased;
@@ -72,6 +73,7 @@ pub async fn run(
 async fn serve(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
+    log_broadcaster: birdnet_web::routes::admin::logs::LogBroadcaster,
     started: tokio::sync::oneshot::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Fail fast on a misconfigured station: validate the loaded config and
@@ -186,8 +188,13 @@ async fn serve(
     };
 
     // Thread the active config path so the in-UI diagnostics page can re-read
-    // and validate it.
-    let state = state.with_config_path(cli.config.clone());
+    // and validate it, and the broadcaster the `tracing` layer installed in
+    // `main` is already writing to — without this the state holds the empty
+    // one its constructor made, and `GET /admin/system/logs` streams
+    // keep-alives for ever.
+    let state = state
+        .with_config_path(cli.config.clone())
+        .with_log_broadcaster(log_broadcaster);
 
     // O-14 / O-15 wire-flip prep: rotate the seed admin row's password
     // hash to a real argon2id digest of CADDY_PWD on first start (and

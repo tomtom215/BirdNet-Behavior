@@ -47,4 +47,10 @@ birdnet-behavior --doctor-json | jq .
 ## Metrics & logs
 
 - **Prometheus metrics** are exposed at `/api/v2/metrics`.
-- A **live log viewer** (`/admin/system/logs/page`) streams the service log over SSE with level filtering.
+- A **live log viewer** (`/admin/system/logs/page`) streams the service log over SSE with level filtering. A connecting client is replayed the last 200 lines first, so you see what led up to now rather than only what happens next. This is the whole picture in Docker, where there is no `journalctl` to fall back on.
+- **`errors.jsonl`**, beside the database, keeps ERROR and WARN lines only, one JSON object per line, capped at 1 MB. It exists because a default Raspberry Pi OS has no `/var/log/journal`: the journal is volatile, so every watchdog bounce, power cut and update erases the evidence of what caused it — including the reboot you are trying to explain. `--support-bundle` carries this file.
+
+> **If you ran an earlier version.** The log viewer streamed nothing at all. Its
+> backing channel existed and the page connected to it, but no `tracing` layer
+> was ever installed, so it replayed an empty backlog and then emitted
+> keep-alives for ever. The page now shows what the station logged.

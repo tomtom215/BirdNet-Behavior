@@ -1,9 +1,17 @@
 //! Server-Sent Events (SSE) log streaming for the admin panel.
 //!
 //! Provides a live log stream at `GET /admin/system/logs` using axum's SSE
-//! support.  Log messages are captured by a custom `tracing` layer that
-//! broadcasts to an unbounded channel; each SSE client receives a fresh
-//! receiver on connection.
+//! support. Log messages are captured by a `tracing` layer in the binary
+//! (`log_capture`), which publishes into the [`LogBroadcaster`] the
+//! application hands to `AppState`; each SSE client receives a fresh receiver
+//! on connection plus a replay of [`LogBroadcaster::recent`].
+//!
+//! This paragraph described that layer for a long time before one existed. It
+//! did not, `AppState` held a channel nothing published to, and this endpoint
+//! replayed an empty backlog and then emitted keep-alives for ever. The
+//! channel is also **bounded** at [`LOG_CHANNEL_CAPACITY`], not unbounded as
+//! the same paragraph claimed: a slow client lags and is told so rather than
+//! growing the buffer until the station runs out of memory.
 //!
 //! | Path | Purpose |
 //! |------|---------|
