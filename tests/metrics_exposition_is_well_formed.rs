@@ -223,3 +223,62 @@ async fn only_counters_carry_the_total_suffix() {
         "the exposition must still carry its counters; found {counters}"
     );
 }
+
+// ── tri-state gauges ────────────────────────────────────────────────────
+
+/// The gauges that can answer "I cannot tell".
+///
+/// Three of them now: clock synchronisation (no systemd to ask), MQTT presence
+/// (no broker configured), detection freshness (no detections yet). Each must
+/// be **absent** in that case rather than rendering a `0`, because a `0` is a
+/// statement — "the clock is wrong", "the broker is unreachable" — and an
+/// operator who alerts on it gets paged about a station that is fine.
+const TRI_STATE_GAUGES: [&str; 3] = [
+    "birdnet_clock_synced",
+    "birdnet_mqtt_connected",
+    "birdnet_detection_silence_seconds",
+];
+
+#[tokio::test]
+async fn an_unanswerable_gauge_is_absent_rather_than_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = station(dir.path());
+    // Nothing has set any of them: no clock probe has run, no MQTT presence
+    // loop, no deadman poll.
+    let body = metrics_body(&state).await;
+    for name in TRI_STATE_GAUGES {
+        assert!(
+            !body.lines().any(|l| sample_name(l) == name),
+            "{name} must not be emitted before anything has measured it:\n{body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_measured_gauge_renders_and_declares_its_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = station(dir.path());
+    // The counterpart: absence must mean "unmeasured", not "never emitted".
+    state.metrics().set_clock_synced(Some(false));
+    state.metrics().set_mqtt_connected(true);
+    state.metrics().set_detection_silence_secs(Some(42));
+
+    let body = metrics_body(&state).await;
+    for (name, want) in [
+        ("birdnet_clock_synced", "birdnet_clock_synced 0"),
+        ("birdnet_mqtt_connected", "birdnet_mqtt_connected 1"),
+        (
+            "birdnet_detection_silence_seconds",
+            "birdnet_detection_silence_seconds 42",
+        ),
+    ] {
+        assert!(
+            body.lines().any(|l| l == want),
+            "expected the sample line `{want}`:\n{body}"
+        );
+        assert!(
+            body.contains(&format!("# TYPE {name} gauge")),
+            "{name} must declare its type"
+        );
+    }
+}

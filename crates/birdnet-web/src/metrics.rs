@@ -153,6 +153,10 @@ pub struct MetricsRegistry {
     /// Seconds since the most recent stored detection, refreshed by the
     /// deadman task. `u64::MAX` = not yet measured / no detections ever.
     detection_silence_secs: AtomicU64,
+    /// Whether the system reports its clock as synchronised: `0` no, `1` yes,
+    /// `u64::MAX` = nothing here can answer, so the series is absent rather
+    /// than reporting a container's host clock as broken.
+    clock_synced: AtomicU64,
     /// State of the MQTT presence connection: `0` down, `1` up,
     /// `u64::MAX` = MQTT is not configured, so the series is absent rather
     /// than reporting a broker that was never asked for as broken.
@@ -237,6 +241,7 @@ impl MetricsRegistry {
             detection_write_failures_total: AtomicU64::new(0),
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
+            clock_synced: AtomicU64::new(u64::MAX),
             mqtt_connected: AtomicU64::new(u64::MAX),
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
@@ -442,6 +447,25 @@ impl MetricsRegistry {
         }
     }
 
+    /// Record whether the system reports its clock as synchronised.
+    ///
+    /// `None` means the question could not be answered — no systemd to ask,
+    /// which is every Docker deployment — and renders as an absent series
+    /// rather than a `0` nobody can act on.
+    pub fn set_clock_synced(&self, synced: Option<bool>) {
+        self.clock_synced
+            .store(synced.map_or(u64::MAX, u64::from), Ordering::Relaxed);
+    }
+
+    /// Clock synchronisation state, when the system can report one.
+    #[must_use]
+    pub fn clock_synced(&self) -> Option<bool> {
+        match self.clock_synced.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v == 1),
+        }
+    }
+
     /// Record whether the MQTT presence session is currently connected.
     ///
     /// Only the presence loop calls this, and only on a station with MQTT
@@ -508,6 +532,7 @@ impl MetricsRegistry {
             source_up,
             outbound_queue,
             detection_silence_secs: self.detection_silence_secs(),
+            clock_synced: self.clock_synced(),
             mqtt_connected: self.mqtt_connected(),
             detections_dropped: Self::read_map(&self.detections_dropped),
             files_analysed: Self::read_map(&self.files_analysed),
@@ -551,6 +576,8 @@ pub struct MetricsSnapshot {
     pub outbound_queue: Vec<(String, u64)>,
     /// Seconds since the most recent stored detection (`None` = unknown).
     pub detection_silence_secs: Option<u64>,
+    /// Clock synchronisation state (`None` = the system cannot say).
+    pub clock_synced: Option<bool>,
     /// MQTT presence connection state (`None` = MQTT not configured).
     pub mqtt_connected: Option<bool>,
     /// Discarded classifications by reason.
@@ -725,6 +752,15 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     // Emitted only once measured: an absent series reads as "unknown" in
     // Prometheus, which is the truth before the deadman task's first pass
     // (and on a station that has never detected anything).
+    if let Some(synced) = snap.clock_synced {
+        out.push_str(
+            "# HELP birdnet_clock_synced Whether the system reports its clock as synchronised to a time source (1) or not \
+             (0). Absent when nothing can answer, which is every container without systemd. A 0 here means timestamps are \
+             free-running: the dates stay plausible and every count and chart looks healthy while the hours drift.\n",
+        );
+        out.push_str("# TYPE birdnet_clock_synced gauge\n");
+        let _ = writeln!(out, "birdnet_clock_synced {}", u8::from(synced));
+    }
     if let Some(up) = snap.mqtt_connected {
         out.push_str(
             "# HELP birdnet_mqtt_connected Whether the MQTT presence session is connected to the broker (1) or not (0). \

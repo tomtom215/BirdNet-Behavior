@@ -518,6 +518,7 @@ detecting straight through:
 | Disk full enough that recordings are being purged | ≥ 90 % used |
 | CPU at or above the Pi throttling point | ≥ 80 °C |
 | Backup or integrity check not completed | > 21 days |
+| Clock not set, or not synchronised to a time source | 15 min continuous |
 
 Each alerts **once per episode**, with a recovery notice when it clears, through
 the same Apprise notifier as the deadman. Every condition must persist for three
@@ -533,6 +534,16 @@ already cleared. Alerts about the station are also exempt from
 `NOTIFY_RATE_PER_MINUTE`, which is sized for detections — a deadman crossing its
 threshold during a dawn chorus used to lose that race silently. Whatever still
 cannot be delivered is counted in `birdnet_notifications_dropped_total`.
+
+The clock check is the one that catches a silent loss rather than a visible
+one. A station whose NTP has been unreachable for months keeps recording, keeps
+detecting, and keeps every gauge green — while filing an entire season under
+the wrong hours. Nothing else notices, because a plausible-looking date passes
+every other check the station makes.
+
+It is deliberately silent where it cannot know: in Docker there is no systemd
+to ask, and the container's clock is the host's, so the condition never fires
+and `birdnet_clock_synced` is absent rather than `0`.
 
 A single-source station that goes fully down is deliberately *not* reported
 here — the deadman covers that, with better wording, and two notifications for

@@ -102,6 +102,19 @@ const TOOLS: &[(&str, Provenance)] = &[
     ),
     ("tar", Provenance::DebianBase),
     (
+        "timedatectl",
+        // The runtime clock-sync check asks systemd whether the clock is
+        // synchronised. There is no systemd inside the container, and the
+        // container's clock is the *host's* clock — not something this station
+        // can report on or fix. `station_health::probe_ntp_state` is built for
+        // exactly this: the call fails, no file fallback exists, and the state
+        // is `Unknown`, which produces no condition and no metric series.
+        // Installing it would be worse than not: a working binary with no bus
+        // to ask still cannot answer, and it would only look as though the
+        // question had been settled.
+        Provenance::NotInContainer("there is no systemd inside the container"),
+    ),
+    (
         "umount",
         Provenance::NotInContainer("the counterpart to `mount` — host-side tmpfs teardown"),
     ),

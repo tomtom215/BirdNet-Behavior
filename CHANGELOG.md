@@ -24,6 +24,53 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Added — a station now notices its own clock drifting
+
+Runtime clock correctness was never re-checked. `--doctor`'s clock checks run
+once, from `ExecStartPre`; at runtime capture tests only a plausibility floor
+and trusts anything above it absolutely. A Pi whose NTP has been unreachable
+for months keeps recording, keeps detecting, and keeps every gauge green while
+filing an entire season under the wrong hours — a loss that shows up only when
+someone tries to compare that season against another station's.
+
+Station health gained a sixth condition and `birdnet_clock_synced` a gauge,
+from two signals that fail differently. The plausibility floor catches a clock
+that was never set — a Pi with no RTC that booted to 1970 — and says so in
+those words, because "not synchronised" would send the operator to
+`timedatectl status` to be told what they already know when the actual fault is
+the uplink. NTP state catches the slow one the floor cannot see.
+
+The probe has three outcomes rather than two, and that is the part worth
+knowing: **"cannot tell" is not "broken"**. Every Docker deployment lands
+there — `timedatectl` is installed but there is no bus, so it exits non-zero
+with *"System has not been booted with systemd as init system"* — and a
+container's clock belongs to its host. Those stations produce no condition and
+no metric series at all, rather than a `0` that would page an operator about
+something they cannot fix from inside the container. The repo's own
+`container_can_run_what_the_daemon_spawns` gate caught the new subprocess
+immediately and required it to be classified, which is the entry that now
+records this reasoning.
+
+`/run/systemd/timesync/synchronized` is a fallback rather than a peer signal.
+It is created when `systemd-timesyncd` first synchronises and is *not* removed
+if synchronisation is later lost, so it answers "synced at some point since
+boot" — precisely the question this check must not ask, given the failure it
+exists for. `timedatectl show -p NTPSynchronized --value` reports the state
+now, so it is the authority and the file is consulted only when nothing else
+can answer.
+
+**A gap this found in its own gates.** The first mutation applied — deleting
+`check_clock` from `evaluate`, which is the shipped state — killed *nothing*.
+All 31 tests passed. Every gate exercised the policy function and none checked
+that anything called it, so a check dropped in a refactor would have been
+invisible: it produces no failure, no warning, and no condition, which is
+exactly what a healthy station produces. `evaluate` now runs a named `CHECKS`
+table, and a gate reads it against the six conditions the module doc promises.
+The same mutation now fails that gate alone.
+
+Not covered, and stated rather than implied: timezone drift. `doctor/clock.rs`
+still checks that only at `ExecStartPre`.
+
 ### Fixed — the live log viewer streamed a channel nothing published to
 
 `routes/admin/logs.rs` opens by saying its lines "are captured by a custom

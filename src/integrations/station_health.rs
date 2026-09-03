@@ -23,7 +23,9 @@
 //!   finishes, or the detection store itself, which means no backup in the ring
 //!   verified and the whole history is in a file nothing else reports;
 //! * a Pi sitting at thermal-throttle temperature in a sealed enclosure in
-//!   July, losing inference throughput and shortening the SD card's life.
+//!   July, losing inference throughput and shortening the SD card's life;
+//! * a clock that has drifted off its time source, which files a whole season
+//!   under the wrong hour and looks, in every count and chart, like a good one.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -150,17 +152,146 @@ fn transitions(
     (broken, recovered)
 }
 
+/// One condition check: reads the station, appends whatever is wrong.
+type Check = fn(&AppState, &mut Vec<Condition>);
+
+/// Every check [`evaluate`] runs, paired with the name it is known by.
+///
+/// A table rather than a sequence of calls, so "which conditions does this
+/// station actually look for?" is one value that a test can read. The module
+/// doc above lists them in prose; this is the same list in code, and
+/// `every_documented_condition_is_actually_checked` is what stops the two
+/// drifting apart. A check dropped during a refactor is otherwise invisible:
+/// it produces no failure, no warning, and no condition — exactly what a
+/// healthy station produces.
+const CHECKS: [(&str, Check); 6] = [
+    ("sources", check_sources),
+    ("disk", check_disk),
+    ("thermal", |_state, out| check_thermal(out)),
+    ("maintenance", check_maintenance),
+    ("quarantined-stores", check_quarantined_stores),
+    ("clock", check_clock),
+];
+
 /// Everything currently wrong with the station, as of this poll.
 ///
-/// Runs on a blocking thread: it touches `SQLite`, `statvfs` and sysfs.
+/// Runs on a blocking thread: it touches `SQLite`, `statvfs`, sysfs, and — for
+/// the clock — one short-lived subprocess.
 fn evaluate(state: &AppState) -> Vec<Condition> {
     let mut out = Vec::new();
-    check_sources(state, &mut out);
-    check_disk(state, &mut out);
-    check_thermal(&mut out);
-    check_maintenance(state, &mut out);
-    check_quarantined_stores(state, &mut out);
+    for (_name, check) in CHECKS {
+        check(state, &mut out);
+    }
     out
+}
+
+/// What the system will say about its own clock synchronisation.
+///
+/// Three answers, not two. "Cannot tell" is its own case and must not collapse
+/// into "broken": a Docker container has no systemd to ask — `timedatectl`
+/// there fails with *"System has not been booted with systemd as init system"*
+/// — and its clock is the host's problem, not something this station can
+/// report on or fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NtpState {
+    /// The system reports its clock as synchronised to a time source.
+    Synced,
+    /// The system reports that it is not.
+    Unsynced,
+    /// Nothing here can answer the question.
+    Unknown,
+}
+
+/// Ask the system whether its clock is synchronised.
+///
+/// `timedatectl show -p NTPSynchronized --value` is the authority because it
+/// reports the state *now*, across whichever NTP implementation is installed.
+///
+/// `/run/systemd/timesync/synchronized` is only a fallback, and a weaker
+/// signal: it is created when `systemd-timesyncd` first synchronises and is
+/// **not** removed if synchronisation is later lost, so it answers "synced at
+/// some point since boot" rather than "synced now". That is precisely the
+/// distinction this check exists for — a Pi whose NTP has been unreachable for
+/// months — so it is consulted only when `timedatectl` cannot answer at all.
+///
+/// One subprocess per five-minute poll. On a Pi that is a few seconds of CPU a
+/// day, which is not worth caching state to avoid.
+fn probe_ntp_state() -> NtpState {
+    match std::process::Command::new("timedatectl")
+        .args(["show", "-p", "NTPSynchronized", "--value"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            return match String::from_utf8_lossy(&out.stdout).trim() {
+                "yes" => NtpState::Synced,
+                "no" => NtpState::Unsynced,
+                _ => NtpState::Unknown,
+            };
+        }
+        // A non-zero exit is the container case: the binary is present but
+        // there is no bus to ask. Fall through to the file, which will also be
+        // absent there, giving Unknown.
+        Ok(_) | Err(_) => {}
+    }
+    if std::path::Path::new("/run/systemd/timesync/synchronized").exists() {
+        NtpState::Synced
+    } else {
+        NtpState::Unknown
+    }
+}
+
+/// A clock that cannot be trusted to say what hour a recording belongs to.
+///
+/// Two signals, because they fail differently. The plausibility floor catches
+/// a clock that never got set — a Pi with no RTC that booted to 1970 — and is
+/// the one capture already refuses to schedule against. NTP state catches the
+/// slower failure the floor cannot see: a clock that *is* plausible and has
+/// been drifting away from real time for months, filing every detection under
+/// the wrong hour while every count and chart looks healthy.
+fn check_clock(state: &AppState, out: &mut Vec<Condition>) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let ntp = probe_ntp_state();
+    state.metrics().set_clock_synced(match ntp {
+        NtpState::Synced => Some(true),
+        NtpState::Unsynced => Some(false),
+        NtpState::Unknown => None,
+    });
+    out.extend(clock_condition(now, ntp));
+}
+
+/// The clock policy, separated from the probes so it can be tested.
+///
+/// No extra grace period for a station that has just booted: the shared
+/// [`REQUIRED_CONSECUTIVE_POLLS`] debounce already means a clock has to look
+/// wrong for [`DEBOUNCE_MINUTES`] minutes before anyone is woken, which is
+/// longer than NTP takes on any station that has a route to a time server. A
+/// station that has none will alert once and stay in that episode, which is
+/// the correct report: its timestamps really are unverifiable.
+fn clock_condition(now: u64, ntp: NtpState) -> Option<Condition> {
+    // The floor first: a clock reading 1970 is wrong whatever NTP thinks, and
+    // saying so is more useful than "not synchronised".
+    if !crate::capture::schedule::secs_look_synced(now) {
+        return Some(Condition {
+            key: "clock".to_owned(),
+            title: "Station clock is not set".to_owned(),
+            body: format!(
+                "The system clock reads a date before this software existed (Unix time {now}),                  so every recording is being filed under the wrong day. Capture will not use                  the solar schedule until this is fixed. On a Raspberry Pi without a                  real-time clock this means network time has never been reached: check the                  uplink, then `sudo timedatectl set-ntp true`."
+            ),
+        });
+    }
+    // "Cannot tell" is not "broken" — see `NtpState`.
+    if ntp != NtpState::Unsynced {
+        return None;
+    }
+    Some(Condition {
+        key: "clock".to_owned(),
+        title: "Station clock is not synchronised".to_owned(),
+        body: format!(
+            "The system reports that its clock is not synchronised to a time source. The date              is still plausible, so nothing else will complain, but the station has been              free-running and every detection is being filed under whatever hour this clock              believes — which is the kind of loss that only shows up when someone tries to              compare a season against another station's. Check `timedatectl status` and the              station's route to its NTP server. Seen for {DEBOUNCE_MINUTES} minutes before              this alert was sent."
+        ),
+    })
 }
 
 /// Any configured audio source whose gauge has been down.
@@ -509,6 +640,125 @@ mod tests {
     /// one, so shortening the constant fails the build instead of silently
     /// making that test vacuous.
     const _: () = assert!(REQUIRED_CONSECUTIVE_POLLS > 2);
+
+    #[test]
+    fn every_documented_condition_is_actually_checked() {
+        // The module doc promises six conditions. Deleting a `check_*` call
+        // from `evaluate` used to be undetectable — it produces no failure, no
+        // warning and no condition, which is indistinguishable from a healthy
+        // station. Removing `check_clock` was applied as a mutation and passed
+        // all 31 tests before this gate existed.
+        for name in [
+            "sources",
+            "disk",
+            "thermal",
+            "maintenance",
+            "quarantined-stores",
+            "clock",
+        ] {
+            assert!(
+                CHECKS.iter().any(|(n, _)| *n == name),
+                "`evaluate` no longer runs the {name} check, which the module doc promises"
+            );
+        }
+        assert_eq!(
+            CHECKS.len(),
+            6,
+            "a seventh check needs a line in the module doc and in this gate"
+        );
+    }
+
+    // ── the clock ───────────────────────────────────────────────────────
+
+    /// A timestamp comfortably inside the plausible range.
+    const PLAUSIBLE_NOW: u64 = 1_780_000_000; // 2026-06-08
+
+    #[test]
+    fn an_unset_clock_is_reported_as_unset_not_as_unsynchronised() {
+        // A Pi with no RTC boots to 1970. Saying "not synchronised" there
+        // sends the operator to `timedatectl status`, which will tell them
+        // what they already know; saying the clock is not *set* points at the
+        // uplink, which is the actual fault.
+        for ntp in [NtpState::Synced, NtpState::Unsynced, NtpState::Unknown] {
+            let c = clock_condition(0, ntp).expect("1970 is a condition whatever NTP says");
+            assert_eq!(c.key, "clock");
+            assert!(c.title.contains("not set"), "{}", c.title);
+        }
+    }
+
+    #[test]
+    fn a_plausible_but_unsynchronised_clock_is_the_slow_failure() {
+        // The one the floor cannot see: the date is fine, every count and
+        // chart looks healthy, and the hours have been drifting for months.
+        let c = clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("a condition");
+        assert_eq!(c.key, "clock");
+        assert!(c.title.contains("not synchronised"), "{}", c.title);
+        assert!(
+            c.body.contains("free-running"),
+            "the body must say what was lost: {}",
+            c.body
+        );
+    }
+
+    #[test]
+    fn a_healthy_clock_and_an_unanswerable_one_both_stay_quiet() {
+        // The discrimination, and the reason `NtpState` has three variants.
+        // Every Docker deployment lands on `Unknown` — `timedatectl` is
+        // present but there is no bus — and a container's clock is the host's
+        // to fix. Alerting there would train an entire class of operator to
+        // ignore this notifier.
+        assert!(clock_condition(PLAUSIBLE_NOW, NtpState::Synced).is_none());
+        assert!(clock_condition(PLAUSIBLE_NOW, NtpState::Unknown).is_none());
+    }
+
+    #[test]
+    fn both_clock_faults_share_one_episode_key() {
+        // A clock that is unset and then merely unsynchronised is one fault
+        // getting better, not two faults. Different keys would send a
+        // recovery notice for the first while opening an episode for the
+        // second, in the same poll.
+        let unset = clock_condition(0, NtpState::Unsynced).expect("unset");
+        let drifting = clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("drifting");
+        assert_eq!(unset.key, drifting.key);
+    }
+
+    #[test]
+    fn the_clock_condition_earns_its_alert_like_every_other() {
+        // It goes through the same debounce: a clock that reads wrong for one
+        // poll during an NTP step must not wake anyone.
+        let alerted = BTreeMap::new();
+        let mut streak = BTreeMap::new();
+        let now = vec![clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("condition")];
+        for poll in 1..REQUIRED_CONSECUTIVE_POLLS {
+            let (broken, _) = transitions(&alerted, &mut streak, &now);
+            assert!(broken.is_empty(), "poll {poll} must not alert yet");
+        }
+        let (broken, _) = transitions(&alerted, &mut streak, &now);
+        assert_eq!(
+            broken.len(),
+            1,
+            "and the {REQUIRED_CONSECUTIVE_POLLS}th does"
+        );
+    }
+
+    #[test]
+    fn probing_this_container_answers_unknown_rather_than_unsynced() {
+        // Not a mock: this test process runs without systemd as PID 1, which
+        // is the same shape as every Docker deployment. `timedatectl` is
+        // installed and exits non-zero with "System has not been booted with
+        // systemd as init system", and /run/systemd/timesync/ does not exist.
+        // If this ever returns Unsynced here, every containerised station
+        // starts alerting about its host's clock.
+        if std::path::Path::new("/run/systemd/timesync/synchronized").exists() {
+            eprintln!("running under systemd-timesyncd — probe test skipped");
+            return;
+        }
+        assert_ne!(
+            probe_ntp_state(),
+            NtpState::Unsynced,
+            "a system that cannot answer must not be reported as broken"
+        );
+    }
 
     /// Drive `polls` consecutive identical polls and return what alerted.
     fn after_polls(polls: u32, conditions: &[Condition]) -> Vec<String> {
