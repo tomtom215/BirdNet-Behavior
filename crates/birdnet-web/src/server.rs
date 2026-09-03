@@ -85,7 +85,7 @@ pub fn build_router(state: AppState) -> Router {
 
 /// Read the trusted-proxy list from `BIRDNET_TRUSTED_PROXIES`.
 ///
-/// Unset falls back to [`TrustedProxies::default`] (loopback plus the private
+/// Unset falls back to [`crate::client_ip::TrustedProxies::default`] (loopback plus the private
 /// ranges). A value that does not parse is **not** silently ignored: it logs
 /// the offending entry and falls back to loopback only, which is the safe
 /// direction — a station whose trust list did not load records real peer
