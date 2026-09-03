@@ -253,7 +253,7 @@ const URL_ATTRIBUTES: &[&str] = &[
 ///
 /// The scan is a single left-to-right pass looking for `<attr>="/`. It does not
 /// parse HTML, and does not need to: the pattern it matches (an attribute name
-/// from [`URL_ATTRIBUTES`], `="`, then `/` not followed by `/`) does not occur
+/// from `URL_ATTRIBUTES`, `="`, then `/` not followed by `/`) does not occur
 /// in prose or in the JSON this application embeds, and the one place it could
 /// — a page documenting HTML markup — this application does not have.
 #[must_use]

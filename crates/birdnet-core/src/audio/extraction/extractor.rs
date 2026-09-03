@@ -661,6 +661,115 @@ mod tests {
         );
     }
 
+    /// `pre_capture_secs` lengthens the clip at the **front**, and by exactly
+    /// the amount asked for.
+    ///
+    /// Every other test in this file sets `pre_capture_secs: 0.0`, which makes
+    /// `spacer + pre_capture` and `spacer - pre_capture` the same expression —
+    /// so the sign of that `+` was never exercised, and cargo-mutants said so
+    /// by flipping it and watching all 11 mutants but one get caught. A
+    /// setting with no non-zero coverage anywhere is a setting nobody has
+    /// tested, whatever the surrounding suite reports.
+    ///
+    /// Driven with a sentinel pulse, like `extraction_offset_matches_safe_start`
+    /// above: a length assertion alone would be satisfied by a clip that grew
+    /// at the wrong end, which is the other half of what "pre-capture" means.
+    #[test]
+    fn pre_capture_lengthens_the_clip_at_the_front() {
+        use hound::WavWriter;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+
+        // 30 s of zeros except a single +1 sample at exactly t = 11.5 s.
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut w = WavWriter::create(&src, spec).unwrap();
+        let pulse_idx = 48_000 * 23 / 2; // 11.5 s
+        for i in 0..48_000 * 30 {
+            w.write_sample::<i16>(if i == pulse_idx { 16_384 } else { 0 })
+                .unwrap();
+        }
+        w.finalize().unwrap();
+
+        // extraction_length 6.0 → spacer 1.5; pre_capture 1.0 → lead-in 2.5.
+        // Detection [10, 13] → clip spans 7.5 .. 14.5 s = 7.0 s, and the pulse
+        // at 11.5 s lands 4.0 s into it.
+        //
+        // Flip that `+` to `-` and the lead-in is 0.5: the clip spans
+        // 9.5 .. 14.5 = 5.0 s and the pulse lands 2.0 s in. Both numbers below
+        // move, which is what makes this a gate rather than a smoke test.
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: 1.0,
+        };
+        let out = Extractor::new(cfg)
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let mut reader = hound::WavReader::open(&out).expect("WAV reader");
+        let duration = reader.duration();
+        assert!(
+            duration.abs_diff(336_000) <= 1,
+            "expected ~336_000 samples (7 s @ 48 kHz: 6 s + 1 s pre-capture), got {duration}"
+        );
+
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<Result<_, _>>()
+            .expect("read samples");
+        let (idx, _) = samples
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, s)| s.unsigned_abs())
+            .expect("samples non-empty");
+        let expected: usize = 192_000; // 4.0 s × 48 000
+        assert!(
+            idx.abs_diff(expected) <= 1,
+            "the extra second must be added before the detection, not after: \
+             expected the pulse ~{expected} samples in, found it at {idx}"
+        );
+    }
+
+    /// A negative `pre_capture_secs` is floored at zero rather than shortening
+    /// the clip — `extraction_length` is the setting for that. The counterpart
+    /// to the test above: without it, `.max(0.0)` could be deleted and nothing
+    /// would notice.
+    #[test]
+    fn a_negative_pre_capture_does_not_shorten_the_clip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: -2.0,
+        };
+        let out = Extractor::new(cfg)
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let duration = hound::WavReader::open(&out).expect("WAV reader").duration();
+        assert!(
+            duration.abs_diff(288_000) <= 1,
+            "a negative pre-capture must be ignored, leaving the plain 6 s clip \
+             (~288_000 samples @ 48 kHz), got {duration}"
+        );
+    }
+
     // ─── build_extraction_filename: pure function, no audio I/O ────────
 
     fn det_named(scientific_name: &str, common_name: &str, confidence: f32) -> Detection {

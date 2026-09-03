@@ -634,9 +634,9 @@ mod tests {
 /// # The two are not the same filter
 ///
 /// ffmpeg's `highpass` defaults to two poles (12 dB/octave); the tee's
-/// [`OnePoleHighPass`](super::tee) has one (6 dB/octave). From the identical
-/// `high_pass` flag a microphone therefore gets materially less rejection than
-/// an RTSP camera, measured on this filter pair at 48 kHz:
+/// `OnePoleHighPass` has one (6 dB/octave). From the identical `high_pass` flag
+/// a microphone therefore gets materially less rejection than an RTSP camera,
+/// measured on this filter pair at 48 kHz:
 ///
 /// | Hz | tee (one pole) | ffmpeg (two poles) |
 /// |----|---------------|--------------------|

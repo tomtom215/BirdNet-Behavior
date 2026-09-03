@@ -69,10 +69,10 @@ static STREAM_SLOTS: LazyLock<Arc<Semaphore>> =
 #[derive(Debug, Deserialize)]
 pub struct StreamParams {
     /// Frequency shift in Hz applied to the live stream. Positive raises the
-    /// pitch, negative lowers it; clamped to ±[`MAX_STREAM_SHIFT_HZ`].
+    /// pitch, negative lowers it; clamped to ±`MAX_STREAM_SHIFT_HZ`.
     ///
     /// Uses the ffmpeg `asetrate` + `aresample` filter chain. **Negative** is
-    /// the accessibility direction — see [`freq_shift_filter`].
+    /// the accessibility direction — see `freq_shift_filter`.
     /// BirdNET-Pi equivalent: the `rubberband` pitch filter its `livestream.sh`
     /// applies, whose shipped ratio is likewise below 1.
     #[serde(default)]

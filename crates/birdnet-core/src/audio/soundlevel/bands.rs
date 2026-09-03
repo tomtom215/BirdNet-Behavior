@@ -117,9 +117,11 @@ const A_NORMALISATION_DB: f64 = 2.0;
 ///
 /// The `+2.00` is the normalisation that makes A(1 kHz) exactly 0 dB. Using the
 /// formula means the curve is right at any frequency, including the band edges
-/// and any centre frequency added later — and [`super::tests`] pins it against
-/// the standard's own tabulated values so a transcription error in the
-/// constants above cannot pass unnoticed.
+/// and any centre frequency added later — and `soundlevel::tests` pins it
+/// against the standard's own tabulated values so a transcription error in the
+/// constants above cannot pass unnoticed. (Named, not linked: the module is
+/// `#[cfg(test)]`, so rustdoc cannot resolve a link to it and `-D warnings`
+/// turns the attempt into a failed build.)
 #[must_use]
 pub fn a_weighting_db(hz: f32) -> f32 {
     let f = f64::from(hz);
