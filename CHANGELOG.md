@@ -24,6 +24,45 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — `/api/v2/metrics` was not a document a Prometheus parser accepts
+
+`birdnet_detections_total` was emitted **twice in one response body**: as an
+unlabelled gauge counting rows in the database, and — from the runtime half of
+the exposition, appended a few lines later by a different module — as the
+genuine per-species counter. One name, two `# HELP` lines, two `# TYPE` lines,
+two meanings, one of them a gauge that falls when a row is deleted.
+
+The Prometheus text format forbids that, and the two common parsers disagree
+about how. `expfmt.TextParser` — `promtool check metrics`, Telegraf's
+`inputs.prometheus`, the Python client, most collection agents — rejects the
+**whole document** on the second `# HELP`, so a station monitored that way
+exported nothing at all, `birdnet_detection_silence_seconds` included: the one
+series that says the station has stopped detecting. A Prometheus server's own
+scrape parser accepts both series and keeps whichever `# TYPE` it saw last, so
+the bundled dashboard's `sum by (species)(rate(birdnet_detections_total[1m]))`
+folded a decreasing gauge in under `species=""`, where every purge reads as a
+counter reset and manufactures a spike — on the panel used to answer "is it
+still detecting?".
+
+The three gauges are renamed off the suffix the convention reserves for
+counters:
+
+| was | is |
+|---|---|
+| `birdnet_detections_total` (gauge) | `birdnet_detections_stored` |
+| `birdnet_detections_rejected_total` | `birdnet_detections_rejected` |
+| `birdnet_species_total` | `birdnet_species_distinct` |
+
+`birdnet_detections_total` now names only the counter it was always meant to.
+`docs/grafana-dashboard.json` is updated; an operator's own dashboards and alert
+rules need the same edit, and `docs/book/reference/integrations.md` says so.
+
+The gate parses the **composed** body — the bytes actually served, not either
+half alone, which is where the defect lived — and holds three structural rules:
+one `# TYPE` and one `# HELP` per name, every sample belonging to a declared
+family, and `_total` only on counters. It found a third offender the audit had
+not: `birdnet_species_total` was also a gauge wearing `_total`.
+
 ### Fixed — the species-occurrence filter was asked about week 0, all year
 
 The `BirdNET` geomodel takes `(latitude, longitude, week)` and was trained on a

@@ -425,8 +425,8 @@ Once the unit is sealed and shipped, the loop is:
    port-forward.
 3. **`/api/v2/metrics`** — Prometheus text format. Scrape with
    Prometheus, Grafana Agent, or VictoriaMetrics. Key series:
-   `birdnet_uptime_seconds`, `birdnet_detections_total`,
-   `birdnet_process_resident_memory_bytes`, `birdnet_species_total`,
+   `birdnet_uptime_seconds`, `birdnet_detections_stored`,
+   `birdnet_process_resident_memory_bytes`, `birdnet_species_distinct`,
    and the two field-health gauges below.
 
    Also worth watching for an unattended station: **`birdnet_noise_floor_dbfs`**

@@ -344,7 +344,7 @@
       },
       "targets": [
         {
-          "expr": "birdnet_detections_total",
+          "expr": "birdnet_detections_stored",
           "format": "table",
           "instant": false,
           "refId": "A"
@@ -375,7 +375,7 @@
       },
       "targets": [
         {
-          "expr": "birdnet_species_total",
+          "expr": "birdnet_species_distinct",
           "legendFormat": "species seen",
           "refId": "A"
         }

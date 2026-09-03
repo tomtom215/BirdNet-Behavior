@@ -53,6 +53,9 @@ With discovery enabled, the station publishes Home Assistant **MQTT discovery** 
 | Metric | Type | Meaning |
 |---|---|---|
 | `birdnet_detections_total` | counter | Total detections since start, labeled by `species` and integer `chunk_offset` (s). |
+| `birdnet_detections_stored` | gauge | Detection rows currently in the database, rejections included. Falls when rows are deleted or purged, which is why it is a gauge and does **not** wear a `_total` suffix. |
+| `birdnet_detections_rejected` | gauge | Of those, the ones a reviewer has marked rejected. `stored - rejected` is what the web UI displays. |
+| `birdnet_species_distinct` | gauge | Distinct species detected, excluding rejected detections. |
 | `birdnet_inference_duration_seconds` | histogram | Per-chunk inference latency (decode → prediction). |
 | `birdnet_db_write_duration_seconds` | histogram | SQLite insert latency for one detection row. |
 | `birdnet_audio_source_up` | gauge | `1` if an audio source is producing samples, else `0`, labeled by `source` (e.g. `local`, `cam1`). One series per capture source. |
@@ -62,6 +65,17 @@ With discovery enabled, the station publishes Home Assistant **MQTT discovery** 
 | `birdnet_detection_write_failures_total` | counter | Detections the model produced and the database refused — a detection the station heard and could not keep. Should stay `0`; see below. |
 | `birdnet_noise_floor_dbfs` | gauge | The station's measured background noise floor per capture `source`, averaged over the last 7 days. Typical quiet outdoor background is −60 to −40 dBFS. |
 | `birdnet_noise_floor_drift_db` | gauge | How far a source's noise floor has moved against **its own** preceding 30-day average, in dB. Absent for a source with no baseline yet — "never measured" is not "unchanged". |
+
+> **Renamed.** Three gauges used to carry a `_total` suffix, and one
+> of them — `birdnet_detections_total` — collided with the per-species counter
+> above. A metric name may have only one type, so the exposition was rejected
+> outright by `promtool check metrics`, Telegraf's `inputs.prometheus` and the
+> Python client, and a Prometheus server silently merged a *decreasing* gauge
+> into the counter. The gauges are now `birdnet_detections_stored`,
+> `birdnet_detections_rejected` and `birdnet_species_distinct`; the counter
+> keeps the `_total` name that the convention reserves for it. Update any
+> dashboard or alert rule that referenced the old gauge names — the bundled
+> `docs/grafana-dashboard.json` already is.
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:

@@ -607,15 +607,15 @@ async fn metrics_exports_both_the_raw_and_the_curated_view() {
     let (status, body) = get(&state, "/api/v2/metrics").await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert!(
-        body.contains("birdnet_detections_total 3"),
+        body.contains("birdnet_detections_stored 3"),
         "the raw count is pipeline throughput and must keep counting every row"
     );
     assert!(
-        body.contains("birdnet_detections_rejected_total 1"),
+        body.contains("birdnet_detections_rejected 1"),
         "the rejection count must be exported so `total - rejected` is derivable"
     );
     assert!(
-        body.contains("birdnet_species_total 2"),
+        body.contains("birdnet_species_distinct 2"),
         "the species gauge is an analytic and must drop the rejected species"
     );
 }

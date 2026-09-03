@@ -29,14 +29,25 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
 
     // Gather database metrics.
     //
-    // `birdnet_detections_total` counts every row, rejections included, and
+    // `birdnet_detections_stored` counts every row, rejections included, and
     // deliberately does not switch to `detections_analytic`: it is a *pipeline
     // throughput* signal — "is the station still turning audio into rows?" — and
     // a detection a human later rejected still proves the chain ran. Exporting
     // the rejection count alongside it is what makes both questions answerable
     // from one scrape, so a dashboard can show either the raw rate or
-    // `total - rejected` to match what the web UI displays. Picking one and
+    // `stored - rejected` to match what the web UI displays. Picking one and
     // hiding the other is what made the UI's own tiles disagree.
+    //
+    // None of these three wears a `_total` suffix, and that is not cosmetic.
+    // `_total` is the Prometheus convention for a *counter*; all three are
+    // gauges that fall when a row is deleted or a purge runs. The gauge here
+    // used to be called `birdnet_detections_total` — the same name
+    // `crate::metrics` gives its genuine per-species counter, which is appended
+    // to this body a few lines below. One name, two `# TYPE` lines, two
+    // meanings: `expfmt.TextParser` rejects the whole document on the second
+    // `# HELP`, so an agent using it (promtool, Telegraf, the Python client)
+    // scraped *nothing* from this station, and a Prometheus server took both
+    // and `rate()`d a decreasing gauge as a counter.
     let (detection_count, species_count, rejected_count) = tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
@@ -93,21 +104,21 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     out.push_str("# TYPE birdnet_uptime_seconds gauge\n");
     writeln!(out, "birdnet_uptime_seconds {uptime_secs}").unwrap_or_default();
 
-    out.push_str("# HELP birdnet_detections_total Total number of bird detections in database.\n");
-    out.push_str("# TYPE birdnet_detections_total gauge\n");
-    writeln!(out, "birdnet_detections_total {detection_count}").unwrap_or_default();
+    out.push_str(
+        "# HELP birdnet_detections_stored Bird detections currently stored, rejections included.\n",
+    );
+    out.push_str("# TYPE birdnet_detections_stored gauge\n");
+    writeln!(out, "birdnet_detections_stored {detection_count}").unwrap_or_default();
+
+    out.push_str("# HELP birdnet_detections_rejected Detections a reviewer has marked rejected.\n");
+    out.push_str("# TYPE birdnet_detections_rejected gauge\n");
+    writeln!(out, "birdnet_detections_rejected {rejected_count}").unwrap_or_default();
 
     out.push_str(
-        "# HELP birdnet_detections_rejected_total Detections a reviewer has marked rejected.\n",
+        "# HELP birdnet_species_distinct Distinct species detected, excluding rejected detections.\n",
     );
-    out.push_str("# TYPE birdnet_detections_rejected_total gauge\n");
-    writeln!(out, "birdnet_detections_rejected_total {rejected_count}").unwrap_or_default();
-
-    out.push_str(
-        "# HELP birdnet_species_total Distinct species detected, excluding rejected detections.\n",
-    );
-    out.push_str("# TYPE birdnet_species_total gauge\n");
-    writeln!(out, "birdnet_species_total {species_count}").unwrap_or_default();
+    out.push_str("# TYPE birdnet_species_distinct gauge\n");
+    writeln!(out, "birdnet_species_distinct {species_count}").unwrap_or_default();
 
     out.push_str("# HELP birdnet_process_resident_memory_bytes Resident memory size in bytes.\n");
     out.push_str("# TYPE birdnet_process_resident_memory_bytes gauge\n");
