@@ -26,6 +26,18 @@ pub const JOB_BACKUP_VACUUM: &str = "backup_vacuum";
 pub const JOB_LOG_RETENTION: &str = "log_retention";
 /// Job key for the daily `species_summary` drift check.
 pub const JOB_SUMMARY_AUDIT: &str = "summary_audit";
+/// Job key for the offsite upload of the weekly snapshot.
+///
+/// Separate from [`JOB_BACKUP_VACUUM`] because the two fail independently and
+/// mean different things: a local backup that fails means the station has no
+/// recoverable snapshot at all, and an offsite upload that fails means the only
+/// copy is on the card the scheme exists to survive. Recorded under its own key
+/// so a health check can tell an operator which one it is — before this, an
+/// offsite failure produced one `warn!` and reached no counter, no
+/// `maintenance_runs` row, no health field and no alert, so a station whose
+/// only off-card copy had failed for twelve months looked identical to one
+/// whose uploads all succeeded.
+pub const JOB_OFFSITE_BACKUP: &str = "offsite_backup";
 
 /// How long an `audit_log` row is kept.
 ///

@@ -104,17 +104,30 @@ fn verdict(compiled: bool, req: Request, dir: Option<&Path>) -> Check {
     }
 }
 
-const QUARANTINE_NAME: &str = "Analytics (quarantined files)";
+const QUARANTINE_NAME: &str = "Quarantined databases";
 
-/// Quarantined analytics databases found beside the live one.
+/// Quarantined databases found beside the live ones — **either** store.
 ///
 /// A corrupt or version-incompatible DuckDB file is moved aside on start and
 /// rebuilt from SQLite (see `AnalyticsDb::open_or_quarantine`). That recovery is
 /// automatic and correct, but it is only announced in the journal — where an
-/// unattended station's operator will never see it. Surfacing the leftover file
-/// here means the doctor and `/admin/doctor` report that something went wrong
-/// and that a file is sitting there using disk.
-fn quarantined_files(dir: Option<&Path>) -> Vec<PathBuf> {
+/// unattended station's operator will never see it.
+///
+/// # Why this also matches the SQLite store now
+///
+/// It used to match `.duckdb.corrupt.` only, and its test asserted that a
+/// quarantined `birds.db.corrupt.<ts>` was *not* counted, on the stated grounds
+/// that it "belongs to the other check". There was no other check. Nothing in
+/// the product looked for it: not this scan, not a station-health condition,
+/// not a prune. So the one quarantine that means **the entire detection history
+/// is gone** — `src/app.rs` moves the database aside and starts fresh when no
+/// backup verifies — was the one nothing reported, and the file sat on the card
+/// for ever.
+///
+/// A DuckDB quarantine costs the behavioural dashboards until a rebuild
+/// finishes. A SQLite quarantine costs everything the station has ever heard.
+/// Both belong here; the message distinguishes them.
+pub fn quarantined_files(dir: Option<&Path>) -> Vec<PathBuf> {
     let Some(dir) = dir else {
         return Vec::new();
     };
@@ -125,9 +138,15 @@ fn quarantined_files(dir: Option<&Path>) -> Vec<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.contains(".duckdb.corrupt.") && !n.contains(".wal"))
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                (n.contains(".duckdb.corrupt.") || n.contains(".db.corrupt."))
+                        // The `-wal` / `-shm` sidecars are moved alongside the
+                        // file they belong to; counting them would report one
+                        // incident as three.
+                        && !n.contains(".wal")
+                        && !n.ends_with("-wal")
+                        && !n.ends_with("-shm")
+            })
         })
         .collect();
     found.sort();
@@ -201,23 +220,62 @@ mod tests {
         );
     }
 
+    /// Both stores' quarantines are found, and the sidecars are not double-counted.
+    ///
+    /// This test used to assert the opposite for SQLite — that
+    /// `birds.db.corrupt.<ts>` was *not* counted, because it "belongs to the
+    /// other check". There was no other check: nothing in the product looked
+    /// for it, so the quarantine that means the whole detection history is gone
+    /// was the one nothing reported.
+    ///
+    /// Observed failing before the scan was widened: `found.len()` was 1, not 2.
     #[test]
-    fn quarantine_scan_finds_only_analytics_corpses() {
+    fn the_scan_finds_a_quarantine_of_either_store() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         std::fs::write(d.join("birds.duckdb"), b"live").unwrap();
+        std::fs::write(d.join("birds.db"), b"live").unwrap();
         std::fs::write(d.join("birds.duckdb.corrupt.1700000000"), b"old").unwrap();
-        // The sidecar moved alongside it must not be counted as a second one.
+        // The analytics store's own sidecar must not become a second incident.
         std::fs::write(d.join("birds.duckdb.corrupt.1700000000.wal"), b"wal").unwrap();
-        // A quarantined *SQLite* database belongs to the other check.
+        // The one that means the entire detection history is gone.
         std::fs::write(d.join("birds.db.corrupt.1700000000"), b"sqlite").unwrap();
+        // SQLite's sidecars, moved alongside it by `quarantine_corrupt_database`.
+        std::fs::write(d.join("birds.db.corrupt.1700000000-wal"), b"wal").unwrap();
+        std::fs::write(d.join("birds.db.corrupt.1700000000-shm"), b"shm").unwrap();
 
         let found = quarantined_files(Some(d));
-        assert_eq!(found.len(), 1, "found: {found:?}");
+        assert_eq!(found.len(), 2, "found: {found:?}");
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
         assert!(
-            found[0]
-                .to_string_lossy()
-                .ends_with(".duckdb.corrupt.1700000000")
+            names.contains(&"birds.duckdb.corrupt.1700000000".to_owned()),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"birds.db.corrupt.1700000000".to_owned()),
+            "the SQLite quarantine is the one that costs the whole history: {names:?}"
+        );
+    }
+
+    /// The discrimination: a live database is not a quarantine.
+    ///
+    /// A scan that matched anything with `.db` in the name would satisfy the
+    /// test above and report a healthy station as having lost its history.
+    #[test]
+    fn a_live_database_is_not_a_quarantine() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::write(d.join("birds.db"), b"live").unwrap();
+        std::fs::write(d.join("birds.db-wal"), b"wal").unwrap();
+        std::fs::write(d.join("birds.duckdb"), b"live").unwrap();
+        std::fs::write(d.join("birds.db.backup.1700000000"), b"backup").unwrap();
+
+        assert!(
+            quarantined_files(Some(d)).is_empty(),
+            "a healthy station must report nothing"
         );
     }
 

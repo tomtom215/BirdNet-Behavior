@@ -18,8 +18,10 @@
 //!   quietly discarding the audio a researcher would want to re-examine;
 //! * a failing integrity check or a backup that has not completed in weeks —
 //!   the two things standing between a corrupt database and a lost season;
-//! * the analytics database quarantined and rebuilt, which empties every
-//!   behavioural dashboard until someone notices;
+//! * either database quarantined and started over — the analytics store
+//!   rebuilt from SQLite, which empties every behavioural dashboard until it
+//!   finishes, or the detection store itself, which means no backup in the ring
+//!   verified and the whole history is in a file nothing else reports;
 //! * a Pi sitting at thermal-throttle temperature in a sealed enclosure in
 //!   July, losing inference throughput and shortening the SD card's life.
 //!
@@ -156,6 +158,7 @@ fn evaluate(state: &AppState) -> Vec<Condition> {
     check_disk(state, &mut out);
     check_thermal(&mut out);
     check_maintenance(state, &mut out);
+    check_quarantined_stores(state, &mut out);
     out
 }
 
@@ -236,6 +239,58 @@ fn disk_condition(used: f64) -> Option<Condition> {
     })
 }
 
+/// A database that had to be quarantined and started over.
+///
+/// The fifth condition this module's own documentation says it exists for, and
+/// the one `evaluate` did not implement. Both stores are covered, and they cost
+/// very different things:
+///
+/// * `*.duckdb.corrupt.<ts>` — the analytics store was rebuilt from SQLite.
+///   Correct and automatic; every behavioural dashboard is empty until it
+///   finishes, and a file is sitting on the card.
+/// * `*.db.corrupt.<ts>` — **the detection history is gone.** `src/app.rs`
+///   moves the database aside and starts fresh only when no backup in the ring
+///   verifies, so this is the end of everything the station has ever heard.
+///
+/// Neither reached anything before: no scan matched the SQLite name, no
+/// condition existed for either, and no prune removes the file.
+fn check_quarantined_stores(state: &AppState, out: &mut Vec<Condition>) {
+    let dir = state.db_path().parent().map(std::path::Path::to_path_buf);
+    let found = crate::doctor::analytics::quarantined_files(dir.as_deref());
+    out.extend(quarantine_condition(&found));
+}
+
+/// The quarantine policy, separated from the filesystem so it can be tested.
+fn quarantine_condition(found: &[std::path::PathBuf]) -> Option<Condition> {
+    let names: Vec<String> = found
+        .iter()
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    // A lost detection history and a rebuilt analytics store are not the same
+    // news, and an operator reading one line on a phone needs the difference in
+    // the title rather than three paragraphs down.
+    let history_lost = names.iter().any(|n| !n.contains(".duckdb.corrupt."));
+    let title = if history_lost {
+        "The detection database was quarantined — the station started over".to_owned()
+    } else {
+        "The analytics database was quarantined and rebuilt".to_owned()
+    };
+    Some(Condition {
+        key: "quarantined-store".to_owned(),
+        title,
+        body: format!(
+            "Found beside the live database: {}. A `.db.corrupt.*` file means no backup in the \
+             ring verified and the station began a fresh history; a `.duckdb.corrupt.*` file \
+             means only the analytics store was rebuilt. Copy the file off the station before \
+             anything reclaims the space, then see `birdnet-behavior --doctor`.",
+            names.join(", ")
+        ),
+    })
+}
+
 /// A CPU sitting at or above the throttling threshold.
 fn check_thermal(out: &mut Vec<Condition>) {
     out.extend(thermal_condition(
@@ -262,7 +317,22 @@ fn thermal_condition(temp: Option<f32>) -> Option<Condition> {
     })
 }
 
-/// A scheduled maintenance job that has not completed in far too long.
+/// A scheduled maintenance job that has failed, or has not completed in far
+/// too long.
+///
+/// # Why "failed" is a separate question from "stale"
+///
+/// This used to read `last_run_unix` alone. `mark_ran` was called
+/// unconditionally after every backup — success or failure — so a backup that
+/// failed **every week for a year** refreshed its timestamp every week and
+/// never once looked stale. The only thing this check could detect was the
+/// maintenance loop having *stopped*, which is not the failure the module doc
+/// promises to catch.
+///
+/// The recorded verdict answers it directly, and the integrity check has always
+/// recorded one: a `Some(false)` there means the database is corrupting, and it
+/// reached the operator as a `tracing::error!` and a red pixel on a page nobody
+/// has open. It pushed nothing.
 fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -270,9 +340,13 @@ fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
     for (job, label) in [
         (birdnet_db::sqlite::JOB_BACKUP_VACUUM, "backup"),
         (birdnet_db::sqlite::JOB_INTEGRITY_CHECK, "integrity check"),
+        (birdnet_db::sqlite::JOB_OFFSITE_BACKUP, "offsite backup"),
     ] {
-        let last =
-            state.with_db(|conn| birdnet_db::sqlite::last_run_unix(conn, job).ok().flatten());
+        let last = state.with_db(|conn| {
+            birdnet_db::sqlite::last_run_result(conn, job)
+                .ok()
+                .flatten()
+        });
         // `None` means "never run", which on a station that has just been
         // installed is normal and on one that has been up for weeks is not.
         // The maintenance loop records a run on its first tick, so a persistent
@@ -285,17 +359,40 @@ fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
 
 /// The maintenance policy, separated from the query so it can be tested.
 ///
-/// `last_run` of `None` means "never recorded", which produces no condition:
-/// on a fresh install that is normal, and there is no timestamp to measure
-/// staleness against. The maintenance loop records a run on its first tick, so
-/// a station that has been up long enough to be stale will have one.
+/// `recorded` is what `maintenance_runs` holds for the job: `None` for "never
+/// run", or `Some((when, verdict))` where the verdict is `None` for a job that
+/// records no pass/fail.
+///
+/// `None` produces no condition: on a fresh install that is normal, and there
+/// is no timestamp to measure staleness against. The maintenance loop records a
+/// run on its first tick, so a station that has been up long enough to be stale
+/// will have one.
+///
+/// A recorded **failure** produces a condition immediately, without waiting for
+/// staleness. That is the whole point: a job that fails on schedule is never
+/// stale, so the staleness rule alone could not see it.
 fn maintenance_condition(
     job: &str,
     label: &str,
-    last_run: Option<i64>,
+    recorded: Option<(i64, Option<bool>)>,
     now: i64,
 ) -> Option<Condition> {
-    let age = now.saturating_sub(last_run?);
+    let (last_run, verdict) = recorded?;
+
+    if verdict == Some(false) {
+        return Some(Condition {
+            key: format!("maintenance-failed:{job}"),
+            title: format!("Scheduled {label} is failing"),
+            body: format!(
+                "The station's {label} ran and did not succeed. It is on schedule, so it will \
+                 never look overdue — the timestamp is refreshed by the attempt, not by the \
+                 result. This is the job that stands between a corrupted database and a lost \
+                 season: journalctl -u birdnet-behavior | grep -i {label}"
+            ),
+        });
+    }
+
+    let age = now.saturating_sub(last_run);
     (age > MAINTENANCE_STALE_SECS).then(|| {
         let days = age / 86_400;
         Condition {
@@ -646,15 +743,150 @@ mod tests {
     fn maintenance_alerts_only_once_genuinely_stale() {
         let now = 1_800_000_000_i64;
         // One day old: the backup job runs weekly, so this is healthy.
-        assert!(maintenance_condition("j", "backup", Some(now - 86_400), now).is_none());
+        assert!(maintenance_condition("j", "backup", Some((now - 86_400, None)), now).is_none());
         // Exactly at the threshold is not yet past it.
         assert!(
-            maintenance_condition("j", "backup", Some(now - MAINTENANCE_STALE_SECS), now).is_none()
+            maintenance_condition(
+                "j",
+                "backup",
+                Some((now - MAINTENANCE_STALE_SECS, None)),
+                now
+            )
+            .is_none()
         );
-        let stale = maintenance_condition("j", "backup", Some(now - 30 * 86_400), now)
+        let stale = maintenance_condition("j", "backup", Some((now - 30 * 86_400, None)), now)
             .expect("30 days is several missed weekly runs");
         assert!(stale.title.contains("30 days"), "{}", stale.title);
         assert!(stale.body.contains("journalctl"), "the fix is actionable");
+    }
+
+    /// A job that fails **on schedule** must alert, and this is the case the
+    /// previous check structurally could not see.
+    ///
+    /// `mark_ran` was called unconditionally after every backup, and this
+    /// function read `last_run_unix` while ignoring the `ok` column. So a
+    /// backup that failed every week for a year refreshed its timestamp every
+    /// week and was never stale: the only thing detectable was the maintenance
+    /// loop having *stopped*. The module's own doc promises to catch "a failing
+    /// integrity check or a backup that has not completed in weeks — the two
+    /// things standing between a corrupt database and a lost season", and
+    /// caught neither.
+    ///
+    /// Observed failing before the verdict was read: a fresh failed run
+    /// produced `None`.
+    #[test]
+    fn a_job_that_fails_on_schedule_alerts_without_waiting_to_go_stale() {
+        let now = 1_800_000_000_i64;
+        // Ran an hour ago and failed. Nowhere near stale.
+        let c = maintenance_condition(
+            "backup_vacuum",
+            "backup",
+            Some((now - 3_600, Some(false))),
+            now,
+        )
+        .expect("a recorded failure is a fault the moment it is recorded");
+        assert!(c.title.contains("failing"), "{}", c.title);
+        assert!(
+            c.key.contains("failed"),
+            "a failure and a staleness must be distinct episodes, or one \
+             recovering would clear the other: {}",
+            c.key
+        );
+        assert!(
+            c.body.contains("never look overdue"),
+            "the operator needs to know why nothing warned them sooner: {}",
+            c.body
+        );
+    }
+
+    /// A **failed integrity check** is the one that means the database is
+    /// corrupting, and it pushed nothing at all.
+    ///
+    /// It recorded its verdict correctly and that verdict correctly reddened a
+    /// badge and 503'd an endpoint — but the staleness-only rule here meant no
+    /// notification ever left the box.
+    #[test]
+    fn a_failed_integrity_check_is_a_condition() {
+        let now = 1_800_000_000_i64;
+        let c = maintenance_condition(
+            "integrity_check",
+            "integrity check",
+            Some((now - 60, Some(false))),
+            now,
+        )
+        .expect("a failed integrity check must reach the operator");
+        assert!(c.title.contains("integrity check"), "{}", c.title);
+    }
+
+    /// The discrimination: a job that ran recently and **passed** is not a
+    /// fault. A rule that alerted on every recorded run would satisfy both
+    /// tests above and page the operator weekly on a perfectly healthy station.
+    #[test]
+    fn a_job_that_ran_and_passed_is_not_a_fault() {
+        let now = 1_800_000_000_i64;
+        assert!(
+            maintenance_condition("j", "backup", Some((now - 3_600, Some(true))), now).is_none(),
+            "a successful run must produce nothing"
+        );
+        // And a passing job can still go stale, so the two rules compose.
+        let stale =
+            maintenance_condition("j", "backup", Some((now - 30 * 86_400, Some(true))), now)
+                .expect("a job that passed a month ago and not since is still overdue");
+        assert!(stale.title.contains("30 days"), "{}", stale.title);
+    }
+
+    /// The fifth condition this module's documentation promised and `evaluate`
+    /// did not implement.
+    ///
+    /// A `.db.corrupt.*` file means no backup in the ring verified and the
+    /// station began a fresh history — everything it had ever heard is in that
+    /// file and nowhere else. Nothing reported it: the doctor's scan matched
+    /// `.duckdb.corrupt.` only (and its test asserted the SQLite name was
+    /// excluded, on the stated grounds that it "belongs to the other check",
+    /// which did not exist), no condition here looked, and no prune removes it.
+    #[test]
+    fn a_quarantined_detection_database_says_the_history_was_lost() {
+        let c = quarantine_condition(&[std::path::PathBuf::from(
+            "/var/lib/birdnet/birds.db.corrupt.1700000000",
+        )])
+        .expect("a lost history must reach the operator");
+        assert!(
+            c.title.contains("started over"),
+            "the title is what an operator reads on a phone: {}",
+            c.title
+        );
+        assert!(
+            c.body.contains("birds.db.corrupt.1700000000"),
+            "it must name the file, because copying it off the station before \
+             anything reclaims the space is the only recovery: {}",
+            c.body
+        );
+    }
+
+    /// …and an analytics rebuild is different news, said differently.
+    ///
+    /// The discrimination: a condition that gave both the same title would
+    /// pass the test above and tell an operator their history was gone every
+    /// time a DuckDB version bump rebuilt the analytics store.
+    #[test]
+    fn a_quarantined_analytics_store_is_not_reported_as_a_lost_history() {
+        let c = quarantine_condition(&[std::path::PathBuf::from(
+            "/var/lib/birdnet/birds.duckdb.corrupt.1700000000",
+        )])
+        .expect("a rebuild is worth telling the operator about");
+        assert!(c.title.contains("analytics"), "{}", c.title);
+        assert!(
+            !c.title.contains("started over"),
+            "a rebuilt analytics store has not lost the detection history: {}",
+            c.title
+        );
+    }
+
+    /// A healthy station says nothing, which a condition that always fired
+    /// would not.
+    #[test]
+    fn no_quarantine_is_not_a_condition() {
+        assert!(quarantine_condition(&[]).is_none());
     }
 
     /// A clock that jumped backwards must not manufacture a fault.
@@ -666,7 +898,7 @@ mod tests {
     #[test]
     fn a_backwards_clock_does_not_manufacture_staleness() {
         let now = 1_000_000_i64;
-        assert!(maintenance_condition("j", "backup", Some(now + 86_400), now).is_none());
+        assert!(maintenance_condition("j", "backup", Some((now + 86_400, None)), now).is_none());
     }
 
     /// The debounce copy must not outrun the debounce.

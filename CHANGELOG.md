@@ -24,6 +24,51 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — a backup that failed every week never alerted, and a corrupt database pushed nothing
+
+`src/integrations/station_health.rs` opens by naming the five conditions it
+exists for, among them *"a failing integrity check or a backup that has not
+completed in weeks — the two things standing between a corrupt database and a
+lost season"*. It caught neither, and implemented four of the five.
+
+**The backup.** `mark_ran` was called unconditionally after
+`run_backup_and_vacuum`, and the health check read `last_run_unix` while
+ignoring the `ok` column. A backup that failed every week for a year therefore
+refreshed its timestamp every week and never once looked stale. The only thing
+that check could ever detect was the maintenance loop having *stopped*.
+
+**The integrity check.** It records its verdict correctly, and that verdict
+correctly reddens a badge and 503s an endpoint — but the staleness-only rule
+meant a `Some(false)`, which means the database is corrupting, sent no
+notification at all.
+
+**The offsite upload.** Invisible everywhere: no counter, no `maintenance_runs`
+row, no health field, no alert. A station whose only off-card copy had failed
+for twelve months looked identical to one whose uploads all succeeded.
+
+**The fifth condition.** A quarantined database reached nothing.
+`doctor/analytics.rs` matched `.duckdb.corrupt.` only, and its test asserted a
+quarantined `birds.db.corrupt.<ts>` was *not* counted, on the stated grounds
+that it "belongs to the other check" — which did not exist. So the one
+quarantine that means **the entire detection history is gone** was the one
+nothing looked for.
+
+Now: `run_backup_and_vacuum` returns a `BackupOutcome` with a verdict per
+destination, recorded through `mark_ran_with`; the offsite upload gets its own
+`JOB_OFFSITE_BACKUP` key, because "no recoverable snapshot at all" and "the only
+copy is on the card the scheme exists to survive" are different news; a recorded
+failure is a condition *immediately*, without waiting to go stale, under its own
+episode key so a failure and a staleness cannot clear each other; and both
+stores' quarantines are found and reported, with the title distinguishing a
+rebuilt analytics store from a lost history.
+
+Gates: six, three of them observed failing against the shipped behaviour —
+ignoring the verdict, alerting on every recorded run (which would page a healthy
+station weekly), and giving both quarantines the same title (which would tell an
+operator their history was gone every time a DuckDB version bump rebuilt the
+analytics store). The doctor's widened scan was observed failing at
+`left: 1, right: 2`.
+
 ### Added — the station can now say it has stopped detecting
 
 Two signals, because between them they separate the three states an outside

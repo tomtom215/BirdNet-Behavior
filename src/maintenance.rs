@@ -202,8 +202,34 @@ async fn run_loop(
             mark_ran(&db_path, JOB_SUMMARY_AUDIT, &mut attempted).await;
         }
         if due(&db_path, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await {
-            run_backup_and_vacuum(&db_path, &backup_dir, offsite.as_deref()).await;
-            mark_ran(&db_path, JOB_BACKUP_VACUUM, &mut attempted).await;
+            // The verdict, not merely the fact that the loop reached this line.
+            //
+            // `mark_ran` was called unconditionally here, and the station-health
+            // check reads `last_run_unix` while ignoring the `ok` column — so a
+            // backup that failed every week for a year refreshed its timestamp
+            // every week and never once looked stale. The only thing that check
+            // could ever detect was the maintenance loop having *stopped*.
+            let outcome = run_backup_and_vacuum(&db_path, &backup_dir, offsite.as_deref()).await;
+            mark_ran_with(
+                &db_path,
+                JOB_BACKUP_VACUUM,
+                &mut attempted,
+                Some(outcome.local),
+            )
+            .await;
+            // Recorded under its own key so a health check can say *which*
+            // copy failed. Nothing recorded this before: an offsite failure
+            // produced one `warn!` and reached no counter, no
+            // `maintenance_runs` row, no health field and no alert.
+            if let Some(ok) = outcome.offsite {
+                mark_ran_with(
+                    &db_path,
+                    birdnet_db::sqlite::JOB_OFFSITE_BACKUP,
+                    &mut attempted,
+                    Some(ok),
+                )
+                .await;
+            }
         }
     }
 }
@@ -826,10 +852,19 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
     }
 }
 
-async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Option<&OffsiteConfig>) {
+async fn run_backup_and_vacuum(
+    db_path: &Path,
+    backup_dir: &Path,
+    offsite: Option<&OffsiteConfig>,
+) -> BackupOutcome {
     if !db_path.exists() {
         tracing::debug!("backup+vacuum skipped: db not present yet");
-        return;
+        // Nothing to back up is not a failed backup. A fresh station must not
+        // page its operator on its first tick.
+        return BackupOutcome {
+            local: true,
+            offsite: None,
+        };
     }
     let db_path_b = db_path.to_path_buf();
     let backup_dir_b = backup_dir.to_path_buf();
@@ -847,11 +882,17 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "scheduled backup failed");
             // Do not VACUUM if backup failed — preserve recoverability.
-            return;
+            return BackupOutcome {
+                local: false,
+                offsite: None,
+            };
         }
         Err(e) => {
             tracing::warn!(error = %e, "scheduled backup task panicked");
-            return;
+            return BackupOutcome {
+                local: false,
+                offsite: None,
+            };
         }
     };
 
@@ -860,9 +901,11 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
     // "the newest backup in the directory": those are the same thing right now,
     // and reading the directory again would make it possible to upload a
     // different file than the one this run created.
-    if let (Some(config), Some(path)) = (offsite, fresh.as_ref()) {
-        run_offsite(config, path, backup_dir).await;
-    }
+    let offsite_ok = if let (Some(config), Some(path)) = (offsite, fresh.as_ref()) {
+        Some(run_offsite(config, path, backup_dir).await)
+    } else {
+        None
+    };
 
     // Step 2: prune old backups.
     if let Err(e) = prune_old_backups(backup_dir, BACKUP_RETENTION).await {
@@ -884,6 +927,29 @@ async fn run_backup_and_vacuum(db_path: &Path, backup_dir: &Path, offsite: Optio
         Ok(Err(e)) => tracing::warn!(error = %e, "scheduled VACUUM failed"),
         Err(e) => tracing::warn!(error = %e, "scheduled VACUUM task panicked"),
     }
+
+    // The local verdict is the *backup's*, not the VACUUM's. A failed VACUUM
+    // costs disk space; a failed backup costs the ability to recover at all,
+    // and that is the value a health check keys on.
+    BackupOutcome {
+        local: true,
+        offsite: offsite_ok,
+    }
+}
+
+/// What one backup run achieved, per destination.
+///
+/// Two verdicts, because the two fail independently and mean different things.
+/// A failed **local** backup means the station has no recoverable snapshot at
+/// all. A failed **offsite** upload means the only copy is on the card the
+/// whole scheme exists to survive. Collapsing them into one boolean would make
+/// a health check unable to say which.
+#[derive(Debug, Clone, Copy)]
+struct BackupOutcome {
+    /// Did the local snapshot get written and verified?
+    local: bool,
+    /// Did the upload succeed? `None` when no offsite destination is configured.
+    offsite: Option<bool>,
 }
 
 /// Longest an offsite upload may take before the maintenance loop abandons it.
@@ -912,7 +978,7 @@ const OFFSITE_BUDGET: std::time::Duration = std::time::Duration::from_secs(2 * 6
 /// whose data disk is full, this fails while writing the temporary file instead
 /// of part-way through an upload, and on one whose `/tmp` is a small tmpfs it
 /// does not fail at all.
-async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) {
+async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) -> bool {
     let started = std::time::Instant::now();
     // The last line of defence for the loop this runs inside.
     //
@@ -943,24 +1009,30 @@ async fn run_offsite(config: &OffsiteConfig, backup: &Path, scratch: &Path) {
             "offsite backup exceeded its budget and was abandoned; the local \
              backup is unaffected and the rest of the maintenance run continues"
         );
-        return;
+        return false;
     };
     match outcome {
-        Ok(report) => tracing::info!(
+        Ok(report) => {
+            tracing::info!(
             destination = %config.destination.describe(),
             uploaded = %report.uploaded,
             bytes = report.bytes,
             pruned = report.pruned.len(),
             kept = report.kept,
-            elapsed_s = started.elapsed().as_secs(),
-            "offsite backup uploaded"
-        ),
-        Err(e) => tracing::warn!(
-            destination = %config.destination.describe(),
-            error = %e,
-            elapsed_s = started.elapsed().as_secs(),
-            "offsite backup failed; the local backup is unaffected"
-        ),
+                elapsed_s = started.elapsed().as_secs(),
+                "offsite backup uploaded"
+            );
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                destination = %config.destination.describe(),
+                error = %e,
+                elapsed_s = started.elapsed().as_secs(),
+                "offsite backup failed; the local backup is unaffected"
+            );
+            false
+        }
     }
 }
 
