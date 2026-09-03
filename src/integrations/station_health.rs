@@ -49,6 +49,7 @@ use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
 use super::announce::{Alert, Outbox};
+use super::reminder::{Reminders, still_broken};
 
 /// How often the conditions are re-measured.
 ///
@@ -115,6 +116,19 @@ pub(super) struct Condition {
     pub body: String,
 }
 
+/// A condition that is currently in an episode.
+///
+/// The title so a recovery notice can name what recovered; the clock so an
+/// episode that stays open is re-announced instead of being announced once and
+/// forgotten (`OB-16`).
+#[derive(Debug)]
+struct OpenEpisode {
+    /// The title the episode was opened with.
+    title: String,
+    /// When to say it again.
+    reminders: Reminders,
+}
+
 /// Decide which conditions start an episode and which end one.
 ///
 /// Pure, so the episode policy is testable without a station. `alerted` is the
@@ -127,8 +141,11 @@ pub(super) struct Condition {
 /// is immediate and keyed on *absence* rather than on a "healthy" signal, so a
 /// condition that stops being measurable (a temperature sensor that disappears)
 /// closes its episode instead of alerting forever on a reading nobody can take.
-fn transitions(
-    alerted: &BTreeMap<String, String>,
+///
+/// Generic in the map's value type because the loop keeps an [`OpenEpisode`]
+/// per key while the tests keep a title; only the key set is read here.
+fn transitions<V>(
+    alerted: &BTreeMap<String, V>,
     streak: &mut BTreeMap<String, u32>,
     now: &[Condition],
 ) -> (Vec<Condition>, Vec<String>) {
@@ -152,6 +169,42 @@ fn transitions(
         .cloned()
         .collect();
     (broken, recovered)
+}
+
+/// Which open episodes are due to be said again, and how long each has been
+/// open.
+///
+/// Pure but for the clocks it advances, so the re-announcement policy is
+/// testable without a station and without waiting a day — the same split as
+/// [`transitions`], for the same reason.
+///
+/// Three rules, and each is a way this could be wrong:
+///
+/// * only conditions **currently** in `now` are considered, so an episode that
+///   has cleared is not reminded about while `recovered` is still being
+///   processed;
+/// * only keys with an **open episode** are considered, so a condition still
+///   earning its debounce is not announced early through this door;
+/// * a clock that is not due is left alone, so calling this every poll is what
+///   makes the schedule a schedule rather than a five-minute drum.
+///
+/// The condition's *current* body comes back with it, not the one the episode
+/// opened with: a disk that was 91 % full in April is 99 % full in August and
+/// the operator should be told the second number.
+fn due_reminders<'a>(
+    alerted: &mut BTreeMap<String, OpenEpisode>,
+    now: &'a [Condition],
+    at: std::time::Instant,
+) -> Vec<(&'a Condition, std::time::Duration)> {
+    now.iter()
+        .filter_map(|condition| {
+            let episode = alerted.get_mut(&condition.key)?;
+            episode
+                .reminders
+                .due(at)
+                .map(|open_for| (condition, open_for))
+        })
+        .collect()
 }
 
 /// One condition check: reads the station, appends whatever is wrong.
@@ -557,14 +610,15 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
             poll_secs = POLL_EVERY.as_secs(),
             "station-health notifier started"
         );
-        // key -> title, so a recovery notice can name what recovered.
+        // key -> the open episode, so a recovery notice can name what
+        // recovered and a long-running fault can be re-announced.
         //
         // This latch means "the episode has been observed and logged", which is
         // what keeps the loud line to one per episode. Whether the *push* went
         // out is the outbox's business: it is retried at every poll until it
         // lands, so a condition raised while the notifier was down is still
         // announced when the notifier comes back.
-        let mut alerted: BTreeMap<String, String> = BTreeMap::new();
+        let mut alerted: BTreeMap<String, OpenEpisode> = BTreeMap::new();
         // Alerts logged but not yet delivered, keyed by condition.
         let mut outbox: Outbox<String> = Outbox::new();
         // How many consecutive polls each currently-faulty key has been seen
@@ -581,6 +635,7 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
                 continue;
             };
 
+            let now = std::time::Instant::now();
             let (broken, recovered) = transitions(&alerted, &mut streak, &current);
             for condition in broken {
                 tracing::warn!(
@@ -596,10 +651,33 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
                         birdnet_integrations::apprise::NotifyType::Warning,
                     ),
                 );
-                alerted.insert(condition.key, condition.title);
+                alerted.insert(
+                    condition.key,
+                    OpenEpisode {
+                        title: condition.title,
+                        reminders: Reminders::opened_at(now),
+                    },
+                );
+            }
+            for (condition, open_for) in due_reminders(&mut alerted, &current, now) {
+                tracing::warn!(
+                    key = %condition.key,
+                    "STATION HEALTH — still unresolved: {}",
+                    condition.title
+                );
+                outbox.queue(
+                    condition.key.clone(),
+                    Alert::new(
+                        format!("Still unresolved: {}", condition.title),
+                        still_broken(&condition.body, open_for),
+                        birdnet_integrations::apprise::NotifyType::Warning,
+                    ),
+                );
             }
             for key in recovered {
-                let title = alerted.remove(&key).unwrap_or_else(|| key.clone());
+                let title = alerted
+                    .remove(&key)
+                    .map_or_else(|| key.clone(), |e| e.title);
                 tracing::info!(key = %key, "station health recovered: {title}");
                 // Keyed by the condition, so a recovery replaces an onset that
                 // is still stuck in the outbox: an operator whose uplink was
@@ -635,6 +713,98 @@ mod tests {
         keys.iter()
             .map(|k| ((*k).to_owned(), format!("t:{k}")))
             .collect()
+    }
+
+    /// Episodes open at `now`, each with its clock started then.
+    fn open(keys: &[&str], now: std::time::Instant) -> BTreeMap<String, OpenEpisode> {
+        keys.iter()
+            .map(|k| {
+                (
+                    (*k).to_owned(),
+                    OpenEpisode {
+                        title: format!("t:{k}"),
+                        reminders: super::Reminders::opened_at(now),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+    #[test]
+    fn an_open_episode_is_said_again_a_day_later() {
+        // OB-16. Before this, an episode was announced once and the only thing
+        // that re-armed it was a process restart, so a disk that filled in
+        // April was mentioned once and never again.
+        let t0 = std::time::Instant::now();
+        let mut alerted = open(&["disk"], t0);
+        let now = vec![cond("disk")];
+
+        assert!(
+            due_reminders(&mut alerted, &now, t0).is_empty(),
+            "nothing is due on the poll that opened the episode"
+        );
+        assert!(
+            due_reminders(&mut alerted, &now, t0 + DAY / 2).is_empty(),
+            "nothing is due half a day in"
+        );
+
+        let due = due_reminders(&mut alerted, &now, t0 + DAY);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].0.key, "disk");
+        assert_eq!(
+            due[0].1, DAY,
+            "the age carried is the episode's, not the schedule's"
+        );
+    }
+
+    #[test]
+    fn a_condition_that_cleared_is_not_reminded_about() {
+        // The counterpart, and the one that stops "remind about everything
+        // open" being the whole implementation: `now` is what the station
+        // currently reports, and a key absent from it has recovered.
+        let t0 = std::time::Instant::now();
+        let mut alerted = open(&["disk"], t0);
+        assert!(
+            due_reminders(&mut alerted, &[], t0 + 30 * DAY).is_empty(),
+            "a cleared condition must not be re-announced a month later"
+        );
+    }
+
+    #[test]
+    fn a_condition_without_an_open_episode_is_not_reminded_about() {
+        // The other counterpart. A condition still earning its debounce has no
+        // episode; reminding about it here would announce a fault the once-only
+        // path has deliberately not announced yet.
+        let t0 = std::time::Instant::now();
+        let mut alerted: BTreeMap<String, OpenEpisode> = BTreeMap::new();
+        assert!(due_reminders(&mut alerted, &[cond("disk")], t0 + 30 * DAY).is_empty());
+    }
+
+    #[test]
+    fn each_open_episode_keeps_its_own_clock() {
+        // Two faults that started three days apart must not be reminded about
+        // together: a shared clock would either spam the newer one or silence
+        // the older one.
+        let t0 = std::time::Instant::now();
+        let mut alerted = open(&["disk"], t0);
+        alerted.insert(
+            "thermal".to_owned(),
+            OpenEpisode {
+                title: "t:thermal".to_owned(),
+                reminders: super::Reminders::opened_at(t0 + 3 * DAY),
+            },
+        );
+        let now = vec![cond("disk"), cond("thermal")];
+
+        // At t0 + 3d + 1h: disk is due. Its *first* reminder is what fires —
+        // nothing consulted its clock before now, so `queued` is still 0 and
+        // the 24 h step is the one being tested against. Thermal opened an
+        // hour ago and is not due.
+        let due = due_reminders(&mut alerted, &now, t0 + 3 * DAY + DAY / 24);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].0.key, "disk");
     }
 
     /// The literal `2` in `a_transient_fault_never_alerts` assumes the debounce
@@ -728,7 +898,7 @@ mod tests {
     fn the_clock_condition_earns_its_alert_like_every_other() {
         // It goes through the same debounce: a clock that reads wrong for one
         // poll during an NTP step must not wake anyone.
-        let alerted = BTreeMap::new();
+        let alerted: BTreeMap<String, String> = BTreeMap::new();
         let mut streak = BTreeMap::new();
         let now = vec![clock_condition(PLAUSIBLE_NOW, NtpState::Unsynced).expect("condition")];
         for poll in 1..REQUIRED_CONSECUTIVE_POLLS {

@@ -24,6 +24,15 @@
 //! so a deadman that fired during a dawn chorus, when the detection rate limit
 //! is exactly what is exhausted, was never announced at all.
 //!
+//! One delivered notification per episode was still the wrong side of the
+//! trade for a fault that lasts (`OB-16`): nothing re-armed an episode but a
+//! process restart, so a station that went quiet in April was announced once
+//! and then never mentioned again. An open episode is now re-announced on
+//! [`super::reminder`]'s widening schedule — 24 h, 72 h, then weekly — with
+//! the *current* silence figure rather than the one it opened with, because
+//! "no detections for 25 hours" read four months later is worse than saying
+//! nothing.
+//!
 //! A silent *night* is normal; the default threshold is sized for "a full
 //! day with zero detections", which for a working garden station means
 //! something is broken. Stations in genuinely sparse habitats raise
@@ -35,6 +44,7 @@ use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
 use super::announce::{Alert, Outbox};
+use super::reminder::{Reminders, still_broken};
 
 /// How often freshness is re-measured. One indexed `SELECT` per pass.
 const POLL_EVERY: Duration = Duration::from_secs(300);
@@ -47,6 +57,14 @@ pub const DEFAULT_DEADMAN_HOURS: u32 = 24;
 enum Transition {
     /// Crossed the threshold: fire the alert and remember it.
     Alert { silent_hours: u64 },
+    /// Still over the threshold, and already announced.
+    ///
+    /// Its own variant rather than [`Transition::None`] so the loop can offer
+    /// a reminder without re-deriving "is it still broken?" from the threshold
+    /// a second time. *When* to remind is a clock question and belongs to
+    /// [`super::reminder`]; *whether there is anything to remind about* is this
+    /// function's, and was previously indistinguishable from a healthy station.
+    StillBroken { silent_hours: u64 },
     /// Detections resumed after an alert: announce recovery, re-arm.
     Recovered,
     /// No state change.
@@ -64,7 +82,9 @@ const fn transition(
     match silence_secs {
         Some(secs) if secs >= threshold_secs => {
             if already_alerted {
-                Transition::None
+                Transition::StillBroken {
+                    silent_hours: secs / 3600,
+                }
             } else {
                 Transition::Alert {
                     silent_hours: secs / 3600,
@@ -78,6 +98,19 @@ const fn transition(
         // and the operator has the onboarding flow instead.
         _ => Transition::None,
     }
+}
+
+/// What the operator is told when the station has gone quiet.
+///
+/// One function, because the onset alert and every reminder must describe the
+/// same fault — and because the figures in it are re-measured at each poll,
+/// so a reminder carries what is true now rather than what was true in April.
+fn quiet_body(silent_hours: u64, threshold_hours: u32) -> String {
+    format!(
+        "No bird detections for {silent_hours} hours (threshold {threshold_hours} h). \
+         The process and audio sources may still look healthy — check microphone \
+         placement/foam, per-source gain, and recent log lines on the station."
+    )
 }
 
 /// Spawn the deadman task. `threshold_hours == 0` still spawns it — the
@@ -94,7 +127,9 @@ pub fn spawn_detection_deadman(
             "detection deadman started"
         );
         let threshold_secs = u64::from(threshold_hours) * 3600;
-        let mut alerted = false;
+        // `Some` while an episode is open, carrying its re-notification clock.
+        // A bool here is what made "announced once, ever" the whole policy.
+        let mut episode: Option<Reminders> = None;
         // Undelivered alerts, keyed by `()`: the deadman has one episode at a
         // time, so a recovery notice queued while the onset is still stuck
         // replaces it rather than following it.
@@ -121,9 +156,10 @@ pub fn spawn_detection_deadman(
             if threshold_secs == 0 {
                 continue;
             }
-            match transition(alerted, silence, threshold_secs) {
+            let now = std::time::Instant::now();
+            match transition(episode.is_some(), silence, threshold_secs) {
                 Transition::Alert { silent_hours } => {
-                    alerted = true;
+                    episode = Some(Reminders::opened_at(now));
                     tracing::warn!(
                         silent_hours,
                         threshold_hours,
@@ -134,18 +170,32 @@ pub fn spawn_detection_deadman(
                         (),
                         Alert::new(
                             "Station has gone quiet",
-                            format!(
-                                "No bird detections for {silent_hours} hours (threshold \
-                                 {threshold_hours} h). The process and audio sources may still \
-                                 look healthy — check microphone placement/foam, per-source \
-                                 gain, and recent log lines on the station."
-                            ),
+                            quiet_body(silent_hours, threshold_hours),
                             birdnet_integrations::apprise::NotifyType::Warning,
                         ),
                     );
                 }
+                Transition::StillBroken { silent_hours } => {
+                    // The episode is open and was announced. Say so again only
+                    // when the widening schedule says it is time.
+                    if let Some(open_for) = episode.as_mut().and_then(|r| r.due(now)) {
+                        tracing::warn!(
+                            silent_hours,
+                            threshold_hours,
+                            "DETECTION DEADMAN — still quiet; re-announcing"
+                        );
+                        outbox.queue(
+                            (),
+                            Alert::new(
+                                "Station is still quiet",
+                                still_broken(&quiet_body(silent_hours, threshold_hours), open_for),
+                                birdnet_integrations::apprise::NotifyType::Warning,
+                            ),
+                        );
+                    }
+                }
                 Transition::Recovered => {
-                    alerted = false;
+                    episode = None;
                     tracing::info!("detection deadman recovered — detections are flowing again");
                     outbox.queue(
                         (),
@@ -184,14 +234,31 @@ mod tests {
     }
 
     #[test]
-    fn crossing_threshold_alerts_exactly_once() {
+    fn crossing_threshold_alerts_once_and_then_reports_still_broken() {
         let first = transition(false, Some(25 * HOUR), 24 * HOUR);
         assert_eq!(first, Transition::Alert { silent_hours: 25 });
-        // Still silent on the next poll: no re-fire while the operator sleeps.
+        // Still silent on the next poll. Not `Alert` — no re-fire while the
+        // operator sleeps — and not `None` either: the loop needs to know the
+        // episode is still open so `reminder::Reminders` can decide whether
+        // 24 h have passed. This returned `None` until OB-16, which is why
+        // nothing but a restart ever re-armed an episode.
         assert_eq!(
             transition(true, Some(26 * HOUR), 24 * HOUR),
-            Transition::None
+            Transition::StillBroken { silent_hours: 26 }
         );
+    }
+
+    #[test]
+    fn a_healthy_station_is_not_still_broken() {
+        // The counterpart. `StillBroken` must mean "the fault is still there",
+        // not "we alerted once"; a version that returned it whenever
+        // `already_alerted` was set would remind for ever about a fault that
+        // had cleared, and `recovery_announces_and_rearms` would not notice.
+        assert_eq!(
+            transition(true, Some(HOUR), 24 * HOUR),
+            Transition::Recovered
+        );
+        assert_eq!(transition(true, None, 24 * HOUR), Transition::None);
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod heartbeat;
 mod mqtt;
 mod mqtt_presence;
 mod notification;
+mod reminder;
 mod station_health;
 mod store_forward;
 mod weather;

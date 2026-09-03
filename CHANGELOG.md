@@ -38,6 +38,39 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a fault was announced once and then never mentioned again
+
+Alert storms are well prevented here — a three-poll debounce, one episode per
+condition, a recovery notice, and a compile-time assertion that the debounce
+constant stays above two. The opposite failure was not prevented at all:
+**nothing re-notified an open episode**. The only thing that re-armed one was a
+process restart. A microphone that went deaf in April produced one push, and by
+August the operator had forgotten it, because the station had.
+
+An open episode is now re-announced on a widening schedule — 24 h, then 72 h,
+then one a week — carrying *"Still unresolved after N days"* and the condition's
+**current** description rather than the one it opened with. A disk that was
+91 % full in April is 99 % full in August, and the second number is the one
+worth waking up for. Four pushes in the first fortnight, then one a week: often
+enough that a four-month fault cannot be forgotten, rare enough to still be
+read.
+
+All three alert loops widen. The deadman gained a `StillBroken` transition —
+its state machine previously answered `None` for a station that was still
+silent, which is the same answer it gives for a station that is fine, so the
+loop had no way to tell them apart. Station health keeps a clock per condition
+key. Acoustic health's set of reported sources became a map of clocks.
+
+One thing the audit finding did not reach, and the tests initially did not
+either: a station that is **off** for a month comes back with several steps of
+the schedule already behind it. A counter that advanced one step per poll would
+replay all of them, one every five minutes, which is the alert storm the rest
+of this subsystem exists to prevent. Every step a gap swallowed is skipped, so
+the operator gets one reminder and the next falls a week later. The test that
+was meant to catch this asserted only that one call returned one reminder —
+true of every implementation, including the broken one — and was rewritten to
+ask what the *next* poll does.
+
 ### Fixed — the "Test notifications" button tested a path the alerts do not use
 
 Two defects in one button, and the second is why the first went unnoticed.
