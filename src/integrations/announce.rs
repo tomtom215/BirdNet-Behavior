@@ -34,8 +34,9 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use birdnet_db::notifications::NotifStatus;
 use birdnet_integrations::apprise::NotifyType;
-use birdnet_web::metrics::SharedMetrics;
+use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
 
@@ -167,8 +168,9 @@ impl<K: Ord + Clone> Outbox<K> {
 pub(super) async fn flush<K: Ord + Clone + std::fmt::Debug>(
     outbox: &mut Outbox<K>,
     apprise: Option<&AppriseHandle>,
-    metrics: &SharedMetrics,
+    state: &AppState,
 ) {
+    let metrics = state.metrics();
     let Some(handle) = apprise else {
         outbox.pending.clear();
         return;
@@ -189,6 +191,7 @@ pub(super) async fn flush<K: Ord + Clone + std::fmt::Debug>(
                         "an alert that had not been delivered has now gone out"
                     );
                 }
+                record(state, NotifStatus::Sent, alert.title(), None);
                 outbox.settle(&key, true);
             }
             Err(e) => {
@@ -204,6 +207,15 @@ pub(super) async fn flush<K: Ord + Clone + std::fmt::Debug>(
                         "an alert about this station was not delivered; it will \
                          be retried at every poll until it is"
                     );
+                    // Once, on the first failure. The retry runs every poll,
+                    // so a notifier down for a day would otherwise write ~288
+                    // rows for one alert and bury the log it exists to be.
+                    record(
+                        state,
+                        NotifStatus::Queued,
+                        alert.title(),
+                        Some(&e.to_string()),
+                    );
                 } else {
                     tracing::debug!(
                         episode = ?key,
@@ -218,6 +230,53 @@ pub(super) async fn flush<K: Ord + Clone + std::fmt::Debug>(
         }
     }
 }
+
+/// Write one `notification_log` row for an alert about the station.
+///
+/// # Why this exists
+///
+/// The notification log contained **every robin and no deadman**: only the
+/// detection path called `record_notification`, so an operator who suspected
+/// they had missed an alert had no record to consult. The three alerting loops
+/// all deliver through [`flush`], so one call site here covers all of them —
+/// which is the point of having moved delivery into the outbox.
+///
+/// The species columns stay `None`. An alert about a failing backup is not
+/// about a bird, and filling them with placeholders would make the log's
+/// species filter answer wrongly rather than not at all.
+///
+/// [`NotifStatus::Queued`] rather than `Failed` for an undelivered alert: its
+/// own doc comment describes this exact situation — "accepted by this station
+/// but not yet delivered", parked for replay — and an operator looking at a
+/// wall of red needs "not there yet" to be distinguishable from "lost" before
+/// they go and climb a hill.
+fn record(state: &AppState, status: NotifStatus, title: &str, error: Option<&str>) {
+    let row = birdnet_db::notifications::NotifRecord {
+        channel: CHANNEL,
+        species_com_name: None,
+        species_sci_name: None,
+        confidence: None,
+        detection_date: None,
+        detection_time: None,
+        status,
+        message: Some(title),
+        error,
+    };
+    if let Err(e) = state.with_db(|conn| birdnet_db::notifications::log_notification(conn, &row)) {
+        // Debug, and never a `warn!`: this is the *logging* of a delivery
+        // failure, and a second warning about the log would double every
+        // genuine one.
+        tracing::debug!(error = %e, "could not record an operational alert in the notification log");
+    }
+}
+
+/// The `notification_log.channel` value every alert about the station carries.
+///
+/// One value rather than one per loop, so `channel = 'alert'` selects the
+/// operational history and `channel = 'apprise'` the bird traffic. Splitting it
+/// three ways would mean an operator had to know the loops existed to query
+/// them.
+pub(super) const CHANNEL: &str = "alert";
 
 #[cfg(test)]
 mod tests {
@@ -334,5 +393,184 @@ mod tests {
         let body = a.body_at(raised + Duration::from_secs(2 * 3600));
         assert!(body.starts_with("no detections for 25 hours"));
         assert!(body.contains("Raised 120 minutes ago"), "{body}");
+    }
+
+    // ── the notification log ────────────────────────────────────────────
+
+    use super::{CHANNEL, flush};
+    use birdnet_db::notifications::{NotifStatus, recent_notifications};
+    use birdnet_web::state::AppState;
+    use std::sync::Arc;
+
+    /// A station with an empty notification log.
+    fn station() -> (tempfile::TempDir, AppState) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("birds.db");
+        birdnet_db::sqlite::open_or_create(&db).expect("open");
+        let state = AppState::new(db).expect("state");
+        (dir, state)
+    }
+
+    /// `(channel, status, message)` for every logged row.
+    ///
+    /// `status` is compared as the string the column stores rather than as a
+    /// `NotifStatus`, because that is what a query against this table sees —
+    /// and the mapping from one to the other is the thing worth pinning.
+    fn logged(state: &AppState) -> Vec<(String, String, String)> {
+        state
+            .with_db(|conn| recent_notifications(conn, 100, 0))
+            .expect("read the log")
+            .into_iter()
+            .map(|r| (r.channel, r.status, r.message.unwrap_or_default()))
+            .collect()
+    }
+
+    /// A notifier with one native destination pointed at `addr`.
+    fn notifier(addr: &str) -> crate::integrations::AppriseHandle {
+        let route = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig::default(),
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target: route,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        Arc::new(tokio::sync::Mutex::new(client))
+    }
+
+    /// Accept one connection and answer `204`, then stop.
+    async fn accepting_stub() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr").to_string();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                    let mut buf = [0_u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock
+                        .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                    let _ = sock.flush().await;
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn a_delivered_alert_reaches_the_notification_log() {
+        // The defect: the log contained every robin and no deadman, so an
+        // operator who suspected they had missed an alert had nothing to
+        // consult.
+        let (_d, state) = station();
+        let apprise = notifier(&accepting_stub().await);
+        let mut outbox: Outbox<()> = Outbox::new();
+        outbox.queue(
+            (),
+            Alert::new(
+                "Station has gone quiet",
+                "no detections",
+                NotifyType::Warning,
+            ),
+        );
+
+        flush(&mut outbox, Some(&apprise), &state).await;
+
+        let rows = logged(&state);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].0, CHANNEL, "one channel for every station alert");
+        assert_eq!(rows[0].1, NotifStatus::Sent.to_string());
+        assert_eq!(rows[0].2, "Station has gone quiet");
+    }
+
+    #[tokio::test]
+    async fn an_undelivered_alert_is_logged_as_queued_not_failed() {
+        // `Queued`'s own doc comment describes this exactly: accepted by the
+        // station, parked for replay. An operator looking at a wall of red
+        // needs "not there yet" to be distinguishable from "lost" before they
+        // go and climb a hill.
+        let (_d, state) = station();
+        // Nothing is listening on this port, so every send fails.
+        let apprise = notifier("127.0.0.1:1");
+        let mut outbox: Outbox<()> = Outbox::new();
+        outbox.queue(
+            (),
+            Alert::new("Disk almost full", "94 %", NotifyType::Warning),
+        );
+
+        flush(&mut outbox, Some(&apprise), &state).await;
+
+        let rows = logged(&state);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].1, NotifStatus::Queued.to_string(), "{rows:?}");
+        assert_eq!(rows[0].2, "Disk almost full");
+    }
+
+    #[tokio::test]
+    async fn a_retried_alert_is_logged_once_not_once_per_poll() {
+        // The retry runs every five-minute poll. A notifier down for a day
+        // would write ~288 rows for one alert and bury the log it exists to
+        // be.
+        let (_d, state) = station();
+        let apprise = notifier("127.0.0.1:1");
+        let mut outbox: Outbox<()> = Outbox::new();
+        outbox.queue(
+            (),
+            Alert::new("Disk almost full", "94 %", NotifyType::Warning),
+        );
+
+        for _ in 0..4 {
+            flush(&mut outbox, Some(&apprise), &state).await;
+        }
+
+        let queued = logged(&state)
+            .into_iter()
+            .filter(|(_, s, _)| *s == NotifStatus::Queued.to_string())
+            .count();
+        assert_eq!(queued, 1, "four polls, one row: {:?}", logged(&state));
+    }
+
+    #[tokio::test]
+    async fn no_notifier_configured_writes_nothing() {
+        // The discrimination. A station with no notifier has nothing to
+        // report about delivery, and a row there would say a send was
+        // attempted when none was.
+        let (_d, state) = station();
+        let mut outbox: Outbox<()> = Outbox::new();
+        outbox.queue((), Alert::new("t", "b", NotifyType::Warning));
+
+        flush(&mut outbox, None, &state).await;
+
+        assert!(logged(&state).is_empty(), "{:?}", logged(&state));
+    }
+
+    #[tokio::test]
+    async fn an_alert_carries_no_species_columns() {
+        // An alert about a failing backup is not about a bird. Filling these
+        // with placeholders would make the Notification Center's species
+        // filter answer wrongly rather than not at all.
+        let (_d, state) = station();
+        let apprise = notifier(&accepting_stub().await);
+        let mut outbox: Outbox<()> = Outbox::new();
+        outbox.queue((), Alert::new("Backup failed", "b", NotifyType::Warning));
+
+        flush(&mut outbox, Some(&apprise), &state).await;
+
+        let rows = state
+            .with_db(|conn| recent_notifications(conn, 10, 0))
+            .expect("read");
+        let row = rows.first().expect("a row");
+        assert_eq!(row.species_com_name, None);
+        assert_eq!(row.species_sci_name, None);
+        assert_eq!(row.confidence, None);
     }
 }

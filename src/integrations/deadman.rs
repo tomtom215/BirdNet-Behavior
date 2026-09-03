@@ -161,7 +161,7 @@ pub fn spawn_detection_deadman(
 
             // Anything the state machine raised — this tick or an earlier one
             // that never got out — is offered again here.
-            super::announce::flush(&mut outbox, apprise.as_ref(), &state.metrics()).await;
+            super::announce::flush(&mut outbox, apprise.as_ref(), &state).await;
         }
     });
 }

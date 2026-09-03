@@ -614,7 +614,7 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
                 );
             }
 
-            super::announce::flush(&mut outbox, apprise.as_ref(), &state.metrics()).await;
+            super::announce::flush(&mut outbox, apprise.as_ref(), &state).await;
         }
     });
 }

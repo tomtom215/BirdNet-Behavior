@@ -24,6 +24,57 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — a notification status the database refused to store, and the alerts nothing logged
+
+Two defects, found together. The second was found by running the first one's
+gates.
+
+**The notification log contained every robin and no deadman.** The four
+detection channels each recorded an outcome; the three alerting loops recorded
+nothing, so an operator who suspected they had missed a station alert had no
+record to consult. Because the 2.2 work had already made `announce::flush` the
+one delivery path for all three loops, this is a single writer rather than
+three. `channel = "alert"`, so `channel = 'alert'` selects the station's own
+history and `channel = 'apprise'` the bird traffic.
+
+An undelivered alert is logged as `Queued`, not `Failed` — that variant's own
+doc comment describes this exact situation, and the distinction it draws
+matters: *an operator looking at a wall of red needs to know which one they are
+looking at before they go and climb a hill*. One row per episode, not one per
+retry: the retry runs at every five-minute poll, so a notifier down for a day
+would write about 288 rows for one alert and bury the log it exists to be.
+Species columns stay empty, because an alert about a failing backup is not
+about a bird and a placeholder would make the Notification Center's species
+filter answer wrongly rather than not at all.
+
+**And then the gate for that would not go green.** `NotifStatus::Queued` could
+not be stored at all. Migration 4 created `notification_log.status` with
+`CHECK(status IN ('sent','failed','skipped'))`. `Queued` was added to the enum
+afterwards, documented at length, and written **in production** by
+`daemon/processor.rs`'s store-and-forward path — where every insert was rejected
+by the CHECK and the error discarded at `debug!`, which the default filter
+drops. A field station on flaky LTE produced exactly the bursts that doc
+comment describes, and the Notification Center showed none of them. The careful
+distinction between "not there yet" and "lost" was between one status that
+existed and one that never had.
+
+Migration 41 rebuilds the table, because SQLite cannot alter a CHECK constraint
+in place — the same reason migrations 36 and 40 rebuilt `quarantine`. Unlike
+those, the insert here is a plain `INSERT` rather than `INSERT OR IGNORE`, so
+the violation *was* returned as an error; it was the caller that threw it away.
+Both halves are fixed, and `ALL_NOTIF_STATUSES` now exists so
+`every_notification_status_is_accepted_by_the_schema` can enumerate the set
+rather than restate it — a sixth status without a migration fails in CI instead
+of on a station. Its counterpart checks the CHECK was *widened* and not deleted.
+
+Eleven gates, six mutations killed. Two of them are worth naming: a loop
+sending inline again — the pre-2.2 latch-on-attempt shape, whose sends reach no
+log — is caught by a source scanner rather than by behaviour, because the whole
+point of one writer is that the loops route through it; and the un-widened
+CHECK, which is not a hypothetical mutation but the shipped schema, reported as
+*"the schema rejects the `queued` status this code writes: CHECK constraint
+failed: status IN ('sent','failed','skipped')"*.
+
 ### Fixed — the audit log was never written
 
 Table, store, admin page and 180-day pruner all existed. `AuditLog::record`

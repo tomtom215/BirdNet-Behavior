@@ -1629,6 +1629,76 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
         CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
     },
+    Migration {
+        version: 41,
+        description: "Let notification_log accept the 'queued' status its code already writes",
+        // ## The status that could not be stored
+        //
+        // Migration 4 created this table with
+        // `CHECK(status IN ('sent','failed','skipped'))`. `NotifStatus::Queued`
+        // was added later, documented at length — "accepted by this station but
+        // not yet delivered", parked in the store-and-forward queue for replay,
+        // and deliberately distinct from `Failed` because "an operator looking
+        // at a wall of red needs to know which one they are looking at before
+        // they go and climb a hill" — and written by
+        // `daemon/processor.rs`'s store-and-forward path in production.
+        //
+        // Every one of those inserts was rejected by the CHECK. The caller logs
+        // the failure at `debug!`, and the default filter drops it, so a field
+        // station on flaky LTE produced exactly the bursts that comment
+        // describes and the Notification Center showed none of them. The
+        // distinction it draws so carefully was between one status that existed
+        // and one that never did.
+        //
+        // Found by running the code rather than reading it: a new gate for the
+        // operational-alert path asserted a `queued` row and got none.
+        //
+        // ## Why the table is rebuilt
+        //
+        // The same reason migrations 36 and 40 rebuilt `quarantine`: SQLite
+        // cannot alter a CHECK constraint in place, because the constraint is
+        // part of the stored `CREATE TABLE` text.
+        //
+        // Unlike those, `log_notification` uses a plain `INSERT` rather than
+        // `INSERT OR IGNORE`, so the violation *was* returned as an error — it
+        // was the caller that discarded it. Both halves are fixed: the schema
+        // accepts the status, and
+        // `migration::tests::every_notification_status_is_accepted_by_the_schema`
+        // enumerates `ALL_NOTIF_STATUSES` so adding a sixth without a migration
+        // fails here instead of on a station.
+        //
+        // The copy names its columns rather than `SELECT *`, so a column added
+        // to one side and not the other fails loudly here instead of silently
+        // shifting every value one place along.
+        up_sql: "CREATE TABLE notification_log_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+            channel TEXT NOT NULL,
+            species_com_name TEXT,
+            species_sci_name TEXT,
+            confidence REAL,
+            detection_date TEXT,
+            detection_time TEXT,
+            status TEXT NOT NULL CHECK(status IN ('sent','failed','skipped','queued')),
+            message TEXT,
+            error TEXT
+        );
+
+        INSERT INTO notification_log_new
+            (id, sent_at, channel, species_com_name, species_sci_name, confidence,
+             detection_date, detection_time, status, message, error)
+        SELECT id, sent_at, channel, species_com_name, species_sci_name, confidence,
+               detection_date, detection_time, status, message, error
+          FROM notification_log;
+
+        DROP TABLE notification_log;
+        ALTER TABLE notification_log_new RENAME TO notification_log;
+
+        CREATE INDEX IF NOT EXISTS idx_notification_log_sent_at
+            ON notification_log(sent_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_notification_log_channel
+            ON notification_log(channel);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2830,6 +2900,67 @@ mod tests {
             .expect("the source survived the migration");
         assert_eq!(source.eq_chain, "");
         assert!(source.pipeline.high_pass);
+    }
+
+    #[test]
+    fn every_notification_status_is_accepted_by_the_schema() {
+        // `notification_log.status` carries a CHECK constraint listing the
+        // statuses by name. Migration 4 wrote that list as
+        // ('sent','failed','skipped'); `NotifStatus::Queued` was added to the
+        // enum afterwards, documented at length, and written in production by
+        // the store-and-forward path — where every insert was rejected and the
+        // failure logged at `debug!`, which the default filter drops.
+        //
+        // So a field station on flaky LTE produced exactly the bursts that
+        // variant's doc comment describes, and the Notification Center showed
+        // none of them. Enumerating the list here means a sixth status without
+        // a migration fails on this line rather than on a station.
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+
+        for status in crate::notifications::ALL_NOTIF_STATUSES {
+            let record = crate::notifications::NotifRecord {
+                channel: "test",
+                species_com_name: None,
+                species_sci_name: None,
+                confidence: None,
+                detection_date: None,
+                detection_time: None,
+                status: *status,
+                message: Some("probe"),
+                error: None,
+            };
+            crate::notifications::log_notification(&conn, &record).unwrap_or_else(|e| {
+                panic!("the schema rejects the `{status}` status this code writes: {e}")
+            });
+        }
+
+        let stored: usize = conn
+            .query_row("SELECT COUNT(*) FROM notification_log", [], |r| r.get(0))
+            .map(|n: i64| usize::try_from(n).unwrap_or(0))
+            .unwrap();
+        assert_eq!(
+            stored,
+            crate::notifications::ALL_NOTIF_STATUSES.len(),
+            "every status must land as its own row"
+        );
+    }
+
+    #[test]
+    fn a_status_the_check_does_not_list_is_still_refused() {
+        // The counterpart. Widening the CHECK must not have removed it: the
+        // column is rendered in the admin UI and filtered on, so an arbitrary
+        // string reaching it is a different bug from the one above.
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+        let err = conn.execute(
+            "INSERT INTO notification_log (channel, status) VALUES ('test', 'elsewhere')",
+            [],
+        );
+        assert!(
+            err.is_err(),
+            "the CHECK constraint is gone, not widened — any string would now store"
+        );
     }
 
     #[test]

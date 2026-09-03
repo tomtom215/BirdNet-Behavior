@@ -504,7 +504,7 @@ pub fn spawn_acoustic_health(
             for event in &outcome.events {
                 report_fault(&mut outbox, event);
             }
-            super::announce::flush(&mut outbox, apprise.as_ref(), &state.metrics()).await;
+            super::announce::flush(&mut outbox, apprise.as_ref(), &state).await;
 
             if last_prune.elapsed() >= PRUNE_EVERY {
                 last_prune = tokio::time::Instant::now();

@@ -37,7 +37,7 @@ impl From<rusqlite::Error> for NotifError {
 }
 
 /// Notification outcome status.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifStatus {
     /// Successfully sent.
@@ -56,8 +56,31 @@ pub enum NotifStatus {
     Queued,
 }
 
+/// Every variant, so a drift gate can enumerate them.
+///
+/// Rust cannot iterate an enum's variants, and the one thing that must never
+/// drift here is the set of statuses the database will accept — see
+/// `migration::tests::every_notification_status_is_accepted_by_the_schema`.
+///
+/// [`NotifStatus::Queued`] is why this list exists. It was added to the enum,
+/// documented at length, and written by the store-and-forward path in
+/// `daemon/processor.rs` — while `notification_log.status` carried
+/// `CHECK(status IN ('sent','failed','skipped'))` from migration 4. Every such
+/// row was rejected, and the only trace was a `debug!` line the default filter
+/// drops. The distinction the doc comment draws so carefully — "not there yet"
+/// against "lost", for an operator deciding whether to go and climb a hill —
+/// described rows that had never existed.
+pub const ALL_NOTIF_STATUSES: &[NotifStatus] = &[
+    NotifStatus::Sent,
+    NotifStatus::Failed,
+    NotifStatus::Skipped,
+    NotifStatus::Queued,
+];
+
 impl NotifStatus {
-    const fn as_str(&self) -> &'static str {
+    /// Canonical string stored in the database.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Sent => "sent",
             Self::Failed => "failed",
