@@ -212,6 +212,43 @@ pub fn derive_source_label(source_file: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// `epoch_ms` reads the real clock.
+    ///
+    /// It had no test at all — it is called only from `processor.rs`, and
+    /// nothing asserted on its value — so cargo-mutants could replace its whole
+    /// body with `0`, `1` or `-1` and the suite stayed green. A constant clock
+    /// makes every learned dynamic threshold look either permanently fresh or
+    /// permanently lapsed, which is the feature silently not working.
+    ///
+    /// Bounded rather than pinned, since the value moves: after 2024 and before
+    /// 2100. That kills all three constants without inventing a fake clock —
+    /// this function exists precisely because everything else takes time as a
+    /// parameter, so there is nothing here to inject.
+    #[test]
+    fn epoch_ms_returns_a_real_clock_reading() {
+        const Y2024_MS: i64 = 1_704_067_200_000;
+        const Y2100_MS: i64 = 4_102_444_800_000;
+        let now = epoch_ms();
+        assert!(
+            (Y2024_MS..Y2100_MS).contains(&now),
+            "epoch_ms must return a plausible wall-clock time in milliseconds, got {now}"
+        );
+    }
+
+    /// ...and it moves forward. The bound above is wide enough that a clock
+    /// frozen at any single plausible instant would pass it; this is the
+    /// counterpart that says the reading is taken each call.
+    #[test]
+    fn epoch_ms_advances() {
+        let first = epoch_ms();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let second = epoch_ms();
+        assert!(
+            second > first,
+            "two readings 5 ms apart must differ: {first} then {second}"
+        );
+    }
     use super::*;
     use crate::daemon::test_support::thresholds;
 

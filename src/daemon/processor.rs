@@ -1015,6 +1015,100 @@ mod tests {
     // Lives inside the daemon module so the private `event_processor`
     // function is directly callable.
 
+    // ── DynamicThresholdState ──────────────────────────────────────────
+    //
+    // Neither `tracker()` nor `confirm()` had a test. Both are the seam
+    // between the dynamic-threshold feature and the rest of the daemon, and
+    // cargo-mutants could rewrite either without the suite noticing.
+
+    use birdnet_core::detection::dynamic_threshold::{DynamicThresholdConfig, DynamicThresholds};
+
+    fn dyn_state(enabled: bool) -> (tempfile::TempDir, birdnet_web::state::AppState) {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let _ = enabled;
+        (tmp, state)
+    }
+
+    fn tracker_with(enabled: bool) -> DynamicThresholds {
+        DynamicThresholds::new(DynamicThresholdConfig {
+            enabled,
+            trigger: 0.9,
+            min: 0.3,
+            valid_hours: 24,
+        })
+    }
+
+    /// The feature's off-switch. `tracker()` hands the judging path a tracker
+    /// only when the operator turned the feature on — return `Some` regardless
+    /// and every station gets adjusted thresholds it never asked for; return
+    /// `None` regardless and the feature is dead while still appearing
+    /// configured. Both halves are asserted, so this discriminates rather than
+    /// alarms.
+    #[test]
+    fn the_tracker_is_offered_only_when_the_feature_is_enabled() {
+        let (_tmp, state) = dyn_state(true);
+        let on = DynamicThresholdState::new(tracker_with(true), &state);
+        assert!(
+            on.tracker().is_some(),
+            "an enabled tracker must be offered to the judging path"
+        );
+
+        let (_tmp2, state2) = dyn_state(false);
+        let off = DynamicThresholdState::new(tracker_with(false), &state2);
+        assert!(
+            off.tracker().is_none(),
+            "a disabled tracker must not be offered — the feature is off"
+        );
+    }
+
+    /// `confirm` learns only when the feature is on, and only from a detection
+    /// confident enough to trigger.
+    ///
+    /// The guard is `if !self.enabled || !self.tracker.observe(..) { return }`,
+    /// which is three mutable pieces: the `||`, and each `!`. Every one of them
+    /// either stops the feature learning at all or lets it learn from
+    /// detections it should not, so each gets an assertion here.
+    #[test]
+    fn confirming_learns_only_when_enabled_and_confident() {
+        let (_tmp, state) = dyn_state(true);
+        let mut on = DynamicThresholdState::new(tracker_with(true), &state);
+
+        // Below the 0.9 trigger: nothing is learned, so no row is written.
+        on.confirm("Turdus merula", 0.5, 1_000, &state);
+        let rows = state
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .expect("load");
+        assert!(
+            rows.is_empty(),
+            "a detection below the trigger must not confirm anything, got {rows:?}"
+        );
+
+        // At the trigger: the species is learned and persisted.
+        on.confirm("Turdus merula", 0.95, 1_000, &state);
+        let rows = state
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .expect("load");
+        assert_eq!(
+            rows.len(),
+            1,
+            "a confident detection must be learned and written: {rows:?}"
+        );
+        assert_eq!(rows[0].sci_name, "Turdus merula");
+
+        // With the feature off, even a confident detection learns nothing.
+        let (_tmp2, state2) = dyn_state(false);
+        let mut off = DynamicThresholdState::new(tracker_with(false), &state2);
+        off.confirm("Turdus merula", 0.99, 1_000, &state2);
+        let rows = state2
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .expect("load");
+        assert!(
+            rows.is_empty(),
+            "a disabled feature must not learn: {rows:?}"
+        );
+    }
+
     // ── ThresholdCache ─────────────────────────────────────────────────
 
     #[test]
