@@ -114,6 +114,34 @@ pub fn redact_url_credentials(value: &str) -> String {
     )
 }
 
+/// Mask the local part of a value that is a bare email address.
+///
+/// `me@example.com` becomes `***@example.com`. The domain stays because that
+/// is the diagnostic half — "is this pointing at the right mail host", "is the
+/// setting populated at all" — and the local part is the half that identifies a
+/// person in a bundle attached to a public issue.
+///
+/// Deliberately narrow: exactly one `@`, no whitespace, a dot in the domain,
+/// and something on both sides. A value that is not unambiguously one address
+/// is returned untouched, because a broad "looks like an email" rule applied to
+/// every configuration value would eventually mangle a setting nobody expected
+/// it to touch.
+#[must_use]
+pub fn redact_email_local_part(value: &str) -> String {
+    let Some((local, domain)) = value.split_once('@') else {
+        return value.to_owned();
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || domain.contains('@')
+        || !domain.contains('.')
+        || value.chars().any(char::is_whitespace)
+    {
+        return value.to_owned();
+    }
+    format!("***@{domain}")
+}
+
 /// Render the configuration with every secret masked.
 ///
 /// Sorted, so two bundles from the same station diff cleanly.
@@ -125,7 +153,7 @@ pub fn redacted_config(config: &Config) -> String {
             let shown = if is_secret_key(k) {
                 REDACTED.to_owned()
             } else {
-                redact_url_credentials(v)
+                redact_email_local_part(&redact_url_credentials(v))
             };
             format!("{k}={shown}")
         })
@@ -397,6 +425,72 @@ mod tests {
             out.contains("rtsp://u:"),
             "the username and host must remain: {out}"
         );
+    }
+
+    /// The Flickr key is a secret and must not travel in a support bundle
+    /// attached to a public issue.
+    ///
+    /// `is_secret_key`'s doc comment already claims `KEY` catches
+    /// `FLICKR_API_KEY`. That claim was written before the setting existed, so
+    /// it is asserted here rather than trusted — a prose claim about a key that
+    /// did not exist is exactly the kind this repository has been caught out by.
+    #[test]
+    fn the_flickr_key_is_masked_and_the_rest_of_its_settings_are_not() {
+        let cfg = Config::parse(
+            "IMAGE_PROVIDER=flickr
+FLICKR_API_KEY=abc123secret
+FLICKR_FILTER_EMAIL=me@example.com",
+        )
+        .unwrap();
+        let out = redacted_config(&cfg);
+
+        assert!(
+            out.contains(&format!("FLICKR_API_KEY={REDACTED}")),
+            "the Flickr key must be masked: {out}"
+        );
+        assert!(
+            !out.contains("abc123secret"),
+            "and must not survive anywhere in the output: {out}"
+        );
+        // The counterpart, so this is not satisfied by a redactor that masks
+        // everything: which provider a station uses is diagnostic and stays.
+        assert!(
+            out.contains("IMAGE_PROVIDER=flickr"),
+            "the provider choice is diagnostic and must remain: {out}"
+        );
+        // The filter address is not a secret, but it is a person's email in a
+        // bundle that gets attached to public issues. The domain is the
+        // diagnostic half and stays; the local part does not.
+        assert!(
+            out.contains("FLICKR_FILTER_EMAIL=***@example.com"),
+            "the address's local part must be masked and its domain kept: {out}"
+        );
+        assert!(!out.contains("me@example.com"), "{out}");
+    }
+
+    /// The email masker is narrow on purpose: a broad rule over every value
+    /// would eventually mangle a setting nobody expected it to touch.
+    #[test]
+    fn only_an_unambiguous_email_address_has_its_local_part_masked() {
+        assert_eq!(redact_email_local_part("me@example.com"), "***@example.com");
+        assert_eq!(
+            redact_email_local_part("first.last+tag@mail.example.co.uk"),
+            "***@mail.example.co.uk"
+        );
+        for untouched in [
+            "plughw:1,0",             // no @ at all
+            "user@host",              // no dot: a LAN hostname, not an address
+            "@example.com",           // no local part
+            "me@",                    // no domain
+            "a@b@example.com",        // not one address
+            "see me@example.com now", // prose, not a value
+        ] {
+            assert_eq!(
+                redact_email_local_part(untouched),
+                untouched,
+                "{untouched:?} must be left alone"
+            );
+        }
     }
 
     /// Sorted output, so two bundles from the same station diff cleanly.

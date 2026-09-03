@@ -14,8 +14,10 @@
 //!   station traffic levels (≪ 100 req/s).
 //! - **Pruning** — stale entries (no requests in `2 × window_secs`) are
 //!   removed periodically to prevent unbounded memory growth.
-//! - **X-Forwarded-For** — optional; the first address in that header is
-//!   used when the real IP sits behind a trusted reverse proxy.
+//! - **Client identity** — delegated to [`crate::client_ip::TrustedProxies`],
+//!   which decides whether a forwarded header may be believed at all. This
+//!   used to be a `trust_x_forwarded_for` boolean and neither of its settings
+//!   was correct: see that module's own documentation for the probe output.
 //!
 //! ## Usage
 //!
@@ -25,7 +27,7 @@
 //! let config = RateLimitConfig {
 //!     requests_per_second: 20.0,
 //!     burst_capacity: 40,
-//!     trust_x_forwarded_for: false,
+//!     ..RateLimitConfig::default()
 //! };
 //! let _limiter = RateLimiter::new(config);
 //! ```
@@ -38,6 +40,8 @@ use std::time::{Duration, Instant};
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{HeaderValue, Request, StatusCode};
+
+use crate::client_ip::{ClientIp, TrustedProxies};
 use axum::middleware::Next;
 use axum::response::Response;
 
@@ -52,8 +56,13 @@ pub struct RateLimitConfig {
     pub requests_per_second: f64,
     /// Maximum burst above the sustained rate.
     pub burst_capacity: u32,
-    /// When `true`, use the first entry in `X-Forwarded-For` as the client IP.
-    pub trust_x_forwarded_for: bool,
+    /// Peers whose forwarded client-IP headers may be believed.
+    ///
+    /// Buckets are keyed on the address this resolves to, so getting it wrong
+    /// is not cosmetic: trusting too little puts an entire household behind a
+    /// proxy into one bucket, and trusting too much lets any client mint a
+    /// fresh bucket per request by setting a header.
+    pub trusted_proxies: TrustedProxies,
 }
 
 impl Default for RateLimitConfig {
@@ -61,7 +70,7 @@ impl Default for RateLimitConfig {
         Self {
             requests_per_second: 30.0,
             burst_capacity: 60,
-            trust_x_forwarded_for: false,
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 }
@@ -175,10 +184,15 @@ impl RateLimiter {
 /// Add it with `axum::middleware::from_fn_with_state` or as a layer.
 pub async fn rate_limit_middleware(
     limiter: Arc<RateLimiter>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
-    let ip = extract_ip(&req, limiter.config.trust_x_forwarded_for);
+    let ip = extract_ip(&req, &limiter.config.trusted_proxies);
+    // Publish the resolution so every handler downstream agrees with the
+    // limiter about who is calling. This layer is the first that needs it, so
+    // resolving once here costs nothing and removes the temptation for a
+    // handler to read `ConnectInfo` and get the proxy instead.
+    req.extensions_mut().insert(ClientIp(ip));
 
     if !limiter.check(ip) {
         tracing::debug!(ip = %ip, "rate limit exceeded");
@@ -208,21 +222,20 @@ pub async fn rate_limit_middleware(
 
 /// Extract the client IP from the request.
 ///
-/// Prefers `X-Forwarded-For` when `trust_xff` is enabled.
-fn extract_ip(req: &Request<Body>, trust_xff: bool) -> IpAddr {
-    if trust_xff
-        && let Some(xff) = req.headers().get("x-forwarded-for")
-        && let Ok(val) = xff.to_str()
-        && let Some(first) = val.split(',').next()
-        && let Ok(ip) = first.trim().parse::<IpAddr>()
-    {
-        return ip;
-    }
-
-    // Fall back to the socket address from axum's `ConnectInfo`.
-    req.extensions()
+/// The peer comes from axum's [`ConnectInfo`]; whether any forwarded header
+/// may override it is [`TrustedProxies`]' decision, not this function's.
+///
+/// A request with no `ConnectInfo` at all is not a real connection — it is a
+/// direct `oneshot` in a test, or a future transport that forgot to insert it.
+/// Falling back to loopback keeps such a request in one shared bucket rather
+/// than giving it an unthrottled path, and loopback is trusted by default, so
+/// a test that sets forwarded headers still exercises the proxied path.
+pub(crate) fn extract_ip(req: &Request<Body>, trusted: &TrustedProxies) -> IpAddr {
+    let peer = req
+        .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map_or_else(|| IpAddr::from([127, 0, 0, 1]), |ci| ci.0.ip())
+        .map_or_else(|| IpAddr::from([127, 0, 0, 1]), |ci| ci.0.ip());
+    trusted.client_ip(req.headers(), peer)
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +256,7 @@ mod tests {
         let limiter = RateLimiter::new(RateLimitConfig {
             requests_per_second: 10.0,
             burst_capacity: 5,
-            trust_x_forwarded_for: false,
+            trusted_proxies: crate::client_ip::TrustedProxies::default(),
         });
         let ip = test_ip(1);
         // Should allow the full burst.
@@ -259,7 +272,7 @@ mod tests {
         let limiter = RateLimiter::new(RateLimitConfig {
             requests_per_second: 1.0,
             burst_capacity: 2,
-            trust_x_forwarded_for: false,
+            trusted_proxies: crate::client_ip::TrustedProxies::default(),
         });
         let ip_a = test_ip(10);
         let ip_b = test_ip(11);
@@ -291,7 +304,7 @@ mod tests {
         let limiter = RateLimiter::new(RateLimitConfig {
             requests_per_second: 100.0,
             burst_capacity: 1,
-            trust_x_forwarded_for: false,
+            trusted_proxies: crate::client_ip::TrustedProxies::default(),
         });
         let ip = test_ip(42);
         assert!(limiter.check(ip)); // Consume the one token.
@@ -299,5 +312,105 @@ mod tests {
         // After 20 ms, at least one token has refilled.
         std::thread::sleep(Duration::from_millis(20));
         assert!(limiter.check(ip)); // Refilled.
+    }
+
+    // -----------------------------------------------------------------------
+    // Client identity: which address the bucket is keyed on
+    // -----------------------------------------------------------------------
+
+    /// Build a request with an optional peer and forwarded header.
+    fn probe(peer: Option<&str>, xff: Option<&str>) -> Request<Body> {
+        let mut b = Request::builder().uri("/");
+        if let Some(v) = xff {
+            b = b.header("x-forwarded-for", v);
+        }
+        let mut r = b.body(Body::empty()).unwrap();
+        if let Some(p) = peer {
+            let sock: std::net::SocketAddr = format!("{p}:40000").parse().unwrap();
+            r.extensions_mut().insert(ConnectInfo(sock));
+        }
+        r
+    }
+
+    /// The two halves the old boolean could not satisfy at once, asserted
+    /// through the function the middleware actually calls.
+    ///
+    /// A probe against the previous implementation recorded both failures:
+    /// `trust=false` gave A=203.0.113.5 (right) and B=127.0.0.1 (wrong);
+    /// `trust=true` gave A=9.9.9.9 (wrong) and B=9.9.9.9 (right).
+    #[test]
+    fn the_bucket_key_ignores_a_forged_header_and_honours_a_proxied_one() {
+        let trusted = crate::client_ip::TrustedProxies::default();
+
+        assert_eq!(
+            extract_ip(&probe(Some("203.0.113.5"), Some("9.9.9.9")), &trusted),
+            "203.0.113.5".parse::<IpAddr>().unwrap(),
+            "a direct client must not be able to pick its own bucket"
+        );
+        assert_eq!(
+            extract_ip(&probe(Some("127.0.0.1"), Some("9.9.9.9")), &trusted),
+            "9.9.9.9".parse::<IpAddr>().unwrap(),
+            "behind a local proxy every visitor must get their own bucket"
+        );
+    }
+
+    /// The consequence, stated in the limiter's own terms: two visitors
+    /// arriving through the same proxy must not share a burst.
+    ///
+    /// This is what the shipped default actually did — `trust_x_forwarded_for`
+    /// was `false` and nothing could set it — so one busy tab throttled the
+    /// whole household.
+    #[test]
+    fn two_visitors_through_one_proxy_do_not_share_a_burst() {
+        let limiter = RateLimiter::new(RateLimitConfig {
+            requests_per_second: 1.0,
+            burst_capacity: 2,
+            trusted_proxies: crate::client_ip::TrustedProxies::default(),
+        });
+        let trusted = crate::client_ip::TrustedProxies::default();
+
+        let a = extract_ip(&probe(Some("127.0.0.1"), Some("198.51.100.7")), &trusted);
+        let b = extract_ip(&probe(Some("127.0.0.1"), Some("198.51.100.8")), &trusted);
+
+        assert!(limiter.check(a));
+        assert!(limiter.check(a));
+        assert!(!limiter.check(a), "visitor A has spent their burst");
+        assert!(limiter.check(b), "visitor B must still have theirs");
+    }
+
+    /// And the counterpart, or the test above is satisfied by any rule that
+    /// reads the header: two *forged* headers from the same untrusted peer
+    /// must land in one bucket, not two. Otherwise the limiter is trivially
+    /// defeated by varying a header.
+    #[test]
+    fn one_untrusted_peer_cannot_split_itself_across_buckets() {
+        let limiter = RateLimiter::new(RateLimitConfig {
+            requests_per_second: 1.0,
+            burst_capacity: 2,
+            trusted_proxies: crate::client_ip::TrustedProxies::default(),
+        });
+        let trusted = crate::client_ip::TrustedProxies::default();
+
+        let a = extract_ip(&probe(Some("203.0.113.5"), Some("198.51.100.7")), &trusted);
+        let b = extract_ip(&probe(Some("203.0.113.5"), Some("198.51.100.8")), &trusted);
+        assert_eq!(a, b, "both requests are the same client");
+
+        assert!(limiter.check(a));
+        assert!(limiter.check(b));
+        assert!(
+            !limiter.check(b),
+            "a second forged header must not buy a fresh burst"
+        );
+    }
+
+    /// A request with no `ConnectInfo` — a direct `oneshot` in a test — falls
+    /// back to loopback rather than to an unthrottled path.
+    #[test]
+    fn a_request_without_connect_info_falls_back_to_loopback() {
+        let trusted = crate::client_ip::TrustedProxies::loopback_only();
+        assert_eq!(
+            extract_ip(&probe(None, None), &trusted),
+            "127.0.0.1".parse::<IpAddr>().unwrap()
+        );
     }
 }

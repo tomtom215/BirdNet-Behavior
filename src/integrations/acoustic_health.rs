@@ -64,7 +64,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use birdnet_core::audio::soundlevel::{Calibration, SoundLevelMeter};
 use birdnet_db::audio_levels::{LevelSample, record_sample};
+use birdnet_db::sound_levels::{BandObservation, BroadbandObservation, record_observation};
 use birdnet_web::state::AppState;
 
 /// How often each source is sampled.
@@ -129,24 +131,113 @@ fn newest_segment_per_source(dir: &Path) -> Vec<(String, PathBuf)> {
     best.into_iter().map(|(s, (_, p))| (s, p)).collect()
 }
 
+/// Everything one decoded segment yields.
+struct Assessment {
+    /// The broadband quality figures that go to `audio_levels`.
+    level: LevelSample,
+    /// Per-band levels, empty when the segment was too short to close a
+    /// one-second window in the meter.
+    bands: Vec<BandObservation>,
+    /// The broadband A- and Z-weighted figures accompanying `bands`.
+    broadband: Option<BroadbandObservation>,
+}
+
 /// Decode `path` and assess it, or `None` if it cannot be read.
+///
+/// One decode feeds both measurements. The quality figures answer "is this
+/// source still working"; the band levels answer "what does this site sound
+/// like, and if the source is failing, how". Running the meter here rather
+/// than on the capture path is the same trade the rest of this module makes:
+/// a sample every [`POLL_EVERY`], costing one filter bank pass over audio
+/// already in memory, instead of a pass over every segment on a Pi that is
+/// already the bottleneck.
 ///
 /// Every failure here is expected in normal operation — the segment can be
 /// mid-write, or drained by the retention purge between the listing and the
 /// read — so none of them is worth more than a debug line.
-fn assess(path: &Path) -> Option<LevelSample> {
+fn assess(path: &Path) -> Option<Assessment> {
     let audio = birdnet_core::audio::decode::decode_file_capped(path, MAX_SAMPLES).ok()?;
     if audio.samples.is_empty() {
         return None;
     }
     let score =
         birdnet_core::audio::quality::assess_quality(&audio.samples, audio.sample_rate).ok()?;
-    Some(LevelSample {
+    let level = LevelSample {
         noise_floor_dbfs: score.noise_floor_dbfs,
         snr_db: score.snr_db,
         spectral_flatness: score.spectral_flatness,
         rain: score.rain_detected,
+    };
+
+    let (bands, broadband) = measure_bands(&audio.samples, audio.sample_rate);
+    Some(Assessment {
+        level,
+        bands,
+        broadband,
     })
+}
+
+/// Run the third-octave meter over one segment.
+///
+/// The interval is the whole segment, rounded down to whole seconds, so one
+/// observation is one reading rather than several — this is a sample, and
+/// storing three readings five minutes apart from the same segment would
+/// triple the row count without adding an observation.
+///
+/// Returns empty when the segment is shorter than a second (the meter needs a
+/// full second to close a window) or when no band survives the source's sample
+/// rate, both of which are silence rather than failure.
+fn measure_bands(
+    samples: &[f32],
+    sample_rate: u32,
+) -> (Vec<BandObservation>, Option<BroadbandObservation>) {
+    if sample_rate == 0 {
+        return (Vec::new(), None);
+    }
+    let whole_seconds = u32::try_from(samples.len() / sample_rate as usize).unwrap_or(u32::MAX);
+    if whole_seconds == 0 {
+        return (Vec::new(), None);
+    }
+    let Ok(mut meter) = SoundLevelMeter::new(sample_rate, whole_seconds, calibration()) else {
+        return (Vec::new(), None);
+    };
+    let Some(reading) = meter.push(samples) else {
+        return (Vec::new(), None);
+    };
+
+    let bands = reading
+        .bands
+        .iter()
+        .map(|b| BandObservation {
+            band_hz: b.centre_hz,
+            mean_db: b.mean_db,
+            min_db: b.min_db,
+            max_db: b.max_db,
+        })
+        .collect();
+    let broadband = BroadbandObservation {
+        a_weighted_db: reading.a_weighted_db,
+        z_weighted_db: reading.z_weighted_db,
+        calibration_db: calibration().offset_db(),
+    };
+    (bands, Some(broadband))
+}
+
+/// The station's sound-level calibration.
+///
+/// `BIRDNET_SPL_CALIBRATION_DB` is the sound pressure level, in dB SPL, that a
+/// full-scale digital signal corresponds to on this microphone at this gain.
+/// Unset means uncalibrated, and the readings are then dBFS and labelled as
+/// such — which is the honest default, and is enough for every question about
+/// change at one place over time.
+fn calibration() -> Calibration {
+    match std::env::var("BIRDNET_SPL_CALIBRATION_DB")
+        .ok()
+        .and_then(|v| v.trim().parse::<f32>().ok())
+    {
+        Some(db) if db.is_finite() => Calibration::SplOffsetDb(db),
+        _ => Calibration::FullScale,
+    }
 }
 
 /// Consecutive faulty observations before a source is reported.
@@ -242,6 +333,8 @@ fn stream_fault(path: &Path) -> Option<birdnet_core::audio::quality::stream_faul
 pub(super) struct SampleOutcome {
     /// Observations stored, for the log and for tests.
     pub(super) recorded: usize,
+    /// Band-level observations stored.
+    pub(super) bands_recorded: usize,
     /// Fault episodes that changed state this tick.
     pub(super) events: Vec<FaultEvent>,
 }
@@ -251,6 +344,7 @@ fn sample_once(state: &AppState, stream_dir: &Path, watch: &mut FaultWatch) -> S
     let (date, hour) = local_date_hour();
     let mut out = SampleOutcome {
         recorded: 0,
+        bands_recorded: 0,
         events: Vec::new(),
     };
     for (source, path) in newest_segment_per_source(stream_dir) {
@@ -261,13 +355,29 @@ fn sample_once(state: &AppState, stream_dir: &Path, watch: &mut FaultWatch) -> S
         if let Some(event) = watch.observe(&source, stream_fault(&path)) {
             out.events.push(event);
         }
-        let Some(sample) = assess(&path) else {
+        let Some(assessment) = assess(&path) else {
             tracing::debug!(path = %path.display(), "acoustic sample skipped");
             continue;
         };
-        match state.with_db(|conn| record_sample(conn, &date, hour, &source, sample)) {
+        match state.with_db(|conn| record_sample(conn, &date, hour, &source, assessment.level)) {
             Ok(()) => out.recorded += 1,
             Err(e) => tracing::debug!(error = %e, source = %source, "acoustic sample not stored"),
+        }
+        // Stored separately, and a failure here does not cost the quality
+        // observation above: the band levels are the newer and more speculative
+        // of the two measurements, and the fault detection that keeps a sealed
+        // station alive must not depend on them.
+        if let Some(broadband) = assessment.broadband
+            && !assessment.bands.is_empty()
+        {
+            match state.with_db(|conn| {
+                record_observation(conn, &date, hour, &source, &assessment.bands, broadband)
+            }) {
+                Ok(()) => out.bands_recorded += 1,
+                Err(e) => {
+                    tracing::debug!(error = %e, source = %source, "band levels not stored");
+                }
+            }
         }
     }
     out
@@ -382,6 +492,7 @@ pub fn spawn_acoustic_health(
                     (
                         SampleOutcome {
                             recorded: 0,
+                            bands_recorded: 0,
                             events: Vec::new(),
                         },
                         FaultWatch::default(),
@@ -441,6 +552,124 @@ mod tests {
         w.finalize().expect("finalize");
     }
 
+    /// Write a one-second tone segment, for the band-level tests.
+    fn write_tone_segment(dir: &Path, name: &str, hz: f32, amplitude: f32) {
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut w = WavWriter::create(dir.join(name), spec).expect("create wav");
+        for i in 0..48_000_u32 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = i as f32 / 48_000.0;
+            let v = amplitude * (std::f32::consts::TAU * hz * t).sin();
+            #[allow(clippy::cast_possible_truncation)]
+            w.write_sample((v * f32::from(i16::MAX)) as i16)
+                .expect("write sample");
+        }
+        w.finalize().expect("finalize");
+    }
+
+    /// The band levels come out of the same decode as the quality figures, and
+    /// they describe the audio rather than being a constant.
+    #[test]
+    fn a_segment_yields_band_levels_that_follow_its_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_tone_segment(dir.path(), "2026-08-20-birdnet-06:00:00.wav", 1000.0, 0.5);
+
+        let a = assess(&dir.path().join("2026-08-20-birdnet-06:00:00.wav")).expect("assessed");
+        assert!(
+            !a.bands.is_empty(),
+            "a one-second 48 kHz segment must close one meter interval"
+        );
+        assert!(a.broadband.is_some());
+
+        let loudest = a
+            .bands
+            .iter()
+            .max_by(|x, y| x.mean_db.total_cmp(&y.mean_db))
+            .expect("bands");
+        assert!(
+            (loudest.band_hz - 1000.0).abs() < 0.01,
+            "a 1 kHz tone should peak in the 1 kHz band, not the {} Hz one",
+            loudest.band_hz
+        );
+    }
+
+    /// A segment too short to close a one-second window yields no bands, and
+    /// the quality figures still land.
+    ///
+    /// The counterpart to the test above: without it, "bands is non-empty"
+    /// could be satisfied by emitting a band list of floors for anything.
+    #[test]
+    fn a_sub_second_segment_yields_no_bands_but_still_assesses() {
+        let (bands, broadband) = measure_bands(&[0.1_f32; 1000], 48_000);
+        assert!(
+            bands.is_empty() && broadband.is_none(),
+            "1000 samples is 21 ms; the meter cannot close a second from it"
+        );
+        assert!(
+            measure_bands(&[0.1_f32; 1000], 0).0.is_empty(),
+            "a zero sample rate must not panic or invent a reading"
+        );
+    }
+
+    /// End to end: a real segment, through the real sampler, into the real
+    /// table, read back by the real query.
+    ///
+    /// Every piece of this exists separately and is tested separately. What
+    /// this asserts is that they are *connected* — the failure mode being a
+    /// meter that works, a table that works, and nothing calling one from the
+    /// other, which every unit test in both files would still pass.
+    #[test]
+    fn the_sampler_stores_band_levels_the_query_can_read_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_tone_segment(dir.path(), "2026-08-20-birdnet-06:00:00.wav", 1000.0, 0.5);
+
+        let db = tempfile::tempdir().expect("db dir");
+        let state = AppState::new(db.path().join("birds.db")).expect("state");
+        let mut watch = FaultWatch::default();
+        let outcome = sample_once(&state, dir.path(), &mut watch);
+
+        assert_eq!(outcome.recorded, 1, "the quality observation should land");
+        assert_eq!(
+            outcome.bands_recorded, 1,
+            "the band observation should land alongside it"
+        );
+
+        let rows = state
+            .with_db(|conn| birdnet_db::sound_levels::latest_hour(conn, "local"))
+            .expect("read back");
+        assert!(
+            rows.len() >= 25,
+            "a 48 kHz source measures 30 bands; got {}",
+            rows.len()
+        );
+        let peak = rows
+            .iter()
+            .max_by(|a, b| a.mean_db.total_cmp(&b.mean_db))
+            .expect("rows");
+        assert!(
+            (peak.band_hz - 1000.0).abs() < 0.01,
+            "the stored spectrum peaks at {} Hz, not the 1 kHz of the tone written",
+            peak.band_hz
+        );
+
+        let broadband = state
+            .with_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24))
+            .expect("read broadband");
+        assert_eq!(broadband.len(), 1);
+        assert!(
+            broadband[0].z_weighted_db > broadband[0].a_weighted_db - 3.0,
+            "at 1 kHz the A-weighting is 0 dB, so the two broadband figures should be close: \
+             A={:.1} Z={:.1}",
+            broadband[0].a_weighted_db,
+            broadband[0].z_weighted_db
+        );
+    }
+
     #[test]
     fn the_newest_segment_of_each_source_is_the_one_sampled() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -476,10 +705,10 @@ mod tests {
         let quiet = assess(&dir.path().join("2026-08-20-birdnet-quiet-06:00:00.wav"))
             .expect("quiet assessed");
         assert!(
-            quiet.noise_floor_dbfs < loud.noise_floor_dbfs - 10.0,
+            quiet.level.noise_floor_dbfs < loud.level.noise_floor_dbfs - 10.0,
             "a 30x quieter capsule must read far lower: loud={} quiet={}",
-            loud.noise_floor_dbfs,
-            quiet.noise_floor_dbfs
+            loud.level.noise_floor_dbfs,
+            quiet.level.noise_floor_dbfs
         );
     }
 

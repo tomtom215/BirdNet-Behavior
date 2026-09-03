@@ -29,10 +29,95 @@ Expand any source with **▸ tune** to open its control panel:
 - **RTSP transport** (auto / TCP / UDP) for camera sources — auto resolves to the NAT-robust TCP default; force UDP only for a camera that needs it,
 - **Quiet window** — an optional per-source `HH:MM`–`HH:MM` pause in the **station's local time**, e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
 - **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, RTSP keepalive.
+- **Equaliser** — a filter chain of your own, when the toggles are not the right shape. See below.
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
 > Aim for peaks near −6 dB. Gain set too high clips the loudest calls and hurts identification more than a quiet signal does.
+
+## The equaliser
+
+The **high-pass** and **DC offset** toggles are two fixed filters: a corner at
+120 Hz and one at 5 Hz. That is a reasonable compromise for a garden and the
+wrong answer at plenty of sites. A station beside a motorway wants a steeper
+cut than one filter section gives. A station with mains hum wants a *notch* at
+50 or 60 Hz — a high-pass cannot remove hum without also removing everything
+below it, including the low end of a grouse, a bittern or an owl.
+
+The **Equaliser** field takes a chain of filter stages. Type one and the
+response curve under the box redraws as you type, computed from the same
+coefficients that will filter your audio — so the picture cannot disagree with
+what you will hear.
+
+### Writing a chain
+
+One stage per `;`. Each stage is:
+
+```
+kind : frequency [ : q [ : gain [ : passes ] ] ]
+```
+
+| Kind | What it does | Uses gain |
+|------|--------------|-----------|
+| `highpass` | Passes above the corner, cuts below | no |
+| `lowpass` | Passes below the corner, cuts above | no |
+| `bandpass` | Keeps a band, cuts either side | no |
+| `notch` | Cuts a narrow band, leaves the rest | no |
+| `peaking` | A bell: boost or cut around a centre | yes |
+| `lowshelf` | Boost or cut everything below a corner | yes |
+| `highshelf` | Boost or cut everything above a corner | yes |
+
+- **frequency** is in hertz, and must be below half your source's sample rate.
+  A 48 kHz source can filter up to 24 kHz; a 16 kHz source only to 8 kHz. The
+  form refuses a chain the source cannot carry rather than accepting it and
+  silently ignoring it later.
+- **q** is the width. `0.707` (the default) is the gentlest useful shape. Higher
+  is narrower: `20` is a hum notch, `1` is a broad tone control.
+- **gain** is in decibels, positive to boost, negative to cut. Ignored by the
+  kinds that do not use it.
+- **passes** repeats the stage, doubling its slope each time. `highpass:120:0.707:0:2`
+  is twice as steep as `highpass:120`.
+
+### Worked examples
+
+| Chain | For |
+|-------|-----|
+| `highpass:120` | The default high-pass, written out |
+| `highpass:120:0.707:0:2` | Twice as steep — a windy or roadside site |
+| `notch:50:20` | Mains hum, Europe/Asia (use `notch:60:20` in North America) |
+| `notch:50:20; notch:100:20` | Hum and its first harmonic |
+| `highpass:200; lowshelf:400:0.7:-6` | Heavy traffic rumble |
+| `peaking:4000:1:4` | Lift the band where most songbirds sit |
+
+### What a chain replaces
+
+A non-empty chain **replaces** the high-pass and DC-offset toggles. It does not
+stack on top of them, so a chain with your own 120 Hz corner gives you one
+filter, not two. Automatic gain control is unaffected either way: it is a
+dynamic-range process, not a filter.
+
+Clear the field to go back to the toggles.
+
+### One thing worth knowing about the toggles
+
+The two backends do not implement the **high-pass** toggle identically. A local
+microphone gets a one-pole filter (6 dB/octave); an RTSP camera gets ffmpeg's
+two-pole one (12 dB/octave). From the same tick-box, a microphone therefore
+keeps considerably more low-frequency energy:
+
+| | 20 Hz | 30 Hz | 50 Hz | 60 Hz | 80 Hz | 120 Hz |
+|---|---|---|---|---|---|---|
+| Microphone | −15.7 dB | −12.3 dB | −8.3 dB | −7.0 dB | −5.1 dB | −3.0 dB |
+| RTSP camera | −31.1 dB | −24.1 dB | −15.3 dB | −12.3 dB | −7.8 dB | −3.0 dB |
+
+This is left as it is because changing either filter would change what every
+existing station of that kind records. Writing an explicit chain is how you get
+the two to agree — a chain is rendered for both backends from the one
+specification, so a microphone and a camera given the same chain are filtered
+the same way.
+
+> Like the other per-source settings, the chain is read when capture starts —
+> **restart the service** after changing it.
 
 ## Stereo microphones and the Channels setting
 
@@ -155,6 +240,30 @@ Two things follow from this that are worth knowing:
 
 Live audio still needs `ffmpeg` installed: the station uses it to encode the
 stream as MP3 for the browser. `--doctor` warns if it is missing.
+
+## If you cannot hear the high notes
+
+Age-related hearing loss takes the top of the range first, and a great deal of
+warbler, kinglet and treecreeper song lives above 8 kHz — where a station can
+hear it perfectly well and its owner cannot.
+
+The **pitch** control beside the Listen button on `/recordings` shifts the live
+audio **down**, into a band that still works. Choose one of the downward
+presets, and your choice is remembered in that browser: hearing is a property
+of a person, so two people listening to the same station at the same time each
+get their own setting. (There is also one upward option, which is what you want
+for bat calls rather than for hearing loss.)
+
+Changing the pitch reconnects the stream — the shift is applied by the encoder
+on the station, not in your browser — so expect about a second of silence.
+
+For **saved clips** the equivalent is `--freq-shift-hz` (config key
+`FREQ_SHIFT`), applied when the clip is written. The same rule applies:
+**negative** shifts down and is the direction that helps.
+
+> Releases before this one documented that setting backwards, saying a positive
+> value helped high-frequency hearing loss. It does the opposite. If you set a
+> positive value on that advice, negate it.
 
 ## Common pitfalls
 

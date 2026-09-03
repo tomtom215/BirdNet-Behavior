@@ -16,6 +16,13 @@
   "use strict";
 
   var WS_PATH = "/api/v2/ws/detections";
+
+  // The station may be served under a reverse-proxy prefix. The server stamps
+  // it on <body data-base-path>; a URL built here from location.host plus a
+  // literal path is the one kind the server cannot rewrite on the way out.
+  function basePath() {
+    return (document.body && document.body.dataset.basePath) || "";
+  }
   var MIN_DELAY_MS = 1000; // first retry waits up to 1s
   var MAX_DELAY_MS = 30000; // backoff caps at 30s
   var MAX_LIVE_ROWS = 50; // bound the optional live list
@@ -43,7 +50,7 @@
 
   function wsUrl() {
     var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return proto + "//" + window.location.host + WS_PATH;
+    return proto + "//" + window.location.host + basePath() + WS_PATH;
   }
 
   function scheduleReconnect() {

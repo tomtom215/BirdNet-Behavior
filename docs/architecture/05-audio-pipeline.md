@@ -38,6 +38,47 @@ RTSP / PipeWire → ffmpeg -f segment ─────────→ WAV files i
 The entire audio pipeline (symphonia + rubato + realfft) cross-compiles
 to aarch64 with **zero system dependencies**.
 
+### Per-source conditioning: one specification, two backends
+
+Audio reaches this pipeline down two paths that do not share code — an
+in-process tee for a local microphone, ffmpeg for RTSP and PipeWire — and both
+have to apply the operator's conditioning.
+
+`audio_sources.eq_chain` holds one specification
+(`kind:freq[:q[:gain[:passes]]]`, stages joined by `;`) which
+`birdnet_core::audio::eq::EqChain` renders two ways:
+
+| Backend | Rendering | Where |
+|---------|-----------|-------|
+| Teed microphone | `EqProcessor` — RBJ biquads, one per channel | `capture/tee.rs` |
+| ffmpeg (RTSP, `PipeWire`) | `-af` filter fragments | `capture/process.rs` |
+
+`audio::eq`'s `both_backends_describe_the_same_filter` holds the two renderings
+against each other stage by stage, and `the_two_backends_agree_on_real_audio`
+runs a signal through both and compares (skipped where ffmpeg is absent).
+
+An **empty** chain — the default, and every station that has not opened the
+editor — selects the legacy `pipeline_high_pass` / `pipeline_dc_removal`
+booleans instead. Those two are *not* implemented identically by the two
+backends: ffmpeg's `highpass` has two poles and the tee's has one, a gap of
+15.45 dB at 20 Hz. See `AudioPipeline`'s own documentation for the measured
+table and for why that is left standing rather than corrected. Writing an
+explicit chain is the opt-in fix, because inside a chain both backends are
+built from the same coefficients.
+
+`agc` stays a boolean either way: it is a dynamic-range process, not a filter,
+and has no place in a chain of biquads.
+
+### Sound-level metering
+
+A parallel consumer of the same captured audio, in
+`birdnet_core::audio::soundlevel`: ISO 266 third-octave bands from 20 Hz to
+20 kHz, each a three-biquad cascade, with IEC 61672 A-weighting evaluated at
+the exact band centre (`1000·10^(n/10)`) rather than the rounded label.
+`birdnet_db::sound_levels` stores per-band minimum, maximum and accumulated
+linear power, so the interval mean is an **energy** mean rather than a mean of
+decibels.
+
 ## Audio Decoding (symphonia)
 
 Implemented in `crates/birdnet-core/src/audio/decode.rs`.

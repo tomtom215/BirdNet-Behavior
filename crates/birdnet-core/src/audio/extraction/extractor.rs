@@ -59,43 +59,52 @@ impl Extractor {
         }
         let actual_duration_secs = audio.samples.len() as f32 / audio.sample_rate as f32;
 
-        // 2. Calculate safe extraction boundaries against the file's real
-        //    duration, not the operator-configured recording length.
+        // 2. The window the clip wants, in the source segment's own timeline.
+        //    Deliberately *not* clamped to the segment here: a window that
+        //    reaches past either end is resolved against the neighbouring
+        //    segments, which is where that audio actually is. Clamping first —
+        //    which is what this did — silently produced a short clip with the
+        //    call cut off, for two of every five detection windows at the
+        //    default settings. See `super::span`.
         let spacer = (self.config.extraction_length - 3.0) / 2.0;
-        let safe_start = (detection.start - spacer)
-            .max(0.0)
-            .min(actual_duration_secs);
-        let safe_stop = (detection.stop + spacer)
-            .max(safe_start)
-            .min(actual_duration_secs);
+        // `pre_capture_secs` lengthens the clip at the front only; a negative
+        // value would shorten it, which is what `extraction_length` is for, so
+        // it is floored at zero rather than silently inverted.
+        let lead_in = spacer + self.config.pre_capture_secs.max(0.0);
+        let want_start = detection.start - lead_in;
+        let want_stop = (detection.stop + spacer).max(want_start);
+
+        let window = super::span::read_window(source_file, &audio, want_start, want_stop)?;
 
         tracing::debug!(
             species = %detection.common_name,
-            safe_start,
-            safe_stop,
+            want_start,
+            want_stop,
             actual_duration_secs,
+            lead_in_secs = window.lead_in_secs,
+            tail_secs = window.tail_secs,
             configured_recording_length = self.config.recording_length,
             "extracting detection clip"
         );
 
-        // 3. Extract the relevant samples. The clamping above guarantees
-        //    0 ≤ start ≤ stop ≤ samples.len(), but we re-check here so the
-        //    invariant is enforced at the slicing boundary too.
-        let start_sample = (safe_start * audio.sample_rate as f32) as usize;
-        let stop_sample =
-            ((safe_stop * audio.sample_rate as f32) as usize).min(audio.samples.len());
-
-        if start_sample >= stop_sample {
+        if window.samples.is_empty() {
+            // The reported `segment` duration is not decoration: it is the
+            // quantity a mutation of `samples.len() / sample_rate` corrupts,
+            // and naming it here is what lets a test see the difference
+            // between "the detection really is past the end of a 5-second
+            // file" and "the extractor thinks the file is 11 500 000 seconds
+            // long". Both otherwise produce this same empty window.
             return Err(ExtractionError::Decode(format!(
-                "no usable audio range for detection at {start_sample}..{stop_sample} samples \
-                 (file has {} samples, detection at {:.2}s-{:.2}s)",
-                audio.samples.len(),
+                "no usable audio range for detection at {:.2}s-{:.2}s \
+                 (segment is {actual_duration_secs:.2}s, {} samples at {} Hz)",
                 detection.start,
-                detection.stop
+                detection.stop,
+                audio.samples.len(),
+                audio.sample_rate,
             )));
         }
 
-        let clip_samples = &audio.samples[start_sample..stop_sample];
+        let clip_samples = window.samples.as_slice();
 
         // 4. Write the clip FLAT in the output dir (the persistent recordings
         //    dir the web serves from). The filename already encodes species,
@@ -324,6 +333,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
 
@@ -350,6 +360,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
 
@@ -384,6 +395,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
 
@@ -399,11 +411,18 @@ mod tests {
             msg.contains("no usable audio range"),
             "error should mention 'no usable audio range'; got: {msg}"
         );
-        // Pin the exact reported range — this is what tightens the
-        // duration-divide mutation to fail.
+        // Pin the reported segment duration — this is what tightens the
+        // duration-divide mutation to fail. Swapping `/` for `*` in
+        // `samples.len() / sample_rate` makes the extractor believe a
+        // five-second file is 11 520 000 000 seconds long; the window is
+        // empty either way, so only this number tells the two apart.
         assert!(
-            msg.contains("240000..240000 samples"),
-            "expected the past-EOF clamp to report 240000..240000, got: {msg}"
+            msg.contains("segment is 5.00s"),
+            "expected the error to report a 5.00s segment, got: {msg}"
+        );
+        assert!(
+            msg.contains("240000 samples at 48000 Hz"),
+            "expected the error to report the raw sample count too, got: {msg}"
         );
     }
 
@@ -531,6 +550,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -561,6 +581,7 @@ mod tests {
             extraction_length: 3.0, // spacer = 0
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -609,6 +630,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -636,6 +658,115 @@ mod tests {
         assert!(
             drift <= 1,
             "pulse drifted: expected offset ~{expected_clip_offset} in clip, found at {idx} (drift {drift})"
+        );
+    }
+
+    /// `pre_capture_secs` lengthens the clip at the **front**, and by exactly
+    /// the amount asked for.
+    ///
+    /// Every other test in this file sets `pre_capture_secs: 0.0`, which makes
+    /// `spacer + pre_capture` and `spacer - pre_capture` the same expression —
+    /// so the sign of that `+` was never exercised, and cargo-mutants said so
+    /// by flipping it and watching all 11 mutants but one get caught. A
+    /// setting with no non-zero coverage anywhere is a setting nobody has
+    /// tested, whatever the surrounding suite reports.
+    ///
+    /// Driven with a sentinel pulse, like `extraction_offset_matches_safe_start`
+    /// above: a length assertion alone would be satisfied by a clip that grew
+    /// at the wrong end, which is the other half of what "pre-capture" means.
+    #[test]
+    fn pre_capture_lengthens_the_clip_at_the_front() {
+        use hound::WavWriter;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+
+        // 30 s of zeros except a single +1 sample at exactly t = 11.5 s.
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut w = WavWriter::create(&src, spec).unwrap();
+        let pulse_idx = 48_000 * 23 / 2; // 11.5 s
+        for i in 0..48_000 * 30 {
+            w.write_sample::<i16>(if i == pulse_idx { 16_384 } else { 0 })
+                .unwrap();
+        }
+        w.finalize().unwrap();
+
+        // extraction_length 6.0 → spacer 1.5; pre_capture 1.0 → lead-in 2.5.
+        // Detection [10, 13] → clip spans 7.5 .. 14.5 s = 7.0 s, and the pulse
+        // at 11.5 s lands 4.0 s into it.
+        //
+        // Flip that `+` to `-` and the lead-in is 0.5: the clip spans
+        // 9.5 .. 14.5 = 5.0 s and the pulse lands 2.0 s in. Both numbers below
+        // move, which is what makes this a gate rather than a smoke test.
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: 1.0,
+        };
+        let out = Extractor::new(cfg)
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let mut reader = hound::WavReader::open(&out).expect("WAV reader");
+        let duration = reader.duration();
+        assert!(
+            duration.abs_diff(336_000) <= 1,
+            "expected ~336_000 samples (7 s @ 48 kHz: 6 s + 1 s pre-capture), got {duration}"
+        );
+
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<Result<_, _>>()
+            .expect("read samples");
+        let (idx, _) = samples
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, s)| s.unsigned_abs())
+            .expect("samples non-empty");
+        let expected: usize = 192_000; // 4.0 s × 48 000
+        assert!(
+            idx.abs_diff(expected) <= 1,
+            "the extra second must be added before the detection, not after: \
+             expected the pulse ~{expected} samples in, found it at {idx}"
+        );
+    }
+
+    /// A negative `pre_capture_secs` is floored at zero rather than shortening
+    /// the clip — `extraction_length` is the setting for that. The counterpart
+    /// to the test above: without it, `.max(0.0)` could be deleted and nothing
+    /// would notice.
+    #[test]
+    fn a_negative_pre_capture_does_not_shorten_the_clip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: -2.0,
+        };
+        let out = Extractor::new(cfg)
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let duration = hound::WavReader::open(&out).expect("WAV reader").duration();
+        assert!(
+            duration.abs_diff(288_000) <= 1,
+            "a negative pre-capture must be ignored, leaving the plain 6 s clip \
+             (~288_000 samples @ 48 kHz), got {duration}"
         );
     }
 
@@ -736,6 +867,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Mp3, // needs_conversion = true
             freq_shift_hz: 0,                // no freq shift
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -807,6 +939,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Mp3,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor_base = Extractor::new(cfg_base);
         let base = extractor_base
@@ -822,6 +955,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Mp3,
             freq_shift_hz: 500,
+            pre_capture_secs: 0.0,
         };
         let extractor_shift = Extractor::new(cfg_shift);
         let shifted = extractor_shift
@@ -855,6 +989,7 @@ mod tests {
             extraction_length: 6.0,
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
         };
         let extractor = Extractor::new(cfg);
         let out = extractor

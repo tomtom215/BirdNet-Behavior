@@ -148,6 +148,39 @@ fn inject_htmx_config(html: &str) -> String {
     html.replacen("<head>", &format!("<head>{HTMX_CONFIG_META}"), 1)
 }
 
+/// Publish the base path to the browser as `<body data-base-path="…">`.
+///
+/// The rewriting pass fixes URLs that are *written* in the markup. It cannot
+/// fix one a script assembles at run time, and this application has three:
+/// `live-detections.js` and the two inline spectrogram sockets build
+/// `location.host` plus a literal path. They read this attribute instead.
+///
+/// Stamped here rather than added to each `<body>` tag because there is no one
+/// layout: `templates/layout.html`, the login and share shells, the admin
+/// shell, the kiosk, the audio player and the log viewer are seven independent
+/// full-page documents, and a new one would silently miss it.
+///
+/// Nothing is added when no base path is set, so a station serving from the
+/// root ships exactly the bytes it shipped before.
+fn inject_base_path(html: &str, base: &crate::base_path::BasePath) -> String {
+    if base.is_empty() {
+        return html.to_owned();
+    }
+    // `<body` rather than `<body>`: the tag may already carry attributes.
+    html.find("<body").map_or_else(
+        || html.to_owned(),
+        |pos| {
+            let cut = pos + "<body".len();
+            format!(
+                r#"{} data-base-path="{}"{}"#,
+                &html[..cut],
+                base.as_str(),
+                &html[cut..]
+            )
+        },
+    )
+}
+
 /// Attach defence-in-depth response headers to every response.
 ///
 /// Added as the outermost layer so it decorates errors (401/404/429), static
@@ -160,9 +193,21 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     // page renderer threads it, so a new page or admin shell can't silently
     // ship an un-nonced inline script.
     let nonce = generate_nonce();
+    let base = crate::base_path::current();
 
     let res = next.run(req).await;
     let (mut parts, body) = res.into_parts();
+
+    // A redirect's target is not HTML and never reaches the body pass. Missed,
+    // it sends the browser out of the prefix on every login and every form
+    // that redirects — the single most visible way base-path support fails.
+    if !base.is_empty()
+        && let Some(loc) = parts.headers.get(header::LOCATION)
+        && let Ok(text) = loc.to_str()
+        && let Ok(v) = HeaderValue::from_str(&crate::base_path::rewrite_location(text, base))
+    {
+        parts.headers.insert(header::LOCATION, v);
+    }
 
     // Only rewrite HTML. Non-HTML responses — the audio `/stream`, the live
     // WebSocket upgrade, JSON, images, static assets — pass through untouched
@@ -184,6 +229,13 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
                 let with_applier = inject_dyn_style_applier(&configured);
                 let scripted = inject_script_nonce(&with_applier, &nonce);
                 let stamped = inject_style_nonce(&scripted, &nonce);
+                // The base-path prefix rides this pass rather than making its
+                // own: the body is already buffered and already walked, so the
+                // rewrite is free, and every page written after this change
+                // gets it without remembering to ask. A no-op — not even a
+                // scan — when no base path is configured.
+                let stamped = crate::base_path::rewrite_html(&stamped, base);
+                let stamped = inject_base_path(&stamped, base);
                 // The body length changed; let the stack recompute it.
                 parts.headers.remove(header::CONTENT_LENGTH);
                 axum::body::Body::from(stamped)

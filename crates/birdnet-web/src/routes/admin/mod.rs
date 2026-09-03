@@ -35,6 +35,7 @@ pub mod audio;
 pub mod backup;
 pub mod backup_recovery;
 pub mod doctor;
+pub mod eq_curve;
 pub mod images;
 pub mod logs;
 pub mod migration;

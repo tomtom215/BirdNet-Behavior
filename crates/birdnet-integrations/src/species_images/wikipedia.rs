@@ -198,7 +198,11 @@ impl ImageProvider for WikipediaClient {
 }
 
 /// Minimal percent-encoding for URL query parameter values.
-fn url_encode(s: &str) -> String {
+///
+/// `pub(super)` so the Flickr provider shares one encoder rather than carrying
+/// a second copy of the same table. It lives here because this is where it was
+/// written and moving it would make the diff about the move.
+pub(super) fn url_encode(s: &str) -> String {
     let mut encoded = String::with_capacity(s.len() * 2);
     for byte in s.bytes() {
         match byte {

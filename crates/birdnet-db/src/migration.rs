@@ -1442,6 +1442,119 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
         CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
     },
+    Migration {
+        version: 37,
+        description: "Record third-octave band levels, so the station measures its soundscape",
+        // ## What this stores that `audio_levels` does not
+        //
+        // `audio_levels` keeps one broadband noise floor and SNR per source per
+        // hour, which is enough to notice a microphone going deaf and not
+        // enough to say what changed. This keeps a level per **band**, so the
+        // shape of the change is visible: the top bands alone (a failing
+        // capsule), one band alone (an oscillating preamp), everything under
+        // 200 Hz (wind, or a mount resonating).
+        //
+        // ## Why the band is a column and not a row per band
+        //
+        // A row per (date, hour, source, band) is 30 rows an hour per source
+        // rather than one — about 260 000 rows a year for a single-microphone
+        // station. That is still small, and it is the shape that survives the
+        // band set changing: a station running at 22.05 kHz measures 27 bands
+        // and one at 48 kHz measures 30, so a fixed 30-column table would carry
+        // three columns that are NULL for some stations and not others, and a
+        // 32 kHz station added later would need a migration to widen it.
+        //
+        // Accumulated the same way `audio_levels` is — running sums plus a
+        // count, folded by `INSERT ... ON CONFLICT DO UPDATE` — so an hour is
+        // one row that each observation updates in place, and a restart mid-
+        // hour loses nothing.
+        //
+        // `mean_power_sum` rather than `mean_db_sum`: decibels are logarithmic
+        // and the mean of the interval must be an energy mean (see
+        // `birdnet_core::audio::soundlevel::BandLevel::mean_db`). Summing the
+        // dB values and dividing would answer a different question, ~43 dB
+        // away from this one for a band with a transient in it.
+        up_sql: "CREATE TABLE IF NOT EXISTS sound_levels (
+            date            TEXT    NOT NULL,
+            hour            INTEGER NOT NULL,
+            source          TEXT    NOT NULL,
+            band_hz         REAL    NOT NULL,
+            samples         INTEGER NOT NULL,
+            mean_power_sum  REAL    NOT NULL,
+            min_db          REAL    NOT NULL,
+            max_db          REAL    NOT NULL,
+            PRIMARY KEY (date, hour, source, band_hz)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_sound_levels_date ON sound_levels(date);
+
+        CREATE TABLE IF NOT EXISTS sound_level_broadband (
+            date            TEXT    NOT NULL,
+            hour            INTEGER NOT NULL,
+            source          TEXT    NOT NULL,
+            samples         INTEGER NOT NULL,
+            a_power_sum     REAL    NOT NULL,
+            z_power_sum     REAL    NOT NULL,
+            calibration_db  REAL    NOT NULL DEFAULT 0.0,
+            PRIMARY KEY (date, hour, source)
+        ) WITHOUT ROWID;",
+    },
+    Migration {
+        version: 38,
+        description: "Remember which species the station has confirmed present, for dynamic thresholds",
+        // A species confirmed present at a site gets an easier threshold for a
+        // while (`birdnet_core::detection::dynamic_threshold`). Held in memory
+        // by the event processor; persisted here so a restart does not forget
+        // what the site contains — a station that reboots nightly for a backup
+        // would otherwise never accumulate anything.
+        //
+        // `expires_at_ms` is an absolute epoch, not a duration: the lease is
+        // "until", and storing a remaining-time would make a restart's clock
+        // skew extend every lease it loaded.
+        //
+        // No CHECK on `level`. The vocabulary is the Rust type's, and a CHECK
+        // here would be a second copy of it that could disagree — which is how
+        // the quarantine `reason` constraint came to be silently dropping rows
+        // (migration 36).
+        up_sql: "CREATE TABLE IF NOT EXISTS dynamic_thresholds (
+            sci_name          TEXT    PRIMARY KEY,
+            level             INTEGER NOT NULL,
+            confirmations     INTEGER NOT NULL,
+            expires_at_ms     INTEGER NOT NULL,
+            first_learned_ms  INTEGER NOT NULL,
+            last_confirmed_ms INTEGER NOT NULL
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_dynamic_thresholds_expiry
+            ON dynamic_thresholds(expires_at_ms);",
+    },
+    Migration {
+        version: 39,
+        description: "Give each audio source a real filter chain instead of three fixed switches",
+        // `pipeline_high_pass` and `pipeline_dc_removal` are a high-pass at a
+        // fixed 120 Hz and one at a fixed 5 Hz. That is a compromise chosen for
+        // a garden, and it is wrong in a different direction at most sites: a
+        // station beside a motorway needs a steeper cut than one section, and a
+        // station with mains hum needs a *notch*, which no high-pass can
+        // provide without also removing everything below it.
+        //
+        // `eq_chain` holds the specification parsed by
+        // `birdnet_core::audio::eq::EqChain` — `kind:freq[:q[:gain[:passes]]]`,
+        // stages separated by `;`. Empty means "use the two boolean columns",
+        // so this migration changes nothing on its own and every existing
+        // station keeps hearing exactly what it heard before. The columns stay
+        // rather than being dropped: they are the fallback, and a chain an
+        // operator later clears returns to them.
+        //
+        // Text rather than JSON. The value is short, an operator edits it by
+        // hand in the admin form, and a parse error has to name the offending
+        // stage — which a JSON blob makes harder, not easier.
+        //
+        // `pipeline_agc` is untouched. It is a dynamic-range process, not a
+        // filter, and it has no place in a chain of biquads.
+        up_sql: "ALTER TABLE audio_sources
+                     ADD COLUMN eq_chain TEXT NOT NULL DEFAULT '';",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2601,6 +2714,48 @@ mod tests {
             rule.action,
             crate::alert_rules::AlertAction::Webhook { auth: None, .. }
         ));
+    }
+
+    #[test]
+    fn migration_39_leaves_an_existing_source_on_its_old_filter_path() {
+        // The no-op-upgrade guarantee. A station that upgrades mid-season must
+        // keep hearing exactly what it heard yesterday: the same two fixed
+        // high-passes it had before the chain existed. An empty `eq_chain` is
+        // what selects that fallback, so the default has to be `''` and not,
+        // say, a chain that reproduces the two switches — the latter would
+        // look equivalent and would not be, because the boolean columns are
+        // still editable and would then be silently overridden.
+        let conn = memory_db();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 39) {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO audio_sources (id, kind, device_id, pipeline_high_pass)
+             VALUES ('legacy_mic', 'usb-alsa', 'plughw:1,0', 1);",
+        )
+        .unwrap();
+
+        let m39 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 39)
+            .expect("migration 39 exists");
+        conn.execute_batch(m39.up_sql).unwrap();
+
+        let chain: String = conn
+            .query_row(
+                "SELECT eq_chain FROM audio_sources WHERE id = 'legacy_mic'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(chain, "", "a pre-existing source must carry no chain");
+
+        // And the row still loads through the store, with its switches intact.
+        let source = crate::audio_sources::AudioSourceStore::get(&conn, "legacy_mic")
+            .unwrap()
+            .expect("the source survived the migration");
+        assert_eq!(source.eq_chain, "");
+        assert!(source.pipeline.high_pass);
     }
 
     #[test]

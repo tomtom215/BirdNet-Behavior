@@ -247,6 +247,81 @@ pub(super) fn build_model_config(sensitivity: f32, confidence_threshold: f32) ->
     }
 }
 
+/// Read a yes/no setting written by hand in a config file.
+///
+/// Three outcomes, not two: `Some(true)`, `Some(false)`, and `None` for a value
+/// that is neither. The caller falls back to its default on `None` *and* warns,
+/// which is the whole reason the third case exists — an operator who writes
+/// `BIRDNET_DYNAMIC_THRESHOLD=treu` currently gets a silently disabled feature
+/// and nothing in the log to explain it.
+///
+/// A named function rather than a closure because the distinction is otherwise
+/// unobservable: for a setting whose default is `false`, `Some(false)` and
+/// `None` produce the same configuration, so cargo-mutants could delete the
+/// entire off-arm and no test could tell. Here the two are different return
+/// values and the arm can be gated directly.
+#[must_use]
+pub(super) fn parse_flag(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Resolve the dynamic-threshold configuration from the environment.
+///
+/// Every key is optional and off is the default. A malformed value falls back
+/// to the default for that field rather than failing the start: a station that
+/// mistyped a threshold should keep detecting birds.
+#[must_use]
+pub(super) fn resolve_dynamic_threshold(
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig {
+    use birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig;
+    let defaults = DynamicThresholdConfig::default();
+
+    let flag = |key: &str| -> Option<bool> {
+        let raw = std::env::var(key)
+            .ok()
+            .or_else(|| config.and_then(|c| c.get(key).map(str::to_owned)))?;
+        let parsed = parse_flag(&raw);
+        if parsed.is_none() {
+            tracing::warn!(
+                key,
+                value = %raw,
+                "not a yes/no value; ignoring it and using the default"
+            );
+        }
+        parsed
+    };
+    let number = |key: &str| -> Option<f32> {
+        std::env::var(key)
+            .ok()
+            .or_else(|| config.and_then(|c| c.get(key).map(str::to_owned)))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+    };
+
+    DynamicThresholdConfig {
+        enabled: flag("BIRDNET_DYNAMIC_THRESHOLD").unwrap_or(defaults.enabled),
+        trigger: number("BIRDNET_DYNAMIC_THRESHOLD_TRIGGER")
+            .filter(|v| (0.0..=1.0).contains(v))
+            .unwrap_or(defaults.trigger),
+        min: number("BIRDNET_DYNAMIC_THRESHOLD_MIN")
+            .filter(|v| (0.0..=1.0).contains(v))
+            .unwrap_or(defaults.min),
+        valid_hours: number("BIRDNET_DYNAMIC_THRESHOLD_HOURS")
+            .filter(|v| *v >= 1.0 && *v <= 8760.0)
+            .map_or(defaults.valid_hours, |v| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                {
+                    v as u32
+                }
+            }),
+    }
+}
+
 /// Build the [`SpeciesFilterConfig`] used by the metadata-model species filter.
 ///
 /// `lists` are the operator's include/exclude entries from `/admin/species`.
@@ -379,6 +454,18 @@ pub(super) fn build_extraction_config(
     )
     .clamp(1.0, 60.0);
 
+    // Extra lead-in beyond the symmetric spacer. Clamped rather than validated
+    // away: a value longer than a whole segment cannot be satisfied even with
+    // boundary spanning (it would need two predecessors), and 30 seconds is
+    // already far beyond any call this is for.
+    // No CLI flag: this is a per-station tuning choice rather than something
+    // an operator flips per run, so it lives in the config file alone.
+    let pre_capture_secs = config
+        .and_then(|c| c.get_parsed::<f32>("PRE_CAPTURE_SECS").ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
+        .clamp(0.0, 30.0);
+
     ExtractionConfig {
         extraction_length,
         target_format: AudioFormat::parse(&cli.audio_format),
@@ -386,6 +473,7 @@ pub(super) fn build_extraction_config(
         output_dir: recordings_dir.to_path_buf(),
         recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz,
+        pre_capture_secs,
     }
 }
 
@@ -459,6 +547,147 @@ mod tests {
     use super::*;
     use crate::daemon::test_support::thresholds;
     use crate::helpers::test_support::{cli_with_explicit, config_with};
+
+    // ── resolve_dynamic_threshold ──────────────────────────────────────
+    //
+    // Untested until cargo-mutants said so: six mutants on this function's
+    // changed lines and nothing to catch any of them. Driven through `config`
+    // rather than the environment — the function prefers an env var, but
+    // `std::env::set_var` is `unsafe` in edition 2024 and `unsafe` is forbidden
+    // workspace-wide, and setting a process-global from a concurrent test is
+    // the race that made it `unsafe`. No env var is set in these tests, so the
+    // config branch is the one taken.
+
+    /// Off, with the documented defaults, when nothing is configured.
+    #[test]
+    fn the_dynamic_threshold_is_off_unless_asked_for() {
+        let cfg = config_with(&[]);
+        let resolved = resolve_dynamic_threshold(Some(&cfg));
+        let defaults =
+            birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default();
+        assert!(!resolved.enabled, "the feature must default to off");
+        assert_eq!(resolved, defaults, "and to its documented defaults");
+        assert_eq!(
+            resolve_dynamic_threshold(None),
+            defaults,
+            "no config at all is the same as an empty one"
+        );
+    }
+
+    /// Every spelling of the on/off flag an operator might write.
+    ///
+    /// The two match arms are separate mutants: delete the true arm and the
+    /// feature can never be switched on; delete the false arm and it can never
+    /// be switched off again once written.
+    #[test]
+    fn every_spelling_of_the_flag_is_understood() {
+        for on in ["1", "true", "yes", "on", "TRUE", " On "] {
+            let cfg = config_with(&[("BIRDNET_DYNAMIC_THRESHOLD", on)]);
+            assert!(
+                resolve_dynamic_threshold(Some(&cfg)).enabled,
+                "{on:?} should enable the feature"
+            );
+        }
+        for off in ["0", "false", "no", "off", "OFF"] {
+            let cfg = config_with(&[("BIRDNET_DYNAMIC_THRESHOLD", off)]);
+            assert!(
+                !resolve_dynamic_threshold(Some(&cfg)).enabled,
+                "{off:?} should disable the feature"
+            );
+        }
+        // A value that is neither falls back to the default rather than
+        // guessing — a mistyped flag must not silently turn the feature on.
+        let cfg = config_with(&[("BIRDNET_DYNAMIC_THRESHOLD", "maybe")]);
+        assert!(!resolve_dynamic_threshold(Some(&cfg)).enabled);
+    }
+
+    /// The three outcomes of the yes/no parser, told apart.
+    ///
+    /// `resolve_dynamic_threshold` cannot distinguish `Some(false)` from
+    /// `None` — its default is already `false`, so both produce the same
+    /// config, and deleting the whole off-arm was invisible to every test.
+    /// Here the two are different values, which is also what lets the caller
+    /// warn about a typo instead of silently disabling the feature.
+    #[test]
+    fn a_yes_no_value_is_parsed_into_three_outcomes() {
+        for on in ["1", "true", "yes", "on", "TRUE", " On "] {
+            assert_eq!(parse_flag(on), Some(true), "{on:?}");
+        }
+        for off in ["0", "false", "no", "off", "OFF", " Off "] {
+            assert_eq!(parse_flag(off), Some(false), "{off:?}");
+        }
+        for neither in ["treu", "", "  ", "2", "maybe", "y", "n"] {
+            assert_eq!(
+                parse_flag(neither),
+                None,
+                "{neither:?} is not a yes/no value and must be reported as such, \
+                 not quietly read as off"
+            );
+        }
+    }
+
+    /// The lease length is bounded to 1 hour .. 1 year, and both ends of the
+    /// range are asserted along with a value inside it.
+    ///
+    /// `*v >= 1.0 && *v <= 8760.0` carries three mutants — the `&&`, the `>=`
+    /// and the `<=` — and each one admits a lease the station cannot use: zero
+    /// hours makes every learned level expire instantly, and a decade-long one
+    /// never expires at all.
+    #[test]
+    fn the_lease_length_is_bounded_at_both_ends() {
+        let hours = |v: &str| {
+            let cfg = config_with(&[("BIRDNET_DYNAMIC_THRESHOLD_HOURS", v)]);
+            resolve_dynamic_threshold(Some(&cfg)).valid_hours
+        };
+        let default_hours =
+            birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default()
+                .valid_hours;
+
+        assert_eq!(hours("48"), 48, "a value inside the range is taken");
+        assert_eq!(hours("1"), 1, "1 hour is the lower bound, inclusive");
+        assert_eq!(
+            hours("8760"),
+            8760,
+            "8760 hours is the upper bound, inclusive"
+        );
+
+        for rejected in ["0", "0.5", "-5", "8761", "100000", "nonsense", "NaN"] {
+            assert_eq!(
+                hours(rejected),
+                default_hours,
+                "{rejected:?} is outside the usable range and must fall back"
+            );
+        }
+    }
+
+    /// `trigger` and `min` are confidences, so both are held to 0..=1.
+    #[test]
+    fn the_confidences_are_held_to_their_range() {
+        let resolved = |k: &str, v: &str| {
+            let cfg = config_with(&[(k, v)]);
+            resolve_dynamic_threshold(Some(&cfg))
+        };
+        let defaults =
+            birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default();
+
+        assert!(
+            (resolved("BIRDNET_DYNAMIC_THRESHOLD_TRIGGER", "0.85").trigger - 0.85).abs() < 1e-6
+        );
+        assert!((resolved("BIRDNET_DYNAMIC_THRESHOLD_MIN", "0.25").min - 0.25).abs() < 1e-6);
+
+        for bad in ["1.5", "-0.1", "nonsense"] {
+            assert!(
+                (resolved("BIRDNET_DYNAMIC_THRESHOLD_TRIGGER", bad).trigger - defaults.trigger)
+                    .abs()
+                    < 1e-6,
+                "trigger {bad:?} must fall back to the default"
+            );
+            assert!(
+                (resolved("BIRDNET_DYNAMIC_THRESHOLD_MIN", bad).min - defaults.min).abs() < 1e-6,
+                "min {bad:?} must fall back to the default"
+            );
+        }
+    }
     use clap::Parser;
 
     // ── settings reach the extractor ────────────────────────────────────

@@ -72,8 +72,39 @@ impl std::error::Error for ServerError {}
 /// `pwd_argon2`), and the middleware open-bypasses when no admin password
 /// is configured — matching the fresh-Pi "no password = open admin" contract.
 pub fn build_router(state: AppState) -> Router {
-    // Rate limiter: 30 req/s sustained, 60-request burst per IP.
-    build_router_with_rate_limit(state, RateLimitConfig::default())
+    // Rate limiter: 30 req/s sustained, 60-request burst per IP, keyed on the
+    // client address that `BIRDNET_TRUSTED_PROXIES` resolves.
+    build_router_with_rate_limit(
+        state,
+        RateLimitConfig {
+            trusted_proxies: trusted_proxies_from_env(),
+            ..RateLimitConfig::default()
+        },
+    )
+}
+
+/// Read the trusted-proxy list from `BIRDNET_TRUSTED_PROXIES`.
+///
+/// Unset falls back to [`crate::client_ip::TrustedProxies::default`] (loopback plus the private
+/// ranges). A value that does not parse is **not** silently ignored: it logs
+/// the offending entry and falls back to loopback only, which is the safe
+/// direction — a station whose trust list did not load records real peer
+/// addresses and rate-limits each separately, rather than believing headers on
+/// the strength of a list that failed to build.
+fn trusted_proxies_from_env() -> crate::client_ip::TrustedProxies {
+    let Ok(spec) = std::env::var("BIRDNET_TRUSTED_PROXIES") else {
+        return crate::client_ip::TrustedProxies::default();
+    };
+    match crate::client_ip::TrustedProxies::parse(&spec) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "BIRDNET_TRUSTED_PROXIES did not parse; trusting loopback only.                  Forwarded client-IP headers from any other peer will be ignored."
+            );
+            crate::client_ip::TrustedProxies::loopback_only()
+        }
+    }
 }
 
 /// Build the router with an explicit rate-limit configuration.
@@ -91,6 +122,13 @@ pub fn build_router(state: AppState) -> Router {
 /// default, with no `429`. Real clients are nowhere near the limit, so the
 /// production numbers stay exactly as they were.
 pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig) -> Router {
+    // Read once, here, for the same reason `trusted_proxies_from_env` is read
+    // here: every entry point that builds a router — the daemon, `start`, the
+    // screenshot fixture, the test harnesses — then agrees on the prefix
+    // without each remembering to install it. `init` is idempotent, so a
+    // process that builds several routers keeps the first answer.
+    crate::base_path::init(crate::base_path::from_env());
+
     let limiter = Arc::new(RateLimiter::new(rate_limit));
 
     // Gate `/admin/*` behind the v2 cookie middleware. The middleware
@@ -113,7 +151,7 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
     // cross-site state-changing requests. The security-headers layer is added
     // last so it decorates *every* response — 401/404/429, static files, and
     // handler output alike.
-    router
+    let router = router
         .layer(axum::middleware::from_fn(
             crate::security::csrf_guard_middleware,
         ))
@@ -141,7 +179,50 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
         // wire bytes looked plausible (`1f ef bf bd 08 …`, right length,
         // correct `Content-Encoding`) and no browser could decode a single
         // page. Compression must see the finished body, so it goes last.
-        .layer(CompressionLayer::new().compress_when(should_compress))
+        .layer(CompressionLayer::new().compress_when(should_compress));
+
+    mount(router)
+}
+
+/// Mount the finished router under the configured base path.
+///
+/// `Router::nest` and not a manual prefix strip: nesting rewrites the path
+/// axum matches on, so every route, extractor and `nest("/api/v2", …)` inside
+/// keeps working with the paths it was written with. Nothing below this line
+/// knows the prefix exists.
+///
+/// # The two routes beside the nest
+///
+/// Both were found by probing axum 0.8.9 rather than assumed, and each is a
+/// URL a real visitor produces:
+///
+/// * **`/`** — the host root. Without this an operator who visits
+///   `https://home.example/` gets a bare 404 from the station, which reads as
+///   "the station is down" rather than "you want the /birdnet path".
+/// * **`{base}/`** — the prefix *with* a trailing slash. `nest("/b", …)`
+///   matches `/b` and `/b/x` but **not** `/b/` — measured, in the version this
+///   workspace pins. That is the URL a browser shows after any link to the
+///   root, and the one most proxies forward, so without this route the feature
+///   fails on the first page an operator opens.
+///
+/// The trailing-slash route redirects rather than serving, so there is one
+/// canonical URL for the station root instead of two that a cache and a
+/// relative link would treat differently.
+fn mount(router: Router) -> Router {
+    let base = crate::base_path::current();
+    if base.is_empty() {
+        return router;
+    }
+    let target = base.as_str().to_owned();
+    tracing::info!(base_path = %target, "serving under a reverse-proxy base path");
+    let to_root = move || {
+        let target = target.clone();
+        async move { axum::response::Redirect::temporary(&target) }
+    };
+    Router::new()
+        .route("/", axum::routing::get(to_root.clone()))
+        .route(&format!("{}/", base.as_str()), axum::routing::get(to_root))
+        .nest(base.as_str(), router)
 }
 
 /// Content types worth compressing, as prefixes matched against `Content-Type`.
@@ -361,7 +442,7 @@ mod tests {
             crate::rate_limit::RateLimitConfig {
                 requests_per_second: 100_000.0,
                 burst_capacity: 100_000,
-                trust_x_forwarded_for: false,
+                trusted_proxies: crate::client_ip::TrustedProxies::default(),
             },
         );
         assert!(

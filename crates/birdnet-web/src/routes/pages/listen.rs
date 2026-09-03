@@ -100,6 +100,7 @@ mod tests {
             rtsp_transport: RtspTransport::Auto,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
+            eq_chain: String::new(),
             disabled_at: if disabled {
                 Some("2026-01-01".to_string())
             } else {

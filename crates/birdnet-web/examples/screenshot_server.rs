@@ -757,7 +757,7 @@ async fn main() {
         RateLimitConfig {
             requests_per_second: 100_000.0,
             burst_capacity: 100_000,
-            trust_x_forwarded_for: false,
+            trusted_proxies: birdnet_web::client_ip::TrustedProxies::default(),
         },
     );
 

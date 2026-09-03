@@ -110,7 +110,30 @@ pub(super) struct ResolvedSource {
     /// from CLI flags has no row to read toggles from, so it gets the
     /// conditioning defaults.
     pub(super) pipeline: birdnet_core::audio::capture::AudioPipeline,
+    /// The operator's filter chain for this source, replacing the two fixed
+    /// high-passes in `pipeline` when it is non-empty. Empty for a CLI-configured
+    /// source, and for every station that has not opened the equaliser.
+    pub(super) eq_chain: birdnet_core::audio::eq::EqChain,
     pub(super) quiet: Option<supervisor::QuietWindow>,
+}
+
+/// Read a stored `eq_chain` specification, degrading to "no chain" on a bad one.
+///
+/// A malformed specification must not silence a station. The insert/update path
+/// validates before storing, so reaching this with a bad value means the row was
+/// written by an older build or edited outside the app — either way the source
+/// keeps recording with its pipeline flags, and the log says which source and
+/// which stage.
+fn parse_eq_chain(spec: &str, source_id: &str) -> birdnet_core::audio::eq::EqChain {
+    birdnet_core::audio::eq::EqChain::parse(spec).unwrap_or_else(|e| {
+        tracing::warn!(
+            source = source_id,
+            stage = %e.stage,
+            reason = %e.reason,
+            "stored equaliser chain is malformed; falling back to the pipeline flags"
+        );
+        birdnet_core::audio::eq::EqChain::default()
+    })
 }
 
 /// Map the stored per-source toggles onto the core type the capture path
@@ -244,6 +267,7 @@ pub(super) fn resolve_sources_from_db(
             source,
             gain_db: row.gain_db,
             pipeline: map_pipeline(row.pipeline),
+            eq_chain: parse_eq_chain(&row.eq_chain, &row.id),
             quiet: parse_quiet_window(row.schedule_quiet.as_ref()),
         });
     }
@@ -751,6 +775,7 @@ mod tests {
             rtsp_transport: RtspTransport::Auto,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
+            eq_chain: String::new(),
             disabled_at: None,
             created_at: "2026-05-01".to_string(),
             updated_at: "2026-05-01".to_string(),
@@ -1003,6 +1028,72 @@ mod tests {
                 CaptureSource::PipeWire { .. } => {}
             }
         }
+    }
+
+    /// The stored specification has to survive the trip from the row to the
+    /// capture config, or the editor is a text box that does nothing.
+    #[test]
+    fn resolve_from_db_carries_the_stored_eq_chain() {
+        use birdnet_db::audio_sources::{AudioSourcePatch, AudioSourceStore};
+        let state = fresh_state();
+        insert_row(&state, "src_a", SourceKind::UsbAlsa, "plughw:1,0", false);
+        state
+            .with_db(|conn| {
+                AudioSourceStore::update(
+                    conn,
+                    "src_a",
+                    &AudioSourcePatch {
+                        eq_chain: Some("highpass:80; notch:50:20".to_string()),
+                        ..AudioSourcePatch::default()
+                    },
+                )
+            })
+            .expect("store the chain");
+
+        let resolved = resolve_sources_from_db(&state).expect("non-empty DB result");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].eq_chain.stages().len(), 2);
+        assert_eq!(resolved[0].eq_chain.to_spec(), "highpass:80; notch:50:20");
+    }
+
+    /// A row with no chain resolves to the empty chain, which is what selects
+    /// the pipeline flags downstream. The counterpart to the test above: with
+    /// only that one, "always returns the stored text" and "always returns a
+    /// chain" would look the same.
+    #[test]
+    fn a_row_with_no_eq_chain_resolves_to_the_empty_chain() {
+        let state = fresh_state();
+        insert_row(&state, "src_a", SourceKind::UsbAlsa, "plughw:1,0", false);
+        let resolved = resolve_sources_from_db(&state).expect("non-empty DB result");
+        assert!(resolved[0].eq_chain.is_empty());
+    }
+
+    /// A specification the parser refuses must not stop the source. It is
+    /// written by the admin form, which validates — so a bad one here means an
+    /// older build or a hand-edited database, and the right answer is to keep
+    /// recording on the flags rather than to drop the microphone.
+    #[test]
+    fn a_malformed_eq_chain_degrades_to_the_flags_rather_than_failing() {
+        let state = fresh_state();
+        insert_row(&state, "src_a", SourceKind::UsbAlsa, "plughw:1,0", false);
+        // Straight to SQL: the store's own validation is exactly what this
+        // test needs to bypass.
+        state
+            .with_db(|conn| {
+                conn.execute(
+                    "UPDATE audio_sources SET eq_chain = ?1 WHERE id = 'src_a'",
+                    rusqlite::params!["shelfpass:nonsense"],
+                )
+            })
+            .expect("write the bad chain");
+
+        let resolved =
+            resolve_sources_from_db(&state).expect("a bad chain must not lose the source");
+        assert_eq!(resolved.len(), 1, "the source is still captured");
+        assert!(
+            resolved[0].eq_chain.is_empty(),
+            "and it falls back to the pipeline flags"
+        );
     }
 
     // ---- seed_sources_from_config (O-13) ----------------------------

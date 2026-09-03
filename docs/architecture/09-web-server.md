@@ -247,6 +247,39 @@ without client-side JS except for the EventSource SSE connection.
 to implement, and sufficient for live detection/log updates. WebSocket adds
 complexity without benefit for this use case.
 
+**Why the base path is applied by rewriting responses, not by a `url_for()`:**
+`BIRDNET_BASE_PATH` mounts the station under a prefix. `Router::nest` fixes
+*incoming* requests; every URL the station **emits** is an absolute path from
+`/` — 234 literal `href`/`src`/`hx-*` attributes across 47 Rust files, 88 more
+in the templates, plus every `Location` header and the session cookie's `Path`.
+
+A `url_for()` helper at each of those 322 sites would depend on every future
+line of HTML remembering to call it, and the failure mode is not a clean one:
+the page renders and then *some* links 404 while others work, which reads like
+a caching bug. So the prefix is applied centrally, in the pass
+`security_headers_middleware` already makes over every `text/html` body to
+stamp CSP nonces. That pass buffers and walks the body regardless, so the
+rewrite is free, and it covers markup written after the change as well as
+before it.
+
+The scan matches an attribute *name* from a fixed list followed by `="/`, not
+a bare `/` — matching values alone would rewrite paths in prose and in embedded
+JSON. It does not track whether it is inside a tag, and `base_path`'s tests say
+why: doing so means toggling on `<` and `>`, which appear inside the inline
+scripts this application ships, and toggling wrongly there produces a *missed*
+link, which breaks navigation rather than displaying one word oddly.
+
+Three things sit outside that pass and are handled explicitly: `Location`
+headers (not HTML), the session cookie's `Path` (which keeps a trailing slash,
+because RFC 6265's path-match is a prefix rule and `Path=/birdnet` also matches
+`/birdnetsomethingelse`), and the WebSocket URLs the live pages assemble in the
+browser — those read `<body data-base-path>`, which the same middleware stamps.
+
+Two routes sit beside the nest, both found by probing axum 0.8.9 rather than
+assumed: `/` (the host root, otherwise a bare 404 that reads as "the station is
+down") and `{base}/` — `nest("/b", …)` matches `/b` and `/b/x` but **not**
+`/b/`, which is the URL a browser shows after any link to the station root.
+
 ---
 
 [← Behavioral Analytics](08-behavioral-analytics.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Deployment →](10-deployment.md)

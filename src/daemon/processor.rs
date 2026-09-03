@@ -21,6 +21,117 @@ use birdnet_integrations::webhook::dispatch_webhook;
 
 use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
 
+/// The learned per-species thresholds, and their persistence.
+///
+/// Wraps the pure tracker with the two pieces of I/O it needs: loading what the
+/// station knew before this process started, and writing back when something
+/// changes.
+///
+/// Writes happen on a level change and not on every confirmation. A confirmation
+/// that only extends a lease is worth nothing on disk — it will be re-learned
+/// within the hour — and a dawn chorus produces hundreds of them. Level changes
+/// are bounded by the tracker's own cooldown to at most one per species per
+/// fifteen minutes, so this is a handful of writes an hour on a busy morning.
+struct DynamicThresholdState {
+    tracker: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
+    enabled: bool,
+}
+
+impl DynamicThresholdState {
+    /// Load persisted levels into `tracker`.
+    ///
+    /// A load failure is logged and the station starts with nothing learned,
+    /// which is the safe direction: every threshold is then the operator's own
+    /// until the site re-confirms its species.
+    fn new(
+        mut tracker: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
+        state: &birdnet_web::state::AppState,
+    ) -> Self {
+        let enabled = tracker.config().enabled;
+        if !enabled {
+            return Self { tracker, enabled };
+        }
+        let now_ms = crate::daemon::disposition::epoch_ms();
+        match state.with_db(birdnet_db::dynamic_thresholds::load_all) {
+            Ok(rows) => {
+                let count = rows.len();
+                tracker.restore(
+                    rows.into_iter().map(|r| {
+                        (
+                            r.sci_name,
+                            birdnet_core::detection::dynamic_threshold::SpeciesLevel {
+                                level: r.level,
+                                confirmations: r.confirmations,
+                                expires_at_ms: r.expires_at_ms,
+                                first_learned_ms: r.first_learned_ms,
+                                last_confirmed_ms: r.last_confirmed_ms,
+                            },
+                        )
+                    }),
+                    now_ms,
+                );
+                tracing::info!(
+                    stored = count,
+                    live = tracker.live_count(now_ms),
+                    "dynamic thresholds enabled"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "could not load learned thresholds; starting with none"
+                );
+            }
+        }
+        Self { tracker, enabled }
+    }
+
+    /// The tracker to judge against, or `None` when the feature is off.
+    fn tracker(&self) -> Option<&birdnet_core::detection::dynamic_threshold::DynamicThresholds> {
+        self.enabled.then_some(&self.tracker)
+    }
+
+    /// Record a detection that survived every gate, persisting on a change.
+    ///
+    /// Called at the point of insert and nowhere earlier. That placement is the
+    /// safety property: a species the occurrence filter excluded, a chunk the
+    /// noise filter dropped, a record quarantined for an implausible hour, a
+    /// detection suppressed as a duplicate — none of them has confirmed
+    /// anything, and letting one lower its own species' threshold would turn a
+    /// single false positive into a stream of them.
+    fn confirm(
+        &mut self,
+        sci_name: &str,
+        confidence: f32,
+        now_ms: i64,
+        state: &birdnet_web::state::AppState,
+    ) {
+        if !self.enabled || !self.tracker.observe(sci_name, confidence, now_ms) {
+            return;
+        }
+        let rows: Vec<birdnet_db::dynamic_thresholds::LearnedThreshold> = self
+            .tracker
+            .snapshot(now_ms)
+            .into_iter()
+            .map(
+                |(sci_name, s)| birdnet_db::dynamic_thresholds::LearnedThreshold {
+                    sci_name,
+                    level: s.level,
+                    confirmations: s.confirmations,
+                    expires_at_ms: s.expires_at_ms,
+                    first_learned_ms: s.first_learned_ms,
+                    last_confirmed_ms: s.last_confirmed_ms,
+                },
+            )
+            .collect();
+        if let Err(e) =
+            state.with_db(|conn| birdnet_db::dynamic_thresholds::replace_all(conn, &rows))
+        {
+            tracing::warn!(error = %e, "could not persist learned thresholds");
+        }
+    }
+}
+
 /// Per-species confidence thresholds, re-read from the database on a short TTL.
 ///
 /// The thresholds decide whether a detection is accepted or quarantined for
@@ -155,9 +266,11 @@ pub(super) fn event_processor(
     extractor: Extractor,
     duplicate_interval_secs: i64,
     daylight: crate::daemon::daylight::DaylightFilter,
+    dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
 ) {
     tracing::debug!("event processor started");
     let mut species_thresholds = ThresholdCache::new(species_thresholds);
+    let mut dynamic = DynamicThresholdState::new(dynamic, &state);
     let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
     if daylight.is_enabled() {
         tracing::info!("taxon-aware daylight filter enabled");
@@ -175,6 +288,7 @@ pub(super) fn event_processor(
             break;
         };
         let species_thresholds = species_thresholds.current(&state);
+        let now_ms = crate::daemon::disposition::epoch_ms();
 
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
@@ -235,6 +349,8 @@ pub(super) fn event_processor(
             &detection.scientific_name,
             species_thresholds,
             global_confidence,
+            dynamic.tracker(),
+            now_ms,
         ) {
             DispositionDecision::Quarantine { threshold } => {
                 tracing::debug!(
@@ -440,6 +556,19 @@ pub(super) fn event_processor(
             );
         } else {
             metrics.inc_detection(&detection.scientific_name, detection.start);
+            // The one place a species can confirm itself, and it is after the
+            // row exists on purpose. Every gate has run by here — the chunk
+            // filters and the occurrence filter in the daemon, the plausible-
+            // hour filter, the threshold gate, the duplicate interval — and a
+            // detection that failed any of them took an early `continue`. A
+            // confirmation from a detection the database then refused would be
+            // learning from something the station did not record.
+            dynamic.confirm(
+                &detection.scientific_name,
+                detection.confidence,
+                now_ms,
+                &state,
+            );
         }
         // event.latency_ms covers decode + inference; surface as a histogram
         // so the dashboard can flag rising p95s before they catch the eye.
@@ -886,6 +1015,100 @@ mod tests {
     // Lives inside the daemon module so the private `event_processor`
     // function is directly callable.
 
+    // ── DynamicThresholdState ──────────────────────────────────────────
+    //
+    // Neither `tracker()` nor `confirm()` had a test. Both are the seam
+    // between the dynamic-threshold feature and the rest of the daemon, and
+    // cargo-mutants could rewrite either without the suite noticing.
+
+    use birdnet_core::detection::dynamic_threshold::{DynamicThresholdConfig, DynamicThresholds};
+
+    fn dyn_state(enabled: bool) -> (tempfile::TempDir, birdnet_web::state::AppState) {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let _ = enabled;
+        (tmp, state)
+    }
+
+    fn tracker_with(enabled: bool) -> DynamicThresholds {
+        DynamicThresholds::new(DynamicThresholdConfig {
+            enabled,
+            trigger: 0.9,
+            min: 0.3,
+            valid_hours: 24,
+        })
+    }
+
+    /// The feature's off-switch. `tracker()` hands the judging path a tracker
+    /// only when the operator turned the feature on — return `Some` regardless
+    /// and every station gets adjusted thresholds it never asked for; return
+    /// `None` regardless and the feature is dead while still appearing
+    /// configured. Both halves are asserted, so this discriminates rather than
+    /// alarms.
+    #[test]
+    fn the_tracker_is_offered_only_when_the_feature_is_enabled() {
+        let (_tmp, state) = dyn_state(true);
+        let on = DynamicThresholdState::new(tracker_with(true), &state);
+        assert!(
+            on.tracker().is_some(),
+            "an enabled tracker must be offered to the judging path"
+        );
+
+        let (_tmp2, state2) = dyn_state(false);
+        let off = DynamicThresholdState::new(tracker_with(false), &state2);
+        assert!(
+            off.tracker().is_none(),
+            "a disabled tracker must not be offered — the feature is off"
+        );
+    }
+
+    /// `confirm` learns only when the feature is on, and only from a detection
+    /// confident enough to trigger.
+    ///
+    /// The guard is `if !self.enabled || !self.tracker.observe(..) { return }`,
+    /// which is three mutable pieces: the `||`, and each `!`. Every one of them
+    /// either stops the feature learning at all or lets it learn from
+    /// detections it should not, so each gets an assertion here.
+    #[test]
+    fn confirming_learns_only_when_enabled_and_confident() {
+        let (_tmp, state) = dyn_state(true);
+        let mut on = DynamicThresholdState::new(tracker_with(true), &state);
+
+        // Below the 0.9 trigger: nothing is learned, so no row is written.
+        on.confirm("Turdus merula", 0.5, 1_000, &state);
+        let rows = state
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .expect("load");
+        assert!(
+            rows.is_empty(),
+            "a detection below the trigger must not confirm anything, got {rows:?}"
+        );
+
+        // At the trigger: the species is learned and persisted.
+        on.confirm("Turdus merula", 0.95, 1_000, &state);
+        let rows = state
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .expect("load");
+        assert_eq!(
+            rows.len(),
+            1,
+            "a confident detection must be learned and written: {rows:?}"
+        );
+        assert_eq!(rows[0].sci_name, "Turdus merula");
+
+        // With the feature off, even a confident detection learns nothing.
+        let (_tmp2, state2) = dyn_state(false);
+        let mut off = DynamicThresholdState::new(tracker_with(false), &state2);
+        off.confirm("Turdus merula", 0.99, 1_000, &state2);
+        let rows = state2
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .expect("load");
+        assert!(
+            rows.is_empty(),
+            "a disabled feature must not learn: {rows:?}"
+        );
+    }
+
     // ── ThresholdCache ─────────────────────────────────────────────────
 
     #[test]
@@ -1100,6 +1323,9 @@ mod tests {
                 extractor,
                 0,
                 crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
             );
         })
         .await
@@ -1243,6 +1469,31 @@ mod tests {
         duplicate_interval_secs: i64,
         daylight: crate::daemon::daylight::DaylightFilter,
     ) {
+        run_processor_dynamic(
+            state,
+            events,
+            species_thresholds,
+            global_confidence,
+            duplicate_interval_secs,
+            daylight,
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+        )
+        .await;
+    }
+
+    /// As [`run_processor_full`], with the learned-threshold tracker supplied.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_processor_dynamic(
+        state: &birdnet_web::state::AppState,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        species_thresholds: HashMap<String, f64>,
+        global_confidence: f32,
+        duplicate_interval_secs: i64,
+        daylight: crate::daemon::daylight::DaylightFilter,
+        dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
+    ) {
         let broadcast = state.detection_broadcast();
         let (event_tx, event_rx) = mpsc::channel();
         for ev in events {
@@ -1277,6 +1528,7 @@ mod tests {
                 extractor,
                 duplicate_interval_secs,
                 daylight,
+                dynamic,
             );
         })
         .await
@@ -1566,6 +1818,172 @@ mod tests {
                     .unwrap_or(-1),
             )
         })
+    }
+
+    /// An enabled tracker.
+    fn dynamic_on() -> birdnet_core::detection::dynamic_threshold::DynamicThresholds {
+        use birdnet_core::detection::dynamic_threshold::{
+            DynamicThresholdConfig, DynamicThresholds,
+        };
+        DynamicThresholds::new(DynamicThresholdConfig {
+            enabled: true,
+            trigger: 0.80,
+            min: 0.10,
+            valid_hours: 24,
+        })
+    }
+
+    /// The learned levels the station has persisted.
+    fn learned(state: &birdnet_web::state::AppState) -> Vec<(String, u8)> {
+        state
+            .with_db(birdnet_db::dynamic_thresholds::load_all)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.sci_name, r.level))
+            .collect()
+    }
+
+    /// A recorded detection confirms its species, and the confirmation is
+    /// persisted.
+    ///
+    /// This is the wiring gate: the tracker works and the table works, both
+    /// tested where they live. The failure this catches is that nothing calls
+    /// one from the other — every unit test in both files passes in that
+    /// state.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_recorded_detection_confirms_its_species() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor_dynamic(
+            &state,
+            vec![make_event(
+                "Strix aluco",
+                "Tawny Owl",
+                0.95,
+                tmp.path().join("rec.wav"),
+                "corr-dyn",
+            )],
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            dynamic_on(),
+        )
+        .await;
+
+        assert_eq!(
+            learned(&state),
+            vec![("Strix aluco".to_string(), 1)],
+            "an accepted detection at 0.95 should have confirmed its species once"
+        );
+    }
+
+    /// A quarantined detection confirms nothing.
+    ///
+    /// The safety property the whole feature rests on, and the reason
+    /// `confirm` is called after the insert rather than after the model. A
+    /// detection the station declined to record has not established that its
+    /// species is present, and letting it lower its own threshold would turn
+    /// one false positive into a stream of them.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_quarantined_detection_confirms_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        // A per-species threshold of 0.99 quarantines a 0.95 detection, which
+        // is still well above the tracker's 0.80 trigger — so a version that
+        // confirmed before the gate would learn from it.
+        let mut thresholds = HashMap::new();
+        thresholds.insert("Strix aluco".to_string(), 0.99);
+
+        run_processor_dynamic(
+            &state,
+            vec![make_event(
+                "Strix aluco",
+                "Tawny Owl",
+                0.95,
+                tmp.path().join("rec.wav"),
+                "corr-dyn-q",
+            )],
+            thresholds,
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            dynamic_on(),
+        )
+        .await;
+
+        let (detections, quarantined) = counts(&state);
+        assert_eq!(detections, 0, "the detection should have been quarantined");
+        assert_eq!(quarantined, 1);
+        assert!(
+            learned(&state).is_empty(),
+            "a quarantined detection must not confirm its species: {:?}",
+            learned(&state)
+        );
+    }
+
+    /// A day bird quarantined for the hour confirms nothing either.
+    ///
+    /// The counterpart with a different rejection reason, because the
+    /// plausible-hour filter takes its own `continue` well before the
+    /// threshold gate — a `confirm` placed anywhere in between would pass the
+    /// test above and fail here.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_detection_rejected_for_its_hour_confirms_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor_dynamic(
+            &state,
+            vec![winter_event("Cyanistes caeruleus", "02:30:00", tmp.path())],
+            HashMap::new(),
+            0.25,
+            0,
+            greenwich_night(),
+            dynamic_on(),
+        )
+        .await;
+
+        let (detections, quarantined) = counts(&state);
+        assert_eq!(detections, 0);
+        assert_eq!(
+            quarantined, 1,
+            "the blue tit at 02:30 should be quarantined"
+        );
+        assert!(
+            learned(&state).is_empty(),
+            "a detection quarantined for its hour must not confirm its species"
+        );
+    }
+
+    /// With the tracker disabled nothing is learned and nothing is written.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_disabled_tracker_learns_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        run_processor(
+            &state,
+            vec![make_event(
+                "Strix aluco",
+                "Tawny Owl",
+                0.95,
+                tmp.path().join("rec.wav"),
+                "corr-dyn-off",
+            )],
+            HashMap::new(),
+            0.25,
+        )
+        .await;
+
+        assert_eq!(
+            counts(&state).0,
+            1,
+            "the detection should still be recorded"
+        );
+        assert!(learned(&state).is_empty());
     }
 
     #[tokio::test(flavor = "current_thread")]

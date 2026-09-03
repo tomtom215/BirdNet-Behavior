@@ -134,6 +134,53 @@ server {
 
 > **WebSocket matters here.** The live dashboard feed, the spectrogram, and kiosk mode all use WebSockets (`/api/v2/ws/detections` and `/api/v2/ws/spectrogram`). Make sure your proxy forwards the `Upgrade`/`Connection` headers (shown above) or those features will silently stall.
 
+## Sharing one hostname: serving under a path
+
+The setup above gives the station its own hostname. If you already run other
+services behind one hostname and want the station at
+`https://home.example/birdnet`, set a base path:
+
+```bash
+BIRDNET_BASE_PATH=/birdnet
+```
+
+The station then serves everything — pages, API, static assets, WebSockets —
+from under that prefix, and every link, form, redirect and cookie it emits
+carries it. A visitor who reaches the bare host root is redirected to the
+prefix, so a mistyped bookmark still lands somewhere useful.
+
+**Your proxy must pass the full path through unchanged.** The station expects
+to see `/birdnet/today`, not `/today`. This is the opposite of the usual
+"strip the prefix" recipe, and it is the one thing that goes wrong:
+
+```caddyfile
+home.example {
+    handle /birdnet/* {
+        reverse_proxy 127.0.0.1:8502    # NOT handle_path — that strips /birdnet
+    }
+}
+```
+
+```nginx
+location /birdnet/ {
+    proxy_pass http://127.0.0.1:8502;   # no trailing path: adding one makes
+    proxy_set_header Host $host;        # nginx strip the prefix
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+Home Assistant ingress works the same way.
+
+A prefix that cannot be used — one containing `..`, whitespace, or a query
+string — is refused and logged, and the station serves from the root. It is
+not quietly corrected: a corrected prefix would not match what your proxy
+sends, and every request would 404 with nothing to explain why.
+
+> Home Assistant, Nextcloud and the rest each need their own `location` block.
+> Nothing about the base path changes the TLS or authentication advice above.
+
 ## Built-in admin sign-in
 
 The binary gates the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention for the password. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open; only `/admin*` (settings, audio config, software update, system controls, backups, migration) requires signing in.**
