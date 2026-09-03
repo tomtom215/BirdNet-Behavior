@@ -16,6 +16,14 @@
 //!   detections resume. One per episode, because a notifier that re-fires
 //!   every poll while the operator is asleep trains them to ignore it.
 //!
+//! One *delivered* notification per episode. The loud log line happens once,
+//! when the state machine says something changed; the push is parked in
+//! [`super::announce::Outbox`] and retried at every poll until it lands. Before
+//! that split, the episode was latched on the send *attempt*, and a send where
+//! every destination had been dropped by the rate limiter returned `Ok(())` —
+//! so a deadman that fired during a dawn chorus, when the detection rate limit
+//! is exactly what is exhausted, was never announced at all.
+//!
 //! A silent *night* is normal; the default threshold is sized for "a full
 //! day with zero detections", which for a working garden station means
 //! something is broken. Stations in genuinely sparse habitats raise
@@ -26,6 +34,7 @@ use std::time::Duration;
 use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
+use super::announce::{Alert, Outbox};
 
 /// How often freshness is re-measured. One indexed `SELECT` per pass.
 const POLL_EVERY: Duration = Duration::from_secs(300);
@@ -86,6 +95,10 @@ pub fn spawn_detection_deadman(
         );
         let threshold_secs = u64::from(threshold_hours) * 3600;
         let mut alerted = false;
+        // Undelivered alerts, keyed by `()`: the deadman has one episode at a
+        // time, so a recovery notice queued while the onset is still stuck
+        // replaces it rather than following it.
+        let mut outbox: Outbox<()> = Outbox::new();
         let mut tick = tokio::time::interval(POLL_EVERY);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -117,49 +130,40 @@ pub fn spawn_detection_deadman(
                         "DETECTION DEADMAN — no detections recorded for over the configured \
                          threshold; check microphone/stream health, gain, and the model"
                     );
-                    notify(
-                        apprise.as_ref(),
-                        "Station has gone quiet",
-                        &format!(
-                            "No bird detections for {silent_hours} hours (threshold \
-                             {threshold_hours} h). The process and audio sources may still look \
-                             healthy — check microphone placement/foam, per-source gain, and \
-                             recent log lines on the station."
+                    outbox.queue(
+                        (),
+                        Alert::new(
+                            "Station has gone quiet",
+                            format!(
+                                "No bird detections for {silent_hours} hours (threshold \
+                                 {threshold_hours} h). The process and audio sources may still \
+                                 look healthy — check microphone placement/foam, per-source \
+                                 gain, and recent log lines on the station."
+                            ),
+                            birdnet_integrations::apprise::NotifyType::Warning,
                         ),
-                        birdnet_integrations::apprise::NotifyType::Warning,
-                    )
-                    .await;
+                    );
                 }
                 Transition::Recovered => {
                     alerted = false;
                     tracing::info!("detection deadman recovered — detections are flowing again");
-                    notify(
-                        apprise.as_ref(),
-                        "Station is detecting again",
-                        "Detections have resumed after the quiet period.",
-                        birdnet_integrations::apprise::NotifyType::Info,
-                    )
-                    .await;
+                    outbox.queue(
+                        (),
+                        Alert::new(
+                            "Station is detecting again",
+                            "Detections have resumed after the quiet period.",
+                            birdnet_integrations::apprise::NotifyType::Info,
+                        ),
+                    );
                 }
                 Transition::None => {}
             }
+
+            // Anything the state machine raised — this tick or an earlier one
+            // that never got out — is offered again here.
+            super::announce::flush(&mut outbox, apprise.as_ref(), &state.metrics()).await;
         }
     });
-}
-
-/// Best-effort Apprise delivery; the WARN log and the gauge are the
-/// guaranteed signals, the push is a bonus when a notifier is configured.
-async fn notify(
-    apprise: Option<&AppriseHandle>,
-    title: &str,
-    body: &str,
-    kind: birdnet_integrations::apprise::NotifyType,
-) {
-    let Some(handle) = apprise else { return };
-    let mut client = handle.lock().await;
-    if let Err(e) = client.send_notification(title, body, kind).await {
-        tracing::warn!(error = %e, "deadman notification failed to send");
-    }
 }
 
 #[cfg(test)]

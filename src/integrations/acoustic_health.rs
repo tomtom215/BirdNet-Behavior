@@ -69,6 +69,8 @@ use birdnet_db::audio_levels::{LevelSample, record_sample};
 use birdnet_db::sound_levels::{BandObservation, BroadbandObservation, record_observation};
 use birdnet_web::state::AppState;
 
+use super::announce::{Alert, Outbox};
+
 /// How often each source is sampled.
 ///
 /// Matches the station-health and recording-effort polls, so a station has one
@@ -383,17 +385,19 @@ fn sample_once(state: &AppState, stream_dir: &Path, watch: &mut FaultWatch) -> S
     out
 }
 
-/// Log a fault event and, when a notifier is configured, send it.
+/// Log a fault event and queue it for delivery.
 ///
 /// One message per episode, with a recovery notice — the same discipline as
 /// [`super::deadman`]. A notifier that re-fired every five minutes while the
 /// operator slept would train them to ignore it, which costs more than the
 /// alert is worth.
-async fn report_fault(
-    apprise: Option<&crate::integrations::apprise::AppriseHandle>,
-    event: FaultEvent,
-) {
-    let (title, body, kind) = match &event {
+///
+/// The log is written here, once; the push is parked in the outbox and retried
+/// until it lands, keyed by source so a recovery replaces an onset that never
+/// got out. Sending inline latched the episode on a send that a rate limiter or
+/// an open circuit could drop without failing.
+fn report_fault(outbox: &mut Outbox<String>, event: &FaultEvent) {
+    let (title, body, kind) = match event {
         FaultEvent::Onset { source, fault } => {
             tracing::warn!(
                 source = %source,
@@ -420,15 +424,10 @@ async fn report_fault(
         }
     };
 
-    let Some(handle) = apprise else { return };
-    if let Err(e) = handle
-        .lock()
-        .await
-        .send_notification(&title, &body, kind)
-        .await
-    {
-        tracing::warn!(error = %e, "stream-fault notification failed to send");
-    }
+    let source = match event {
+        FaultEvent::Onset { source, .. } | FaultEvent::Recovered { source } => source.clone(),
+    };
+    outbox.queue(source, Alert::new(title, body, kind));
 }
 
 /// The station's local date and hour — the same lens the detections are stamped
@@ -471,6 +470,8 @@ pub fn spawn_acoustic_health(
         tick.tick().await;
         let mut last_prune = tokio::time::Instant::now();
         let mut watch = FaultWatch::default();
+        // Alerts logged but not yet delivered, keyed by source.
+        let mut outbox: Outbox<String> = Outbox::new();
         loop {
             tick.tick().await;
             let probe = state.clone();
@@ -500,9 +501,10 @@ pub fn spawn_acoustic_health(
                 }
             };
             watch = returned;
-            for event in outcome.events {
-                report_fault(apprise.as_ref(), event).await;
+            for event in &outcome.events {
+                report_fault(&mut outbox, event);
             }
+            super::announce::flush(&mut outbox, apprise.as_ref(), &state.metrics()).await;
 
             if last_prune.elapsed() >= PRUNE_EVERY {
                 last_prune = tokio::time::Instant::now();
@@ -777,6 +779,76 @@ mod tests {
         n: u32,
     ) -> Vec<FaultEvent> {
         (0..n).filter_map(|_| w.observe(source, fault)).collect()
+    }
+
+    // ── what report_fault hands to the outbox ───────────────────────────
+
+    #[test]
+    fn a_fault_is_parked_for_delivery_rather_than_sent_inline() {
+        // Sending inline latched the episode on a send the rate limiter or an
+        // open circuit could drop without failing, and `FaultWatch` then held
+        // the source in `reported` for the rest of the outage.
+        let mut outbox: Outbox<String> = Outbox::new();
+        report_fault(
+            &mut outbox,
+            &FaultEvent::Onset {
+                source: "RTSP_1".into(),
+                fault: StreamFault::DigitallySilent,
+            },
+        );
+        let waiting = outbox.waiting();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].0, "RTSP_1", "keyed by source");
+        assert!(
+            waiting[0].1.title().contains("RTSP_1"),
+            "the alert must name the source: {}",
+            waiting[0].1.title()
+        );
+    }
+
+    #[test]
+    fn a_recovery_replaces_an_onset_that_never_got_out() {
+        // An operator whose uplink was down for an hour must not be handed a
+        // fault that cleared while it was down.
+        let mut outbox: Outbox<String> = Outbox::new();
+        report_fault(
+            &mut outbox,
+            &FaultEvent::Onset {
+                source: "RTSP_1".into(),
+                fault: StreamFault::DigitallySilent,
+            },
+        );
+        outbox.settle(&"RTSP_1".to_owned(), false);
+        report_fault(
+            &mut outbox,
+            &FaultEvent::Recovered {
+                source: "RTSP_1".into(),
+            },
+        );
+        let waiting = outbox.waiting();
+        assert_eq!(waiting.len(), 1, "both were queued");
+        assert!(
+            waiting[0].1.title().starts_with("Audio recovered"),
+            "the stale onset survived: {}",
+            waiting[0].1.title()
+        );
+    }
+
+    #[test]
+    fn two_sources_are_two_pending_alerts() {
+        // The discrimination for the gate above: replacement is per source, so
+        // a second faulty input does not erase the first.
+        let mut outbox: Outbox<String> = Outbox::new();
+        for source in ["RTSP_1", "RTSP_2"] {
+            report_fault(
+                &mut outbox,
+                &FaultEvent::Onset {
+                    source: source.into(),
+                    fault: StreamFault::StuckLevel,
+                },
+            );
+        }
+        assert_eq!(outbox.waiting().len(), 2);
     }
 
     #[test]

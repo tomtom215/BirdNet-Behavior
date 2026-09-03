@@ -46,6 +46,7 @@ use std::time::Duration;
 use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
+use super::announce::{Alert, Outbox};
 
 /// How often the conditions are re-measured.
 ///
@@ -424,7 +425,15 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
             "station-health notifier started"
         );
         // key -> title, so a recovery notice can name what recovered.
+        //
+        // This latch means "the episode has been observed and logged", which is
+        // what keeps the loud line to one per episode. Whether the *push* went
+        // out is the outbox's business: it is retried at every poll until it
+        // lands, so a condition raised while the notifier was down is still
+        // announced when the notifier comes back.
         let mut alerted: BTreeMap<String, String> = BTreeMap::new();
+        // Alerts logged but not yet delivered, keyed by condition.
+        let mut outbox: Outbox<String> = Outbox::new();
         // How many consecutive polls each currently-faulty key has been seen
         // for; see REQUIRED_CONSECUTIVE_POLLS.
         let mut streak: BTreeMap<String, u32> = BTreeMap::new();
@@ -446,42 +455,35 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
                     "STATION HEALTH — {}",
                     condition.title
                 );
-                notify(
-                    apprise.as_ref(),
-                    &condition.title,
-                    &condition.body,
-                    birdnet_integrations::apprise::NotifyType::Warning,
-                )
-                .await;
+                outbox.queue(
+                    condition.key.clone(),
+                    Alert::new(
+                        &condition.title,
+                        &condition.body,
+                        birdnet_integrations::apprise::NotifyType::Warning,
+                    ),
+                );
                 alerted.insert(condition.key, condition.title);
             }
             for key in recovered {
                 let title = alerted.remove(&key).unwrap_or_else(|| key.clone());
                 tracing::info!(key = %key, "station health recovered: {title}");
-                notify(
-                    apprise.as_ref(),
-                    "Station health recovered",
-                    &format!("Resolved: {title}"),
-                    birdnet_integrations::apprise::NotifyType::Info,
-                )
-                .await;
+                // Keyed by the condition, so a recovery replaces an onset that
+                // is still stuck in the outbox: an operator whose uplink was
+                // down must not be told about a fault that has already cleared.
+                outbox.queue(
+                    key,
+                    Alert::new(
+                        "Station health recovered",
+                        format!("Resolved: {title}"),
+                        birdnet_integrations::apprise::NotifyType::Info,
+                    ),
+                );
             }
+
+            super::announce::flush(&mut outbox, apprise.as_ref(), &state.metrics()).await;
         }
     });
-}
-
-/// Best-effort Apprise delivery; the WARN log is the guaranteed signal.
-async fn notify(
-    apprise: Option<&AppriseHandle>,
-    title: &str,
-    body: &str,
-    kind: birdnet_integrations::apprise::NotifyType,
-) {
-    let Some(handle) = apprise else { return };
-    let mut client = handle.lock().await;
-    if let Err(e) = client.send_notification(title, body, kind).await {
-        tracing::warn!(error = %e, "station-health notification failed to send");
-    }
 }
 
 #[cfg(test)]

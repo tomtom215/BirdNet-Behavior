@@ -524,6 +524,16 @@ the same Apprise notifier as the deadman. Every condition must persist for three
 consecutive five-minute polls before it fires, so a mic that re-enumerates or a
 disk that spikes during clip extraction stays silent.
 
+Once per *delivered* alert. The loud journal line is written when the condition
+is first observed; the push is then retried at every five-minute poll until it
+actually reaches a destination, so a fault raised while the uplink was down is
+still announced when the uplink comes back. A recovery that happens before the
+onset alert got out replaces it, so you are never handed a fault that has
+already cleared. Alerts about the station are also exempt from
+`NOTIFY_RATE_PER_MINUTE`, which is sized for detections — a deadman crossing its
+threshold during a dawn chorus used to lose that race silently. Whatever still
+cannot be delivered is counted in `birdnet_notifications_dropped_total`.
+
 A single-source station that goes fully down is deliberately *not* reported
 here — the deadman covers that, with better wording, and two notifications for
 one fault is how a channel gets muted. This check exists for what the deadman

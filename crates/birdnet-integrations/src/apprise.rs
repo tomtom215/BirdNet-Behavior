@@ -55,6 +55,28 @@ pub enum AppriseError {
     Cli(String),
     /// A native (non-Apprise) delivery failed.
     Native(String),
+    /// The client has nowhere to send.
+    ///
+    /// Reachable, and it used to be silent. `--notify-urls` whose every scheme
+    /// lacks a native sender leaves a client with no routes, no config file
+    /// and no server URL: `create_apprise_client` still returns it, and every
+    /// send through it delivered nothing and answered `Ok(())`. The startup
+    /// warning was the only sign.
+    NoDestinations,
+    /// Every configured destination was skipped before a send was attempted.
+    ///
+    /// Not a failure of any destination — nothing was tried. It is an error
+    /// anyway, because the alternative is what this used to do: return
+    /// `Ok(())` when `delivered == 0` and no send had been attempted, so a
+    /// caller that had just latched an alert episode believed the alert had
+    /// gone out. One dropped operational alert was then dropped for the life of
+    /// the process.
+    AllDestinationsSkipped {
+        /// Destinations skipped because their circuit was open.
+        circuit_open: usize,
+        /// Destinations skipped because they were over their rate limit.
+        rate_limited: usize,
+    },
 }
 
 impl fmt::Display for AppriseError {
@@ -65,14 +87,61 @@ impl fmt::Display for AppriseError {
             Self::NoUrl => write!(f, "Apprise server URL not configured"),
             Self::Cli(msg) => write!(f, "Apprise CLI error: {msg}"),
             Self::Native(msg) => write!(f, "notification delivery failed: {msg}"),
+            Self::NoDestinations => write!(
+                f,
+                "notification not sent: no destination is configured that this \
+                 station can deliver to"
+            ),
+            Self::AllDestinationsSkipped {
+                circuit_open,
+                rate_limited,
+            } => write!(
+                f,
+                "notification not sent: every destination was skipped \
+                 ({circuit_open} with an open circuit, {rate_limited} rate-limited)"
+            ),
         }
+    }
+}
+
+impl AppriseError {
+    /// A stable, low-cardinality label for `birdnet_notifications_dropped_total`.
+    ///
+    /// Four values and no more, so the metric's label cardinality cannot grow
+    /// with traffic. A mixed skip is reported as `circuit_open`: a destination
+    /// that is down is the more serious of the two, and the one an operator
+    /// has to act on.
+    #[must_use]
+    pub const fn drop_reason(&self) -> &'static str {
+        match self {
+            Self::AllDestinationsSkipped { circuit_open, .. } if *circuit_open > 0 => {
+                "circuit_open"
+            }
+            Self::AllDestinationsSkipped { .. } => "rate_limited",
+            Self::NoDestinations => "no_destination",
+            _ => "send_failed",
+        }
+    }
+
+    /// Whether the notification was dropped without any destination being
+    /// tried.
+    ///
+    /// The detection path counts these and writes no `notification_log` row:
+    /// during a dawn chorus the rate limiter refuses thousands, and a row each
+    /// would bury the sends that matter.
+    #[must_use]
+    pub const fn nothing_was_attempted(&self) -> bool {
+        matches!(
+            self,
+            Self::AllDestinationsSkipped { .. } | Self::NoDestinations
+        )
     }
 }
 
 impl std::error::Error for AppriseError {}
 
 /// Notification type (maps to Apprise message types).
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotifyType {
     /// Informational notification.
@@ -81,6 +150,21 @@ pub enum NotifyType {
     Warning,
     /// Success notification.
     Success,
+}
+
+/// Whether a notification is about a bird or about the station itself.
+///
+/// The two are guarded differently on purpose. A detection notification is one
+/// of thousands on a good morning and is subject to the rate limit; an
+/// operational alert is one of a handful a day and must not lose a race with a
+/// blackbird. Both still honour the circuit breaker — see
+/// [`crate::dispatch::Gate::admit_priority`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Priority {
+    /// A bird detection. Subject to the rate limit and the breaker.
+    Routine,
+    /// A report about the station's own health. Exempt from the rate limit.
+    Operational,
 }
 
 /// Configuration for notification filtering.
@@ -340,8 +424,48 @@ impl Client {
         notify_type: NotifyType,
         image_url: Option<&str>,
     ) -> Result<(), AppriseError> {
+        self.send(title, body, notify_type, image_url, Priority::Routine)
+            .await
+    }
+
+    /// Send a report about the station itself — a deadman alert, a health
+    /// condition, a stream fault.
+    ///
+    /// Exempt from the rate limit, which is sized for detections; see
+    /// [`Priority`]. Returns an error rather than `Ok(())` when nothing left
+    /// the station, so a caller that latches an alert episode can latch it on
+    /// delivery instead of on the attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppriseError` on network or server failure, and
+    /// [`AppriseError::AllDestinationsSkipped`] when every destination was
+    /// skipped before a send was attempted.
+    pub async fn send_operational_alert(
+        &mut self,
+        title: &str,
+        body: &str,
+        notify_type: NotifyType,
+    ) -> Result<(), AppriseError> {
+        self.send(title, body, notify_type, None, Priority::Operational)
+            .await
+    }
+
+    /// The one delivery path, for both priorities.
+    async fn send(
+        &mut self,
+        title: &str,
+        body: &str,
+        notify_type: NotifyType,
+        image_url: Option<&str>,
+        priority: Priority,
+    ) -> Result<(), AppriseError> {
         let mut first_error: Option<AppriseError> = None;
         let mut delivered = 0_usize;
+        // Skips *in this call*, not the process-lifetime counters: the question
+        // at the end is whether this particular notification left the box.
+        let mut skipped_open = 0_usize;
+        let mut skipped_limited = 0_usize;
 
         // Native routes first: no subprocess, no Python, and a real error
         // rather than an exit status when a URL is wrong.
@@ -358,19 +482,42 @@ impl Client {
             // detection, all day — and it is the retries, not the sends, that
             // get an address rate-limited. The interaction rules live in
             // `dispatch::Gate`, where they are testable with injected time.
-            match self.guards[index].admit(Instant::now()) {
+            let admission = match priority {
+                Priority::Routine => self.guards[index].admit(Instant::now()),
+                Priority::Operational => self.guards[index].admit_priority(Instant::now()),
+            };
+            match admission {
                 crate::dispatch::Admission::Send | crate::dispatch::Admission::Probe => {}
                 crate::dispatch::Admission::CircuitOpen(wait) => {
                     self.skipped_circuit_open += 1;
-                    tracing::debug!(
-                        target_label = %route.label,
-                        retry_in_secs = wait.as_secs(),
-                        "skipping a destination whose circuit is open"
-                    );
+                    skipped_open += 1;
+                    // A suppressed *detection* stays at `debug`: at a detection
+                    // every twenty seconds this is four thousand lines a day,
+                    // which is why it was `debug` to begin with. The evidence
+                    // that a destination is down is the `warn` on the failure
+                    // that opened the circuit, below, plus
+                    // `birdnet_notifications_dropped_total`. A suppressed
+                    // *operational alert* is rare and is the thing the operator
+                    // most needs to know was not sent.
+                    if priority == Priority::Operational {
+                        tracing::warn!(
+                            target_label = %route.label,
+                            retry_in_secs = wait.as_secs(),
+                            "an alert about the station was not sent: this \
+                             destination's circuit is open"
+                        );
+                    } else {
+                        tracing::debug!(
+                            target_label = %route.label,
+                            retry_in_secs = wait.as_secs(),
+                            "skipping a destination whose circuit is open"
+                        );
+                    }
                     continue;
                 }
                 crate::dispatch::Admission::RateLimited => {
                     self.skipped_rate_limited += 1;
+                    skipped_limited += 1;
                     tracing::warn!(
                         target_label = %route.label,
                         "dropping a notification: destination is over its rate limit"
@@ -385,10 +532,19 @@ impl Client {
                     delivered += 1;
                 }
                 Err(e) => {
-                    self.guards[index].on_failure(Instant::now());
                     // `route.label` is credential-free by construction; the
                     // URL it came from is not, and must never be logged.
-                    tracing::warn!(target_label = %route.label, error = %e, "notification failed");
+                    if let Some(open_for) = self.guards[index].on_failure(Instant::now()) {
+                        tracing::warn!(
+                            target_label = %route.label,
+                            open_for_secs = open_for.as_secs(),
+                            error = %e,
+                            "notification destination is now considered down; \
+                             sends to it are suppressed until one probe succeeds"
+                        );
+                    } else {
+                        tracing::warn!(target_label = %route.label, error = %e, "notification failed");
+                    }
                     if first_error.is_none() {
                         first_error = Some(AppriseError::Native(e.to_string()));
                     }
@@ -414,6 +570,21 @@ impl Client {
         if self.base_url.is_empty() {
             return match (delivered, first_error) {
                 (0, Some(e)) => Err(e),
+                // Nothing delivered, nothing failed, and something was
+                // skipped: the notification did not leave the station. Saying
+                // `Ok` here is what let a latched alert episode believe it had
+                // been announced.
+                (0, None) if skipped_open + skipped_limited > 0 => {
+                    Err(AppriseError::AllDestinationsSkipped {
+                        circuit_open: skipped_open,
+                        rate_limited: skipped_limited,
+                    })
+                }
+                // Nothing delivered, nothing failed, nothing skipped: there
+                // was nowhere to send. See `AppriseError::NoDestinations`.
+                (0, None) if self.native.is_empty() && !self.cli_needed => {
+                    Err(AppriseError::NoDestinations)
+                }
                 _ => Ok(()),
             };
         }
@@ -745,5 +916,62 @@ mod tests {
         assert!((config.min_confidence - 0.8).abs() < f32::EPSILON);
         assert!(config.species_watchlist.is_empty());
         assert_eq!(config.cooldown, Duration::from_secs(300));
+    }
+
+    /// Every failure maps to a label from the documented vocabulary.
+    ///
+    /// `birdnet_notifications_dropped_total`'s HELP text names these four and
+    /// nothing else; a label outside the list is a metric nobody's dashboard
+    /// queries, and an open-ended one is unbounded cardinality on a station
+    /// that drops a notification per detection.
+    #[test]
+    fn every_failure_maps_to_a_documented_drop_reason() {
+        let cases = [
+            (
+                AppriseError::AllDestinationsSkipped {
+                    circuit_open: 1,
+                    rate_limited: 0,
+                },
+                "circuit_open",
+                true,
+            ),
+            (
+                AppriseError::AllDestinationsSkipped {
+                    circuit_open: 1,
+                    rate_limited: 2,
+                },
+                "circuit_open",
+                true,
+            ),
+            (
+                AppriseError::AllDestinationsSkipped {
+                    circuit_open: 0,
+                    rate_limited: 3,
+                },
+                "rate_limited",
+                true,
+            ),
+            (AppriseError::NoDestinations, "no_destination", true),
+            (
+                AppriseError::Native("refused".to_owned()),
+                "send_failed",
+                false,
+            ),
+            (AppriseError::NoUrl, "send_failed", false),
+            (
+                AppriseError::Cli("apprise not on PATH".to_owned()),
+                "send_failed",
+                false,
+            ),
+        ];
+        for (e, reason, unattempted) in cases {
+            assert_eq!(e.drop_reason(), reason, "label for {e}");
+            assert_eq!(
+                e.nothing_was_attempted(),
+                unattempted,
+                "a failure that reached a destination must still be logged as \
+                 one, and a skip must not be: {e}"
+            );
+        }
     }
 }

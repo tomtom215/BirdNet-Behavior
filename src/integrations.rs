@@ -8,6 +8,7 @@
 //! surface so callers use `integrations::create_*` unchanged.
 
 mod acoustic_health;
+mod announce;
 mod apprise;
 mod birdweather;
 mod deadman;

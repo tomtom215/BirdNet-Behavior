@@ -841,15 +841,28 @@ pub(super) fn event_processor(
                             None,
                         ),
                         Err(e) => {
-                            tracing::warn!(error = %e, "Apprise notification failed");
-                            record_notification(
-                                &log_state,
-                                "apprise",
-                                &log_subject,
-                                NotifStatus::Failed,
-                                Some(&title),
-                                Some(&e.to_string()),
-                            );
+                            log_state
+                                .metrics()
+                                .inc_notification_dropped(e.drop_reason());
+                            // A notification no destination was even tried for
+                            // — every one skipped by the rate limiter or an
+                            // open circuit, or none configured — is counted
+                            // and not logged as a row. During a dawn chorus
+                            // the limiter refuses thousands of these, and a
+                            // row each would bury the sends that matter, for
+                            // the same reason there is deliberately no
+                            // `skipped` row below.
+                            if !e.nothing_was_attempted() {
+                                tracing::warn!(error = %e, "Apprise notification failed");
+                                record_notification(
+                                    &log_state,
+                                    "apprise",
+                                    &log_subject,
+                                    NotifStatus::Failed,
+                                    Some(&title),
+                                    Some(&e.to_string()),
+                                );
+                            }
                         }
                     }
                 });

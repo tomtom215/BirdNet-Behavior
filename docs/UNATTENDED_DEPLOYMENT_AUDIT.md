@@ -242,7 +242,7 @@ Findings marked **[FIXED]** landed on this branch; the commit is named.
 | **PS-3** | P1 | VERIFIED | Weekly `VACUUM` writes **3.0× the file size** (274.7 MB measured for 91.3 MB), stages a full copy in the `PrivateTmp` tmpfs inside `MemoryMax=1G`, and holds the write lock; a detection blocked past `busy_timeout=5000` returns `database is locked` and is logged "it is lost". | `PRAGMA incremental_vacuum` with `auto_vacuum=INCREMENTAL`, or `VACUUM INTO` on the data partition; raise `busy_timeout` for the writer. |
 | **PS-4** | P1 | VERIFIED | **82.6 KB written to the block layer per detection** against 577 B of row — measured at 12 k/52 k/202 k/502 k rows. ~1.05 GB/day at 1 000 detections/day, ~3.05 GB/day on a mature busy station. 55 % is database machinery. | Batch inserts inside one transaction; `PRAGMA wal_autocheckpoint` tuning; document the real card-wear budget. |
 | **PS-5** | P1 | READ | The daily integrity check detects corruption, logs one `error!`, and the daemon **keeps writing to the corrupt file** until someone reboots it. The "never write to a corrupt database" policy exists only at startup. | On a failed check, quarantine and restore in place, or stop the writer and go read-only with a loud health state. |
-| **PS-6** | P1 | READ | A quarantined `birds.db.corrupt.<ts>` — total history loss — is matched by **no** doctor scan (`doctor/analytics.rs:130` matches `.duckdb.corrupt.` only, and its test asserts the SQLite name is *not* matched), no `station_health` condition, and no prune. It sits on the card for ever. | Extend the scan and add a `history_quarantined` condition; prune on a retention schedule. |
+| **PS-6** | P1 | READ | A quarantined `birds.db.corrupt.<ts>` — total history loss — is matched by **no** doctor scan (`doctor/analytics.rs:130` matches `.duckdb.corrupt.` only, and its test asserts the SQLite name is *not* matched), no `station_health` condition, and no prune. It sits on the card for ever. **[FIXED IN PART — "Alert on a backup that fails, not only on one that stops"]** The doctor scan now matches `.db.corrupt.` as well as `.duckdb.corrupt.` (excluding `-wal`/`-shm` sidecars), and `check_quarantined_stores` raises a condition whose title distinguishes a lost detection history from a rebuilt analytics store. **The prune is still not done**: a quarantined file still sits on the card for ever, which on a 32 GB card is the difference between one bad week and a full disk. That half is item 2.11. | Remaining: prune quarantined stores on a retention schedule. |
 | **PS-7** | P1 | READ | `sync_all` appears **twice in the whole workspace**, neither in the audio path. Clips and segments are written non-atomically under their final names, so a power cut leaves truncated files the database points at for ever; and because both retention passes are database-driven, a clip whose row was lost is never deleted except by the 95 %-full purge. | Write to `.part` + `rename` + `sync_all` (the pattern `docker/entrypoint.sh:239` already uses); add an orphan-clip reconciliation pass (**S-14**). |
 | **PS-8** | P1 | READ | `--doctor`'s only disk check and its "Recordings directory" check both read `--watch-dir` first, which the shipped unit **always** sets to the tmpfs — so the preflight measures a RAM disk while `/api/v2/system/disk` correctly measures the card. | Check the data partition explicitly, and report both. |
 | **PS-9** | P1 | READ/VERIFIED | Nothing probes writability at runtime. On a read-only remount — what the kernel does after repeated I/O errors — `/api/v2/health` still answers `healthy` (a read-only `SELECT 1` succeeds; the integrity verdict freezes because *recording* it is a write) while every detection is classified and discarded. | A periodic write probe on the data partition, feeding a health condition and a metric. |
@@ -358,13 +358,13 @@ unscraped Prometheus series is **not surfaced**.
 | 14 | Clock unsynced, NTP never lands | **No** — one WARN on transition |
 | 15 | Retention purging too aggressively | **No** |
 | 16 | Scheduled window resolves to zero minutes | Partly, wrong cause |
-| 17 | Notifications failing silently | **No** — and can swallow the deadman (**OB-5**) |
+| 17 | Notifications failing silently | Was **No**, and could swallow the deadman; **[FIXED]** by **OB-5** — `birdnet_notifications_dropped_total{reason}`, and an undelivered alert is retried rather than latched |
 | 18 | Web UI up, every page 5xx | **No** — a counter, and no log line at all |
 | 19 | DuckDB sync stopped / store quarantined | **No** — `analytics:true` stays true |
 | 20 | Audio quality degraded (wind screen gone) | **No** (as #6) |
-| 21 | **Weekly backup fails every week for a year** | **No** — see **OB-7** |
-| 22 | Daily integrity check FAILS | Partly — reddens a page; pushes nothing |
-| 23 | Offsite backup failing, no copy leaves the box | **No** |
+| 21 | **Weekly backup fails every week for a year** | Was **No**; **[FIXED]** by **OB-7** — the verdict is recorded and a recorded failure is a condition immediately |
+| 22 | Daily integrity check FAILS | Was **Partly** — reddened a page, pushed nothing; **[FIXED]** by **OB-7** |
+| 23 | Offsite backup failing, no copy leaves the box | Was **No**; **[FIXED]** by **OB-7** — its own `JOB_OFFSITE_BACKUP` key and condition |
 | 24 | Whole box dead | Was **weak**; **[FIXED]** by the heartbeat timer |
 | 25 | MQTT/HA "station online" sensor | **No** — advertised, never published |
 
@@ -375,7 +375,7 @@ unscraped Prometheus series is **not surfaced**.
 | **OB-1** | P1 | VERIFIED | `/api/v2/metrics` declared `birdnet_detections_total` twice, gauge and counter. `expfmt.TextParser` (`promtool`, Telegraf, the Python client) **rejects the whole document**; the Prometheus server merges a decreasing gauge into the counter the dashboard `rate()`s. **[FIXED]** | Done — and the gate found a third offender the audit had not. |
 | **OB-2** | P1 | READ | The heartbeat fired only per detection. **[FIXED]** | Done. |
 | **OB-4** | P1 | VERIFIED | `/api/v2/health` returns `200 "healthy"` while its own body says `detection_daemon: "stopped"`; the status code is gated on SQLite alone. This is the endpoint the container healthcheck polls and the one every monitor gets pointed at. | A `?strict=1` / `readyz` sibling returning 503 on a stopped daemon or a silence past `DEADMAN_HOURS`; keep the default 200 so a quiet season does not restart the container. |
-| **OB-5** | P1 | READ | **An operational alert can be dropped and then never re-sent.** All three alerting loops set the episode latch *before* calling `notify()`, `notify()` swallows the failure with one `warn!`, and the send may not be attempted at all because the shared circuit breaker skips it with a **`debug!`** that the default filter drops for `birdnet_integrations`. Sequence: uplink drops, three detection notifications fail, circuit opens; 24 h later the deadman fires, latches, and its send is skipped silently; the link returns; `alerted` stays true for the process lifetime. And `apprise.rs:473` `skip_counts()` — which returns exactly the two counters that would answer "how many alerts were dropped" — has **zero production callers**. | Latch only on a successful send; let operational alerts bypass the detection rate limiter and force one probe through an open circuit; export `birdnet_notifications_dropped_total{reason}`; raise the skip to `warn!`. |
+| **OB-5** | P1 | READ | **An operational alert can be dropped and then never re-sent.** All three alerting loops set the episode latch *before* calling `notify()`, `notify()` swallows the failure with one `warn!`, and the send may not be attempted at all because the shared circuit breaker skips it with a **`debug!`** that the default filter drops for `birdnet_integrations`. Sequence: uplink drops, three detection notifications fail, circuit opens; 24 h later the deadman fires, latches, and its send is skipped silently; the link returns; `alerted` stays true for the process lifetime. And `apprise.rs:473` `skip_counts()` — which returns exactly the two counters that would answer "how many alerts were dropped" — has **zero production callers**. **[FIXED — "Latch an alert episode on delivery, not on the attempt"]** The defect was worse than described here: `send_notification_with_image` returned **`Ok(())`** for `(delivered: 0, first_error: None)`, which is precisely the fully-skipped case, so the send itself reported success. Two of the four prescriptions were adopted as written; the other two were changed on evidence. Forcing a probe through an open circuit was **not** done — the breaker already admits one probe per open period, and a caller that now retries rides that schedule and lands as soon as the destination comes back, so forcing would only add traffic to a dead endpoint. Raising the per-send skip to `warn!` was **reverted for detections**: at a detection every twenty seconds that is ~4 000 lines a day, which is why it was `debug` to begin with; the `warn` moved to the *transition* (`Breaker::on_failure` now reports the period it just opened for) and is kept per-send only for operational alerts. | Done; see Stage 2 landed. |
 | **OB-7** | P1 | READ | **A backup that fails every week never alerts**, because `mark_ran` is called unconditionally after `run_backup_and_vacuum` and the station-health check reads `last_run_unix`, ignoring the `ok` column entirely. It can only detect the maintenance loop having *stopped*. And a **failed integrity check pushes nothing at all** — it reddens a badge and 503s an endpoint, but sends no notification, though `station_health.rs:19-20` names it as one of the two things the module exists for. Offsite failure is invisible everywhere: no counter, no `maintenance_runs` row, no health field, no alert. | Give the backup a verdict and use `mark_ran_with`; branch on `last_run_result`; add the recorded integrity failure as its own condition; give offsite its own job key. |
 | **OB-12** | P1 | READ | **No chunk or file throughput counter exists**, and the one latency histogram is observed *per stored detection*, not per analysed chunk — its own HELP says so. So a station where inference runs perfectly and returns nothing (wrong labels, wrong sample rate, a model swapped by a bad update) has flat, empty latency series **identical to a station where inference is not running at all**. The four production drop reasons all live downstream of a prediction the model actually made. | `birdnet_files_analysed_total{source}` at the point the correlation id is minted (~5 760/day/source at the default segment length), plus `birdnet_chunks_analysed_total`. A flat counter with `audio_source_up == 1` is "capture writes, nothing analysed"; a rising counter with zero detections is "the model answers nothing" — the discrimination no surface can currently make. |
 | **OB-14** | P1 | READ | Runtime clock correctness is **never re-checked**. `--doctor`'s clock checks run once, from `ExecStartPre`; at runtime capture tests only a floor and trusts anything above it absolutely. A Pi whose NTP has been unreachable for months, or whose timezone changed, records everything under the wrong hour with no runtime signal at all — a lost season that looks like a good one. Ties to **NT-1**, **NT-5**, **NT-6**. | A `clock` condition from two cheap signals (`secs_look_synced`, and `timedatectl show -p NTPSynchronized` / the mtime of `/run/systemd/timesync/synchronized`); export `birdnet_clock_synced`. |
@@ -531,8 +531,9 @@ because nobody applied.
 
 **All five P0s are closed**, each with a gate observed failing against the code
 it was written for and the failure text recorded in the commit message. The
-workspace suite went from 3 425 passing at the branch point to 3 465; the
-installer suite from eight test files to ten, all passing.
+workspace suite went from 3 425 passing at the branch point to 3 502 with Stage
+2 in progress (3 465 at the end of Stage 1); the installer suite from eight test
+files to ten, all passing.
 
 | # | Item | Finding | Gate, observed failing first |
 |---|---|---|---|
@@ -546,6 +547,7 @@ installer suite from eight test files to ten, all passing.
 | 1.5 | One clock floor, and no date-based deletion on an unset clock | **NT-5**, half of **NT-4** | The doctor/supervisor agreement sweep fails at `1578268800` against the old constants. See the caveat below. |
 | 1.6 | Atomic binary swap, and the `.prev` the manual promises | **LC-1** (P0) | 7 of 10 assertions fail against `install -m 0755`, including "the live binary was unlinked; a power cut here leaves no binary at all". |
 | 1.7 | The model is verified, and a partial download resumed | **LC-2** (P0) | "the truncated model was skipped — this is the defect", for the model and for the labels. The counterpart — a verified model must not be re-downloaded — passes either way. |
+| 1.8 | A reachable red on `/api/v2/health` | **OB-4**, **PR-5** | Against the previous status logic, `left: 200, right: 503`; against a version making every request strict, `left: 503, right: 200` — the change that would put field stations into a Docker restart loop. |
 | — | Two pruners with no production caller | **NT-18** | Both tables shrink; with the `reviewed = 1` condition removed the counterpart fails on the surviving row. |
 
 > **What 1.5 does not do.** The floor catches a clock that is too *early*, which
@@ -561,7 +563,6 @@ installer suite from eight test files to ten, all passing.
 
 | # | Item | Finding | Why here |
 |---|---|---|---|
-| 1.8 | A reachable red on `/api/v2/health` | **OB-4**, **PR-5** | Makes 1.7, 1.3 and half the silent-failure matrix visible to the monitor everyone already points at. Keep the default 200; add strict. |
 | 1.9 | Never write to a database known to be corrupt | **PS-5** | Detected daily, then written to anyway until someone reboots. |
 | 1.10 | Atomic clip and segment writes | **PS-7**, **S-4** | `.part` + `rename` + `sync_all`; the pattern is already in `entrypoint.sh`. |
 | 1.11 | The monotonic-versus-wall step detector | **NT-4**, remaining half | The forward-jump direction 1.5 does not cover. |
@@ -573,11 +574,18 @@ installer suite from eight test files to ten, all passing.
 Nothing here changes what the station records; everything here changes whether a
 person 40 km away learns that it stopped.
 
+**Landed so far:**
+
+| # | Item | Finding | Gate, observed failing first |
+|---|---|---|---|
+| 2.1 | A throughput counter, so "hearing nothing" and "not running" are distinguishable | **OB-12** | The discrimination is an explicit assertion: a station that analysed ten files and detected nothing must not render identically to one that analysed none. The two `run.rs` call sites are not CI-reachable (they need the 541 MB model); both sit in the `Ok` arm of `process_and_infer_filtered`, so "analysed" cannot drift to mean "attempted". |
+| 2.2 | Latch an episode only on a *delivered* alert; let operational alerts bypass the detection rate limiter | **OB-5** | 25 gates. Deleting the `(0, None)` arm fails four, one printing *"a notification that reached nobody was reported as sent"*. `admit_priority` delegating to `admit` fails *"an operational alert was dropped by the detection rate limit"*; returning `Send` unconditionally fails the counterpart, which is what stops the fix from hammering a retired webhook. `Outbox::settle` dropping the alert whatever happened — the shipped latch-on-attempt — fails *"an undelivered alert stays and is offered again"*. |
+| 2.3 | Record the backup's verdict; alert on a *failed* integrity check, not only a stale one; give offsite a job key | **OB-7**, **PS-16** | Verdict ignored (the shipped code): *"a recorded failure is a fault the moment it is recorded"*. The counterpart — alert on every recorded run — fails with *"a successful run must produce nothing"*, which is the rule that would page a healthy station weekly. |
+
+**Still to do:**
+
 | # | Item | Finding |
 |---|---|---|
-| 2.1 | A throughput counter, so "hearing nothing" and "not running" are distinguishable | **OB-12** |
-| 2.2 | Latch an episode only on a *delivered* alert; let operational alerts bypass the detection rate limiter | **OB-5** |
-| 2.3 | Record the backup's verdict; alert on a *failed* integrity check, not only a stale one; give offsite a job key | **OB-7**, **PS-16** |
 | 2.4 | Undervoltage and throttling telemetry | **NP-5** |
 | 2.5 | A runtime clock-sync condition and gauge | **OB-14** |
 | 2.6 | Wire a `tracing` layer to the log broadcaster; one broadcaster, not three; persist ERROR/WARN to a file the bundle carries | **O-3** |
@@ -585,7 +593,7 @@ person 40 km away learns that it stopped.
 | 2.8 | Re-notify open episodes on a widening schedule | **OB-16** |
 | 2.9 | Alert rules and a dashboard/exposition agreement gate | **OB-3** |
 | 2.10 | One disk denominator, everywhere | **OB-6**, **PR-14** |
-| 2.11 | Quarantined-database detection and pruning | **PS-6** |
+| 2.11 | Prune quarantined stores on a retention schedule (detection and the condition landed with 2.3) | **PS-6**, remaining half |
 | 2.12 | Read-only-remount detection | **PS-9** |
 | 2.13 | `--doctor` measures the card, not the RAM disk | **PS-8** |
 | 2.14 | Publish the MQTT status topic that discovery already advertises, with a last will | **OB-8** |
@@ -594,7 +602,7 @@ person 40 km away learns that it stopped.
 | 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10**, **OB-11** |
 | 2.18 | journald drop-in; demote the two per-file INFO lines | **OB-15**, **PS-19**, **O-9** |
 | 2.19 | `GET /admin/doctor.json` and a support bundle over HTTP | §3.6 |
-| 2.20 | Wire the two orphan pruners | **NT-18** |
+
 
 ### Stage 3 — a station survives its own maintenance and its own operator
 

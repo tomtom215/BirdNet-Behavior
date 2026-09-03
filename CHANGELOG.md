@@ -24,6 +24,77 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — an alert nobody received counted as one that had been sent
+
+Every alert loop in the station latched its episode on the *attempt*, and the
+attempt could not fail. `Client::send_notification_with_image` ended with
+
+```rust
+return match (delivered, first_error) {
+    (0, Some(e)) => Err(e),
+    _ => Ok(()),
+};
+```
+
+`(0, None)` is the fully-skipped case — every destination refused by the rate
+limiter or the circuit breaker, no send attempted, no error to report. It
+returned `Ok(())`. Nothing had left the box.
+
+Both guards live on the same `dispatch::Gate` a detection notification uses, and
+its token bucket is sized for detections. So the sequence that matters is
+ordinary: a dawn chorus drains the minute's budget, the detection deadman
+crosses its 24-hour threshold at 06:00, `notify()` gets `Ok(())` from a send
+that never happened, the loop sets `alerted = true`, and `transition()` returns
+`Transition::None` for the rest of the silence. The station had stopped
+detecting, the one mechanism built to say so had said it, and the operator was
+never told. The same held for every station-health condition and every stream
+fault. The skip itself was logged at `debug`, and the default filter puts
+`birdnet_integrations` at `info`, so there was no evidence either.
+
+Four changes, and they are separable:
+
+**The send reports what happened.** `AppriseError::AllDestinationsSkipped
+{ circuit_open, rate_limited }` for a notification every destination refused,
+and `AppriseError::NoDestinations` for a client with nowhere to send — reachable
+today through `--notify-urls` whose every scheme lacks a native sender, where a
+startup warning was the only sign and every send since answered `Ok(())`.
+
+**An alert about the station outranks the bird traffic.**
+`Gate::admit_priority` bypasses the rate limit for `Priority::Operational`. It
+still honours the breaker, deliberately: a destination that has failed three
+times running will not accept this one either, the breaker already admits one
+probe per open period, and a caller that retries rides that schedule and lands
+as soon as the destination comes back. The weekly report moved to the same path
+— it is one message a week, and losing it to a blackbird stamped `last_sent_date`
+and skipped that week.
+
+**The episode is latched on delivery, without re-logging.** The loud journal
+line still happens once, where the state machine decides something changed; the
+push is parked in `src/integrations/announce.rs` and retried at every poll until
+it lands. Keying that outbox by episode makes supersession free — a recovery
+queued while its onset is still stuck replaces it, so nobody is handed a fault
+that has already cleared — and an alert delivered more than ten minutes late
+carries how long it waited, because everything in these bodies is present tense.
+
+**What still cannot be delivered is counted.**
+`birdnet_notifications_dropped_total{reason}` over `circuit_open`,
+`rate_limited`, `send_failed` and `no_destination`. A detection notification the
+limiter refuses is counted and writes no `notification_log` row: during a dawn
+chorus that would be thousands, for the same reason there is deliberately no
+`skipped` row beside it. The per-send circuit-open line stays at `debug` for
+detections — four thousand a day on a station with a retired webhook — and the
+`warn` moved to the transition, where `Breaker::on_failure` now reports the
+period it just opened for.
+
+Twenty-five gates, each observed failing first. Six mutations were applied to
+the shipped code and watched go red: `admit_priority` delegating to `admit`
+(the alert is dropped by the detection limit), `admit_priority` returning `Send`
+unconditionally (a dead destination gets hammered), `on_failure` never and
+always reporting a transition, deleting the `(0, None)` arm (four tests fail,
+one printing *"a notification that reached nobody was reported as sent"*),
+`Outbox::settle` dropping the alert whatever happened, `queue` refusing to
+replace, and the late-delivery note suppressed.
+
 ### Fixed — a backup that failed every week never alerted, and a corrupt database pushed nothing
 
 `src/integrations/station_health.rs` opens by naming the five conditions it

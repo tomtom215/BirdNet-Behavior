@@ -85,8 +85,12 @@ async fn weekly_report_loop(
         match build_weekly_report(&state) {
             Ok((title, body)) => {
                 let mut client = apprise.lock().await;
+                // Operational, not routine: a report sent once a week must not
+                // lose the minute's send budget to a dawn chorus. It used to,
+                // and the skip came back as `Ok(())`, so `last_sent_date` was
+                // stamped and that week's report was never attempted again.
                 if let Err(e) = client
-                    .send_notification(&title, &body, NotifyType::Info)
+                    .send_operational_alert(&title, &body, NotifyType::Info)
                     .await
                 {
                     tracing::warn!(error = %e, "weekly report notification failed");

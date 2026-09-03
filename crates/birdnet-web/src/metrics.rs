@@ -185,6 +185,15 @@ pub struct MetricsRegistry {
     /// inference never started. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
     /// (OB-12).
     files_analysed: RwLock<HashMap<String, AtomicU64>>,
+    /// Notifications that never left the station, by why.
+    ///
+    /// Both guards on the outbound path — the per-destination circuit breaker
+    /// and the per-destination rate limit — drop a notification without
+    /// failing, and the skip was logged at `debug`, which the default filter
+    /// discards. A station could drop every alert it ever tried to send and
+    /// leave no evidence anywhere. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
+    /// (OB-5).
+    notifications_dropped: RwLock<HashMap<String, AtomicU64>>,
     capture_restarts: RwLock<HashMap<String, AtomicU64>>,
     /// Capture processes found alive but producing no segments, per source.
     /// Distinct from a restart: this is the *diagnosis*, and a stall that keeps
@@ -226,6 +235,7 @@ impl MetricsRegistry {
             detection_silence_secs: AtomicU64::new(u64::MAX),
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
+            notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
             occurrence_filter_active: AtomicU64::new(0),
@@ -283,6 +293,15 @@ impl MetricsRegistry {
     /// answering nothing. Neither of those was distinguishable from outside.
     pub fn inc_file_analysed(&self, source: &str) {
         Self::bump(&self.files_analysed, source);
+    }
+
+    /// Record a notification that never left the station.
+    ///
+    /// `reason` is a small closed vocabulary — `circuit_open`, `rate_limited`,
+    /// `send_failed`, `no_destination` — rather than free text, so the label
+    /// cardinality cannot grow with traffic.
+    pub fn inc_notification_dropped(&self, reason: &str) {
+        Self::bump(&self.notifications_dropped, reason);
     }
 
     /// Record that a capture process was restarted.
@@ -468,6 +487,7 @@ impl MetricsRegistry {
             detection_silence_secs: self.detection_silence_secs(),
             detections_dropped: Self::read_map(&self.detections_dropped),
             files_analysed: Self::read_map(&self.files_analysed),
+            notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
             occurrence_filter_active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
@@ -511,6 +531,8 @@ pub struct MetricsSnapshot {
     pub detections_dropped: Vec<(String, u64)>,
     /// Audio files the pipeline finished analysing, per source.
     pub files_analysed: Vec<(String, u64)>,
+    /// Notifications that never left the station, by reason.
+    pub notifications_dropped: Vec<(String, u64)>,
     /// Capture restarts per source.
     pub capture_restarts: Vec<(String, u64)>,
     /// Silent stalls diagnosed per source.
@@ -581,6 +603,16 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
             out,
             "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
             escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_notifications_dropped_total Notifications that never left the station, by reason: circuit_open (the destination is considered down), rate_limited (over the configured per-minute budget), send_failed (the destination refused or was unreachable), no_destination (nothing configured to send to).\n");
+    out.push_str("# TYPE birdnet_notifications_dropped_total counter\n");
+    for (reason, count) in &snap.notifications_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_notifications_dropped_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
         );
     }
 
@@ -962,6 +994,56 @@ mod operational_metrics_tests {
         assert!(
             out.contains("# TYPE birdnet_files_analysed_total counter"),
             "it must be declared, and as a counter: {out}"
+        );
+    }
+
+    /// The only number that says an alert never left the station.
+    ///
+    /// Both guards on the outbound path drop a notification *without failing* —
+    /// the circuit breaker when a destination is considered down, the token
+    /// bucket when it is over its per-minute budget — and the send then
+    /// returned `Ok(())`. The skip was logged at `debug`, which the default
+    /// filter discards, so a station could drop every alert it ever tried to
+    /// send and leave no evidence at all. See
+    /// `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` (OB-5).
+    ///
+    /// Observed failing before `inc_notification_dropped` existed: the
+    /// exposition carried no `birdnet_notifications_dropped_total` at all.
+    #[test]
+    fn dropped_notifications_are_counted_by_reason() {
+        let out = rendered(|r| {
+            r.inc_notification_dropped("rate_limited");
+            r.inc_notification_dropped("rate_limited");
+            r.inc_notification_dropped("circuit_open");
+        });
+        assert!(
+            out.contains(r#"birdnet_notifications_dropped_total{reason="rate_limited"} 2"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_notifications_dropped_total{reason="circuit_open"} 1"#),
+            "the reason is what separates a dead destination from a busy one, \
+             which need different fixes: {out}"
+        );
+        assert!(
+            out.contains("# TYPE birdnet_notifications_dropped_total counter"),
+            "it must be declared, and as a counter: {out}"
+        );
+    }
+
+    /// The counterpart: a station whose notifications all go out must not
+    /// publish a series suggesting otherwise.
+    #[test]
+    fn a_station_that_drops_nothing_publishes_no_drop_samples() {
+        let out = rendered(|_| {});
+        assert!(
+            out.contains("# TYPE birdnet_notifications_dropped_total counter"),
+            "the family is always declared, so a dashboard panel is never \
+             missing: {out}"
+        );
+        assert!(
+            !out.contains("birdnet_notifications_dropped_total{"),
+            "no drops means no samples, not a zero for every reason: {out}"
         );
     }
 
