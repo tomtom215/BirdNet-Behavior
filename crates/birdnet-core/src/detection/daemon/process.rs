@@ -27,6 +27,31 @@ pub fn process_file_pipeline_only(
     Ok(chunks)
 }
 
+/// The BirdNET geomodel week for the recording this file came from.
+///
+/// The week is a property of *when the audio was recorded*, which is what the
+/// filename says, and never of when it was analysed: a backlog drained three
+/// days after a power cut must be scored against the season it was recorded
+/// in. [`crate::civil::birdnet_week`] documents the 48-week year the model was
+/// trained on and why week 0 is not a point in it.
+///
+/// `pipeline::process_file` already refuses a file whose name does not parse
+/// as `YYYY-MM-DD-birdnet-…`, so the only way to reach the fallback is a name
+/// whose date is digit-shaped but names no day (`2026-99-99`). That warns and
+/// continues rather than discarding real audio, and week 1 is named here so
+/// the substitution is auditable rather than invented somewhere downstream.
+fn geomodel_week(date: &str, path: &Path) -> u32 {
+    crate::civil::birdnet_week_from_date(date).unwrap_or_else(|| {
+        tracing::warn!(
+            file = %path.display(),
+            date,
+            "recording date does not name a day; scoring the species-occurrence \
+             filter against week 1"
+        );
+        1
+    })
+}
+
 /// Process a single audio file and run inference.
 ///
 /// Returns all detections found in the file, or an empty vec if
@@ -69,7 +94,7 @@ pub fn process_and_infer(
             &chunk.recording.time,
             chunk.start_secs,
             chunk.end_secs,
-            0, // week will be computed by caller
+            geomodel_week(&chunk.recording.date, path),
         )?;
 
         let infer_elapsed = infer_start.elapsed();
@@ -130,7 +155,6 @@ pub fn process_and_infer_filtered(
     filter_observer: Option<&crate::detection::daemon::SpeciesFilterObserver>,
     lat: Option<f64>,
     lon: Option<f64>,
-    week: u32,
     correlation_id: &str,
 ) -> Result<Vec<DetectionEvent>, DaemonError> {
     let start = Instant::now();
@@ -145,6 +169,13 @@ pub fn process_and_infer_filtered(
         pipeline_ms = pipeline_elapsed.as_millis(),
         "audio pipeline complete"
     );
+
+    // One week per file: every chunk carries the same `recording`, because the
+    // date comes from the filename rather than from the chunk's offset within
+    // it. Deriving it once says so, and leaves one place for it to be wrong.
+    let week = chunks
+        .first()
+        .map_or(1, |c| geomodel_week(&c.recording.date, path));
 
     // Run inference on all chunks first to collect raw predictions
     let mut all_predictions: Vec<Vec<Detection>> = Vec::with_capacity(chunks.len());

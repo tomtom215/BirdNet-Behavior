@@ -332,6 +332,61 @@ pub fn shift_datetime(date: &str, time: &str, offset_secs: f64) -> Option<(Strin
     ))
 }
 
+/// The BirdNET "week of year" for a calendar month and day, always in `1..=48`.
+///
+/// BirdNET's metadata model — the geomodel this project feeds through
+/// [`crate::inference::species_filter::SpeciesFilter`] — takes
+/// `(latitude, longitude, week)` and was trained on a **48-week year**: four
+/// weeks per month, with days 29–31 clamped into week 4 of their month. It is
+/// not the ISO week and not the day-of-year ÷ 7; asking it about week 0 or
+/// week 52 is asking about a point outside its input domain.
+///
+/// Both reference implementations agree on this arithmetic and on the clamp:
+/// `tphakala/birdnet-go`'s `internal/inference/onnx/rangefilter.go`
+/// (`CalculateWeek`, documented "Result is always in `[1, 48]`") records that
+/// an un-clamped copy which produced week 49 for 29–31 December was a real
+/// defect fed into a live range filter.
+///
+/// # Panics
+///
+/// Never. `month` outside `1..=12` and `day` outside `1..=31` are clamped
+/// rather than rejected: this is the last step before a model input, and a
+/// plausible week is a better failure than a panic in the capture path. Callers
+/// that need to know a date was malformed should parse it with
+/// [`parse_civil`] first, which rejects rather than guesses.
+#[must_use]
+pub const fn birdnet_week(month: u32, day: u32) -> u32 {
+    let month = if month < 1 {
+        1
+    } else if month > 12 {
+        12
+    } else {
+        month
+    };
+    let day = if day < 1 { 1 } else { day };
+    let week_in_month = {
+        let w = (day - 1) / 7 + 1;
+        if w > 4 { 4 } else { w }
+    };
+    (month - 1) * 4 + week_in_month
+}
+
+/// The BirdNET week for a `YYYY-MM-DD` date string, or `None` if it does not parse.
+///
+/// The date a station files a detection under is the date in its *recording's*
+/// filename, not "now": a backlog drained three days after a power cut must be
+/// scored against the season it was recorded in, not the season it was
+/// analysed in. See [`birdnet_week`] for the arithmetic and why the domain
+/// matters.
+#[must_use]
+pub fn birdnet_week_from_date(date: &str) -> Option<u32> {
+    // `parse_civil` wants a time as well and validates both halves; midnight
+    // is a legitimate time of day, so it is the right filler for a date-only
+    // input and cannot make a bad date parse.
+    let civil = parse_civil(date, "00:00:00")?;
+    Some(birdnet_week(civil.month, civil.day))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{days_in_month, is_leap_year};
@@ -944,5 +999,118 @@ mod tests {
     fn a_time_that_names_nothing_has_no_instant() {
         assert!(unix_secs_from_local("", "", 0).is_none());
         assert!(unix_secs_from_local("not-a-date", "25:99:99", 0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod birdnet_week_tests {
+    use super::{birdnet_week, birdnet_week_from_date};
+
+    /// The domain contract, swept over every date a Gregorian year can hold.
+    ///
+    /// The geomodel was trained on `1..=48`. Anything outside it is a question
+    /// the model was never asked, and the answer it invents is not detectable
+    /// downstream — which is exactly how a hardcoded `0` survived in the
+    /// daemon's two call sites without a single failing test.
+    #[test]
+    fn every_day_of_every_month_lands_in_the_trained_domain() {
+        for month in 1..=12 {
+            for day in 1..=31 {
+                let w = birdnet_week(month, day);
+                assert!(
+                    (1..=48).contains(&w),
+                    "month {month} day {day} gave week {w}, outside the model's 1..=48 domain"
+                );
+            }
+        }
+    }
+
+    /// The four boundaries of the arithmetic, named individually so a mutant
+    /// that breaks one is not masked by the other three.
+    #[test]
+    fn the_corners_of_the_forty_eight_week_year() {
+        assert_eq!(birdnet_week(1, 1), 1, "the first day of the year is week 1");
+        assert_eq!(birdnet_week(1, 7), 1, "day 7 is still the first week");
+        assert_eq!(birdnet_week(1, 8), 2, "day 8 opens the second week");
+        assert_eq!(
+            birdnet_week(12, 31),
+            48,
+            "the last day of the year is week 48"
+        );
+    }
+
+    /// Days 29-31 clamp into week 4 rather than opening a week 5.
+    ///
+    /// This is the case `birdnet-go` records as a live defect in its own
+    /// history: an un-clamped copy returned 49 for 29-31 December and fed it
+    /// to the range filter.
+    #[test]
+    fn the_long_tail_of_a_month_clamps_into_week_four() {
+        for day in 29..=31 {
+            assert_eq!(
+                birdnet_week(12, day),
+                48,
+                "December {day} must clamp to week 48, not open a 49th"
+            );
+            assert_eq!(
+                birdnet_week(1, day),
+                4,
+                "January {day} must clamp to week 4"
+            );
+        }
+        // And the day before the clamp is genuinely week 4 too, so the clamp is
+        // not doing the work of the formula.
+        assert_eq!(birdnet_week(1, 22), 4);
+    }
+
+    /// Each month opens a new block of four weeks. Without this a mutant that
+    /// drops the `(month - 1) * 4` term still passes every within-month case.
+    #[test]
+    fn each_month_opens_the_next_block_of_four() {
+        for month in 1..=12 {
+            assert_eq!(
+                birdnet_week(month, 1),
+                (month - 1) * 4 + 1,
+                "the first day of month {month}"
+            );
+        }
+        // Adjacent months must differ, which a constant-returning mutant cannot do.
+        assert_ne!(birdnet_week(1, 15), birdnet_week(7, 15));
+    }
+
+    /// A malformed month or day is clamped, not panicked on: this runs in the
+    /// capture path.
+    #[test]
+    fn out_of_range_inputs_are_clamped_into_the_domain() {
+        assert_eq!(birdnet_week(0, 1), 1);
+        assert_eq!(birdnet_week(13, 31), 48);
+        assert_eq!(birdnet_week(1, 0), 1);
+        assert_eq!(birdnet_week(6, 99), 24);
+    }
+
+    #[test]
+    fn a_date_string_resolves_to_its_week() {
+        assert_eq!(birdnet_week_from_date("2026-01-05"), Some(1));
+        assert_eq!(birdnet_week_from_date("2026-07-05"), Some(25));
+        assert_eq!(birdnet_week_from_date("2026-12-31"), Some(48));
+        // A leap day is an ordinary day to this arithmetic.
+        assert_eq!(birdnet_week_from_date("2028-02-29"), Some(8));
+    }
+
+    /// Unparseable dates are `None`, never a guessed week. The database's
+    /// `Date` column is free-form `TEXT` and an imported history holds values
+    /// that name no point in time.
+    #[test]
+    fn an_unparseable_date_has_no_week() {
+        for bad in [
+            "",
+            "not-a-date",
+            "2026-13-01",
+            "2026-01-32",
+            "26-01-01",
+            "2026-1-1",
+        ] {
+            assert_eq!(birdnet_week_from_date(bad), None, "{bad} must not parse");
+        }
     }
 }

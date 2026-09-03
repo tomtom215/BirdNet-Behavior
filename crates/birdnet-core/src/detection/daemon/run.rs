@@ -348,7 +348,6 @@ pub fn run_daemon(
                     filter_observer.as_ref(),
                     lat,
                     lon,
-                    0, // week will be computed by caller
                     &correlation_id,
                 ) {
                     Ok(events) => {
@@ -426,7 +425,6 @@ fn process_existing_files(
             filter_observer,
             lat,
             lon,
-            0,
             &correlation_id,
         ) {
             Ok(events) => {

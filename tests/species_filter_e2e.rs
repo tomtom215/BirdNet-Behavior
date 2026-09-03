@@ -245,6 +245,13 @@ fn pipeline_for(
 /// Copy the bundled recording under the capture-style name the pipeline
 /// requires (`YYYY-MM-DD-birdnet-HH:MM:SS.wav`), which is how a real captured
 /// segment reaches the daemon.
+/// Stage the bundled recording under a name the daemon can parse.
+///
+/// The date in this name is load-bearing: since the `week` parameter was
+/// removed, `process_and_infer_filtered` derives the geomodel week from the
+/// recording's own filename. 19 May is week 19 of the 48-week year — the
+/// literal `20` this call site used to pass was not that week, and nothing
+/// noticed, because the daemon passed `0` here regardless.
 fn staged_recording(dir: &Path) -> std::path::PathBuf {
     let staged = dir.join("2026-05-19-birdnet-06:30:00.wav");
     std::fs::copy(PICA_PICA_WAV, &staged).expect("stage the bundled recording");
@@ -282,7 +289,6 @@ fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
         None,
         Some(42.36),
         Some(-71.06),
-        20,
         "species-filter-e2e",
     )
     .expect("processing the bundled recording must not fail");

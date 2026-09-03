@@ -24,6 +24,38 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — the species-occurrence filter was asked about week 0, all year
+
+The `BirdNET` geomodel takes `(latitude, longitude, week)` and was trained on a
+48-week year, so its input domain is `1..=48`. The daemon passed a literal `0`
+at both of its call sites, each carrying the comment *"week will be computed by
+caller"* — and `run.rs` **is** the caller. Nothing computed it. `sf_thresh`
+defaults to `0.03`, so the filter is on by default: every station with
+coordinates has been filtering its species list against a point outside the
+model's domain, identically in June and December, for the life of the project.
+Every `Week` value ever written to `detections` is `0`.
+
+Nothing caught it because week 0 does not error — the model returns a different,
+plausible-looking occurrence vector — and because the one end-to-end test over
+that function passed a week of its own (`20`, which is not even the week of the
+recording it stages: 19 May is week 19), so it exercised the parameter rather
+than the daemon's use of it.
+
+The week is now derived from the *recording's own date*, never from the clock at
+analysis time: a backlog drained three days after a power cut is scored against
+the season it was recorded in. `process_and_infer_filtered` no longer takes a
+`week` argument at all, so there is no longer a position a constant can be
+passed in — the compiler enforces what a test could only observe.
+
+`birdnet_core::civil::birdnet_week` is the shared arithmetic, clamping days
+29–31 into week 4 of their month. That clamp is not decoration: `birdnet-go`
+records an un-clamped copy of the same formula returning week 49 for 29–31
+December and feeding it to a live range filter.
+
+Existing rows keep `Week = 0`. The value is a BirdNET-Pi compatibility column
+that only one internal query reads, so it is not backfilled here; the
+derivation from `Date` is available if that changes.
+
 ### Added — the ten gaps against BirdNET-Pi and birdnet-go
 
 `docs/FEATURE_GAP_ANALYSIS.md` is a line-by-line comparison against
