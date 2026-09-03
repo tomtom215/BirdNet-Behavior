@@ -68,8 +68,9 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
 /// `GET /api/v2/settings` is a read, so it is not in [`WRITE_ROUTES`] — the
 /// CSRF guard has no interest in a `GET`. It is here rather than in
 /// `public_routes()` because a station's settings are not public: the values
-/// are redacted (see [`redacted_settings`]), but the *shape* of a station's
-/// configuration is still not something to hand an anonymous visitor.
+/// are redacted (by `redacted_settings`, private to this module, so it is
+/// named rather than linked), but the *shape* of a station's configuration is
+/// still not something to hand an anonymous visitor.
 pub const READ_ROUTES: &[(&str, &str)] = &[("GET", "/api/v2/settings")];
 
 /// Whether `path` is one of the mutating API endpoints.

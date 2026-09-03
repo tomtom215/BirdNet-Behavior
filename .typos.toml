@@ -81,6 +81,21 @@ extend-ignore-re = [
     # in [default.extend-words], which is global: a real misspelling of
     # "Privileges" anywhere else in the repository is still caught.
     'NoNewPrivilages',
+    # `PUT /api/v2/settings` refuses unknown keys rather than ignoring them,
+    # because a caller who misspells one and gets a 200 has been told their
+    # change landed. The misspelling is the fixture:
+    # `a_settings_write_refuses_unknown_keys_and_the_redaction_placeholder`
+    # sends `{"confidence_treshold":"0.8"}` and asserts the refusal names it
+    # back, and the handler's comment, the CHANGELOG and the API manual all
+    # quote the same string so the example a reader sees is the one the test
+    # sends. Correcting it would delete the point.
+    #
+    # Same shape as `NoNewPrivilages` above, and allow-listed the same way:
+    # the whole compound token, never "treshold" in [default.extend-words],
+    # which is global — a real misspelling of "threshold" anywhere else in the
+    # repository is still caught, and this project has a `confidence_threshold`
+    # setting whose name it would then stop protecting.
+    'confidence_treshold',
 ]
 
 [default.extend-words]
