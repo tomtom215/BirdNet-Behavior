@@ -7,18 +7,204 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Five clusters: HTTPS in the listener itself, a searchable detection log with
+Six clusters: HTTPS in the listener itself, a searchable detection log with
 bulk review, backups that leave the SD card they were written on, removing the
-Apprise dependency for the services most stations actually use, and giving the
+Apprise dependency for the services most stations actually use, giving the
 detection pipeline the quality controls that separate a station's real records
-from its model's artefacts.
+from its model's artefacts, and closing the ten highest-priority gaps against
+the two projects this one is measured against.
 
-Plus four bugs that were found the same way each time — by running the thing
-rather than by reading it. Thirteen state-changing endpoints with no login,
-found while adding a fourteenth. A checkbox group that could not be submitted at
-all, found by posting a real form. Five CSS variables that had never been
-defined, found by looking at a screenshot. And one latent data-loss bug found
-while adding a quarantine reason.
+Plus bugs that were found the same way each time — by running the thing rather
+than by reading it. Thirteen state-changing endpoints with no login, found while
+adding a fourteenth. A checkbox group that could not be submitted at all, found
+by posting a real form. Five CSS variables that had never been defined, found by
+looking at a screenshot. One latent data-loss bug found while adding a
+quarantine reason. Every detection clip silently truncated at a segment
+boundary, found by reading a waveform rather than a code path. And an
+accessibility feature documented in the wrong direction for its entire life,
+found by checking upstream's own config file instead of trusting a comment.
+
+### Added — the ten gaps against BirdNET-Pi and birdnet-go
+
+`docs/FEATURE_GAP_ANALYSIS.md` is a line-by-line comparison against
+[Nachtzuster/BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi) (`88985a3`,
+~19k lines) and [tphakala/birdnet-go](https://github.com/tphakala/birdnet-go)
+(`1e74c82`, ~540k lines of Go across 51 `internal/` packages): 38 findings, 8 of
+them recorded as **declined** with the reason, plus what this project has that
+neither of them does. This release closes the ten it ranked first. Every gate
+below was watched failing against the code it guards before it was committed.
+
+- **Sound-level monitoring.** A real ISO 266 third-octave spectrum — 1/3-octave
+  bands from 20 Hz to 20 kHz, IEC 61672 A-weighting, and both broadband and
+  per-band minimum, maximum and *energy* mean over each interval. The energy
+  mean matters: averaging decibels instead of power under-reports a two-second
+  silence followed by a second of full scale by 43 dB, so the arithmetic is
+  pinned by a test that drives the meter with exactly that signal.
+
+  The band filter is a three-section cascade, not one biquad. One biquad gives
+  22.5 dB of rejection two bands out where the standard wants far more, and a
+  1 kHz tone showed up only 12.6 dB down in the 630 Hz and 1600 Hz bands — a
+  spectrum that would have looked plausible and been wrong. The `alpha` term is
+  pre-warped with the `sinh` bandwidth-in-octaves form, because without it the
+  10 kHz band's lower edge sat at −4.35 dB instead of −3.01.
+
+  A-weighting is evaluated at the *exact* ISO centre (`1000·10^(n/10)`), not the
+  rounded label. At the labels it deviates from IEC 61672 table 3 by up to
+  0.157 dB; at the exact centres, 0.050 dB. Both halves are asserted.
+
+- **Dynamic per-species confidence thresholds.** A species the station has
+  confirmed at high confidence becomes easier to hear for a while: three levels,
+  multipliers 0.75 / 0.50 / 0.25, a 15-minute learning cooldown and a floor at
+  the model's own threshold. Ported from birdnet-go's `dynamicthreshold`, with
+  its expiry semantics.
+
+- **Species tracking — first of the year, first of the season, back after a
+  winter away.** Hemisphere-aware seasons (±10° for the equatorial band), and a
+  status per species carrying whether it is new to the station, new this year,
+  new this season, or returning, with the days since it was last heard.
+
+- **Pre-capture that spans segment boundaries.** Every clip was silently cut at
+  the edge of the 15-second capture segment it landed in: a call two seconds
+  into a segment lost its lead-in, and one near the end lost its tail. Clips
+  are now assembled across neighbouring segments when they abut within 0.25 s
+  and match in sample rate. The stream directory keeps ~40 segments, so this is
+  live on a real station rather than theoretical.
+
+- **A per-source parametric equaliser.** `pipeline_high_pass` and
+  `pipeline_dc_removal` are two fixed filters — 120 Hz and 5 Hz. That is a
+  compromise chosen for a garden and wrong in a different direction at most
+  sites: a station beside a motorway wants a steeper cut, and a station with
+  mains hum wants a *notch*, which no high-pass gives without removing
+  everything below it.
+
+  Each source now takes a chain of RBJ-cookbook stages —
+  `highpass:120; notch:50:20; peaking:3500:1:4` — rendered from one
+  specification for **both** capture backends: biquads in-process for a teed
+  microphone, ffmpeg filter fragments for RTSP. The admin editor draws the
+  response curve as you type, computed from the same coefficients that will
+  filter the audio, and refuses a chain the source's sample rate cannot carry
+  rather than accepting it and falling back silently at the next restart.
+
+  Empty is the default and means exactly what the station did before.
+
+- **Serving from under a reverse-proxy path.** `BIRDNET_BASE_PATH=/birdnet`
+  puts the whole station under a prefix, for the common home setup of one
+  hostname and several services. Home Assistant ingress works this way too.
+
+  Nesting the router fixes incoming requests and nothing else — 234 literal
+  `href`/`src`/`hx-*` attributes across 47 Rust files, 88 more in the templates,
+  every `Location` header, the session cookie's `Path`, and three WebSocket URLs
+  built in the browser all pointed outside the application. Those are handled in
+  the pass that already buffers every HTML body to stamp CSP nonces, so the
+  rewrite is free and covers markup written after this change as well as before
+  it. The cookie keeps a trailing slash because RFC 6265's path-match is a
+  prefix rule: `Path=/birdnet` also matches `/birdnetsomethingelse`.
+
+- **A Flickr species-image provider.** The `ImageProvider` trait has had exactly
+  one implementor since it was written, and its own documentation said it
+  existed so Wikipedia could be joined by Flickr. Wikipedia has no photograph at
+  all for a long tail of species and, for many others, a museum skin, an egg or
+  a range map.
+
+  Choosing Flickr gives a *chain*, not a replacement: Flickr first, Wikipedia
+  behind it, so the setting can only add coverage. Only `NotFound` falls
+  through — an API error stops the chain and is reported, because a broken key
+  papered over by the other provider stays broken for a year.
+  `FLICKR_FILTER_EMAIL` narrows the search to one photographer's photostream,
+  which is how an operator shows their own pictures of the birds their own
+  station heard.
+
+  Only commercially-licensed photographs are requested, and every one is shown
+  with its photographer's name and a link to the licence terms; a photo Flickr
+  returns with nobody named is skipped rather than shown uncredited.
+
+- **Resolving the client's address instead of guessing at it.** A trusted-proxy
+  list (CIDRs, bare addresses, and the reserved names `loopback`, `private`,
+  `cloudflare`) with a right-to-left walk of `X-Forwarded-For` that stops at the
+  first untrusted hop. A forged header from an untrusted peer is now ignored;
+  from a trusted one it is honoured. Both halves are gated, because a test that
+  only asserts the honouring half is a blanket alarm passing for a
+  discriminator.
+
+- **A pitch control on the live stream.** See *Fixed* below — the mechanism
+  existed; nothing could reach it, and it was documented backwards.
+
+### Fixed — two doc comments that were confidently wrong
+
+Both were found by measuring rather than reading, which is the only reason they
+were found at all: each had been true-looking prose for as long as it existed.
+
+- **The two capture backends do not apply the same high-pass.** `AudioPipeline`
+  said they did. ffmpeg's `highpass` defaults to two poles (12 dB/octave); the
+  in-process tee's is one pole (6 dB/octave). From the identical `high_pass`
+  flag a microphone therefore keeps far more low-frequency energy than an RTSP
+  camera:
+
+  | Hz | tee | ffmpeg |     | Hz | tee | ffmpeg |
+  |---|---|---|---|---|---|---|
+  | 20 | −15.68 dB | −31.13 dB | | 60 | −7.00 dB | −12.30 dB |
+  | 30 | −12.31 dB | −24.10 dB | | 80 | −5.14 dB | −7.83 dB |
+  | 50 | −8.31 dB | −15.34 dB | | 120 | −3.04 dB | −3.01 dB |
+
+  They agree only at the corner. The divergence is **left as it stands** rather
+  than quietly corrected — both filters have been in the field, and changing
+  either changes what every existing station of that kind records. The table is
+  now in the type's documentation *and* asserted to 0.05 dB, and setting an
+  explicit equaliser chain is the opt-in fix: inside a chain both backends
+  render from one specification and provably agree.
+
+- **`HIGH_PASS_CUTOFF_HZ` claimed the model cannot hear below its corner.**
+  "Nothing BirdNET classifies lives down there: the model's mel bank starts well
+  above it." `MelConfig::default()` has `fmin: 0.0`, and the V2.4 path hands the
+  model raw samples (`[1, 144_000]`) with no filtering of its own. Energy below
+  120 Hz reaches the classifier on both model generations. The corner is a
+  signal-to-noise judgement, not a free lunch — which is the reason a steeper
+  one is now offered rather than imposed.
+
+### Fixed — the frequency shift pointed the wrong way
+
+Five doc comments, including the `--freq-shift-hz` CLI help an operator reads
+before choosing a value, said a **positive** (upward) shift "makes calls
+accessible to people with high-frequency hearing loss". That is backwards.
+Presbycusis takes the top of the range first, so an 8 kHz warbler is restored by
+moving it *down*. A listener following our documentation shifted the song
+further out of their own hearing.
+
+The upstream this was ported from was fetched and read rather than recalled.
+`BirdNET-Pi`'s `install_config.sh` ships `FREQSHIFT_HI=6000` / `FREQSHIFT_LO=3000`
+under the comment "useful for earing impaired people", and `livestream.sh` builds
+`rubberband=pitch=${FREQSHIFT_LO}/${FREQSHIFT_HI}` — a ratio of 0.5, down one
+octave. Its sox path ships `FREQSHIFT_PITCH=-1500`. Two independent settings,
+both downward.
+
+All five comments are corrected, `ACCESSIBILITY_SHIFT_HZ = -3000` names the
+direction and carries that evidence, and a `const` assertion fails the **build**
+if the sign is ever flipped back — a stronger guard than a test, which a
+filtered `cargo test` can skip.
+
+Two related things came out of the same re-check:
+
+- **The live-stream shift was unreachable.** `/stream?freq_shift_hz=N` has
+  always worked; nothing in the UI ever sent it, so the feature existed only for
+  someone willing to hand-edit a URL. (The gap analysis had recorded this as
+  "streams the raw tap unshifted", which was wrong about the mechanism and right
+  about the outcome; the document now says so.) There is now a pitch control
+  beside the Listen button, with downward presets and one upward option for bat
+  calls. It is remembered **per browser**, not per station: hearing loss belongs
+  to a person, and this station spawns one encoder per connection where upstream
+  fed one broadcast to everyone, so two listeners can each have their own.
+- **`freq_shift_hz` was an unbounded `i32` from an unauthenticated request.**
+  `freq_shift_hz=2000000000` asked ffmpeg to resample from ~2 GHz down to
+  44.1 kHz, and `MAX_CONCURRENT_STREAMS` allows four of those at once. Clamped
+  to ±24 kHz, which is wider than any useful setting.
+
+### Fixed — the support bundle carried an email address
+
+A config value that is unambiguously an email address now has its local part
+masked and its domain kept (`you@example.com` → `***@example.com`) — the domain
+is the diagnostic half. `FLICKR_API_KEY` was already caught by the redactor's
+`KEY` needle; that claim predated the setting existing, so it is now asserted
+rather than trusted.
 
 ### Added — HTTPS, without a reverse proxy
 

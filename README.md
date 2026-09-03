@@ -53,6 +53,9 @@ It ships as **one self-contained binary** (~75 MB). The ONNX Runtime inference e
 | Analytics | — | DuckDB behavioral engine, built in |
 | HTTPS | reverse proxy (Caddy/nginx) | built in — `--tls-mode self-signed` or your own certificate |
 | Offsite backups | copy them yourself | built in — encrypted on the station, to S3-compatible or SFTP |
+| Sound levels | — | ISO 266 third-octave spectrum, IEC 61672 A-weighted |
+| Per-source audio filtering | two fixed toggles | a parametric chain, with the response curve drawn as you type |
+| Behind a path (`/birdnet`) | own subdomain or port | `BIRDNET_BASE_PATH` |
 | Each release ships | — | signed SLSA provenance + CycloneDX SBOM |
 
 Every BirdNET build is dominated by the model itself — the BirdNET+ weights cost the same memory whichever runtime loads them. What Rust removes is the overhead *around* the model: no interpreter to warm up, no virtualenv, no GIL serializing the request path. Audio capture and the detection loop run on a dedicated thread; the web server answers requests concurrently on a single Tokio runtime. It runs comfortably on a 2 GB Raspberry Pi.
@@ -164,9 +167,16 @@ sudo ./uninstall.sh --purge      # remove everything, including data + model
 - **Offsite backups** — each weekly snapshot encrypted **on the station** (argon2id + ChaCha20-Poly1305) and uploaded to any S3-compatible store or SSH host, with retention and a `--decrypt-backup` restore path. The passphrase never leaves; there is no setting to send a backup in the clear.
 - **Search the whole log** — `/search` filters every detection you have ever recorded by species, date, hour, confidence, source and review verdict, with bulk confirm/reject/delete for signed-in admins. Every filter is in the URL, so a useful search is a bookmark.
 - **Repeat confirmation** — record a species only when enough nearby analysis windows agree, which separates a bird that sings from an artefact that fires once.
+- **Sound-level monitoring** — a real ISO 266 third-octave spectrum (20 Hz–20 kHz) with IEC 61672 A-weighting, recording the minimum, maximum and *energy* mean per band. Turns a station into a noise logger alongside its detections.
+- **A parametric equaliser per source** — replaces the two fixed high-pass toggles with a filter chain (`highpass:120; notch:50:20`) rendered identically for a local microphone and an RTSP camera, with the response curve drawn live as you type it. Mains hum needs a notch, and no high-pass can give you one.
+- **Species tracking** — first of the year, first of the season, and back after a winter away, hemisphere-aware.
+- **Dynamic confidence thresholds** — a species the station has already confirmed becomes easier to hear, with a floor at the model's own threshold.
+- **Serve it under a path** — `BIRDNET_BASE_PATH=/birdnet` for the one-hostname-many-services setup, and for Home Assistant ingress.
+- **Photographs from Flickr, or your own** — an optional second image provider that falls back to Wikipedia, so choosing it can only add coverage. Point it at your own photostream to show your own pictures of the birds your own station heard.
+- **Listen at a pitch you can hear** — age-related hearing loss takes the top of the range first, and much warbler and kinglet song lives above it. The live stream shifts down on request, remembered per listener.
 - **Operational polish** — rare-bird quarantine queue, audio quality pre-filtering, a built-in `--doctor` diagnostic, Prometheus metrics, kiosk mode, a live spectrogram, and a first-run onboarding wizard.
 
-➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/today.html). New environment variables for these features — `BNB_SHARE_SECRET`, `BNB_BASE_URL`, `BNB_STATION_LAT`/`BNB_STATION_LON` — are documented in [`.env.example`](.env.example) and the [configuration reference](https://tomtom215.github.io/BirdNet-Behavior/reference/configuration-reference.html).
+➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/today.html). New environment variables for these features — `BNB_SHARE_SECRET`, `BNB_BASE_URL`, `BNB_STATION_LAT`/`BNB_STATION_LON`, `BIRDNET_BASE_PATH`, `IMAGE_PROVIDER`/`FLICKR_API_KEY` — are documented in [`.env.example`](.env.example) and the [configuration reference](https://tomtom215.github.io/BirdNet-Behavior/reference/configuration-reference.html).
 
 ---
 
