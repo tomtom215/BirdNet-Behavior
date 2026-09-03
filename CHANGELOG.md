@@ -24,6 +24,38 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — a zero-length database passed the integrity check
+
+SQLite opens a **zero-length file as a brand-new empty database**. That is by
+design — it is how every database in this project gets created — and it means
+`PRAGMA quick_check` answers `"ok"` for a `birds.db` that has been truncated to
+nothing. `check_integrity` ran that pragma and nothing else.
+
+So `check_and_recover` took its healthy branch, logged *"database healthy"*, and
+returned `RecoveryAction::None`. `migrate()` then built a fresh schema into the
+empty file, the station started recording into it, and five good backups sat
+beside it until the ring rotated them out about 35 days later.
+
+Truncation to zero is not exotic on the hardware this runs on: it is what a
+power cut during an SD card's wear-levelling relocation produces, what a
+filesystem repair leaves when an inode survives and its extents do not, and what
+a partly-restored backup leaves behind.
+
+`check_integrity` now requires the file to begin with SQLite's sixteen-byte
+magic before it asks SQLite anything. A file that is empty, too short to hold
+the header, or header-shaped-but-wrong is not a database, and `check_and_recover`
+walks the backup ring for it as it already does for a database that fails
+`quick_check`.
+
+Gate: five tests. Three shapes of "this is not a database" — empty, eight bytes,
+and right-length-wrong-magic — plus a recovery that must bring the history back,
+plus the discrimination that an ordinary healthy database still passes and is
+not restored over. Against the previous code four of the five fail, the first
+reporting `quick_check said "ok"` and the recovery one reporting `database
+integrity check passed`. The fifth passed before and after, which is what makes
+it worth keeping: a `check_integrity` that returned `false` for everything would
+satisfy the other four and quarantine every healthy station at its next boot.
+
 ### Fixed — the weekly backup never finished on a station that was recording
 
 `backup_database` drove SQLite's online backup API with

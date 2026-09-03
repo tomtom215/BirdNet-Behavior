@@ -159,9 +159,51 @@ pub fn checkpoint_wal(db_path: &Path) -> Result<(), ResilienceError> {
 ///
 /// Returns `ResilienceError` on check failure.
 pub fn check_integrity(db_path: &Path) -> Result<bool, ResilienceError> {
+    if !has_sqlite_header(db_path) {
+        return Ok(false);
+    }
     let conn = open_readonly_with_busy_timeout(db_path)?;
     let result: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     Ok(result == "ok")
+}
+
+/// The sixteen bytes every SQLite database file begins with.
+///
+/// <https://www.sqlite.org/fileformat.html#the_database_header>
+const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
+
+/// Does this file begin with SQLite's magic string?
+///
+/// # Why `check_integrity` cannot just ask SQLite
+///
+/// SQLite opens a **zero-length file as a brand-new empty database**. That is
+/// by design — it is how every database in this project gets created — and it
+/// means `PRAGMA quick_check` answers `"ok"` for a `birds.db` that has been
+/// truncated to nothing.
+///
+/// So [`check_and_recover`] took its healthy branch, logged "database healthy",
+/// and `src/app.rs` carried on; `migrate()` then built a fresh schema into the
+/// empty file and the station recorded into it, with good backups beside it
+/// that the ring rotates out in about five weeks. Truncation to zero is not
+/// exotic on an SD card: it is what a power cut during a wear-levelling
+/// relocation produces, and what a filesystem repair leaves when an inode
+/// survives and its extents do not.
+///
+/// A file that cannot be read at all is also not a database we can vouch for,
+/// so an I/O error here is `false` rather than a panic or a propagated error —
+/// the caller's next move (walk the backups) is the right one either way.
+fn has_sqlite_header(db_path: &Path) -> bool {
+    use std::io::Read as _;
+
+    let Ok(mut f) = std::fs::File::open(db_path) else {
+        return false;
+    };
+    let mut head = [0_u8; 16];
+    match f.read_exact(&mut head) {
+        Ok(()) => &head == SQLITE_MAGIC,
+        // Shorter than the header — including empty — is not a database.
+        Err(_) => false,
+    }
 }
 
 /// Run full integrity check (slower but more thorough).
