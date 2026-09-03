@@ -24,6 +24,65 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — the "Station Status" entity Home Assistant showed had nothing behind it
+
+Home Assistant discovery has always registered a `binary_sensor` with
+`device_class: connectivity` on `{prefix}/status`. Nothing ever published to
+that topic — `publish_status()` and `publish_daily_stats()` had zero call sites
+for the life of the project — so two of the four entities were permanently
+*unknown*, and the one automation an unattended station exists to support,
+*tell me when it stops answering*, could not be built.
+
+It could not be fixed where it looked like it should be. A last will is
+discarded by the broker when the client sends DISCONNECT (MQTT 3.1.1 §3.14),
+and DISCONNECT is how every one of this station's publishes ends — the
+publisher opens a TCP connection per message. Setting the will flags on those
+CONNECTs would have produced a will that fires on a mid-publish network blip
+and never on the power cut it exists for: worse than none, because it looks
+like it works.
+
+So presence gets its own connection. `PresenceSession` holds one otherwise-idle
+socket open with a 30-second keepalive, carrying a will of `offline` (retained,
+`QoS` 1) on `{prefix}/status`. The station publishes `online` retained when it
+connects and `offline` retained on a clean stop; the broker publishes the will
+about 45 seconds after a station stops answering for any other reason. The two
+connections use different client identifiers — a broker must disconnect an
+existing session when a second claims its identifier (§3.1.3.1), so sharing one
+would have had every detection publish kick the presence session off and the
+station flap `online`/`offline` for as long as birds were singing.
+
+`birdnet_mqtt_connected` is the gauge for the case the topic structurally
+cannot cover: the broker itself being down. A station cannot report on a broker
+that is not there, so that signal has to travel by another road.
+
+Three more defects surfaced in the same module, all found by reading it rather
+than by the finding that sent us there:
+
+- **Discovery configs were published unretained.** Home Assistant builds its
+  entity list from what the broker replays when HA starts, so all four entities
+  vanished every time *Home Assistant* restarted, until the station was
+  restarted too. They are now always retained, whatever `MQTT_RETAIN` is set to
+  — that setting is a real preference for the detection stream and not one for
+  discovery.
+- **`MqttConfig::qos` had no reader anywhere in the workspace**, while
+  `publisher.rs`'s own module doc said `QoS` 1 "is sent at `QoS` 0 after logging
+  a warning". There was no warning and no branch. A station configured for
+  `QoS` 1 got `QoS` 0, where "the broker never received it" and "the broker has
+  it" are the same return value. `QoS` 1 now sends a packet identifier and waits
+  for the PUBACK, which is cheap here because the connection carries one message
+  and there is no in-flight window to track.
+- **`publish_status` is gone rather than wired.** The presence session owns
+  `{prefix}/status` now, and a stateless publisher beside it would be a second
+  writer to one topic with a different retain flag — the one arrangement in
+  which Home Assistant shows a live station as offline.
+
+Nine gates, against a broker stub that decodes CONNECT and PUBLISH rather than
+matching bytes, because the failure that matters here is semantic: §3.1.3 lays
+the CONNECT payload out positionally, so a will written after the username is a
+perfectly well-formed packet that publishes the station's password to whatever
+the broker reads next. Eight mutations were applied to the shipped code and
+watched go red, including that one.
+
 ### Fixed — an alert nobody received counted as one that had been sent
 
 Every alert loop in the station latched its episode on the *attempt*, and the

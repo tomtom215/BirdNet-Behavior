@@ -15,13 +15,35 @@ BIRDNET_MQTT_HOST=192.168.1.10
 
 Topics are built from a configurable **prefix** (default `birdnet`):
 
-| Topic | Payload |
-|---|---|
-| `birdnet/detection/<Scientific_Name>` | A detection (JSON, below). Spaces in the name become underscores. |
-| `birdnet/status` | Online/offline status of the station. |
-| `birdnet/stats/today` | Rolling daily totals. |
+| Topic | Payload | Retained | Published by |
+|---|---|---|---|
+| `birdnet/detection/<Scientific_Name>` | A detection (JSON, below). Spaces in the name become underscores. | your `MQTT_RETAIN` setting | the station, per detection |
+| `birdnet/status` | `online` or `offline` | yes | see below |
+| `birdnet/stats/today` | `{"count": N}` — detections so far today, station-local | yes | the station, every 5 minutes |
 
 Subscribe to everything with `birdnet/detection/#`.
+
+### How the station reports that it is gone
+
+`birdnet/status` is not published by the detection stream. The station holds a
+second, otherwise idle connection to the broker whose only job is to carry an
+MQTT **last will**, and the two connections use different client identifiers
+(`<client_id>` and `<client_id>-presence`) because a broker must disconnect an
+existing session when a second one claims its identifier.
+
+| What happened | `birdnet/status` becomes | Who published it |
+|---|---|---|
+| The station started | `online` | the station |
+| `systemctl stop`, an upgrade, any clean exit | `offline` | the station |
+| Power cut, crash, cable pulled, Wi-Fi gone | `offline`, within ~45 s | **the broker**, from the will |
+| The broker itself went down | unchanged | nobody — see below |
+
+The last row is the honest limit, and it is why `birdnet_mqtt_connected` exists
+as a Prometheus gauge: a station cannot report on a broker that is not there,
+so that case needs a signal that does not travel through the broker.
+
+The keepalive is 30 seconds and the broker publishes the will after 1.5 of
+those, which is where the ~45 s comes from.
 
 ### Detection payload
 
@@ -44,7 +66,23 @@ BIRDNET_MQTT_HOST=192.168.1.10
 BIRDNET_MQTT_HA_DISCOVERY=1     # or the --mqtt-ha-discovery flag
 ```
 
-With discovery enabled, the station publishes Home Assistant **MQTT discovery** config under the `homeassistant/` prefix, so it registers itself automatically — no YAML to write. The latest detection (species, confidence) and the daily stats appear as entities you can drop on a dashboard or trigger automations from ("flash the porch light when an owl is heard after dark").
+With discovery enabled, the station publishes Home Assistant **MQTT discovery** config under the `homeassistant/` prefix, so it registers itself automatically — no YAML to write. Four entities appear:
+
+| Entity | Type | Reads |
+|---|---|---|
+| Last Detected Bird | `sensor` | `birdnet/detection/#` |
+| Detection Confidence | `sensor` | `birdnet/detection/#` |
+| **Station Status** | `binary_sensor` (`connectivity`) | `birdnet/status` |
+| Detections Today | `sensor` | `birdnet/stats/today` |
+
+Drop them on a dashboard or trigger automations from them — "flash the porch light when an owl is heard after dark", or, from Station Status, "tell me when the garden station stops answering".
+
+> **If you ran an earlier version.** Station Status and Detections Today were
+> registered but never fed, so both showed as *unknown* for the life of the
+> station and no automation could be built on either. Discovery configs were
+> also published unretained, which meant Home Assistant lost all four entities
+> every time **it** restarted, until the station was restarted too. Both are
+> fixed; the entities repopulate the next time the station starts.
 
 ## Prometheus metrics
 
@@ -64,6 +102,7 @@ With discovery enabled, the station publishes Home Assistant **MQTT discovery** 
 | `birdnet_outbound_queue_depth` | gauge | Store-and-forward uploads parked for replay after a network failure, labeled by `kind` (e.g. `birdweather`). A depth that only grows means the uplink or token has been broken for a while. |
 | `birdnet_watchdog_pings_total` | counter | Successful systemd `WATCHDOG=1` notifications sent. |
 | `birdnet_detection_write_failures_total` | counter | Detections the model produced and the database refused — a detection the station heard and could not keep. Should stay `0`; see below. |
+| `birdnet_mqtt_connected` | gauge | `1` when the station's MQTT presence session is connected to the broker, `0` when it is not. Absent when MQTT is not configured. This is the one MQTT signal that does not travel through the broker, so it is what tells you the *broker* is down rather than the station — while it reads `0`, the broker has already published the station's last will and Home Assistant shows it offline, but nobody has told you which of the two failed. |
 | `birdnet_notifications_dropped_total` | counter | Notifications that never left the station, labeled by `reason`: `circuit_open` (the destination is considered down after three consecutive failures), `rate_limited` (over `NOTIFY_RATE_PER_MINUTE`), `send_failed` (the destination refused or was unreachable), `no_destination` (nothing configured that this station can deliver to). Detection notifications dominate this on a busy station; an alert about the station itself is exempt from the rate limit and is retried at every poll until it lands, so `circuit_open` rising while a health condition is open means the operator is not being told. |
 | `birdnet_noise_floor_dbfs` | gauge | The station's measured background noise floor per capture `source`, averaged over the last 7 days. Typical quiet outdoor background is −60 to −40 dBFS. |
 | `birdnet_noise_floor_drift_db` | gauge | How far a source's noise floor has moved against **its own** preceding 30-day average, in dB. Absent for a source with no baseline yet — "never measured" is not "unchanged". |

@@ -153,6 +153,10 @@ pub struct MetricsRegistry {
     /// Seconds since the most recent stored detection, refreshed by the
     /// deadman task. `u64::MAX` = not yet measured / no detections ever.
     detection_silence_secs: AtomicU64,
+    /// State of the MQTT presence connection: `0` down, `1` up,
+    /// `u64::MAX` = MQTT is not configured, so the series is absent rather
+    /// than reporting a broker that was never asked for as broken.
+    mqtt_connected: AtomicU64,
     /// Classifications the pipeline produced and then discarded, by reason.
     ///
     /// A station that is "detecting nothing" is either hearing nothing or
@@ -233,6 +237,7 @@ impl MetricsRegistry {
             detection_write_failures_total: AtomicU64::new(0),
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
+            mqtt_connected: AtomicU64::new(u64::MAX),
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
             notifications_dropped: RwLock::new(HashMap::new()),
@@ -437,6 +442,24 @@ impl MetricsRegistry {
         }
     }
 
+    /// Record whether the MQTT presence session is currently connected.
+    ///
+    /// Only the presence loop calls this, and only on a station with MQTT
+    /// configured — so the series exists exactly when there is a broker whose
+    /// reachability is a real question.
+    pub fn set_mqtt_connected(&self, up: bool) {
+        self.mqtt_connected.store(u64::from(up), Ordering::Relaxed);
+    }
+
+    /// MQTT presence connection state, or `None` when MQTT is not configured.
+    #[must_use]
+    pub fn mqtt_connected(&self) -> Option<bool> {
+        match self.mqtt_connected.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v == 1),
+        }
+    }
+
     /// Bump the watchdog ping counter.
     pub fn inc_watchdog_pings(&self) {
         self.watchdog_pings_total.fetch_add(1, Ordering::Relaxed);
@@ -485,6 +508,7 @@ impl MetricsRegistry {
             source_up,
             outbound_queue,
             detection_silence_secs: self.detection_silence_secs(),
+            mqtt_connected: self.mqtt_connected(),
             detections_dropped: Self::read_map(&self.detections_dropped),
             files_analysed: Self::read_map(&self.files_analysed),
             notifications_dropped: Self::read_map(&self.notifications_dropped),
@@ -527,6 +551,8 @@ pub struct MetricsSnapshot {
     pub outbound_queue: Vec<(String, u64)>,
     /// Seconds since the most recent stored detection (`None` = unknown).
     pub detection_silence_secs: Option<u64>,
+    /// MQTT presence connection state (`None` = MQTT not configured).
+    pub mqtt_connected: Option<bool>,
     /// Discarded classifications by reason.
     pub detections_dropped: Vec<(String, u64)>,
     /// Audio files the pipeline finished analysing, per source.
@@ -699,6 +725,15 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     // Emitted only once measured: an absent series reads as "unknown" in
     // Prometheus, which is the truth before the deadman task's first pass
     // (and on a station that has never detected anything).
+    if let Some(up) = snap.mqtt_connected {
+        out.push_str(
+            "# HELP birdnet_mqtt_connected Whether the MQTT presence session is connected to the broker (1) or not (0). \
+             Absent when MQTT is not configured. While this is 0 the broker has published the station's last will, so \
+             Home Assistant already shows it offline.\n",
+        );
+        out.push_str("# TYPE birdnet_mqtt_connected gauge\n");
+        let _ = writeln!(out, "birdnet_mqtt_connected {}", u8::from(up));
+    }
     if let Some(secs) = snap.detection_silence_secs {
         out.push_str("# HELP birdnet_detection_silence_seconds Seconds since the most recent stored detection (end-to-end audio\u{2192}detection freshness).\n");
         out.push_str("# TYPE birdnet_detection_silence_seconds gauge\n");

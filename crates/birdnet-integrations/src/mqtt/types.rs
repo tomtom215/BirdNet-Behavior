@@ -8,10 +8,15 @@ use std::fmt;
 
 /// MQTT broker connection configuration.
 ///
-/// The publisher connects to the broker, sends a CONNECT packet,
-/// publishes one PUBLISH packet per detection, then disconnects.
-/// This stateless pattern requires no background thread and is
-/// safe to call from any context.
+/// Shared by both connection styles: the stateless per-message publish that
+/// detections use, and the one long-lived presence session that holds the
+/// last will. Give the presence session a different [`client_id`]: a broker
+/// that receives a second CONNECT with a client identifier already in use
+/// must disconnect the first (§3.1.3.1), so sharing one would have every
+/// detection publish kick the presence session off and the station would
+/// flap between `online` and `offline` for ever.
+///
+/// [`client_id`]: Self::client_id
 #[derive(Debug, Clone)]
 pub struct MqttConfig {
     /// Broker hostname or IP address.
@@ -27,7 +32,11 @@ pub struct MqttConfig {
     /// Topic prefix for all published messages.
     ///
     /// Detection events are published to `{prefix}/detection/{species_safe}`.
-    /// The LWT topic is `{prefix}/status`.
+    /// `{prefix}/status` carries the station's presence, both the `online`
+    /// this process publishes and the `offline` the broker publishes on its
+    /// behalf — see [`Will`] and `PresenceSession`. This doc comment named
+    /// that topic as "the LWT topic" for a long time before anything
+    /// registered a will.
     pub topic_prefix: String,
     /// Quality of service level for PUBLISH packets.
     pub qos: QosLevel,
@@ -109,15 +118,46 @@ impl MqttConfig {
     }
 }
 
+/// A last will: what the broker publishes when this client stops answering.
+///
+/// Registered in CONNECT (§3.1.2.5) and held by the broker for the life of
+/// the session. The broker publishes it when the connection closes for any
+/// reason *except* a DISCONNECT packet — a network drop, a power cut, a
+/// killed process, a keepalive that goes unanswered. That exception is the
+/// whole design constraint: a will is only useful on a connection the client
+/// intends to keep open.
+#[derive(Debug, Clone)]
+pub struct Will {
+    /// Topic the broker publishes to.
+    pub topic: String,
+    /// Payload the broker publishes.
+    pub payload: Vec<u8>,
+    /// `QoS` for the broker's publish.
+    pub qos: QosLevel,
+    /// Whether the broker retains it.
+    ///
+    /// Should be `true` for a presence topic. A subscriber that connects
+    /// after the station died — Home Assistant restarting, which is the
+    /// common case — sees nothing at all otherwise, and an entity with no
+    /// state reads as "unknown" rather than "offline".
+    pub retain: bool,
+}
+
 /// MQTT Quality of Service level.
 ///
-/// Only `AtMostOnce` (`QoS` 0) is fully supported by the stateless publisher.
-/// Higher `QoS` levels require persistent state and acknowledgement tracking.
+/// `QoS` 2 is deliberately absent. It needs a four-packet exchange and
+/// duplicate suppression that only pays for itself when a repeat is harmful,
+/// and nothing this station publishes is: a detection re-sent is the same
+/// detection, and a status re-sent is the same status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QosLevel {
-    /// Fire-and-forget. No acknowledgement.  Best-effort delivery.
+    /// Fire-and-forget. No acknowledgement, so a publish reports success
+    /// whether or not the broker received it — the write went into the
+    /// socket, and that is all the caller learns.
     AtMostOnce = 0,
-    /// Broker acknowledges receipt.  Not implemented; falls back to `QoS` 0.
+    /// The broker acknowledges receipt with a PUBACK, which the publisher
+    /// waits for. A publish that returns `Ok` at this level means the broker
+    /// has the message.
     AtLeastOnce = 1,
 }
 
@@ -161,6 +201,10 @@ pub enum MqttError {
     Io(std::io::Error),
     /// MQTT packet encoding failed.
     Encode(String),
+    /// The broker sent something the client could not make sense of: a packet
+    /// type where another was required, or an acknowledgement carrying the
+    /// wrong packet identifier.
+    Protocol(String),
     /// JSON serialisation of the payload failed.
     Serialise(String),
     /// No MQTT configuration is set.
@@ -179,6 +223,7 @@ impl fmt::Display for MqttError {
             Self::Io(e) => write!(f, "MQTT I/O error: {e}"),
             Self::Tls(msg) => write!(f, "MQTT TLS error: {msg}"),
             Self::Encode(msg) => write!(f, "MQTT encoding error: {msg}"),
+            Self::Protocol(msg) => write!(f, "MQTT protocol error: {msg}"),
             Self::Serialise(msg) => write!(f, "MQTT payload serialisation error: {msg}"),
             Self::NotConfigured => write!(f, "MQTT not configured"),
         }

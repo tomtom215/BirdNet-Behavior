@@ -277,6 +277,12 @@ async fn serve(
     let email_notifier = integrations::create_email_notifier(&state);
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
+    // Cloned before the detection pipeline takes ownership: the presence
+    // session below needs the same broker settings but is spawned after the
+    // router is built, and it must run in web-only mode too — a station whose
+    // capture is off is still a station whose reachability an operator cares
+    // about.
+    let mqtt_presence_client = mqtt_client.clone();
     let notification_filter = integrations::create_notification_filter(&cli, config.as_ref());
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
 
@@ -493,6 +499,13 @@ async fn serve(
     if let Some(ref mqtt) = integrations::get_mqtt_client_ref(&cli, config.as_ref()) {
         integrations::publish_ha_discovery(mqtt, &cli, config.as_ref());
     }
+
+    // Hold one MQTT connection open carrying a last will, so the "Station
+    // Status" entity that discovery has always advertised finally has
+    // something behind it. Without this the broker has no session to notice
+    // dying, and the entity stays `unknown` for the life of the station —
+    // which is the one state an offline alert cannot be built on.
+    integrations::spawn_mqtt_presence(shutdown_state.clone(), mqtt_presence_client);
 
     // Spawn daily auto-update check (logs result, does not auto-apply).
     //
