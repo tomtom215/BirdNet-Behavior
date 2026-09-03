@@ -1555,6 +1555,80 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "ALTER TABLE audio_sources
                      ADD COLUMN eq_chain TEXT NOT NULL DEFAULT '';",
     },
+    Migration {
+        version: 40,
+        description: "Widen the quarantine reason CHECK again, for a clock that was never set",
+        // ## Why a fifth reason
+        //
+        // A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads
+        // the epoch; the capture tee stamps that reading into the segment
+        // filename, and a detection's `Date` and `Time` are parsed straight
+        // back out of that filename. Nothing checked, so every detection made
+        // before the clock was set was stored as `1970-01-01` — where it stays.
+        // `species_summary` files it under hour 00 for ever, `MIN(Date)` makes
+        // every species touched in that window "first seen 1970", the history
+        // calendar acquires a 56-year span, and `detected_at_utc` of about zero
+        // sorts it before everything else the station has ever heard. Retention
+        // then reclaims its audio for being older than any cutoff, so the
+        // evidence goes and the poisoned row stays.
+        //
+        // Such a detection is quarantined rather than dropped: something was
+        // genuinely heard, and the operator should be able to see that their
+        // station spent a fortnight recording without knowing what day it was.
+        //
+        // ## Why the table is rebuilt, again
+        //
+        // The same reason migration 36 rebuilt it: SQLite cannot alter a CHECK
+        // constraint in place, because the constraint is part of the stored
+        // `CREATE TABLE` text. And the same trap applies — `insert_quarantine`
+        // uses `INSERT OR IGNORE`, which does not distinguish a CHECK violation
+        // from the `UNIQUE(date, time, sci_name)` collision it is there to
+        // absorb, so without this migration every clock-quarantined detection
+        // would be swallowed silently and reported as success.
+        //
+        // `migration::tests::every_quarantine_reason_is_accepted_by_the_schema`
+        // is the gate. Adding `ImplausibleClock` to the enum turned it red
+        // before a line of this migration existed, which is exactly the job it
+        // was written for after migration 36 was needed.
+        //
+        // The copy names its columns rather than `SELECT *`, so a column added
+        // to one side and not the other fails loudly here instead of silently
+        // shifting every value one place along.
+        up_sql: "CREATE TABLE quarantine_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            sci_name TEXT NOT NULL,
+            com_name TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            sf_probability REAL,
+            reason TEXT NOT NULL CHECK(reason IN
+                ('below_sf_thresh','low_confidence','implausible_hour',
+                 'implausible_clock','manual')),
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            approved INTEGER NOT NULL DEFAULT 0,
+            file_name TEXT,
+            lat REAL,
+            lon REAL,
+            week INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(date, time, sci_name)
+        );
+
+        INSERT INTO quarantine_new
+            (id, date, time, sci_name, com_name, confidence, sf_probability,
+             reason, reviewed, approved, file_name, lat, lon, week, created_at)
+        SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
+               reason, reviewed, approved, file_name, lat, lon, week, created_at
+          FROM quarantine;
+
+        DROP TABLE quarantine;
+        ALTER TABLE quarantine_new RENAME TO quarantine;
+
+        CREATE INDEX IF NOT EXISTS idx_quarantine_reviewed ON quarantine(reviewed);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

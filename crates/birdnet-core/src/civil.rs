@@ -428,6 +428,38 @@ pub const fn clock_looks_plausible(secs: u64) -> bool {
     secs >= CLOCK_PLAUSIBLE_FLOOR_SECS
 }
 
+/// Whether a `YYYY-MM-DD` date could be a real date this station recorded on.
+///
+/// Applies [`clock_looks_plausible`] to the date's own midnight, so it answers
+/// the same question about a recording's filename that the capture supervisor
+/// asks about the system clock.
+///
+/// A date that does not parse is **not** plausible. On the live capture path
+/// this cannot happen — `detection::pipeline::process_file` refuses a file
+/// whose name does not parse — so the `None` branch is the belt to that
+/// braces, and it fails closed because a detection that names no day cannot be
+/// filed under one.
+///
+/// # Why this exists
+///
+/// A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the
+/// epoch, the capture tee stamps that into the segment filename, and the
+/// detection's `Date` and `Time` are parsed straight back out of that filename.
+/// Nothing checked. Every detection produced before the clock was set was
+/// stored as `1970-01-01`, where it stays: `species_summary` files it under
+/// hour 00 for ever, `MIN(Date)` makes every species touched in that window
+/// "first seen 1970", the history calendar acquires a 56-year span, and
+/// `detected_at_utc` of about zero sorts it before everything. Retention then
+/// reclaims the audio, because it is older than any cutoff — so the evidence
+/// goes and the poisoned rows stay.
+#[must_use]
+pub fn date_looks_plausible(date: &str) -> bool {
+    let Some(civil) = parse_civil(date, "00:00:00") else {
+        return false;
+    };
+    u64::try_from(unix_secs_from_civil(&civil)).is_ok_and(clock_looks_plausible)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{days_in_month, is_leap_year};
@@ -1204,5 +1236,43 @@ mod clock_floor_tests {
             );
             secs += 86_400 * 7;
         }
+    }
+}
+
+#[cfg(test)]
+mod date_plausibility_tests {
+    use super::date_looks_plausible;
+
+    #[test]
+    fn the_epoch_and_everything_near_it_is_implausible() {
+        for d in ["1970-01-01", "1970-01-02", "1999-12-31", "2023-12-31"] {
+            assert!(!date_looks_plausible(d), "{d} must not be filed");
+        }
+    }
+
+    #[test]
+    fn a_real_recording_date_is_plausible() {
+        for d in ["2024-01-01", "2026-05-19", "2030-12-31"] {
+            assert!(
+                date_looks_plausible(d),
+                "{d} is a date a station records on"
+            );
+        }
+    }
+
+    /// A date that names no day cannot be filed under one, and fails closed.
+    #[test]
+    fn an_unparseable_date_is_implausible() {
+        for d in ["", "not-a-date", "2026-13-01", "2026-01-32", "26-01-01"] {
+            assert!(!date_looks_plausible(d), "{d} must not parse");
+        }
+    }
+
+    /// The boundary, both sides, so a predicate that rejects everything cannot
+    /// pass the tests above.
+    #[test]
+    fn the_boundary_is_the_floors_own_day() {
+        assert!(!date_looks_plausible("2023-12-31"));
+        assert!(date_looks_plausible("2024-01-01"));
     }
 }

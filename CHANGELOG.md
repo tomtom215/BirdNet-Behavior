@@ -24,6 +24,57 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — detections recorded before the clock was set were filed under 1970, permanently
+
+A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the epoch;
+the capture tee stamps that reading into the segment filename, and a detection's
+`Date` and `Time` are parsed straight back out of that filename. Nothing
+checked. Every detection made before the clock was set was stored as
+`1970-01-01` — where it stayed:
+
+* `species_summary` files it under hour 00 for ever;
+* `MIN(Date)` makes every species touched in that window "first seen 1970", so
+  the first-of-the-year and first-of-the-season features report nonsense;
+* the history calendar acquires a 56-year span;
+* `detected_at_utc` of about zero sorts it before everything the station has
+  ever heard;
+* and clip retention later reclaims its audio for being older than any cutoff —
+  so the evidence goes and the poisoned row stays.
+
+On a station whose uplink is down, "before NTP lands" can be weeks.
+
+The write path now refuses such a row before anything else: it is quarantined
+with a new reason, `implausible_clock`, and counted as
+`birdnet_detections_dropped_total{reason="implausible_clock"}`. Quarantined
+rather than dropped, because something was genuinely heard and the operator
+should be able to see that their station spent a fortnight recording without
+knowing what day it was — and because `tests/clock_steps_backwards.rs` already
+pins that a naive "drop implausible dates" filter is the wrong answer.
+
+Migration 40 widens the quarantine `reason` CHECK for the fifth time. That is
+not optional bookkeeping: `insert_quarantine` uses `INSERT OR IGNORE`, which
+does not distinguish a CHECK violation from the `UNIQUE` collision it exists to
+absorb, so without the migration every clock-quarantined detection would have
+been swallowed silently and reported as success — exactly the defect migration
+36 was written for. The gate that catches it,
+`every_quarantine_reason_is_accepted_by_the_schema`, turned red the moment the
+enum gained a variant and before a line of the migration existed, which is the
+job it was added to do.
+
+Gates, both observed failing:
+
+* with the check disabled — the state this shipped in — a `1970-01-01`
+  detection produced `detections = 1, quarantine = 0`;
+* with the check replaced by `if true`, the counterpart failed with `a real
+  date must still be filed`, because a gate that quarantines everything would
+  satisfy the first test and stop the station recording at all.
+
+Also corrects `metrics.rs`'s explanation of the drop-reason labels. It named
+`quality` and `occurrence` and taught what a spike in each would mean; neither
+is ever emitted in production — both appear only in that file's own tests — so
+both readings it taught were unavailable. It now names the five reasons
+production actually emits.
+
 ### Fixed — two clock floors 1 461 days apart, and retention that ran on an unset clock
 
 `--doctor` and the capture supervisor each had a `CLOCK_SYNCED_FLOOR_SECS`. The

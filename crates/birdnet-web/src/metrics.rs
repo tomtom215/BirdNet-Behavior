@@ -157,9 +157,22 @@ pub struct MetricsRegistry {
     ///
     /// A station that is "detecting nothing" is either hearing nothing or
     /// throwing everything away, and from outside those look identical. The
-    /// reason label is what separates them: a spike in `quality` means the
-    /// microphone is in the wind, a spike in `occurrence` means the geomodel
-    /// disagrees with the classifier about where the station is.
+    /// reason label is what separates them.
+    ///
+    /// The reasons production actually emits, and what each one means when it
+    /// spikes: `confidence` (the model is unsure — a noisy site, or a threshold
+    /// set too high), `duplicate` (the same bird inside the deduplication
+    /// window, which is normal and only interesting if it dominates),
+    /// `quarantine` (below a per-species threshold, so the row is in the review
+    /// queue rather than gone), `implausible_hour` (a day bird at 2 a.m. —
+    /// worth looking at, and also in the queue), and `implausible_clock` (the
+    /// station is recording without knowing what day it is: NTP has not
+    /// reached it, and **nothing it records in this state can be filed**).
+    ///
+    /// This comment used to name `quality` and `occurrence` instead, and
+    /// explain what a spike in each would mean. Neither label is ever emitted
+    /// in production — both appear only in this file's own tests — so both
+    /// readings it taught were unavailable. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`.
     detections_dropped: RwLock<HashMap<String, AtomicU64>>,
     /// Capture processes the supervisor has restarted, per source.
     capture_restarts: RwLock<HashMap<String, AtomicU64>>,

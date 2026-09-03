@@ -35,6 +35,18 @@ pub enum QuarantineReason {
     /// night. Quarantined rather than dropped because the taxonomy behind that
     /// judgement is genus-level and cannot be complete.
     ImplausibleHour,
+    /// The recording's own date is not a date a station could have recorded on
+    /// — before 2024, or naming no day at all.
+    ///
+    /// A Raspberry Pi has no battery-backed RTC, so before NTP lands it reads
+    /// the epoch, and that reading is stamped into the segment filename the
+    /// detection's `Date` and `Time` are parsed out of. Such a row cannot be
+    /// filed: it poisons `MIN(Date)` first-seen dates, the hour histogram and
+    /// the history calendar permanently, while retention reclaims its audio for
+    /// being older than any cutoff. Quarantined rather than dropped, because
+    /// something was genuinely heard and the operator should see that the
+    /// station was recording blind.
+    ImplausibleClock,
     /// Manually quarantined by a user from the Today page or API.
     Manual,
 }
@@ -48,6 +60,7 @@ pub const ALL_QUARANTINE_REASONS: &[QuarantineReason] = &[
     QuarantineReason::BelowSfThresh,
     QuarantineReason::LowConfidence,
     QuarantineReason::ImplausibleHour,
+    QuarantineReason::ImplausibleClock,
     QuarantineReason::Manual,
 ];
 
@@ -59,6 +72,7 @@ impl QuarantineReason {
             Self::BelowSfThresh => "below_sf_thresh",
             Self::LowConfidence => "low_confidence",
             Self::ImplausibleHour => "implausible_hour",
+            Self::ImplausibleClock => "implausible_clock",
             Self::Manual => "manual",
         }
     }
@@ -70,6 +84,7 @@ impl QuarantineReason {
             Self::BelowSfThresh => "Below SF threshold",
             Self::LowConfidence => "Below species threshold",
             Self::ImplausibleHour => "Night-time, not a night bird",
+            Self::ImplausibleClock => "Clock not set when recorded",
             Self::Manual => "Manually flagged",
         }
     }
@@ -81,6 +96,7 @@ impl QuarantineReason {
             "below_sf_thresh" => Self::BelowSfThresh,
             "low_confidence" => Self::LowConfidence,
             "implausible_hour" => Self::ImplausibleHour,
+            "implausible_clock" => Self::ImplausibleClock,
             _ => Self::Manual,
         }
     }
