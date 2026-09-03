@@ -1325,6 +1325,149 @@ mod tests {
         );
     }
 
+    /// Build an Apprise handle whose sends either fail for real or are never
+    /// attempted at all.
+    ///
+    /// `destination` = `Some(addr)` gives one native `json://` route, so a send
+    /// is genuinely tried and fails; `None` gives a client with nowhere to
+    /// send, which returns `NoDestinations` without touching the network.
+    fn apprise_that(destination: Option<&str>) -> crate::integrations::AppriseHandle {
+        let routes = destination.map_or_else(Vec::new, |addr| {
+            let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+                .expect("a json:// route parses");
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }]
+        });
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig::default(),
+        )
+        .expect("client")
+        .with_native_routes(routes, false);
+        std::sync::Arc::new(tokio::sync::Mutex::new(client))
+    }
+
+    /// Rows on the `apprise` channel, waited for rather than sampled.
+    ///
+    /// The notification is dispatched from a task `event_processor` spawns and
+    /// detaches, so it can still be in flight when `event_processor` returns.
+    /// Polling to a deadline is what makes this test about the decision under
+    /// test rather than about scheduling.
+    async fn apprise_rows_within(
+        state: &birdnet_web::state::AppState,
+        deadline: std::time::Duration,
+    ) -> usize {
+        let start = std::time::Instant::now();
+        loop {
+            let rows = state
+                .with_db(|conn| birdnet_db::notifications::recent_notifications(conn, 100, 0))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.channel == "apprise")
+                .count();
+            if rows > 0 || start.elapsed() >= deadline {
+                return rows;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Run one accepted detection through `event_processor` with `apprise`
+    /// attached, and return how many `apprise` rows it logged.
+    async fn apprise_rows_for_one_detection(apprise: crate::integrations::AppriseHandle) -> usize {
+        use birdnet_core::audio::extraction::ExtractionConfig;
+        use birdnet_core::detection::daemon::DetectionEvent;
+        use birdnet_core::detection::types::Detection;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+
+        let (event_tx, event_rx) = mpsc::channel::<DetectionEvent>();
+        event_tx
+            .send(DetectionEvent {
+                detection: Detection {
+                    date: "2026-05-19".into(),
+                    time: "09:00:00".into(),
+                    scientific_name: "Pica pica".into(),
+                    common_name: "Eurasian Magpie".into(),
+                    // Above NotifyConfig::default()'s 0.8 floor, so the
+                    // notification is genuinely dispatched.
+                    confidence: 0.95,
+                    start: 0.0,
+                    stop: 3.0,
+                    week: 20,
+                    file_name_extr: None,
+                },
+                source_file: tmp.path().join("nonexistent.wav"),
+                latency_ms: 100,
+                correlation_id: "test-corr-notify".into(),
+            })
+            .unwrap();
+        drop(event_tx);
+
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let rt_handle = tokio::runtime::Handle::current();
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(apprise),
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+            );
+        })
+        .await
+        .unwrap();
+
+        apprise_rows_within(&state, std::time::Duration::from_secs(20)).await
+    }
+
+    #[tokio::test]
+    async fn a_notification_that_failed_on_the_wire_is_logged() {
+        // Nothing was listening on port 1, so a destination was tried and the
+        // send genuinely failed. That is a delivery attempt, and the
+        // Notification Center exists to show it.
+        let rows = apprise_rows_for_one_detection(apprise_that(Some("127.0.0.1:1"))).await;
+        assert_eq!(rows, 1, "a real failed attempt must leave one row");
+    }
+
+    #[tokio::test]
+    async fn a_notification_no_destination_was_tried_for_is_not_logged() {
+        // The counterpart, and the discrimination `cargo-mutants` found
+        // untested: deleting the `!` from `if !e.nothing_was_attempted()`
+        // inverts these two outcomes, and until this pair existed nothing
+        // noticed. On a station whose Apprise routes are all rate-limited or
+        // circuit-open, that inversion writes a `Failed` row per detection —
+        // thousands a day, burying the sends that actually happened — while
+        // the genuine failures stop being recorded at all.
+        let rows = apprise_rows_for_one_detection(apprise_that(None)).await;
+        assert_eq!(
+            rows, 0,
+            "a notification no destination was tried for is counted in \
+             birdnet_notifications_dropped_total, not logged as an attempt"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn event_processor_inserts_row_for_accepted_event() {
         use birdnet_core::audio::extraction::ExtractionConfig;
