@@ -225,9 +225,7 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
         let source = open_readonly_with_busy_timeout(db_path)?;
         let mut dest = open_with_busy_timeout(&backup_path)?;
         let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
-        backup
-            .run_to_completion(100, std::time::Duration::from_millis(50), None)
-            .map_err(ResilienceError::Sqlite)
+        copy_whole_database(&backup)
     })();
     if let Err(e) = result {
         if let Err(rm) = std::fs::remove_file(&backup_path)
@@ -251,6 +249,72 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
     prune_backups(backup_dir, db_name, MAX_BACKUP_FILES)?;
 
     Ok(backup_path)
+}
+
+/// How long the copy may spend being refused before it is called a failure.
+///
+/// A deadline is not decoration here: the defect this function exists to fix
+/// was a copy that never returned, and a `SQLITE_BUSY` retried without a bound
+/// would reproduce it in a new shape. Ten minutes is far above any honest
+/// duration for a station-sized database and far below "for ever".
+const BACKUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Delay between retries when the copy could not start at all.
+const BACKUP_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Copy the whole source database in **one** `sqlite3_backup_step()` call.
+///
+/// # Why one call and not a loop
+///
+/// SQLite restarts an online backup from page 0 whenever the source database is
+/// written by a connection other than the backup's own — and the source here is
+/// opened on its own read-only connection, so *every* detection the daemon
+/// stores is such a write. The restart happens on the **next call to
+/// `sqlite3_backup_step()`**, which is what makes a loop of small steps the
+/// wrong shape: each sleep between steps is another window for a write to
+/// arrive and undo everything copied so far.
+///
+/// This function used to be `run_to_completion(100, 50 ms)`, a loop of
+/// 100-page steps with a 50 ms sleep after each. On a 209 MB database taking a
+/// detection every twenty seconds — an ordinary dawn — it was measured still
+/// running after 300 seconds, having restarted eight times, reaching 77 % and
+/// dropping to 0 each time. It never finished, and because
+/// `run_backup_and_vacuum` is awaited inline in the single sequential
+/// maintenance loop, the daily integrity check, `VACUUM`, clip retention, the
+/// per-species cap and log retention all stopped with it, for the life of the
+/// process, with no error path taken and so nothing logged.
+///
+/// A negative page count copies every remaining page inside one step, holding
+/// one read transaction on the source, so there is no next call for a write to
+/// restart. In WAL mode — which this database uses — that read transaction is a
+/// snapshot and does not block the writer, so the station keeps recording
+/// through the copy.
+///
+/// `Busy` and `Locked` mean the step could not begin, so no work is lost by
+/// retrying; `More` cannot be returned for a negative page count, and is
+/// handled by continuing rather than by asserting, because "copy the rest" is
+/// the right response to it either way.
+fn copy_whole_database(backup: &rusqlite::backup::Backup<'_, '_>) -> Result<(), ResilienceError> {
+    use rusqlite::backup::StepResult;
+
+    let deadline = std::time::Instant::now() + BACKUP_DEADLINE;
+    loop {
+        // Anything that is not `Done` means keep going: `Busy` and `Locked`
+        // both mean the step did not begin, and `StepResult` is
+        // `#[non_exhaustive]`, so a future variant meaning anything other than
+        // "finished" must also keep going rather than return a half-copied
+        // file as a success.
+        if backup.step(-1).map_err(ResilienceError::Sqlite)? == StepResult::Done {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(ResilienceError::Unrecoverable(format!(
+                "database backup did not complete within {}s",
+                BACKUP_DEADLINE.as_secs()
+            )));
+        }
+        std::thread::sleep(BACKUP_RETRY_DELAY);
+    }
 }
 
 /// Remove old backup files, keeping only the N most recent.

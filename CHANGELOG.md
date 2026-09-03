@@ -24,6 +24,46 @@ boundary, found by reading a waveform rather than a code path. And an
 accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment.
 
+### Fixed — the weekly backup never finished on a station that was recording
+
+`backup_database` drove SQLite's online backup API with
+`run_to_completion(100, 50 ms)`: a loop of 100-page steps with a 50 ms sleep
+after each one. SQLite restarts an online backup **from page 0 whenever the
+source is written by a connection other than the backup's own**, and the source
+here is opened on its own read-only connection — so every detection the daemon
+stores is such a write, and the restart lands on the next step.
+
+A station recording a detection every twenty seconds therefore had a weekly
+backup that never returned. Measured on a 209 MB database under that load: still
+running after 300 seconds, eight restarts, reaching 77 % and dropping to 0 each
+time.
+
+The consequence is larger than a missing backup. `run_backup_and_vacuum` is
+awaited **inline** in the single sequential maintenance loop, so the daily
+`PRAGMA integrity_check`, `VACUUM`, clip retention, the per-species cap and log
+retention all stopped with it, for the life of the process — with no error path
+taken, and so nothing logged. The station kept recording birds, which is the
+right priority, and quietly stopped taking the snapshots that make a corrupt
+card recoverable. That turns "recoverable corruption" into "total data loss",
+which is the exact chain `src/maintenance.rs`'s own module documentation was
+written to prevent.
+
+The copy is now a single `sqlite3_backup_step(-1)`: every remaining page inside
+one step, holding one read transaction, so there is no next call for a write to
+restart. In WAL mode that read transaction is a snapshot and does not block the
+writer, so the station records straight through it. `Busy` and `Locked` are
+retried — they mean the step did not begin, so nothing is lost — under a
+ten-minute deadline, because a retry without a bound would reproduce the same
+"never returns" failure in a new shape.
+
+Gate: a 4 000-row database, a second connection inserting every 20 ms, and a
+30-second budget, with the backup on its own thread so the old code **fails**
+rather than hanging the suite. Against `run_to_completion` it timed out with
+1 368 rows written meanwhile; the fixed version completes the same work in
+0.65 s. The counterpart — the same fixture with no writer — passes either way,
+and is kept, because it is the reason the writer is the discrimination rather
+than decoration.
+
 ### Fixed — the dead-man only fired when a bird sang
 
 `HEARTBEAT_URL` is the station's one *push-based* liveness signal: the only
