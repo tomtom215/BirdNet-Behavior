@@ -9,7 +9,7 @@
 
 mod backup;
 mod data;
-mod service;
+pub(crate) mod service;
 mod update;
 
 use axum::{Router, routing};

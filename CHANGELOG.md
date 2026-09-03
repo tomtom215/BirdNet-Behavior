@@ -50,8 +50,8 @@ could build on. Home Assistant and Node-RED could read a station and never act
 on one, and because our own front end was the only client, a change to fragment
 markup would silently break whatever automation existed in the wild.
 
-Four endpoints now exist, and they are the only ones under `/api/v2` that change
-anything:
+Six mutating endpoints now exist, and they are the only ones under `/api/v2`
+that change anything, plus one read that lives behind the same token:
 
 | Endpoint | Does |
 |---|---|
@@ -59,11 +59,14 @@ anything:
 | `POST /api/v2/detections/lock` | protect a clip from the purge and the retention sweep |
 | `POST /api/v2/detections/unlock` | return it to the ordinary rules |
 | `POST /api/v2/detections/delete` | remove the detection |
+| `GET /api/v2/settings` | read every setting, with credentials removed |
+| `PUT /api/v2/settings` | change one or more settings |
+| `POST /api/v2/control/restart` | restart the station |
 
 **They are off by default, and the default is the safe one.** Set
 `BNB_API_TOKEN` — resolved from the config file then the environment, the same
 precedence `CADDY_PWD` uses — and each endpoint accepts
-`Authorization: Bearer <token>`. Leave it unset and all four answer `404`: the
+`Authorization: Bearer <token>`. Leave it unset and all seven answer `404`: the
 write surface does not exist rather than existing unprotected. That is
 deliberately the *opposite* default from `CADDY_PWD`, where an unset password
 leaves `/admin` open; these endpoints never touch that bypass. A token under 32
@@ -80,21 +83,81 @@ The endpoints are mounted in their own router rather than the public one, which
 is asserted read-only by the gate that exists because thirteen mutating routes
 once sat there. They are exempt from the same-origin CSRF check — a cross-site
 form cannot set an `Authorization` header, which is the whole premise of the
-check — and the exemption is scoped to those four paths, with a test that fails
+check — and the exemption is scoped to those paths, with a test that fails
 if it widens: a rule keyed on the header instead of the path lets a
 cross-origin page write through, and the test watches the detection actually
 disappear.
 
 Every change is written to the audit log with no user and `via=api`, because a
-token is not a person.
+token is not a person. A settings change records the key *names* only: `/admin/audit`
+renders that table, and an entry reading `birdweather_token=…` would put a
+credential on a page.
 
-**Found while doing it, and not fixed:** the audit log's vocabulary gate finds
-action names by scanning for the literal text of the `audit` call and reading
-string literals near it. A local helper that takes the action as a parameter
-compiles, works, and is invisible to it — which is how these four names first
-went undocumented, and how any future call site can. The calls here are written
-out at each site so the existing mechanism sees them, and the reason is stated
-in the source, but the gate itself still has the hole.
+**Settings are readable, with the credentials taken out.** Automation has to read
+what it is about to change, so `GET /api/v2/settings` exists — but handing a
+scripted client `email_smtp_pass` in the clear is not an acceptable price for it.
+The redaction is the support bundle's, not a second implementation: those rules
+moved out of `--support-bundle` into `birdnet-core` and both callers now use the
+one copy, because two copies of "which values are secret" is precisely the
+arrangement that once shipped an open `/admin` while the station's own diagnostic
+reported it protected. They deny in two directions — by key name, and by value
+shape for the credential inside an `apprise_url` that does not *look* like a
+secret. The by-shape rules are blunt — `ntfy://alice:hunter2@ntfy.example/topic`
+comes back as `***@ntfy.example/topic`, host and path kept, scheme and username
+not — and the gate pins that exact string rather than "the password is gone",
+because an earlier version of it asserted only the absence of the password and
+the presence of the host, both true for a reason it had not established. A
+withheld value is replaced with `***REDACTED***` rather than omitted,
+so "you may not read this" stays distinguishable from "this was never
+configured", and the response names those keys.
+
+`PUT` refuses two things rather than accepting them quietly. An unknown key: a
+misspelled `confidence_treshold` answering `200` would report a change that never
+happened. And the literal `***REDACTED***`, which is what the `GET` hands back —
+a client that reads the whole object, edits one field and writes it back would
+otherwise overwrite the real SMTP password with the placeholder. Values may be
+strings, numbers or booleans, and each goes through the settings page's own
+normalisation and only-write-what-changed rule rather than a second writer; the
+gate for that asserts the *stored* form of `"51,5"` is `51.5`, because a handler
+that stored the string it was given would also answer `200`.
+
+`POST /api/v2/control/restart` shares its systemd detection and its delayed
+self-`SIGTERM` with the admin page's button. It answers `503` outside systemd,
+where nothing would bring the station back — a cheerful `200` there would tell
+the caller the opposite of what was about to happen — and the audit entry is
+written before the decision, so a refused restart is recorded too.
+
+**Found while doing it, and fixed:** a unit test named
+`the_route_table_is_the_router` did not check the router. It compared the route
+table against itself and passed with `.put(write_settings)` deleted from
+`router()`; `axum::Router` exposes no route list to assert against. It is now
+`the_route_table_is_well_formed`, saying what it does, and
+`every_documented_route_is_mounted` sends a real request for each table entry —
+which is what noticed. `openapi.json` is checked against the same tables in both
+directions: every bearer-gated route is documented *and* documented as
+bearer-gated, and every other operation is documented as anonymous. Redocly's
+`security-defined` rule does not catch a missing per-operation `security`, and
+the document's default is anonymous, so a write documented without one would
+hand every generated client a `401` it had no way to anticipate.
+
+**Found while doing it, and not fixed:** two things.
+
+The audit log's vocabulary gate finds action names by scanning for the literal
+text of the `audit` call and reading string literals near it. A local helper that
+takes the action as a parameter compiles, works, and is invisible to it — which
+is how the four detection names first went undocumented, and how any future call
+site can. The calls here are written out at each site so the existing mechanism
+sees them, and the reason is stated in the source, but the gate itself still has
+the hole.
+
+The settings redaction catches a credential in a URL's *authority*
+(`ntfy://user:pass@host`) and a key whose *name* looks like a secret. It catches
+neither for a URL whose credential is a path segment — a heartbeat ping URL is
+exactly that, and `heartbeat_url` is returned in full. This is stated in the
+endpoint's own documentation and in `openapi.json` rather than left for a reader
+to discover, but it is not fixed: a rule that redacted URL paths generally would
+take `rtsp://camera.local/stream` with it, and the path is what makes an RTSP
+problem diagnosable.
 
 ### Fixed — a database found corrupt was written to for months
 

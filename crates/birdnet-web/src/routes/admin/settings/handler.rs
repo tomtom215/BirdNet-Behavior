@@ -306,7 +306,7 @@ fn existing_or_empty<'a>(map: &'a std::collections::HashMap<String, String>, key
 ///    (e.g. `night_inhibit=false`, `info_site=ebird`) would overlay
 ///    over the file config / env on every save of any unrelated setting.
 #[allow(clippy::too_many_lines)]
-fn build_settings_items(
+pub(crate) fn build_settings_items(
     form: &SettingsForm,
     existing: &std::collections::HashMap<String, String>,
 ) -> Vec<(&'static str, String, SettingsCategory)> {

@@ -6,7 +6,7 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 
 > **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
 >
-> The **write** endpoints are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
+> The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
 > **OpenAPI:** a complete, machine-readable **OpenAPI 3.1** description of this API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients.
 
@@ -188,10 +188,13 @@ CSV/JSON/eBird export of the full detection history is available from the [Backu
 
 ## Changing a station
 
-Four endpoints, and they are the only ones in `/api/v2` that change anything.
+Six endpoints, and they are the only ones in `/api/v2` that change anything.
 They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
+
+A seventh, `GET /api/v2/settings`, is a *read* that lives behind the same token:
+a station's configuration is not public even with its credentials taken out.
 
 ### Turning them on
 
@@ -202,7 +205,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all four answer `404`: the write surface does not exist rather
+Until you do, all seven answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
@@ -227,6 +230,9 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `POST` | `/api/v2/detections/lock` | Protect the clip from the disk-full purge and retention sweep |
 | `POST` | `/api/v2/detections/unlock` | Return it to the ordinary purge rules |
 | `POST` | `/api/v2/detections/delete` | Remove the detection row |
+| `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
+| `PUT` | `/api/v2/settings` | Change one or more settings |
+| `POST` | `/api/v2/control/restart` | Restart the station |
 
 ```bash
 curl -X POST http://localhost:8502/api/v2/detections/review \
@@ -242,14 +248,94 @@ curl -X POST http://localhost:8502/api/v2/detections/lock \
   -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula"}'
 ```
 
+### Settings
+
+`GET /api/v2/settings` returns every persisted setting, plus `redacted` (the
+keys whose value was withheld) and `writable_keys` (what `PUT` will accept):
+
+```bash
+curl http://localhost:8502/api/v2/settings \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+```json
+{
+  "settings": { "confidence_threshold": "0.7", "email_smtp_pass": "***REDACTED***" },
+  "redacted": ["email_smtp_pass"],
+  "writable_keys": ["alsa_device", "rtsp_url", "…"]
+}
+```
+
+Credentials are removed two ways: by key name (`email_smtp_pass`,
+`birdweather_token`) and by value shape, which catches the credential inside a
+URL — `apprise_url` does not *look* like a secret and routinely carries one.
+A withheld value is **replaced** rather than omitted, so "you may not read this"
+stays distinguishable from "this was never configured".
+
+The by-shape rules are the support bundle's, applied in the same order, and they
+are blunt: `ntfy://alice:hunter2@ntfy.example/topic` comes back as
+`***@ntfy.example/topic` — the host and path survive, the scheme and username do
+not. Treat a by-shape redaction as "the host, roughly", not as a value you can
+edit and send back.
+
+> One gap, stated rather than left to be discovered: a URL whose *path segment*
+> is the credential — a heartbeat ping URL, for instance — matches neither rule
+> and is returned in full.
+
+`PUT` is a partial update; send only the keys you mean to change. Values may be
+strings, numbers or booleans, and each goes through the same normalisation the
+settings page uses, so `"51,5"` is stored as `51.5`:
+
+```bash
+curl -X PUT http://localhost:8502/api/v2/settings \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"confidence_threshold": 0.75, "station_name": "Back Garden"}'
+```
+
+```json
+{ "updated": 2, "keys": ["confidence_threshold", "station_name"] }
+```
+
+A key already holding the value you sent is not rewritten and is not counted in
+`updated`. Two things are refused with `400` rather than accepted quietly:
+
+- **An unknown key.** A misspelled `confidence_treshold` answering `200` would
+  tell you a change had landed when none had.
+- **The literal `***REDACTED***`.** It is what `GET` hands back for a secret, so
+  a client that reads the whole object, edits one field and writes it back would
+  otherwise overwrite the station's real SMTP password with the placeholder.
+
+Settings that the running process reads at startup need a restart to take
+effect, the same as when they are changed from `/admin/settings`.
+
+### Restarting
+
+```bash
+curl -X POST http://localhost:8502/api/v2/control/restart \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+The process sends itself `SIGTERM` after a short delay — long enough for the
+response to reach you — and systemd's `Restart=always` starts a fresh instance.
+Outside systemd — a bare `cargo run`, a container without an init — nothing
+would bring the station back, so the endpoint answers `503` and signals nothing
+rather than reporting a restart that would in fact be a shutdown.
+
+### The audit log
+
 Every change is written to the [audit log](../admin/system.md) as
-`detection.review` / `detection.lock` / `detection.unlock` / `detection.delete`,
-with no user and `via=api` in the metadata — a token is not a person, and the
-log says so rather than inventing one.
+`detection.review` / `detection.lock` / `detection.unlock` / `detection.delete`
+/ `settings.update` / `system.restart`, with no user and `via=api` in the
+metadata — a token is not a person, and the log says so rather than inventing
+one. A settings change records the key *names* only: an entry reading
+`birdweather_token=…` would put a credential on the page that renders the log.
+The restart entry is written before the decision, so a refused restart is
+recorded too.
 
 ### Cross-origin calls
 
 These endpoints are exempt from the dashboard's same-origin (CSRF) check,
 because a cross-site *form* cannot set an `Authorization` header — that is the
 whole premise of the check, so it has nothing to protect here. The exemption is
-scoped to these four paths; every other write in the product still has it.
+scoped to these paths; every other write in the product still has it.

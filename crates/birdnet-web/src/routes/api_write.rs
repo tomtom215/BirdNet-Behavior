@@ -30,12 +30,21 @@
 //! which return HTML fragments, take `Form`, and are shaped by what HTMX needs
 //! to swap into the DOM.
 
+use std::collections::BTreeMap;
+
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::{Json, Router, routing::post};
+use axum::{
+    Json, Router,
+    routing::{get, post},
+};
+use birdnet_core::config::redact::{
+    REDACTED, is_secret_key, redact_email_local_part, redact_url_credentials,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::routes::admin::settings::form::SETTINGS_FORM_KEYS;
 use crate::state::AppState;
 
 /// Every bearer-authenticated mutating endpoint, as `(method, path)`.
@@ -50,7 +59,18 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v2/detections/lock"),
     ("POST", "/api/v2/detections/unlock"),
     ("POST", "/api/v2/detections/delete"),
+    ("PUT", "/api/v2/settings"),
+    ("POST", "/api/v2/control/restart"),
 ];
+
+/// Read endpoints that live behind the same bearer gate.
+///
+/// `GET /api/v2/settings` is a read, so it is not in [`WRITE_ROUTES`] — the
+/// CSRF guard has no interest in a `GET`. It is here rather than in
+/// `public_routes()` because a station's settings are not public: the values
+/// are redacted (see [`redacted_settings`]), but the *shape* of a station's
+/// configuration is still not something to hand an anonymous visitor.
+pub const READ_ROUTES: &[(&str, &str)] = &[("GET", "/api/v2/settings")];
 
 /// Whether `path` is one of the mutating API endpoints.
 ///
@@ -73,6 +93,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/detections/lock", post(lock))
         .route("/api/v2/detections/unlock", post(unlock))
         .route("/api/v2/detections/delete", post(delete))
+        .route("/api/v2/settings", get(read_settings).put(write_settings))
+        .route("/api/v2/control/restart", post(restart))
 }
 
 /// The composite key that identifies a detection.
@@ -295,26 +317,279 @@ async fn delete(State(state): State<AppState>, Json(key): Json<Key>) -> (StatusC
     }
 }
 
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// The station's settings, with every credential masked.
+///
+/// Applies the project's existing redaction rule rather than a second copy of
+/// it: [`is_secret_key`] by key name, then [`redact_url_credentials`] and
+/// [`redact_email_local_part`] by value shape. That composition is
+/// `support::redacted_config`'s, and it moved into `birdnet-core` so both
+/// callers share one definition — two copies of "which values are secret" is
+/// the arrangement that once shipped an open `/admin` a diagnostic called
+/// protected.
+///
+/// The value is **replaced, not dropped**, for the reason the support-bundle
+/// module records: "this station has an SMTP password set" is information, and
+/// an absent key reads identically to one that was never configured.
+///
+/// `apprise_url`, `notify_urls` and `heartbeat_url` are the interesting cases.
+/// None of their *names* looks like a secret, and all three routinely carry one
+/// in the value — `ntfy://user:pass@host`, and a heartbeat URL whose path
+/// segment *is* the credential (`NT-16`). The by-shape half catches the first
+/// two; the third is a bare token in a path and is caught by neither, which is
+/// stated here rather than left for a reader to discover.
+fn redacted_settings(raw: &std::collections::HashMap<String, String>) -> BTreeMap<String, String> {
+    raw.iter()
+        .map(|(k, v)| {
+            let shown = if is_secret_key(k) {
+                REDACTED.to_owned()
+            } else {
+                redact_email_local_part(&redact_url_credentials(v))
+            };
+            (k.clone(), shown)
+        })
+        .collect()
+}
+
+async fn read_settings(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let raw = crate::routes::admin::settings::handler::load_all_settings(&state);
+    let redacted = redacted_settings(&raw);
+    let masked: Vec<&String> = redacted
+        .iter()
+        .filter(|(_, v)| v.as_str() == REDACTED)
+        .map(|(k, _)| k)
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "settings": redacted,
+            // Named so a caller can tell "this station has no SMTP password"
+            // from "you are not allowed to read it".
+            "redacted": masked,
+            "writable_keys": SETTINGS_FORM_KEYS,
+        })),
+    )
+}
+
+/// Coerce one JSON scalar to the string the settings table stores.
+///
+/// Numbers and booleans are accepted because a JSON client will naturally send
+/// `{"latitude": 51.5}` or `{"night_inhibit": true}`, and refusing those would
+/// be a papercut with no safety value — every settings value is a string in the
+/// database either way. Arrays, objects and `null` are refused: none of them
+/// has an obvious string form, and guessing one would store something the
+/// caller did not write.
+fn scalar_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+async fn write_settings(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let Some(object) = body.as_object() else {
+        return bad_request("the body must be a JSON object of setting keys to values");
+    };
+
+    // Unknown keys are refused rather than ignored. A caller who misspells
+    // `confidence_treshold` and gets a 200 has been told their change landed.
+    let unknown: Vec<&String> = object
+        .keys()
+        .filter(|k| !SETTINGS_FORM_KEYS.contains(&k.as_str()))
+        .collect();
+    if !unknown.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "unknown setting keys",
+                "unknown": unknown,
+                "writable_keys": SETTINGS_FORM_KEYS,
+            })),
+        );
+    }
+
+    // The round-trip trap: `GET` returns `***REDACTED***` in place of every
+    // secret, so a client that reads the whole object, edits one field and
+    // writes it back would overwrite real credentials with the placeholder.
+    // Refusing is the honest answer — silently skipping would mean "I set it
+    // and nothing happened".
+    let placeholders: Vec<&String> = object
+        .iter()
+        .filter(|(_, v)| v.as_str() == Some(REDACTED))
+        .map(|(k, _)| k)
+        .collect();
+    if !placeholders.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "refusing to store the redaction placeholder over a real value; \
+                          send only the keys you mean to change",
+                "keys": placeholders,
+            })),
+        );
+    }
+
+    let mut strings = serde_json::Map::new();
+    for (k, v) in object {
+        let Some(s) = scalar_to_string(v) else {
+            return bad_request(&format!(
+                "{k} must be a string, number or boolean, not {}",
+                match v {
+                    Value::Null => "null",
+                    Value::Array(_) => "an array",
+                    _ => "an object",
+                }
+            ));
+        };
+        strings.insert(k.clone(), Value::String(s));
+    }
+
+    // Deserialise into the same form type the settings page posts, so the
+    // normalisation, the category assignment and the only-write-what-changed
+    // rule are the page's and not a second implementation of them.
+    let Ok(form) = serde_json::from_value::<crate::routes::admin::settings::form::SettingsForm>(
+        Value::Object(strings),
+    ) else {
+        return bad_request("the body could not be read as a settings payload");
+    };
+
+    let existing = crate::routes::admin::settings::handler::load_all_settings(&state);
+    let items = crate::routes::admin::settings::handler::build_settings_items(&form, &existing);
+    if items.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(json!({ "updated": 0, "keys": [], "note": "every value already matched" })),
+        );
+    }
+    let keys: Vec<&str> = items.iter().map(|(k, _, _)| *k).collect();
+
+    let written = state.with_db(|conn| {
+        birdnet_db::settings::ensure_settings_table(conn)?;
+        let refs: Vec<(&str, &str, birdnet_db::settings::SettingsCategory)> =
+            items.iter().map(|(k, v, c)| (*k, v.as_str(), *c)).collect();
+        birdnet_db::settings::set_many(conn, &refs)?;
+        Ok::<usize, birdnet_db::settings::SettingsError>(refs.len())
+    });
+
+    match written {
+        Ok(n) => {
+            // Names only, never values: a metadata field carrying
+            // `birdweather_token=…` would put a credential in a table
+            // `/admin/audit` renders.
+            crate::audit::audit(
+                &state,
+                None,
+                "settings.update",
+                None,
+                Some(&format!("{VIA_API} keys={}", keys.join(","))),
+            );
+            (StatusCode::OK, Json(json!({ "updated": n, "keys": keys })))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "settings write from the API failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "the database refused the change" })),
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Control
+// ---------------------------------------------------------------------------
+
+/// Restart the station.
+///
+/// Shares [`crate::routes::admin::system_controls::service::request_restart`]
+/// with the admin page's button, so the systemd detection and the delayed
+/// self-SIGTERM have one implementation. `503` rather than `200` when there is
+/// no systemd to bring the process back: a caller that got a cheerful 200 and
+/// then found the station gone would have been told the opposite of what
+/// happened.
+#[allow(clippy::unused_async)] // async required by axum's Handler trait
+async fn restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    use crate::routes::admin::system_controls::service::{RestartOutcome, request_restart};
+
+    // Before the decision, so the record exists even where the restart is
+    // refused — and before the SIGTERM, so it survives the restart.
+    crate::audit::audit(&state, None, "system.restart", None, Some(VIA_API));
+
+    match request_restart() {
+        RestartOutcome::Signalled => (
+            StatusCode::OK,
+            Json(json!({
+                "restarting": true,
+                "note": "SIGTERM sent; systemd Restart=always brings a fresh instance up"
+            })),
+        ),
+        RestartOutcome::NotUnderSystemd => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "restarting": false,
+                "error": "not running under systemd, so nothing would restart this process"
+            })),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{WRITE_ROUTES, is_valid_date, is_valid_time, is_write_route};
+    use std::collections::HashMap;
+
+    use super::{
+        READ_ROUTES, REDACTED, WRITE_ROUTES, is_valid_date, is_valid_time, is_write_route,
+        redacted_settings, scalar_to_string,
+    };
 
     #[test]
-    fn the_route_table_is_the_router() {
-        // Every entry names a path this module actually mounts. `router()` is
-        // built by hand, so this is what stops the table and the router
-        // drifting — the CSRF guard and the OpenAPI gate both read the table.
+    fn the_route_table_is_well_formed() {
+        // What this checks is the *table*: every entry is a method this module
+        // could mount, on a path under the API prefix, recognised by
+        // `is_write_route`.
+        //
+        // It does not check the router — `axum::Router` exposes no route list
+        // to assert against, and a first version of this test named itself
+        // `the_route_table_is_the_router` while passing happily with
+        // `.put(write_settings)` deleted from `router()`. That half is
+        // `every_documented_route_is_mounted` in
+        // `tests/the_api_can_change_the_station.rs`, which has a real
+        // `AppState` and can send the request.
         assert!(!WRITE_ROUTES.is_empty());
         for (method, path) in WRITE_ROUTES {
-            assert_eq!(
-                *method, "POST",
-                "{path} is documented with a method the router does not mount"
+            assert!(
+                matches!(*method, "POST" | "PUT"),
+                "{path} is documented with {method}, a method the router does not mount"
             );
             assert!(path.starts_with("/api/v2/"), "{path} is not under /api/v2");
             assert!(
                 is_write_route(path),
                 "{path} is not recognised by is_write_route"
             );
+        }
+    }
+
+    #[test]
+    fn a_read_route_is_not_a_write_route() {
+        // `GET /api/v2/settings` shares a path with `PUT /api/v2/settings`, and
+        // the CSRF guard keys on the path alone. That is safe only because a
+        // `GET` never reaches the guard's mutating branch; what would not be
+        // safe is `READ_ROUTES` growing a mutating method, so say so here.
+        assert!(!READ_ROUTES.is_empty());
+        for (method, path) in READ_ROUTES {
+            assert_eq!(
+                *method, "GET",
+                "{path} is listed as a read but documented with {method}"
+            );
+            assert!(path.starts_with("/api/v2/"), "{path} is not under /api/v2");
         }
     }
 
@@ -347,5 +622,80 @@ mod tests {
         assert!(!is_valid_time("06:05"));
         assert!(!is_valid_time("06-05-04"));
         assert!(!is_valid_time(""));
+    }
+
+    #[test]
+    fn a_scalar_becomes_the_string_the_settings_table_stores() {
+        assert_eq!(
+            scalar_to_string(&serde_json::json!("0.7")).as_deref(),
+            Some("0.7")
+        );
+        assert_eq!(
+            scalar_to_string(&serde_json::json!(0.7)).as_deref(),
+            Some("0.7")
+        );
+        assert_eq!(
+            scalar_to_string(&serde_json::json!(4)).as_deref(),
+            Some("4")
+        );
+        assert_eq!(
+            scalar_to_string(&serde_json::json!(true)).as_deref(),
+            Some("true")
+        );
+        // Refused, because none of these has a string form a caller would
+        // recognise as the value they sent.
+        assert!(scalar_to_string(&serde_json::json!(null)).is_none());
+        assert!(scalar_to_string(&serde_json::json!([1, 2])).is_none());
+        assert!(scalar_to_string(&serde_json::json!({"a": 1})).is_none());
+    }
+
+    #[test]
+    fn settings_are_redacted_by_key_and_by_shape() {
+        let raw: HashMap<String, String> = [
+            // By key name.
+            ("email_smtp_pass", "hunter2"),
+            ("birdweather_token", "bw-live-abcdef"),
+            // By value shape: nothing about `apprise_url` says "secret".
+            ("apprise_url", "ntfy://alice:hunter2@ntfy.example/topic"),
+            // Left alone.
+            ("confidence_threshold", "0.7"),
+            ("site_name", "Back Garden"),
+        ]
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+
+        let out = redacted_settings(&raw);
+
+        assert_eq!(out["email_smtp_pass"], REDACTED);
+        assert_eq!(out["birdweather_token"], REDACTED);
+
+        // The exact output, not just "the password is gone", because the two
+        // by-shape rules compose in a way neither one describes on its own.
+        // `redact_url_credentials` alone yields
+        // `ntfy://alice:***REDACTED***@ntfy.example/topic`; running
+        // `redact_email_local_part` over *that* sees `ntfy://alice:…` as an
+        // address local part and replaces the whole thing, scheme included.
+        // So it is the email rule, not the URL rule, that removes the password
+        // here — and a first version of this test asserted only "does not
+        // contain hunter2" and "does contain ntfy.example", both of which were
+        // true for a reason it had not established. This is the support
+        // bundle's composition unchanged (`support::redacted_env`); pinning it
+        // means a change to either rule shows up here rather than silently
+        // altering what a station discloses.
+        assert_eq!(out["apprise_url"], "***@ntfy.example/topic");
+        assert!(
+            !out["apprise_url"].contains("hunter2"),
+            "a credential inside a URL value survived: {}",
+            out["apprise_url"]
+        );
+
+        // The counterpart: a blanket `REDACTED` for everything would satisfy
+        // the assertions above and make the endpoint useless.
+        assert_eq!(out["confidence_threshold"], "0.7");
+        assert_eq!(out["site_name"], "Back Garden");
+
+        // Every key survives, so a caller can tell "not set" from "not shown".
+        assert_eq!(out.len(), raw.len());
     }
 }

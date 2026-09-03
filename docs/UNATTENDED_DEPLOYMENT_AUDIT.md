@@ -130,10 +130,13 @@ Two of the prior verdicts are wrong in a way that matters:
 And thirty-two findings are new, of which the sharpest is **O-1**: our entire
 `/api/v2` surface was read-only. A mechanical check — every `post(`/`put(`/
 `delete(`/`patch(` across all fourteen modules mounted under `/api/v2` — returned
-nothing. **Half closed**: four bearer-authenticated `/detections/*` write
-endpoints now exist (item 5.14 below); settings and restart do not yet. Every mutation in the product is an HTMX form post returning HTML, so
-no automation, Home Assistant action or scripted admin is possible without
-scraping fragments and forging an `Origin` header.
+nothing. **Closed but for the batch endpoint**: six bearer-authenticated write
+endpoints now exist — the four `/detections/*` writes, `PUT /api/v2/settings`
+and `POST /api/v2/control/restart` — along with `GET /api/v2/settings` behind
+the same token (item 5.14 below). Before them every mutation in the product was
+an HTMX form post returning HTML, so no automation, Home Assistant action or
+scripted admin was possible without scraping fragments and forging an `Origin`
+header.
 
 ### 1.3 What would jeopardise a year alone in a field
 
@@ -446,7 +449,7 @@ already what the bundle embeds).
 
 | ID | Sev | How | Finding | Fix |
 |---|---|---|---|---|
-| **O-1** | P1 | VERIFIED | **[FIXED — half of it]** Four bearer-authenticated write endpoints now exist — `POST /api/v2/detections/{review,lock,unlock,delete}` — in their own router, so `public_routes()` stays read-only, and behind `api_token::require_bearer`, so they never inherit the admin middleware's open-when-no-password bypass: a station with no `BNB_API_TOKEN` answers **404** on all four. That is the opposite default from `CADDY_PWD`, deliberately. The CSRF guard skips exactly these paths, because a cross-site form cannot set an `Authorization` header. **Not done:** `GET`/`PUT /settings`, `POST /control/restart`, and the batch endpoint — four of the remedy's eight. The original finding: **The `/api/v2` surface is 100 % read-only.** No mutating route method in any of the fourteen modules mounted under it. Every mutation is an HTMX form post returning HTML behind a same-origin check — trivially satisfied by any script that sets a matching `Origin`, and therefore not a contract anyone can build on. Upstream has 54 mutating routes. Consequences: no supported automation; Home Assistant and Node-RED can read but never act; and our own front end is the only client, so a fragment-markup change silently breaks whatever automation exists in the wild. | Port the ~8 with operational weight, reusing the handlers already behind the HTMX routes: review, lock, delete, batch, `GET` and `PUT /settings`, `POST /control/restart`. Bearer auth, and the CSRF guard must **skip** bearer-authenticated requests — a header token is not attachable by a cross-site form, which is the entire premise of the check. |
+| **O-1** | P1 | VERIFIED | **[FIXED — all but the batch endpoint]** Six bearer-authenticated write endpoints now exist — `POST /api/v2/detections/{review,lock,unlock,delete}`, `PUT /api/v2/settings` and `POST /api/v2/control/restart` — plus `GET /api/v2/settings` behind the same token, in their own router, so `public_routes()` stays read-only, and behind `api_token::require_bearer`, so they never inherit the admin middleware's open-when-no-password bypass: a station with no `BNB_API_TOKEN` answers **404** on all seven. That is the opposite default from `CADDY_PWD`, deliberately. The CSRF guard skips exactly these paths, because a cross-site form cannot set an `Authorization` header. The settings read applies the support bundle's own redaction rules, moved into `birdnet-core` so there is one copy rather than two; the settings write reuses the admin page's `build_settings_items`, so the normalisation and the only-write-what-changed rule are the page's; the restart shares its systemd detection with the admin button. **Not done:** the batch endpoint — one of the remedy's eight. The original finding: **The `/api/v2` surface is 100 % read-only.** No mutating route method in any of the fourteen modules mounted under it. Every mutation is an HTMX form post returning HTML behind a same-origin check — trivially satisfied by any script that sets a matching `Origin`, and therefore not a contract anyone can build on. Upstream has 54 mutating routes. Consequences: no supported automation; Home Assistant and Node-RED can read but never act; and our own front end is the only client, so a fragment-markup change silently breaks whatever automation exists in the wild. | Port the ~8 with operational weight, reusing the handlers already behind the HTMX routes: review, lock, delete, batch, `GET` and `PUT /settings`, `POST /control/restart`. Bearer auth, and the CSRF guard must **skip** bearer-authenticated requests — a header token is not attachable by a cross-site form, which is the entire premise of the check. |
 | **O-2** | P1 | VERIFIED | **The audit log is never written.** Table, store, admin page and pruner all exist; `AuditLog::record` has **zero production callers** — every call site is inside its own `#[cfg(test)]` block. `/admin/audit` is permanently empty, which on a shared station reads as "nothing happened". The repo already caught half of this: the *pruner* was wired after being found to have no caller; the writer never was. **[FIXED — "Record who changed what"]** The helper as prescribed, called from every surface listed plus two the finding did not name: species filters and audio sources, which are what decide whether a season's gap is a real absence. 24 actions in all. One change to the prescription: settings values are not "redacted through the existing secret list", they are **never recorded at all** — only the names of the changed keys. `rtsp_url` is the reason a key-name allow-list would not have been enough: an RTSP URL carries `user:pass@` in its authority while its key name says nothing about a secret, which is the same trap `redact_url_credentials` exists for. A save that changed nothing writes no row, because the form posts every field every time. Destructive actions are recorded *before* the work, since a process that does not survive a restore has no "after" to write from. | Done; see Stage 2 landed. |
 | **O-3** | P1 | VERIFIED | **The admin log viewer streams a channel nothing publishes to.** `src/main.rs:146-148` installs exactly two layers and no `tracing_subscriber::Layer` implementation exists anywhere in the crate; `LogBroadcaster::new()` is called **three separate times** in `state.rs`, so they are three distinct channels anyway. `GET /admin/system/logs` replays an empty backlog and then emits keep-alives for ever. On Docker, where `journalctl` is unavailable to the user, this page is the whole story. **[FIXED — "Show the operator what the station logged"]** Taken as prescribed, with one correction to this row: **"three separate times ... so they are three distinct channels anyway" is wrong.** The three `LogBroadcaster::new()` calls are in three *alternative* constructors — `AppState::new`, `new_with_analytics`, `from_connection` — and a run builds exactly one `AppState` (`src/app.rs:184`). There was one channel, and nothing published to it; the count was never the defect. `LogCapture` now implements `Layer`, is installed as a third `.with(...)`, and the broadcaster is built in `main` *before* the subscriber and handed to the state, because the layer has to exist at `init()` time and the state does not exist yet. `errors.jsonl` sits beside the database, takes ERROR and WARN only, is capped at 1 MB, and is a bundle member. URL credentials are stripped in the layer rather than per call site, because that file travels in the support bundle. | Done; see Stage 2 landed. |
 | **O-4** | P1 | VERIFIED | **No private mode.** `grep` for `private_mode`/`public_access` returns zero hits. The dashboard, the whole API, the live audio stream and both WebSockets are unauthenticated with no configuration that changes it. On a station reachable through a tunnel or a port forward, anyone with the URL sees the full detection history and can **open a live microphone feed of somebody's garden**. `--listen 127.0.0.1` is not a substitute; that is what the tunnel connects to. The privacy argument used to decline Sentry applies here with more force, and this is on by default. | `BIRDNET_PRIVATE_MODE` plus `BIRDNET_PUBLIC_ACCESS=live_audio,share`, applied by moving `public_routes()` inside `auth_middleware::apply` with an exempt set. Gate both directions, including that an operator-minted share link keeps working. |
@@ -605,7 +608,7 @@ person 40 km away learns that it stopped.
 | 2.11 | Prune quarantined stores on a retention schedule (detection and the condition landed with 2.3) | **PS-6**, remaining half |
 | 2.12 | Read-only-remount detection | **PS-9** |
 | 2.13 | `--doctor` measures the card, not the RAM disk | **PS-8** |
-| 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10**, **OB-11** |
+| 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10**, **OB-11** — the rules moved to `birdnet_core::config::redact` with 5.14, so this is now a one-place fix rather than two. The mangling is measured: `redact_email_local_part(&redact_url_credentials(v))` turns `rtsp://cam:secret@camera.local/stream` into `***@camera.local/stream`, losing the scheme and the username, because the second rule reads the first's output as an email address. `GET /api/v2/settings` discloses the same shape and its gate pins that exact string, so a fix here will show up there |
 | 2.18 | journald drop-in; demote the two per-file INFO lines | **OB-15**, **PS-19**, **O-9** — the volatile-journal half of **OB-15** is now partly covered by `errors.jsonl` (2.6), which survives the reboot; the 1.6–2.8 GB/year of INFO is not |
 | 2.19 | `GET /admin/doctor.json` and a support bundle over HTTP | §3.6 |
 | 2.20 | A "Test notifications" path for email and MQTT | **OB-9**, remaining half |
@@ -672,7 +675,7 @@ person 40 km away learns that it stopped.
 | 5.11 | Rollback after a bad update; a smoke test that runs `--doctor` | **NT-12** |
 | 5.12 | Cellular/CGNAT documentation, then a safe-mode boot | **NT-17** |
 | 5.13 | Correct the systemd documentation and gate it against the unit | **NT-8** |
-| 5.14 | Mutating endpoints under `/api/v2` with bearer auth — **half done**: the four `/detections/*` writes have landed, settings and restart and batch have not | **O-1** |
+| 5.14 | Mutating endpoints under `/api/v2` with bearer auth — **all but the batch endpoint**: the four `/detections/*` writes, `GET`/`PUT /settings` and `POST /control/restart` have landed; batch has not | **O-1** |
 | 5.15 | Configurable frame ancestors | **O-5** |
 | 5.16 | OpenAPI path-set equality | **O-8** |
 | 5.17 | HSTS and COOP, correctly conditioned | **O-10** |
@@ -767,13 +770,13 @@ plan.
 
 ### Where the numbers come from
 
-`cargo test --workspace` on x86_64 in a container: **3 618 passed, 0 failed,
-110 suites**. `cargo fmt --check --all` and
+`cargo test --workspace` on x86_64 in a container: **3 629 passed, 0 failed,
+7 ignored, 110 suites**. `cargo fmt --check --all` and
 `cargo clippy --workspace --all-targets -- -D warnings` both exit 0. The same
 command at the branch point `f33eb9e` reports 3 570 in 106 suites, so the
 difference is this pass's own gates and nothing else. (This block read "3 567,
-106 suites" until both were taken again; that figure predated the last commit
-of the previous pass.)
+106 suites" and then "3 618" as the pass went on; re-take it rather than
+carrying a figure forward — the count moves with every commit here.)
 
 Two gates in the template's list are **not** verified here, and should not be
 claimed as local results:
@@ -804,13 +807,16 @@ claimed as local results:
   ticked off without a configured station.
 
   The *counts* move with the container **and** with the checks themselves, so
-  do not carry them forward: this block recorded "8 passed, 9 warnings"; a
-  re-run gave 9 passed, 8 warnings (`Disk space` warned at under 1 GiB free on
-  the earlier container and passes with 13 GiB here), and after 5.14 added an
-  `API write surface` check it is **10 passed, 8 warnings, 0 errors, 5
-  skipped**. The eight warnings now are: configuration file, station location,
-  species occurrence filter, admin authentication, HTTPS, database directory,
-  offsite backup, audio source. Re-run it rather than quoting this list.
+  do not carry them forward. This block has recorded, in order: "8 passed, 9
+  warnings"; then 9 passed, 8 warnings; then — after 5.14 added an `API write
+  surface` check — 10 passed, 8 warnings; and now **9 passed, 9 warnings, 0
+  errors, 5 skipped**, because `Disk space` flipped back to WARN when the
+  container dropped to 4 GiB free during a build. It warned under 1 GiB on the
+  first container, passed at 13 GiB, and warns again at 4 GiB — the same check,
+  the same binary, three answers. The nine warnings now are: configuration
+  file, station location, species occurrence filter, admin authentication,
+  HTTPS, database directory, offsite backup, audio source, disk space. Re-run
+  it rather than quoting this list; that is the point of the paragraph.
 
 ### What to do first
 
@@ -821,12 +827,26 @@ else, so any of them can be taken next; §4's **Stage 2 — still to do** table 
 the list, and it is not repeated here because two copies of a work queue is how
 one of them goes stale.
 
+Two of those items are now cheaper than the table suggests, for the same
+reason. **2.17** (redact by shape in the support bundle) is a one-place fix
+since 5.14 moved the rules into `birdnet_core::config::redact`, and the
+mangling it names is measured rather than suspected — see that row. **2.20** (a
+test path for email and MQTT) is the one item still holding `OB-9` open.
+
 Stage 1 still has 1.10 (`PS-7`/`S-4`), 1.11 (`NT-4` remaining half) and 1.12
 (`LC-2` remaining half) outstanding. Those are about *keeping the data*, which
 outranks everything in Stage 2 on a station that is already failing — take them
 first if you have no other reason to choose. 1.9 (`PS-5`) is done, in its
 narrowed form; the runtime quarantine-and-restore branch of that remedy is not,
 and stopping the ingest writer was its prerequisite.
+
+**5.14 (`O-1`)** is done except for the batch endpoint. Whoever takes that
+should read `crates/birdnet-web/src/routes/api_write.rs` first: the two route
+tables at the top are what the CSRF guard, the router-mount gate and the two
+`openapi.json` gates all read, so a batch endpoint added without an entry there
+is invisible to every one of them — and the tables are also the reason a gate
+named `the_route_table_is_the_router` had to be renamed, because it did not
+check the router and passed with a route unmounted.
 
 ### A gap in the mutation matrix — a proposal, not a change
 

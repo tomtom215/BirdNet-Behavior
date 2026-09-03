@@ -73,6 +73,87 @@ mod tests {
         );
     }
 
+    /// Every bearer-gated route is documented, and documented as bearer-gated.
+    ///
+    /// The converse of `every_documented_path_is_routed`: that gate catches a
+    /// path in the spec that the app does not serve, and this one catches an
+    /// endpoint the app serves that the spec does not mention. A mutating
+    /// endpoint missing from `openapi.json` is invisible to every generated
+    /// client, which is the whole reason the document exists.
+    ///
+    /// The `security` half is the discrimination. `security: []` at the top of
+    /// the document makes anonymous the default, so an operation that omits its
+    /// own `security` tells a generator to send no credential — and the
+    /// generated client would get a 401 it had no way to anticipate. Redocly's
+    /// `security-defined` rule does not catch this: it checks that a named
+    /// scheme is *defined*, not that an operation names one.
+    #[test]
+    fn every_bearer_route_is_documented_as_bearer_gated() {
+        use crate::routes::api_write::{READ_ROUTES, WRITE_ROUTES};
+
+        let spec: serde_json::Value = serde_json::from_str(OPENAPI_JSON).unwrap();
+        assert_eq!(
+            spec["security"],
+            serde_json::json!([]),
+            "the document's default is no longer anonymous, which changes what an \
+             operation without its own `security` means; re-read this gate"
+        );
+
+        for (method, path) in WRITE_ROUTES.iter().chain(READ_ROUTES) {
+            let documented = path
+                .strip_prefix("/api/v2")
+                .expect("route table paths are all under /api/v2");
+            let op = &spec["paths"][documented][method.to_lowercase()];
+            assert!(
+                op.is_object(),
+                "{method} {path} is served but `openapi.json` does not document it; \
+                 every generated client is blind to it"
+            );
+            assert_eq!(
+                op["security"],
+                serde_json::json!([{ "bearerAuth": [] }]),
+                "{method} {path} is documented without `security`, so a generated \
+                 client will send no credential and get a 401 it cannot anticipate"
+            );
+        }
+    }
+
+    /// The counterpart: the read-only surface is documented as anonymous.
+    ///
+    /// Without this, marking every operation `bearerAuth` would satisfy the
+    /// gate above and tell every generated client it needs a token to read a
+    /// detection count.
+    #[test]
+    fn the_read_only_surface_asks_for_no_credential() {
+        use crate::routes::api_write::{READ_ROUTES, WRITE_ROUTES};
+
+        let spec: serde_json::Value = serde_json::from_str(OPENAPI_JSON).unwrap();
+        let gated: std::collections::HashSet<&str> = WRITE_ROUTES
+            .iter()
+            .chain(READ_ROUTES)
+            .map(|(_, p)| p.strip_prefix("/api/v2").expect("under /api/v2"))
+            .collect();
+
+        let mut anonymous = 0_usize;
+        for (path, item) in spec["paths"].as_object().expect("paths object") {
+            if gated.contains(path.as_str()) {
+                continue;
+            }
+            for (method, op) in item.as_object().expect("path item") {
+                assert!(
+                    op["security"].is_null(),
+                    "{method} {path} is not in the bearer route tables but is \
+                     documented as needing a credential"
+                );
+                anonymous += 1;
+            }
+        }
+        assert!(
+            anonymous > 40,
+            "only {anonymous} anonymous operations found"
+        );
+    }
+
     /// Every path the spec documents must actually be routed by the app — so a
     /// documented endpoint can never silently not exist (the classic spec drift).
     #[tokio::test]

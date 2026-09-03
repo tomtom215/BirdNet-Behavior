@@ -36,7 +36,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use birdnet_web::api_token::ApiToken;
-use birdnet_web::routes::api_write::WRITE_ROUTES;
+use birdnet_web::routes::api_write::{READ_ROUTES, WRITE_ROUTES};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
@@ -67,7 +67,7 @@ fn station(with_token: bool) -> (tempfile::TempDir, AppState) {
     (dir, state)
 }
 
-/// One JSON request against the real router, with the real middleware stack.
+/// One JSON `POST` against the real router, with the real middleware stack.
 async fn call(
     state: &AppState,
     path: &str,
@@ -76,6 +76,21 @@ async fn call(
     body: &str,
 ) -> (StatusCode, String) {
     call_as(state, path, bearer, origin, body, "application/json").await
+}
+
+/// One JSON request with the method spelled out.
+///
+/// `WRITE_ROUTES` is no longer all-`POST` — `PUT /api/v2/settings` is in it —
+/// so a loop over the table that hard-coded `POST` would be asserting 405
+/// handling rather than the authentication it means to assert.
+async fn call_method(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    bearer: Option<&str>,
+    body: &str,
+) -> (StatusCode, String) {
+    request(state, method, path, bearer, None, body, "application/json").await
 }
 
 /// The same, with the content type spelled out.
@@ -92,8 +107,21 @@ async fn call_as(
     body: &str,
     content_type: &str,
 ) -> (StatusCode, String) {
+    request(state, "POST", path, bearer, origin, body, content_type).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn request(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    bearer: Option<&str>,
+    origin: Option<&str>,
+    body: &str,
+    content_type: &str,
+) -> (StatusCode, String) {
     let mut req = Request::builder()
-        .method("POST")
+        .method(method)
         .uri(path)
         .header(header::CONTENT_TYPE, content_type);
     if let Some(t) = bearer {
@@ -140,12 +168,12 @@ fn row(state: &AppState) -> (Option<String>, i64, i64) {
 #[tokio::test]
 async fn a_station_with_no_token_has_no_write_api() {
     let (_dir, state) = station(false);
-    for (_, path) in WRITE_ROUTES {
-        let (status, body) = call(&state, path, Some(TOKEN), None, KEY).await;
+    for (method, path) in WRITE_ROUTES.iter().chain(READ_ROUTES) {
+        let (status, body) = call_method(&state, method, path, Some(TOKEN), KEY).await;
         assert_eq!(
             status,
             StatusCode::NOT_FOUND,
-            "POST {path} answered {status} on a station with no BNB_API_TOKEN; the \
+            "{method} {path} answered {status} on a station with no BNB_API_TOKEN; the \
              mutating API must not exist until an operator enables it. Body: {body}"
         );
     }
@@ -156,19 +184,19 @@ async fn a_station_with_no_token_has_no_write_api() {
 #[tokio::test]
 async fn a_configured_station_refuses_a_missing_or_wrong_credential() {
     let (_dir, state) = station(true);
-    for (_, path) in WRITE_ROUTES {
-        let (status, _) = call(&state, path, None, None, KEY).await;
+    for (method, path) in WRITE_ROUTES.iter().chain(READ_ROUTES) {
+        let (status, _) = call_method(&state, method, path, None, KEY).await;
         assert_eq!(
             status,
             StatusCode::UNAUTHORIZED,
-            "POST {path} with no token"
+            "{method} {path} with no token"
         );
 
-        let (status, _) = call(&state, path, Some(WRONG), None, KEY).await;
+        let (status, _) = call_method(&state, method, path, Some(WRONG), KEY).await;
         assert_eq!(
             status,
             StatusCode::UNAUTHORIZED,
-            "POST {path} with the wrong token"
+            "{method} {path} with the wrong token"
         );
     }
     let (verdict, locked, count) = row(&state);
@@ -263,9 +291,9 @@ async fn a_bad_key_is_refused_and_a_missing_row_is_not_found() {
 async fn the_public_router_still_exposes_no_write_api() {
     let (_dir, state) = station(true);
     let public = birdnet_web::routes::public_routes().with_state(state);
-    for (_, path) in WRITE_ROUTES {
+    for (method, path) in WRITE_ROUTES.iter().chain(READ_ROUTES) {
         let req = Request::builder()
-            .method("POST")
+            .method(*method)
             .uri(*path)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(KEY))
@@ -278,8 +306,8 @@ async fn the_public_router_still_exposes_no_write_api() {
             .status();
         assert!(
             status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
-            "POST {path} is reachable in the *public* router (status {status}) — anyone who \
-             can load the dashboard could call it"
+            "{method} {path} is reachable in the *public* router (status {status}) — anyone \
+             who can load the dashboard could call it"
         );
     }
 }
@@ -354,4 +382,332 @@ async fn the_csrf_skip_covers_bearer_calls_and_nothing_else() {
         1,
         "and the detection must still be there — the write must not have run"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/// Seed the settings table with one secret, one secret-shaped URL, and one
+/// ordinary value.
+fn seed_settings(state: &AppState) {
+    state.with_db(|conn| {
+        birdnet_db::settings::ensure_settings_table(conn).expect("settings table");
+        for (k, v, c) in [
+            (
+                "email_smtp_pass",
+                "hunter2",
+                birdnet_db::settings::SettingsCategory::Notifications,
+            ),
+            (
+                "apprise_url",
+                "ntfy://alice:hunter2@ntfy.example/topic",
+                birdnet_db::settings::SettingsCategory::Notifications,
+            ),
+            (
+                "latitude",
+                "51.0",
+                birdnet_db::settings::SettingsCategory::Location,
+            ),
+        ] {
+            birdnet_db::settings::set(conn, k, v, c).expect("seed a setting");
+        }
+    });
+}
+
+/// Read one setting straight out of the database.
+fn setting(state: &AppState, key: &str) -> Option<String> {
+    state.with_db(|conn| birdnet_db::settings::get(conn, key).ok())
+}
+
+/// `GET /api/v2/settings` hands a client the station's configuration with the
+/// credentials taken out.
+///
+/// Automation needs to *read* what it is about to change; handing it
+/// `email_smtp_pass` in the clear over an endpoint that exists to be scripted
+/// is not an acceptable price for that.
+#[tokio::test]
+async fn the_api_reads_settings_with_the_credentials_removed() {
+    let (_dir, state) = station(true);
+    seed_settings(&state);
+
+    let (status, body) = call_method(&state, "GET", "/api/v2/settings", Some(TOKEN), "").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Redacted by key name.
+    assert!(
+        !body.contains("hunter2"),
+        "a credential was served in the clear: {body}"
+    );
+    assert!(
+        body.contains("email_smtp_pass"),
+        "the key itself must survive — \"not set\" and \"not shown\" are different \
+         answers, and a caller needs to tell them apart: {body}"
+    );
+    // And named, so a client knows which values it must not write back.
+    assert!(
+        body.contains("\"redacted\""),
+        "the response does not say which keys it withheld: {body}"
+    );
+
+    // The counterpart: blanket redaction would satisfy every assertion above
+    // and make the endpoint useless.
+    assert!(
+        body.contains("51.0"),
+        "an ordinary value was redacted too, which leaves nothing to read: {body}"
+    );
+    // Redacted by value shape, not by key name: nothing about `apprise_url`
+    // says "secret", and it routinely carries one. The host survives; the
+    // scheme and user do not, because the two shape rules compose — see
+    // `settings_are_redacted_by_key_and_by_shape` in `api_write.rs`, which
+    // pins the exact output and says which rule produces it.
+    assert!(
+        body.contains("ntfy.example"),
+        "the URL's host should survive so the value stays recognisable: {body}"
+    );
+}
+
+/// `PUT /api/v2/settings` changes the station, through the settings page's own
+/// normalisation.
+#[tokio::test]
+async fn the_api_can_change_a_setting() {
+    let (_dir, state) = station(true);
+    seed_settings(&state);
+
+    // `51,5` is what a browser on a comma-decimal locale sends, and what the
+    // settings page normalises. Asserting the *stored* form is `51.5` is how
+    // this gate proves the API reuses `build_settings_items` rather than
+    // having grown a second, subtly different writer: a handler that stored
+    // the string it was given would answer 200 and store `51,5`.
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"latitude":"51,5","station_name":"Back Garden"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        setting(&state, "latitude").as_deref(),
+        Some("51.5"),
+        "{body}"
+    );
+    assert_eq!(
+        setting(&state, "station_name").as_deref(),
+        Some("Back Garden"),
+        "{body}"
+    );
+
+    // A JSON client will send `{"latitude": 51.5}`, not `{"latitude": "51.5"}`.
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"latitude":52.25}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        setting(&state, "latitude").as_deref(),
+        Some("52.25"),
+        "{body}"
+    );
+
+    // Only what changed is written, and the response says which keys those
+    // were — so a caller can tell a no-op from a write.
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"latitude":52.25}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"updated\":0"), "{body}");
+}
+
+/// The two ways a settings write is refused, and the reason each exists.
+#[tokio::test]
+async fn a_settings_write_refuses_unknown_keys_and_the_redaction_placeholder() {
+    let (_dir, state) = station(true);
+    seed_settings(&state);
+
+    // A misspelled key that got a 200 would have told the caller their change
+    // landed.
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"confidence_treshold":"0.8"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("confidence_treshold"), "{body}");
+    assert!(
+        body.contains("writable_keys"),
+        "the refusal should say what *is* writable: {body}"
+    );
+
+    // The round-trip trap: read the whole object, change one field, write it
+    // back — and every secret arrives as `***REDACTED***`. Storing that would
+    // silently destroy the station's SMTP password.
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"email_smtp_pass":"***REDACTED***"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        setting(&state, "email_smtp_pass").as_deref(),
+        Some("hunter2"),
+        "the redaction placeholder overwrote a real credential"
+    );
+
+    // A value with no string form is refused rather than guessed at.
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"latitude":[51,5]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(
+        setting(&state, "latitude").as_deref(),
+        Some("51.0"),
+        "the seeded value should be untouched"
+    );
+
+    // The counterpart: a handler that refused everything would pass all three
+    // assertions above.
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"station_name":"Back Garden"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// A settings write is recorded in the audit log, by key name and never by
+/// value.
+///
+/// `/admin/audit` renders this table. An entry reading
+/// `birdweather_token=abc123` would have put a credential on a page.
+#[tokio::test]
+async fn a_settings_write_is_audited_by_key_and_not_by_value() {
+    let (_dir, state) = station(true);
+
+    let (status, body) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"birdweather_token":"bw-live-abcdef"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let entries: Vec<(String, String)> = state.with_db(|conn| {
+        let mut stmt = conn
+            .prepare("SELECT action, COALESCE(metadata, '') FROM audit_log")
+            .expect("audit_log exists");
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("query")
+            .filter_map(Result::ok)
+            .collect()
+    });
+
+    let update = entries
+        .iter()
+        .find(|(action, _)| action == "settings.update")
+        .unwrap_or_else(|| panic!("no settings.update entry; the log holds {entries:?}"));
+    assert!(
+        update.1.contains("birdweather_token"),
+        "the entry does not say which key changed: {update:?}"
+    );
+    assert!(
+        !update.1.contains("bw-live-abcdef"),
+        "the audit entry carries the credential itself: {update:?}"
+    );
+    assert!(
+        update.1.contains("via=api"),
+        "the entry does not distinguish an API write from an admin one: {update:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Control
+// ---------------------------------------------------------------------------
+
+/// A restart request answers honestly when nothing would restart the process.
+///
+/// The `Signalled` branch cannot be exercised from a test: it is selected by
+/// `INVOCATION_ID`/`JOURNAL_STREAM` being present in the environment, and
+/// setting an environment variable is `unsafe` under edition 2024 while this
+/// workspace has `unsafe_code = "forbid"`. Reaching it would also send this
+/// process a real `SIGTERM`. What is asserted here is the branch a test *can*
+/// reach, plus the audit entry, which is written before the decision precisely
+/// so it exists in both.
+#[tokio::test]
+async fn a_restart_says_so_when_nothing_would_bring_the_station_back() {
+    let (_dir, state) = station(true);
+    assert!(
+        std::env::var_os("INVOCATION_ID").is_none() && std::env::var_os("JOURNAL_STREAM").is_none(),
+        "this test assumes it is not running under systemd"
+    );
+
+    let (status, body) = call(&state, "/api/v2/control/restart", Some(TOKEN), None, "{}").await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a caller that got a 200 here would have been told the station was coming back \
+         when nothing was going to bring it back. Body: {body}"
+    );
+    assert!(body.contains("\"restarting\":false"), "{body}");
+
+    let actions: Vec<String> = state.with_db(|conn| {
+        let mut stmt = conn
+            .prepare("SELECT action FROM audit_log")
+            .expect("audit_log exists");
+        stmt.query_map([], |r| r.get(0))
+            .expect("query")
+            .filter_map(Result::ok)
+            .collect()
+    });
+    assert!(
+        actions.iter().any(|a| a == "system.restart"),
+        "a restart request left no trace; the log holds {actions:?}"
+    );
+}
+
+/// Every `(method, path)` in the two route tables is actually mounted.
+///
+/// The tables are read by the CSRF guard, by the OpenAPI gate and by every
+/// loop in this file, so an entry the router does not serve would quietly
+/// weaken all three. The unit test in `api_write.rs` cannot check this —
+/// `axum::Router` exposes no route list — and an earlier version of it was
+/// named as though it could while passing with `.put(write_settings)` deleted
+/// from `router()`. This is the half that noticed.
+#[tokio::test]
+async fn every_documented_route_is_mounted() {
+    let (_dir, state) = station(true);
+    for (method, path) in WRITE_ROUTES.iter().chain(READ_ROUTES) {
+        let (status, body) = call_method(&state, method, path, Some(TOKEN), KEY).await;
+        assert!(
+            status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
+            "{method} {path} is in the route table but the router answers {status}; the \
+             table is what the CSRF guard and the OpenAPI gate read. Body: {body}"
+        );
+    }
 }

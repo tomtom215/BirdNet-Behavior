@@ -2,7 +2,22 @@
 
 use axum::response::Html;
 
-/// Restart the birdnet-behavior service.
+/// What asking for a restart actually did.
+///
+/// Two outcomes, and the difference matters enough to be a type rather than a
+/// rendered string: on a station not under systemd nothing brings the process
+/// back, so signalling it would leave the operator staring at a dead server
+/// behind a cheerful "restart sent". The HTMX page and
+/// `POST /api/v2/control/restart` render this differently; neither decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartOutcome {
+    /// SIGTERM is on its way; `Restart=always` will bring a fresh instance up.
+    Signalled,
+    /// Not under systemd — refused, because nothing would restart us.
+    NotUnderSystemd,
+}
+
+/// Ask the process to restart itself, and say what happened.
 ///
 /// The unit runs as a non-root, sandboxed `Type=notify` service with
 /// `Restart=always`. The robust, privilege-free way for it to restart itself is
@@ -13,6 +28,38 @@ use axum::response::Html;
 /// the `systemctl` child mid-job. When not running under systemd there is
 /// nothing to bring us back, so we say so rather than kill the process and leave
 /// the operator staring at a dead server behind a misleading "restart sent".
+///
+/// Does **not** audit: the caller does, because the two callers have different
+/// identities (a logged-in person, or a bearer token that is nobody) and the
+/// audit-log vocabulary gate reads the action literal at the call site.
+pub fn request_restart() -> RestartOutcome {
+    let under_systemd =
+        std::env::var("INVOCATION_ID").is_ok() || std::env::var("JOURNAL_STREAM").is_ok();
+    if !under_systemd {
+        return RestartOutcome::NotUnderSystemd;
+    }
+
+    // Respond first, then signal: send SIGTERM from a detached thread after a
+    // short delay so the HTTP response reaches the caller before the process
+    // exits. The graceful-shutdown path then runs and `Restart=always` starts a
+    // fresh instance. `kill` of our own PID needs no privilege (same uid), so it
+    // works even with every capability dropped.
+    let pid = std::process::id().to_string();
+    tracing::info!(%pid, "restart requested; SIGTERM self, systemd Restart=always brings us back");
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid])
+            .status();
+    });
+    RestartOutcome::Signalled
+}
+
+/// `POST /admin/system/restart` — the dashboard's restart button.
+///
+/// The decision is [`request_restart`]'s; this renders it as the HTML fragment
+/// HTMX swaps in, and records *who* asked. `POST /api/v2/control/restart` is
+/// the same decision rendered as JSON.
 #[allow(clippy::unused_async)] // async required by axum's Handler trait
 pub(super) async fn service_restart(
     axum::extract::State(state): axum::extract::State<crate::state::AppState>,
@@ -22,36 +69,19 @@ pub(super) async fn service_restart(
     // the restart and exists even on a station where the restart is refused —
     // "who kept pressing this?" is a question either outcome raises.
     crate::audit::audit(&state, Some(&request_user), "system.restart", None, None);
-    let under_systemd =
-        std::env::var("INVOCATION_ID").is_ok() || std::env::var("JOURNAL_STREAM").is_ok();
 
-    if !under_systemd {
-        return Html(
+    match request_restart() {
+        RestartOutcome::NotUnderSystemd => Html(
             "<p class=\"ctl-warn\">Not running under systemd, so the service can't restart itself \
 from here. Restart it from a shell: <code>sudo systemctl restart birdnet-behavior</code> \
 (or stop and re-run the binary).</p>"
                 .to_string(),
-        );
+        ),
+        RestartOutcome::Signalled => Html(
+            "<p class=\"ctl-ok\">Restarting now — the dashboard will reconnect in a few seconds.</p>"
+                .to_string(),
+        ),
     }
-
-    // Respond first, then signal: send SIGTERM from a detached thread after a
-    // short delay so this HTTP response reaches the browser before the process
-    // exits. The graceful-shutdown path then runs and `Restart=always` starts a
-    // fresh instance. `kill` of our own PID needs no privilege (same uid), so it
-    // works even with every capability dropped.
-    let pid = std::process::id().to_string();
-    tracing::info!(%pid, "admin UI requested restart; SIGTERM self, systemd Restart=always brings us back");
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid])
-            .status();
-    });
-
-    Html(
-        "<p class=\"ctl-ok\">Restarting now — the dashboard will reconnect in a few seconds.</p>"
-            .to_string(),
-    )
 }
 
 /// Return HTML with current process status (PID, uptime, memory, version).

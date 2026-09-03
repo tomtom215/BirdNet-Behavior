@@ -49,6 +49,14 @@
     {
       "name": "meta",
       "description": "API metadata."
+    },
+    {
+      "name": "settings",
+      "description": "Reading and changing the station's configuration. Requires `BNB_API_TOKEN`."
+    },
+    {
+      "name": "control",
+      "description": "Station lifecycle. Requires `BNB_API_TOKEN`."
     }
   ],
   "paths": {
@@ -599,6 +607,209 @@
           },
           "404": {
             "description": "No detection matches that date, time and scientific name — or this station has no `BNB_API_TOKEN`, in which case the write surface does not exist."
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Read the station's settings",
+        "description": "Every persisted setting, with credentials removed two ways: by key name (`email_smtp_pass`, `birdweather_token`) and by value shape, which catches the credential inside a URL such as `ntfy://user:pass@host`. The by-shape rules are blunt: that value comes back as `***@host`, keeping the host and path but not the scheme or username, so a redacted value is not one you can edit and send back. A redacted value is **replaced** with `***REDACTED***` rather than omitted, so a caller can tell a secret it may not read from a setting that was never configured; `redacted` lists exactly which keys those were.\n\nKnown gap: a URL whose *path segment* is the credential — a heartbeat ping URL, for instance — is caught by neither rule and is returned in full.",
+        "operationId": "readSettings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The station's settings, redacted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "settings",
+                    "redacted",
+                    "writable_keys"
+                  ],
+                  "properties": {
+                    "settings": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Every persisted key, in sorted order."
+                    },
+                    "redacted": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The keys whose value was replaced with `***REDACTED***`."
+                    },
+                    "writable_keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "The keys `PUT /settings` will accept."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, so the settings API does not exist."
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Change one or more settings",
+        "description": "A partial update: send only the keys you mean to change. Values may be strings, numbers or booleans; each is stored as the string the settings table holds, through the same normalisation the admin page uses (so `\"51,5\"` is stored as `51.5`). A key already holding the value sent is not rewritten and is not counted in `updated`.\n\nUnknown keys are refused rather than ignored — a misspelling that answered 200 would report a change that never happened — and so is the literal `***REDACTED***`, which is what a client gets back from `GET /settings` for a secret and must not write over the real value.\n\nThe change is recorded in the station's audit log by key name only, never by value.",
+        "operationId": "writeSettings",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                "description": "Setting keys to values. Keys must come from `writable_keys`.",
+                "example": {
+                  "confidence_threshold": "0.75",
+                  "station_name": "Back Garden"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The settings were written. `updated` is 0 when every value already matched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "updated",
+                    "keys"
+                  ],
+                  "properties": {
+                    "updated": {
+                      "type": "integer",
+                      "description": "How many keys were written."
+                    },
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Which keys those were."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown key, a value with no string form, the `***REDACTED***` placeholder, or a body that is not a JSON object."
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, so the settings API does not exist."
+          },
+          "500": {
+            "description": "The database refused the change."
+          }
+        }
+      }
+    },
+    "/control/restart": {
+      "post": {
+        "tags": [
+          "control"
+        ],
+        "summary": "Restart the station",
+        "description": "Sends this process `SIGTERM` after a short delay, so the response is written before the socket closes; systemd's `Restart=always` brings a fresh instance up. The request body is ignored.\n\nAnswers `503` when the process is not running under systemd, because nothing would then bring the station back — a `200` there would tell the caller the opposite of what is about to happen. The attempt is recorded in the audit log either way.",
+        "operationId": "restartStation",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`SIGTERM` sent; systemd will start a fresh instance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "restarting"
+                  ],
+                  "properties": {
+                    "restarting": {
+                      "type": "boolean"
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, so the control API does not exist."
+          },
+          "503": {
+            "description": "Not running under systemd, so nothing would restart the process. Nothing was signalled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "restarting",
+                    "error"
+                  ],
+                  "properties": {
+                    "restarting": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1897,7 +2108,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The station's `BNB_API_TOKEN`, resolved from its configuration file and then its environment. Required by every write endpoint and accepted by none of the read-only ones."
+        "description": "The station's `BNB_API_TOKEN`, resolved from its configuration file and then its environment. Required by every write endpoint, and by the settings read — a station's configuration is not public even with its credentials taken out. The read-only detection, species and analytics endpoints accept no credential and ignore one if it is sent."
       }
     },
     "parameters": {
