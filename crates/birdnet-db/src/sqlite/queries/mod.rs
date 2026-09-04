@@ -4,6 +4,7 @@ pub mod analytics;
 pub mod correlation;
 pub mod detection_reviews;
 pub mod detections;
+pub mod effort;
 pub mod heatmap;
 pub mod images;
 pub mod imports;
@@ -39,6 +40,7 @@ pub use detections::{
     todays_detection_count, todays_detections, todays_source_activity, unlock_detection,
     unstamped_detection_count,
 };
+pub use effort::total_recording_seconds;
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{
     ImageBlacklist, add_image_blacklist, blacklisted_urls_for_species, is_image_blacklisted,
