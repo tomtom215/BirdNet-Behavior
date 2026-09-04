@@ -209,7 +209,7 @@ fn has_sqlite_header(db_path: &Path) -> bool {
 /// Run full integrity check (slower but more thorough).
 ///
 /// Like [`check_integrity`], this asks whether the file is a database *before*
-/// it asks SQLite anything, and for the same reason — see [`has_sqlite_header`]
+/// it asks SQLite anything, and for the same reason — see `has_sqlite_header`
 /// for why `PRAGMA integrity_check` cannot answer that question itself.
 ///
 /// The guard matters more here than there, because this is the entry point the
