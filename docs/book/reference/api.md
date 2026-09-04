@@ -188,12 +188,12 @@ CSV/JSON/eBird export of the full detection history is available from the [Backu
 
 ## Changing a station
 
-Six endpoints, and they are the only ones in `/api/v2` that change anything.
+Seven endpoints, and they are the only ones in `/api/v2` that change anything.
 They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-A seventh, `GET /api/v2/settings`, is a *read* that lives behind the same token:
+An eighth, `GET /api/v2/settings`, is a *read* that lives behind the same token:
 a station's configuration is not public even with its credentials taken out.
 
 ### Turning them on
@@ -205,7 +205,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all seven answer `404`: the write surface does not exist rather
+Until you do, all eight answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
@@ -230,6 +230,7 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `POST` | `/api/v2/detections/lock` | Protect the clip from the disk-full purge and retention sweep |
 | `POST` | `/api/v2/detections/unlock` | Return it to the ordinary purge rules |
 | `POST` | `/api/v2/detections/delete` | Remove the detection row |
+| `POST` | `/api/v2/detections/batch` | Apply one of the four above to up to 500 detections |
 | `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
 | `PUT` | `/api/v2/settings` | Change one or more settings |
 | `POST` | `/api/v2/control/restart` | Restart the station |
@@ -247,6 +248,61 @@ curl -X POST http://localhost:8502/api/v2/detections/lock \
   -H 'Content-Type: application/json' \
   -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula"}'
 ```
+
+### Batches
+
+One round trip instead of forty, for the case that actually comes up: triaging
+a night's false positives.
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/batch \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"op":"review","status":"rejected","detections":[
+        {"date":"2026-09-03","time":"02:14:07","sci_name":"Strix aluco"},
+        {"date":"2026-09-03","time":"02:19:51","sci_name":"Strix aluco"}
+      ]}'
+```
+
+```json
+{
+  "op": "review",
+  "requested": 2,
+  "applied": 2,
+  "failed": 0,
+  "results": [
+    { "detection": "2026-09-03 02:14:07 Strix aluco", "applied": true },
+    { "detection": "2026-09-03 02:19:51 Strix aluco", "applied": true }
+  ]
+}
+```
+
+`op` is one of `review`, `lock`, `unlock`, `delete`, and applies to every
+detection in the list. `status` and `notes` belong to `review` and are refused
+with any other `op`: a caller who sent `{"op":"delete","status":"confirmed"}`
+meant something by both fields, and silently dropping one would not say which.
+At most 500
+detections per request; a longer list is refused before anything is written
+rather than quietly truncated.
+
+> **Read `failed`, not just the status code.** The response is `200` whenever
+> the *request* was well-formed, even if every item failed. A key that matches
+> nothing does not stop the batch — a client working from a list a few seconds
+> stale would otherwise have forty good deletions refused because three rows had
+> already gone — so each detection gets its own entry in `results`, and
+> `applied` and `failed` are at the top level so you need not walk the array.
+
+This is **not** a transaction. Each detection takes the same path as the single-detection endpoint, which is what keeps the SQLite
+store and the analytics copy in step; a shared transaction would mean a second
+implementation of "delete a detection" and is not worth that. If the process
+dies mid-batch, the detections already applied stay applied.
+
+Every detection actually changed is written to the audit log individually, under
+the same action name a single-detection call uses — so "what happened to that
+recording?" is still answerable afterwards. A full batch therefore writes 500
+rows, which is exactly what the admin audit view shows in one page before it
+says "Showing the most recent 500 matches". That, and the cost of the writes
+themselves, is what the limit bounds.
 
 ### Settings
 
@@ -327,7 +383,8 @@ rather than reporting a restart that would in fact be a shutdown.
 Every change is written to the [audit log](../admin/system.md) as
 `detection.review` / `detection.lock` / `detection.unlock` / `detection.delete`
 / `settings.update` / `system.restart`, with no user and `via=api` in the
-metadata — a token is not a person, and the log says so rather than inventing
+metadata — a batch writes one such row per detection it changed, under the same
+names — a token is not a person, and the log says so rather than inventing
 one. A settings change records the key *names* only: an entry reading
 `birdweather_token=…` would put a credential on the page that renders the log.
 The restart entry is written before the decision, so a refused restart is

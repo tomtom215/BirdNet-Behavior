@@ -50,7 +50,7 @@ could build on. Home Assistant and Node-RED could read a station and never act
 on one, and because our own front end was the only client, a change to fragment
 markup would silently break whatever automation existed in the wild.
 
-Six mutating endpoints now exist, and they are the only ones under `/api/v2`
+Seven mutating endpoints now exist, and they are the only ones under `/api/v2`
 that change anything, plus one read that lives behind the same token:
 
 | Endpoint | Does |
@@ -59,6 +59,7 @@ that change anything, plus one read that lives behind the same token:
 | `POST /api/v2/detections/lock` | protect a clip from the purge and the retention sweep |
 | `POST /api/v2/detections/unlock` | return it to the ordinary rules |
 | `POST /api/v2/detections/delete` | remove the detection |
+| `POST /api/v2/detections/batch` | apply one of those four to up to 500 detections |
 | `GET /api/v2/settings` | read every setting, with credentials removed |
 | `PUT /api/v2/settings` | change one or more settings |
 | `POST /api/v2/control/restart` | restart the station |
@@ -66,7 +67,7 @@ that change anything, plus one read that lives behind the same token:
 **They are off by default, and the default is the safe one.** Set
 `BNB_API_TOKEN` — resolved from the config file then the environment, the same
 precedence `CADDY_PWD` uses — and each endpoint accepts
-`Authorization: Bearer <token>`. Leave it unset and all seven answer `404`: the
+`Authorization: Bearer <token>`. Leave it unset and all eight answer `404`: the
 write surface does not exist rather than existing unprotected. That is
 deliberately the *opposite* default from `CADDY_PWD`, where an unset password
 leaves `/admin` open; these endpoints never touch that bypass. A token under 32
@@ -92,6 +93,40 @@ Every change is written to the audit log with no user and `via=api`, because a
 token is not a person. A settings change records the key *names* only: `/admin/audit`
 renders that table, and an entry reading `birdweather_token=…` would put a
 credential on a page.
+
+**One request instead of forty.** `POST /api/v2/detections/batch` applies one
+of the four detection operations to a list of them, which is the shape triage
+actually takes: a night of false positives is rejected in one call rather than
+forty authenticated round trips.
+
+It is deliberately **not** a transaction, and says so rather than letting a
+caller infer one from the word "batch". Each detection goes through the same
+`AppState` method the single-detection endpoint calls, because those methods
+write SQLite *and* the DuckDB analytics copy — `tests/analytics_divergence.rs`
+exists because a handler that reached past the pairing for one shared
+transaction would compile, pass every contract test, and silently desynchronise
+the two stores. One transaction is not worth a second implementation of "delete
+a detection", and two new gates in that suite now cover this route: restoring
+the raw-SQLite shortcut leaves the analytics copy holding rows SQLite no longer
+has (`left: 3, right: 1`) and verdicts it never recorded.
+
+A key that matches nothing does not stop the batch either. A client working from
+a list a few seconds stale would otherwise have forty good deletions refused
+because three rows had already gone, so every detection gets its own entry in
+`results` and `applied`/`failed` sit at the top level. The response is `200`
+whenever the *request* was well-formed even if every item failed, which is a
+real hazard for a client that reads only the status code — `207` was the
+alternative and surprises the shell scripts this exists for, so the trade is
+stated in the endpoint's own documentation and in the manual instead.
+
+An unknown `op`, and `status`/`notes` sent with an `op` that is not `review`,
+are refused rather than ignored — the same rule as a misspelled settings key.
+The list is capped at 500: measured at about 0.44 ms per item on this
+workspace's debug build (100 in 39 ms, 500 in 229 ms, 1000 in 434 ms), and 500
+is also exactly one page of `/admin/audit`, which caps at 500 rows and then says
+so. Every detection actually changed gets its own audit row under the same
+action name a single call writes, because a single row reading "deleted 40
+detections" cannot answer "what happened to that recording?".
 
 **Settings are readable, with the credentials taken out.** Automation has to read
 what it is about to change, so `GET /api/v2/settings` exists — but handing a
@@ -139,6 +174,15 @@ bearer-gated, and every other operation is documented as anonymous. Redocly's
 `security-defined` rule does not catch a missing per-operation `security`, and
 the document's default is anonymous, so a write documented without one would
 hand every generated client a `401` it had no way to anticipate.
+
+The audit log's action scanner reads string literals in the lines *after* a
+`crate::audit::audit` call, and its window was seven. The batch endpoint picks
+its action name with a `match`, which rustfmt expands to one arm per line, so
+the fourth literal — the one that deletes a detection — sat at offset seven and
+fell outside. The window is now ten. Widening can only ever find *more*
+literals, so it strengthens the undocumented-action assertion and cannot weaken
+it; checked at 7, 8, 9, 10, 12 and 15 across the crate, the set found is
+identical (32 actions) and no unrelated string is mistaken for one.
 
 **And a worse one, found by CI.** The restart endpoint read
 `INVOCATION_ID`/`JOURNAL_STREAM` on every request, which made its behaviour a

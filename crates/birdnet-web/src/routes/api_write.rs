@@ -59,6 +59,7 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v2/detections/lock"),
     ("POST", "/api/v2/detections/unlock"),
     ("POST", "/api/v2/detections/delete"),
+    ("POST", "/api/v2/detections/batch"),
     ("PUT", "/api/v2/settings"),
     ("POST", "/api/v2/control/restart"),
 ];
@@ -94,6 +95,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/detections/lock", post(lock))
         .route("/api/v2/detections/unlock", post(unlock))
         .route("/api/v2/detections/delete", post(delete))
+        .route("/api/v2/detections/batch", post(batch))
         .route("/api/v2/settings", get(read_settings).put(write_settings))
         .route("/api/v2/control/restart", post(restart))
 }
@@ -316,6 +318,267 @@ async fn delete(State(state): State<AppState>, Json(key): Json<Key>) -> (StatusC
         Ok(false) => not_found(),
         Err(e) => server_error(&e),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Batch
+// ---------------------------------------------------------------------------
+
+/// The most detections one batch may name.
+///
+/// Measured rather than guessed: on this workspace's debug build, one item —
+/// the paired write plus its audit row — costs about 0.44 ms (100 in 39 ms,
+/// 500 in 229 ms, 1000 in 434 ms), so 500 is roughly a quarter-second of work
+/// on a development machine. A release build on a Raspberry Pi's SD card will
+/// be slower and that figure should not be read as a latency budget for one;
+/// what the number is here for is to show the cap is not arbitrary.
+///
+/// The cap also bounds the audit log, and lands on the same number by a second
+/// route: `/admin`'s audit view is `AUDIT_PAGE_LIMIT = 500` rows over its date
+/// range, and shows "Showing the most recent 500 matches" when it hits that. A
+/// full batch is therefore exactly one page of audit history — noticeable, and
+/// not more than the view can show at once.
+pub const BATCH_MAX: usize = 500;
+
+/// The cap must actually cap. Checked at compile time rather than in a test,
+/// because both sides are constants: clippy's `assertions_on_constants`
+/// rejected the runtime version, and it was right to — an assertion the
+/// compiler can fold is not something a test run tells you. Raising
+/// [`BATCH_MAX`] past this bound fails the build, which is the strongest
+/// version of the check and the cheapest.
+const _: () = assert!(
+    BATCH_MAX > 0 && BATCH_MAX <= 1000,
+    "BATCH_MAX must bound something: an uncapped batch is an unbounded write \
+     loop a single request can start"
+);
+
+/// One detection in a batch.
+///
+/// Separate from [`Key`] because a review stores a common name alongside the
+/// verdict and the other three operations have no use for one.
+#[derive(Debug, Deserialize)]
+struct BatchKey {
+    date: String,
+    time: String,
+    sci_name: String,
+    /// Read only when `op` is `review`; defaults to `sci_name`, as the
+    /// single-detection endpoint does.
+    com_name: Option<String>,
+}
+
+/// What a batch does to each of its detections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchOp {
+    Review,
+    Lock,
+    Unlock,
+    Delete,
+}
+
+impl BatchOp {
+    /// Parse the `op` field, or `None` for anything else.
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "review" => Some(Self::Review),
+            "lock" => Some(Self::Lock),
+            "unlock" => Some(Self::Unlock),
+            "delete" => Some(Self::Delete),
+            _ => None,
+        }
+    }
+
+    /// Every accepted value, for an error message that says what is accepted.
+    const NAMES: [&'static str; 4] = ["review", "lock", "unlock", "delete"];
+}
+
+/// A batch of the same operation over many detections.
+#[derive(Debug, Deserialize)]
+struct BatchBody {
+    op: String,
+    /// `review` only: `confirmed`, `rejected`, or absent to clear the verdict.
+    status: Option<String>,
+    /// `review` only: free text attached to every verdict in the batch.
+    notes: Option<String>,
+    detections: Vec<BatchKey>,
+}
+
+/// Apply one operation to many detections in a single request.
+///
+/// # What this is, and what it is not
+///
+/// It is one round trip, one authentication, and one result document instead
+/// of N of each — which is what a triage client rejecting forty overnight
+/// false positives actually needs.
+///
+/// It is **not** a transaction, and the doc says so rather than letting a
+/// caller infer one from the word "batch". Each detection goes through the
+/// same [`crate::state::AppState`] method the single-detection endpoint calls,
+/// because those methods write `SQLite` *and* the `DuckDB` analytics copy, and
+/// `tests/analytics_divergence.rs` exists because a handler that reached for
+/// `with_db(|c| birdnet_db::sqlite::…)` to get one transaction would compile,
+/// pass every contract test, and silently desynchronise the two stores. One
+/// transaction is not worth a second implementation of "delete a detection".
+///
+/// # Partial results are the answer, not an error
+///
+/// A key that matches nothing does not stop the batch: a client working from a
+/// list a few seconds stale would otherwise have forty good deletions refused
+/// because three rows had already gone. Every detection gets its own entry in
+/// `results`, and `applied`/`failed` are top-level so a caller does not have to
+/// walk the array to know.
+///
+/// The response is `200` whenever the *request* was well-formed, even if every
+/// item failed — the request was understood and carried out, and the outcomes
+/// are the body. A client that checks only the status code will be misled, so
+/// `failed` is named at the top level and the manual says to read it. `207` was
+/// the alternative and is more precise HTTP, but it surprises the shell scripts
+/// and Node-RED flows this endpoint exists for.
+async fn batch(
+    State(state): State<AppState>,
+    Json(body): Json<BatchBody>,
+) -> (StatusCode, Json<Value>) {
+    let Some(op) = BatchOp::parse(&body.op) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "unknown op",
+                "op": body.op,
+                "accepted": BatchOp::NAMES,
+            })),
+        );
+    };
+
+    // Refused rather than ignored, for the reason a misspelled settings key is:
+    // a caller who sent `{"op":"delete","status":"confirmed"}` believes one of
+    // those two words did something, and only one of them did.
+    if op != BatchOp::Review && (body.status.is_some() || body.notes.is_some()) {
+        return bad_request("status and notes apply to op \"review\" only");
+    }
+
+    // Parsed once, before anything is written: a batch that would fail on every
+    // item because the verdict is misspelled should say so instead of reporting
+    // 500 identical failures.
+    let verdict = match body.status.as_deref() {
+        None => None,
+        Some(s) => {
+            let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(s) else {
+                return bad_request("status must be \"confirmed\", \"rejected\", or omitted");
+            };
+            Some(status)
+        }
+    };
+
+    if body.detections.len() > BATCH_MAX {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "too many detections in one batch",
+                "requested": body.detections.len(),
+                "max": BATCH_MAX,
+            })),
+        );
+    }
+
+    let mut results = Vec::with_capacity(body.detections.len());
+    let mut applied = 0_usize;
+    let mut failed = 0_usize;
+
+    for key in &body.detections {
+        let target = target_of(&key.date, &key.time, &key.sci_name);
+
+        // Per item, not per request: one malformed key must not sink the rest,
+        // and the caller is told which one it was.
+        if let Err((_, Json(e))) = validate(&key.date, &key.time, &key.sci_name) {
+            failed += 1;
+            results.push(json!({
+                "detection": target,
+                "applied": false,
+                "error": e.get("error").and_then(Value::as_str).unwrap_or("invalid key"),
+            }));
+            continue;
+        }
+
+        let outcome: Result<bool, birdnet_db::sqlite::DbError> = match op {
+            BatchOp::Review => match verdict {
+                Some(status) => state
+                    .set_detection_review(
+                        &key.date,
+                        &key.time,
+                        &key.sci_name,
+                        key.com_name.as_deref().unwrap_or(&key.sci_name),
+                        status,
+                        body.notes.as_deref(),
+                    )
+                    .map(|()| true),
+                None => state
+                    .clear_detection_review(&key.date, &key.time, &key.sci_name)
+                    .map(|()| true),
+            },
+            BatchOp::Lock => state.with_db(|conn| {
+                birdnet_db::sqlite::lock_detection(conn, &key.date, &key.time, &key.sci_name)
+            }),
+            BatchOp::Unlock => state.with_db(|conn| {
+                birdnet_db::sqlite::unlock_detection(conn, &key.date, &key.time, &key.sci_name)
+            }),
+            BatchOp::Delete => state.delete_detection(&key.date, &key.time, &key.sci_name),
+        };
+
+        match outcome {
+            Ok(true) => {
+                applied += 1;
+                // The action names are matched inline rather than returned by
+                // a helper so `tests/the_audit_log_records_what_happened.rs`
+                // can see them: that gate reads string literals in the lines
+                // following a `crate::audit::audit` call, and a helper taking
+                // the action as a parameter is invisible to it. rustfmt
+                // expands this match to one arm per line, which put the fourth
+                // literal outside the gate's window — the window is ten rather
+                // than seven because of this call site, and that is recorded
+                // where the window is set.
+                crate::audit::audit(
+                    &state,
+                    None,
+                    match op {
+                        BatchOp::Review => "detection.review",
+                        BatchOp::Lock => "detection.lock",
+                        BatchOp::Unlock => "detection.unlock",
+                        BatchOp::Delete => "detection.delete",
+                    },
+                    Some(&target),
+                    Some(VIA_API),
+                );
+                results.push(json!({ "detection": target, "applied": true }));
+            }
+            Ok(false) => {
+                failed += 1;
+                results.push(json!({
+                    "detection": target,
+                    "applied": false,
+                    "error": "no detection matches that date, time and scientific name",
+                }));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, detection = %target, "batch item failed");
+                failed += 1;
+                results.push(json!({
+                    "detection": target,
+                    "applied": false,
+                    "error": "the database refused the change",
+                }));
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "op": body.op,
+            "requested": body.detections.len(),
+            "applied": applied,
+            "failed": failed,
+            "results": results,
+        })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -547,7 +810,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        READ_ROUTES, REDACTED, WRITE_ROUTES, is_valid_date, is_valid_time, is_write_route,
+        BatchOp, READ_ROUTES, REDACTED, WRITE_ROUTES, is_valid_date, is_valid_time, is_write_route,
         redacted_settings, scalar_to_string,
     };
 
@@ -648,6 +911,32 @@ mod tests {
         assert!(scalar_to_string(&serde_json::json!(null)).is_none());
         assert!(scalar_to_string(&serde_json::json!([1, 2])).is_none());
         assert!(scalar_to_string(&serde_json::json!({"a": 1})).is_none());
+    }
+
+    #[test]
+    fn every_batch_op_name_parses_and_nothing_else_does() {
+        // `NAMES` is what the refusal message tells a caller is accepted, so a
+        // name in that list that `parse` rejects would advertise an operation
+        // the endpoint refuses.
+        for name in BatchOp::NAMES {
+            assert!(
+                BatchOp::parse(name).is_some(),
+                "{name} is advertised as accepted but does not parse"
+            );
+        }
+        assert_eq!(BatchOp::NAMES.len(), 4);
+
+        // The counterpart. Without it, `parse` returning `Some(Delete)` for
+        // everything would satisfy the loop above — and turn a typo into a
+        // deletion.
+        for name in [
+            "", "Delete", "DELETE", "remove", "review ", "lock;", "purge",
+        ] {
+            assert!(
+                BatchOp::parse(name).is_none(),
+                "{name:?} must not be accepted as an op"
+            );
+        }
     }
 
     #[test]

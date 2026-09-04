@@ -611,6 +611,163 @@
         }
       }
     },
+    "/detections/batch": {
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Apply one operation to many detections",
+        "description": "One round trip, one authentication and one result document instead of N of each — what a triage client rejecting forty overnight false positives needs.\n\n**This is not a transaction.** Each detection goes through the same code path as the single-detection endpoint, so the SQLite store and the DuckDB analytics copy stay in step; one shared transaction would mean a second implementation of \"delete a detection\" and is not worth that. A key that matches nothing does not stop the batch either: a client working from a slightly stale list would otherwise have forty good deletions refused because three rows had already gone.\n\n**Read `failed`, not just the status code.** The response is `200` whenever the request itself was well-formed, even if every item failed — the request was understood and carried out, and the per-item outcomes are the body. `applied` and `failed` are at the top level so a caller need not walk `results` to know what happened.\n\nEvery detection actually changed is written to the station's audit log individually, under the same action name the single-detection endpoint uses, so \"what happened to that recording?\" stays answerable. A full batch of 500 writes 500 audit rows, which is one page of the station's audit view.",
+        "operationId": "batchDetections",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "op",
+                  "detections"
+                ],
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      "review",
+                      "lock",
+                      "unlock",
+                      "delete"
+                    ],
+                    "description": "Applied to every detection in the list. An unrecognised value is refused rather than ignored."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed",
+                      "rejected"
+                    ],
+                    "description": "`review` only; omit to clear an existing verdict. Sending it with any other `op` is a `400`, because a caller who wrote it believes it did something."
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "`review` only; attached to every verdict in the batch."
+                  },
+                  "detections": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "description": "At most 500 per request; a longer list is refused before anything is written rather than truncated.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "date",
+                        "time",
+                        "sci_name"
+                      ],
+                      "properties": {
+                        "date": {
+                          "type": "string",
+                          "example": "2026-09-03",
+                          "description": "Local calendar date of the detection, `YYYY-MM-DD`."
+                        },
+                        "time": {
+                          "type": "string",
+                          "example": "06:12:44",
+                          "description": "Local time of the detection, `HH:MM:SS`."
+                        },
+                        "sci_name": {
+                          "type": "string",
+                          "example": "Erithacus rubecula",
+                          "description": "Scientific name exactly as the detection was recorded."
+                        },
+                        "com_name": {
+                          "type": "string",
+                          "example": "European Robin",
+                          "description": "Read only when `op` is `review`; defaults to `sci_name`."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The request was carried out. Check `failed` — this is also the status when every item failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "op",
+                    "requested",
+                    "applied",
+                    "failed",
+                    "results"
+                  ],
+                  "properties": {
+                    "op": {
+                      "type": "string"
+                    },
+                    "requested": {
+                      "type": "integer",
+                      "description": "How many were named."
+                    },
+                    "applied": {
+                      "type": "integer",
+                      "description": "How many were changed."
+                    },
+                    "failed": {
+                      "type": "integer",
+                      "description": "How many were not — malformed key, no such detection, or a database error."
+                    },
+                    "results": {
+                      "type": "array",
+                      "description": "One entry per detection, in the order sent.",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "detection",
+                          "applied"
+                        ],
+                        "properties": {
+                          "detection": {
+                            "type": "string",
+                            "example": "2026-09-03 06:12:44 Erithacus rubecula"
+                          },
+                          "applied": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string",
+                            "description": "Present only when `applied` is false."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown `op`, `status`/`notes` on a non-review `op`, an unparseable verdict, or more than 500 detections."
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, so the write surface does not exist."
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "tags": [

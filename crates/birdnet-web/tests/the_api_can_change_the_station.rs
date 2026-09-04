@@ -36,7 +36,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use birdnet_web::api_token::ApiToken;
-use birdnet_web::routes::api_write::{READ_ROUTES, WRITE_ROUTES};
+use birdnet_web::routes::api_write::{BATCH_MAX, READ_ROUTES, WRITE_ROUTES};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
 
@@ -718,4 +718,308 @@ async fn every_documented_route_is_mounted() {
              table is what the CSRF guard and the OpenAPI gate read. Body: {body}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Batch
+// ---------------------------------------------------------------------------
+
+/// Seed `n` extra magpie detections at 10:00:00, 10:00:01, …
+fn seed_many(state: &AppState, n: usize) -> Vec<String> {
+    let mut times = Vec::with_capacity(n);
+    state.with_db(|conn| {
+        for i in 0..n {
+            let t = format!("10:{:02}:{:02}", i / 60, i % 60);
+            conn.execute(
+                "INSERT INTO detections
+                     (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
+                      File_Name, chunk_offset_secs)
+                 VALUES ('2026-09-03', ?1, 'Pica pica', 'Eurasian Magpie',
+                         0.9, 0.7, 36, 1.25, 0.0, 'x.wav', 0)",
+                rusqlite::params![t],
+            )
+            .expect("seed");
+            times.push(t);
+        }
+    });
+    times
+}
+
+/// A batch body naming `times`, all on the seeded date and species.
+fn batch_body(op: &str, extra: &str, times: &[String]) -> String {
+    let keys: Vec<String> = times
+        .iter()
+        .map(|t| format!(r#"{{"date":"2026-09-03","time":"{t}","sci_name":"Pica pica"}}"#))
+        .collect();
+    format!(
+        r#"{{"op":"{op}"{extra},"detections":[{}]}}"#,
+        keys.join(",")
+    )
+}
+
+/// How many of the seeded detections are locked, and how many exist.
+fn locked_and_total(state: &AppState) -> (i64, i64) {
+    state.with_db(|conn| {
+        let locked: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE is_locked = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(-1);
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap_or(-1);
+        (locked, total)
+    })
+}
+
+/// The finding: one request changes many detections.
+///
+/// Without it a triage client rejecting forty overnight false positives makes
+/// forty authenticated round trips, which is the shape the audit's remedy
+/// named as the eighth endpoint.
+#[tokio::test]
+async fn a_batch_applies_one_operation_to_many_detections() {
+    let (_dir, state) = station(true);
+    let times = seed_many(&state, 5);
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &batch_body("lock", "", &times),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"applied\":5"), "{body}");
+    assert!(body.contains("\"failed\":0"), "{body}");
+    assert_eq!(
+        locked_and_total(&state),
+        (5, 6),
+        "five of the six detections should be locked and none deleted"
+    );
+
+    // And the reverse, so the gate is not satisfied by a handler that only ever
+    // locks.
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &batch_body("unlock", "", &times[..3]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(locked_and_total(&state), (2, 6), "three were unlocked");
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &batch_body("delete", "", &times),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"applied\":5"), "{body}");
+    assert_eq!(
+        locked_and_total(&state).1,
+        1,
+        "only the original detection should remain"
+    );
+}
+
+/// A batch does what it can and says what it could not.
+///
+/// The discrimination for the partial-results design. A handler that refused
+/// the whole batch on the first bad key would leave the good ones untouched;
+/// one that reported success for everything would leave `failed` at zero.
+#[tokio::test]
+async fn a_batch_does_the_rest_when_one_key_is_bad() {
+    let (_dir, state) = station(true);
+    let times = seed_many(&state, 3);
+
+    let good: Vec<String> = times.clone();
+    let keys: Vec<String> = good
+        .iter()
+        .map(|t| format!(r#"{{"date":"2026-09-03","time":"{t}","sci_name":"Pica pica"}}"#))
+        .collect();
+    let body_json = format!(
+        r#"{{"op":"lock","detections":[{},{},{}]}}"#,
+        keys.join(","),
+        // Well-formed, matches nothing.
+        r#"{"date":"2020-01-01","time":"00:00:00","sci_name":"Turdus merula"}"#,
+        // Malformed: a date no query should ever see.
+        r#"{"date":"yesterday","time":"00:00:00","sci_name":"Pica pica"}"#,
+    );
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &body_json,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("\"requested\":5"), "{body}");
+    assert!(
+        body.contains("\"applied\":3"),
+        "the three good keys should still have been applied: {body}"
+    );
+    assert!(body.contains("\"failed\":2"), "{body}");
+    assert!(
+        body.contains("no detection matches"),
+        "the missing row should be named as such: {body}"
+    );
+    assert!(
+        body.contains("date must be YYYY-MM-DD"),
+        "the malformed key should say what is wrong with it: {body}"
+    );
+    assert_eq!(
+        locked_and_total(&state),
+        (3, 4),
+        "exactly the three good keys were locked"
+    );
+}
+
+/// The two whole-request refusals, and the cap.
+#[tokio::test]
+async fn a_batch_refuses_an_unknown_op_a_misplaced_status_and_an_oversized_list() {
+    let (_dir, state) = station(true);
+    let times = seed_many(&state, 2);
+
+    // An op the endpoint does not implement. Answering 200 would report a
+    // change that never happened.
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &batch_body("purge", "", &times),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("accepted"), "{body}");
+
+    // `status` belongs to review. Silently ignoring it would tell a caller who
+    // wrote `{"op":"delete","status":"confirmed"}` that both words did work.
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &batch_body("delete", r#","status":"confirmed""#, &times),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // Over the cap: refused before anything is written, not truncated.
+    let over: Vec<String> = (0..=BATCH_MAX)
+        .map(|i| format!("11:{:02}:{:02}", i / 60, i % 60))
+        .collect();
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &batch_body("delete", "", &over),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("too many"), "{body}");
+
+    assert_eq!(
+        locked_and_total(&state),
+        (0, 3),
+        "a refused batch must not have changed anything"
+    );
+
+    // The counterpart: a handler that refused every batch would pass all three
+    // assertions above.
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &batch_body("lock", "", &times),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        locked_and_total(&state),
+        (2, 3),
+        "a well-formed batch must still work after the refusals"
+    );
+}
+
+/// A batch writes one audit row per detection it changed, and none for the
+/// ones it did not.
+///
+/// The alternative — one row per batch — was rejected: the audit view is where
+/// an operator asks "what happened to that recording?", and a single row
+/// reading "deleted 40 detections" cannot answer it. The cost is that one call
+/// can write a full page of history into a view capped at 500 rows, which is
+/// what [`BATCH_MAX`] bounds.
+#[tokio::test]
+async fn a_batch_audits_every_detection_it_changed_and_no_others() {
+    let (_dir, state) = station(true);
+    let times = seed_many(&state, 3);
+
+    let keys: Vec<String> = times
+        .iter()
+        .map(|t| format!(r#"{{"date":"2026-09-03","time":"{t}","sci_name":"Pica pica"}}"#))
+        .collect();
+    let body_json = format!(
+        r#"{{"op":"delete","detections":[{},{}]}}"#,
+        keys.join(","),
+        r#"{"date":"2020-01-01","time":"00:00:00","sci_name":"Turdus merula"}"#,
+    );
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &body_json,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let entries: Vec<(String, String, String)> = state.with_db(|conn| {
+        let mut stmt = conn
+            .prepare("SELECT action, COALESCE(target, ''), COALESCE(metadata, '') FROM audit_log")
+            .expect("audit_log exists");
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .expect("query")
+            .filter_map(Result::ok)
+            .collect()
+    });
+
+    let deletes: Vec<&(String, String, String)> = entries
+        .iter()
+        .filter(|(action, _, _)| action == "detection.delete")
+        .collect();
+    assert_eq!(
+        deletes.len(),
+        3,
+        "one row per detection actually deleted, and none for the key that \
+         matched nothing; the log holds {entries:?}"
+    );
+    for (_, target, metadata) in &deletes {
+        assert!(
+            target.contains("Pica pica"),
+            "the row must name which detection it was: {target}"
+        );
+        assert!(
+            metadata.contains("via=api"),
+            "a batch is still an API change, not a human one: {metadata}"
+        );
+    }
+    assert!(
+        !entries.iter().any(|(_, t, _)| t.contains("Turdus merula")),
+        "the key that matched nothing must not be recorded as a deletion: {entries:?}"
+    );
 }
