@@ -38,7 +38,7 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
-### Fixed — seven ways the station vouched for something it had not checked
+### Fixed — eight ways the station vouched for something it had not checked
 
 This project accumulated eleven planning and audit documents written at
 different times. They were reconciled against the source in one pass: every open
@@ -129,17 +129,26 @@ one. The verdict on the live database at boot deliberately stays on the cheap
 check, because the deep one is 24× slower on a path that runs before the server
 starts listening, and the daily check covers it.
 
+**A restore that could not finish was the thing that lost the history.**
+`restore_from_backup` deleted the database it was replacing before it knew it
+could write the replacement, so any failure after that point — a full card,
+another I/O error from the card that caused the corruption in the first place,
+a power cut — left neither. The station then read that failure as "corrupt and
+no good backup exists", quarantined, and started fresh, while a perfectly good
+backup sat beside it waiting to be rotated away by the weekly ring. Reproduced
+on a 12 MB filesystem with a 2.7 MB backup and 1.3 MB free: the live database
+was left at zero bytes with no rows readable. The restore now builds the
+replacement alongside, verifies it, and swaps it in by rename; a good backup
+that could not be written is reported as exactly that, names the file that is
+still intact, and stops the station rather than starting it fresh — which on a
+full card would not have let it record anyway.
+
 ### Found and not fixed
 
 Recorded so nothing discovered goes untraced. The full register is
 `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.12 and §3.13 — 121 new rows with
 severity, evidence and a remedy each. The ones an operator should know about:
 
-* **A corrupt database on a full card is turned into total history loss.** The
-  restore path needs room for a second whole database; its failure to get that
-  room is indistinguishable from "no good backup", and the station then
-  quarantines a *recoverable* database and starts fresh. Now that the ring is
-  worth restoring from, this is the most damaging thing still open (`AD-9`).
 * **The eBird export writes latitude 0, longitude 0**, applies no confidence
   floor and no one-per-hour deduplication, and writes raw detection tallies as
   bird counts — so one blackbird detected two hundred times is exported as two

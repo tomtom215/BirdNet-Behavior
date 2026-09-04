@@ -40,11 +40,12 @@ two references), for **255** rows in the register — counted by first id per ro
 which is the right measure because a few rows deliberately group several ids
 (`WE-1 … WE-5`, and three of the accessibility rows). Per prefix: PS 19, PR 17,
 NT 18, LC 16, OB 16, NL 1, NP 13, S 16, O 16, ARM 1, AU 1, RC 35, ON 20, R 11,
-AD 9, OP 16, UX 15, FR 6, UP 8, WE 1. **Eight** of the new rows are fixed on
-the reconciliation branch, each with a gate observed failing against the code it
-guards — `RC-1`, `RC-2`, `RC-3` (in part), `RC-4`, `ON-1`, `ON-2`, `ON-14` and
-`AD-2`, counted by grepping §3.12 and §3.13 for the marker rather than by adding
-up. `ON-1` and `ON-14` also close `LC-2`'s container half and `LC-15`, which are
+AD 9, OP 16, UX 15, FR 6, UP 8, WE 1. **Ten** of the new rows are fixed on the
+reconciliation branch, each with a gate observed failing against the code it
+guards — `RC-1`, `RC-2`, `RC-3` (in part), `RC-4`, `RC-22`, `ON-1`, `ON-2`,
+`ON-14`, `AD-2` and `AD-9` — counted by grepping §3.12 and §3.13 for the marker
+rather than by adding up, which had this sentence saying nine. `RC-22` came
+along with `AD-9`, in the lines it rewrote. `ON-1` and `ON-14` also close `LC-2`'s container half and `LC-15`, which are
 rows in the original register. The five P0s
 are PS-1, PS-2, NT-1, LC-1 and LC-2 — in each of them the station keeps serving
 a healthy dashboard while it loses, or has already lost, what it exists to
@@ -610,7 +611,7 @@ larger than one reviewable change; the reason is in the row.
 | **RC-19** | P2 | READ | **The login page renders a throttle that does not exist.** `routes/auth_pages.rs:347,354-364` renders a `rate_limited` state whose flag is set `true` only by that file's own test (`:427`); `login_submit` implements no throttle. So the UI promises a lockout the code does not have. This is **O-6** seen from the other side — O-6 says the throttle is missing; this says the product already claims it. | Implement the throttle (item 5.2) and let the existing rendering become true, rather than deleting the rendering. |
 | **RC-20** | P1 | VERIFIED | **`OB-11`'s redaction mangling reaches the API, and a green test pins it.** `redact_email_local_part(&redact_url_credentials("rtsp://cam:secret@camera.local/stream"))` returns `***@camera.local/stream`: the URL rule produces `rtsp://cam:***REDACTED***@…`, and the email rule then reads its own output as an address, splits on `@`, and returns `format!("***@{domain}")` (`redact.rs:114`). An IP host mangles identically. `OB-11` recorded this for the support bundle; it also applies to `GET /api/v2/settings` (`api_write.rs:614`), so a station misreports its own camera URL to any authenticated client. And `api_write.rs:978` now asserts `out["apprise_url"] == "***@ntfy.example/topic"` with twelve lines of comment endorsing the composition — a gate deliberately written to pin the mangled value, which must change with the fix. | Item 2.17. This row exists to record two things that row does not: the API surface, and that the fix has a green test standing in front of it. |
 | **RC-21** | P2 | VERIFIED | **`birdnet_detection_silence_seconds` is consumed by nothing this project ships.** `crates/birdnet-web/src/metrics.rs:774` exports it and the operator manual names it first among the series to alert on. `grep -rn grafana --include=*.rs --include=*.sh --include=*.yml .` returns zero hits — nothing in the workspace reads `docs/grafana-dashboard.json` — the dashboard covers 9 of 29 metric families, this series is not among them, there is no `alerting_rules.yml`, and the `alert: []` stanzas were removed rather than filled. `grafana-dashboard.json:322` also still says "Resident memory (MemoryHigh = 384 MiB)" against `installer/lib/65-service.sh:145 MemoryHigh=768M`. | Item 2.9 (**OB-3**), which is bigger than its one-line entry suggests: it needs the rules file, the dashboard's coverage raised, and a gate holding the dashboard's metric names to the exposition's. |
-| **RC-22** | P3 | READ | **`restore_from_backup` still has the shape PS-1 removed, on the startup path.** `crates/birdnet-db/src/resilience.rs:471` `run_to_completion(100, Duration::from_millis(50), None)`. Not PS-1's bug — the source is a backup file nothing writes, so no restart can occur — but the same arithmetic PS-1's own comment spells out: `N/100 × 50 ms` of pure sleep, about 25 s on a 209 MB database, before the listener binds on a recovery boot. Compounds **PS-17**. | One line, by symmetry with `copy_whole_database`. |
+| **RC-22** | P3 | READ | **[FIXED]** — came along with `AD-9`, which rewrote these lines. **`restore_from_backup` still has the shape PS-1 removed, on the startup path.** `crates/birdnet-db/src/resilience.rs:471` `run_to_completion(100, Duration::from_millis(50), None)`. Not PS-1's bug — the source is a backup file nothing writes, so no restart can occur — but the same arithmetic PS-1's own comment spells out: `N/100 × 50 ms` of pure sleep, about 25 s on a 209 MB database, before the listener binds on a recovery boot. Compounds **PS-17**. | One line, by symmetry with `copy_whole_database`. |
 | **RC-23** | P3 | READ | **Two different orderings prune the same backup directory.** `resilience.rs:363-390 prune_backups` sorts lexically on the timestamp embedded in the filename; `src/maintenance.rs:1120-1128 prune_old_backups_blocking` sorts on `metadata()…modified()` over a broader `contains(".backup.")` filter. Any operation that rewrites mtimes without rewriting names — a `cp` without `-p`, a restore of the backup directory, an rsync — makes the two disagree about which snapshot is newest, and the mtime pass is the one that deletes. | One ordering. Lands with **RC-10**. |
 | **RC-24** | P2 | READ | **`ci.yml` pins the model's digest and not the labels'.** `.github/workflows/ci.yml:296` verifies the model checksum declared at `:275`; `labels.csv` is exported at `:298` unverified, while `install.sh:150`, `installer/lib/10-config.sh:87` and `docker/entrypoint.sh:104` all pin `LABELS_SHA256`. A labels file is what maps a model output index to a species name; a wrong one mislabels silently and for ever. | Pin it in CI as the three shipping paths already do. |
 | **RC-25** | P2 | READ | **The release checklist omits a check the release hard-fails on.** `RELEASING.md`'s pre-release list has no `CITATION.cff` line, and `release.yml:86` fails `validate` on it. Tick every box, tag, and get a red tag. | One checklist line. |
@@ -699,7 +700,7 @@ and no previous document asked.
 | **AD-6** | P2 | READ | The purger sees only the recordings directory (`disk/manager.rs:39`). Nothing measures or bounds `birds.db-wal`, the five-copy backup ring, `birds.duckdb` (no retention job at all), or `birds.db.corrupt.*`. | **PS-12** and **PS-6**'s prune half. |
 | **AD-7** | P2 | READ | Binary swap and schema migration are both strong. The gap is downgrade: a downgraded DuckDB is quarantined and rebuilt synchronously on the boot path. | Bound it, or do it behind the listener — ties to **PS-17**. |
 | **AD-8** | P2 | READ | Nothing sets journald `Storage=` or `SystemMaxUse=`, so a default Pi has a volatile journal; the `errors.jsonl` mitigation is on the same partition as the database and truncates rather than rotates. | Item 2.18. |
-| **AD-9** | **P0** | READ+VERIFIED | **The worst pair: partial corruption on a full card.** The restore path needs room for a second whole database; its failure is indistinguishable from "no good backup"; `app.rs:134-156` then quarantines a *recoverable* database and starts fresh — turning a recoverable fault into total history loss, on the failure combination a year in a field makes likely. | Check free space before restoring and distinguish "no room" from "no backup", which is also **PS-10**'s "separate the two verdicts" applied one level out. |
+| **AD-9** | **P0** | VERIFIED | **The worst pair: partial corruption on a full card.** **[FIXED]** The mechanism turned out to be worse than this row stated, and simpler: `restore_from_backup` deleted the destination *before* it knew it could write the replacement, so any failure after that line — a full disk, another I/O error from the card that caused the corruption, a power cut — left neither. `app.rs` then read every error out of recovery as "no good backup exists", quarantined, and started fresh, and the weekly ring rotated the good backup away within five weeks. Reproduced on a 12 MB tmpfs with a 2 711 552-byte backup and 1 355 776 bytes free: `Err(DiskFull)`, live database left at **0 bytes**, zero rows readable, backup intact beside it. The restore now builds the replacement beside the destination, verifies it with the deep check, and swaps it in by `rename`; `ResilienceError::RestoreFailed { backup, detail }` is distinct from `NoBackup`, and `src/app.rs` decides through a named `recovery_fallback` — no good backup still starts fresh, a good backup that could not be written refuses to start. Re-run on the same tmpfs: the live database is byte-for-byte unchanged, the backup intact, no temporary left behind. | Done. The remaining piece is a **free-space precheck** so the attempt is refused before a partial write rather than after: it needs `statvfs`, which means a dependency in `birdnet-db` or `unsafe`, and was not worth pulling in for a message improvement when the data is already safe. |
 
 #### 3.13.4 Operability without SSH (`OP-*`)
 
@@ -1111,16 +1112,17 @@ re-take it rather than carrying a figure forward — the count moves with every
 commit here. Extract it with `grep "^test result:"` and sum the fields; a
 `| tail -N` will report exit 0 over a run with failures inside it.)
 
-The reconciliation branch takes the suite to **3 667 passed, 0 failed,
-7 ignored** in **113** suites — twenty-seven gates across seven files, and two
-new suites,
-`crates/birdnet-db/tests/the_species_list_honours_the_provenance_rule.rs` and
-`crates/birdnet-db/tests/a_corrupt_index_must_not_reach_the_backup_ring.rs`.
+The reconciliation branch takes the suite to **3 674 passed, 0 failed,
+7 ignored** in **114** suites — thirty-four gates across nine files, and three
+new suites, all in `crates/birdnet-db/tests/`:
+`the_species_list_honours_the_provenance_rule.rs`,
+`a_corrupt_index_must_not_reach_the_backup_ring.rs` and
+`a_failed_restore_keeps_what_it_was_replacing.rs`.
 `--workspace --all-features` gives the same set as `--workspace` here, because
-`analytics` is the only feature and it is on by default. (This block read
-"3 653" between the fourth fix and the sixth, and "3 661" before `AD-2`; re-take
-it rather than carrying it, which is what the paragraph above says and what this
-sentence keeps being evidence for.)
+`analytics` is the only feature and it is on by default. (This block has now
+read "3 653", "3 661" and "3 667" in turn; re-take it rather than carrying it,
+which is what the paragraph above says and what this sentence keeps being
+evidence for.)
 
 Not in that count, because it is not a cargo test:
 `installer/test/container-model-cache.sh`, run by
@@ -1191,17 +1193,14 @@ in `crates/birdnet-db/tests/a_corrupt_index_must_not_reach_the_backup_ring.rs`,
 and `check_and_recover`'s verdict on the *live* database deliberately still uses
 `quick_check` for a cost reason stated at the call site.
 
-**`AD-9` is what remains of that family, and is now the worst thing on this
-list**: partial corruption *on a full card*. The restore path needs room for a
-second whole database, its failure to get that room is indistinguishable from
-"no good backup", and `app.rs:134-156` then quarantines a *recoverable*
-database and starts fresh — turning a recoverable fault into total history loss,
-on the failure combination a year in a field makes likely. It is also **PS-10**'s
-"separate the two verdicts" applied one level out: check free space before
-restoring, and distinguish "no room" from "no backup". The ring is now worth
-restoring from, which is what makes this the next thing to protect.
+**`AD-9` is done too**, and its row records a correction: the mechanism was not
+"the restore path needs room for a second database" but "the restore path
+deleted the first one before it knew it could write the second". `PS-10`'s
+"separate the two verdicts" is now applied at both levels — inside recovery, and
+in `src/app.rs`'s `recovery_fallback`, which is a named decision with its own
+tests rather than one branch.
 
-**Then `R-19`, because it is the only finding here that damages someone else.**
+**So `R-19` is now the head of this list**, because it is the only finding here that damages someone else.**
 The eBird export applies no confidence floor, no one-per-hour deduplication,
 writes raw detection tallies into `Number` — one blackbird detected two hundred
 times becomes "200 birds" — and hard-codes `Protocol=S, Observers=1`. It also
