@@ -45,7 +45,7 @@
 | Backup encryption | `ring` (`aead`, `rand`) | ChaCha20-Poly1305 for the offsite backup envelope. Already compiled as rustls's provider, so a direct edge rather than a new crate |
 | Backup key derivation | `argon2` | argon2id over the operator's passphrase; already present for the admin password hash |
 | S3 request signing | `hmac`, `sha2`, `base64` | AWS SigV4 written out rather than pulling the AWS SDK — see below. All three were already present for share-link tokens |
-| System info | `sysinfo` 0.32 | CPU/memory/disk metrics for admin panel |
+| System info | `sysinfo` 0.39 | CPU/memory/disk metrics for admin panel |
 
 ### C-Binding Dependencies (Necessary)
 
@@ -57,8 +57,9 @@
 
 ### Notes on specific versions
 
-- **sysinfo 0.32** — `Components` is gated behind the `component` feature;
-  the workspace manifest enables `features = ["system", "component"]`.
+- **sysinfo 0.39** — `Components` is gated behind the `component` feature;
+  the workspace manifest enables `features = ["system", "component"]`. It is
+  also what sets the workspace MSRV floor at Rust 1.95.
 - **axum 0.8** — the routing API uses `IntoResponse`, `Router::merge`,
   `extract::Path`, and `extract::State`.
 - **lettre** — configured with `SmtpsTransport` or `StarttlsRelay` using
@@ -84,7 +85,7 @@ and no OpenSSL.
 | Crate | Version | Notes |
 |-------|---------|-------|
 | `ort`      | `2.0.0-rc` | ONNX Runtime wrapper; handles session management, optimization levels, threading |
-| `ndarray`  | `0.16` | Tensor inputs and outputs for the session |
+| `ndarray`  | `0.17` | Tensor inputs and outputs for the session |
 
 **Cross-compilation.** `ort` fetches pre-built ONNX Runtime binaries for
 `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu` automatically,
@@ -105,7 +106,7 @@ TFLite upstream via `tf2onnx`). The model file path is passed via
 | `thiserror` | Derive macro adds compile-time cost; hand-rolling is simple enough |
 | `r2d2` / `deadpool` | Connection pooling not needed; single connection with `Arc<Mutex>` suffices for embedded use |
 | `askama` / `minijinja` | Template engine avoided; HTMX works with format strings; keeps binary smaller |
-| `image` | Spectrogram PNG generation deferred; not needed for core detection pipeline |
+| `image` | PNG encoding for spectrograms is hand-rolled over `flate2`; a full image crate would be a large dependency for one writer |
 | `cpal` | Direct audio capture avoided; subprocess `arecord`/`ffmpeg` is simpler and proven |
 | `chrono` | Pure-Rust timestamp formatting hand-rolled for Unix → date conversion; avoids chrono's known time zone complexity |
 | `openssl` | All TLS done via `rustls` (in reqwest, lettre, and ort); no system OpenSSL dependency |
@@ -118,14 +119,14 @@ Direct dependencies (excluding universal `serde` and `tracing`):
 
 | Crate | Key direct dependencies |
 |-------|-------------------------|
-| `birdnet-core` | symphonia, rubato, realfft, notify, ort, ndarray, hound |
-| `birdnet-db` | rusqlite |
-| `birdnet-web` | axum, tower, tower-http, tokio, tokio-util, tokio-stream, sysinfo, reqwest, rustls, tokio-rustls, hyper, hyper-util, rcgen |
+| `birdnet-core` | symphonia, rubato, audioadapter-buffers, realfft, hound, ort, notify (`ndarray` is transitive via `ort`, not a direct edge) |
+| `birdnet-db` | rusqlite, argon2, password-hash |
+| `birdnet-web` | axum, tower, tower-http, tokio, tokio-util, tokio-stream, sysinfo, reqwest, rustls, rustls-pki-types, tokio-rustls, hyper, hyper-util, rcgen, flate2, form_urlencoded, hmac, sha2, base64, password-hash, rusqlite, tempfile |
 | `birdnet-integrations` | reqwest, tokio, lettre, rustls, ring, hmac, base64, argon2, tokio-util |
 | `birdnet-behavioral` | duckdb + rusqlite (optional, `analytics` feature) |
 | `birdnet-timeseries` | duckdb (optional, `analytics` feature) |
 | `birdnet-migrate` | rusqlite, birdnet-db |
-| `birdnet-scheduler` | (serde + tracing only) |
+| `birdnet-scheduler` | (serde only) |
 
 ## Supply Chain Security
 

@@ -22,7 +22,7 @@
 3. **Validated**: Schema is checked before import; per-species reports show what will be imported
 4. **Simple**: Users upload a `.db` file via the web UI or point to a path; we handle the rest
 5. **Deterministic**: Same input always produces the same output; re-running is safe (upsert logic)
-6. **Auditable**: Full `MigrationReport` with counts, failures, duration returned to the user
+6. **Auditable**: a `MigrationSummary` with rows read / imported / skipped, the schema name and the source path is returned to the user
 
 ## birdnet-migrate Crate
 
@@ -46,26 +46,28 @@ birdnet-migrate/src/
     └── species_report.rs    # Pre- and post-migration species report
 ```
 
-### Migrator Trait
+### The three traits
+
+Detection, validation and import are three separate one-job traits, not
+associated types on a single trait:
 
 ```rust
-pub trait Migrator {
-    type Source;
-    type Report;
-    type SchemaInfo;
+/// Detects whether a SQLite file uses a known source schema.
+pub trait SchemaDetector: Send + Sync {
+    fn detect(&self, path: &Path) -> Result<DetectedSchema, MigrateError>;
+}
 
-    /// Validate source and return schema summary + species report + migration preview
-    fn validate_source(
-        &self,
-        source: &Self::Source,
-    ) -> Result<(Self::SchemaInfo, Self::Report, MigrationReport), MigrateError>;
+/// Validates a source database before or after migration.
+pub trait Validator: Send + Sync {
+    fn validate_source(&self, source_path: &Path) -> Result<ValidationReport, MigrateError>;
+    fn validate_destination(&self, source_path: &Path, dest_path: &Path)
+        -> Result<ValidationReport, MigrateError>;
+}
 
-    /// Execute the migration; returns final MigrationReport
-    fn migrate(
-        &self,
-        source: &Self::Source,
-        target: &rusqlite::Connection,
-    ) -> Result<MigrationReport, MigrateError>;
+/// Imports data from a source database into the destination.
+pub trait Migrator: Send + Sync {
+    fn migrate(&self, source_path: &Path, dest_path: &Path, progress: &ProgressHandle)
+        -> Result<MigrationSummary, MigrateError>;
 }
 ```
 
@@ -77,24 +79,24 @@ pub trait Migrator {
 pub struct BirdNetPiMigrator;
 
 impl Migrator for BirdNetPiMigrator {
-    type Source = Path;             // Path to source .db file
-    type Report = SpeciesReport;    // Per-species detection summary
-    type SchemaInfo = SchemaInfo;   // Schema version, table names, column list
-    // ...
+    fn migrate(&self, source_path: &Path, dest_path: &Path, progress: &ProgressHandle)
+        -> Result<MigrationSummary, MigrateError> { /* … */ }
 }
 ```
 
-### MigrationReport
+The per-species preview shown before import is a separate `MigrationReport`
+in `birdnet_pi/species_report.rs` (total rows, unique species, date range,
+top species, and the null-date / invalid-confidence / duplicate counts).
+
+### MigrationSummary
 
 ```rust
-pub struct MigrationReport {
-    pub source_path: PathBuf,
-    pub total_rows_read: u64,
-    pub rows_imported: u64,
-    pub rows_skipped: u64,
-    pub rows_failed: u64,
-    pub duration_ms: u64,
-    pub errors: Vec<String>,
+pub struct MigrationSummary {
+    pub source_rows: u64,
+    pub imported_rows: u64,
+    pub skipped_rows: u64,
+    pub schema_name: String,
+    pub source_path: String,
 }
 ```
 
@@ -143,19 +145,19 @@ The migration UI is accessible at `/admin/migrate`:
    └── POST /admin/migrate/upload (multipart form)
 
 2. Preview: Show SpeciesReport and SchemaInfo
-   └── GET /admin/migrate/preview (HTMX partial)
+   └── POST /admin/migrate/validate (HTMX partial)
    ├── Total detections: 847,293
    ├── Unique species: 142
    ├── Date range: 2022-04-01 → 2026-03-13
    └── Top species: American Robin (12,445), ...
 
 3. Confirm: "Import N detections from 142 species"
-   └── POST /admin/migrate/confirm (starts async import)
+   └── POST /admin/migrate/upload/confirm, then POST /admin/migrate/run
 
-4. Progress: Live progress via SSE
-   └── GET /admin/migrate/stream (SSE: { percent, current, total })
+4. Progress: polled by HTMX, not streamed
+   └── GET /admin/migrate/progress
 
-5. Result: MigrationReport with success/failure counts
+5. Result: MigrationSummary with rows read / imported / skipped
 ```
 
 ## Validation & Safety

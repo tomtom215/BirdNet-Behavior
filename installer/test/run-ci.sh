@@ -30,6 +30,7 @@ CI_TESTS=(
     binary-swap-atomicity.sh
     checksum-refusals.sh
     config-template.sh
+    container-model-cache.sh
     coord-parse.sh
     location-notice.sh
     model-resume.sh

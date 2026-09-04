@@ -15,7 +15,7 @@
 ---
 
 Inference is implemented in `crates/birdnet-core/src/inference/` and wired
-into the detection daemon via `src/daemon.rs`.
+into the detection daemon via `src/daemon/`.
 
 ## Inference Pipeline
 
@@ -30,8 +30,9 @@ Audio chunk (f32, model sample rate)
         ▼
     Raw logits (f32 vector, thousands of entries)
         │
-    sigmoid(sensitivity * logits)
-        │
+    sigmoid(sensitivity * logits)   ← only when the model emits logits;
+        │                              V3.0 preview outputs are already
+        │                              probabilities and pass straight through
     Top-N species with confidence scores
         │
     Filter by confidence threshold
@@ -77,9 +78,13 @@ use ort::value::Tensor;
 pub struct BirdNetModel {
     session: Session,
     labels: LabelSet,
-    sensitivity: f32,
-    confidence_threshold: f32,
-    top_n: usize,
+    config: ModelConfig,
+    input_shape: Vec<usize>,
+    /// True when the model already emits probabilities in [0, 1]
+    /// (BirdNET+ V3.0 preview); V2.4 fixed-shape models emit logits.
+    is_probability_output: bool,
+    /// Latches once a label-count/output-dimension mismatch has warned.
+    warned_label_count_mismatch: bool,
 }
 
 impl BirdNetModel {
@@ -122,15 +127,12 @@ underlying session.
 | Inference (3 s clip, Pi 4) | 2–4 s | 0.8–1.5 s |
 | Memory (model loaded) | ~200 MB | ~50 MB |
 
-## Hot Reload
+## Model reload
 
-Model updates without a service restart:
-
-- Watch the model file for changes via `notify`
-- Load the new session on a background task
-- Swap atomically via `Arc` replacement
-- Validate that the new session produces reasonable output before
-  committing the swap
+**Not implemented.** A model change needs a service restart: the session
+is built once at load time and there is no watcher, background reload or
+`Arc` swap for it. (The `notify`-based watcher in the tree watches
+recordings; the only hot reload that exists is for TLS certificates.)
 
 ---
 

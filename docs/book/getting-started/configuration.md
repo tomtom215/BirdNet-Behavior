@@ -82,7 +82,7 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 > anything that *changes* something requires a password — the `/admin` panel,
 > and also deleting, relabelling, reviewing or locking a detection, or saving
 > the onboarding wizard. A fresh bare-metal install
-> auto-generates `CADDY_PWD` (username `birdnet`) and prints it once in the
+> auto-generates `CADDY_PWD` (username `admin`) and prints it once in the
 > post-install summary — change it via `CADDY_PWD` in `birdnet.conf`. To restrict
 > the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502`. The
 > authentication (`CADDY_PWD`) and cross-origin (`BIRDNET_CORS_ALLOWED_ORIGINS`)

@@ -8,6 +8,70 @@ use crate::sqlite::types::{
     map_detection_row,
 };
 
+/// The rollup, when it may be read, and the truth when it may not.
+///
+/// # Why this exists
+///
+/// `species_summary` (migration 30) is a materialised rollup keyed
+/// `(Com_Name, Sci_Name, hour)` and maintained by triggers, so the species list
+/// aggregates a few thousand rows instead of millions and still does in year
+/// ten. Its triggers filter on one thing: `review_verdict IS NOT 'rejected'`.
+///
+/// Migration 34 then gave `detections_analytic` a *second* rule — imported rows
+/// are excluded when the operator sets `analytics_exclude_imports` — and the
+/// rollup could not learn it. Not by oversight: the rule depends on a setting
+/// the operator can flip at any moment, and a trigger-maintained rollup keyed
+/// without a provenance dimension cannot answer both questions from the same
+/// rows. So the rollup answers "everything not rejected", full stop.
+///
+/// The result, measured on a station with two of its own detections and three
+/// imported, with the setting on: `detections_analytic` reports 1 species and
+/// 2 rows, while `species_count` reported 2 and `top_species` ranked the
+/// imported species **first**, at 3 detections — a species that station never
+/// heard, presented as its commonest bird, after the operator had explicitly
+/// asked for it to be excluded. `species_summary()` on the detail page reads
+/// the view directly and was right all along, so the list and the detail page
+/// disagreed about the same species.
+///
+/// # What this does
+///
+/// Returns a `FROM` source with the rollup's exact column shape
+/// (`Com_Name, Sci_Name, hour, detections, confidence_sum`) — either the rollup
+/// table itself, or an equivalent aggregate over `detections_analytic`, which
+/// carries both rules.
+///
+/// The substitute is used only when the station has imported rows **and** has
+/// asked for them to be excluded. Every other station keeps the rollup and its
+/// bounded cost; the one that has opted into the exclusion pays migration 30's
+/// old scan for correct numbers, which is the right way round. `EXISTS` over
+/// `import_batch_id IS NOT NULL` rides the partial index migration 33 built for
+/// exactly that predicate, so the extra check is not a scan.
+///
+/// The lasting fix is a provenance dimension in the rollup's key, so both
+/// answers come from it; that is a schema migration and a trigger rewrite, and
+/// is recorded in `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` rather than half-built
+/// here.
+const SUMMARY_FROM_DETECTIONS: &str = "(SELECT Com_Name, Sci_Name, \
+     SUBSTR(Time, 1, 2) AS hour, COUNT(*) AS detections, \
+     SUM(Confidence) AS confidence_sum \
+     FROM detections_analytic GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2))";
+
+/// Pick the source [`SUMMARY_FROM_DETECTIONS`] documents.
+fn summary_source(conn: &Connection) -> Result<&'static str, DbError> {
+    let substitute: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM settings
+                        WHERE key = 'analytics_exclude_imports' AND value = 'true')
+            AND EXISTS(SELECT 1 FROM detections WHERE import_batch_id IS NOT NULL)",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(if substitute {
+        SUMMARY_FROM_DETECTIONS
+    } else {
+        "species_summary"
+    })
+}
+
 /// Get the number of unique species (by scientific name).
 ///
 /// Reads `species_summary`, the per-species aggregate migration 30 maintains
@@ -19,7 +83,10 @@ use crate::sqlite::types::{
 /// Returns `DbError` on query failure.
 pub fn species_count(conn: &Connection) -> Result<i64, DbError> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT Sci_Name) FROM species_summary",
+        &format!(
+            "SELECT COUNT(DISTINCT Sci_Name) FROM {}",
+            summary_source(conn)?
+        ),
         [],
         |row| row.get(0),
     )?;
@@ -42,12 +109,13 @@ pub fn species_count(conn: &Connection) -> Result<i64, DbError> {
 ///
 /// Returns `DbError` on query failure.
 pub fn top_species(conn: &Connection, limit: u32) -> Result<Vec<SpeciesCount>, DbError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT Com_Name, Sci_Name, SUM(detections) as count,
                 SUM(confidence_sum) / SUM(detections) as avg_conf
-         FROM species_summary GROUP BY Com_Name, Sci_Name
+         FROM {} GROUP BY Com_Name, Sci_Name
          ORDER BY count DESC, Com_Name ASC LIMIT ?1",
-    )?;
+        summary_source(conn)?
+    ))?;
     let rows = stmt
         .query_map(params![limit], |row| {
             Ok(SpeciesCount {
@@ -75,13 +143,14 @@ pub fn search_species(
     limit: u32,
 ) -> Result<Vec<SpeciesCount>, DbError> {
     let pattern = format!("%{query}%");
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT Com_Name, Sci_Name, SUM(detections) as count,
                 SUM(confidence_sum) / SUM(detections) as avg_conf
-         FROM species_summary
+         FROM {}
          WHERE Com_Name LIKE ?1 COLLATE NOCASE OR Sci_Name LIKE ?1 COLLATE NOCASE
          GROUP BY Com_Name, Sci_Name ORDER BY count DESC, Com_Name ASC LIMIT ?2",
-    )?;
+        summary_source(conn)?
+    ))?;
     let rows = stmt
         .query_map(params![pattern, limit], |row| {
             Ok(SpeciesCount {
@@ -175,11 +244,12 @@ pub fn species_hourly_activity(
     conn: &Connection,
     com_name: &str,
 ) -> Result<Vec<HourlyCount>, DbError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT hour, SUM(detections) as count
-         FROM species_summary WHERE Com_Name = ?1
+         FROM {} WHERE Com_Name = ?1
          GROUP BY hour ORDER BY hour",
-    )?;
+        summary_source(conn)?
+    ))?;
     let rows = stmt
         .query_map(params![com_name], |row| {
             Ok(HourlyCount {
@@ -216,9 +286,10 @@ pub fn species_hourly_activity_batch(
     }
     // One bind placeholder per species for the `IN (…)` list.
     let placeholders = vec!["?"; com_names.len()].join(",");
+    let source = summary_source(conn)?;
     let sql = format!(
         "SELECT Com_Name, CAST(hour AS INTEGER) AS h, SUM(detections) AS cnt
-         FROM species_summary
+         FROM {source}
          WHERE Com_Name IN ({placeholders})
          GROUP BY Com_Name, h"
     );

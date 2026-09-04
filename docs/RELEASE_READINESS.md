@@ -1,13 +1,21 @@
 # Release-Readiness Assessment
 
-> **⚠️ SUPERSEDED — historical record only.** The current plan is
-> [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-07 against `main`).
-> This file's branch model (`claude/gallant-feynman-bJs95`) is dead — all work merges to
-> `main`, which is CI-gated and green. Of its open gaps, **G-11** (DuckDB analytics
-> resilience) is carried forward as F-05 in the new plan, **G-12** (MQTT buffering) is
-> largely addressed by `src/integrations/store_forward.rs`, and **G-14** (glibc/Bookworm)
-> is settled as documented-and-refused by the installer. Kept for the inventory and the
-> D-1…D-5 decision record.
+> **⚠️ SUPERSEDED — historical record only.** Audited 2026-06-03, at a point long before
+> the current `0.15.0` tree (`Cargo.toml` `workspace.package.version`). Its branch model
+> (`claude/gallant-feynman-bJs95`) is dead — that branch does not exist on the remote, and
+> all work merges to `main`, which is CI-gated and green.
+> [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-08) succeeded this file and
+> is itself now a completed record of the `v0.10.x`/`0.11.0` cycle; the live picture is in
+> the later audits, starting with `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`. Of the gaps this
+> file left open: **G-11** (DuckDB analytics resilience) is **closed** —
+> `AnalyticsDb::open_or_quarantine` in `crates/birdnet-behavioral/src/connection/mod.rs`
+> quarantines an unusable analytics DB and rebuilds it from SQLite; **G-12** (MQTT
+> buffering) is closed by its *own second option* — MQTT and Apprise/email are documented
+> fire-and-forget by design, and `src/integrations/store_forward.rs` buffers
+> `BirdWeather` only, not MQTT; **G-10** (a11y sweep) is closed by a standing gate,
+> `.github/workflows/a11y.yml` "Accessibility gate (axe-core, WCAG 2.1 A/AA)"; and
+> **G-14** (glibc/Bookworm) is settled as documented-and-refused by the installer. Kept
+> for the inventory and the D-1…D-5 decision record.
 
 **Purpose.** A self-contained inventory of where BirdNet-Behavior stands against the
 north-star — *"a non-technical person installs with one command and it runs 24/7/365 on a
@@ -25,12 +33,18 @@ has moved._
 
 ## 0. How to work this repo (read first if resuming cold)
 
-**Branch model (squash-loop).**
+**Branch model (squash-loop).** *Obsolete — kept to explain the shape of the work below.*
+The integration branch it names no longer exists, and "never target `main`" is now exactly
+backwards: `main` is the base for every PR. What it said at the time:
 - **Working branch:** harness-assigned each session (this cycle: `claude/epic-wozniak-iLHW8`) — commit here.
 - **Integration branch:** `claude/gallant-feynman-bJs95` — open every PR with this as the **base**. Never target `main`.
-- Per task: `git fetch origin claude/gallant-feynman-bJs95 && git reset --hard origin/claude/gallant-feynman-bJs95`, commit on the working branch, `git push --force-with-lease -u origin <work>`, open PR head→base, repeat after squash-merge.
+- Per task: `git fetch origin <integration> && git reset --hard origin/<integration>`, commit on the working branch, `git push --force-with-lease -u origin <work>`, open PR head→base, repeat after squash-merge.
 
-**Gate before every commit (no CI runs on PRs into the integration branch yet — see G-02, so this local gate is the real guard):**
+**Gate before every commit.** The parenthetical here used to read "no CI runs on PRs into
+the integration branch yet — see G-02"; that is no longer true. `ci.yml` and `a11y.yml`
+both carry `claude/**` in their `pull_request.branches`. It is still the real guard for
+everything they do not cover, because `coverage.yml`, `install-smoke.yml`, `mutation.yml`
+and `supply-chain.yml` remain restricted to `main`/`master`:
 ```bash
 cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
@@ -57,9 +71,13 @@ north-star:
   modular `installer/lib/*.sh`, with a CI sync-gate.
 - A **release pipeline** that cross-compiles `aarch64` + `x86_64`, publishes GitHub Releases
   with per-arch tarballs, `SHA256SUMS`, **SLSA provenance**, and **CycloneDX SBOMs**
-  (v0.4.0 → **v0.5.3** published).
-- **7 active CI workflows** (CI, Coverage, Mutation, Supply-chain, Docs, Docker, Release),
-  **632 runs**, green on `main`.
+  (v0.4.0 → **v0.5.3** published *at the time of this audit*; the tree is now at `0.15.0`).
+- **CI workflows** — this said "7 (CI, Coverage, Mutation, Supply-chain, Docs, Docker,
+  Release), **632 runs**". There are now **ten** workflow files: the six real `main` gates
+  named here plus `a11y.yml` (A11y & Visual QA) and `install-smoke.yml` (Install smoke
+  test) make eight that gate a push to `main`; `release.yml` is tag-driven, not a `main`
+  gate, and `publish-model.yml` is dispatch-only. The run count is a point-in-time
+  GitHub figure and is long out of date.
 - A deep **resilience** layer: systemd hardening + watchdog/sd_notify, audio hot-plug
   auto-reconnect with capped backoff, disk-full purging + per-species caps, SQLite
   WAL + integrity-check + hot-backup + corruption quarantine/recovery, bounded queues
@@ -89,7 +107,7 @@ the integration-test and first-run-UX holes.
 | All gates + CI green | ✅ green on `main`; AI-branch PRs now gated (G-02 done); dependabot clippy red is a stale weekly target (G-03 deferred) |
 | Cross-compiled artifacts build | ✅ release.yml + CI aarch64 cross-check |
 | Docs let a non-technical user install/upgrade/troubleshoot | ✅ strong; onboarding wizard now real (G-09) |
-| Safe auto-update (verify + rollback) | ⚠️ atomic swap + `.bak` rollback, **no integrity verification** (G-01) |
+| Safe auto-update (verify + rollback) | ✅ atomic swap + `.bak` rollback, **plus** sha256 verification against the release's `SHA256SUMS` before anything touches disk and a smoke test of the staged binary before the swap (G-01 done) |
 
 ---
 
@@ -124,10 +142,10 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Audio hot-plug auto-reconnect | ✅ | `src/capture/supervisor.rs` capped backoff 2s→60s (never gives up), `birdnet_audio_source_up` gauge, down-alerts; fault-injection tests `dead_source_is_restarted_and_recovers`, `backoff_doubles_then_caps` |
 | Disk-full handling | ✅ | `crates/birdnet-core/src/audio/capture/disk/{manager,purge}.rs`: 95% purge of oldest 10%, per-species caps, Purge/Keep modes; tests present |
 | SQLite WAL + corruption recovery + backups | ✅ | `crates/birdnet-db/src/resilience.rs`: WAL, `quick_check`/`integrity_check`, hot backup API, rotation (5), `check_and_recover()` restore-from-backup, quarantine corrupt DB; daily/weekly maintenance ticks; tests present |
-| DuckDB **analytics** DB resilience | 🟡 | SQLite is covered; the regenerable analytics DB has no explicit rebuild-on-corrupt path documented (G-11) |
+| DuckDB **analytics** DB resilience | ✅ | was 🟡. `AnalyticsDb::open_or_quarantine` (`crates/birdnet-behavioral/src/connection/mod.rs`) quarantines an unusable analytics DB and rebuilds it from SQLite — "analytics database is unusable; quarantining it and rebuilding from SQLite" (G-11) |
 | Network capped backoff / graceful offline | ✅ | BirdWeather `MAX_RETRIES=3`, Apprise `MAX_RETRIES=2` (+ cooldown-map prune), exp backoff, log-and-continue; MQTT fail-fast (re-queued by supervisor) |
 | Bounded queues / backpressure | ✅ | detection `sync_channel` cap 1024, broadcast 256, log ring 512/200, rate-limiter cleanup — no unbounded growth vectors |
-| Safe auto-update (verify + rollback) | 🟡 | `auto_update.rs:188-293` atomic temp→extract→`.bak`→rename; **no sha256/signature verification** (`:323-326` *skips* `SHA256SUMS`); no rollback-on-failed-start test (G-01) |
+| Safe auto-update (verify + rollback) | ✅ | was 🟡 (atomic swap only, `SHA256SUMS` *skipped*). `crates/birdnet-integrations/src/auto_update/mod.rs` now reads the asset's digest from the release's `SHA256SUMS` (erroring when the release publishes none), verifies the download against it, and smoke-tests the staged binary before the swap — `UpdateError::Integrity` / `::SmokeTest` (G-01) |
 
 ### Track C — Low-touch first-run UX
 
@@ -145,14 +163,14 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Item | Verdict | Evidence |
 |---|---|---|
 | P3-4 cosmetics | 🟡 | uptime pill wired; "migration-missing" deferred (`RELEASE_PUNCHLIST.md` P3-4) |
-| a11y / responsive / dark-light / reduced-motion sweep | 🟡 | design system mature; no recent dedicated consistency/a11y audit (G-10) |
+| a11y / responsive / dark-light / reduced-motion sweep | ✅ | was 🟡 ("no recent dedicated audit"); a standing gate now runs on `main` and `claude/**` PRs — `.github/workflows/a11y.yml`, step "Accessibility gate (axe-core, WCAG 2.1 A/AA)" (G-10) |
 
 ### Track E — Testing & CI
 
 | Item | Verdict | Evidence |
 |---|---|---|
 | CI: fmt/clippy×2/test×4/doc/build/MSRV/aarch64-cross | ✅ | `.github/workflows/ci.yml` |
-| CI gates the **integration branch** | ❌ | `ci.yml:3-7` triggers on `main`/`master` only → PRs into `gallant-feynman` run **no CI** (G-02) |
+| CI gates the **integration branch** | 🟡 | Was ❌ (`ci.yml` triggered on `main`/`master` only). `ci.yml` and `a11y.yml` now carry `claude/**` in `pull_request.branches`, which covers a PR whose *base* is a `claude/**` branch — a PR *from* one into `main` already ran every gate, because the filter reads the base. `coverage.yml`, `install-smoke.yml`, `mutation.yml` and `supply-chain.yml` still lack the glob, so only that stacked case is uncovered (G-02) |
 | inline-style guard | ✅ | `crates/birdnet-web/tests/inline_style_guard.rs` (runs under `cargo test --tests`) |
 | Coverage / Mutation / Supply-chain / Docs / Docker | ✅ | `coverage.yml` (llvm-cov), `mutation.yml` (cargo-mutants), `supply-chain.yml` (deny/audit/machete/typos/shellcheck), `docs.yml` (mdbook→Pages), `docker.yml` (multi-arch GHCR) |
 | Dependabot CI green | ❌ | cargo-bump branch fails **Clippy (pedantic+nursery, -D warnings)** — `main` unaffected (G-03) |
@@ -234,9 +252,28 @@ Nuance from the audit: the maintainer's real integration branch is **`main`** (d
 docs, all gates target it) and it *is* CI-gated and green. The un-gated branch is the
 **AI-session** integration branch (`claude/gallant-feynman-*`), since `ci.yml` only triggered on
 `main`/`master`. Fix: added `claude/**` to `ci.yml` `pull_request.branches`, so a slice runs the
-full gate at PR time before it is squash-merged toward `main`. Least-invasive (PR-time only, no
-per-push cost; no-op for ordinary contributors). **Verify:** open a PR into a `claude/**` base and
-confirm CI runs. *(Judgment call — flagged to maintainer; trivially reverted if AI-branch globs in
+**CI** gate — fmt, clippy, tests, MSRV, aarch64 cross-check — at PR time before it is
+squash-merged toward `main`.
+
+What the `claude/**` glob actually buys is narrower than it looks, and in the
+opposite direction to the obvious reading. `pull_request.branches` filters on the
+PR's **base**, not its head, so a PR *from* a `claude/**` branch *into* `main`
+already matched every workflow whose filter names `main` — which is all of them.
+Observed on PR #235, head `claude/birdnet-audit-reconciliation-jtgz6k`, base
+`main`: `cargo-deny`, `cargo-audit`, `cargo-machete`, `Spelling (typos)`,
+`shellcheck (bootstrap scripts)` and `installer unit tests` (supply-chain.yml),
+`cargo-llvm-cov` (coverage.yml), `install.sh → web UI` (install-smoke.yml) and
+`Accessibility (axe) + visual-QA sweep` (a11y.yml) all ran, alongside every
+ci.yml job. The glob covers the *other* case: a stacked PR whose base is itself a
+`claude/**` integration branch, which previously matched nothing. `ci.yml`'s own
+comment says exactly that.
+
+So the residual gap is only that a PR based on a `claude/**` branch runs CI and
+a11y but not coverage, supply-chain, install-smoke or mutation. `mutation.yml`
+additionally carries `paths:` filters, so it is skipped whenever the diff misses
+those files regardless of branch — which is the usual reason it does not appear.
+Least-invasive (PR-time only, no per-push cost; no-op for ordinary contributors).
+**Verify:** open a PR into a `claude/**` base and confirm CI runs. *(Judgment call — flagged to maintainer; trivially reverted if AI-branch globs in
 committed CI are unwanted.)*
 
 **G-03 — Dependabot CI red on clippy.** *(Track E · P2 · S · low)* ⏸️ **DEFERRED (documented).**
@@ -300,17 +337,27 @@ selection links to Settings → Audio per D-5. Tests: `tests/web_api_onboarding.
 save persists + completes, empty submit completes without writing blanks); `boot_smoke` updated to
 accept the first-boot 303 and assert the wizard serves.
 
-**G-10 — Polish sweep.** *(Track D · P3 · M · low)* Finish P3-4; a11y/responsive/dark-light/
-reduced-motion pass (Playwright visual-QA in `tools/visual-qa/`). **Verify:** visual-regression
-+ axe pass.
+**G-10 — Polish sweep.** *(Track D · P3 · M · low)* ✅ **DONE (a11y half).** The
+a11y/responsive/dark-light/reduced-motion pass is now a standing gate rather than a
+one-off: `.github/workflows/a11y.yml` runs "Accessibility (axe) + visual-QA sweep",
+including "Accessibility gate (axe-core, WCAG 2.1 A/AA)" (`node axe.mjs`), on `main` and
+on `claude/**` PRs, path-scoped to `crates/birdnet-web/**` and `tools/visual-qa/**`. P3-4's
+migration-missing stub remains deliberately out of scope (`RELEASE_PUNCHLIST.md` P3-4).
 
-**G-11 — DuckDB analytics-DB resilience.** *(Track B · P3 · S · low)* **Fix:** on analytics-DB
-open failure/corruption, quarantine + rebuild from SQLite (it's a derived store). **Verify:**
-fault-injection: corrupt analytics.db → next start rebuilds.
+**G-11 — DuckDB analytics-DB resilience.** *(Track B · P3 · S · low)* ✅ **DONE.** Exactly the
+proposed fix landed: `AnalyticsDb::open_or_quarantine`
+(`crates/birdnet-behavioral/src/connection/mod.rs`) quarantines an unusable analytics DB via
+`quarantine_file` and rebuilds it from SQLite — it is a derived store — logging "analytics
+database is unusable; quarantining it and rebuilding from SQLite" and reporting which path
+it took through `OpenOutcome`.
 
-**G-12 — MQTT offline buffering (optional).** *(Track B · P3 · S · low)* **Fix:** small bounded
-store-and-forward queue for missed publishes (Apprise-style), or document fire-and-forget as
-intended. **Verify:** broker-down test drops nothing within the bound.
+**G-12 — MQTT offline buffering (optional).** *(Track B · P3 · S · low)* ✅ **CLOSED by the
+second option.** MQTT is documented fire-and-forget by design, on the grounds that it is live
+telemetry: `src/integrations/store_forward.rs` states it directly — "MQTT and Apprise/email
+stay fire-and-forget by design (live telemetry / look-now alerts)". The store-and-forward
+queue that file implements (the `outbound_queue` table, migration 19) is for **BirdWeather**
+only, the one channel where late delivery is correct. No MQTT buffer was built, and none is
+planned.
 
 **G-13 — Model bundling / one-fetch offline.** *(Track A · P2 · M · low)* ✅ **DONE (decision D-2 =
 "stable shared GitHub release asset").** The ~541 MB BirdNET+ V3.0 model + labels now publish to a
@@ -337,8 +384,9 @@ notes, and quickstart. **Operational note:** publish `models-v3.0-preview3` (run
 
 ## 5. Proposed sequenced plan (small, independently-shippable PRs)
 
-> Each wave = one or more PRs head `claude/epic-wozniak-iLHW8` → base `claude/gallant-feynman-bJs95`.
-> Re-base onto the integration tip before each.
+> Each wave = one or more PRs head `claude/epic-wozniak-iLHW8` → base
+> `claude/gallant-feynman-bJs95`, re-based onto the integration tip before each. That base
+> branch no longer exists; PRs now target `main`.
 
 - **Wave 0 — decisions.** Resolve D-1…D-5 (this doc + the questions raised alongside it). Run
   the D-1 glibc spike (try an Ubuntu 22.04 build) so the call is fact-based.

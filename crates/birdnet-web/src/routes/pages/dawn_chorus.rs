@@ -120,13 +120,25 @@ struct ChorusRibbon {
 /// the reviewer-verdict exclusion once and centrally. This one cannot:
 /// `INDEXED BY` is not valid against a view, and dropping the hint costs a 60x
 /// slowdown that grows with the station's history (see the numbers above). So
-/// the exclusion is spelled out inline instead — same predicate the view
-/// applies, same null-safe `IS NOT` for the same three-valued-logic reason, and
-/// `dawn_chorus_excludes_rejected_detections` holds the two in step.
+/// the whole predicate is spelled out inline instead — both of the view's
+/// clauses, the null-safe `IS NOT` for the same three-valued-logic reason, and
+/// the provenance subquery migration 34 added.
+///
+/// Two spellings of one rule is the shape this repository keeps paying for, and
+/// it charged again here: the verdict clause was copied and the provenance one
+/// was not, while this comment went on saying "same predicate the view applies".
+/// The chorus was then the single surface still counting another site's records
+/// after the operator excluded them. `the_inline_predicate_and_the_view_admit_the_same_rows`
+/// now holds the two against each other on the same rows rather than asserting
+/// each separately, so a third clause added to the view cannot be missed here.
 const CHORUS_SQL: &str = "SELECT Com_Name, CAST(strftime('%H', Time) AS INTEGER) hr, COUNT(*) n \
      FROM detections INDEXED BY idx_detections_date_species \
      WHERE Date >= date('now','localtime', ?1) \
        AND review_verdict IS NOT 'rejected' \
+       AND (import_batch_id IS NULL \
+            OR NOT EXISTS (SELECT 1 FROM settings \
+                            WHERE key = 'analytics_exclude_imports' \
+                              AND value = 'true')) \
      GROUP BY Com_Name, hr";
 
 fn collect_chorus(
@@ -727,6 +739,119 @@ mod tests {
             2,
             "unreviewed and confirmed detections must both stay: {names:?}"
         );
+    }
+
+    /// A station with one detection of its own and one imported from elsewhere.
+    fn station_with_an_import(exclude: Option<&str>) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        conn.execute(
+            "INSERT INTO import_batches (id, source_kind, row_count) VALUES (1, 'birdnet-pi', 1)",
+            [],
+        )
+        .expect("batch");
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+             VALUES (date('now','localtime'), '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9)",
+            [],
+        )
+        .expect("seed local");
+        conn.execute(
+            "INSERT INTO detections \
+               (Date, Time, Sci_Name, Com_Name, Confidence, import_batch_id) \
+             VALUES (date('now','localtime'), '06:00:00', 'Parus major', 'Great Tit', 0.9, 1)",
+            [],
+        )
+        .expect("seed import");
+        if let Some(value) = exclude {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('analytics_exclude_imports', ?1)",
+                rusqlite::params![value],
+            )
+            .expect("setting");
+        }
+        conn
+    }
+
+    /// Migration 34 gave `detections_analytic` a *second* rule — imported rows
+    /// are excluded when the operator has asked for it — and the inline copy
+    /// above was never taught it, while the comment beside it went on claiming
+    /// "same predicate the view applies".
+    ///
+    /// So the dawn chorus was the one surface that kept counting another site's
+    /// records after the operator excluded them. `provenance.rs` warns before an
+    /// import that this damage "is not detectable after the fact"; a chart that
+    /// quietly disagrees with every other chart is exactly that.
+    #[test]
+    fn dawn_chorus_excludes_an_import_the_operator_excluded() {
+        let conn = station_with_an_import(Some("true"));
+        let names: Vec<String> = collect_chorus(&conn, 30, 10)
+            .expect("chorus")
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "Great Tit"),
+            "an excluded import is still in the dawn chorus: {names:?}"
+        );
+        assert_eq!(
+            names.len(),
+            1,
+            "the station's own detection must stay: {names:?}"
+        );
+    }
+
+    /// The counterpart, and the reason the fix cannot be "drop imported rows".
+    ///
+    /// Including an import is the default and a legitimate choice — merging two
+    /// sites is a thing operators do, and only they know whether these are one
+    /// site with a moved GPS fix or two a county apart. Both cases must render.
+    #[test]
+    fn dawn_chorus_keeps_an_import_the_operator_kept() {
+        for setting in [None, Some("false"), Some("yes")] {
+            let conn = station_with_an_import(setting);
+            let names: Vec<String> = collect_chorus(&conn, 30, 10)
+                .expect("chorus")
+                .into_iter()
+                .map(|r| r.name)
+                .collect();
+            assert!(
+                names.iter().any(|n| n == "Great Tit"),
+                "setting {setting:?} is not \"true\", so the import counts: {names:?}"
+            );
+            assert_eq!(names.len(), 2, "setting {setting:?}: {names:?}");
+        }
+    }
+
+    /// The two spellings of one rule must agree, on the same rows.
+    ///
+    /// The gates above pin the chorus. This one pins the chorus *against the
+    /// view*, which is what the comment beside `CHORUS_SQL` actually promises —
+    /// and is the check that would have caught migration 34 adding a clause to
+    /// one and not the other.
+    #[test]
+    fn the_inline_predicate_and_the_view_admit_the_same_rows() {
+        for setting in [None, Some("true"), Some("false")] {
+            let conn = station_with_an_import(setting);
+            let from_view: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM detections_analytic \
+                      WHERE Date >= date('now','localtime','-30 days')",
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("view count");
+            let from_chorus: i64 = collect_chorus(&conn, 30, 10)
+                .expect("chorus")
+                .len()
+                .try_into()
+                .expect("fits");
+            assert_eq!(
+                from_chorus, from_view,
+                "setting {setting:?}: the chorus admitted {from_chorus} species \
+                 where detections_analytic admits {from_view} rows (one species each)"
+            );
+        }
     }
 
     /// The windowed chorus query must seek a date range, never scan the table.

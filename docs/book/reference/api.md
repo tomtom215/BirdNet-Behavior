@@ -1,10 +1,10 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the four [write endpoints](#changing-a-station), which need a token.
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the eight [write endpoints](#changing-a-station), which need a token.
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
-> **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+> **Auth:** the built-in session sign-in gates only the `/admin*` UI routes. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
 >
 > The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
@@ -188,7 +188,8 @@ CSV/JSON/eBird export of the full detection history is available from the [Backu
 
 ## Changing a station
 
-Seven endpoints, and they are the only ones in `/api/v2` that change anything.
+Eight method-and-path pairs across seven routes, and they are the only ones in
+`/api/v2` that change anything.
 They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.

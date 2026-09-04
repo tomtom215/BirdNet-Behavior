@@ -13,11 +13,21 @@ bird activity analytics.
 
 **Design principles:**
 
-- Single binary deployment — no pip, no virtualenv, no apt dependencies
+- Single binary deployment — no pip, no virtualenv, no Python runtime. Not
+  *no apt*: capture, livestream and non-WAV export spawn `arecord`, `ffmpeg`
+  and `sox` (`audio/capture/process.rs`, `routes/livestream.rs`,
+  `audio/extraction/convert.rs`), and `--doctor` tells the operator so —
+  `src/doctor/environment.rs:62`, *"install ffmpeg (`apt install ffmpeg`) or
+  fall back to --audio-format wav"*. An image sized for an air-gapped station
+  needs those three packages
 - Pure Rust wherever practical; minimal external surface
-- Zero C dependencies in the audio pipeline
+- The DSP is pure Rust with no C linked into it — decode (`symphonia`),
+  resample (`rubato`), FFT (`realfft`), mel and the biquad chains are all
+  in-process. The C/C++ in the pipeline is at the two ends: ONNX Runtime for
+  inference, and the spawned binaries above for capture and export
 - `unsafe` forbidden workspace-wide (`unsafe_code = "forbid"`)
-- 20–50 MB RSS on a Raspberry Pi 4
+- 20–50 MB RSS on a Raspberry Pi 4 — a design target, not a measured figure;
+  nothing in-tree gates it, so a regression past it would go unnoticed
 
 ## Architecture Documents
 
@@ -46,11 +56,19 @@ BirdNet-Behavior/
 ├── Cargo.toml              # Workspace root
 ├── src/                    # Binary entry point and application glue
 │   ├── main.rs
+│   ├── app.rs
 │   ├── cli.rs
-│   ├── daemon.rs
-│   ├── capture.rs
-│   ├── integrations.rs
-│   ├── helpers.rs
+│   ├── daemon/             # Detection daemon (directory, not daemon.rs)
+│   ├── capture.rs + capture/
+│   ├── integrations.rs + integrations/
+│   ├── helpers.rs + helpers/
+│   ├── doctor.rs + doctor/ # --doctor checks and the capture watchdog
+│   ├── channel_report.rs   # --channel-report
+│   ├── support.rs          # --support-bundle
+│   ├── maintenance.rs
+│   ├── log_capture.rs
+│   ├── log_filter.rs
+│   ├── sd_notify.rs
 │   └── weekly_report.rs
 ├── crates/
 │   ├── birdnet-core/         # Audio, detection pipeline, ML inference

@@ -56,7 +56,7 @@ This project follows a **minimal dependency, pure Rust** philosophy:
 3. **Zero system dependencies** for the audio pipeline (symphonia, rubato are pure Rust)
 4. **Single binary deployment** — everything embedded, nothing to install
 5. **No runtime overhead** — no garbage collector, no interpreter, no JIT
-6. **No files over 500 lines** — single-responsibility, trait-based, modular sub-modules
+6. **Small, single-responsibility modules** — split a file when its purpose stops being one thing. Data-definition and orchestration files are the exception: `migration.rs` is ~3 100 lines by design, one entry per migration.
 7. **Trait abstractions over concrete types** — every major boundary is a trait for testability
 
 ### Feature Parity

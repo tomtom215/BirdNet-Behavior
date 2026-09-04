@@ -29,8 +29,9 @@ The [scheduler](../reference/architecture.md) computes sunrise and sunset from y
 
 ## Retention — how clips are purged
 
-Retention is **disk-based, not time-based.** There is no "keep N days" setting. Instead:
+Retention is **disk-based by default**, with an optional age limit on top:
 
+- **Keep Clip Audio (days)** (`BIRDNET_CLIP_RETENTION_DAYS`, `--clip-retention-days`, default `0` = keep for ever) reclaims the audio of detections older than N days.
 - The disk manager purges the **oldest** recordings once the disk crosses `DISK_PURGE_THRESHOLD` (default **95%**, in `birdnet.conf`).
 - At most `BIRDNET_MAX_FILES_PER_SPECIES` (`--max-files-per-species`, default `0` = unlimited) clips are kept per species.
 - **Locked** clips are *never* purged — lock anything you want to keep permanently from the [Today](../guide/today.md) page or a species' recordings.

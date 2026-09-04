@@ -18,7 +18,7 @@
 | Mel spectrogram divergence from librosa | Medium | Low | Pure-Rust implementation validated against librosa reference spectrograms within 1e-4 tolerance; covered by unit tests |
 | ONNX model accuracy loss | Medium | Low | End-to-end tests run a real WAV fixture through the full pipeline and assert expected species at expected confidence |
 | DuckDB ARM64 performance under load | Medium | Medium | Analytics feature is optional; operational queries stay on SQLite; DuckDB queries are synced from SQLite and tuned for columnar access |
-| Cross-compilation drift between release and Docker images | Low | Low | Release binaries use `cargo-zigbuild`; Docker images build natively per architecture on matching runners |
+| Cross-compilation drift between release and Docker images | Low | Low | Release binaries are cross-compiled with Ubuntu 24.04's GCC 13 aarch64 toolchain; Docker images build natively per architecture on matching runners |
 | RTSP / audio capture subprocess instability | Low | Low | Supervised `ffmpeg` / `arecord` subprocesses with restart logic, gap detection, and disk monitoring |
 
 ## Dependency Risks
@@ -31,7 +31,7 @@
 | `duckdb` | C++ build cost and version coupling | Optional `analytics` feature; native per-architecture Docker builds avoid emulation; `Cargo.lock` pinned |
 | `axum` / `tokio` | Active, well-maintained ecosystem | Low risk |
 | `lettre` | Pure Rust SMTP with rustls | Low risk |
-| `sysinfo` | API churn between minor versions | Pinned to 0.32; workspace manifest enables the `system` and `component` features explicitly |
+| `sysinfo` | API churn between minor versions | Pinned to 0.39; workspace manifest enables the `system` and `component` features explicitly. It also sets the workspace MSRV floor at Rust 1.95 |
 
 ## Operational Risks
 
@@ -44,7 +44,7 @@
 | Model file corruption or missing weights | Loader refuses to start with an invalid model; the Docker entrypoint re-downloads the model on first run |
 | Migration corrupts target database | Imports run inside a single transaction; source is opened read-only |
 | Directory traversal on backup download | Canonical path check + filename allow-list |
-| Unauthorised web access | Optional HTTP Basic Auth with constant-time comparison; per-IP token-bucket rate limiter on API and admin routes |
+| Unauthorised web access | Session-cookie sign-in on `/admin*` with argon2id password hashing; a bearer token gates the write API; per-IP token-bucket rate limiter on API and admin routes |
 
 ## Outstanding Issues
 

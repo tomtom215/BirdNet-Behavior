@@ -60,10 +60,14 @@ CREATE TABLE IF NOT EXISTS detections (
 -- displayed in (migration v32). See "Two clocks" below.
 ALTER TABLE detections ADD COLUMN detected_at_utc INTEGER;
 
--- Settings key-value store (migration v4)
+-- Settings key-value store. Created lazily at runtime by
+-- `settings::ensure_settings_table`, and materialised idempotently in
+-- migration v15 so the seed there parses on a fresh install.
 CREATE TABLE IF NOT EXISTS settings (
-    key   TEXT PRIMARY KEY NOT NULL,
-    value TEXT NOT NULL
+    key        TEXT PRIMARY KEY NOT NULL,
+    value      TEXT NOT NULL,
+    category   TEXT NOT NULL DEFAULT 'general',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Performance indexes (migrations v2-v3)
@@ -127,7 +131,7 @@ installations that have not yet run it. Corrections ship as a new migration.
 
 ### Settings Module
 
-`crates/birdnet-db/src/sqlite/settings.rs` provides:
+`crates/birdnet-db/src/settings.rs` (crate root, not under `sqlite/`) provides:
 
 ```rust
 pub fn get_or(conn: &Connection, key: &str, default: &str)
@@ -154,7 +158,9 @@ Settings used across the application:
 - **WAL enforcement**: Crash-safe writes
 - **Integrity checking**: `PRAGMA quick_check` and full `integrity_check`
 - **Hot backup**: Via rusqlite's `Backup` API (timestamped backups)
-- **Backup pruning**: Keep only N most recent (default: 5)
+- **Backup pruning**: two limits on the same directory. `backup_database`
+  prunes inline to `MAX_BACKUP_FILES = 5` per database name; the weekly
+  maintenance job prunes to `BACKUP_RETENTION = 14` across the directory
 - **Auto-recovery**: On startup, check integrity → restore from backup if corrupt
 - **Recovery result**: Reports whether database was healthy or recovered
 
@@ -255,7 +261,9 @@ Analytics queries are split across two crates:
 - **DuckDB**: bundles DuckDB's C++ source, so a C++ toolchain is required on
   the build host. CI builds Docker images natively on `ubuntu-24.04` and
   `ubuntu-24.04-arm` runners to avoid QEMU emulation; release binaries are
-  produced via `cargo-zigbuild` using Zig's universal linker.
+  cross-compiled on Ubuntu 24.04 with the distro's GCC 13 aarch64
+  toolchain — not `cargo-zigbuild`, whose `-lstdc++` lacks the GNU
+  cxx11-ABI symbols pyke's ONNX Runtime archives reference.
 
 ---
 

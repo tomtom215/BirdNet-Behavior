@@ -21,10 +21,13 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
    mirror what CI enforces:
    ```bash
    cargo build --workspace
-   cargo test --workspace
-   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace --all-features
+   cargo clippy --workspace --all-targets --all-features -- -D warnings
    cargo fmt --check --all
    ```
+   CI splits the test job into five runs (`--lib --bins`, `--tests`,
+   `--doc`, `--all-features`, and the bundled-DuckDB extension check), so
+   a green `--all-features` run locally is the closest single command.
 3. **Supply-chain & licence checks** (when you've touched `Cargo.toml`):
    ```bash
    cargo install --locked cargo-deny    # one-time

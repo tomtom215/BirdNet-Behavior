@@ -22,7 +22,7 @@ Under `/data` in Docker (a named volume) or under the configured data directory 
 
 ## How do I keep a recording I love from being deleted?
 
-Retention is disk-based, not time-based — the oldest clips are purged once the disk fills past the threshold. **Lock** any detection (on the Today page) to pin its recording permanently. See [Backups & Recovery](../admin/backups.md).
+Retention is disk-based by default — the oldest clips are purged once the disk fills past the threshold — with an optional age limit (**Keep Clip Audio (days)** / `CLIP_RETENTION_DAYS`) that is off unless you set it. **Lock** any detection (on the Today page) to pin its recording permanently; locked clips are exempt from both. See [Backups & Recovery](../admin/backups.md).
 
 ## Is the dashboard exposed on my network? Do I need a login?
 
@@ -30,7 +30,7 @@ By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reach
 
 ## How do I find or reset the admin password?
 
-The bare-metal installer auto-generates a strong admin password (username `birdnet`) and prints it **once** in the post-install summary, storing it as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`. To set your own, edit that file (or the `CADDY_PWD` environment variable / `.env` under Docker) and restart:
+The bare-metal installer auto-generates a strong admin password (username `admin`) and prints it **once** in the post-install summary, storing it as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`. To set your own, edit that file (or the `CADDY_PWD` environment variable / `.env` under Docker) and restart:
 
 ```bash
 sudo nano /etc/birdnet/birdnet.conf   # set CADDY_PWD=your-new-password

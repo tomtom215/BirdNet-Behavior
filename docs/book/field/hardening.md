@@ -22,8 +22,8 @@ To report a vulnerability, see
 
 The single most important decision is *what can reach the web UI*. **Viewing the
 dashboard requires no login; the `/admin` panel** — which can change settings,
-trigger database backups, and update the software — **is gated by HTTP Basic
-Auth enforced by the binary itself.** Treat reachability as the primary control.
+trigger database backups, and update the software — **is gated by a
+session-cookie sign-in enforced by the binary itself.** Treat reachability as the primary control.
 
 - **Default: all interfaces.** A bare-metal binary defaults to
   `--listen 0.0.0.0:8502`, so the dashboard is reachable from other devices on
@@ -92,8 +92,8 @@ internet-reachable, keep it set (and add TLS off-LAN).
   credentials never cross the wire in clear text.
 - **WebSocket caveat.** The live-detection WebSocket (`/api/v2/ws/detections`)
   and the health endpoint (`/api/v2/health`) are intentionally exempt from the
-  built-in Basic Auth layer, because browsers cannot attach Basic-auth headers
-  to a `WebSocket` handshake. (They are read-only and outside `/admin` in any
+  built-in sign-in layer, because a browser cannot attach credentials to a
+  `WebSocket` handshake. (They are read-only and outside `/admin` in any
   case.) The live detection stream is therefore readable by anyone who can reach
   the port. If that matters, gate access at the network layer (VPN / proxy
   allow-list) rather than relying on app-level auth.

@@ -68,8 +68,8 @@ pub use queries::{
     species_hourly_activity, species_hourly_activity_batch, species_shapes, species_sparklines,
     species_summary, temporal_cooccurrence, today_species_hour_heatmap, todays_detection_count,
     todays_detections, todays_source_activity, top_cooccurrence_pairs, top_species,
-    unlock_detection, unstamped_detection_count, weekly_detection_count, weekly_heatmap,
-    weekly_new_species, weekly_top_species,
+    total_recording_seconds, unlock_detection, unstamped_detection_count, weekly_detection_count,
+    weekly_heatmap, weekly_new_species, weekly_top_species,
 };
 pub use types::{
     ConcurrentDetection, DailyCount, DayCount, DetectionRecord, DetectionRow, HourlyCount,

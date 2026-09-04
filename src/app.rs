@@ -12,12 +12,38 @@
 use crate::cli::Cli;
 use crate::{capture, daemon, helpers, integrations, maintenance, sd_notify, weekly_report};
 
-/// Run the detection daemon and web server until a shutdown signal arrives.
+/// What to do when `check_and_recover` could not leave a healthy database.
 ///
-/// Called from `main` only for [`crate::Action::RunServer`]; the maintenance
-/// and doctor short-circuits are handled before this is reached. Takes
-/// ownership of the parsed `cli` and the loaded `config` (already resolved by
-/// `main`).
+/// This used to be one branch. Every error out of recovery was read as "corrupt
+/// and no good backup exists", quarantined, and followed by a fresh database —
+/// which is right when there is genuinely nothing to lose, and is how an
+/// unattended station keeps recording instead of sitting dead.
+///
+/// It is exactly wrong when a good backup was found and could not be put in
+/// place. Reproduced on a full card: a 2.7 MB backup, a truncated `birds.db`,
+/// and 1.3 MB free. The restore failed with `DiskFull`, and the station was
+/// about to announce that no good backup existed and start fresh — with the
+/// backup sitting intact beside it, and the weekly ring due to rotate it away
+/// within five weeks. Starting fresh also buys nothing in that state, because a
+/// station with no room cannot record either.
+#[derive(Debug, PartialEq, Eq)]
+enum RecoveryFallback {
+    /// Nothing recoverable exists. Move the corrupt file aside and start fresh.
+    QuarantineAndStartFresh,
+    /// The history is still recoverable and must not be discarded.
+    RefuseToStart,
+}
+
+/// Pick the fallback [`RecoveryFallback`] documents.
+const fn recovery_fallback(e: &birdnet_db::resilience::ResilienceError) -> RecoveryFallback {
+    match e {
+        birdnet_db::resilience::ResilienceError::RestoreFailed { .. } => {
+            RecoveryFallback::RefuseToStart
+        }
+        _ => RecoveryFallback::QuarantineAndStartFresh,
+    }
+}
+
 /// Run the detection daemon and web server until a shutdown signal arrives.
 ///
 /// Called from `main` only for [`crate::Action::RunServer`]; the maintenance
@@ -129,32 +155,42 @@ async fn serve(
                     tracing::info!(details = %result.details, "database healthy");
                 }
             }
-            Err(e) => {
-                // Corrupt and unrecoverable (no good backup). Never write to a
-                // corrupt database: quarantine it for offline recovery and
-                // start fresh, so an unattended station keeps recording rather
-                // than refusing to boot. Only refuse to start if we cannot even
-                // move the corrupt file aside.
-                tracing::error!(
-                    error = %e,
-                    path = %db_path.display(),
-                    "database is corrupt and no good backup exists; quarantining before starting fresh"
-                );
-                let quarantined = birdnet_db::resilience::quarantine_corrupt_database(&db_path)
-                    .map_err(|qe| {
-                        format!(
-                            "database is corrupt and could not be quarantined ({qe}); refusing to \
-                             start to avoid writing to a corrupt database — restore a backup or move \
-                             {} aside manually",
-                            db_path.display()
-                        )
-                    })?;
-                tracing::error!(
-                    quarantined_to = %quarantined.display(),
-                    "corrupt database quarantined; starting with a fresh database. Restore a backup \
-                     or recover the quarantined file to keep historical detections"
-                );
-            }
+            Err(e) => match recovery_fallback(&e) {
+                RecoveryFallback::RefuseToStart => {
+                    return Err(format!(
+                        "{e} — refusing to start. Starting fresh here would discard the one copy \
+                         of the history that is still good, and the weekly backup ring would \
+                         rotate it away within five weeks."
+                    )
+                    .into());
+                }
+                RecoveryFallback::QuarantineAndStartFresh => {
+                    // Never write to a corrupt database: quarantine it for
+                    // offline recovery and start fresh, so an unattended
+                    // station keeps recording rather than refusing to boot.
+                    // Only refuse to start if we cannot even move the corrupt
+                    // file aside.
+                    tracing::error!(
+                        error = %e,
+                        path = %db_path.display(),
+                        "database is corrupt and no good backup exists; quarantining before starting fresh"
+                    );
+                    let quarantined = birdnet_db::resilience::quarantine_corrupt_database(&db_path)
+                        .map_err(|qe| {
+                            format!(
+                                "database is corrupt and could not be quarantined ({qe}); refusing to \
+                                 start to avoid writing to a corrupt database — restore a backup or move \
+                                 {} aside manually",
+                                db_path.display()
+                            )
+                        })?;
+                    tracing::error!(
+                        quarantined_to = %quarantined.display(),
+                        "corrupt database quarantined; starting with a fresh database. Restore a backup \
+                         or recover the quarantined file to keep historical detections"
+                    );
+                }
+            },
         }
     }
 
@@ -825,5 +861,52 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => tracing::info!("received Ctrl+C"),
         () = terminate => tracing::info!("received SIGTERM"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RecoveryFallback, recovery_fallback};
+    use birdnet_db::resilience::ResilienceError;
+
+    /// The reproduction, at the decision that acts on it. A good backup that
+    /// could not be written must not be treated as no backup at all.
+    #[test]
+    fn a_restore_that_could_not_be_written_does_not_start_fresh() {
+        let e = ResilienceError::RestoreFailed {
+            backup: std::path::PathBuf::from("/data/backups/birds.db.backup.20260101-000000"),
+            detail: "database or disk is full".to_string(),
+        };
+        assert_eq!(
+            recovery_fallback(&e),
+            RecoveryFallback::RefuseToStart,
+            "the history is still sitting in that backup; starting fresh discards \
+             the one chance to get it back, and on a full card it does not let \
+             the station record either"
+        );
+        assert!(
+            e.to_string()
+                .contains("/data/backups/birds.db.backup.20260101-000000"),
+            "and the operator must be told which file is intact: {e}"
+        );
+    }
+
+    /// The counterpart, and the reason the fix cannot be "always refuse".
+    /// An unattended station with genuinely nothing to restore has to keep
+    /// recording rather than sit dead until someone drives out to it.
+    #[test]
+    fn no_good_backup_still_quarantines_and_starts_fresh() {
+        for e in [
+            ResilienceError::NoBackup,
+            ResilienceError::Unrecoverable("all 5 backup(s) failed verification".to_string()),
+            ResilienceError::Io(std::io::Error::other("some other failure")),
+        ] {
+            assert_eq!(
+                recovery_fallback(&e),
+                RecoveryFallback::QuarantineAndStartFresh,
+                "nothing recoverable exists for {e:?}, so the station must keep \
+                 recording rather than refuse to boot"
+            );
+        }
     }
 }

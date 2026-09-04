@@ -22,6 +22,25 @@ pub enum ResilienceError {
     NoBackup,
     /// Database is corrupt and unrecoverable.
     Unrecoverable(String),
+    /// A verified backup was found and could not be put in place.
+    ///
+    /// Kept apart from [`Self::NoBackup`] and [`Self::Unrecoverable`] because
+    /// the caller's response to the two is opposite. "No good backup" means
+    /// there is nothing to lose by quarantining and starting fresh, which is
+    /// what keeps an unattended station recording. This means the opposite: the
+    /// history is still recoverable, sitting in `backup`, and starting fresh
+    /// would discard the one chance to get it back — while the weekly ring
+    /// rotates that backup away within five weeks.
+    ///
+    /// The commonest cause is the card being full, which is also the state in
+    /// which starting fresh buys nothing, because the station cannot record
+    /// either.
+    RestoreFailed {
+        /// The backup that is intact and was not restored.
+        backup: PathBuf,
+        /// What went wrong, for the operator.
+        detail: String,
+    },
 }
 
 impl fmt::Display for ResilienceError {
@@ -31,6 +50,13 @@ impl fmt::Display for ResilienceError {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::NoBackup => write!(f, "no backup available for recovery"),
             Self::Unrecoverable(msg) => write!(f, "unrecoverable: {msg}"),
+            Self::RestoreFailed { backup, detail } => write!(
+                f,
+                "the database is corrupt and a good backup exists at {}, but it \
+                 could not be restored: {detail}. The backup is intact — free \
+                 space or replace the card and restart; do not delete it",
+                backup.display()
+            ),
         }
     }
 }
@@ -40,7 +66,7 @@ impl std::error::Error for ResilienceError {
         match self {
             Self::Sqlite(e) => Some(e),
             Self::Io(e) => Some(e),
-            Self::NoBackup | Self::Unrecoverable(_) => None,
+            Self::NoBackup | Self::Unrecoverable(_) | Self::RestoreFailed { .. } => None,
         }
     }
 }
@@ -151,9 +177,29 @@ pub fn checkpoint_wal(db_path: &Path) -> Result<(), ResilienceError> {
     Ok(())
 }
 
-/// Run integrity check on a database.
+/// The cheap structural check: is this file a database, and are its pages
+/// well formed?
 ///
-/// Uses `PRAGMA quick_check` for speed. For full check, use `full_integrity_check`.
+/// # What this does not catch
+///
+/// `PRAGMA quick_check` is not a faster `integrity_check` with the same answer.
+/// It checks page structure and skips, in SQLite's own words, verifying "that
+/// index content matches table content", along with the UNIQUE constraints. A
+/// database whose indexes have quietly stopped agreeing with the rows they
+/// point at passes this cleanly — and a query that uses such an index silently
+/// returns *fewer rows*, with nothing to see afterwards.
+///
+/// Measured on the bundled SQLite (3.53.2) with one indexed value patched in
+/// the table b-tree and every page left valid: `quick_check` answers `ok` where
+/// `integrity_check` answers `row 10001 missing from index
+/// idx_detections_sci_first_cover`.
+///
+/// So this is the right instrument for "is the file torn" and the wrong one for
+/// any decision that overwrites or discards data. Those use
+/// [`full_integrity_check`]; see its doc for which, and why
+/// [`check_and_recover`]'s verdict on the live database deliberately still uses
+/// this one. `tests/a_corrupt_index_must_not_reach_the_backup_ring.rs` holds
+/// the whole arrangement.
 ///
 /// # Errors
 ///
@@ -208,12 +254,37 @@ fn has_sqlite_header(db_path: &Path) -> bool {
 
 /// Run full integrity check (slower but more thorough).
 ///
+/// Like [`check_integrity`], this asks whether the file is a database *before*
+/// it asks SQLite anything, and for the same reason — see `has_sqlite_header`
+/// for why `PRAGMA integrity_check` cannot answer that question itself.
+///
+/// The guard matters more here than there, because this is the entry point the
+/// *running* station uses: the daily scheduled check in `src/maintenance.rs`
+/// whose verdict halts the detection writes, `--check-db`, and `--doctor`.
+/// [`check_integrity`] is reached only at boot, through [`check_and_recover`],
+/// and from [`backup_database`]. So while the guard was on that one alone, a
+/// `birds.db` truncated to zero *while the station was running* was reported
+/// healthy by the daily check every day for the rest of the year, the ingest
+/// halt never tripped, and an operator who ran `--check-db` — which is what the
+/// failure message tells them to do — was told the database was fine. Only the
+/// next reboot could notice.
+///
 /// # Errors
 ///
 /// Returns `ResilienceError` on check failure.
 pub fn full_integrity_check(db_path: &Path) -> Result<bool, ResilienceError> {
+    if !has_sqlite_header(db_path) {
+        return Ok(false);
+    }
     let conn = open_readonly_with_busy_timeout(db_path)?;
-    let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    // `integrity_check(1)` rather than the unbounded form: every caller of this
+    // function wants a boolean and none reads the error list, so stopping at
+    // the first fault is the honest shape. It costs the same on a healthy
+    // database — both must read every page to conclude `ok`, measured at 7 202
+    // against 7 223 ms on 95 MB — and is far cheaper on a corrupt one, which
+    // matters now that `check_and_recover` may run this over a whole ring of
+    // backups.
+    let result: String = conn.query_row("PRAGMA integrity_check(1)", [], |row| row.get(0))?;
     Ok(result == "ok")
 }
 
@@ -231,9 +302,16 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
     // Refuse to snapshot a corrupt source — the rolling backup ring (capped at
     // `MAX_BACKUP_FILES`) would otherwise overwrite the last good backup with
     // a copy of the damaged DB, eventually leaving zero recoverable backups
-    // for `check_and_recover` to restore from. A failed quick_check is rare on
-    // a healthy station, so this is cheap defense-in-depth.
-    if !check_integrity(db_path)? {
+    // for `check_and_recover` to restore from.
+    //
+    // This used `check_integrity`, which is `quick_check`, and could not see
+    // the corruption it was defending against: an index that has stopped
+    // agreeing with its table passes `quick_check` cleanly, so five weekly
+    // snapshots later every backup in the ring was a copy of the damaged
+    // database and the paragraph above had described exactly what happened.
+    // The deep check costs 7.7 s per 95 MB against 314 ms; once a week, to keep
+    // the ring worth having, that is the cheapest thing in this file.
+    if !full_integrity_check(db_path)? {
         return Err(ResilienceError::Sqlite(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error {
                 code: rusqlite::ffi::ErrorCode::DatabaseCorrupt,
@@ -440,45 +518,69 @@ pub fn backups_newest_first(backup_dir: &Path, db_name: &str) -> Vec<PathBuf> {
 ///
 /// Returns `ResilienceError` on restore failure.
 pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), ResilienceError> {
-    // Remove corrupt destination if it exists (cannot open corrupt files with SQLite)
-    if db_path.exists() {
-        std::fs::remove_file(db_path)?;
-        // Also remove WAL/SHM journal files if present. Use `with_suffix` (raw
-        // append) rather than `with_extension`: the WAL/SHM sidecars are
-        // `<db_path>-wal` / `-shm`, and `with_extension("db-wal")` only produces
-        // that for a path literally ending in `.db`. For any other name (e.g.
-        // `/data/station` or `my.archive.db`) it would target the wrong file and
-        // leave the real sidecars attached to the freshly restored DB, risking
-        // re-corruption — the same bug `quarantine_corrupt_database` already
-        // avoids with `with_suffix`.
-        let wal_path = with_suffix(db_path, "-wal");
-        let shm_path = with_suffix(db_path, "-shm");
-        if let Err(e) = std::fs::remove_file(&wal_path)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %wal_path.display(), error = %e, "failed to remove WAL file during restore");
-        }
-        if let Err(e) = std::fs::remove_file(&shm_path)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %shm_path.display(), error = %e, "failed to remove SHM file during restore");
+    // Build the replacement beside the destination and swap it in by rename.
+    //
+    // This used to `remove_file(db_path)` first and copy into the hole. Every
+    // failure after that line — the card that caused the corruption producing
+    // another I/O error, a power cut, or the disk being full — left the station
+    // with neither the original nor the replacement, and the caller could not
+    // tell that apart from having no backup at all. Reproduced on a 12 MB tmpfs
+    // with a 2.7 MB backup and a truncated `birds.db`: `check_and_recover`
+    // returned `DiskFull`, the live database was left at zero bytes, and
+    // `src/app.rs` was about to quarantine it and start fresh while the good
+    // backup sat intact beside it — after which the weekly ring rotates that
+    // backup away within five weeks.
+    //
+    // The destination is now untouched until there is a verified database to
+    // put in its place, and the swap itself is a rename within one directory.
+    let tmp = with_suffix(db_path, ".restore-tmp");
+    remove_if_present(&tmp);
+    remove_if_present(&with_suffix(&tmp, "-wal"));
+    remove_if_present(&with_suffix(&tmp, "-shm"));
+
+    if let Err(e) = copy_backup_into(backup_path, &tmp) {
+        remove_if_present(&tmp);
+        remove_if_present(&with_suffix(&tmp, "-wal"));
+        remove_if_present(&with_suffix(&tmp, "-shm"));
+        return Err(ResilienceError::RestoreFailed {
+            backup: backup_path.to_path_buf(),
+            detail: e.to_string(),
+        });
+    }
+
+    // Verify the copy before it replaces anything. The deep check, because this
+    // is about to become the live database and `quick_check` cannot see an
+    // index that disagrees with its table.
+    match full_integrity_check(&tmp) {
+        Ok(true) => {}
+        other => {
+            remove_if_present(&tmp);
+            return Err(ResilienceError::RestoreFailed {
+                backup: backup_path.to_path_buf(),
+                detail: match other {
+                    Ok(_) => "the restored copy did not pass its integrity check".to_string(),
+                    Err(e) => format!("the restored copy could not be verified: {e}"),
+                },
+            });
         }
     }
 
-    let source = open_readonly_with_busy_timeout(backup_path)?;
-    let mut dest = open_with_busy_timeout(db_path)?;
+    // Only now is the old database in the way. Use `with_suffix` (raw append)
+    // rather than `with_extension`: the WAL/SHM sidecars are `<db_path>-wal` /
+    // `-shm`, and `with_extension("db-wal")` only produces that for a path
+    // literally ending in `.db`. For any other name (e.g. `/data/station` or
+    // `my.archive.db`) it would target the wrong file and leave the real
+    // sidecars attached to the freshly restored DB, risking re-corruption — the
+    // same bug `quarantine_corrupt_database` already avoids with `with_suffix`.
+    remove_if_present(db_path);
+    remove_if_present(&with_suffix(db_path, "-wal"));
+    remove_if_present(&with_suffix(db_path, "-shm"));
 
-    let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
-    backup
-        .run_to_completion(100, std::time::Duration::from_millis(50), None)
-        .map_err(ResilienceError::Sqlite)?;
+    std::fs::rename(&tmp, db_path).map_err(|e| ResilienceError::RestoreFailed {
+        backup: backup_path.to_path_buf(),
+        detail: format!("the restored copy could not be moved into place: {e}"),
+    })?;
 
-    // Close the dest connection before enforcing WAL
-    drop(backup);
-    drop(dest);
-    drop(source);
-
-    // Enforce WAL mode on restored database
     enforce_wal_mode(db_path)?;
 
     tracing::warn!(
@@ -488,6 +590,34 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
     );
 
     Ok(())
+}
+
+/// Copy a backup into `dest`, which must not be the live database.
+///
+/// `step(-1)` inside one call rather than `run_to_completion(100, 50 ms)`, for
+/// the reason `copy_whole_database` gives: the paged form spends `N/100 × 50 ms`
+/// asleep, about 25 s on a 209 MB database, and it buys nothing here because the
+/// destination is a fresh temporary file no other connection has open, so there
+/// is no writer to yield to. That sleep was on the recovery boot path, before
+/// the listener binds.
+fn copy_backup_into(backup_path: &Path, dest_path: &Path) -> Result<(), ResilienceError> {
+    let source = open_readonly_with_busy_timeout(backup_path)?;
+    let mut dest = open_with_busy_timeout(dest_path)?;
+    let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
+    backup.step(-1).map_err(ResilienceError::Sqlite)?;
+    drop(backup);
+    drop(dest);
+    drop(source);
+    Ok(())
+}
+
+/// Remove a file if it is there, warning but not failing when it will not go.
+fn remove_if_present(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %path.display(), error = %e, "could not remove file during restore");
+    }
 }
 
 /// Append a raw suffix to a whole path (not just the file stem), so
@@ -548,7 +678,16 @@ pub fn check_and_recover(
     db_path: &Path,
     backup_dir: &Path,
 ) -> Result<RecoveryResult, ResilienceError> {
-    // Check integrity
+    // Deliberately the cheap check, unlike the two decisions that overwrite
+    // data. This runs before the listener binds, and the deep check is 24×
+    // slower — 7.7 s per 95 MB here, minutes on a mature station — which is the
+    // cost `PS-17` is already about, paid again on each of several brownouts a
+    // month. A false "healthy" here is inaction rather than destruction: the
+    // station runs on a database that needs attention, the daily
+    // `full_integrity_check` in `src/maintenance.rs` catches it within the day
+    // and halts the detection writes, and the backup ring is now protected
+    // independently. That protection is what makes this trade safe, and it is
+    // why the two call sites below moved to the deep check and this one did not.
     match check_integrity(db_path) {
         Ok(true) => {
             return Ok(RecoveryResult {
@@ -585,7 +724,13 @@ pub fn check_and_recover(
 
     let mut rejected = 0_usize;
     for backup_path in &candidates {
-        match check_integrity(backup_path) {
+        // The deep check, not `quick_check`: this decides what gets written
+        // over the live database, and restoring a backup whose indexes
+        // disagree with its tables would report success while losing rows to
+        // every query that uses them. Walking the ring is at most
+        // `MAX_BACKUP_FILES` deep checks and only happens when the station is
+        // already recovering, where being right outranks being quick.
+        match full_integrity_check(backup_path) {
             Ok(true) => {}
             Ok(false) => {
                 tracing::warn!(

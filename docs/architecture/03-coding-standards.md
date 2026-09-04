@@ -42,6 +42,7 @@ cargo = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 multiple_crate_versions = "allow"
+duration_suboptimal_units = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -101,9 +102,14 @@ This keeps library crates portable and testable without an async runtime.
 
 These rules are **hard requirements**, not suggestions:
 
-### 1. No file over 500 lines
+### 1. Prefer files under 500 lines
 
-If a file approaches 500 lines, split it using Rust's module system:
+500 lines is the point at which a file should be justified rather than a
+hard cap: a data table with one entry per row (`migration.rs`, ~3 100
+lines) or a single orchestration loop legitimately exceeds it, and about
+a hundred files in the workspace do. Behaviour spread across 500 lines
+usually should not. When a file grows past it for no such reason, split
+it using Rust's module system:
 
 ```
 routes/admin/mod.rs      → sub-module declarations + router assembly
@@ -116,21 +122,27 @@ routes/admin/logs.rs     → log streaming only
 ### 2. Single responsibility per module
 
 Each `.rs` file has one clear purpose. Examples:
-- `sqlite/settings.rs` — only key-value settings CRUD
-- `sqlite/migrations.rs` — only schema migration logic
+- `settings.rs` — only key-value settings CRUD
+- `migration.rs` — only the versioned schema-migration chain
 - `email.rs` — only SMTP email composition and delivery
 
 ### 3. Trait-based abstraction at every boundary
 
 ```rust
-// ✅ Good: trait boundary enables testing and swapping implementations
-pub trait Migrator {
-    type Source;
-    type Report;
-    fn validate_source(&self, source: &Self::Source)
-        -> Result<(SchemaInfo, SourceReport, MigrationReport), MigrateError>;
-    fn migrate(&self, source: &Self::Source, target: &Connection)
-        -> Result<MigrationReport, MigrateError>;
+// ✅ Good: one narrow trait per responsibility, each with one job
+pub trait SchemaDetector: Send + Sync {
+    fn detect(&self, path: &Path) -> Result<DetectedSchema, MigrateError>;
+}
+
+pub trait Validator: Send + Sync {
+    fn validate_source(&self, source_path: &Path) -> Result<ValidationReport, MigrateError>;
+    fn validate_destination(&self, source_path: &Path, dest_path: &Path)
+        -> Result<ValidationReport, MigrateError>;
+}
+
+pub trait Migrator: Send + Sync {
+    fn migrate(&self, source_path: &Path, dest_path: &Path, progress: &ProgressHandle)
+        -> Result<MigrationSummary, MigrateError>;
 }
 
 // ✅ Good: integration trait
@@ -144,9 +156,11 @@ pub trait NotificationSink: Send + Sync {
 ```rust
 // In birdnet-db/src/sqlite/mod.rs
 pub mod connection;
-pub mod migrations;
-pub mod settings;
 pub mod queries;          // further sub-modules inside
+pub mod types;
+
+// Settings and the migration chain sit at the crate root, not under sqlite/:
+// birdnet-db/src/settings.rs, birdnet-db/src/migration.rs
 
 // In birdnet-db/src/sqlite/queries/mod.rs
 pub mod detections;
@@ -160,10 +174,10 @@ pub mod analytics;
 Consumers use the crate's public API, not internal module paths:
 
 ```rust
-// birdnet-db/src/lib.rs
-pub use sqlite::connection::DbConnection;
-pub use sqlite::settings::{get_or, set};
-pub use sqlite::queries::detections::insert_detection;
+// birdnet-db/src/sqlite/mod.rs — flat re-exports so call sites stay
+// `birdnet_db::sqlite::foo` regardless of which sub-module owns `foo`
+pub use connection::{DbError, open_connection, open_or_create, open_readonly, quick_check};
+pub use queries::correlation::{FollowOn, SpeciesPair};
 ```
 
 ## Testing Philosophy
@@ -174,7 +188,10 @@ pub use sqlite::queries::detections::insert_detection;
 - End-to-end tests against real WAV fixtures and real SQLite databases
 - Coverage tracked via `cargo-tarpaulin`
 - MSRV explicitly specified (1.95) and CI-enforced
-- **Current test count**: ~516 passing across all crates and integration tests
+- **Current test count**: 3 623 `#[test]` / `#[tokio::test]` attributes across
+  the workspace — re-derive with
+  `grep -rn --include='*.rs' -E '^\s*#\[(test|tokio::test)' src crates tests | wc -l`
+  rather than trusting this figure
 
 ### Raw String Literals in HTML/SVG
 
@@ -195,17 +212,26 @@ The `.github/workflows/ci.yml` pipeline enforces quality gates on every
 push and pull request:
 
 1. **fmt** — `cargo fmt --check --all` (zero diff required)
-2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
-   (pedantic + nursery, zero warnings permitted)
-3. **test** — `cargo test --workspace` (unit, integration, doc tests)
-4. **doc** — `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
-5. **build** — debug build of the full workspace with and without the
+2. **clippy** — run twice: `cargo clippy --workspace --all-targets -- -D
+   warnings`, then again with `--all-features` (pedantic + nursery, zero
+   warnings permitted)
+3. **test** — five invocations: `--workspace --lib --bins`, `--workspace
+   --tests`, `--workspace --doc`, `--workspace --all-features`, and
+   `-p birdnet-behavioral --features analytics
+   embedded_extension_loads_when_bundled`
+4. **inference** — the end-to-end suites run against the real model
+5. **doc** — `cargo doc --workspace --no-deps --document-private-items
+   --all-features` with warnings denied
+6. **build** — debug build of the full workspace with and without the
    `analytics` feature
-6. **msrv** — `cargo check --workspace` against the declared MSRV
+7. **msrv** — `cargo check --workspace --all-features` against the declared MSRV
+8. **cross-aarch64** — `cargo check --workspace --all-features --target
+   aarch64-unknown-linux-gnu`
 
-Release builds for `aarch64` and `x86_64` are produced by
-`.github/workflows/release.yml` using Ubuntu 24.04's native GCC 13
-cross toolchain, and multi-arch Docker images are assembled by
+Release builds for `aarch64`, `x86_64` and `aarch64-apple-darwin` are
+produced by `.github/workflows/release.yml`; the two Linux targets use
+Ubuntu 24.04's native GCC 13 cross toolchain and macOS builds natively on
+`macos-14`, and multi-arch Docker images are assembled by
 `.github/workflows/docker.yml` on native runners to avoid QEMU
 emulation.
 

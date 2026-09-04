@@ -301,7 +301,7 @@ fn finalize_restore(db_path: &std::path::Path) -> Result<(), String> {
         }
     }
 
-    match birdnet_db::resilience::check_integrity(db_path) {
+    match birdnet_db::resilience::full_integrity_check(db_path) {
         Ok(true) => Ok(()),
         Ok(false) => Err("the restored database fails an integrity check".to_string()),
         Err(e) => Err(format!("the restored database could not be opened: {e}")),
