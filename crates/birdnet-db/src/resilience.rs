@@ -208,10 +208,28 @@ fn has_sqlite_header(db_path: &Path) -> bool {
 
 /// Run full integrity check (slower but more thorough).
 ///
+/// Like [`check_integrity`], this asks whether the file is a database *before*
+/// it asks SQLite anything, and for the same reason — see [`has_sqlite_header`]
+/// for why `PRAGMA integrity_check` cannot answer that question itself.
+///
+/// The guard matters more here than there, because this is the entry point the
+/// *running* station uses: the daily scheduled check in `src/maintenance.rs`
+/// whose verdict halts the detection writes, `--check-db`, and `--doctor`.
+/// [`check_integrity`] is reached only at boot, through [`check_and_recover`],
+/// and from [`backup_database`]. So while the guard was on that one alone, a
+/// `birds.db` truncated to zero *while the station was running* was reported
+/// healthy by the daily check every day for the rest of the year, the ingest
+/// halt never tripped, and an operator who ran `--check-db` — which is what the
+/// failure message tells them to do — was told the database was fine. Only the
+/// next reboot could notice.
+///
 /// # Errors
 ///
 /// Returns `ResilienceError` on check failure.
 pub fn full_integrity_check(db_path: &Path) -> Result<bool, ResilienceError> {
+    if !has_sqlite_header(db_path) {
+        return Ok(false);
+    }
     let conn = open_readonly_with_busy_timeout(db_path)?;
     let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     Ok(result == "ok")
