@@ -38,6 +38,122 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — six ways the station vouched for something it had not checked
+
+This project accumulated eleven planning and audit documents written at
+different times. They were reconciled against the source in one pass: every open
+item re-verified from the code rather than from another document, and stale
+claims corrected in place rather than annotated, because a document that
+contradicts the code stops the next person running the real check. That pass
+found its own defects, and they share the shape the last one did — a rule
+implemented in two places, where the second place learned only half of it.
+
+**A database truncated to zero passed the daily integrity check, every day.**
+`check_integrity` was taught to look for SQLite's sixteen-byte magic, because
+SQLite opens a zero-length file as a brand-new empty database and answers
+`quick_check` with "ok". The guard went on that function alone.
+`full_integrity_check` is the one the *running* station uses — the daily
+scheduled check whose verdict halts the detection writes, `--check-db`, and
+`--doctor` — and it had no guard. So a `birds.db` truncated while the station
+was running, which is what a power cut during an SD card's wear-levelling
+relocation produces, was reported healthy for the rest of the year. The ingest
+halt never tripped. An operator who ran `--check-db`, which is what the failure
+message tells them to do, was told the database was fine. Only the next reboot
+could notice.
+
+**Opening a chart re-admitted another station's imported history into every
+behavioural analytic.** Two crates create a view called `detections_ts` on the
+same DuckDB connection, and a gate holds their definitions equal. Migration 34
+gave that view a second rule — exclude imported detections when the operator has
+asked for it — which has no constant to compare, because the flag lives in
+SQLite and the time-series crate cannot see it. Constructing a time-series
+executor overwrote the view, so sessionize, retention, funnel, next-species,
+co-occurrence and phenology silently counted a foreign site's records until a
+later sync happened to reinstall the right definition. The view now has one
+owner; a read no longer rewrites the catalog underneath the other crate.
+
+**The species list ranked a bird the station had never heard as its commonest.**
+`species_summary` is a trigger-maintained rollup that filters on the review
+verdict alone, and it could not learn migration 34's rule because the rule
+depends on a setting the operator can flip and the rollup's key has no
+provenance dimension. Measured on two of the station's own detections and three
+imported, with the exclusion on: the analytic view reported one species and two
+rows, while the species list reported two and put the imported one first at three
+detections. The per-species detail page reads the view directly and was right
+throughout, so the list and the detail page disagreed about the same species.
+The five rollup readers now fall back to the view — only on a station that both
+has imports and excludes them, so everyone else keeps the rollup's bounded cost.
+
+**The dawn chorus copied half of that same rule** and its comment claimed it had
+copied all of it. It was the one surface still counting an excluded site's
+records after the operator excluded them, and, being a chart, the most likely to
+be believed.
+
+**The watchdog that exists to prove the station is working was blind to a
+station that never worked.** The detection deadman measured "seconds since the
+last detection", which is unmeasurable when there has never been one, and folded
+that into "nothing to say" with a comment about brand-new stations not alarming
+on first boot — right about the first hour, with no time bound. A station whose
+microphone, gain, confidence threshold or occurrence filter was wrong on the day
+it was installed detected nothing on day one and nothing on day three hundred,
+in silence. It now measures against `recording_effort`, the station's own record
+of how long it has been listening: a new station still says nothing, and one
+that has listened past the threshold and heard nothing says so — in different
+words, because "no detections for 25 hours" sends the operator to the weather
+and "recorded 25 hours and never detected a single bird" sends them to the
+configuration, which is where the fault is.
+
+**The container adopted whatever model file it found.** `ensure_model_file`
+returned on the file's presence alone, three lines below a comment promising a
+sha256 check, so a truncated or half-restored model became final for the life of
+the volume — while `--doctor` accepts any model file over a megabyte and the
+compose healthcheck cannot see a stopped detection daemon. The installer closed
+this on bare metal and the container was never brought along. Its `verify_sha256`
+also returned success when `sha256sum` was missing, which is the same shape the
+installer's own test suite exists to prevent: "we could not check this" must
+never return what "this checked out" returns.
+
+### Found and not fixed
+
+Recorded so nothing discovered goes untraced. The full register is
+`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.12 and §3.13 — 121 new rows with
+severity, evidence and a remedy each. The ones an operator should know about:
+
+* **`quick_check` gates database recovery and cannot see index corruption.**
+  Measured: a corrupted mid-file index page gives `quick_check: ok` against
+  `integrity_check: 82 errors`, and `VACUUM` does not repair it. The daily check
+  halts ingest, the operator restarts as instructed, recovery says "healthy",
+  and the weekly backup ring overwrites the last good snapshot within five
+  weeks. This is the most damaging thing still open (`AD-2`).
+* **The eBird export writes latitude 0, longitude 0**, applies no confidence
+  floor and no one-per-hour deduplication, and writes raw detection tallies as
+  bird counts — so one blackbird detected two hundred times is exported as two
+  hundred birds. BirdNET-Pi does all of this correctly. It is the only defect
+  here whose output leaves the station and enters a public database (`R-19`).
+* **The support bundle and `--doctor` are reachable only over SSH**, though both
+  are already written, tested, and embedded in each other (`OP-1`).
+* **A forward clock step still deletes the clip library**, and a comment in
+  `civil.rs` claims every destructive retention job refuses to run on an
+  implausible clock. The function it names has no caller in the maintenance loop
+  (`AD-1`).
+* **The onboarding wizard's answers do not reach the running station** until a
+  restart, and the wizard's final step says detections will start arriving in a
+  minute or two (`ON-4`).
+* **A restore replaces the live database under the running daemon**, with no
+  quiesce and no free-space check (`UP-2`).
+* **Recording effort never reaches an export**, in this project or either
+  reference — so an exported zero cannot be told from a dead recorder. We are
+  the only one of the three that records effort at all, which makes this the
+  cheapest thing on the list to put right (`FR-5`).
+* **Darwin Core cannot be emitted**: the schema cannot supply `occurrenceID`,
+  coordinates, coordinate uncertainty, an offset-bearing `eventDate`, or any of
+  the dataset and attribution terms. Three changes get most of the way there and
+  are written down (`R-DwC`).
+* **Seven onboarding preference cards cannot be reached from a keyboard**, and
+  28 page partials render a permanent loading skeleton instead of an error when
+  they fail. The accessibility gate passes both, because it does not press Tab
+  and its fixture is never empty (`UX-1`, `UX-4`).
+
 ### Added — a station can now be changed over its API, by something that is not a browser
 
 The `/api/v2` surface was entirely read-only. A grep for `post(`, `put(`,
