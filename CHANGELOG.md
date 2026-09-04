@@ -38,7 +38,7 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
-### Fixed — six ways the station vouched for something it had not checked
+### Fixed — seven ways the station vouched for something it had not checked
 
 This project accumulated eleven planning and audit documents written at
 different times. They were reconciled against the source in one pass: every open
@@ -113,18 +113,33 @@ also returned success when `sha256sum` was missing, which is the same shape the
 installer's own test suite exists to prevent: "we could not check this" must
 never return what "this checked out" returns.
 
+**The backup ring could be eaten by a corruption the guard could not see.**
+`PRAGMA quick_check` is not a faster `integrity_check` with the same answer: it
+checks page structure and skips verifying that index content matches table
+content. A database whose indexes have quietly stopped agreeing with the rows
+they point at passes it cleanly, and queries using those indexes then return
+fewer rows with nothing to see afterwards. Two decisions that overwrite data
+were made on that check — the guard that refuses to snapshot a corrupt source,
+whose own comment explained that otherwise "the rolling backup ring would
+overwrite the last good backup with a copy of the damaged DB", and the walk that
+picks which backup gets restored over the live database. Both now use the deep
+check, as does the admin backup page. Demonstrated by a gate: a good backup of
+5 000 rows sitting behind a corrupt one of 20 000, and recovery took the corrupt
+one. The verdict on the live database at boot deliberately stays on the cheap
+check, because the deep one is 24× slower on a path that runs before the server
+starts listening, and the daily check covers it.
+
 ### Found and not fixed
 
 Recorded so nothing discovered goes untraced. The full register is
 `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.12 and §3.13 — 121 new rows with
 severity, evidence and a remedy each. The ones an operator should know about:
 
-* **`quick_check` gates database recovery and cannot see index corruption.**
-  Measured: a corrupted mid-file index page gives `quick_check: ok` against
-  `integrity_check: 82 errors`, and `VACUUM` does not repair it. The daily check
-  halts ingest, the operator restarts as instructed, recovery says "healthy",
-  and the weekly backup ring overwrites the last good snapshot within five
-  weeks. This is the most damaging thing still open (`AD-2`).
+* **A corrupt database on a full card is turned into total history loss.** The
+  restore path needs room for a second whole database; its failure to get that
+  room is indistinguishable from "no good backup", and the station then
+  quarantines a *recoverable* database and starts fresh. Now that the ring is
+  worth restoring from, this is the most damaging thing still open (`AD-9`).
 * **The eBird export writes latitude 0, longitude 0**, applies no confidence
   floor and no one-per-hour deduplication, and writes raw detection tallies as
   bird counts — so one blackbird detected two hundred times is exported as two

@@ -40,8 +40,12 @@ two references), for **255** rows in the register — counted by first id per ro
 which is the right measure because a few rows deliberately group several ids
 (`WE-1 … WE-5`, and three of the accessibility rows). Per prefix: PS 19, PR 17,
 NT 18, LC 16, OB 16, NL 1, NP 13, S 16, O 16, ARM 1, AU 1, RC 35, ON 20, R 11,
-AD 9, OP 16, UX 15, FR 6, UP 8, WE 1. Ten are fixed on the reconciliation
-branch, each with a gate observed failing against the code it guards. The five P0s
+AD 9, OP 16, UX 15, FR 6, UP 8, WE 1. **Eight** of the new rows are fixed on
+the reconciliation branch, each with a gate observed failing against the code it
+guards — `RC-1`, `RC-2`, `RC-3` (in part), `RC-4`, `ON-1`, `ON-2`, `ON-14` and
+`AD-2`, counted by grepping §3.12 and §3.13 for the marker rather than by adding
+up. `ON-1` and `ON-14` also close `LC-2`'s container half and `LC-15`, which are
+rows in the original register. The five P0s
 are PS-1, PS-2, NT-1, LC-1 and LC-2 — in each of them the station keeps serving
 a healthy dashboard while it loses, or has already lost, what it exists to
 collect.
@@ -688,7 +692,7 @@ and no previous document asked.
 | ID | Sev | How | Finding | Remedy |
 |---|---|---|---|---|
 | **AD-1** | **P0** | READ | **`civil.rs:436` claims "every destructive retention job refuses to run" on an implausible clock, and `secs_look_synced` has no caller in `src/maintenance.rs` at all.** `clock_looks_plausible` is a floor, so a forward step is always "plausible"; `run_clip_retention` then reclaims the whole library while the rows survive, so the loss is invisible in every count. This is **NT-4**'s remaining half stated more sharply than NT-4 states it, plus a comment that is actively misleading about it. | Item 1.11, and correct that comment now rather than with the fix. |
-| **AD-2** | **P1** | VERIFIED | **`quick_check` misses index corruption and it is the predicate that gates recovery.** Probe: corrupting a mid-file *index* page gives `quick_check: ok` against `integrity_check: 82 errors`; a table page is caught by both; `VACUUM` does not repair it (82 → 100). `check_integrity` (`resilience.rs:166`) uses `quick_check`, and it gates boot recovery, the backup-source guard and backup validation. So the daily `full_integrity_check` halts ingest, the operator restarts as instructed, `check_and_recover` says healthy, and the five-slot ring overwrites the last good backup within five weeks. (Measured on sqlite 3.45.1; the shipped binary bundles 3.50.x.) | Use `integrity_check` on the recovery path, or `quick_check` first and `integrity_check` before declaring healthy. Interacts directly with **RC-1** and with **RC-18**, where `/station` renders a green "Database integrity" tick from this same weaker check. |
+| **AD-2** | **P1** | VERIFIED | **`quick_check` cannot see an index that disagrees with its table, and two decisions that overwrite data were made on it.** **[FIXED]** — `backup_database`'s source guard, `check_and_recover`'s backup-candidate walk and the admin backup page now use `full_integrity_check`. *The mechanism in the first draft of this row was wrong and is corrected here*: it said a random byte flip in an index page gives `quick_check: ok`. It does not — that produces structurally invalid cells, which `quick_check` catches, and it caught them in every run. What `quick_check` skips is verifying "that index content matches table content", so the reproduction has to leave every page valid and patch an indexed value inside the *table* b-tree. Re-measured on the bundled SQLite (**3.53.2**, not the system 3.45.1 the first draft used): 20 000 rows / 9.6 MB → `quick_check` `ok` in 34 ms against `integrity_check(1)` `row 10001 missing from index idx_detections_sci_first_cover` in 266 ms; 200 000 rows / 95.1 MB → `ok` in 314 ms against the same verdict in 3 929 ms. The consequence stands as written and is now demonstrated by a gate: a 5 000-row good backup sitting behind a 20 000-row corrupt one, and recovery took the corrupt one. | Done for the two decisions. **Deliberately not done** for `check_and_recover`'s verdict on the *live* database: the deep check is 24× slower (7 663 ms against 314 ms on 95 MB; minutes on a mature station) on the path that runs before the listener binds, which is **PS-17**'s cost, and a false "healthy" there is inaction rather than destruction — the daily check catches it within the day and the ring is now protected independently. **RC-18** is the remaining relative: `/station` still renders a green "Database integrity" tick from `quick_check`, per render, while the station's actual daily verdict is not shown at all. |
 | **AD-3** | **P1** | READ | **A flapping source is invisible to every operator-facing signal.** `clear_fault` (`supervisor.rs:346`, called `:455`) refunds `attempts_since_healthy` after one healthy 2 s tick, so a flapper is pinned at `BACKOFF_BASE` and never approaches the cap; `DOWN_WARN_AFTER` is 120 s *continuous* and never elapses; `UptimeRing::segments` paints the strip Up; `restart_attempts` reads 0–1. Backoff is correctly per-source and no source starves another — the defect is entirely in what is reported. | Count restarts over a window rather than consecutively. |
 | **AD-4** | **P1** | READ | **PS-9 unchanged and wider.** No runtime writability probe; `db_health` (`system.rs:147`) is a read-only `SELECT 1` plus a frozen verdict. Further: `detection_silence_secs` is in the health body but not in `degraded` (`:223`), so a week of silence does not make even the strict endpoint go red. | Item 2.12, plus put silence into the strict predicate. |
 | **AD-5** | P2 | READ | **One production `sync_all` in the workspace** (`auto_update/mod.rs:374`; the only other is `#[cfg(test)]`). With `synchronous=NORMAL` (`connection.rs:57`) there is no corruption but the last few MB of commits can roll back, undocumented. | **PS-7**, and say so in the durability documentation. |
@@ -1107,13 +1111,16 @@ re-take it rather than carrying a figure forward — the count moves with every
 commit here. Extract it with `grep "^test result:"` and sum the fields; a
 `| tail -N` will report exit 0 over a run with failures inside it.)
 
-The reconciliation branch takes the suite to **3 661 passed, 0 failed,
-7 ignored** in **112** suites — twenty-one gates across six files, and one new
-suite, `crates/birdnet-db/tests/the_species_list_honours_the_provenance_rule.rs`.
+The reconciliation branch takes the suite to **3 667 passed, 0 failed,
+7 ignored** in **113** suites — twenty-seven gates across seven files, and two
+new suites,
+`crates/birdnet-db/tests/the_species_list_honours_the_provenance_rule.rs` and
+`crates/birdnet-db/tests/a_corrupt_index_must_not_reach_the_backup_ring.rs`.
 `--workspace --all-features` gives the same set as `--workspace` here, because
 `analytics` is the only feature and it is on by default. (This block read
-"3 653" between the fourth fix and the sixth; re-take it rather than carrying it,
-which is what the paragraph above says and what this sentence is evidence for.)
+"3 653" between the fourth fix and the sixth, and "3 661" before `AD-2`; re-take
+it rather than carrying it, which is what the paragraph above says and what this
+sentence keeps being evidence for.)
 
 Not in that count, because it is not a cargo test:
 `installer/test/container-model-cache.sh`, run by
@@ -1177,19 +1184,22 @@ claimed as local results:
 *Rewritten by the reconciliation pass, 2026-09-04. The paragraphs after this
 one are the previous handoff and are still accurate; this is what changed.*
 
-**`AD-2` first: `quick_check` gates database recovery and cannot see index
-corruption.** This is the one thing found in this pass that still destroys data
-after everything on this branch. It was measured, not reasoned: corrupting a
-mid-file index page gives `quick_check: ok` against `integrity_check: 82
-errors`, and `VACUUM` does not repair it. `check_integrity` uses `quick_check`
-and gates boot recovery, the backup-source guard and backup validation — so the
-daily check halts ingest, the operator restarts as the message tells them to,
-`check_and_recover` says "healthy", and the five-slot weekly ring overwrites the
-last good backup inside five weeks. `RC-1` closed the truncation hole on the same
-path this pass; this is the other hole in the same predicate, and it is worse
-because the file still looks like a database. `AD-9` is the same failure with a
-full card underneath it, where the restore path's "no room" is indistinguishable
-from "no backup" and a *recoverable* database gets quarantined.
+**`AD-2` is done** — it was the head of this list and is now fixed, for the two
+decisions that overwrite data. Read its row before touching this area: the
+mechanism recorded in the first draft was wrong, the corrected reproduction is
+in `crates/birdnet-db/tests/a_corrupt_index_must_not_reach_the_backup_ring.rs`,
+and `check_and_recover`'s verdict on the *live* database deliberately still uses
+`quick_check` for a cost reason stated at the call site.
+
+**`AD-9` is what remains of that family, and is now the worst thing on this
+list**: partial corruption *on a full card*. The restore path needs room for a
+second whole database, its failure to get that room is indistinguishable from
+"no good backup", and `app.rs:134-156` then quarantines a *recoverable*
+database and starts fresh — turning a recoverable fault into total history loss,
+on the failure combination a year in a field makes likely. It is also **PS-10**'s
+"separate the two verdicts" applied one level out: check free space before
+restoring, and distinguish "no room" from "no backup". The ring is now worth
+restoring from, which is what makes this the next thing to protect.
 
 **Then `R-19`, because it is the only finding here that damages someone else.**
 The eBird export applies no confidence floor, no one-per-hour deduplication,
