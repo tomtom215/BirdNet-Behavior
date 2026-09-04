@@ -147,8 +147,18 @@ verify_sha256() {
     file="$1"
     expected="$2"
     if ! command -v sha256sum >/dev/null 2>&1; then
-        warn "sha256sum not available — cannot verify ${file##*/} integrity."
-        return 0
+        # "We could not check this" must never return the same value as "this
+        # checked out". It used to: a stripped image with no sha256sum turned
+        # every verification in this script into a no-op that reported success,
+        # so the absence of the checking tool counted as a successful check of
+        # the 541 MB model. `installer/test/checksum-refusals.sh` closed the
+        # three instances of this shape in the installer; this was the one left
+        # in the container, and it is finding LC-15.
+        #
+        # The runtime image is debian-slim, which ships coreutils, so this is a
+        # guard against a future stripped base rather than a live failure.
+        warn "sha256sum not available — cannot verify ${file##*/} integrity, and refusing to treat that as verified."
+        return 1
     fi
     actual="$(sha256sum "$file" | awk '{print $1}')"
     [ "$actual" = "$expected" ]
@@ -274,8 +284,29 @@ ensure_model_file() {
 
     if [ -f "$dest" ]; then
         actual="$(wc -c < "$dest" 2>/dev/null || echo 0)"
-        log "${desc}: already cached ($(human_bytes "$actual")) — skipping download."
-        return 0
+        # Verify what is on the volume, not merely that something is. This
+        # branch used to `return 0` on presence alone, three lines below the
+        # comment above promising a sha256 check, and `$expected` was never
+        # consulted — so any unverified file sitting at this path was adopted as
+        # the model for the life of the volume. It does not take a partial
+        # download to get one there: `fetch_one` stages at `${dest}.tmp` and
+        # only moves on success, but a container killed between that move and
+        # the verification below, a volume restored from a truncated snapshot,
+        # or a disk that filled during the move all leave exactly this. Nothing
+        # downstream catches it — `src/doctor/model.rs` accepts any file over a
+        # megabyte — so the station runs a season on a broken model.
+        #
+        # `installer/lib/55-model.sh` fixed this on bare metal with
+        # `model_file_is_verified`; this is the container half of LC-2.
+        if verify_sha256 "$dest" "$expected"; then
+            log "${desc}: already cached ($(human_bytes "$actual")) and sha256 verified — skipping download."
+            return 0
+        fi
+        warn "${desc}: the cached file ($(human_bytes "$actual")) does not match its expected sha256 — discarding it and downloading again."
+        # `${dest}.tmp` is deliberately left alone: it is the resume state for a
+        # download still in progress across restarts, which is what makes a
+        # 541 MB fetch survivable on a slow link.
+        rm -f "$dest"
     fi
 
     for src in github zenodo; do
