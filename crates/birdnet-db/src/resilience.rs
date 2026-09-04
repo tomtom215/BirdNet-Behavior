@@ -22,6 +22,25 @@ pub enum ResilienceError {
     NoBackup,
     /// Database is corrupt and unrecoverable.
     Unrecoverable(String),
+    /// A verified backup was found and could not be put in place.
+    ///
+    /// Kept apart from [`Self::NoBackup`] and [`Self::Unrecoverable`] because
+    /// the caller's response to the two is opposite. "No good backup" means
+    /// there is nothing to lose by quarantining and starting fresh, which is
+    /// what keeps an unattended station recording. This means the opposite: the
+    /// history is still recoverable, sitting in `backup`, and starting fresh
+    /// would discard the one chance to get it back — while the weekly ring
+    /// rotates that backup away within five weeks.
+    ///
+    /// The commonest cause is the card being full, which is also the state in
+    /// which starting fresh buys nothing, because the station cannot record
+    /// either.
+    RestoreFailed {
+        /// The backup that is intact and was not restored.
+        backup: PathBuf,
+        /// What went wrong, for the operator.
+        detail: String,
+    },
 }
 
 impl fmt::Display for ResilienceError {
@@ -31,6 +50,13 @@ impl fmt::Display for ResilienceError {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::NoBackup => write!(f, "no backup available for recovery"),
             Self::Unrecoverable(msg) => write!(f, "unrecoverable: {msg}"),
+            Self::RestoreFailed { backup, detail } => write!(
+                f,
+                "the database is corrupt and a good backup exists at {}, but it \
+                 could not be restored: {detail}. The backup is intact — free \
+                 space or replace the card and restart; do not delete it",
+                backup.display()
+            ),
         }
     }
 }
@@ -40,7 +66,7 @@ impl std::error::Error for ResilienceError {
         match self {
             Self::Sqlite(e) => Some(e),
             Self::Io(e) => Some(e),
-            Self::NoBackup | Self::Unrecoverable(_) => None,
+            Self::NoBackup | Self::Unrecoverable(_) | Self::RestoreFailed { .. } => None,
         }
     }
 }
@@ -492,45 +518,69 @@ pub fn backups_newest_first(backup_dir: &Path, db_name: &str) -> Vec<PathBuf> {
 ///
 /// Returns `ResilienceError` on restore failure.
 pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), ResilienceError> {
-    // Remove corrupt destination if it exists (cannot open corrupt files with SQLite)
-    if db_path.exists() {
-        std::fs::remove_file(db_path)?;
-        // Also remove WAL/SHM journal files if present. Use `with_suffix` (raw
-        // append) rather than `with_extension`: the WAL/SHM sidecars are
-        // `<db_path>-wal` / `-shm`, and `with_extension("db-wal")` only produces
-        // that for a path literally ending in `.db`. For any other name (e.g.
-        // `/data/station` or `my.archive.db`) it would target the wrong file and
-        // leave the real sidecars attached to the freshly restored DB, risking
-        // re-corruption — the same bug `quarantine_corrupt_database` already
-        // avoids with `with_suffix`.
-        let wal_path = with_suffix(db_path, "-wal");
-        let shm_path = with_suffix(db_path, "-shm");
-        if let Err(e) = std::fs::remove_file(&wal_path)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %wal_path.display(), error = %e, "failed to remove WAL file during restore");
-        }
-        if let Err(e) = std::fs::remove_file(&shm_path)
-            && e.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %shm_path.display(), error = %e, "failed to remove SHM file during restore");
+    // Build the replacement beside the destination and swap it in by rename.
+    //
+    // This used to `remove_file(db_path)` first and copy into the hole. Every
+    // failure after that line — the card that caused the corruption producing
+    // another I/O error, a power cut, or the disk being full — left the station
+    // with neither the original nor the replacement, and the caller could not
+    // tell that apart from having no backup at all. Reproduced on a 12 MB tmpfs
+    // with a 2.7 MB backup and a truncated `birds.db`: `check_and_recover`
+    // returned `DiskFull`, the live database was left at zero bytes, and
+    // `src/app.rs` was about to quarantine it and start fresh while the good
+    // backup sat intact beside it — after which the weekly ring rotates that
+    // backup away within five weeks.
+    //
+    // The destination is now untouched until there is a verified database to
+    // put in its place, and the swap itself is a rename within one directory.
+    let tmp = with_suffix(db_path, ".restore-tmp");
+    remove_if_present(&tmp);
+    remove_if_present(&with_suffix(&tmp, "-wal"));
+    remove_if_present(&with_suffix(&tmp, "-shm"));
+
+    if let Err(e) = copy_backup_into(backup_path, &tmp) {
+        remove_if_present(&tmp);
+        remove_if_present(&with_suffix(&tmp, "-wal"));
+        remove_if_present(&with_suffix(&tmp, "-shm"));
+        return Err(ResilienceError::RestoreFailed {
+            backup: backup_path.to_path_buf(),
+            detail: e.to_string(),
+        });
+    }
+
+    // Verify the copy before it replaces anything. The deep check, because this
+    // is about to become the live database and `quick_check` cannot see an
+    // index that disagrees with its table.
+    match full_integrity_check(&tmp) {
+        Ok(true) => {}
+        other => {
+            remove_if_present(&tmp);
+            return Err(ResilienceError::RestoreFailed {
+                backup: backup_path.to_path_buf(),
+                detail: match other {
+                    Ok(_) => "the restored copy did not pass its integrity check".to_string(),
+                    Err(e) => format!("the restored copy could not be verified: {e}"),
+                },
+            });
         }
     }
 
-    let source = open_readonly_with_busy_timeout(backup_path)?;
-    let mut dest = open_with_busy_timeout(db_path)?;
+    // Only now is the old database in the way. Use `with_suffix` (raw append)
+    // rather than `with_extension`: the WAL/SHM sidecars are `<db_path>-wal` /
+    // `-shm`, and `with_extension("db-wal")` only produces that for a path
+    // literally ending in `.db`. For any other name (e.g. `/data/station` or
+    // `my.archive.db`) it would target the wrong file and leave the real
+    // sidecars attached to the freshly restored DB, risking re-corruption — the
+    // same bug `quarantine_corrupt_database` already avoids with `with_suffix`.
+    remove_if_present(db_path);
+    remove_if_present(&with_suffix(db_path, "-wal"));
+    remove_if_present(&with_suffix(db_path, "-shm"));
 
-    let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
-    backup
-        .run_to_completion(100, std::time::Duration::from_millis(50), None)
-        .map_err(ResilienceError::Sqlite)?;
+    std::fs::rename(&tmp, db_path).map_err(|e| ResilienceError::RestoreFailed {
+        backup: backup_path.to_path_buf(),
+        detail: format!("the restored copy could not be moved into place: {e}"),
+    })?;
 
-    // Close the dest connection before enforcing WAL
-    drop(backup);
-    drop(dest);
-    drop(source);
-
-    // Enforce WAL mode on restored database
     enforce_wal_mode(db_path)?;
 
     tracing::warn!(
@@ -540,6 +590,34 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
     );
 
     Ok(())
+}
+
+/// Copy a backup into `dest`, which must not be the live database.
+///
+/// `step(-1)` inside one call rather than `run_to_completion(100, 50 ms)`, for
+/// the reason `copy_whole_database` gives: the paged form spends `N/100 × 50 ms`
+/// asleep, about 25 s on a 209 MB database, and it buys nothing here because the
+/// destination is a fresh temporary file no other connection has open, so there
+/// is no writer to yield to. That sleep was on the recovery boot path, before
+/// the listener binds.
+fn copy_backup_into(backup_path: &Path, dest_path: &Path) -> Result<(), ResilienceError> {
+    let source = open_readonly_with_busy_timeout(backup_path)?;
+    let mut dest = open_with_busy_timeout(dest_path)?;
+    let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
+    backup.step(-1).map_err(ResilienceError::Sqlite)?;
+    drop(backup);
+    drop(dest);
+    drop(source);
+    Ok(())
+}
+
+/// Remove a file if it is there, warning but not failing when it will not go.
+fn remove_if_present(path: &Path) {
+    if let Err(e) = std::fs::remove_file(path)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %path.display(), error = %e, "could not remove file during restore");
+    }
 }
 
 /// Append a raw suffix to a whole path (not just the file stem), so
