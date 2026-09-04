@@ -151,9 +151,29 @@ pub fn checkpoint_wal(db_path: &Path) -> Result<(), ResilienceError> {
     Ok(())
 }
 
-/// Run integrity check on a database.
+/// The cheap structural check: is this file a database, and are its pages
+/// well formed?
 ///
-/// Uses `PRAGMA quick_check` for speed. For full check, use `full_integrity_check`.
+/// # What this does not catch
+///
+/// `PRAGMA quick_check` is not a faster `integrity_check` with the same answer.
+/// It checks page structure and skips, in SQLite's own words, verifying "that
+/// index content matches table content", along with the UNIQUE constraints. A
+/// database whose indexes have quietly stopped agreeing with the rows they
+/// point at passes this cleanly — and a query that uses such an index silently
+/// returns *fewer rows*, with nothing to see afterwards.
+///
+/// Measured on the bundled SQLite (3.53.2) with one indexed value patched in
+/// the table b-tree and every page left valid: `quick_check` answers `ok` where
+/// `integrity_check` answers `row 10001 missing from index
+/// idx_detections_sci_first_cover`.
+///
+/// So this is the right instrument for "is the file torn" and the wrong one for
+/// any decision that overwrites or discards data. Those use
+/// [`full_integrity_check`]; see its doc for which, and why
+/// [`check_and_recover`]'s verdict on the live database deliberately still uses
+/// this one. `tests/a_corrupt_index_must_not_reach_the_backup_ring.rs` holds
+/// the whole arrangement.
 ///
 /// # Errors
 ///
@@ -231,7 +251,14 @@ pub fn full_integrity_check(db_path: &Path) -> Result<bool, ResilienceError> {
         return Ok(false);
     }
     let conn = open_readonly_with_busy_timeout(db_path)?;
-    let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    // `integrity_check(1)` rather than the unbounded form: every caller of this
+    // function wants a boolean and none reads the error list, so stopping at
+    // the first fault is the honest shape. It costs the same on a healthy
+    // database — both must read every page to conclude `ok`, measured at 7 202
+    // against 7 223 ms on 95 MB — and is far cheaper on a corrupt one, which
+    // matters now that `check_and_recover` may run this over a whole ring of
+    // backups.
+    let result: String = conn.query_row("PRAGMA integrity_check(1)", [], |row| row.get(0))?;
     Ok(result == "ok")
 }
 
@@ -249,9 +276,16 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
     // Refuse to snapshot a corrupt source — the rolling backup ring (capped at
     // `MAX_BACKUP_FILES`) would otherwise overwrite the last good backup with
     // a copy of the damaged DB, eventually leaving zero recoverable backups
-    // for `check_and_recover` to restore from. A failed quick_check is rare on
-    // a healthy station, so this is cheap defense-in-depth.
-    if !check_integrity(db_path)? {
+    // for `check_and_recover` to restore from.
+    //
+    // This used `check_integrity`, which is `quick_check`, and could not see
+    // the corruption it was defending against: an index that has stopped
+    // agreeing with its table passes `quick_check` cleanly, so five weekly
+    // snapshots later every backup in the ring was a copy of the damaged
+    // database and the paragraph above had described exactly what happened.
+    // The deep check costs 7.7 s per 95 MB against 314 ms; once a week, to keep
+    // the ring worth having, that is the cheapest thing in this file.
+    if !full_integrity_check(db_path)? {
         return Err(ResilienceError::Sqlite(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error {
                 code: rusqlite::ffi::ErrorCode::DatabaseCorrupt,
@@ -566,7 +600,16 @@ pub fn check_and_recover(
     db_path: &Path,
     backup_dir: &Path,
 ) -> Result<RecoveryResult, ResilienceError> {
-    // Check integrity
+    // Deliberately the cheap check, unlike the two decisions that overwrite
+    // data. This runs before the listener binds, and the deep check is 24×
+    // slower — 7.7 s per 95 MB here, minutes on a mature station — which is the
+    // cost `PS-17` is already about, paid again on each of several brownouts a
+    // month. A false "healthy" here is inaction rather than destruction: the
+    // station runs on a database that needs attention, the daily
+    // `full_integrity_check` in `src/maintenance.rs` catches it within the day
+    // and halts the detection writes, and the backup ring is now protected
+    // independently. That protection is what makes this trade safe, and it is
+    // why the two call sites below moved to the deep check and this one did not.
     match check_integrity(db_path) {
         Ok(true) => {
             return Ok(RecoveryResult {
@@ -603,7 +646,13 @@ pub fn check_and_recover(
 
     let mut rejected = 0_usize;
     for backup_path in &candidates {
-        match check_integrity(backup_path) {
+        // The deep check, not `quick_check`: this decides what gets written
+        // over the live database, and restoring a backup whose indexes
+        // disagree with its tables would report success while losing rows to
+        // every query that uses them. Walking the ring is at most
+        // `MAX_BACKUP_FILES` deep checks and only happens when the station is
+        // already recovering, where being right outranks being quick.
+        match full_integrity_check(backup_path) {
             Ok(true) => {}
             Ok(false) => {
                 tracing::warn!(
