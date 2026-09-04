@@ -1107,11 +1107,22 @@ re-take it rather than carrying a figure forward — the count moves with every
 commit here. Extract it with `grep "^test result:"` and sum the fields; a
 `| tail -N` will report exit 0 over a run with failures inside it.)
 
-The reconciliation branch adds thirteen gates across four files and takes the
-suite to **3 653 passed, 0 failed, 7 ignored** in **112** suites — one new
+The reconciliation branch takes the suite to **3 661 passed, 0 failed,
+7 ignored** in **112** suites — twenty-one gates across six files, and one new
 suite, `crates/birdnet-db/tests/the_species_list_honours_the_provenance_rule.rs`.
-Measured with `cargo test --workspace --all-features`, which is the same set as
-`--workspace` here: `analytics` is the only feature and it is on by default.
+`--workspace --all-features` gives the same set as `--workspace` here, because
+`analytics` is the only feature and it is on by default. (This block read
+"3 653" between the fourth fix and the sixth; re-take it rather than carrying it,
+which is what the paragraph above says and what this sentence is evidence for.)
+
+Not in that count, because it is not a cargo test:
+`installer/test/container-model-cache.sh`, run by
+`installer/test/run-ci.sh` — whose accounting step fails if a file in that
+directory is neither run nor excluded with a reason — and by CI's
+`installer unit tests` job. `shellcheck 0.10.0 --severity=warning -x` is clean
+over `docker/entrypoint.sh`, `installer/test/*.sh`, `quickstart.sh`,
+`install.sh` and `scripts/*.sh`, and `installer/build.sh --check` reports
+`install.sh` in sync with `installer/lib/*.sh`.
 
 Line counts at `ee795ed`, one method
 (`find crates src -name '*.rs' | xargs cat | wc -l`): **184 379** lines of Rust
