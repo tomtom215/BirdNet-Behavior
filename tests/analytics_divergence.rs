@@ -714,3 +714,111 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
          detection — so what a column means depends on station history"
     );
 }
+
+/// The batch endpoint must reach the analytics copy too.
+///
+/// This is the route this suite's own module doc predicts: a batch handler is
+/// exactly where the temptation to reach past the paired write is strongest,
+/// because one `with_db` transaction over N keys is faster and simpler than N
+/// paired calls — and it would compile, pass every contract test above, and
+/// desynchronise the two stores for every detection in every batch.
+///
+/// Two operations, because they diverge differently: `delete` removes a row
+/// from both stores, `review` writes a verdict the OLAP copy mirrors in its own
+/// column. A gate on one alone would leave the other free to drift.
+#[tokio::test]
+async fn the_batch_route_removes_detections_from_the_olap_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    let state = state.with_api_token(
+        birdnet_web::api_token::ApiToken::new("0123456789abcdef0123456789abcdef")
+            .expect("long enough"),
+    );
+    assert_eq!(olap_count(&state), 3, "fixture");
+
+    let body = format!(
+        r#"{{"op":"delete","detections":[
+             {{"date":"{today}","time":"06:15:00","sci_name":"Turdus merula"}},
+             {{"date":"{today}","time":"07:15:00","sci_name":"Erithacus rubecula"}}
+           ]}}"#
+    );
+    let res = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v2/detections/batch")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    header::AUTHORIZATION,
+                    "Bearer 0123456789abcdef0123456789abcdef",
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "the batch route answered");
+
+    assert_eq!(
+        olap_count(&state),
+        1,
+        "the batch handler bypassed the paired write: SQLite lost two rows the \
+         analytics copy still has, and nothing reconciles the difference"
+    );
+    assert_eq!(
+        olap_count_of(&state, "Parus major"),
+        1,
+        "and the untouched detection is still there — a handler that cleared \
+         the whole OLAP table would satisfy the count above"
+    );
+}
+
+/// A batch review must reach the analytics copy's verdict column.
+#[tokio::test]
+async fn the_batch_route_records_verdicts_in_the_olap_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    let state = state.with_api_token(
+        birdnet_web::api_token::ApiToken::new("0123456789abcdef0123456789abcdef")
+            .expect("long enough"),
+    );
+
+    let body = format!(
+        r#"{{"op":"review","status":"rejected","detections":[
+             {{"date":"{today}","time":"06:15:00","sci_name":"Turdus merula"}}
+           ]}}"#
+    );
+    let res = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v2/detections/batch")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    header::AUTHORIZATION,
+                    "Bearer 0123456789abcdef0123456789abcdef",
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "the batch route answered");
+
+    let rejected: i64 = state
+        .with_analytics(|adb| {
+            adb.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM detections WHERE review_verdict = 'rejected'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .expect("count verdicts")
+        })
+        .expect("analytics is configured");
+    assert_eq!(
+        rejected, 1,
+        "the batch review wrote the verdict to SQLite only; the analytics \
+         dashboards will keep counting a detection the operator rejected"
+    );
+}

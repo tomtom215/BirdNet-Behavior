@@ -196,6 +196,7 @@ fn collect(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     checks.push(config::check_confirmation_filter(cli, config));
     checks.push(config::check_listen_address(cli));
     checks.push(config::check_admin_exposure(cli, config));
+    checks.push(config::check_api_surface(config));
     checks.extend(tls::check_tls(cli, config));
     checks.extend(clock::check_clock(cli, config));
     checks.extend(database::check_database(cli, config));

@@ -3,12 +3,14 @@
 //! REST API, WebSocket, and HTMX page serving via axum.
 
 pub mod analytics_cache;
+pub mod api_token;
 pub mod audit;
 pub mod auth_middleware;
 pub mod base_path;
 pub mod client_ip;
 pub mod db_pool;
 pub mod metrics;
+pub mod notifier;
 pub mod rate_limit;
 pub mod routes;
 pub mod security;

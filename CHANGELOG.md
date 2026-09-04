@@ -38,6 +38,320 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a station can now be changed over its API, by something that is not a browser
+
+The `/api/v2` surface was entirely read-only. A grep for `post(`, `put(`,
+`delete(` and `patch(` across the fourteen routers nested under it returned
+nothing, against the reference implementation's fifty-four mutating routes.
+Every state change in this product was an HTMX form post that returned an HTML
+fragment, behind a same-origin check any script satisfies by setting a matching
+`Origin` header — so it was neither a security boundary nor a contract anyone
+could build on. Home Assistant and Node-RED could read a station and never act
+on one, and because our own front end was the only client, a change to fragment
+markup would silently break whatever automation existed in the wild.
+
+Seven mutating endpoints now exist, and they are the only ones under `/api/v2`
+that change anything, plus one read that lives behind the same token:
+
+| Endpoint | Does |
+|---|---|
+| `POST /api/v2/detections/review` | record `confirmed` / `rejected`, or clear a verdict |
+| `POST /api/v2/detections/lock` | protect a clip from the purge and the retention sweep |
+| `POST /api/v2/detections/unlock` | return it to the ordinary rules |
+| `POST /api/v2/detections/delete` | remove the detection |
+| `POST /api/v2/detections/batch` | apply one of those four to up to 500 detections |
+| `GET /api/v2/settings` | read every setting, with credentials removed |
+| `PUT /api/v2/settings` | change one or more settings |
+| `POST /api/v2/control/restart` | restart the station |
+
+**They are off by default, and the default is the safe one.** Set
+`BNB_API_TOKEN` — resolved from the config file then the environment, the same
+precedence `CADDY_PWD` uses — and each endpoint accepts
+`Authorization: Bearer <token>`. Leave it unset and all eight answer `404`: the
+write surface does not exist rather than existing unprotected. That is
+deliberately the *opposite* default from `CADDY_PWD`, where an unset password
+leaves `/admin` open; these endpoints never touch that bypass. A token under 32
+bytes is refused, leaving the API off, and `--doctor` now says so — a knob that
+was set and silently ignored is the failure an operator cannot see.
+
+The token is not a settings row. This project already deletes plaintext
+credential rows a previous build's settings form could write, and the page that
+renders settings is unauthenticated on a default station; a token there would be
+a credential published on a public page. Only a SHA-256 digest of it is held in
+memory, because the state it would live in derives `Debug`.
+
+The endpoints are mounted in their own router rather than the public one, which
+is asserted read-only by the gate that exists because thirteen mutating routes
+once sat there. They are exempt from the same-origin CSRF check — a cross-site
+form cannot set an `Authorization` header, which is the whole premise of the
+check — and the exemption is scoped to those paths, with a test that fails
+if it widens: a rule keyed on the header instead of the path lets a
+cross-origin page write through, and the test watches the detection actually
+disappear.
+
+Every change is written to the audit log with no user and `via=api`, because a
+token is not a person. A settings change records the key *names* only: `/admin/audit`
+renders that table, and an entry reading `birdweather_token=…` would put a
+credential on a page.
+
+**One request instead of forty.** `POST /api/v2/detections/batch` applies one
+of the four detection operations to a list of them, which is the shape triage
+actually takes: a night of false positives is rejected in one call rather than
+forty authenticated round trips.
+
+It is deliberately **not** a transaction, and says so rather than letting a
+caller infer one from the word "batch". Each detection goes through the same
+`AppState` method the single-detection endpoint calls, because those methods
+write SQLite *and* the DuckDB analytics copy — `tests/analytics_divergence.rs`
+exists because a handler that reached past the pairing for one shared
+transaction would compile, pass every contract test, and silently desynchronise
+the two stores. One transaction is not worth a second implementation of "delete
+a detection", and two new gates in that suite now cover this route: restoring
+the raw-SQLite shortcut leaves the analytics copy holding rows SQLite no longer
+has (`left: 3, right: 1`) and verdicts it never recorded.
+
+A key that matches nothing does not stop the batch either. A client working from
+a list a few seconds stale would otherwise have forty good deletions refused
+because three rows had already gone, so every detection gets its own entry in
+`results` and `applied`/`failed` sit at the top level. The response is `200`
+whenever the *request* was well-formed even if every item failed, which is a
+real hazard for a client that reads only the status code — `207` was the
+alternative and surprises the shell scripts this exists for, so the trade is
+stated in the endpoint's own documentation and in the manual instead.
+
+An unknown `op`, and `status`/`notes` sent with an `op` that is not `review`,
+are refused rather than ignored — the same rule as a misspelled settings key.
+The list is capped at 500: measured at about 0.44 ms per item on this
+workspace's debug build (100 in 39 ms, 500 in 229 ms, 1000 in 434 ms), and 500
+is also exactly one page of `/admin/audit`, which caps at 500 rows and then says
+so. Every detection actually changed gets its own audit row under the same
+action name a single call writes, because a single row reading "deleted 40
+detections" cannot answer "what happened to that recording?".
+
+**Settings are readable, with the credentials taken out.** Automation has to read
+what it is about to change, so `GET /api/v2/settings` exists — but handing a
+scripted client `email_smtp_pass` in the clear is not an acceptable price for it.
+The redaction is the support bundle's, not a second implementation: those rules
+moved out of `--support-bundle` into `birdnet-core` and both callers now use the
+one copy, because two copies of "which values are secret" is precisely the
+arrangement that once shipped an open `/admin` while the station's own diagnostic
+reported it protected. They deny in two directions — by key name, and by value
+shape for the credential inside an `apprise_url` that does not *look* like a
+secret. The by-shape rules are blunt — `ntfy://alice:hunter2@ntfy.example/topic`
+comes back as `***@ntfy.example/topic`, host and path kept, scheme and username
+not — and the gate pins that exact string rather than "the password is gone",
+because an earlier version of it asserted only the absence of the password and
+the presence of the host, both true for a reason it had not established. A
+withheld value is replaced with `***REDACTED***` rather than omitted,
+so "you may not read this" stays distinguishable from "this was never
+configured", and the response names those keys.
+
+`PUT` refuses two things rather than accepting them quietly. An unknown key: a
+misspelled `confidence_treshold` answering `200` would report a change that never
+happened. And the literal `***REDACTED***`, which is what the `GET` hands back —
+a client that reads the whole object, edits one field and writes it back would
+otherwise overwrite the real SMTP password with the placeholder. Values may be
+strings, numbers or booleans, and each goes through the settings page's own
+normalisation and only-write-what-changed rule rather than a second writer; the
+gate for that asserts the *stored* form of `"51,5"` is `51.5`, because a handler
+that stored the string it was given would also answer `200`.
+
+`POST /api/v2/control/restart` shares its systemd detection and its delayed
+self-`SIGTERM` with the admin page's button. It answers `503` outside systemd,
+where nothing would bring the station back — a cheerful `200` there would tell
+the caller the opposite of what was about to happen — and the audit entry is
+written before the decision, so a refused restart is recorded too.
+
+**Found while doing it, and fixed:** a unit test named
+`the_route_table_is_the_router` did not check the router. It compared the route
+table against itself and passed with `.put(write_settings)` deleted from
+`router()`; `axum::Router` exposes no route list to assert against. It is now
+`the_route_table_is_well_formed`, saying what it does, and
+`every_documented_route_is_mounted` sends a real request for each table entry —
+which is what noticed. `openapi.json` is checked against the same tables in both
+directions: every bearer-gated route is documented *and* documented as
+bearer-gated, and every other operation is documented as anonymous. Redocly's
+`security-defined` rule does not catch a missing per-operation `security`, and
+the document's default is anonymous, so a write documented without one would
+hand every generated client a `401` it had no way to anticipate.
+
+The audit log's action scanner reads string literals in the lines *after* a
+`crate::audit::audit` call, and its window was seven. The batch endpoint picks
+its action name with a `match`, which rustfmt expands to one arm per line, so
+the fourth literal — the one that deletes a detection — sat at offset seven and
+fell outside. The window is now ten. Widening can only ever find *more*
+literals, so it strengthens the undocumented-action assertion and cannot weaken
+it; checked at 7, 8, 9, 10, 12 and 15 across the crate, the set found is
+identical (32 actions) and no unrelated string is mistaken for one.
+
+**And a worse one, found by CI.** The restart endpoint read
+`INVOCATION_ID`/`JOURNAL_STREAM` on every request, which made its behaviour a
+property of the calling process's environment. A GitHub Actions runner sets
+`INVOCATION_ID`, so in CI the endpoint took the *signalling* branch and the test
+binary sent itself `SIGTERM` 400 ms later. It surfaced only because one test
+asserted the environment before calling; `every_documented_route_is_mounted`, in
+the same binary, `POST`s every route in the table with a valid token and had no
+such guard.
+
+Whether systemd is supervising the process is a property of how it started and
+cannot change while it runs, so it is now read once by `supervised_by_systemd()`,
+recorded on `AppState` by `app.rs`, and read from there by both restart
+handlers. A state built without it is not supervised — the safe answer, and the
+one every test wants. Splitting the decision (`restart_outcome`) and the
+rendering (`restart_fragment`) out of the signalling makes both assertable
+without a test process killing itself, which they were not before.
+
+`tests/the_restart_endpoint_cannot_signal_a_test.rs` holds the two halves no
+behavioural test can see: that `app.rs` still records the answer — delete that
+one line and every station refuses every restart for ever, while the suite stays
+green because its states are all correctly unsupervised — and that nothing reads
+those variables for itself again. The exemption in the second is scoped to
+`supervised_by_systemd`'s own body rather than to the file it lives in, because
+the original defect was four lines below it; restoring that defect exactly is
+what the gate was observed failing against.
+
+**Found while doing it, and not fixed:** two things.
+
+The audit log's vocabulary gate finds action names by scanning for the literal
+text of the `audit` call and reading string literals near it. A local helper that
+takes the action as a parameter compiles, works, and is invisible to it — which
+is how the four detection names first went undocumented, and how any future call
+site can. The calls here are written out at each site so the existing mechanism
+sees them, and the reason is stated in the source, but the gate itself still has
+the hole.
+
+The settings redaction catches a credential in a URL's *authority*
+(`ntfy://user:pass@host`) and a key whose *name* looks like a secret. It catches
+neither for a URL whose credential is a path segment — a heartbeat ping URL is
+exactly that, and `heartbeat_url` is returned in full. This is stated in the
+endpoint's own documentation and in `openapi.json` rather than left for a reader
+to discover, but it is not fixed: a rule that redacted URL paths generally would
+take `rtsp://camera.local/stream` with it, and the path is what makes an RTSP
+problem diagnosable.
+
+### Fixed — a database found corrupt was written to for months
+
+The "never write to a corrupt database" policy existed only at startup. There
+it is thorough: before the state is built, the daemon verifies the file,
+restores from the newest backup that itself verifies, and — failing that —
+quarantines it rather than opening it.
+
+The *daily* check had none of that. It ran `PRAGMA integrity_check` and, on
+failure, did two things: wrote one `error!` line, and recorded the verdict. The
+station then kept inserting detections into the corrupt file until somebody
+rebooted it, which on an unattended station is months. Compounding it, and not
+noted in the audit finding: `backup_database` refuses to snapshot a corrupt
+source, so throughout all of that the backup ring had stopped producing new
+restore points. Every hour made the recovery *worse* rather than better,
+silently.
+
+A confirmed corrupt verdict now stops the writes that record a detection —
+`insert_detection`, `insert_quarantine`, and the BirdWeather upload queue —
+through one gate, `AppState::with_ingest_db`.
+
+**Deliberately not a read-only connection.** Login sessions are rows in this
+database. `PRAGMA query_only` would honour the policy to the letter and lock the
+operator out of the admin UI that exists to tell them what is wrong, while
+silencing the notification log that records the alerts about the corruption.
+Settings, sessions, the audit log, the notification log and the maintenance-run
+record that turns the health endpoint red all keep working. `/api/v2/health`
+reports `"detection_writes": "halted"` and answers 503, and the existing
+station-health condition for a failing integrity check already alerts — and,
+after the change above, keeps saying so weekly.
+
+Only a *confirmed* corrupt verdict halts. A check that could not be completed
+is "no verdict", not a failure: a transient I/O error must not stop a working
+station from recording a season. The latch is one-way, because a file does not
+heal itself and a check that flapped would flap the station with it; recovery
+is a restart, where the startup path restores or quarantines. The log line says
+exactly that.
+
+Eight gates. The one worth naming is structural rather than behavioural: a
+fourth per-detection write added later through the ungated writer would produce
+no failure, no warning and no alert — which is what a healthy station produces.
+The gated set is therefore written down once, in the gate's own doc comment,
+and a source scan reads it back and checks every name, in every production file
+in the workspace. Put one call site back on the ungated writer and it names the
+file and the function.
+
+### Fixed — a fault was announced once and then never mentioned again
+
+Alert storms are well prevented here — a three-poll debounce, one episode per
+condition, a recovery notice, and a compile-time assertion that the debounce
+constant stays above two. The opposite failure was not prevented at all:
+**nothing re-notified an open episode**. The only thing that re-armed one was a
+process restart. A microphone that went deaf in April produced one push, and by
+August the operator had forgotten it, because the station had.
+
+An open episode is now re-announced on a widening schedule — 24 h, then 72 h,
+then one a week — carrying *"Still unresolved after N days"* and the condition's
+**current** description rather than the one it opened with. A disk that was
+91 % full in April is 99 % full in August, and the second number is the one
+worth waking up for. Four pushes in the first fortnight, then one a week: often
+enough that a four-month fault cannot be forgotten, rare enough to still be
+read.
+
+All three alert loops widen. The deadman gained a `StillBroken` transition —
+its state machine previously answered `None` for a station that was still
+silent, which is the same answer it gives for a station that is fine, so the
+loop had no way to tell them apart. Station health keeps a clock per condition
+key. Acoustic health's set of reported sources became a map of clocks.
+
+One thing the audit finding did not reach, and the tests initially did not
+either: a station that is **off** for a month comes back with several steps of
+the schedule already behind it. A counter that advanced one step per poll would
+replay all of them, one every five minutes, which is the alert storm the rest
+of this subsystem exists to prevent. Every step a gap swallowed is skipped, so
+the operator gets one reminder and the next falls a week later. The test that
+was meant to catch this asserted only that one call returned one reminder —
+true of every implementation, including the broken one — and was rewritten to
+ask what the *next* poll does.
+
+### Fixed — the "Test notifications" button tested a path the alerts do not use
+
+Two defects in one button, and the second is why the first went unnoticed.
+
+**It tested a path nothing else uses.** The handler built a fresh
+`reqwest::Client` and `POST`ed `{apprise_url}/notify` itself. That is not how
+an alert about the station is delivered: `announce::flush` locks the shared
+`apprise::Client` and calls `send_operational_alert`, which walks the native
+`ntfy://` / `discord://` / `slack://` routes delivered in-process, falls back
+to the `apprise` CLI for a config file, and puts every destination through a
+circuit breaker and a rate limiter first. None of that was under the button, so
+a green "test notification sent" said nothing about whether the deadman alert
+would leave the box — which is exactly what the alert-latching defect above
+turned out to be.
+
+**And it was disabled for the configuration most stations have.** The button
+was enabled only when `apprise_url` — an Apprise API *server* — was set, so a
+station configured with `NOTIFY_URLS` alone saw "Not configured" and a dead
+button while its alerts worked fine.
+
+The web layer now holds the *same* client the three alert loops hold, and the
+button makes the identical call `flush` makes. It is live whenever any
+destination resolved — native routes, an Apprise server, or a config file the
+CLI would be run for — and the page lists what this station resolved rather
+than what is typed into the settings form, which is a different question when a
+value was saved after the last restart. The labels come from
+`dispatch::label_for` and are credential-free by construction.
+
+An operator now gets the notifier's own answer, which is the point: *"every
+destination was skipped (1 with an open circuit, 0 rate-limited)"* is a
+different problem from a delivery that was tried and failed, and the old test
+could report neither.
+
+Eleven gates. The one that matters is the discrimination: with the circuit
+already open on the station's destination, the button must **report** that and
+not force a send. A fix that read the notifier's routes and then sent them with
+a client of its own would pass every other gate and fail that one — verified by
+making `Gate::admit_priority` admit unconditionally and watching exactly that
+gate go red. The counterpart, a station that resolved nothing at all, passes
+against both the old and the new code, which is what stops "enable it whenever
+a route resolved" from becoming "enable it always".
+
+Email and MQTT still have no test of any kind; that half is recorded as an open
+item rather than quietly folded in.
+
 ### Fixed — a notification status the database refused to store, and the alerts nothing logged
 
 Two defects, found together. The second was found by running the first one's

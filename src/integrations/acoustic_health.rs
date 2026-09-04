@@ -70,6 +70,7 @@ use birdnet_db::sound_levels::{BandObservation, BroadbandObservation, record_obs
 use birdnet_web::state::AppState;
 
 use super::announce::{Alert, Outbox};
+use super::reminder::{Reminders, still_broken};
 
 /// How often each source is sampled.
 ///
@@ -265,6 +266,19 @@ pub(super) enum FaultEvent {
         /// The source label.
         source: String,
     },
+    /// A reported fault that is still there, on the re-announcement schedule.
+    ///
+    /// `OB-16`: without this a microphone that failed in April was announced
+    /// once and never mentioned again, because `reported` was a set and a set
+    /// has nothing to say about time.
+    StillBroken {
+        /// The source label.
+        source: String,
+        /// What is still wrong with it.
+        fault: birdnet_core::audio::quality::stream_fault::StreamFault,
+        /// How long the episode has been open.
+        open_for: std::time::Duration,
+    },
 }
 
 /// Per-source episode tracking for stream faults.
@@ -280,8 +294,10 @@ pub(super) struct FaultWatch {
         String,
         (birdnet_core::audio::quality::stream_fault::StreamFault, u32),
     >,
-    /// Sources already reported, so an episode is announced once.
-    reported: std::collections::HashSet<String>,
+    /// Sources already reported, each with the clock that decides when its
+    /// episode is announced again. A set until `OB-16`, which is why nothing
+    /// but a restart ever re-armed one.
+    reported: std::collections::HashMap<String, Reminders>,
 }
 
 impl FaultWatch {
@@ -296,10 +312,22 @@ impl FaultWatch {
         source: &str,
         fault: Option<birdnet_core::audio::quality::stream_fault::StreamFault>,
     ) -> Option<FaultEvent> {
+        self.observe_at(source, fault, std::time::Instant::now())
+    }
+
+    /// The same, with the observation time supplied, so the re-announcement
+    /// schedule is testable without waiting a day. Mirrors
+    /// [`super::announce::Alert::raised_at`].
+    pub(super) fn observe_at(
+        &mut self,
+        source: &str,
+        fault: Option<birdnet_core::audio::quality::stream_fault::StreamFault>,
+        now: std::time::Instant,
+    ) -> Option<FaultEvent> {
         let Some(fault) = fault else {
             self.running.remove(source);
             // Only announce recovery to someone who was told about the fault.
-            return self.reported.remove(source).then(|| FaultEvent::Recovered {
+            return self.reported.remove(source).map(|_| FaultEvent::Recovered {
                 source: source.to_owned(),
             });
         };
@@ -315,7 +343,20 @@ impl FaultWatch {
         }
         let held = entry.1;
 
-        if held >= FAULT_TICKS_BEFORE_ALERT && self.reported.insert(source.to_owned()) {
+        if let Some(reminders) = self.reported.get_mut(source) {
+            // Already announced. Say it again only when the widening schedule
+            // says it is time, carrying the fault seen *now* — a source whose
+            // input changed character between reminders should be described as
+            // it currently is.
+            return reminders.due(now).map(|open_for| FaultEvent::StillBroken {
+                source: source.to_owned(),
+                fault,
+                open_for,
+            });
+        }
+        if held >= FAULT_TICKS_BEFORE_ALERT {
+            self.reported
+                .insert(source.to_owned(), Reminders::opened_at(now));
             return Some(FaultEvent::Onset {
                 source: source.to_owned(),
                 fault,
@@ -387,10 +428,12 @@ fn sample_once(state: &AppState, stream_dir: &Path, watch: &mut FaultWatch) -> S
 
 /// Log a fault event and queue it for delivery.
 ///
-/// One message per episode, with a recovery notice — the same discipline as
+/// One message per episode, with a recovery notice, plus a re-announcement on
+/// [`super::reminder`]'s widening schedule — the same discipline as
 /// [`super::deadman`]. A notifier that re-fired every five minutes while the
 /// operator slept would train them to ignore it, which costs more than the
-/// alert is worth.
+/// alert is worth; one that never spoke again would let a dead microphone run
+/// until the next site visit.
 ///
 /// The log is written here, once; the push is parked in the outbox and retried
 /// until it lands, keyed by source so a recovery replaces an onset that never
@@ -414,6 +457,31 @@ fn report_fault(outbox: &mut Outbox<String>, event: &FaultEvent) {
                 birdnet_integrations::apprise::NotifyType::Warning,
             )
         }
+        FaultEvent::StillBroken {
+            source,
+            fault,
+            open_for,
+        } => {
+            tracing::warn!(
+                source = %source,
+                fault = ?fault,
+                "audio source is still producing unusable audio — {}",
+                fault.label()
+            );
+            (
+                format!("Audio problem on {source} is still unresolved"),
+                still_broken(
+                    &format!(
+                        "The {source} input is running and delivering segments on time, but they \
+                         still contain {}. Detections from this source are unreliable until it is \
+                         fixed.",
+                        fault.label()
+                    ),
+                    *open_for,
+                ),
+                birdnet_integrations::apprise::NotifyType::Warning,
+            )
+        }
         FaultEvent::Recovered { source } => {
             tracing::info!(source = %source, "audio source is producing usable audio again");
             (
@@ -425,7 +493,9 @@ fn report_fault(outbox: &mut Outbox<String>, event: &FaultEvent) {
     };
 
     let source = match event {
-        FaultEvent::Onset { source, .. } | FaultEvent::Recovered { source } => source.clone(),
+        FaultEvent::Onset { source, .. }
+        | FaultEvent::Recovered { source }
+        | FaultEvent::StillBroken { source, .. } => source.clone(),
     };
     outbox.queue(source, Alert::new(title, body, kind));
 }
@@ -855,7 +925,9 @@ mod tests {
     fn a_sustained_fault_is_reported_once() {
         // Once per episode, not once per poll. A notifier that re-fired every
         // five minutes overnight is one the operator learns to skip past, and
-        // then misses the next real thing.
+        // then misses the next real thing. Twenty polls take microseconds here,
+        // so this is the first day of an episode; the widening re-announcement
+        // (`OB-16`) starts at 24 h and is gated separately below.
         let mut w = FaultWatch::default();
         let events = feed(&mut w, "RTSP_1", Some(StreamFault::DigitallySilent), 20);
         assert_eq!(
@@ -906,6 +978,85 @@ mod tests {
             assert!(w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none());
             assert!(w.observe("RTSP_1", Some(StreamFault::Saturated)).is_none());
             assert!(w.observe("RTSP_1", None).is_none());
+        }
+    }
+
+    const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+    /// Open an episode on `w` at `t0` and return the onset event.
+    fn open_episode(w: &mut FaultWatch, t0: std::time::Instant) -> Option<FaultEvent> {
+        let mut last = None;
+        for _ in 0..FAULT_TICKS_BEFORE_ALERT {
+            last = w.observe_at("RTSP_1", Some(StreamFault::DigitallySilent), t0);
+        }
+        last
+    }
+
+    #[test]
+    fn a_fault_that_lasts_is_said_again_on_a_widening_schedule() {
+        // OB-16. A microphone that failed in April was announced once and then
+        // never mentioned again, because `reported` was a `HashSet` and a set
+        // has nothing to say about time.
+        let t0 = std::time::Instant::now();
+        let mut w = FaultWatch::default();
+        assert!(matches!(
+            open_episode(&mut w, t0),
+            Some(FaultEvent::Onset { .. })
+        ));
+
+        // Nothing for the rest of the first day.
+        assert!(
+            w.observe_at("RTSP_1", Some(StreamFault::DigitallySilent), t0 + DAY / 2)
+                .is_none()
+        );
+
+        // 24 h, then 72 h, then weekly.
+        for (at, expected) in [
+            (DAY, DAY),
+            (3 * DAY, 3 * DAY),
+            (10 * DAY, 10 * DAY),
+            (17 * DAY, 17 * DAY),
+        ] {
+            match w.observe_at("RTSP_1", Some(StreamFault::DigitallySilent), t0 + at) {
+                Some(FaultEvent::StillBroken { open_for, .. }) => {
+                    assert_eq!(open_for, expected, "the age carried at {at:?}");
+                }
+                other => panic!("expected a re-announcement at {at:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_source_that_recovered_is_not_reminded_about() {
+        // The counterpart. A watch that re-announced from a stale `reported`
+        // entry would tell an operator their microphone is still dead a week
+        // after they fixed it, which is worse than saying nothing.
+        let t0 = std::time::Instant::now();
+        let mut w = FaultWatch::default();
+        open_episode(&mut w, t0);
+        assert_eq!(
+            w.observe_at("RTSP_1", None, t0 + DAY / 2),
+            Some(FaultEvent::Recovered {
+                source: "RTSP_1".into()
+            })
+        );
+        // A week later, with the source healthy, there is nothing to say.
+        assert!(w.observe_at("RTSP_1", None, t0 + 7 * DAY).is_none());
+    }
+
+    #[test]
+    fn a_reminder_describes_the_fault_seen_now() {
+        // An input that changes character — silence becoming saturation —
+        // should be re-announced as what it is, not as what it was. Nothing
+        // else in the watch would notice: the onset event has already gone.
+        let t0 = std::time::Instant::now();
+        let mut w = FaultWatch::default();
+        open_episode(&mut w, t0);
+        match w.observe_at("RTSP_1", Some(StreamFault::Saturated), t0 + DAY) {
+            Some(FaultEvent::StillBroken { fault, .. }) => {
+                assert_eq!(fault, StreamFault::Saturated);
+            }
+            other => panic!("expected a re-announcement, got {other:?}"),
         }
     }
 

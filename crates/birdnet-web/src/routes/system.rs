@@ -213,7 +213,14 @@ async fn health(
     // journal that says why. `?strict=1` is for the monitor that should page a
     // human, which is a different consumer with a different correct answer.
     let strict = flag_is_set(q.strict.as_ref());
-    let degraded = !db_ok || (strict && !daemon_running);
+    // PS-5. A station whose detection writes have been halted is degraded on
+    // every reading of the word, `?strict` or not: it is running, it is
+    // classifying, and it is recording nothing. `db_ok` is already false
+    // whenever this is true — both come from the same recorded verdict — so
+    // this does not change the status code today. It is or-ed in anyway so the
+    // two cannot drift apart if the halt ever acquires another cause.
+    let ingest_halted = state.ingest_halted();
+    let degraded = !db_ok || ingest_halted || (strict && !daemon_running);
 
     let status = if degraded {
         StatusCode::SERVICE_UNAVAILABLE
@@ -229,6 +236,7 @@ async fn health(
             "database": health.as_str(),
             "analytics": state.has_analytics(),
             "detection_daemon": if daemon_running { "running" } else { "stopped" },
+            "detection_writes": if ingest_halted { "halted" } else { "accepted" },
             "detection_silence_secs": detection_silence_secs,
             "strict": strict,
         })),

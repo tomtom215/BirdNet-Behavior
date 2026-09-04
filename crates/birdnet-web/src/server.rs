@@ -143,8 +143,19 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
     let admin = routes::admin_routes().merge(routes::pages::mutating_router());
     let admin = crate::auth_middleware::apply(admin, state.clone());
 
+    // O-1: the mutating `/api/v2` endpoints. A separate router, because
+    // `public_routes()` is asserted read-only by
+    // `tests/public_router_is_read_only.rs` and these are mutating; and
+    // because they authenticate with a bearer token rather than a cookie, so
+    // they must not inherit the admin middleware's open-when-no-password
+    // bypass. On a station with no `BNB_API_TOKEN` every one of them is 404.
+    let api_write = crate::api_token::require_bearer(routes::api_write::router(), state.clone());
+
     let request_metrics = state.metrics();
-    let router = routes::public_routes().merge(admin).with_state(state);
+    let router = routes::public_routes()
+        .merge(admin)
+        .merge(api_write)
+        .with_state(state);
 
     // Layer order is outermost-last. The CSRF guard runs after rate limiting
     // (so request floods are still throttled) and before auth, rejecting

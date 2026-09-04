@@ -128,11 +128,15 @@ Two of the prior verdicts are wrong in a way that matters:
   *permanently undetectable*, not merely double-counted.
 
 And thirty-two findings are new, of which the sharpest is **O-1**: our entire
-`/api/v2` surface is read-only. A mechanical check — every `post(`/`put(`/
-`delete(`/`patch(` across all fourteen modules mounted under `/api/v2` — returns
-nothing. Every mutation in the product is an HTMX form post returning HTML, so
-no automation, Home Assistant action or scripted admin is possible without
-scraping fragments and forging an `Origin` header.
+`/api/v2` surface was read-only. A mechanical check — every `post(`/`put(`/
+`delete(`/`patch(` across all fourteen modules mounted under `/api/v2` — returned
+nothing. **Closed**: seven bearer-authenticated write endpoints now exist — the
+four `/detections/*` writes, `POST /api/v2/detections/batch`,
+`PUT /api/v2/settings` and `POST /api/v2/control/restart` — along with
+`GET /api/v2/settings` behind the same token (item 5.14 below). Before them every mutation in the product was
+an HTMX form post returning HTML, so no automation, Home Assistant action or
+scripted admin was possible without scraping fragments and forging an `Origin`
+header.
 
 ### 1.3 What would jeopardise a year alone in a field
 
@@ -241,7 +245,7 @@ Findings marked **[FIXED]** landed on this branch; the commit is named.
 | **PS-2** | **P0** | VERIFIED | A **zero-length `birds.db` returns `quick_check = ok`**, so `check_and_recover` logs "database healthy", `migrate()` builds a fresh schema, and the station records into an empty database with five good backups beside it that rotate out in 35 days. | **[FIXED]** — `check_integrity` now requires SQLite's sixteen-byte magic before asking SQLite anything. |
 | **PS-3** | P1 | VERIFIED | Weekly `VACUUM` writes **3.0× the file size** (274.7 MB measured for 91.3 MB), stages a full copy in the `PrivateTmp` tmpfs inside `MemoryMax=1G`, and holds the write lock; a detection blocked past `busy_timeout=5000` returns `database is locked` and is logged "it is lost". | `PRAGMA incremental_vacuum` with `auto_vacuum=INCREMENTAL`, or `VACUUM INTO` on the data partition; raise `busy_timeout` for the writer. |
 | **PS-4** | P1 | VERIFIED | **82.6 KB written to the block layer per detection** against 577 B of row — measured at 12 k/52 k/202 k/502 k rows. ~1.05 GB/day at 1 000 detections/day, ~3.05 GB/day on a mature busy station. 55 % is database machinery. | Batch inserts inside one transaction; `PRAGMA wal_autocheckpoint` tuning; document the real card-wear budget. |
-| **PS-5** | P1 | READ | The daily integrity check detects corruption, logs one `error!`, and the daemon **keeps writing to the corrupt file** until someone reboots it. The "never write to a corrupt database" policy exists only at startup. | On a failed check, quarantine and restore in place, or stop the writer and go read-only with a loud health state. |
+| **PS-5** | P1 | READ | The daily integrity check detects corruption, logs one `error!`, and the daemon **keeps writing to the corrupt file** until someone reboots it. The "never write to a corrupt database" policy exists only at startup. **[FIXED — the second option, narrowed]** The remedy's second branch, with one deliberate narrowing: **not** `PRAGMA query_only`. Login sessions are rows in this database, so a read-only writer would lock the operator out of the admin UI that exists to tell them what is wrong, and would stop the notification log recording the alerts about the corruption — self-defeating on exactly the station this audit is about. The line is drawn at the writes that *record a detection event* (`insert_detection`, `insert_quarantine`, `outbound_queue::enqueue`), through `AppState::with_ingest_db`; settings, sessions, the audit log, the notification log and the maintenance-run record that makes the health endpoint go red all keep working. `/api/v2/health` reports `"detection_writes": "halted"` and answers 503. The latch is one-way — a file does not heal itself, and a flapping check would flap the station — so recovery is a restart, where the startup path restores from backup or quarantines. One thing the finding did not reach: `backup_database` refuses to snapshot a corrupt source, so during all of that the backup ring had *also* stopped producing restore points, which is why every hour of it made recovery worse rather than better. | Done; see Stages 0 and 1 landed. The first branch of the remedy — quarantine and restore *in place*, at runtime — is not done and is now unblocked by this: stopping the ingest writer is its prerequisite. |
 | **PS-6** | P1 | READ | A quarantined `birds.db.corrupt.<ts>` — total history loss — is matched by **no** doctor scan (`doctor/analytics.rs:130` matches `.duckdb.corrupt.` only, and its test asserts the SQLite name is *not* matched), no `station_health` condition, and no prune. It sits on the card for ever. **[FIXED IN PART — "Alert on a backup that fails, not only on one that stops"]** The doctor scan now matches `.db.corrupt.` as well as `.duckdb.corrupt.` (excluding `-wal`/`-shm` sidecars), and `check_quarantined_stores` raises a condition whose title distinguishes a lost detection history from a rebuilt analytics store. **The prune is still not done**: a quarantined file still sits on the card for ever, which on a 32 GB card is the difference between one bad week and a full disk. That half is item 2.11. | Remaining: prune quarantined stores on a retention schedule. |
 | **PS-7** | P1 | READ | `sync_all` appears **twice in the whole workspace**, neither in the audio path. Clips and segments are written non-atomically under their final names, so a power cut leaves truncated files the database points at for ever; and because both retention passes are database-driven, a clip whose row was lost is never deleted except by the 95 %-full purge. | Write to `.part` + `rename` + `sync_all` (the pattern `docker/entrypoint.sh:239` already uses); add an orphan-clip reconciliation pass (**S-14**). |
 | **PS-8** | P1 | READ | `--doctor`'s only disk check and its "Recordings directory" check both read `--watch-dir` first, which the shipped unit **always** sets to the tmpfs — so the preflight measures a RAM disk while `/api/v2/system/disk` correctly measures the card. | Check the data partition explicitly, and report both. |
@@ -382,13 +386,13 @@ unscraped Prometheus series is **not surfaced**.
 | **OB-3** | P2 | VERIFIED | The shipped Grafana dashboard has **`alert: []`** — not one rule — covers 8 of 21 metric families, omits `birdnet_detection_silence_seconds` (which the manual names first as the series to alert on) and 12 others, and labels a memory threshold at **half** the unit's real `MemoryHigh`. | Ship `alerting_rules.yml` with the four rules the docs already argue for; a CI gate that every name in the dashboard exists in the rendered exposition and vice-versa — which would also have caught **OB-1**. |
 | **OB-6** | P2 | VERIFIED | Three surfaces grade the same disk three ways; one returned **HTTP 503 "critical" on a 69.6 %-full filesystem** whose own JSON body said 69.6 %. Every ext4 default has a 5 % root reserve, so a monitor polling that endpoint pages the operator on a healthy station — which is how a channel gets muted before the real alert arrives. Same as **PR-14**. **[FIXED]** With **PR-14**; see there. One thing the finding did not name: an existing unit test, `disk_usage_percent_with_reserved_space`, **asserted the defect** — same fixture, `assert!(u.is_critical(), "7/252 available is critical")` — which is what made `available < total / 20` look like a choice rather than a slip. The fixture is kept and the assertion inverted. |
 | **OB-8** | P2 | VERIFIED | Home Assistant discovery advertises a `binary_sensor` with `device_class: connectivity` on `{prefix}/status`, and `publish_status()` / `publish_daily_stats()` have **zero production call sites**. Every station with discovery on registers a "Station Status" entity that is permanently unknown, so the obvious automation — *notify me when the station goes offline* — can never fire. There is also **no MQTT last-will**, and structurally cannot be: `publish()` opens a fresh connection per message at QoS 0, so no session exists for a broker to notice dying. **[FIXED — "Give the broker something to report when the station dies"]** Taken as prescribed, first option. A `PresenceSession` holds one otherwise-idle connection carrying a will (`{prefix}/status` = `offline`, retained, `QoS` 1) with a 30 s keepalive, so the broker publishes the will ~45 s after a station stops answering; the station publishes `online` retained on connect and `offline` retained on a clean stop. `publish_daily_stats` is fed from the same loop. Two things the finding did not reach: discovery configs were published **unretained**, so Home Assistant lost all four entities whenever *it* restarted — they are now always retained regardless of `MQTT_RETAIN`; and `MqttConfig::qos` had **zero readers** in the workspace while `publisher.rs`'s own module doc claimed a `QoS`-1-to-0 downgrade "after logging a warning" that did not exist, so `QoS` 1 now genuinely waits for a PUBACK. | Done; see Stage 2 landed. |
-| **OB-9** | P2 | READ | "Test notifications" tests a code path the alerts do not use, and is **disabled for the configuration most stations have**: its button is enabled only when `apprise_url` (an Apprise *API server*) is set, so a station using native `ntfy://`/`discord://` routes sees "Not configured" and a disabled button while its alerts work fine. When enabled it builds a fresh client and POSTs directly, exercising neither the native routes, nor the CLI fallback, nor the circuit breaker, nor the rate limiter — i.e. none of the machinery that decides whether **OB-5**'s deadman alert leaves the box. No test at all for email or MQTT. | Route the test through the same handle the alert paths hold; enable it whenever any route resolved. |
+| **OB-9** | P2 | READ | "Test notifications" tests a code path the alerts do not use, and is **disabled for the configuration most stations have**: its button is enabled only when `apprise_url` (an Apprise *API server*) is set, so a station using native `ntfy://`/`discord://` routes sees "Not configured" and a disabled button while its alerts work fine. When enabled it builds a fresh client and POSTs directly, exercising neither the native routes, nor the CLI fallback, nor the circuit breaker, nor the rate limiter — i.e. none of the machinery that decides whether **OB-5**'s deadman alert leaves the box. No test at all for email or MQTT. **[FIXED — the push half; "Test notifications" now sends what an alert sends]** Taken as prescribed. `src/app.rs` hands the *same* `Arc<Mutex<apprise::Client>>` the three alert loops hold to the web layer as `birdnet_web::notifier::Notifier`, and the handler locks it and calls `send_operational_alert` — the identical call `announce::flush` makes, so the native routes, the `apprise` CLI fallback, the circuit breaker and the operational rate-limit bypass are all under the button. The button is enabled on *any* resolved destination, and the page names them (the labels are credential-free by construction). **The email and MQTT half is not done**: those channels still have no test of any kind, and this item did not add one. | Push done; see Stage 2 landed. Email and MQTT tests remain — 2.20. |
 | **OB-10** | P2 | VERIFIED | The support bundle publishes `HEARTBEAT_URL` and `APPRISE_URL` **verbatim** — both bearer credentials carried as a path segment, which the name-based and `user:pass@`-based redactors both miss — in a file the tool invites the operator to attach to a bug report. Partly **[FIXED]**: the heartbeat URL is no longer logged at `INFO`, so it is out of `journal.log`; the `config.redacted` half remains. | Redact by shape: for any `scheme://host/rest`, keep scheme and host. Extend the existing `every_secret_key_is_redacted_from_the_support_bundle` gate. |
 | **OB-11** | P2 | VERIFIED | Chaining the email redactor after the URL redactor **mangles every RTSP URL with a dotted host** into `***@host/path`, destroying the scheme and the username the first redactor deliberately kept. On an RTSP station that is the most diagnostic setting in the file. The gate is green only because its fixture hostname (`cam`) has no dot — the one hostname shape that never occurs in the field. | Apply the email redactor only when the value contains no `://`; re-point the fixture at `cam.example.com` and an IP. |
 | **NL-1** | P1 | VERIFIED | **`NotifStatus::Queued` could not be stored, and had a production writer.** Migration 4 created `notification_log.status` with `CHECK(status IN ('sent','failed','skipped'))`. `Queued` was added to the enum later, documented at length — "accepted by this station but not yet delivered", parked for replay, deliberately distinct from `Failed` because *"an operator looking at a wall of red needs to know which one they are looking at before they go and climb a hill"* — and written in production by `daemon/processor.rs`'s store-and-forward path. Every insert was rejected by the CHECK, and `record_notification` discards the error at `debug!`, which the default filter drops. So a field station on flaky LTE produced exactly the bursts that comment describes and the Notification Center showed none of them: the distinction it draws was between one status that existed and one that never did. Found by running the code, not reading it — a new gate for the alert path asserted a `queued` row and got none. **[FIXED]** Migration 41 rebuilds the table (SQLite cannot alter a CHECK in place), and `every_notification_status_is_accepted_by_the_schema` enumerates `ALL_NOTIF_STATUSES` so a sixth status without a migration fails in CI. | Done. |
 | **OB-13** | P2 | READ | The three alerting loops never call `record_notification`, so the notification log contains **every robin and no deadman**. An operator who suspects they missed an alert has no record to consult. **[FIXED — "Log the alerts about the station, not only the birds"]** One writer, in `announce::flush`, because 2.2 had already made that the single delivery path for all three loops — the finding's "shared `notify()`" now exists. `channel = "alert"` as prescribed. `NotifStatus::Queued` for an undelivered alert rather than `Failed`, and one row per episode rather than one per retry: the retry runs every poll, so a notifier down for a day would otherwise write ~288 rows for one alert. | Done; see Stage 2 landed and **NL-1**. |
 | **OB-15** | P2 | VERIFIED | Measured **~11 520 baseline INFO lines/day/source** (two per analysed file at the default 15 s segment, 5 760 files/day; 236 B/line measured) — **1.6–2.8 GB/year**. No journald `Storage=` or `SystemMaxUse` is configured anywhere, so on a default Raspberry Pi OS without `/var/log/journal` the journal is **volatile**: ~30–45 days on a 2 GB Pi and **zero across a reboot**, so every watchdog bounce, power cut and update erases the evidence of what caused it. | A journald drop-in with the unit; demote the two per-file INFO lines to DEBUG — they are 92 % of the volume and carry nothing a counter would not carry better. Takes the year to ~150 MB. |
-| **OB-16** | P2 | READ | Alert storms are genuinely well prevented — three-poll debounce, per-episode latch, recovery notices, a compile-time assertion that the debounce constant stays > 2. But **nothing ever re-notifies an open episode**: the only thing that re-arms one is a process restart. The posture is *one push, ever, per fault, over a channel never tested end to end (**OB-9**) that may drop it silently (**OB-5**)*. For a fault lasting four months that is the wrong side of the trade. | Re-notify open episodes with exponential spacing (24 h, 72 h, then weekly, capped), carrying "still broken, N days". |
+| **OB-16** | P2 | READ | Alert storms are genuinely well prevented — three-poll debounce, per-episode latch, recovery notices, a compile-time assertion that the debounce constant stays > 2. But **nothing ever re-notifies an open episode**: the only thing that re-arms one is a process restart. The posture is *one push, ever, per fault, over a channel never tested end to end (**OB-9**) that may drop it silently (**OB-5**)*. For a fault lasting four months that is the wrong side of the trade. **[FIXED — an open episode is said again on a widening schedule]** Taken as prescribed: 24 h, 72 h, then one a week, in `src/integrations/reminder.rs`, carrying "Still unresolved after N days" and the condition's *current* body rather than the one the episode opened with. All three loops re-announce — the deadman through a new `Transition::StillBroken` arm (the shipped code returned `Transition::None`, which is indistinguishable from a healthy station), station health through a pure `due_reminders`, acoustic health through `FaultWatch::reported` becoming a map of clocks rather than a `HashSet`. One thing the finding did not reach: a station that is **off** for a month comes back with several steps of the schedule behind it, and a counter advancing one step per call replays them at one per five-minute poll. `Reminders::due` skips every step the gap swallowed. | Done; see Stage 2 landed. |
 
 **Diagnosability from 40 km.** Genuinely strong for four of five microphone
 failure modes: the `/station` Health tab gives per-source chips, a rolling 24 h
@@ -445,7 +449,7 @@ already what the bundle embeds).
 
 | ID | Sev | How | Finding | Fix |
 |---|---|---|---|---|
-| **O-1** | P1 | VERIFIED | **The `/api/v2` surface is 100 % read-only.** No mutating route method in any of the fourteen modules mounted under it. Every mutation is an HTMX form post returning HTML behind a same-origin check — trivially satisfied by any script that sets a matching `Origin`, and therefore not a contract anyone can build on. Upstream has 54 mutating routes. Consequences: no supported automation; Home Assistant and Node-RED can read but never act; and our own front end is the only client, so a fragment-markup change silently breaks whatever automation exists in the wild. | Port the ~8 with operational weight, reusing the handlers already behind the HTMX routes: review, lock, delete, batch, `GET` and `PUT /settings`, `POST /control/restart`. Bearer auth, and the CSRF guard must **skip** bearer-authenticated requests — a header token is not attachable by a cross-site form, which is the entire premise of the check. |
+| **O-1** | P1 | VERIFIED | **[FIXED]** Seven bearer-authenticated write endpoints now exist — `POST /api/v2/detections/{review,lock,unlock,delete}`, `POST /api/v2/detections/batch`, `PUT /api/v2/settings` and `POST /api/v2/control/restart` — plus `GET /api/v2/settings` behind the same token, in their own router, so `public_routes()` stays read-only, and behind `api_token::require_bearer`, so they never inherit the admin middleware's open-when-no-password bypass: a station with no `BNB_API_TOKEN` answers **404** on all seven. That is the opposite default from `CADDY_PWD`, deliberately. The CSRF guard skips exactly these paths, because a cross-site form cannot set an `Authorization` header. The settings read applies the support bundle's own redaction rules, moved into `birdnet-core` so there is one copy rather than two; the settings write reuses the admin page's `build_settings_items`, so the normalisation and the only-write-what-changed rule are the page's; the restart shares its systemd detection with the admin button. The batch endpoint applies one of the four detection operations to up to 500 keys, and is deliberately **not** a transaction: each key takes the same paired `AppState` write the single endpoint takes, because a shared `with_db` transaction would reach past the SQLite/DuckDB pairing that `tests/analytics_divergence.rs` exists to protect — two new gates there cover this route, and restoring the shortcut leaves the analytics copy holding rows SQLite no longer has. All eight of the remedy's endpoints are now in place. The original finding: **The `/api/v2` surface is 100 % read-only.** No mutating route method in any of the fourteen modules mounted under it. Every mutation is an HTMX form post returning HTML behind a same-origin check — trivially satisfied by any script that sets a matching `Origin`, and therefore not a contract anyone can build on. Upstream has 54 mutating routes. Consequences: no supported automation; Home Assistant and Node-RED can read but never act; and our own front end is the only client, so a fragment-markup change silently breaks whatever automation exists in the wild. | Port the ~8 with operational weight, reusing the handlers already behind the HTMX routes: review, lock, delete, batch, `GET` and `PUT /settings`, `POST /control/restart`. Bearer auth, and the CSRF guard must **skip** bearer-authenticated requests — a header token is not attachable by a cross-site form, which is the entire premise of the check. |
 | **O-2** | P1 | VERIFIED | **The audit log is never written.** Table, store, admin page and pruner all exist; `AuditLog::record` has **zero production callers** — every call site is inside its own `#[cfg(test)]` block. `/admin/audit` is permanently empty, which on a shared station reads as "nothing happened". The repo already caught half of this: the *pruner* was wired after being found to have no caller; the writer never was. **[FIXED — "Record who changed what"]** The helper as prescribed, called from every surface listed plus two the finding did not name: species filters and audio sources, which are what decide whether a season's gap is a real absence. 24 actions in all. One change to the prescription: settings values are not "redacted through the existing secret list", they are **never recorded at all** — only the names of the changed keys. `rtsp_url` is the reason a key-name allow-list would not have been enough: an RTSP URL carries `user:pass@` in its authority while its key name says nothing about a secret, which is the same trap `redact_url_credentials` exists for. A save that changed nothing writes no row, because the form posts every field every time. Destructive actions are recorded *before* the work, since a process that does not survive a restore has no "after" to write from. | Done; see Stage 2 landed. |
 | **O-3** | P1 | VERIFIED | **The admin log viewer streams a channel nothing publishes to.** `src/main.rs:146-148` installs exactly two layers and no `tracing_subscriber::Layer` implementation exists anywhere in the crate; `LogBroadcaster::new()` is called **three separate times** in `state.rs`, so they are three distinct channels anyway. `GET /admin/system/logs` replays an empty backlog and then emits keep-alives for ever. On Docker, where `journalctl` is unavailable to the user, this page is the whole story. **[FIXED — "Show the operator what the station logged"]** Taken as prescribed, with one correction to this row: **"three separate times ... so they are three distinct channels anyway" is wrong.** The three `LogBroadcaster::new()` calls are in three *alternative* constructors — `AppState::new`, `new_with_analytics`, `from_connection` — and a run builds exactly one `AppState` (`src/app.rs:184`). There was one channel, and nothing published to it; the count was never the defect. `LogCapture` now implements `Layer`, is installed as a third `.with(...)`, and the broadcaster is built in `main` *before* the subscriber and handed to the state, because the layer has to exist at `init()` time and the state does not exist yet. `errors.jsonl` sits beside the database, takes ERROR and WARN only, is capped at 1 MB, and is a bundle member. URL credentials are stripped in the layer rather than per call site, because that file travels in the support bundle. | Done; see Stage 2 landed. |
 | **O-4** | P1 | VERIFIED | **No private mode.** `grep` for `private_mode`/`public_access` returns zero hits. The dashboard, the whole API, the live audio stream and both WebSockets are unauthenticated with no configuration that changes it. On a station reachable through a tunnel or a port forward, anyone with the URL sees the full detection history and can **open a live microphone feed of somebody's garden**. `--listen 127.0.0.1` is not a substitute; that is what the tunnel connects to. The privacy argument used to decline Sentry applies here with more force, and this is on by default. | `BIRDNET_PRIVATE_MODE` plus `BIRDNET_PUBLIC_ACCESS=live_audio,share`, applied by moving `public_routes()` inside `auth_middleware::apply` with an exempt set. Gate both directions, including that an operator-minted share link keeps working. |
@@ -532,11 +536,13 @@ because nobody applied.
 
 **All five P0s are closed**, each with a gate observed failing against the code
 it was written for and the failure text recorded in the commit message. The
-workspace suite went from 3 425 passing at the branch point to **3 567** with
-seven Stage 2 items landed (3 465 at the end of Stage 1); the installer suite
-from eight tests to eleven (`installer/test/*.sh`, excluding the `run-ci.sh`
-harness), all passing. Every figure here is from a run, not a running total —
-this sentence said "eight to ten" until the count was taken again.
+workspace suite went from 3 425 passing at the branch point to **3 570** where
+that work merged (`f33eb9e`), with nine Stage 2 items landed (3 465 at the end
+of Stage 1); the installer suite from eight tests to eleven
+(`installer/test/*.sh`, excluding the `run-ci.sh` harness), all passing. Every
+figure here is from a run, not a running total — this sentence said "eight to
+ten" until the count was taken again, and said "3 567 with seven Stage 2 items"
+until both were taken again at the merge commit.
 
 | # | Item | Finding | Gate, observed failing first |
 |---|---|---|---|
@@ -552,6 +558,7 @@ this sentence said "eight to ten" until the count was taken again.
 | 1.7 | The model is verified, and a partial download resumed | **LC-2** (P0) | "the truncated model was skipped — this is the defect", for the model and for the labels. The counterpart — a verified model must not be re-downloaded — passes either way. |
 | 1.8 | A reachable red on `/api/v2/health` | **OB-4**, **PR-5** | Against the previous status logic, `left: 200, right: 503`; against a version making every request strict, `left: 503, right: 200` — the change that would put field stations into a Docker restart loop. |
 | — | Two pruners with no production caller | **NT-18** | Both tables shrink; with the `reviewed = 1` condition removed the counterpart fails on the surviving row. |
+| 1.9 | A database that failed its check stops taking detections | **PS-5** | 8 gates. Against the shipped write path — `with_ingest_db` never refusing, which is what `with_db` did — `a_halted_station_records_nothing` fails `left: 1, right: 0` and the discrimination test fails its own vacuity guard (*"the ingest gate must be closed, or this test is vacuous"*), while the control `a_healthy_station_records_the_detection` stays green. Against the shipped *maintenance* behaviour — the verdict changing nothing — two of the three decision gates fail and `nothing_else_halts_the_detection_writes` stays green, which is the counterpart that keeps a transient `Err` from stopping a station. The third mutation is the structural one: putting a single per-detection write back on `with_db` is invisible to every behavioural gate and is caught only by the source scan, by name and file — *"src/daemon/processor.rs: enqueue"*. |
 
 > **What 1.5 does not do.** The floor catches a clock that is too *early*, which
 > is the common case on RTC-less hardware. A clock far in the **future** — the
@@ -566,7 +573,6 @@ this sentence said "eight to ten" until the count was taken again.
 
 | # | Item | Finding | Why here |
 |---|---|---|---|
-| 1.9 | Never write to a database known to be corrupt | **PS-5** | Detected daily, then written to anyway until someone reboots. |
 | 1.10 | Atomic clip and segment writes | **PS-7**, **S-4** | `.part` + `rename` + `sync_all`; the pattern is already in `entrypoint.sh`. |
 | 1.11 | The monotonic-versus-wall step detector | **NT-4**, remaining half | The forward-jump direction 1.5 does not cover. |
 | 1.12 | Raise `doctor/model.rs` off its one-megabyte threshold | **LC-2**, remaining half | The installer no longer *produces* a truncated model; the doctor still cannot *detect* one that arrived another way. |
@@ -587,24 +593,25 @@ person 40 km away learns that it stopped.
 | 2.5 | A runtime clock-sync condition and gauge | **OB-14** | 9 gates. The first mutation — deleting `check_clock` from `evaluate`, which is the shipped state — **killed nothing**: every gate tested the policy function and none tested that anything called it. That hole is the finding inside the finding, and it is why `evaluate` now runs a named `CHECKS` table that `every_documented_condition_is_actually_checked` reads. Re-run against the table, the same mutation fails that gate alone. Five more killed: `Unknown` treated as broken (every Docker station would alert about its host's clock), the two clock faults given different episode keys, the plausibility floor skipped, the probe answering `Unsynced` when it cannot tell, and a tri-state gauge rendering `0` instead of being absent. |
 | 2.6 | Wire a `tracing` layer to the log broadcaster; persist ERROR/WARN to a file the bundle carries | **O-3** | 12 gates. 6 mutations killed: no layer publishing (the shipped state — 5 fail, `left: 0, right: 1`), `with_log_broadcaster` made a no-op, which is the shipped *arrangement* (only the wiring gate fails, every layer gate stays green — so it tests the wiring, not the layer), fields dropped from the message, every level persisted (`only ERROR and WARN persist: {"level":"INFO",…}`), no URL redaction (`cannot reach rtsp://admin:hunter2@cam.local/stream`), and an uncapped file. |
 | 2.7 | Write the audit log | **O-2** | 15 gates, 6 mutations killed. `audit()` writing nothing — the shipped state — fails 6 and leaves the two "must record nothing" gates green. The rest each fail one: login recording `fail` whatever happened, a settings save recording every submission, metadata carrying values (`rtsp_url`'s `user:pass@` is the fixture), a failure row not naming who was tried, and an action name with `threshold` misspelled, which the source-scanning vocabulary gate catches — the same lesson as 2.5's `CHECKS` table: a set expressed only as scattered call sites cannot be checked. |
+| 2.8 | Re-notify an open episode on a widening schedule | **OB-16** | 15 gates across the schedule and all three alert loops. The shipped posture — `Reminders::due` never firing, which is exactly *one push, ever, per fault* — fails 7 of them and leaves every counterpart green: a condition that cleared, a condition still earning its debounce, a recovered source, and "nothing is due in the first day" all pass either way. The deadman's half is separate, because the decision lives in its pure `transition`: restoring the shipped arm gives `left: None, right: StillBroken { silent_hours: 26 }`. A third mutation — a loop that keeps the import and stops rendering the reminder — is caught only by the source-scanning gate (*"station_health imports the schedule but never renders a reminder"*), which is 2.5's lesson applied: none of the behavioural gates can see a loop that stops calling the policy. The fourth is the one that found a real defect rather than confirming a fix: the first version advanced the counter one step per call, so a station suspended for a month replayed every swallowed step, one per five-minute poll. The test that was supposed to catch it asserted only that one call returned one reminder — true of any implementation — and was green for a reason that had nothing to do with what it claimed. It now asks what the *next* poll does. |
 | 2.10 | One disk denominator, everywhere | **OB-6**, **PR-14** | 6 gates. 4 mutations killed. The shipped predicates fail the reproduction (`a disk 76.6 % full is not critical (was: 9167069184 available < 13527658700 = total/20)`) and the swept property gate; `is_critical` returning `false` unconditionally fails the two full-disk counterparts, so the fix is not "stop reporting"; a `CRITICAL_PERCENT` of 98 fails the purge-threshold coherence gate. The fourth is the instructive one: making `used_percent()` divide by `total` **as well** leaves the property gate green — two surfaces agreeing on the same wrong number — and is caught only by the reproduction, which pins the answer to what `df` says. |
 | 2.14 | Publish the MQTT status topic that discovery already advertises, with a last will | **OB-8** | 9 gates against a broker stub that *decodes* CONNECT and PUBLISH rather than matching bytes. 8 mutations killed, each by one gate: no will (`"a will was registered"`), a will on the stateless publish too (only the discrimination test fails), the will written after the username — a well-formed packet that publishes the password to whatever the broker reads as the topic — `ping` that writes and never reads (`"an unanswered ping must fail"`), `config.qos` ignored, which is the shipped code (`"an unacknowledged QoS 1 publish must not report success"`, while the `QoS` 0 counterpart stays green — the fix is not "every publish now blocks"), the retain override ignored, also shipped (`"override honoured"`), `shutdown` that disconnects without saying offline (`left: 1, right: 2`), and an unretained will. |
 | 2.15 | Operational alerts reach the notification log | **OB-13**, and **NL-1** found while doing it | 11 gates, 6 mutations killed. `flush` recording nothing — the shipped state — fails 4 and leaves `no_notifier_configured_writes_nothing` green. Then: `Queued` written as `Failed`, a row per retry instead of one per episode, placeholder species columns, a loop sending inline again (the pre-2.2 shape, caught by the source scanner), and the CHECK left un-widened — `"the schema rejects the `queued` status this code writes: CHECK constraint failed"`. That last one is **NL-1**: the two behavioural gates were written, run, and failed against the shipped schema before the migration existed. |
+| 2.16 | "Test notifications" sends what an alert sends, and is live whenever a destination resolved | **OB-9** | 11 gates — 5 behavioural against a local destination through the real admin router, 6 at the renderer. Against the shipped handler four of the five behavioural gates fail: the button reaches nothing (`left: 0, right: 1` requests at the station's own destination), it renders `class="btn-disabled" … disabled` for a station whose native route is working, an open circuit is reported as *"Apprise URL not configured"*, and the module holds two HTTP clients (`left: 2, right: 1`). The fifth — no notifier at all still yields a disabled button and an error, not a send — passes **both** ways, which is what stops the fix being "always enabled". The discrimination is the open circuit: with `Gate::admit_priority` returning `Send` unconditionally the other four stay green and that one fails, so this is a test that goes through the shared guards rather than one that merely reaches the destination. |
 
 **Still to do:**
 
 | # | Item | Finding |
 |---|---|---|
 | 2.4 | Undervoltage and throttling telemetry | **NP-5** |
-| 2.8 | Re-notify open episodes on a widening schedule | **OB-16** |
 | 2.9 | Alert rules and a dashboard/exposition agreement gate | **OB-3** |
 | 2.11 | Prune quarantined stores on a retention schedule (detection and the condition landed with 2.3) | **PS-6**, remaining half |
 | 2.12 | Read-only-remount detection | **PS-9** |
 | 2.13 | `--doctor` measures the card, not the RAM disk | **PS-8** |
-| 2.16 | "Test notifications" tests the path the alerts use | **OB-9** |
-| 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10**, **OB-11** |
+| 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10**, **OB-11** — the rules moved to `birdnet_core::config::redact` with 5.14, so this is now a one-place fix rather than two. The mangling is measured: `redact_email_local_part(&redact_url_credentials(v))` turns `rtsp://cam:secret@camera.local/stream` into `***@camera.local/stream`, losing the scheme and the username, because the second rule reads the first's output as an email address. `GET /api/v2/settings` discloses the same shape and its gate pins that exact string, so a fix here will show up there |
 | 2.18 | journald drop-in; demote the two per-file INFO lines | **OB-15**, **PS-19**, **O-9** — the volatile-journal half of **OB-15** is now partly covered by `errors.jsonl` (2.6), which survives the reboot; the 1.6–2.8 GB/year of INFO is not |
 | 2.19 | `GET /admin/doctor.json` and a support bundle over HTTP | §3.6 |
+| 2.20 | A "Test notifications" path for email and MQTT | **OB-9**, remaining half |
 
 
 ### Stage 3 — a station survives its own maintenance and its own operator
@@ -668,7 +675,7 @@ person 40 km away learns that it stopped.
 | 5.11 | Rollback after a bad update; a smoke test that runs `--doctor` | **NT-12** |
 | 5.12 | Cellular/CGNAT documentation, then a safe-mode boot | **NT-17** |
 | 5.13 | Correct the systemd documentation and gate it against the unit | **NT-8** |
-| 5.14 | Mutating endpoints under `/api/v2` with bearer auth | **O-1** |
+| 5.14 | Mutating endpoints under `/api/v2` with bearer auth — **done**: the four `/detections/*` writes, `POST /detections/batch`, `GET`/`PUT /settings` and `POST /control/restart` | **O-1** |
 | 5.15 | Configurable frame ancestors | **O-5** |
 | 5.16 | OpenAPI path-set equality | **O-8** |
 | 5.17 | HSTS and COOP, correctly conditioned | **O-10** |
@@ -763,34 +770,154 @@ plan.
 
 ### Where the numbers come from
 
-`cargo test --workspace` on x86_64 in a container: **3 567 passed, 0 failed,
-106 suites**. `cargo fmt --check --all` and
-`cargo clippy --workspace --all-targets -- -D warnings` both exit 0.
+`cargo test --workspace` on x86_64 in a container: **3 640 passed, 0 failed,
+7 ignored, 111 suites**. `cargo fmt --check --all` and
+`cargo clippy --workspace --all-targets -- -D warnings` both exit 0. The same
+command at the branch point `f33eb9e` reports 3 570 in 106 suites, so the
+difference is this pass's own gates and nothing else. (This block read "3 567,
+106 suites" and then "3 618" as the pass went on; re-take it rather than
+carrying a figure forward — the count moves with every commit here.)
 
 Two gates in the template's list are **not** verified here, and should not be
-claimed:
+claimed as local results:
 
-* `cargo deny check` — `cargo-deny` is not installed in this environment.
-* `birdnet-behavior --doctor` exits **1**, not 0, in this container: 8 passed,
-  9 warnings, 0 errors. Exit 1 means "worst severity is Warn"
-  (`doctor/render.rs::summarise`), and the warnings are all
-  unconfigured-environment ones — no admin password, no audio source, no
-  HTTPS, no offsite backup, under 1 GiB free. Reaching 0 needs a configured
-  station, which this container is not.
+* `cargo deny check` — `cargo-deny` is still not installed in this
+  environment, and neither are `cargo-audit`, `cargo-machete`,
+  `cargo-llvm-cov` or `cross`. The supply-chain question is nevertheless
+  **answered, by CI rather than here**: the `Supply chain` workflow run on the
+  merge commit `f33eb9e`
+  ([33778570446](https://github.com/tomtom215/BirdNet-Behavior/actions/runs/33778570446))
+  reports all six jobs green — `cargo-deny`, `cargo-audit`, `cargo-machete`,
+  `Spelling (typos)`, `shellcheck (bootstrap scripts)` and `installer unit
+  tests`. Read that from the run, not from this sentence, before relying on
+  it; and note it is a statement about `f33eb9e`, not about whatever is in
+  your working tree.
+
+  A container fact worth carrying: `typos`, `shellcheck` and `cargo-mutants`
+  are **not** in the base image either. They were installed by hand in this
+  session (`cargo install typos-cli`, `cargo install cargo-mutants`, and the
+  0.10.0 release tarball for `shellcheck`) and all three gates then pass
+  locally — `typos` 1.50.1 against `./.typos.toml`, `shellcheck` 0.10.0 at
+  `--severity=warning -x` over the 26 files CI checks, `cargo-mutants` 27.1.0.
+  A previous handoff recorded them as "installed here"; they are not, and the
+  next session will have to install them again before it can claim them.
+* `birdnet-behavior --doctor` exits **1**, not 0, in a container. Exit 1 means
+  "worst severity is Warn" (`doctor/render.rs::summarise`), and every warning
+  is an unconfigured-environment one. **Still true**, and still not to be
+  ticked off without a configured station.
+
+  The *counts* move with the container **and** with the checks themselves, so
+  do not carry them forward. This block has recorded, in order: "8 passed, 9
+  warnings"; then 9 passed, 8 warnings; then — after 5.14 added an `API write
+  surface` check — 10 passed, 8 warnings; and now **9 passed, 9 warnings, 0
+  errors, 5 skipped**, because `Disk space` flipped back to WARN when the
+  container dropped to 4 GiB free during a build. It warned under 1 GiB on the
+  first container, passed at 13 GiB, and warns again at 4 GiB — the same check,
+  the same binary, three answers. The nine warnings now are: configuration
+  file, station location, species occurrence filter, admin authentication,
+  HTTPS, database directory, offsite backup, audio source, disk space. Re-run
+  it rather than quoting this list; that is the point of the paragraph.
 
 ### What to do first
 
-1. **2.16 (`OB-9`) — make "Test notifications" use the path the alerts use.**
-   The highest-value remaining item, and not because it is a feature: it is the
-   gate that would have caught **OB-5** and **OB-8** before this pass did. It
-   currently builds a fresh client and POSTs directly, exercising neither the
-   native routes, nor the CLI fallback, nor the circuit breaker, nor the rate
-   limiter — and its button is disabled for the configuration most stations
-   have.
-2. **2.8 (`OB-16`) — re-notify open episodes on a widening schedule.** The
-   posture after 2.2 is still *one delivered push, ever, per fault*. For a
-   fault lasting four months that is the wrong side of the trade.
-3. Then the rest of Stage 2 in any order; nothing in it blocks anything else.
+The two items this section used to name — **2.16 (`OB-9`)** and **2.8
+(`OB-16`)** — are both done, so the head of the queue is open. Nothing left in
+Stage 2 orders itself the way those two did, and nothing in it blocks anything
+else, so any of them can be taken next; §4's **Stage 2 — still to do** table is
+the list, and it is not repeated here because two copies of a work queue is how
+one of them goes stale.
+
+Two of those items are now cheaper than the table suggests, for the same
+reason. **2.17** (redact by shape in the support bundle) is a one-place fix
+since 5.14 moved the rules into `birdnet_core::config::redact`, and the
+mangling it names is measured rather than suspected — see that row. **2.20** (a
+test path for email and MQTT) is the one item still holding `OB-9` open.
+
+Stage 1 still has 1.10 (`PS-7`/`S-4`), 1.11 (`NT-4` remaining half) and 1.12
+(`LC-2` remaining half) outstanding. Those are about *keeping the data*, which
+outranks everything in Stage 2 on a station that is already failing — take them
+first if you have no other reason to choose. 1.9 (`PS-5`) is done, in its
+narrowed form; the runtime quarantine-and-restore branch of that remedy is not,
+and stopping the ingest writer was its prerequisite.
+
+**5.14 (`O-1`)** is done — all eight endpoints the remedy named. Anyone adding
+a ninth should read `crates/birdnet-web/src/routes/api_write.rs` first: the two
+route tables at the top are what the CSRF guard, the router-mount gate and the
+two `openapi.json` gates all read, so an endpoint added without an entry there
+is invisible to every one of them. They are also the reason a gate named
+`the_route_table_is_the_router` had to be renamed: it did not check the router,
+and passed with a route unmounted. The second thing to read is
+`tests/analytics_divergence.rs`, which is why the batch endpoint loops over the
+paired `AppState` writes instead of taking one transaction.
+
+### A gap in the mutation matrix — a proposal, not a change
+
+`.github/workflows/mutation.yml` has 25 rows covering **ten** file patterns:
+
+| Package | Pattern |
+|---|---|
+| `birdnet-core` | `config/validate.rs`, `inference/model.rs`, `audio/extraction/{extractor,convert}.rs`, `civil.rs` |
+| `birdnet-db` | `migration.rs`, `sqlite/queries/detections/*.rs` |
+| `birdnet-behavior` | `src/daemon/*.rs`, `src/capture/{schedule,supervisor}.rs` |
+
+**Nothing in `crates/birdnet-integrations/` or `src/integrations/` is mutated**,
+and both hold delivery decisions the covered code branches on.
+
+This is not hypothetical. In the previous pass a mutant survived at
+`src/daemon/processor.rs`'s `if !e.nothing_was_attempted()` call site. The
+tempting fix was to move the decision onto `AppriseError` as a positively-named
+predicate — which would have made the mutant **vanish by relocating it into an
+unmutated file**, turning the gate green while testing less. It was rejected and
+the test written instead, but the hazard is structural: `apprise.rs`'s
+`drop_reason` and `nothing_was_attempted`, and `announce.rs`'s `Outbox::settle`
+and `flush`, are exactly the shape of decision a survivor can be hidden in.
+
+Counts, from `cargo mutants --list --package P --file F | wc -l`
+(cargo-mutants 27.1.0), not estimated:
+
+| Package | File | Mutants |
+|---|---|---|
+| `birdnet-integrations` | `src/apprise.rs` | **93** |
+| `birdnet-integrations` | `src/dispatch/limit.rs` | 36 |
+| `birdnet-integrations` | `src/dispatch/parse.rs` | 23 |
+| `birdnet-integrations` | `src/dispatch/plan.rs` | 17 |
+| `birdnet-behavior` | `src/integrations/station_health.rs` | 65 |
+| `birdnet-behavior` | `src/integrations/acoustic_health.rs` | 55 |
+| `birdnet-behavior` | `src/integrations/reminder.rs` | 31 |
+| `birdnet-behavior` | `src/integrations/announce.rs` | 21 |
+| `birdnet-behavior` | `src/integrations/deadman.rs` | 16 |
+
+**The proposal, for the maintainer to accept or decline** — six new jobs is real
+CI time, and that is not a call to make unilaterally:
+
+* `crates/birdnet-integrations/src/apprise.rs`, **4 shards**. It is a library
+  row: `birdnet-integrations` depends on `birdnet-db` (bundled `rusqlite`) but
+  **not** on `birdnet-behavioral`, so no DuckDB and no ONNX are linked, and it
+  belongs in the same cost class as `db/migration.rs` — which the matrix sizes
+  at ~28 mutants a shard. 93 over 4 measures **24 24 24 21**
+  (`--list --shard k/4`, every shard non-empty); the empty-tail guard the CI
+  config check enforces is `3 × 24 = 72 < 93`. Three shards also works and
+  measures **31 31 31**, slightly above the documented slice size.
+* `src/integrations/announce.rs`, **2 shards**. A binary-crate row, so every
+  mutant relinks DuckDB and ONNX and the matrix sizes those at ~13 a shard. 21
+  over 2 measures **11 10**; guard `1 × 11 = 11 < 21`.
+
+Both need their paths adding to the workflow's two `paths:` filters as well, or
+a PR touching them will not run the job.
+
+Two things not measured here, and neither should be guessed at:
+
+* **Per-mutant wall-clock for these files.** No sweep was run — the container's
+  disk does not have room for `target/mutants` beside a 16 GB `target/`. The
+  shard counts above come from the matrix's own documented slice sizes, not from
+  a timing of these files.
+* **The first run is not a measurement.** The workflow's own comment on
+  `civil.rs` records that a *new* matrix label has no cache and restores an
+  arbitrary other row's `target/mutants/`; eight rows once spent 45 minutes each
+  learning that. Expect one bad run after adding these, and size nothing from it.
+
+The remaining files in the table are listed so the next person does not have to
+re-derive them, not as part of the proposal.
 
 ### Two claims in this document that were found to be wrong
 

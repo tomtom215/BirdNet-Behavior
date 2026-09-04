@@ -1,10 +1,12 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. All endpoints are read-only `GET`s unless noted.
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the four [write endpoints](#changing-a-station), which need a token.
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
-> **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every `/api/v2/*` endpoint, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+> **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+>
+> The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
 > **OpenAPI:** a complete, machine-readable **OpenAPI 3.1** description of this API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients.
 
@@ -21,6 +23,7 @@ curl http://localhost:8502/api/v2/health
   "database": "ok",
   "analytics": true,
   "detection_daemon": "running",
+  "detection_writes": "accepted",
   "detection_silence_secs": 142
 }
 ```
@@ -182,3 +185,214 @@ page:
 ## Export
 
 CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
+
+## Changing a station
+
+Seven endpoints, and they are the only ones in `/api/v2` that change anything.
+They exist so Home Assistant, Node-RED or a shell script can *act* on a station
+rather than only read it — before them, every state change in the product was an
+HTMX form post returning HTML, which is not a contract anyone can build on.
+
+An eighth, `GET /api/v2/settings`, is a *read* that lives behind the same token:
+a station's configuration is not public even with its credentials taken out.
+
+### Turning them on
+
+They are **off** by default. Set `BNB_API_TOKEN` in the config file or the
+environment and restart:
+
+```bash
+openssl rand -base64 48
+```
+
+Until you do, all eight answer `404`: the write surface does not exist rather
+than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
+where an unset password leaves `/admin` *open* — an unset token leaves the write
+API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
+with a warning in the log and a warning from `birdnet-behavior --doctor`.
+
+### Identifying a detection
+
+There is no surrogate id. A detection is identified the way the database
+identifies it — by date, time and scientific name:
+
+```json
+{ "date": "2026-09-03", "time": "06:12:44", "sci_name": "Erithacus rubecula" }
+```
+
+A malformed key is `400`; a well-formed key matching no row is `404`.
+
+### The endpoints
+
+| Method | Path | Does |
+|---|---|---|
+| `POST` | `/api/v2/detections/review` | Record `confirmed` / `rejected`, or clear a verdict by omitting `status` |
+| `POST` | `/api/v2/detections/lock` | Protect the clip from the disk-full purge and retention sweep |
+| `POST` | `/api/v2/detections/unlock` | Return it to the ordinary purge rules |
+| `POST` | `/api/v2/detections/delete` | Remove the detection row |
+| `POST` | `/api/v2/detections/batch` | Apply one of the four above to up to 500 detections |
+| `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
+| `PUT` | `/api/v2/settings` | Change one or more settings |
+| `POST` | `/api/v2/control/restart` | Restart the station |
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/review \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula","status":"confirmed"}'
+```
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/lock \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula"}'
+```
+
+### Batches
+
+One round trip instead of forty, for the case that actually comes up: triaging
+a night's false positives.
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/batch \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"op":"review","status":"rejected","detections":[
+        {"date":"2026-09-03","time":"02:14:07","sci_name":"Strix aluco"},
+        {"date":"2026-09-03","time":"02:19:51","sci_name":"Strix aluco"}
+      ]}'
+```
+
+```json
+{
+  "op": "review",
+  "requested": 2,
+  "applied": 2,
+  "failed": 0,
+  "results": [
+    { "detection": "2026-09-03 02:14:07 Strix aluco", "applied": true },
+    { "detection": "2026-09-03 02:19:51 Strix aluco", "applied": true }
+  ]
+}
+```
+
+`op` is one of `review`, `lock`, `unlock`, `delete`, and applies to every
+detection in the list. `status` and `notes` belong to `review` and are refused
+with any other `op`: a caller who sent `{"op":"delete","status":"confirmed"}`
+meant something by both fields, and silently dropping one would not say which.
+At most 500
+detections per request; a longer list is refused before anything is written
+rather than quietly truncated.
+
+> **Read `failed`, not just the status code.** The response is `200` whenever
+> the *request* was well-formed, even if every item failed. A key that matches
+> nothing does not stop the batch — a client working from a list a few seconds
+> stale would otherwise have forty good deletions refused because three rows had
+> already gone — so each detection gets its own entry in `results`, and
+> `applied` and `failed` are at the top level so you need not walk the array.
+
+This is **not** a transaction. Each detection takes the same path as the single-detection endpoint, which is what keeps the SQLite
+store and the analytics copy in step; a shared transaction would mean a second
+implementation of "delete a detection" and is not worth that. If the process
+dies mid-batch, the detections already applied stay applied.
+
+Every detection actually changed is written to the audit log individually, under
+the same action name a single-detection call uses — so "what happened to that
+recording?" is still answerable afterwards. A full batch therefore writes 500
+rows, which is exactly what the admin audit view shows in one page before it
+says "Showing the most recent 500 matches". That, and the cost of the writes
+themselves, is what the limit bounds.
+
+### Settings
+
+`GET /api/v2/settings` returns every persisted setting, plus `redacted` (the
+keys whose value was withheld) and `writable_keys` (what `PUT` will accept):
+
+```bash
+curl http://localhost:8502/api/v2/settings \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+```json
+{
+  "settings": { "confidence_threshold": "0.7", "email_smtp_pass": "***REDACTED***" },
+  "redacted": ["email_smtp_pass"],
+  "writable_keys": ["alsa_device", "rtsp_url", "…"]
+}
+```
+
+Credentials are removed two ways: by key name (`email_smtp_pass`,
+`birdweather_token`) and by value shape, which catches the credential inside a
+URL — `apprise_url` does not *look* like a secret and routinely carries one.
+A withheld value is **replaced** rather than omitted, so "you may not read this"
+stays distinguishable from "this was never configured".
+
+The by-shape rules are the support bundle's, applied in the same order, and they
+are blunt: `ntfy://alice:hunter2@ntfy.example/topic` comes back as
+`***@ntfy.example/topic` — the host and path survive, the scheme and username do
+not. Treat a by-shape redaction as "the host, roughly", not as a value you can
+edit and send back.
+
+> One gap, stated rather than left to be discovered: a URL whose *path segment*
+> is the credential — a heartbeat ping URL, for instance — matches neither rule
+> and is returned in full.
+
+`PUT` is a partial update; send only the keys you mean to change. Values may be
+strings, numbers or booleans, and each goes through the same normalisation the
+settings page uses, so `"51,5"` is stored as `51.5`:
+
+```bash
+curl -X PUT http://localhost:8502/api/v2/settings \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"confidence_threshold": 0.75, "station_name": "Back Garden"}'
+```
+
+```json
+{ "updated": 2, "keys": ["confidence_threshold", "station_name"] }
+```
+
+A key already holding the value you sent is not rewritten and is not counted in
+`updated`. Two things are refused with `400` rather than accepted quietly:
+
+- **An unknown key.** A misspelled `confidence_treshold` answering `200` would
+  tell you a change had landed when none had.
+- **The literal `***REDACTED***`.** It is what `GET` hands back for a secret, so
+  a client that reads the whole object, edits one field and writes it back would
+  otherwise overwrite the station's real SMTP password with the placeholder.
+
+Settings that the running process reads at startup need a restart to take
+effect, the same as when they are changed from `/admin/settings`.
+
+### Restarting
+
+```bash
+curl -X POST http://localhost:8502/api/v2/control/restart \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+The process sends itself `SIGTERM` after a short delay — long enough for the
+response to reach you — and systemd's `Restart=always` starts a fresh instance.
+Outside systemd — a bare `cargo run`, a container without an init — nothing
+would bring the station back, so the endpoint answers `503` and signals nothing
+rather than reporting a restart that would in fact be a shutdown.
+
+### The audit log
+
+Every change is written to the [audit log](../admin/system.md) as
+`detection.review` / `detection.lock` / `detection.unlock` / `detection.delete`
+/ `settings.update` / `system.restart`, with no user and `via=api` in the
+metadata — a batch writes one such row per detection it changed, under the same
+names — a token is not a person, and the log says so rather than inventing
+one. A settings change records the key *names* only: an entry reading
+`birdweather_token=…` would put a credential on the page that renders the log.
+The restart entry is written before the decision, so a refused restart is
+recorded too.
+
+### Cross-origin calls
+
+These endpoints are exempt from the dashboard's same-origin (CSRF) check,
+because a cross-site *form* cannot set an `Authorization` header — that is the
+whole premise of the check, so it has nothing to protect here. The exemption is
+scoped to these paths; every other write in the product still has it.

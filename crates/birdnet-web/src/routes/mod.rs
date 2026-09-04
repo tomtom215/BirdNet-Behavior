@@ -5,6 +5,7 @@
 
 pub mod admin;
 pub mod analytics;
+pub mod api_write;
 pub mod auth_pages;
 pub mod detections;
 pub mod export;

@@ -275,7 +275,10 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
 
 /// Reject state-changing requests whose `Origin`/`Referer` is cross-site.
 pub async fn csrf_guard_middleware(req: Request, next: Next) -> Response {
-    if is_state_changing(req.method()) && !is_same_origin(req.headers()) {
+    if is_state_changing(req.method())
+        && !is_bearer_api_request(req.uri().path(), req.headers())
+        && !is_same_origin(req.headers())
+    {
         return (
             StatusCode::FORBIDDEN,
             "Cross-origin request blocked by CSRF protection. \
@@ -284,6 +287,34 @@ pub async fn csrf_guard_middleware(req: Request, next: Next) -> Response {
             .into_response();
     }
     next.run(req).await
+}
+
+/// Whether this is a bearer-authenticated call to the mutating API (`O-1`).
+///
+/// The CSRF check exists because a cross-site *form* can be made to submit to
+/// this station with the victim's cookies attached. A form cannot set an
+/// `Authorization` header — that is the entire premise — and a cross-origin
+/// `fetch` that tries to set one triggers a preflight the CORS layer refuses
+/// unless the operator has allow-listed the origin. So a request carrying a
+/// bearer credential has nothing for this guard to protect, and applying the
+/// same-origin rule to it would make the API unusable from anything that is
+/// not a browser on the station's own hostname — which is every automation it
+/// exists for.
+///
+/// Deliberately scoped to the paths in
+/// [`crate::routes::api_write::WRITE_ROUTES`] rather than to "any request with
+/// an `Authorization` header". The cookie-authenticated `/admin` surface must
+/// keep its CSRF protection whatever headers a request carries, and a skip
+/// keyed only on the header would hand it away.
+///
+/// Presence of the header is enough here: whether the credential is *correct*
+/// is [`crate::api_token::require_bearer`]'s question, and it is asked after
+/// this one. A forged header buys a caller nothing but a 401.
+fn is_bearer_api_request(path: &str, headers: &HeaderMap) -> bool {
+    crate::routes::api_write::is_write_route(path)
+        && header_str(headers, &header::AUTHORIZATION)
+            .and_then(crate::api_token::bearer_credential)
+            .is_some()
 }
 
 fn is_state_changing(method: &Method) -> bool {

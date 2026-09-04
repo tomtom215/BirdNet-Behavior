@@ -194,7 +194,22 @@ async fn serve(
     // keep-alives for ever.
     let state = state
         .with_config_path(cli.config.clone())
-        .with_log_broadcaster(log_broadcaster);
+        .with_log_broadcaster(log_broadcaster)
+        // Decided once, here, and carried on the state: whether anything would
+        // bring this process back if it exited. Both restart handlers read it
+        // rather than the environment, so a test binary that inherited
+        // `INVOCATION_ID` cannot reach the branch that signals.
+        .with_supervised_by_systemd(
+            birdnet_web::routes::admin::system_controls::supervised_by_systemd(),
+        );
+
+    // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
+    // token. Absent one — the default — those routes answer 404 and this
+    // station has no write API at all.
+    let state = match helpers::build_api_token(config.as_ref()) {
+        Some(token) => state.with_api_token(token),
+        None => state,
+    };
 
     // O-14 / O-15 wire-flip prep: rotate the seed admin row's password
     // hash to a real argon2id digest of CADDY_PWD on first start (and
@@ -268,13 +283,17 @@ async fn serve(
     // Teed capture sources publish their live PCM here, and `/stream` reads it
     // instead of opening the audio device a second time — which an ALSA
     // microphone refuses with `Device or resource busy` while it is being
-    // recorded. Must be the last builder call before the state is cloned.
+    // recorded.
     let live_audio = birdnet_core::audio::capture::new_live_audio_hub();
     let state = state.with_live_audio(std::sync::Arc::clone(&live_audio));
 
     // Captured before `state` is moved into the web server below; used by the
     // per-species recording-cap maintenance task.
     let recordings_dir_for_maintenance = state.recording_dir();
+    // Likewise, and for PS-5: the maintenance loop that finds the corruption is
+    // the one that has to stop the detection writes, so it holds a clone of the
+    // latch the ingest path reads.
+    let ingest_halt_for_maintenance = state.ingest_halt_flag();
 
     let broadcast = state.detection_broadcast();
 
@@ -292,6 +311,18 @@ async fn serve(
     let mqtt_presence_client = mqtt_client.clone();
     let notification_filter = integrations::create_notification_filter(&cli, config.as_ref());
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
+
+    // OB-9: give the web layer the *same* notifier the alert loops deliver
+    // through, so "Test notifications" exercises the native routes, the
+    // `apprise` CLI fallback, the circuit breaker and the rate limiter — the
+    // machinery that decides whether a deadman alert leaves the box — instead
+    // of a fresh client of its own. The last builder call: `AppState`'s
+    // builders abort if the state has already been cloned, and the loops below
+    // clone it.
+    let state = match apprise_client.clone() {
+        Some(handle) => state.with_notifier(birdnet_web::notifier::Notifier::attach(handle).await),
+        None => state,
+    };
 
     // Start weekly report scheduler (if Apprise is configured).
     if let Some(ref apprise) = apprise_client {
@@ -614,6 +645,7 @@ async fn serve(
         species_cap,
         clip_retention_days,
         offsite,
+        ingest_halt_for_maintenance,
     );
 
     // Bind every listener the plan calls for before telling systemd we are up:

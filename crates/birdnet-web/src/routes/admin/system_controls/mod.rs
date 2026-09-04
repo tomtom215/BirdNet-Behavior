@@ -9,8 +9,15 @@
 
 mod backup;
 mod data;
-mod service;
+pub(crate) mod service;
 mod update;
+
+/// Whether systemd is supervising this process.
+///
+/// Re-exported so the application can record it on its
+/// [`crate::state::AppState`] at startup without the whole `service` module
+/// becoming public. See [`service::supervised_by_systemd`].
+pub use service::supervised_by_systemd;
 
 use axum::{Router, routing};
 

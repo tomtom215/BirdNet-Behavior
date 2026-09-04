@@ -283,6 +283,10 @@ const ACTIONS: &[&str] = &[
     "data.database.restore",
     "data.detections.clear",
     "data.recordings.clear",
+    "detection.delete",
+    "detection.lock",
+    "detection.review",
+    "detection.unlock",
     "rule.create",
     "rule.delete",
     "rule.import",
@@ -332,7 +336,17 @@ fn actions_in_source() -> std::collections::BTreeSet<String> {
                 // its own line in a multi-line call and inline in a short one,
                 // and a scanner that only understood one of those silently
                 // missed four call sites when this was first written.
-                for window_line in lines.iter().skip(i).take(7) {
+                //
+                // Ten rather than seven because the action can itself be a
+                // `match`, which rustfmt expands to one arm per line: the batch
+                // endpoint's call in `routes/api_write.rs` puts four literals
+                // at offsets 4..7, and at seven the last of them — the one that
+                // deletes a detection — fell outside. Widening only ever finds
+                // *more* literals, so it can strengthen the undocumented-action
+                // assertion and never weaken it; checked at 7, 8, 9, 10, 12 and
+                // 15 over the whole crate, the set found is identical (32) and
+                // no unrelated string is mistaken for an action.
+                for window_line in lines.iter().skip(i).take(10) {
                     for literal in window_line.split('"').skip(1).step_by(2) {
                         // Only dotted lowercase names. Targets are variables or
                         // `format!`s and metadata is `key=value`, so neither can

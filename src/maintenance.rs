@@ -39,6 +39,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use birdnet_integrations::offsite::OffsiteConfig;
@@ -87,6 +88,7 @@ pub fn spawn_database_maintenance(
     species_cap: u32,
     clip_retention_days: u32,
     offsite: Option<Arc<OffsiteConfig>>,
+    ingest_halted: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
         run_loop(
@@ -96,6 +98,7 @@ pub fn spawn_database_maintenance(
             species_cap,
             clip_retention_days,
             offsite,
+            &ingest_halted,
         )
         .await;
     });
@@ -108,6 +111,7 @@ async fn run_loop(
     species_cap: u32,
     clip_retention_days: u32,
     offsite: Option<Arc<OffsiteConfig>>,
+    ingest_halted: &AtomicBool,
 ) {
     tracing::info!(
         db_path = %db_path.display(),
@@ -148,6 +152,7 @@ async fn run_loop(
         .await
         {
             let verdict = run_integrity_check(&db_path).await;
+            halt_ingest_if_corrupt(verdict, ingest_halted);
             mark_ran_with(&db_path, JOB_INTEGRITY_CHECK, &mut attempted, verdict).await;
         }
         if due(
@@ -563,6 +568,46 @@ async fn mark_ran_with(
              process restarts before the next successful write"
         ),
         Err(e) => tracing::warn!(error = %e, job, "recording the maintenance run panicked"),
+    }
+}
+
+/// Stop the per-detection writes when the check says the database is corrupt.
+///
+/// # Why this exists (`PS-5`)
+///
+/// The check detected corruption, logged one `error!`, and changed nothing:
+/// the daemon kept inserting into the corrupt file until somebody rebooted it,
+/// and `backup_database` — which refuses to snapshot a corrupt source — had
+/// quietly stopped producing new restore points, so every hour of that made
+/// recovery worse rather than better. The "never write to a corrupt database"
+/// policy existed only at `app.rs`'s startup path.
+///
+/// Only `Some(false)` halts. `None` is *"no verdict"* — the check could not be
+/// completed, or the database is not there yet — and it is the false-positive
+/// route that matters: a transient I/O error must not stop a working station
+/// from recording a season. `Some(true)` obviously does not halt.
+///
+/// **The latch is one-way.** A file does not heal itself, and a check that
+/// flapped would flap the station with it; recovery is a restart, where
+/// `resilience::check_and_recover` restores from backup or quarantines. The
+/// log line says so.
+///
+/// What is *not* halted is as deliberate as what is: see
+/// [`AppState::with_ingest_db`](birdnet_web::state::AppState::with_ingest_db).
+fn halt_ingest_if_corrupt(verdict: Option<bool>, ingest_halted: &AtomicBool) {
+    if verdict != Some(false) {
+        return;
+    }
+    // `swap` rather than `store`, so the loud line is written once per process
+    // rather than once a day for as long as the station stays up.
+    if !ingest_halted.swap(true, Ordering::Relaxed) {
+        tracing::error!(
+            "detection writes are now HALTED — this station will not record \
+             further detections until it is restarted. Restart it: the startup \
+             path restores from the newest verifying backup, or quarantines the \
+             file and starts fresh. The web UI, the alerts and the notification \
+             log keep working so you can see this."
+        );
     }
 }
 
@@ -2138,5 +2183,53 @@ mod tests {
         run_recording_species_cap(&db, &recs, 0).await; // unlimited
         assert!(recs.join("keep-1.wav").exists());
         assert!(recs.join("keep-2.wav").exists());
+    }
+
+    /// `PS-5`: only a *confirmed corrupt* verdict halts the detection writes.
+    #[test]
+    fn a_failed_integrity_check_halts_the_detection_writes() {
+        let halted = AtomicBool::new(false);
+        super::halt_ingest_if_corrupt(Some(false), &halted);
+        assert!(
+            halted.load(Ordering::Relaxed),
+            "a database that failed its integrity check must stop taking \
+             detections; the shipped code logged one error! and kept inserting"
+        );
+    }
+
+    /// The counterparts, and the reason the latch is not simply "the check ran".
+    ///
+    /// `None` is *"no verdict"* — the check could not be completed, or there is
+    /// no database yet. That is the false-positive route that matters: a
+    /// transient I/O error must not stop a working station from recording a
+    /// season. `Some(true)` obviously must not halt either.
+    #[test]
+    fn nothing_else_halts_the_detection_writes() {
+        for verdict in [None, Some(true)] {
+            let halted = AtomicBool::new(false);
+            super::halt_ingest_if_corrupt(verdict, &halted);
+            assert!(
+                !halted.load(Ordering::Relaxed),
+                "verdict {verdict:?} must not stop a station recording"
+            );
+        }
+    }
+
+    /// The latch is one-way, and set once.
+    ///
+    /// A file does not heal itself, and a check that flapped would flap the
+    /// station with it; recovery is a restart, where `check_and_recover`
+    /// restores from backup or quarantines. Re-running the daily check must
+    /// therefore neither clear the latch nor write the loud line again.
+    #[test]
+    fn the_halt_latches() {
+        let halted = AtomicBool::new(false);
+        super::halt_ingest_if_corrupt(Some(false), &halted);
+        super::halt_ingest_if_corrupt(Some(true), &halted);
+        assert!(
+            halted.load(Ordering::Relaxed),
+            "a later passing check must not silently resume writing to a file \
+             that failed one"
+        );
     }
 }

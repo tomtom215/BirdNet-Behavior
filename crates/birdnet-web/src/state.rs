@@ -9,7 +9,9 @@ use birdnet_core::audio::capture::{CaptureStatusHandle, LiveAudioHubHandle};
 use birdnet_core::i18n::I18nManager;
 
 use crate::analytics_cache::AnalyticsCache;
+use crate::api_token::ApiToken;
 use crate::db_pool::ReaderPool;
+use crate::notifier::Notifier;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -118,6 +120,32 @@ struct AppStateInner {
     /// `None` in web-only mode and tooling, where `/stream` falls back to
     /// opening the device itself.
     live_audio: Option<LiveAudioHubHandle>,
+    /// The notifier the station's alert loops deliver through, so
+    /// `/admin/notifications/test` can exercise that path rather than a
+    /// parallel one of its own (`OB-9`). `None` when nothing is configured to
+    /// notify, and in tooling.
+    notifier: Option<Notifier>,
+    /// Set when the database has been found corrupt while the station is
+    /// running, at which point the per-detection writes stop. See
+    /// [`AppState::with_ingest_db`]. An `Arc<AtomicBool>` for the same reason
+    /// `detection_daemon_running` is one: the maintenance loop that discovers
+    /// the corruption holds only a clone, taken before the state was shared.
+    ingest_halted: Arc<AtomicBool>,
+    /// The station's API token, if one is configured. `None` — the default —
+    /// means the bearer-authenticated mutating API is not enabled at all; see
+    /// [`crate::api_token`].
+    api_token: Option<ApiToken>,
+    /// Whether systemd is supervising this process, decided once at startup.
+    ///
+    /// `false` — the default — means a restart request is refused, because
+    /// nothing would bring the station back. It is here rather than read from
+    /// the environment at the point of use because it is a property of how the
+    /// process was started and cannot change while it runs, and because a
+    /// per-request environment read made the restart endpoint behave
+    /// differently under a test binary that inherited `INVOCATION_ID` — which
+    /// a GitHub Actions runner sets. See
+    /// `routes::admin::system_controls::service::supervised_by_systemd`.
+    supervised_by_systemd: bool,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -192,6 +220,10 @@ impl AppState {
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
                 live_audio: None,
+                notifier: None,
+                ingest_halted: Arc::new(AtomicBool::new(false)),
+                api_token: None,
+                supervised_by_systemd: false,
             }),
         })
     }
@@ -381,6 +413,10 @@ impl AppState {
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
                 live_audio: None,
+                notifier: None,
+                ingest_halted: Arc::new(AtomicBool::new(false)),
+                api_token: None,
+                supervised_by_systemd: false,
             }),
         })
     }
@@ -414,6 +450,10 @@ impl AppState {
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
                 live_audio: None,
+                notifier: None,
+                ingest_halted: Arc::new(AtomicBool::new(false)),
+                api_token: None,
+                supervised_by_systemd: false,
             }),
         }
     }
@@ -524,6 +564,51 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_live_audio");
         Self {
             inner: rebuild_inner(inner, |s| s.live_audio = Some(hub)),
+        }
+    }
+
+    /// Attach the notifier the alert loops deliver through, so the admin
+    /// "Test notifications" button exercises the path an alert about the
+    /// station actually takes — native routes, `apprise` CLI fallback, circuit
+    /// breaker and rate limiter included.
+    ///
+    /// Without this the test page has no handle and falls back to saying so;
+    /// with a *fresh* client, as it used to build, a green test would say
+    /// nothing about whether a deadman alert leaves the box (`OB-9`).
+    #[must_use]
+    pub fn with_notifier(self, notifier: Notifier) -> Self {
+        let inner = unwrap_inner(self.inner, "with_notifier");
+        Self {
+            inner: rebuild_inner(inner, |s| s.notifier = Some(notifier)),
+        }
+    }
+
+    /// Enable the bearer-authenticated mutating API with `token`.
+    ///
+    /// Not calling this leaves the API off, which is the default and the
+    /// behaviour of every station that has not been given a `BNB_API_TOKEN`.
+    /// The token is resolved by `helpers::auth::resolve_api_token` — the
+    /// configuration file first, then the environment, the same precedence
+    /// `CADDY_PWD` uses.
+    #[must_use]
+    pub fn with_api_token(self, token: ApiToken) -> Self {
+        let inner = unwrap_inner(self.inner, "with_api_token");
+        Self {
+            inner: rebuild_inner(inner, |s| s.api_token = Some(token)),
+        }
+    }
+
+    /// Record whether systemd is supervising this process.
+    ///
+    /// Called by the application with
+    /// `routes::admin::system_controls::service::supervised_by_systemd()`. Not
+    /// calling it leaves the answer `false`, which is what a test station and
+    /// any tooling should get: a restart is then refused rather than signalled.
+    #[must_use]
+    pub fn with_supervised_by_systemd(self, supervised: bool) -> Self {
+        let inner = unwrap_inner(self.inner, "with_supervised_by_systemd");
+        Self {
+            inner: rebuild_inner(inner, |s| s.supervised_by_systemd = supervised),
         }
     }
 
@@ -951,6 +1036,92 @@ impl AppState {
     #[must_use]
     pub fn live_audio(&self) -> Option<LiveAudioHubHandle> {
         self.inner.live_audio.clone()
+    }
+
+    /// The notifier the alert loops deliver through, if the station has one.
+    ///
+    /// `None` means no destination resolved at startup — not that the operator
+    /// left a settings field blank, which is the distinction the test page got
+    /// wrong before `OB-9`.
+    #[must_use]
+    pub fn notifier(&self) -> Option<&Notifier> {
+        self.inner.notifier.as_ref()
+    }
+
+    /// The station's API token, if the mutating API is enabled.
+    #[must_use]
+    pub fn api_token(&self) -> Option<&ApiToken> {
+        self.inner.api_token.as_ref()
+    }
+
+    /// Whether systemd is supervising this process, as recorded at startup.
+    ///
+    /// Read by both restart handlers. `false` on any state built without
+    /// [`Self::with_supervised_by_systemd`], so a test station refuses a
+    /// restart instead of signalling itself.
+    #[must_use]
+    pub fn supervised_by_systemd(&self) -> bool {
+        self.inner.supervised_by_systemd
+    }
+
+    /// Shared handle to the ingest-halt latch, for the maintenance loop to set
+    /// when the daily integrity check confirms the database is corrupt.
+    ///
+    /// The same shape as [`AppState::detection_status_flag`], and for the same
+    /// reason: the loop that flips it is spawned after the state has been
+    /// cloned, so it cannot use a builder.
+    #[must_use]
+    pub fn ingest_halt_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.inner.ingest_halted)
+    }
+
+    /// Whether the per-detection writes are currently refused.
+    #[must_use]
+    pub fn ingest_halted(&self) -> bool {
+        self.inner.ingest_halted.load(Ordering::Relaxed)
+    }
+
+    /// Run `f` against the writer **unless** the database is known to be
+    /// corrupt, in which case nothing runs and this returns `None`.
+    ///
+    /// # What "ingest" means here, and why it is not every write (`PS-5`)
+    ///
+    /// The daily `PRAGMA integrity_check` used to detect corruption, log one
+    /// `error!`, and change nothing: the daemon kept inserting into the corrupt
+    /// file until somebody rebooted it, and `backup_database` — which refuses
+    /// to snapshot a corrupt source — had quietly stopped producing new restore
+    /// points, so every hour of that made recovery worse rather than better.
+    /// The "never write to a corrupt database" policy existed only at startup.
+    ///
+    /// This is the runtime half of it, and it is deliberately **not** a
+    /// `PRAGMA query_only` on the whole connection. Login sessions are rows in
+    /// this database: making it read-only would lock the operator out of the
+    /// admin UI that exists to tell them what is wrong, and would stop the
+    /// notification log recording the very alerts about the corruption. The
+    /// line is drawn at the writes that *record a detection event* — the
+    /// high-volume ones, the ones that grow the file, and the ones whose loss
+    /// is the point of noticing the corruption at all:
+    ///
+    /// * `sqlite::insert_detection`
+    /// * `sqlite::insert_quarantine`
+    /// * `outbound_queue::enqueue`
+    ///
+    /// Everything else — settings, sessions, the audit log, the notification
+    /// log, the maintenance-run record that makes the health endpoint go red —
+    /// keeps working, because a station that cannot say what is wrong with it
+    /// is the failure this whole subsystem exists to prevent.
+    ///
+    /// That list is not a comment to be trusted: `the_ingest_writes_are_gated`
+    /// reads it back out of the source, for the reason 2.5 records — a set
+    /// expressed only as scattered call sites cannot be checked.
+    pub fn with_ingest_db<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce(&Connection) -> T,
+    {
+        if self.ingest_halted() {
+            return None;
+        }
+        Some(self.with_db(f))
     }
 
     /// The shared short-TTL cache for heavy-analytics fragments.
