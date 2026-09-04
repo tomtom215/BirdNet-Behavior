@@ -20,7 +20,7 @@ mod trend;
 use duckdb::Connection;
 
 use crate::error::TimeSeriesError;
-use crate::queries::ENSURE_TS_VIEW;
+
 use crate::types::results::WindowRow;
 
 /// Executes time-series analytics queries against a DuckDB connection.
@@ -35,14 +35,41 @@ pub struct TimeSeriesDb<'conn> {
 impl<'conn> TimeSeriesDb<'conn> {
     /// Create a new executor borrowing `conn`.
     ///
-    /// Ensures the `detections_ts` view is present before any query runs.
+    /// Checks that the `detections_ts` view is present before any query runs.
+    ///
+    /// # Why this checks rather than creates
+    ///
+    /// This used to run `CREATE OR REPLACE VIEW` with [`crate::queries::ENSURE_TS_VIEW`]. That
+    /// worked only while the view had a single definition. It no longer does:
+    /// migration 34 gave `detections_ts` a second rule — on a station that has
+    /// imported another site's history and asked for it to be excluded,
+    /// `birdnet_behavioral::queries::detections_ts_view_sql` appends
+    /// `AND import_batch_id IS NULL` — and that rule depends on a setting which
+    /// lives in `SQLite`, a store this crate cannot see.
+    ///
+    /// `birdnet-behavioral` and this crate run against the *same* `DuckDB`
+    /// connection, so replacing the view here dropped the second rule for the
+    /// rest of that connection's life. Sessionize, retention, funnel,
+    /// next-species, co-occurrence and phenology then counted another station's
+    /// records as this one's, until a later sync happened to reinstall the
+    /// right definition — damage `birdnet_migrate`'s own provenance warning
+    /// calls "not detectable after the fact", caused by opening a chart.
+    ///
+    /// So the view has exactly one owner, `birdnet-behavioral`, which is the
+    /// crate that knows the flag; it creates the view on open, on every sync,
+    /// and when the operator flips the setting. Constructing an executor is a
+    /// read, and a read must not rewrite the catalog underneath the other
+    /// crate. [`crate::queries::ENSURE_TS_VIEW`] remains as the definition this crate's queries
+    /// are written against, and `tests/analytics_view_ownership.rs` still holds
+    /// the two crates' texts equal.
     ///
     /// # Errors
     ///
-    /// Returns an error if the view cannot be created (e.g. `detections` table
-    /// is missing).
+    /// Returns [`TimeSeriesError::MissingView`] if `detections_ts` does not
+    /// exist on this connection — which, for a connection that came from
+    /// `AnalyticsDb::open`, it always does.
     pub fn new(conn: &'conn Connection) -> Result<Self, TimeSeriesError> {
-        conn.execute_batch(ENSURE_TS_VIEW)
+        conn.prepare("SELECT 1 FROM detections_ts LIMIT 0")
             .map_err(|e| TimeSeriesError::MissingView(format!("detections_ts: {e}")))?;
         Ok(Self { conn })
     }

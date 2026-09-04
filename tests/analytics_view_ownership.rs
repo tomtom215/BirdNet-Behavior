@@ -137,3 +137,177 @@ fn unreviewed_detections_survive_a_time_series_query() {
         "an unreviewed detection must not be filtered out by either definition"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The same failure, reintroduced by migration 34's second filter.
+//
+// Everything above is about the `review_verdict` clause, which both crates
+// carry. Migration 34 added a *second* rule to the same view: on a station that
+// has imported another site's history and asked for it to be excluded, the
+// behavioural view gains `AND import_batch_id IS NULL`.
+//
+// That rule is built by `birdnet_behavioral::queries::detections_ts_view_sql`,
+// which takes the flag. `birdnet-timeseries` has no such function — it has one
+// constant, and `TimeSeriesDb::new` ran `CREATE OR REPLACE VIEW` with it on
+// every construction. So on a station with the setting on, opening any
+// time-series page replaced the excluding view with the including one for the
+// rest of the connection's life, and sessionize, retention, funnel,
+// next-species, co-occurrence and phenology all silently began counting another
+// station's records as this one's — the exact damage `provenance.rs` warns is
+// "not detectable after the fact".
+//
+// The gate above could not see it: it compares `CREATE_DETECTIONS_TS_VIEW`
+// against `ENSURE_TS_VIEW`, and those two are identical. The excluding variant
+// has no counterpart in `birdnet-timeseries` to be compared with.
+// ---------------------------------------------------------------------------
+
+/// The station above, plus two detections imported from somewhere else.
+fn station_with_an_import(dir: &std::path::Path) -> (AppState, String) {
+    let db_path = dir.join("birds.db");
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    birdnet_db::migration::migrate(&conn).unwrap();
+    let today: String = conn
+        .query_row("SELECT date('now','localtime')", [], |r| r.get(0))
+        .expect("today");
+    for (time, sci, com) in [
+        ("06:15:00", "Turdus merula", "Eurasian Blackbird"),
+        ("07:15:00", "Erithacus rubecula", "European Robin"),
+        ("08:15:00", "Parus major", "Great Tit"),
+    ] {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES (?1, ?2, ?3, ?4, 0.85)",
+            rusqlite::params![&today, time, sci, com],
+        )
+        .unwrap();
+    }
+    conn.execute(
+        "INSERT INTO import_batches (id, source_kind, row_count) VALUES (1, 'birdnet-pi', 2)",
+        [],
+    )
+    .unwrap();
+    for (time, sci, com) in [
+        ("09:15:00", "Sylvia atricapilla", "Eurasian Blackcap"),
+        ("10:15:00", "Fringilla coelebs", "Common Chaffinch"),
+    ] {
+        conn.execute(
+            "INSERT INTO detections
+               (Date, Time, Sci_Name, Com_Name, Confidence, import_batch_id)
+             VALUES (?1, ?2, ?3, ?4, 0.85, 1)",
+            rusqlite::params![&today, time, sci, com],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let state = AppState::new_with_analytics(db_path, &dir.join("analytics.duckdb"))
+        .expect("analytics state opens");
+    state
+        .resync_analytics_full()
+        .expect("analytics is configured")
+        .expect("initial sync");
+    (state, today)
+}
+
+/// The definition of `detections_ts` as `DuckDB` currently holds it.
+fn view_sql(state: &AppState) -> String {
+    state
+        .with_analytics(|adb| {
+            adb.conn()
+                .query_row(
+                    "SELECT sql FROM duckdb_views() WHERE view_name = 'detections_ts'",
+                    [],
+                    |r| r.get::<_, String>(0),
+                )
+                .expect("detections_ts must exist")
+        })
+        .expect("analytics is configured")
+}
+
+/// The behavioural half, and the one that reproduces: an operator who asked for
+/// another site's history to be excluded must not have it counted again because
+/// somebody opened a chart.
+#[test]
+fn an_excluded_import_stays_excluded_through_a_time_series_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _today) = station_with_an_import(dir.path());
+
+    state
+        .with_analytics(|adb| adb.set_exclude_imports(true))
+        .expect("analytics is configured")
+        .expect("exclude imports");
+
+    let before = ts_rows(&state);
+    assert_eq!(
+        before, 3,
+        "the exclusion reached the analytics store: three recorded here, two imported"
+    );
+
+    // One time-series page's worth of work, on the same connection.
+    let _ = state.with_timeseries(|ts| ts.quiet_days(1, 0));
+
+    assert_eq!(
+        ts_rows(&state),
+        before,
+        "opening a time-series page readmitted another station's imported \
+         detections into every behavioural analytic"
+    );
+}
+
+/// The counterpart, so the gate above cannot pass by a view that excludes
+/// imports unconditionally. Including an import is a legitimate choice — it is
+/// the default, and merging two sites is a thing operators do — so a station
+/// that has not asked for the exclusion must still see all five.
+#[test]
+fn an_included_import_stays_included_through_a_time_series_query() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _today) = station_with_an_import(dir.path());
+
+    state
+        .with_analytics(|adb| adb.set_exclude_imports(false))
+        .expect("analytics is configured")
+        .expect("include imports");
+
+    assert_eq!(ts_rows(&state), 5, "the default counts imported rows");
+    let _ = state.with_timeseries(|ts| ts.quiet_days(1, 0));
+    assert_eq!(
+        ts_rows(&state),
+        5,
+        "an included import must not be filtered out by either definition"
+    );
+}
+
+/// The sharp one, and the rule rather than one of its consequences.
+///
+/// `detections_ts` has exactly one owner: `birdnet-behavioral`, which is the
+/// only crate that knows the flag. Constructing a time-series executor is a
+/// read, and a read must not redefine the catalog underneath the other crate.
+///
+/// This is stated as "the definition does not change" rather than "the
+/// definition contains `import_batch_id`", so a third rule added to the view
+/// later inherits the protection instead of needing its own gate — which is how
+/// the second rule came to be unprotected.
+#[test]
+fn constructing_the_executor_does_not_redefine_the_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _today) = station_with_an_import(dir.path());
+    state
+        .with_analytics(|adb| adb.set_exclude_imports(true))
+        .expect("analytics is configured")
+        .expect("exclude imports");
+
+    let before = view_sql(&state);
+    assert!(
+        before.contains("import_batch_id"),
+        "the fixture must start from the excluding definition, or this gate is \
+         vacuous — got: {before}"
+    );
+
+    let _ = state.with_timeseries(|ts| ts.quiet_days(1, 0));
+
+    assert_eq!(
+        view_sql(&state),
+        before,
+        "constructing a TimeSeriesDb rewrote the shared `detections_ts` view"
+    );
+}
