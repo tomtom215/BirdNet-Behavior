@@ -1,13 +1,14 @@
 # End-to-end testing standards
 
 > The standard a change must meet before it is considered "done" in this
-> repository — derived from real bug investigations that **819 unit tests
-> failed to catch**.
+> repository — derived from real bug investigations that the unit-test
+> suite of the day, **819 tests**, failed to catch. (The suite has since
+> grown by roughly a factor of four; the lesson has not changed.)
 
 ## Why this document exists
 
-In one session of focused end-to-end testing we found six production bugs
-that the existing 819-test suite all happily passed against:
+In one session of focused end-to-end testing we found seven production
+bugs that the 819-test suite of the time all happily passed against:
 
 1. **`_watcher` dropped immediately on daemon start** — daemon exited
    in milliseconds because the `notify` watcher was bound to a local
@@ -37,7 +38,7 @@ Each bug looked locally correct in code review. Each bug had unit-test
 coverage that exercised the *function* but not its *integration* with the
 real model, real audio, real database schema, and real file watcher.
 
-The rest of this document codifies how we'll catch the seventh bug.
+The rest of this document codifies how we'll catch the eighth bug.
 
 ---
 
@@ -253,7 +254,7 @@ cargo llvm-cov --workspace --summary-only
 
 If a step fails or skips, **do not merge**. Open an issue if the failure
 seems unrelated, but the bug almost certainly is related — most of the
-six fixes in this branch were found by exactly this sequence.
+seven fixes in this branch were found by exactly this sequence.
 
 ---
 

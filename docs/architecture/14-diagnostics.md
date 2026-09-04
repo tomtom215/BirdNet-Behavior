@@ -43,10 +43,10 @@ Unit tests pin every individual rule; property-based tests (proptest) cover
 the full reachable range of each numeric field plus a panic-freedom
 invariant for arbitrary string input.
 
-### 2. Preflight subcommand (`birdnet-behavior --doctor` / `--preflight`)
+### 2. Preflight subcommand (`birdnet-behavior --doctor` / `--doctor-json`)
 
-Runs ~12 independent checks against the live environment and prints a
-one-screen report. Each check produces a `Check { status, name, message,
+Runs one check per row of the table below against the live environment
+and prints a one-screen report. Each check produces a `Check { status, name, message,
 remediation? }`. The CLI exits with the worst-severity-derived code:
 
 | Exit | Meaning                                              |
@@ -72,8 +72,8 @@ Checks included today:
 
 - **Auto-repair.** Diagnostics report and suggest; they never mutate state.
   Operators stay in control of their install.
-- **Continuous health monitoring.** That is the web `/healthz` endpoint's
-  job; preflight is one-shot.
+- **Continuous health monitoring.** That is the web `/api/v2/health`
+  endpoint's job; preflight is one-shot.
 - **Full RTSP handshake.** Replicating ffmpeg's RTSP/TCP/UDP/SETUP/PLAY
   dance would double the dependency surface for marginal extra signal.
   TCP-connect probes catch the overwhelmingly common failure modes
@@ -94,7 +94,7 @@ Checks included today:
 ## Alternatives considered
 
 - **A long-running supervisor that surfaces problems via the web UI.**
-  Rejected for now because it duplicates `/healthz` and requires the web
+  Rejected for now because it duplicates `/api/v2/health` and requires the web
   server to already be up — exactly the situation that breaks in the
   field. Preflight has to work *before* anything else does.
 - **A `libc::statvfs` FFI for disk-free.** Rejected because the workspace
@@ -140,12 +140,15 @@ Checks included today:
   `UPDATE_DOCTOR_SNAPSHOTS=1 cargo test`, which forces the change to go
   through a PR review.
 - **Mutation testing** for the configuration validator via
-  `cargo-mutants` in `.github/workflows/mutation.yml`. Restricted to
-  `crates/birdnet-core/src/config/validate.rs` so the run stays under
-  ten minutes. Threshold: more than five surviving mutants fails the
-  job; current score is 0 missed / 61 caught / 4 unviable. A surviving
-  mutant always means an assertion is too weak — fixing it tightens
-  the test suite.
+  `cargo-mutants` in `.github/workflows/mutation.yml`. It is a per-file
+  matrix — `config/validate.rs` (split across two shards),
+  `inference/model.rs`, `audio/extraction/extractor.rs`,
+  `audio/extraction/convert.rs`, `civil.rs` and `migration.rs` — so a
+  survivor in one file does not tank the whole pipeline, and each file
+  is its own job with its own runtime budget. The threshold is
+  `max_missed: 0` on **every** row: a surviving mutant always means an
+  assertion is too weak, and the rule is to refactor the source until
+  the boundary is observable rather than to lift the threshold.
 - **Coverage measurement** via `cargo-llvm-cov` in
   `.github/workflows/coverage.yml`. Posts a sticky summary comment on
   PRs, uploads HTML + lcov artifacts, and optionally pushes to Codecov

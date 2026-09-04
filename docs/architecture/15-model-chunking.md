@@ -113,14 +113,17 @@ single biggest accuracy improvement of this branch.
 
 ## Related issue: unique-key constraint loses duplicate-species chunks
 
-The detections schema declares `UNIQUE(Date, Time, Sci_Name)`. Because
-all chunks of one recording inherit the same `(Date, Time)` from the
-filename, a bird that calls in multiple chunks of the same file
-currently produces exactly one detection row in the database — the
-highest-confidence one is the *first* one inserted, not the *best* one.
-This is a separate issue from chunking and is tracked for a follow-up
-schema migration (proposed key:
-`UNIQUE(Date, Time, Sci_Name, File_Name, chunk_offset)`).
+**Fixed.** The detections schema originally declared
+`UNIQUE(Date, Time, Sci_Name)` (migration 5). Because all chunks of one
+recording inherit the same `(Date, Time)` from the filename, a bird that
+called in multiple chunks of the same file produced exactly one detection
+row — the *first* one inserted, not the *best* one.
+
+Migration 11 widened the key to
+`(Date, Time, Sci_Name, File_Name, chunk_offset_secs)`, and migration 23
+refined it to
+`(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs)` so a
+NULL filename cannot slip past the constraint.
 
 ## See also
 
@@ -128,5 +131,5 @@ schema migration (proposed key:
 - [`docs/architecture/06-ml-inference.md`](06-ml-inference.md) — model contract
 - [`crates/birdnet-core/src/inference/model.rs`](../../crates/birdnet-core/src/inference/model.rs)
   — `recommended_chunk_samples` and `recommended_chunk_secs`
-- [`crates/birdnet-core/src/detection/daemon.rs`](../../crates/birdnet-core/src/detection/daemon.rs)
+- [`crates/birdnet-core/src/detection/daemon/`](../../crates/birdnet-core/src/detection/daemon)
   — pipeline auto-adjustment

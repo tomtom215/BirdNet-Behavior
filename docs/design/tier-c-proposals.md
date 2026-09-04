@@ -4,7 +4,8 @@ These are the items from the [parity audit](../../CHANGELOG.md) that cannot be
 started without committing to an architecture. Each is weeks of work and each
 forecloses options once begun, so they are written down here rather than built.
 
-Nothing in this file is implemented. Each section says what the thing is, what
+Nothing in this file is implemented; one *precondition* has since landed, and
+Proposal 3 says so where it matters. Each section says what the thing is, what
 it would cost, what it would rule out, and — where there is one — the cheaper
 partial that captures most of the value.
 
@@ -135,6 +136,13 @@ JWKS cache, and no login-time egress.
 **Recommendation:** the header path, gated on a `trusted_proxies` allow-list.
 Revisit real OIDC only if someone reports the proxy route is not enough.
 
+*Since this was written, that allow-list has shipped* — `crates/birdnet-web/src/client_ip.rs`
+(`TrustedProxies`, the right-to-left `X-Forwarded-For` walk, the `cloudflare`
+preset), configured by `server.rs:94` `trusted_proxies_from_env`. The stated
+precondition is therefore met and the remaining work is only the header
+mapping, so the "perhaps forty lines" above now costs less than it says.
+`X-Forwarded-User` itself is still absent from the tree.
+
 ---
 
 ## 4. UI localisation
@@ -147,9 +155,16 @@ a different thing and is already done.
 
 ### What it would cost here
 
-The blocker is not translation, it is that our HTML is `format!` string
-literals spread across ~50 route modules. There is no template layer to
-externalise strings from. Introducing one means touching every page.
+The blocker is not translation, it is where the strings are. There are 639
+`format!` sites across `crates/birdnet-web/src/routes/`, and 64 of its 121
+`.rs` files emit raw `<div`/`<table` markup directly. A template layer *does*
+exist — 22 files under `crates/birdnet-web/templates/`, pulled in by 21
+`include_str!` sites (`routes/pages/mod.rs:67-89`, `routes/auth_pages.rs:35`,
+`routes/share.rs:40`, and others) — but it covers the page shells, not the
+strings inside the rendered fragments, which is where the translatable text
+lives. So the work is not "introduce a template layer"; it is to get the
+user-visible text out of those 639 `format!` sites, and that still means
+touching every page.
 
 Two credible shapes:
 

@@ -13,13 +13,16 @@
 ## How this was measured
 
 Both repositories were cloned and read, not summarised from memory. Sizes, for
-scale:
+scale — and each names the tip it was measured at rather than inheriting the
+comparison's, because these numbers move: upstream at `88985a3` and
+`b184f689` (2026‑09‑03), ours at `ee795ed`. All three are `git ls-files`
+line counts with tests included.
 
 | Project | Language | Lines | Notes |
 |---|---|---|---|
-| Nachtzuster/BirdNET-Pi | PHP + Python + shell | ~19 k | 188 tracked files |
-| tphakala/birdnet-go | Go + Svelte | ~540 k Go | 51 `internal/` packages |
-| **BirdNet-Behavior** | Rust | ~159 k | 8 crates + binary |
+| Nachtzuster/BirdNET-Pi | PHP + Python + shell | ~25 k, of which ~18 k is the fork's own code — the rest is vendored Adminer and file-manager PHP | 188 tracked files |
+| tphakala/birdnet-go | Go + Svelte | ~542 k Go (~265 k excluding `_test.go`) | 52 subtrees under `internal/`; 137 Go packages counting nested ones |
+| **BirdNet-Behavior** | Rust | ~200 k `.rs` | 8 crates + binary |
 
 Every row below carries the upstream file that is the evidence for the claim
 and the file in this repository that is the evidence for our state. A row that
@@ -32,12 +35,20 @@ unrelated symbol) that is recorded rather than quietly dropped — several of th
 
 * `GAP` — they have a capability we do not, and it is worth having.
 * `PARTIAL` — we have some of it; the remainder is worth having.
+* `SHIPPED` — was a `GAP` or a `PARTIAL`, and the work has since landed. The
+  row is kept, rewritten to say what is in our source now, so that a
+  `G‑NN` cross-reference from elsewhere in this document does not send a
+  reader to a gap that was closed.
 * `PARITY` — we do the same thing, possibly differently.
 * `DECLINED` — deliberate divergence, with the reason stated. These are not
   work items; they are recorded so that the next person to run this comparison
   does not re-open them.
 
-Nothing is listed as done that has not been read in our source.
+Nothing is listed as done that has not been read in our source. The
+reciprocal needed repairing and has been: nine Tier‑1 findings were still
+written as open long after they shipped, because only the Tier‑1 **Status**
+column was being kept current. A finding's own body is what a `G‑NN`
+cross-reference lands on, so that is what has to be updated when work lands.
 
 ---
 
@@ -49,16 +60,16 @@ this project (`.env.example`, the `settings` table keys rendered by
 `crates/birdnet-web/src/routes/admin/settings/render/`) leaves four genuine
 gaps and a handful of deliberate divergences.
 
-### N‑1 · Flickr image provider — GAP
+### N‑1 · Flickr image provider — SHIPPED
 
 | | |
 |---|---|
 | **Upstream** | `scripts/api.php:16` — `if ($config["IMAGE_PROVIDER"] === 'FLICKR') { $image_provider = new Flickr(); }`; settings `IMAGE_PROVIDER`, `FLICKR_API_KEY`, `FLICKR_FILTER_EMAIL` |
-| **Ours** | `crates/birdnet-integrations/src/species_images/provider.rs:12` defines the `ImageProvider` trait; `wikipedia.rs:169` is the only implementor. The seam exists and is documented as existing for exactly this ("so that Wikipedia can be replaced with Flickr, eBird, or a custom source") but nothing was ever plugged into it. |
+| **Ours** | The seam has a second occupant. `species_images/provider.rs:12` still defines the `ImageProvider` trait, and `species_images/flickr/` now implements it alongside `wikipedia.rs`. `SpeciesImages::from_settings` (`species_images/mod.rs:182`) picks between them on an `image_provider` setting. |
 | **Why it matters** | Wikipedia/Wikimedia has no photograph at all for a long tail of species, and for many others has a museum skin or a range map. `FLICKR_FILTER_EMAIL` also lets an operator show *their own* photographs of the birds their own station heard, which is the single most-requested cosmetic feature in the upstream issue tracker. |
-| **Plan** | Add `species_images/flickr.rs` implementing `ImageProvider` against `flickr.photos.search` (`sort=relevance`, `license` filtered to the commercial-use-permitted set, optional `user_id` resolved once from `FLICKR_FILTER_EMAIL` via `flickr.people.findByEmail`). Introduce an `image_provider` setting (`wikipedia` \| `flickr`) and a chain policy so a Flickr miss falls back to Wikipedia rather than showing nothing. Cache identically to the Wikipedia path (`species_images/cache.rs`) so a provider switch does not re-fetch what is already on disk. Key handling follows the existing secret rules — redacted from the support bundle (`src/helpers/offsite.rs`). |
+| **Resolution** | `species_images/flickr/` queries `flickr.photos.search` with `sort=relevance` and `license` restricted to the commercial-use-permitted set (`ALLOWED_LICENSES = "4,5,6,7,8,9,10"`, `flickr/mod.rs:60`), optionally narrowed to one photographer's photostream via `FLICKR_FILTER_EMAIL`. Attribution is carried, not assumed: the photographer's name goes in `SpeciesImage::description` and the photo-page link in `wiki_url`, which the species page already renders as its credit line. Selecting Flickr does **not** replace Wikipedia — `from_settings` wraps the two in `species_images/chain/`'s `FallbackProvider`, which falls through on `ImageError::NotFound` only; a network error or a rejected key stops the chain and is reported, so a broken `FLICKR_API_KEY` cannot hide behind Wikipedia's coverage. `FLICKR_API_KEY` is in the redaction list (`crates/birdnet-core/src/config/redact.rs:129`). |
 
-### N‑2 · Frequency shift on the live stream — GAP
+### N‑2 · Frequency shift on the live stream — SHIPPED
 
 | | |
 |---|---|
@@ -68,14 +79,14 @@ gaps and a handful of deliberate divergences.
 | **Why it matters** | This is an accessibility feature, not a novelty. Age-related high-frequency hearing loss starts around 8 kHz; a great deal of warbler and kinglet song lives above it. A feature that works only if you know to hand-edit a query string is not available to the people it is for, and one documented in the wrong direction is worse than absent. |
 | **Resolution** | A pitch control beside the Listen button on `/recordings`, with downward presets (the accessibility direction) and one upward option; the choice is remembered per browser in `localStorage`. Per-listener rather than upstream's station-wide flag, and deliberately: hearing loss is a property of a person, and this station serves one ffmpeg per connection rather than one Icecast broadcast for everyone, so it can do better than upstream here. All five doc comments corrected against the primary source, with `ACCESSIBILITY_SHIFT_HZ` naming the direction and a `const` assertion failing the *build* if its sign is ever flipped back. The `freq_shift_hz` query parameter is now clamped to ±24 kHz — it was an unbounded `i32` from an unauthenticated request, and `freq_shift_hz=2000000000` asked ffmpeg to resample from ~2 GHz, four streams at a time. |
 
-### N‑3 · Choosing which RTSP source feeds the live stream — GAP (minor)
+### N‑3 · Choosing which RTSP source feeds the live stream — PARTIAL
 
 | | |
 |---|---|
 | **Upstream** | `RTSP_STREAM_TO_LIVESTREAM` (an index into the comma-separated `RTSP_STREAM` list), consumed at `scripts/livestream.sh:26-36`. |
-| **Ours** | We support multiple sources (`crates/birdnet-db/src/audio_sources.rs`, `BIRDNET_RTSP_URLS`) but `GET /api/v2/stream` taps whichever source the capture manager offers. |
+| **Ours** | Half of this has landed. `GET /api/v2/stream` accepts **`?source_id=<id>`**, resolved against the `audio_sources` table — `routes/livestream.rs:86` declares the parameter, `:216` branches on it, and an unknown id returns `404`. The Recordings page's `srcFor()` already builds it (`templates/recordings.html`), so a listener can choose a source from the UI. Without the parameter the first non-disabled `audio_sources` row wins, and a station with no rows yet gets `503`. What is missing is the station-wide **default**: `grep -rn livestream_source` over `crates/` and `src/` finds nothing, so an operator cannot say once which source is the one to listen to. |
 | **Why it matters** | A two-microphone station (feeder + nest box) has one of them that a person actually wants to listen to. |
-| **Plan** | Accept `?source=<id>` on `/api/v2/stream`, resolved against `audio_sources.id`, and add a `livestream_source` setting for the default. Falls back to the current behaviour when unset or when the named source is not capturing. |
+| **Plan** | Add a `livestream_source` setting naming the default `audio_sources.id`, consulted where `resolve_default_source` currently takes the first enabled row, and falling back to that when unset or when the named source is not capturing. The shipped query parameter is **`?source_id=`** — an earlier draft of this row specified `?source=`, and implementing the default against that spelling would leave the station answering to two names for one thing. |
 
 ### N‑4 · Bulk species management — PARTIAL
 
@@ -106,48 +117,48 @@ re-discovering them.
 
 ## Part 2 — versus tphakala/birdnet-go
 
-birdnet-go is roughly 3.4× this project by line count and has taken the design
-in directions we have not. Sorting its capabilities against ours produces 33
-findings. They are grouped by the part of the system they touch, and ordered
+birdnet-go is roughly 2.7× this project by line count and has taken the design
+in directions we have not. Sorting its capabilities against ours produces 34
+findings (G‑1 … G‑34, contiguous). They are grouped by the part of the system they touch, and ordered
 within each group by how much they change what a station can do.
 
 ### 2.1 Audio capture and conditioning
 
-#### G‑1 · Sound level monitoring (ISO 266 ⅓-octave bands) — GAP
+#### G‑1 · Sound level monitoring (ISO 266 ⅓-octave bands) — SHIPPED
 
 | | |
 |---|---|
 | **Upstream** | `internal/audiocore/soundlevel/processor.go` — a bank of biquad bandpass filters on the 30 standard ⅓-octave centre frequencies from 25 Hz to 20 kHz (`octaveBandCenterFreqs`, ISO 266), each producing a 1-second RMS in dB, aggregated over a configurable interval into min/max/mean per band. Skips bands whose upper edge passes 0.95 × Nyquist because the biquad goes unstable there. Streamed at `GET /api/v2/soundlevels/stream` and exported to Prometheus (`internal/observability/metrics/soundlevel.go`). |
-| **Ours** | `crates/birdnet-core/src/audio/quality/` computes a **single** broadband SNR, a spectral flatness, an adaptive noise floor and a rain/wind flag (`types.rs:17`). Useful for gating inference; not a soundscape measurement. Grepping the workspace for `octave`/`sound_level` returns one hit, a comment about cents in `extraction/convert.rs:49`. |
+| **Ours** | Both measurements now exist, and they are different instruments. `crates/birdnet-core/src/audio/quality/` still computes the **single** broadband SNR, spectral flatness, adaptive noise floor and rain/wind flag (`types.rs:17`) that decide whether a chunk is worth classifying. Beside it, `crates/birdnet-core/src/audio/soundlevel/` — `bands.rs`, `filter.rs`, `meter.rs` — is the soundscape measurement, described by its own module header as *"what the site sounds like, not whether a chunk is worth classifying"*. |
 | **Why it matters** | This is the difference between "was that chunk clean enough to classify" and "what does this site sound like". A banded SPL series is the standard unit of acoustic-ecology fieldwork: it is what shows a road opening, a generator running at night, a dawn chorus rising 12 dB in the 2–4 kHz bands over six weeks of spring. It also diagnoses the station itself — a microphone going deaf, a preamp oscillating, a mount picking up wind — none of which a broadband SNR separates from "quiet night". |
-| **Plan** | New module `crates/birdnet-core/src/audio/soundlevel/` with three units: (a) `filter.rs`, a direct-form-II-transposed biquad bandpass with coefficients derived per band from centre frequency and sample rate, with the Nyquist-margin exclusion; (b) `bands.rs`, the ISO 266 centre-frequency table and band-edge arithmetic; (c) `meter.rs`, the per-second window accumulator and interval aggregator producing `{band → {min,max,mean}}`. Pure synchronous DSP, no allocation in the hot loop, fed from the existing capture tee (`audio/capture/tee.rs`) so it costs one pass over samples we already have in memory. Surfaced as `GET /api/v2/soundlevel` (latest interval), a `birdnet_sound_level_db{band=…}` gauge family in `crates/birdnet-web/src/metrics.rs`, and a heat-strip on the station-health page. Persisted at interval granularity in the existing `audio_levels` table so the series survives a restart. |
+| **Resolution** | `crates/birdnet-core/src/audio/soundlevel/` ships as the three planned units — `filter.rs` (*"the third-octave band filter: three biquads in series"*), `bands.rs` (the ISO 266 centre frequencies and the A-weighting curve) and `meter.rs` (*"filter bank in, interval statistics out"*, carrying the `NYQUIST_MARGIN = 0.95` band exclusion at `:24`) — plus `tests.rs`. The biquad itself was built once and shared, as planned: `crates/birdnet-core/src/audio/biquad.rs` is what both this and G‑2's `eq` use. Served at `GET /api/v2/soundlevel` (`routes/system.rs:18`), which returns the newest third-octave spectrum for one source. Persistence went to **new** tables rather than the existing `audio_levels`: migration 37, *"Record third-octave band levels, so the station measures its soundscape"*, creates `sound_levels` and `sound_level_broadband`, because `audio_levels` keeps one broadband figure per source per hour and cannot hold the shape of a change. One piece of the plan did not land: the `birdnet_sound_level_db{band=…}` gauge family is **not** in `crates/birdnet-web/src/metrics.rs`, which has no `sound_level` mention at all. |
 
-#### G‑2 · Per-source parametric equalizer — GAP
+#### G‑2 · Per-source parametric equalizer — SHIPPED
 
 | | |
 |---|---|
 | **Upstream** | `conf.EqualizerFilter` — a chain of filters each with `type` (LowPass/HighPass/BandPass/Peaking/…), `frequency`, `q`, `gain`, `width`, `passes`; global default plus a per-source and per-stream override (`Settings.ResolveEQOverride`), implemented in `internal/audiocore/equalizer`. |
-| **Ours** | `crates/birdnet-core/src/audio/capture/types.rs:624` `AudioPipeline` — three booleans (`high_pass` at a fixed 120 Hz, `dc_removal` at a fixed 5 Hz, `agc`) plus an RTSP stall timeout. Honest and well-documented, but a single fixed corner. |
+| **Ours** | `crates/birdnet-core/src/audio/eq/` — a configurable filter chain per capture source, stored as the `audio_sources.eq_chain` column (migration 39) and edited at `/admin/audio` (`routes/admin/audio.rs:186`, parsed at `:411` by `EqChain::parse`). The three `AudioPipeline` booleans it replaces are still reachable: `EqChain::from_pipeline_flags` reproduces them exactly, and an empty `eq_chain` means a station's audio does not change on upgrade. |
 | **Why it matters** | Sites differ in the noise they are fighting. A station next to a motorway needs a steeper low-cut than 120 Hz/one pole; a station under a fluorescent transformer needs a notch at 100/120 Hz that no high-pass provides; a hydrophone or a bat detector needs the band moved entirely. A fixed corner is a compromise picked for a garden. |
-| **Plan** | Introduce `audio::eq` with a `BiquadFilter` (the same primitive G‑1 needs — build it once, share it) and an `EqChain` of `{kind, freq_hz, q, gain_db, passes}`. Store the chain per source as JSON in a new `audio_sources.eq_chain` column, defaulting to the chain that reproduces today's flags exactly so no station's audio changes on upgrade. Apply it in both backends the way `AudioPipeline` already documents: as `-af` stages for ffmpeg sources, as the in-process filter chain in the tee. Admin UI gets a filter-row editor with a live magnitude-response sparkline. |
+| **Resolution** | `audio::eq` shipped with the `EqChain` the plan describes and the biquad primitive shared with G‑1. The chain is stored per source in `audio_sources.eq_chain` (`ADD COLUMN eq_chain TEXT NOT NULL DEFAULT ''`, migration 39) and applied in both backends — as `-af` stages for ffmpeg sources, in-process for the tee. `EqChain::from_pipeline_flags` converts the three booleans into an explicit chain, and an empty `eq_chain` falls back to the old fixed 120 Hz high-pass and 5 Hz DC block (`capture/process.rs:311‑318`), so no station's audio moved on upgrade. |
 
-#### G‑3 · Pre-capture across the segment boundary — GAP
+#### G‑3 · Pre-capture across the segment boundary — SHIPPED
 
 | | |
 |---|---|
 | **Upstream** | `conf.ExportSettings.PreCapture` — a live ring buffer sized `maxDuration + preCapture + margin` (`EffectiveCaptureBufferSeconds`), so a clip starts *before* the analysis window that triggered it regardless of where the trigger fell. |
-| **Ours** | `crates/birdnet-core/src/audio/extraction/extractor.rs:64` — `spacer = (extraction_length - 3.0) / 2.0`, then `safe_start = (detection.start - spacer).max(0.0).min(actual_duration_secs)`. The pre-roll is taken from **inside the segment file**, and `.max(0.0)` is what happens when there is not enough: a detection in the first 1.5 s of a segment silently loses its lead-in, and one at 0.0 s gets none. |
+| **Ours** | The window is no longer clamped to the segment. `extraction/extractor.rs:73` computes `lead_in = spacer + pre_capture_secs.max(0.0)` and hands the unclamped window to `extraction/span/`, whose module header records what the old behaviour cost: measured on a 15 s segment at 48 kHz with a 6 s extraction, a detection at 0.0 s produced a 4.5 s clip and one at 12.0 s produced another — **two of every five** windows at zero overlap. |
 | **Why it matters** | With a 15-second segment and a 6-second extraction, one in ten clips starts inside the call. Those are the clips a person plays to decide whether the identification is right, and the ones uploaded to BirdWeather. The failure is invisible — the clip is a valid file of the right length, just missing its beginning. |
-| **Plan** | Two parts, in order. (a) Give the extractor a *predecessor* — when `safe_start` clamps at 0, look up the immediately preceding segment for the same source (the filename already encodes source and timestamp: `capture/types.rs:301` `recording_filename_at`) and prepend the tail of it, so the clip spans the boundary. (b) Add a `pre_capture_secs` setting that lengthens the requested lead-in beyond the symmetric spacer. A gate must show the current code producing a truncated clip for a detection at t=0 before the fix lands. |
+| **Resolution** | Both parts landed. `extraction/span/` resolves a window against the segment *and its neighbours*, reading the tail of the predecessor and the head of the successor when the window reaches them; `pre_capture_secs` lengthens the requested lead-in beyond the symmetric spacer, floored at zero rather than silently inverted (`extractor.rs:70‑73`). The guard that matters more than the fix is stated in the module's own header: **a neighbour is used only when it actually abuts**, so a restart, a dropped source or a purge cannot splice audio from two different times into one clip that looks continuous. |
 
-#### G‑4 · Solar-relative quiet hours — GAP
+#### G‑4 · Solar-relative quiet hours — SHIPPED
 
 | | |
 |---|---|
 | **Upstream** | `conf.QuietHoursConfig` — `mode: "fixed"` (HH:MM) or `"solar"` (`startEvent: sunset` ± `startOffset` minutes → `endEvent: sunrise` ± `endOffset`), per source and per stream. |
-| **Ours** | `crates/birdnet-db/src/audio_sources.rs:272` `schedule_quiet: Option<(String, String)>` — HH:MM only. We *do* have the solar maths (`crates/birdnet-scheduler/src/solar.rs`, NOA A/Meeus) and use it for recording windows; it is simply not wired to per-source quiet hours. |
+| **Ours** | `crates/birdnet-db/src/audio_sources.rs:272` still types the window as `schedule_quiet: Option<(String, String)>`, but each endpoint is now either a clock time **or** a solar anchor with a signed offset — `sunset`, `sunset+30`, `sunrise-15`. The admin form validates that shape (`routes/admin/audio.rs:294`: *"Quiet window ends must be a clock time (22:00) or a solar anchor (sunset, sunset+30, sunrise-15)"*), and the solar maths in `crates/birdnet-scheduler/src/solar.rs` is what resolves it. |
 | **Why it matters** | A fixed 22:00–06:00 window is wrong for eight months of the year at any latitude that matters. At 55° N sunrise moves by four hours between solstices; an operator who set quiet hours in January is recording two hours of dawn chorus into a disabled source by June, or burning CPU on two hours of daylight in December. |
-| **Plan** | Extend the stored schedule to a tagged form (`fixed:HH:MM-HH:MM` \| `solar:sunset+30-sunrise-30`) with a migration that rewrites existing rows into the `fixed:` form. Resolve through `birdnet-scheduler` at window-evaluation time, which already owns the station's coordinates. |
+| **Resolution** | Shipped, and more cheaply than planned: **no tagged form and no migration**. The two shapes share the one stored column and are unambiguous — *"a clock time contains a colon and no letters"* — so `parse_quiet_endpoint` (`src/capture/sources.rs:180`) reads `HH:MM` as `QuietEndpoint::Fixed` and `sunrise`/`sunset` with a required signed offset as `Sunrise`/`Sunset`. A bare `sunset30` is rejected rather than guessed at, and an offset beyond ±12 h is rejected because it has stopped meaning "around sunset". `/admin/audio` validates the same shape (`routes/admin/audio.rs:255`) so a value the form accepts is one the daemon can read back. |
 
 #### G‑5 · Loudness normalisation of exported clips (EBU R128) — GAP
 
@@ -203,7 +214,7 @@ within each group by how much they change what a station can do.
 | **Upstream** | `internal/classifier/` (≈44 k lines). An orchestrator running any of: BirdNET v2.4, BirdNET v3.0, Google **Perch v2**, a **bat** classifier built on BirdNET v2.4 embeddings, and **BSG regional** models — concurrently, routed per audio source (`AudioSourceConfig.Models`), each with its own labels, locale and threshold. A model catalog with regional variants (`model_catalog.go`, `model_catalog_regional_gen.go`), a download manager pulling from HuggingFace with a configurable endpoint for mirrors, primary-model swap and failover (`model_manager*.go`), and `GET /api/v2/models/catalog` · `POST /api/v2/models/install/:id`. |
 | **Ours** | One BirdNET ONNX classifier plus the metadata/geomodel (`crates/birdnet-core/src/inference/model.rs`, `species_filter.rs`). Model and labels are paths given by config; `scripts/setup-onnxruntime.sh` seeds the runtime. The only workspace mention of Perch is a comment in `audio/resample.rs:4` noting it wants 32 kHz. |
 | **Why it matters** | Two distinct things. (a) **Coverage**: BirdNET is weakest exactly where a hobbyist most wants help — outside Europe/North America, and on non-birds. Perch v2 is materially better in the tropics; a bat classifier turns one box into two instruments. (b) **Corroboration**: two independent models agreeing is far stronger evidence than one model being confident, and it is the honest way to attack the false-positive problem that our `corroboration.rs` attacks with repetition alone. |
-| **Plan** | This is a multi-stage programme, not one change. **Stage 1** — make the classifier a trait. Extract `trait Classifier { fn labels(&self) -> &LabelSet; fn input_spec(&self) -> InputSpec; fn infer(&self, samples: &[f32]) -> Result<Vec<f32>, InferenceError>; }` from the concrete `Model`, with `InputSpec` carrying sample rate, window length and normalisation so the pipeline stops assuming 48 kHz/3 s. **Stage 2** — a registry that loads N classifiers from config and a per-source routing table. **Stage 3** — a merge policy in the detection pipeline: union with per-model thresholds, plus an *agreement* flag recorded on the detection row that the review UI and `corroboration.rs` can both use. **Stage 4** — Perch v2 as the second concrete implementation (32 kHz, 5 s windows, a CSV label file), which is the real test of whether Stages 1–3 are right. **Stage 5** — a model catalog and downloader with checksum verification, mirror support and atomic install, reusing the auto-update machinery in `birdnet-integrations/src/auto_update/`. **Stage 6** — the bat classifier, which additionally needs the ≥192 kHz capture path and the ultrasonic validation filter (G‑12). Stages 1–3 are worth doing even if no second model ever ships, because they remove the hardcoded assumption that there is exactly one. |
+| **Plan** | This is a multi-stage programme, not one change. **Stage 1** — make the classifier a trait. Extract `trait Classifier { fn labels(&self) -> &LabelSet; fn input_spec(&self) -> InputSpec; fn infer(&self, samples: &[f32]) -> Result<Vec<f32>, InferenceError>; }` from the concrete `Model`, with `InputSpec` carrying sample rate, window length and normalisation so the pipeline stops assuming 48 kHz/3 s. **Stage 2** — a registry that loads N classifiers from config and a per-source routing table. **Stage 3** — a merge policy in the detection pipeline: union with per-model thresholds, plus an *agreement* flag recorded on the detection row that the review UI and `corroboration.rs` can both use. **Stage 4** — Perch v2 as the second concrete implementation (32 kHz, 5 s windows, a CSV label file), which is the real test of whether Stages 1–3 are right. **Stage 5** — a model catalog and downloader with checksum verification, mirror support and atomic install, reusing the auto-update machinery in `birdnet-integrations/src/auto_update/`. **Stage 6** — the bat classifier, which additionally needs the ≥192 kHz capture path and the ultrasonic validation filter (G‑14). Stages 1–3 are worth doing even if no second model ever ships, because they remove the hardcoded assumption that there is exactly one. |
 
 #### G‑11 · Inference backends beyond ONNX Runtime CPU — GAP
 
@@ -214,14 +225,14 @@ within each group by how much they change what a station can do.
 | **Why it matters** | On the x86 half of our target list, an Intel iGPU through OpenVINO is several times faster than CPU, which is the difference between 2.0 s of overlap being affordable and not — and overlap is what makes our own `corroboration.rs` filter effective (see its own table: `lenient` and `moderate` are no-ops at zero overlap). On Raspberry Pi, XNNPACK is the same argument in miniature. |
 | **Plan** | Expose an `inference_backend` setting resolving to `ort` execution providers, with the CPU provider always present as the fallback and a startup probe that logs which provider actually bound (`ort` will silently fall back, which is precisely the kind of confident-but-wrong state this repo's conventions exist to prevent). A `--channel-report`-style `--inference-report` should measure it rather than assert it. |
 
-#### G‑12 · Dynamic per-species confidence threshold — GAP
+#### G‑12 · Dynamic per-species confidence threshold — SHIPPED
 
 | | |
 |---|---|
 | **Upstream** | `internal/analysis/processor/dynamic_threshold.go` — once a species is confirmed present at a site by a high-confidence detection, its threshold drops in steps (×0.75, ×0.50, ×0.25) for `validHours`, floored at `min`, then decays back. Persisted per species (`internal/datastore/dynamic_threshold.go`) and tunable at `/api/v2/dynamic-thresholds/test`. |
-| **Ours** | A global `confidence_threshold` plus optional per-species overrides an operator types in (`species_thresholds` table). Nothing learned. |
+| **Ours** | The global `confidence_threshold` and the operator-typed per-species overrides (`species_thresholds` table) are still there, and something learned now sits beside them: `crates/birdnet-core/src/detection/dynamic_threshold/` — *"Let a species that is **known present** be easier to hear."* Off unless asked for (`src/daemon/config.rs:278` `resolve_dynamic_threshold`), and what it learns survives a restart through the `dynamic_thresholds` table (migration 38, `crates/birdnet-db/src/dynamic_thresholds.rs`). |
 | **Why it matters** | A fixed threshold is a bad instrument because it is answering two questions at once — "is this a bird" and "is this bird plausible here". Once a Tawny Owl is *known* to be in the wood, a 0.4 Tawny Owl is very likely another Tawny Owl; a 0.4 for a species never recorded within 500 km is not. Learning the first without loosening the second is what this buys, and it is the single highest-yield detection-quality change on this list after multi-model. |
-| **Plan** | New `crates/birdnet-core/src/detection/dynamic_threshold.rs`: an in-memory map species → `{level, high_conf_count, expires_at, first_seen, last_triggered}`, advanced by detections at or above a trigger confidence, with a hard floor and hour-bounded expiry. Persisted through a new `dynamic_thresholds` table so a restart does not forget the site. Applied in `detection/daemon/process.rs` *after* the geomodel filter, never before — a species the range filter excludes must not become easier to detect. The `/admin/species/test` preview must show the effective threshold, not the configured one, or the preview stops matching the pipeline (the same trap `matches_species` was written to avoid). |
+| **Resolution** | Shipped as a directory rather than a file: `detection/dynamic_threshold/{mod,tests}.rs`, with `DynamicThresholds::effective_threshold(sci_name, base, now_ms)` (`mod.rs:261`) checking expiry on every read, and `LearnedThreshold` rows round-tripped by `birdnet-db`'s `replace_all` / `load_all`. It is applied in the binary's daemon — `src/daemon/disposition.rs:145` takes an `Option<&DynamicThresholds>`, held as `DynamicThresholdState` in `src/daemon/processor.rs:35` — not in `detection/daemon/process.rs`, which is not a path in this tree. **Still to check against the plan:** that the `/admin/species/test` preview shows the *effective* threshold rather than the configured one. That was the plan's stated trap and nothing in this pass confirmed it was avoided. |
 
 #### G‑13 · Silero VAD privacy gate — GAP
 
@@ -249,14 +260,14 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Two separate problems. (a) **Silent double-counting**: our own species filter matches by scientific name across two vocabularies (`species_filter.rs`'s whole doc comment is about this hazard), and a reclassified genus makes the same bird two species in the life list, the year list, and every retention query. (b) **Browsing**: "show me every warbler" is a natural question that a flat species list cannot answer. |
 | **Plan** | Ship a curated alias table as a data file with provenance, normalise on write in `detections`, and add a one-off migration that collapses existing rows (reported, reversible, and never run silently). Then derive family/genus from the label file where present and expose `/species?family=…`. The alias table needs a staleness gate — a test that fails when the shipped classifier's label set contains a name the table maps *from*, which would mean the map is being applied to a model that already uses the canonical name. |
 
-#### G‑16 · Species tracking: yearly, seasonal, and returning-after-absence — PARTIAL
+#### G‑16 · Species tracking: yearly, seasonal, and returning-after-absence — SHIPPED (API only; not yet on the pages)
 
 | | |
 |---|---|
 | **Upstream** | `conf.SpeciesTrackingSettings` — "new species" window, **yearly** tracking with a configurable reset date, **seasonal** tracking with hemisphere-aware season boundaries (`GetDefaultSeasons` handles northern, southern *and* equatorial wet/dry), and **infrequent** tracking that flags a species returning after `absenceDays`. Notification suppression is tracked separately per category. |
-| **Ours** | `rare_species_days` drives `/feeds/rare.rss` and `/feeds/rare.ics`, whose SQL (`routes/feeds.rs:47`) already implements two definitions of rare — first-ever, and returning after a gap. A life list exists (`routes/pages/life_list.rs`). There is no year list, no season list, and no hemisphere awareness. |
+| **Ours** | `rare_species_days` drives `/feeds/rare.rss` and `/feeds/rare.ics`, whose SQL (`routes/feeds.rs:47`) implements two definitions of rare — first-ever, and returning after a gap — and a life list exists (`routes/pages/life_list.rs`). The year list, the season list and the hemisphere awareness now exist too: `crates/birdnet-db/src/species_tracking.rs` computes `new_ever`, `new_this_year`, `new_this_season`, `returning_after_absence` and `days_since_previous` per species, served at `GET /api/v2/species/tracking` (`routes/species.rs:19`). The season boundary is hemisphere- and latitude-dependent and lives in `crates/birdnet-core/src/season.rs`, which carries northern, southern and equatorial wet/dry tables. |
 | **Why it matters** | "First of the year" is the unit birders actually keep score in, and a station is uniquely good at catching it — it is listening at 04:40 when nobody is awake. Seasonal firsts are the phenology signal this project's DuckDB analytics already exist to measure, so not surfacing them on the dashboard is leaving the best story untold. Hemisphere matters because half the potential users are south of the equator and a northern-defaults season table is wrong by six months for all of them. |
-| **Plan** | A `birdnet-db` module `species_tracking` computing four flags per species from the existing `detections` table — `new_ever`, `new_this_year`, `new_this_season`, `returning_after_absence` — with the season boundary table derived from the station's latitude (northern / southern / equatorial wet-dry, matching upstream's three cases) and overridable. Wire the flags into the today page, the notification trigger vocabulary, and the RSS/iCal feeds. The year-reset date must be configurable; a `reset_month`/`reset_day` of 1 January is a northern-hemisphere convention too. |
+| **Resolution** | The module and the season table landed as planned, and the API reports the windows alongside the species rather than as a courtesy — a bare "first this season" is unreadable without knowing which season the station thinks it is in, and a station with no latitude honestly returns `season: null`. **What did not land is the wiring.** `crate::tracking` has exactly one consumer, `routes/species.rs:52`; the flags do not reach the today page, the RSS/iCal feeds or the notification trigger vocabulary, so the capability exists but nothing a non-API user looks at shows it. That is the remainder of this item. |
 
 #### G‑17 · Dog-bark suppression window — PARTIAL
 
@@ -269,23 +280,23 @@ within each group by how much they change what a station can do.
 
 ### 2.3 Web, security and deployment
 
-#### G‑18 · Trusted-proxy client-IP resolution — GAP (correctness/security)
+#### G‑18 · Trusted-proxy client-IP resolution — SHIPPED (correctness/security)
 
 | | |
 |---|---|
 | **Upstream** | `conf.Security.TrustedProxies` — a CIDR/IP list whose forwarded headers (`CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`) may be believed, with loopback/link-local/RFC1918 peers always trusted, a reserved `"cloudflare"` value expanding to the published edge ranges, and — the point — headers **ignored** when the immediate peer is not trusted, so a directly exposed instance cannot be IP-spoofed. |
-| **Ours** | `crates/birdnet-web/src/rate_limit.rs:212` `extract_ip(req, trust_xff)` takes a boolean. `RateLimitConfig::default()` sets `trust_x_forwarded_for: false` (`rate_limit.rs:64`) and grep finds no code path that ever sets it true — it is not reachable from configuration. |
+| **Ours** | The boolean is gone. `crates/birdnet-web/src/rate_limit.rs:233` now reads `pub(crate) fn extract_ip(req: &Request<Body>, trusted: &TrustedProxies) -> IpAddr`, and `RateLimitConfig` carries `trusted_proxies: TrustedProxies` (`rate_limit.rs:65`) rather than a flag. The allow-list itself is `crates/birdnet-web/src/client_ip.rs`, populated at startup by `server.rs:94` `trusted_proxies_from_env`. |
 | **Why it matters** | Both settings of that boolean are wrong behind a proxy. `false` — today's only reachable state — means every request through a reverse proxy shares the proxy's IP, so one abusive client exhausts the bucket for the whole household, and the audit log records the proxy for every login. `true`, had it been wired, would mean any client can set `X-Forwarded-For` and get a fresh bucket, which is worse. The correct behaviour needs the peer address, which neither state consults. |
-| **Plan** | Replace the boolean with `trusted_proxies: Vec<IpNet>` plus the always-trusted private/loopback set, resolve the client IP by walking `X-Forwarded-For` right-to-left and stopping at the first untrusted hop, and support the `cloudflare` preset from a shipped range list with a refresh path. Use the resolved IP everywhere a client identity is needed — rate limiting, the audit log, and session binding — not just in the limiter. A gate must show a forged header being *ignored* from an untrusted peer and *honoured* from a trusted one; a test that only asserts the honouring half is the "blanket alarm passing for a discriminator" case this repo's conventions call out. |
+| **Resolution** | `client_ip.rs` walks `X-Forwarded-For` right-to-left and stops at the first untrusted hop (`:408`), with loopback and the RFC1918 ranges trusted by default and a reserved `cloudflare` name expanding to a snapshot of the published edge ranges (`:234`, `:318`). The discrimination the plan demanded is gated **both** ways rather than only the permissive one: `an_untrusted_peer_cannot_forge_its_own_address` (`:498`), `the_walk_stops_at_the_first_untrusted_hop_from_the_right` (`:537`) and `cf_connecting_ip_from_an_untrusted_peer_is_ignored` (`:605`) are the ignoring half; `the_cloudflare_name_lets_the_walk_pass_the_edge` (`:617`) is the honouring half. **Not confirmed in this pass:** whether the resolved IP reached the audit log and session binding, or only the rate limiter. |
 
-#### G‑19 · Reverse-proxy base path — GAP
+#### G‑19 · Reverse-proxy base path — SHIPPED
 
 | | |
 |---|---|
 | **Upstream** | `WebServerSettings.BasePath` (e.g. `/birdnet`), with `internal/api/basepath.go`, `basepath_test.go`, `basepath_race_test.go` and an ingress test — enough machinery to show it is not a one-line prefix. |
-| **Ours** | Every route is absolute from `/` (`crates/birdnet-web/src/routes/mod.rs`), every template link is a literal absolute path, and `nest("/api/v2", …)` is the only prefixing. |
+| **Ours** | `crates/birdnet-web/src/base_path/` — *"Serving the station from under a prefix, e.g. `https://home.example/birdnet`"*, whose own header explains why this is not a one-line `nest`: mounting the router under a prefix fixes *incoming* requests and nothing else. Read from `BIRDNET_BASE_PATH` (`base_path/mod.rs:204`, falling back to the root when it does not parse) and installed by `server.rs:130`. |
 | **Why it matters** | The common home deployment is one hostname and a reverse proxy with several services under paths. Without base-path support such a user must give the station its own subdomain or its own port, and mixed absolute/relative links break in ways that look like caching bugs. Home Assistant ingress (which upstream tests for) works this way too. |
-| **Plan** | A `base_path` setting threaded through three places: the router (`Router::nest` at the top level), URL generation (a `url_for()` helper the templates must use instead of literals, with a lint or a test that fails on a literal `href="/` in a template), and the redirect/cookie paths. The session cookie `Path` attribute and the WebSocket URLs are the two that will be missed if this is done casually, so they get their own gates. |
+| **Resolution** | The outgoing half was solved by rewriting rather than by a `url_for()` helper: `security.rs:165` `inject_base_path` prefixes the absolute links in served HTML, so the templates keep their literals and cannot drift out of step with the setting. Gated end to end by `crates/birdnet-web/tests/base_path_end_to_end.rs` — the station answering under the prefix *and not beside it*, the trailing slash not being a dead end, the bare root redirecting into the prefix, **every** link a rendered page emits being prefixed, the prefix being published for the page's scripts, and static assets served from under it. |
 
 #### G‑20 · OAuth2 / OIDC authentication — GAP
 
@@ -314,14 +325,15 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Half the stations that exist are on a wall-mounted tablet in a visitor centre or a kitchen, where what needs to be on screen is not what a person debugging a microphone needs. |
 | **Plan** | Store an element list in `settings` and render from it. Our HTMX partials are *already* the element vocabulary — `/pages/hero-status`, `/pages/today-list`, `/pages/most-recent`, `/pages/hourly-chart` and the rest are exactly these components — so this is a layout table and a drag-to-reorder editor over machinery that exists, not a rewrite. |
 
-#### G‑23 · Detection comments and batch operations — PARTIAL
+#### G‑23 · Detection comments — PARTIAL (the batch half has shipped)
 
 | | |
 |---|---|
 | **Upstream** | `POST /api/v2/detections/:id/comments`, `batch/{delete,lock,resolve,review}`, and an ignored-species list. |
-| **Ours** | Review (`detection_reviews` table, `/detection-reviews`), lock/unlock, and bulk review in the search page (`/pages/search-bulk`). No free-text comments, no batch delete/lock. |
-| **Why it matters** | The verification loop is where a station's data becomes usable to anyone else. "Why did I mark this wrong" is the note that makes a review defensible six months later. |
-| **Plan** | A `detection_comments` table (append-only, user-attributed, audit-logged) and batch endpoints reusing the existing bulk-review selection UI. |
+| **Shipped — batch operations** | `POST /api/v2/detections/batch` landed in PR #234 (`routes/api_write.rs`: route table `:62`, registration `:98`, handler `:436`). It applies one of `review` / `lock` / `unlock` / `delete` to up to `BATCH_MAX = 500` detections per request — a bound the compiler checks, not a test (`api_write.rs:341`, with a `const` assertion at `:350`). One bad key does not sink the batch: each item gets its own result and the `failed` count is named at the top level. Every detection it changes gets an audit row. It is bearer-only, mounted behind `api_token::require_bearer` (`server.rs:152`), so it does not exist on a station with no `BNB_API_TOKEN`. Gated by four tests in `crates/birdnet-web/tests/the_api_can_change_the_station.rs:783,840,890,967` and by the SQLite↔DuckDB desync guard in `tests/analytics_divergence.rs:749,795`. Upstream's batch `resolve` is the only member of their set with no analogue here. |
+| **Ours — what is still missing** | **Free-text comments.** There is no `detection_comments` table: 41 migrations exist and none creates one. There is no route in `crates/birdnet-web/src/routes/` whose path contains `comment`. And `detection_reviews.notes` is not a thread wearing another name — migration 13 puts it under `UNIQUE(date, time, sci_name)` and writes it with `INSERT … ON CONFLICT`, so a second review **overwrites** the first, and the table carries no user column and no foreign key to `users`. The batch endpoint writes that field (*"`review` only: free text attached to every verdict in the batch"*), which is exactly what makes it look like a comment and why the distinction is worth stating. Review (`detection_reviews`, `/detection-reviews`), lock/unlock and bulk review in the search page (`/pages/search-bulk`) are unchanged. |
+| **Why it matters** | The verification loop is where a station's data becomes usable to anyone else. "Why did I mark this wrong" is the note that makes a review defensible six months later. An overwritten, unattributed `notes` field cannot carry that: the second reviewer erases the first one's reasoning without either of them knowing. |
+| **Plan** | A `detection_comments` table — append-only, user-attributed, audit-logged — with the routes to read and write it. The batch endpoints this row also planned are done; nothing here is blocked on them. |
 
 #### G‑24 · Profiling endpoints — GAP
 
@@ -352,7 +364,7 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Open-Meteo is the right default (no key, permissive terms, self-hostable) and we should keep it. But a station owner who already runs a **personal weather station** has ground-truth data ten metres from the microphone, and that is a far better covariate for bird activity than a gridded forecast — which is exactly what the Wunderground provider is for. |
 | **Plan** | Extract a `WeatherProvider` trait from the existing client, keep Open-Meteo as the default implementation, and add Wunderground (personal station) and yr.no (no key, Norwegian Met, good for Europe). OpenWeather is the least interesting of the three and comes last. |
 
-#### G‑27 · eBird API integration — GAP |
+#### G‑27 · eBird API integration — GAP
 
 | | |
 |---|---|
@@ -422,7 +434,7 @@ within each group by how much they change what a station can do.
 | | |
 |---|---|
 | **Upstream** | `config.schema.json` generated by `cmd/gen-schema`, with tests asserting the shipped schema, the wiki page and the config comments cannot drift apart. |
-| **Ours** | `.env.example` (27 kB, hand-maintained), the admin settings pages, and `docs/book/`. |
+| **Ours** | `.env.example` (37 kB, hand-maintained), the admin settings pages, and `docs/book/`. |
 | **Why it matters** | Three surfaces describe every setting today and nothing gates them against each other, which is exactly the drift this repository's own testing conventions warn about. |
 | **Plan** | Derive a JSON Schema from the settings registry at build time, ship it, and add a gate that fails when a settings key exists in the registry but not in `.env.example` or the admin UI — or vice versa. This is cheap and it retires a whole class of "documented but not implemented" bug that this project has already hit more than once. |
 
@@ -483,14 +495,14 @@ against the code it was written for, per `CLAUDE.md`.
 | 11 | Metric-triggered alert rules | G‑29 |
 | 12 | Notification circuit breaker + `*_file` secrets | G‑28 |
 | 13 | Taxonomy: synonyms, family, genus | G‑15 |
-| 14 | Detection comments + batch operations | G‑23 |
+| 14 | Detection comments (batch operations shipped, PR #234) | G‑23 |
 | 15 | Weather provider trait + Wunderground + yr.no | G‑26 |
 | 16 | eBird recent-observations client | G‑27 |
 | 17 | Loudness normalisation of exports | G‑5 |
 | 18 | Per-source restart + jobs API | G‑32 |
 | 19 | `rsync` backup target + daily schedules | G‑30 |
 | 20 | Config schema generation + drift gate | G‑34 |
-| 21 | Which source feeds the live stream | N‑3 |
+| 21 | A station-wide default source for the live stream (`?source_id=` has shipped) | N‑3 |
 | 22 | Bulk species management page | N‑4 |
 | 23 | Watchdog tuning | G‑9 |
 | 24 | Memory-budget capability gating | G‑33 |

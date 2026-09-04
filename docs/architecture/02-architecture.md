@@ -59,11 +59,20 @@ BirdNet-Behavior/
 ├── Cargo.toml                      # Workspace root
 ├── src/                            # Binary entry point and application glue
 │   ├── main.rs                     # Startup, CLI parse, service wiring
+│   ├── app.rs                      # Flag / env / config / settings precedence
 │   ├── cli.rs                      # clap argument definitions
-│   ├── daemon.rs                   # Detection event processor
-│   ├── capture.rs                  # Audio capture subprocess lifecycle
-│   ├── integrations.rs             # Integration factories
-│   ├── helpers.rs                  # Disk manager, mDNS, init helpers
+│   ├── daemon/                     # Detection event processor (processor.rs),
+│   │                               #   config resolution, daylight gating
+│   ├── capture/                    # Audio capture subprocess lifecycle
+│   ├── integrations/               # Integration factories
+│   ├── helpers/                    # Disk manager, mDNS, init helpers
+│   ├── doctor/                     # --doctor / --doctor-json preflight checks
+│   ├── maintenance.rs              # Weekly VACUUM, backup and clip retention
+│   ├── sd_notify.rs                # READY / WATCHDOG / STOPPING for Type=notify
+│   ├── log_capture.rs              # tracing → admin log viewer broadcast
+│   ├── log_filter.rs               # Log level and target filtering
+│   ├── channel_report.rs           # --channel-report capture diagnostics
+│   ├── support.rs                  # Diagnostic support bundle
 │   └── weekly_report.rs            # Weekly report scheduler
 │
 ├── crates/
@@ -81,7 +90,7 @@ BirdNet-Behavior/
 │   │       │   └── spectrogram/    # Mel spectrogram + live broadcast
 │   │       ├── detection/
 │   │       │   ├── pipeline.rs     # Chunking + inference orchestration
-│   │       │   ├── daemon.rs       # File-watcher event loop
+│   │       │   ├── daemon/         # File-watcher event loop
 │   │       │   ├── privacy.rs      # Human-voice suppression
 │   │       │   └── types.rs
 │   │       └── inference/
@@ -104,7 +113,7 @@ BirdNet-Behavior/
 │   │       ├── lib.rs
 │   │       ├── server.rs           # axum setup, graceful shutdown
 │   │       ├── state.rs            # Shared application state
-│   │       ├── auth.rs             # HTTP Basic Auth
+│   │       ├── auth_middleware.rs  # Session gate on /admin*
 │   │       ├── rate_limit.rs       # Per-IP token-bucket rate limiter
 │   │       ├── system_info.rs      # CPU / memory / temperature
 │   │       └── routes/             # REST API, HTMX pages, admin panel
@@ -116,7 +125,7 @@ BirdNet-Behavior/
 │   │       ├── email/              # SMTP via lettre + rustls
 │   │       ├── species_images/     # Wikipedia image cache
 │   │       ├── mqtt/               # Pure-Rust MQTT 3.1.1 + HA discovery
-│   │       ├── auto_update.rs      # GitHub Releases update
+│   │       ├── auto_update/        # GitHub Releases update
 │   │       ├── heartbeat.rs
 │   │       ├── notification.rs     # Template rendering
 │   │       └── weekly_report.rs
@@ -178,7 +187,7 @@ async runtime.
 ## Inter-Crate Dependencies
 
 ```
-main.rs / daemon.rs / integrations.rs
+main.rs / daemon/ / integrations/
   ├── birdnet-core         (no cross-deps)
   ├── birdnet-db           (no cross-deps)
   ├── birdnet-scheduler    (no cross-deps)

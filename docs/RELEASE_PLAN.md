@@ -1,15 +1,24 @@
 # Pre-Release Stability Audit and Execution Plan
 
-**Status:** current. Supersedes the `v0.10.0` preparation plan (same path, git
-history at `e98c8a0`), whose findings F-01…F-12 all landed and are re-verified
-green below. Also supersedes `docs/RELEASE_PUNCHLIST.md` and
-`docs/RELEASE_READINESS.md`.
+**Status:** complete — the historical record of the `v0.10.x` cycle. Every
+finding S-01…S-11 below landed, and the release shipped as `0.11.0`
+(`CHANGELOG.md` `## [0.11.0] - 2026-08-09`). The tree has moved four minors on
+since: `Cargo.toml` `workspace.package.version` is `0.15.0`. The body is
+preserved as the record of that cycle — read its `file:line` evidence as of
+`e98c8a0`, not as of today, and expect symbols to have moved. The current
+picture lives in the later audits: `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` (the
+one `CHANGELOG.md` points readers at), `docs/POST_0140_AUDIT.md`,
+`docs/FIELD_READINESS_AUDIT.md`, `docs/ENCLOSURE_READINESS_AUDIT.md` and
+`docs/PRODUCTION_AUDIT.md`. This plan superseded the `v0.10.0` preparation plan
+(same path, git history at `e98c8a0`), whose findings F-01…F-12 all landed and
+are re-verified green below, and also `docs/RELEASE_PUNCHLIST.md` and
+`docs/RELEASE_READINESS.md`, which are older still.
 
 **Audited:** 2026-08-08, against `main` tip `e98c8a0` (merge of PR #195).
 
-**Target:** ship `v0.10.x` as a public, field-deployable release — an unattended
-station that runs a full season with no operator on site, installed by *either*
-documented path (bare-metal installer **or** Docker).
+**Target (at the time):** ship `v0.10.x` as a public, field-deployable release —
+an unattended station that runs a full season with no operator on site,
+installed by *either* documented path (bare-metal installer **or** Docker).
 
 **Method note.** Every row below carries the command that produced it. Where a
 previous cycle's claim was re-checked rather than assumed, that is stated. Two
@@ -30,7 +39,7 @@ x86_64 Linux, 4 cores, 15 GB RAM, rustc 1.97.1, from a cold `target/`.
 | Lint (all features) | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | **exit 0** — 0 warnings |
 | Tests | `cargo test --workspace --all-features` | **exit 0** — 40 suites, **1933 passed, 0 failed**, 5 ignored |
 | Tests + real model | same, with `BIRDNET_TEST_MODEL`/`_LABELS` set | **exit 0** — identical counts (see **S-04**) |
-| Model integrity | `sha256sum model.onnx` / `labels.csv` | **both match** the digests pinned in `ci.yml`, `install.sh`, `installer/lib/10-config.sh`, `docker/entrypoint.sh` |
+| Model integrity | `sha256sum model.onnx` / `labels.csv` | **both match** the digests pinned in `install.sh`, `installer/lib/10-config.sh` and `docker/entrypoint.sh`, which each carry `MODEL_SHA256` **and** `LABELS_SHA256`. `ci.yml` pins the **model digest only** — it fetches `labels.csv` and exports `BIRDNET_TEST_LABELS` with no checksum at all |
 | Advisories | RustSec DB × `Cargo.lock` (510 packages) | **0 vulnerabilities, 0 unmaintained** |
 | Installer sync | `installer/build.sh --check` | in sync |
 | Shell syntax | `bash -n` over 30 scripts | clean |
@@ -550,7 +559,9 @@ commit. The check was wrong, not Dependabot.
 - `dependabot.yml` now ignores that action at **every** update type, and
   `password-hash 0.6.x` (blocked on an `argon2 0.6` that does not exist —
   newest published is `0.6.0-rc.8`).
-- **New `msrv-ref-matches-cargo-toml` step in `ci.yml`** — the real fix. It
+- **New MSRV-ref step in `ci.yml`** — the real fix. Its name in the workflow is
+  `MSRV ref matches Cargo.toml rust-version`; there is no
+  `msrv-ref-matches-cargo-toml` identifier to grep for. It
   reads the MSRV job's own toolchain ref back out of the workflow file and fails
   if it differs from `rust-version`. Verified both ways: passes as committed,
   and fails when the ref is set to `1.100`. An ignore rule can be
@@ -634,11 +645,15 @@ maintainer's call.
 - [x] A missing model makes CI **fail**, not pass quietly — and the suite that
       had never run in CI at all now runs
 - [x] `Cargo.toml`, `CHANGELOG.md`, `openapi.json` **and** `CITATION.cff` agree,
-      with `validate` enforcing three of four (`api.md` is docs, not a gate)
+      with `validate` now enforcing all four — the `openapi.json` gate landed
+      the day after this audit (`api.md` is docs, not a gate)
 - [x] Full gate green locally: fmt, clippy `-D warnings` both feature sets,
       `test --workspace --all-features` (**1946 passed, 0 failed**, model
-      required), rustdoc `-D warnings`, MSRV 1.95. **In CI: not yet — this
-      branch has not been pushed through a PR run at the time of writing.**
+      required), rustdoc `-D warnings`, MSRV 1.95. **In CI: not yet at the time
+      of writing** — the branch had not been pushed through a PR run. It has
+      since merged; every slice's artefact is on `main` (the `v1.5.5` Dockerfile
+      pin, `ensure_db_dir`, `BIRDNET_REQUIRE_MODEL=1`, the `CITATION.cff` gate,
+      the SHA-pinned `release.yml`).
 
 ## 5. Still not established (and why)
 
@@ -705,12 +720,16 @@ maintainer's call.
     observed once per *stored detection*, so its sample count tracks bird
     activity rather than throughput. The keep-up question is answered by
     `pipeline` instead. A latency figure needs a busy site or a longer window.
-  - **`detect.persisted` is unexplained.** The injected reference recording
-    produced no new stored detection while `pipeline` stored five that same
-    hour. The harness now fails rather than passing on a stale magpie, but the
-    underlying question — most likely the species filter rejecting `Pica pica`
-    for this station's coordinates, which would be correct behaviour and a
-    wrong harness assumption — is unanswered.
+  - **The injection phase's failure is unexplained.** The injected reference
+    recording produced no new stored detection while `pipeline` stored five
+    that same hour. The harness now fails rather than passing on a stale
+    magpie — `scripts/hardware-test.sh` records `FAIL detect.inference` both
+    when nothing new is stored and when "detections rose … but no Pica pica
+    among the newest rows" — but the underlying question, most likely the
+    species filter rejecting `Pica pica` for this station's coordinates, which
+    would be correct behaviour and a wrong harness assumption, is unanswered.
+    (There is no `detect.persisted` phase to grep for; the phases are
+    `detect.before`, `detect.inject`, `detect.inference` and `detect.metric`.)
   - **Thermal headroom is thin.** 72.5 °C at rest and 74.0 °C peak leaves 6 °C
     below the Pi 4's 80 °C soft-throttle point, indoors, with no enclosure. A
     sealed box in summer will throttle. Measured, not bounded.
@@ -741,11 +760,16 @@ maintainer's call.
     * **MQTT / Home Assistant discovery — 8 flags, no UI at all.** The command
       palette advertises "mqtt" as a searchable term and there is nowhere to
       send the operator. Deferred by decision, not oversight.
-    * **`birdnet_core::audio::quality` is built and never called.** ~1300
+    * **`birdnet_core::audio::quality` still does not gate inference.** ~1,700
       lines of SNR, spectral flatness, rain/wind assessment and noise-floor
-      tracking, with benchmarks, that no pipeline invokes. Wiring it changes
-      which chunks reach inference, so it needs its own change and a hardware
-      run to judge the effect on detection rates.
+      tracking, with benchmarks. "Never called" was true at `e98c8a0` and is
+      not true now: `src/integrations/acoustic_health.rs` calls
+      `quality::assess_quality` and `quality::stream_fault::assess_stream` from
+      the background loop `src/app.rs` spawns, to *observe* what the
+      microphones sound like — nothing downstream reads those numbers to make a
+      decision. What is still unwired is the half that would decide **which
+      chunks reach the model**; that changes detection rates, so it needs its
+      own change and a hardware run to judge the effect.
   - **The status surfaces now grade real signals, but only one of the
     unhappy paths has been seen on hardware.** The dashboard checklist, the
     hero pill, the Today rail line and the header badge all read the capture

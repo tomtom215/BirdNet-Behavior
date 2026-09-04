@@ -1,12 +1,17 @@
 # Release-Readiness Punch-List
 
-> **⚠️ SUPERSEDED — historical record only.** The current plan is
-> [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-07 against `main`).
-> This file was written against the `claude/gallant-feynman-bJs95` integration branch,
-> which no longer exists, and its "there is no CI on this repo" note is wrong: `main` is
-> gated by 8 workflows and is green. Every O-01…O-26 and P1–P3 item below has shipped.
-> Kept for the reasoning behind those decisions; do not take its branch model or gate
-> instructions as current.
+> **⚠️ SUPERSEDED — historical record only.** Written 2026-05-29 against the
+> `claude/gallant-feynman-bJs95` integration branch, which no longer exists, at a point
+> long before the current `0.15.0` tree (`Cargo.toml` `workspace.package.version`).
+> Every O-01…O-26 and P1–P3 item below has shipped. Two of its own statements are simply
+> wrong today and are corrected in place below: the branch model, and the "there is no CI
+> on this repo" note — the repo has **ten** workflows, of which eight gate pushes to
+> `main` (`a11y`, `ci`, `coverage`, `docker`, `docs`, `install-smoke`, `mutation`,
+> `supply-chain`; `release` is tag-driven and `publish-model` is dispatch-only).
+> [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-08) succeeded this file and
+> is itself now a completed record; the live picture is in the later audits, starting with
+> `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`. Kept for the reasoning behind these decisions; do
+> not take its branch model or gate instructions as current.
 
 **Purpose.** A self-contained backlog of the work remaining before a clean release,
 written so it can be picked up **cold in a fresh session** — every item carries its
@@ -20,21 +25,32 @@ _Last audited: 2026-05-29, against integration tip `claude/gallant-feynman-bJs95
 
 ## 0. How to work this repo (read first if resuming cold)
 
-**Branch model (squash-loop).** Two long-lived branches:
+**Branch model (squash-loop).** *This section is obsolete and is kept only to explain the
+shape of the work below.* The two-long-lived-branch model it describes is gone: the
+integration branch `claude/gallant-feynman-bJs95` no longer exists on the remote, and
+`main` is not "the old release branch stuck at `#86`" — it is the release branch, it is
+CI-gated, and every PR bases on it. What it said at the time:
 - **Working branch:** harness-assigned each session (e.g. `claude/sleepy-brown-de7jU` this cycle) — commit here; use it as-is, do not rename.
 - **Integration branch:** `claude/gallant-feynman-bJs95` — open every PR with this as the **base**.
 - `main` is the old release branch (stuck at `#86`); **do not** target it.
 
-Per-task cycle (`$WORK` = your assigned working branch):
+Per-task cycle, as it then ran (`$WORK` = your assigned working branch):
 1. Ensure the working branch is at the integration tip:
-   `git fetch origin claude/gallant-feynman-bJs95 && git reset --hard origin/claude/gallant-feynman-bJs95`
+   `git fetch origin <integration> && git reset --hard origin/<integration>`
 2. Commit the change on `$WORK`.
 3. `git push --force-with-lease -u origin $WORK`
    (force-with-lease is expected — the working branch is rewritten each cycle after the prior squash-merge).
-4. Open a PR: head `$WORK` → base `claude/gallant-feynman-bJs95`.
+4. Open a PR: head `$WORK` → base `<integration>`.
 5. After it squash-merges, go back to step 1.
 
-**Gate (run all before opening a PR — there is _no_ CI on this repo, so this is the only gate):**
+Today the cycle is the same shape with `main` as the base, and CI runs on the PR: `ci.yml`
+and `a11y.yml` both carry `claude/**` in their `pull_request.branches`.
+
+**Gate (run all before opening a PR).** This was written as "the only gate, since there is
+no CI on this repo"; that is false — see the banner. It remains a useful *local* gate, and
+it is still the only one that covers a `claude/**` branch fully, because only `ci.yml` and
+`a11y.yml` run on such a PR (`coverage`, `install-smoke`, `mutation` and `supply-chain`
+are restricted to `main`/`master`):
 ```bash
 cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
@@ -802,7 +818,7 @@ From the v2 design proposals (since shipped and removed from the repo — see gi
 - **Multi-station compare** ("your station vs neighbour's") — needs a storage/shape decision.
 - **Web Push** — O-24 shipped PWA bones (manifest, service worker, icons) but not Web Push; needs a
   server-side push store + key-rotation story distinct from the session model.
-- **Custom species images** — `BIRDNET_CUSTOM_IMAGE_DIR` (`.env.example:223`) overrides the Wikipedia
+- **Custom species images** — `BIRDNET_CUSTOM_IMAGE_DIR` (`.env.example:645`) overrides the Wikipedia
   cache; still works after BUG-1 — `species_image_file` checks the custom dir first (unchanged), then
   falls through to the now-fetch-on-miss Wikipedia cache.
 
@@ -811,8 +827,9 @@ From the v2 design proposals (since shipped and removed from the repo — see gi
 ## Audit greps (re-run to refresh this doc)
 
 ```bash
-# Shipped history (integration branch):
-git log origin/claude/gallant-feynman-bJs95 --oneline | head -60
+# Shipped history (the integration branch these greps were written against is gone;
+# run this against `main`):
+git log origin/main --oneline | head -60
 # Deferred-work markers:
 rg -n -i 'TODO|FIXME|stub|not wired|later pass|follow-?up|O-15-followup|O-13-followup' crates/ src/ -g '*.rs'
 # Help-link coverage:

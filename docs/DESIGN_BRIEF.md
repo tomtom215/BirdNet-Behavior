@@ -29,7 +29,7 @@ users**, with deep analytics underneath for enthusiasts.
   classes in one stylesheet; the few dynamic values use a `data-style`
   attribute promoted by a nonce'd `<style>` block. Do not propose inline styles.
 - **One hand-written stylesheet** (`crates/birdnet-web/static/css/app.css`,
-  ~3.4k lines) and **self-hosted fonts** (offline-capable — air-gapped Pi
+  ~4.3k lines) and **self-hosted fonts** (offline-capable — air-gapped Pi
   installs are supported). No CDNs, no runtime-fetched web fonts, no new JS
   dependencies.
 - **Performance-conscious for a Pi** and **fully responsive** (a phone
@@ -97,12 +97,19 @@ users**, with deep analytics underneath for enthusiasts.
 4. **Mobile-first polish.** The bottom tab bar + PWA exist, but individual
    screens (especially the wide SVG analytics, admin forms, and tables) need
    true small-screen layouts.
-5. **New: per-source / multi-stream UI.** Multiple RTSP mics/cameras are
+5. **Per-source / multi-stream UI.** Multiple RTSP mics/cameras are
    supported and every detection now carries a first-class **`Source`** label
-   (`cam1`, `cam2`, `local`). Design source **filtering**, **per-source badges /
-   legends**, a **corroboration** display (*"also heard by cam2"* — multiple mics
-   confirming a detection), and — as an advanced, off-by-default option — a
-   **duplicate-collapse** affordance for explicitly co-located mics. The full,
+   (`cam1`, `cam2`, `local`). A **corroboration** display (*"also heard by
+   cam2"*) already ships on the detection detail page
+   (`routes/pages/detection_detail.rs`, backed by
+   `birdnet_db::sqlite::concurrent_detections_from_other_sources`) — it needs
+   a design pass and a home on the surfaces that do not yet show it, not
+   inventing. Still to design: source **filtering**, **per-source badges /
+   legends**, and — as an advanced, off-by-default option — a
+   **duplicate-collapse** affordance for explicitly co-located mics. Note for
+   whoever implements filtering: `idx_detections_source` was dropped in
+   migration 33 on the reasoning that nothing filters on `Source`, so a real
+   `WHERE Source = ?` needs that index back. The full,
    corroboration-first design rationale is in
    [`book/field/multistream.md`](book/field/multistream.md); design these as
    one coherent surface.
@@ -151,6 +158,6 @@ shared analytics page template, mobile, and the per-source UI).
 | Stylesheet | `crates/birdnet-web/static/css/app.css` |
 | Self-hosted fonts | `crates/birdnet-web/static/fonts/` |
 | Nav manifest (single source of truth) | `crates/birdnet-web/src/routes/pages/nav.rs` |
-| SVG viz helpers | `crates/birdnet-web/src/routes/pages/viz.rs` (+ `atoms.rs`) |
+| SVG viz helpers | `crates/birdnet-web/src/routes/pages/viz/` — a directory (`mod.rs`, `funnel.rs`, `matrix.rs`, `radial.rs`, `timeline.rs`), plus `atoms.rs` beside it |
 | Empty states | `crates/birdnet-web/src/routes/pages/empty_states.rs` |
 | Skeletons | `crates/birdnet-web/src/routes/pages/skeletons.rs` |

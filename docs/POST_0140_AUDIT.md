@@ -1,26 +1,37 @@
 # Post-0.14.0 audit: what a 24/7/365 enclosure will actually hit
 
-**Date:** 2026-08-21 · **Branch:** `claude/production-readiness-audit-k7fzps` · **Base:** `9615b9c`
+**Date:** 2026-08-21, §4 added 2026-08-24 · **Base:** `9615b9c`, the shipped
+`v0.14.0` line · **Re-checked:** 2026-09-04 against `main` at `ee795ed` (v0.15.0)
 
-> **Status: all twenty-five are fixed on this branch.** D1–D13 came from
-> reading the Rust; D14–D25 (§4, added 2026-08-24) came from asking what was
-> still not field-ready and looking at the supply chain, the failure modes
-> nothing had ever provoked, and `install.sh`.
+> **Status: all twenty-five are fixed, and the branch that fixed them is on
+> `main`.** D1–D13 came from reading the Rust; D14–D25 (§4) came from asking what
+> was still not field-ready and looking at the supply chain, the failure modes
+> nothing had ever provoked, and `install.sh`. Each `[FIXED]` line below was
+> re-checked against `ee795ed` and holds, with one residue recorded under D9.
 >
-> **Status of the original thirteen: all fixed.** Each fix's gate was
-> observed failing against the code it was written for, and the commit message
-> records the exact failure text — including three cases where the *gate* had to
-> be corrected because it did not catch the planted defect on the first try, and
-> two where a gate written for one defect immediately found another.
+> Each fix's gate was observed failing against the code it was written for, and
+> the commit message records the exact failure text — including three cases where
+> the *gate* had to be corrected because it did not catch the planted defect on
+> the first try, and two where a gate written for one defect immediately found
+> another.
 >
-> The findings below are left as written. They are the record of what the
-> shipped 0.14.0 did, not of what this branch does; the `[FIXED]` line under
-> each says what changed.
+> **§2's direct answers are the part that has aged.** They were written about
+> 0.14.0 and roughly half are no longer true of `main`. They have been brought up
+> to date in place; where an answer still stands it says so, and where the
+> original count was simply wrong the corrected number is given with the command
+> that produced it.
+>
+> The numbered findings are left as written. They are the record of what the
+> shipped 0.14.0 did, not of what `main` does; the `[FIXED]` line under each says
+> what changed.
 
 Everything below was verified first-hand in this session against the code on this
 commit. Where I measured, the numbers and the method are given. Where I could not
-verify, it says so. Two claims I made early and then disproved are marked
-**RETRACTED** rather than quietly dropped.
+verify, it says so. Claims made early and then disproved are corrected in place
+rather than quietly dropped — the promised `**RETRACTED**` marker was never
+actually used, so look instead for the correction in the text: §2's `unwrap()`
+count, §4's *"Two things were suspected and disproved"* on `journal_mode=MEMORY`
+and negative session durations, and §4's *Checked and cleared* list.
 
 ---
 
@@ -276,6 +287,24 @@ The dangerous property is the one the module doc already states: the damage is n
 detectable after the fact. A merged dataset cannot be repaired, only discarded —
 and right now it cannot even be discarded selectively.
 
+> **Residue, found re-checking this on 2026-09-04.** The `[FIXED]` note above says
+> the rule lives in `detections_analytic` and its `DuckDB` twin "so the two
+> engines cannot disagree". That is true of the two *views*, and
+> `species_summary` is not one of them. `top_species` reads the rollup directly
+> (`crates/birdnet-db/src/sqlite/queries/species.rs:44-49`), and both the
+> maintaining trigger (`crates/birdnet-db/src/migration.rs:960-967`) and
+> `rebuild_species_summary` (`species.rs:472-484`) filter on `review_verdict` and
+> nothing else. So with `analytics_exclude_imports` set, every view-backed
+> analytic drops the imported batch and the species counts an operator reads
+> beside those charts do not — on the species list, the admin species page,
+> `/species/top`, the CSV export, Year in Review and the heat map's top-five
+> strip. `tests/provenance_filter_two_stores.rs` compares the two views against
+> each other, so it is green through this. Same shape in the dawn chorus, which
+> copies the verdict half of the view's predicate inline and was not updated when
+> migration 34 added the second clause
+> (`crates/birdnet-web/src/routes/pages/dawn_chorus.rs:123-130`) — and its own
+> doc comment still says it copies the whole predicate.
+
 ### D10 — `iso_week` is not the ISO week
 
 **[FIXED]** — the weekly phenology queries use `%V` with `%G`, so `iso_week` is the ISO week and every bucket is seven days. `monthly_totals_sql` keeps the calendar year deliberately. The effort join moved with it — and the gate caught that `effort_corrected_abundance_sql` spells its week expression out inline rather than using the shared constant, so the first edit had left the two sides disagreeing.
@@ -355,6 +384,9 @@ protects the feature the project is named for.
 
 ## 2. Direct answers
 
+*Written about 0.14.0. Each answer below carries what re-checking it against
+`ee795ed` found.*
+
 **What are we missing?** Selective provenance (D9) — the ability to exclude or
 delete an imported batch. A restore path that is safe (D1, D2). Retention on
 `audit_log` (D6). A drift alarm on `species_summary` (D7). Effort normalisation
@@ -364,6 +396,17 @@ one chart applies the correction. Precision-by-confidence from `detection_review
 the ground truth is being collected and used **only to hide rows**
 (`detection_reviews.rs` exposes counts and nothing else). Weather is stored,
 displayed as a temperature line on Today, and **never correlated with detections**.
+
+> The first four shipped: D9's batch delete and exclude toggle, D1/D2's restore
+> path, `JOB_LOG_RETENTION` and `JOB_SUMMARY_AUDIT` in the maintenance loop
+> (`src/maintenance.rs:187`, `:200`). The last three still stand at `ee795ed`.
+> `effort_corrected_abundance_sql` has exactly one consumer,
+> `crates/birdnet-web/src/routes/analytics.rs:692`, behind
+> `/analytics/abundance`, and no other route mentions effort.
+> `detection_reviews.rs` still exports counts and page/lookup helpers and no
+> precision measure. `crates/birdnet-db/src/weather.rs:141`, `:155`, `:164`,
+> `:170` remain the only `FROM weather` / `DELETE FROM weather` sites in the
+> workspace; nothing joins `weather` to `detections`.
 
 **What am I not 100 % confident in?** Pi-class performance — every number here is
 x86/NVMe with a warm cache; I have no Pi and did not extrapolate. The audio capture
@@ -387,13 +430,27 @@ cache that exists three modules away. `cached_fragment` is used by
 for `history.rs`, `life_list.rs`, `species_pages.rs`, `year_in_review.rs`,
 `today.rs` and `dashboard/`.
 
+> Half of this moved. Both victims now read through the pool rather than the
+> writer — `history.rs:81`, `:128`, `:302`, `:335`, `:360` and `life_list.rs:29`
+> all call `with_read_db` — so neither blocks a detection landing. The caching
+> half did not: `grep -c cached_fragment` is still **0** in all six at `ee795ed`.
+
 **What misses the engineering-excellence bar?** Not the things I expected. Build,
 tests and clippy are all green. `unsafe` is forbidden. Non-test production code
-across ~103 000 lines contains roughly **40** `unwrap()`s total — that is genuinely
-disciplined, and my first, cruder count of "1 536" was wrong; I am correcting it
-here. What misses the bar is narrower and consistent: **work declared finished that
-was not** (D11, D12, and the "consolidation" comments generally), and **features
-built end-to-end except for the last wire** (D4, D6, D7, D9's batch filter).
+contains **2** `unwrap()`s in total — `crates/birdnet-integrations/src/weather.rs:200`
+and `crates/birdnet-web/src/routes/static_files.rs:203`. That is more disciplined
+than the "roughly 40" recorded here, which had itself corrected a cruder count of
+"1 536". Counted at `ee795ed` over every tracked `*.rs`, excluding `tests/`,
+`benches/`, `examples/`, `*test_support.rs`, inline `#[cfg(test)]` blocks **and
+`#[cfg(test)]`-gated module files** — that last exclusion is what the earlier
+counts missed: a sweep without it finds 41, of which 39 are in
+`crates/birdnet-core/src/audio/soundlevel/tests.rs` and
+`crates/birdnet-behavioral/src/connection/live.rs`, both declared `#[cfg(test)]
+mod` and both test code that happens to sit beside what it tests. What misses the
+bar is narrower and consistent:
+**work declared finished that was not** (D11, D12, and the "consolidation"
+comments generally), and **features built end-to-end except for the last wire**
+(D4, D6, D7, D9's batch filter).
 
 **What misses the production-ready bar?** D1 and D2 together. A station in a sealed
 enclosure will eventually need a restore, and today both the button and the runbook
@@ -406,9 +463,25 @@ build runs on PRs. Shortfalls: §8's restore procedure is unsafe (D2). §3's sto
 table gives ~5–50 MB/day for detection rows; I measure ~557 bytes/row all-in, so
 3 000 detections/day is ~1.7 MB/day — the table overstates by 3–30×, and nowhere
 says a three-year station lands near 1.8 GB or that three quarters of it is index.
-Screenshots are dated 17 Aug and predate the nav, health-badge and clock changes
-that landed 20–21 Aug; `notifications.png` shows a screen no station can produce
-(D4). External links are not checked at all.
+Screenshots predate the nav, health-badge and clock changes that landed 20–21 Aug;
+`notifications.png` shows a screen no station can produce (D4). External links are
+not checked at all.
+
+> Two of these closed. `docs/book/field/deployment.md:392-395` now deletes the
+> sidecars before the `cp`, and its §3 table reads *"~0.6 MB per 1 000
+> detections"* with the 1.83 GB / ~557 B / 73.7 % breakdown beneath it
+> (`:63`, `:73-77`).
+>
+> Two did not, and one was stated wrong. The screenshots are **not** dated 17
+> Aug: `git log -1 -- docs/book/images/` gives **2026-08-10** (`bed832c`), and
+> `notifications.png` was last touched **2026-06-15** (`209acc4`). Nothing has
+> been regenerated since, so they predate even more than this said. External
+> links are still unchecked — `.github/workflows/docs.yml:67-71` runs
+> `scripts/check-book-links.py` against the rendered HTML, which is internal
+> only, and no workflow runs an external checker. `notifications.png` is no
+> longer a screen no station can produce: D4 gave `log_notification` production
+> writers (`src/daemon/processor.rs:240`, `src/integrations/announce.rs:265`), so
+> the page it shows is reachable. The image itself is unchanged.
 
 **Which parts fail the bar for telling the public it is complete?** The Notification
 Center (D4). Backup/restore (D1, D2). Cross-station import (D9) — it should say
@@ -421,24 +494,43 @@ document honestly.
   button and a restore form posting to `/admin/system/restore`
   (`backup_recovery.rs:305,314`) — and per D1 neither is safe. There is no
   `--restore-db` CLI flag to pair with `--backup-db`, so the headless recovery path
-  is the runbook, which is D2.
+  is the runbook, which is D2. **Both halves are safe now (D1, D2); the missing
+  flag is not.** `src/cli.rs:170` `pub backup_db: bool` is still the only one of
+  the pair, and no `restore_db` / `restore-db` appears anywhere in that file.
 * *Import.* Ends at a warning sentence. No batch list with a delete, no
-  "exclude imported data" toggle on any chart.
-* *Notification Center.* Empty forever.
+  "exclude imported data" toggle on any chart. **Both exist now** —
+  `delete_import_batch` behind a Remove button
+  (`crates/birdnet-web/src/routes/admin/migration.rs:186`, `:211`) and the
+  `analytics_exclude_imports` toggle (`:275-295`) — with the caveat recorded
+  under D9.
+* *Notification Center.* Empty forever. **No longer:** D4 wired the writers.
 * *Today.* The "LIVE SIGNAL · LAST 30 S" panel is the largest element above the fold
   and, when idle, is a blank rectangle with no empty state — the one place a new
-  operator looks to answer "is it working?".
+  operator looks to answer "is it working?". **Fixed:** an `idle` pill
+  (`routes/pages/today.rs:163`), a flat static baseline rather than a fake
+  waveform, and the tooltip *"No audio captured recently — the signal updates as
+  new audio is recorded"* (`templates/today.html:289`, `:312-314`).
 * *Today, again.* The "6 rare sightings are waiting for your eye" banner is styled
-  in the alert/error register. Rare sightings are the good news.
+  in the alert/error register. Rare sightings are the good news. **Still true, by
+  a different route.** The class is now `.x-nudge`, painted from `--rare` /
+  `--rare-soft` (`static/css/app.css:3849-3852`) — but `--danger` is defined as
+  `var(--rare)` (`:144`), and the same rule styles both the review nudge and the
+  "No detections for …" outage banner (`routes/pages/today.rs:574`, `:580`). Good
+  news and an outage still read identically.
 * *Nav glyphs.* `⌂ ⌬ ▦ ♪ ¶` as bottom-bar icons. `⌬` is a benzene ring standing in
   for Species and `¶` a pilcrow for Reports; these are text glyphs whose rendering
   and metrics vary by platform font, and two of them carry no meaning to a general
-  audience.
+  audience. **Unchanged** (`routes/pages/nav.rs:51`, `:57`, `:63`, `:69`, `:75`).
 
-**Are the collapsed sections the right design?** I counted them rather than guessing:
-**four** `<details>` elements in the whole app (`correlation.rs` ×2,
-`behavioral.rs`, `admin/migration/render.rs`), plus a handful of CSS disclosure
-patterns (`.bnb-add-form`, `.tsh-api-details`, `.pt-disc`). That is not a lot, and
+**Are the collapsed sections the right design?** I counted them rather than guessing,
+and counted wrong: I swept `crates/birdnet-web/src` and missed the templates. There
+are **14** `<details>` elements in the whole app — `templates/timeseries.html` ×4,
+`templates/admin_audio_sources.html` ×3, `routes/pages/correlation.rs` ×2, and one
+each in `templates/dawn_chorus.html`, `templates/login.html`,
+`templates/admin_accounts.html`, `routes/pages/behavioral.rs` and
+`routes/admin/migration/render.rs` — plus a handful of CSS disclosure patterns
+(`.bnb-add-form`, `.tsh-api-details`, `.pt-disc`). (`PRODUCTION_AUDIT.md` said 12
+four days earlier; that was wrong too.) 14 is still not a lot, and
 where they are used — an add-form, an API reference, a methodology note — collapse
 is the right call: secondary content that would otherwise push the primary content
 below the fold. If the app *feels* full of collapsed sections, the cause is more
@@ -456,14 +548,21 @@ general one.
   times** in `birdnet-scheduler/src/solar.rs:235`,
   `birdnet-web/src/routes/pages/history.rs:539` and
   `birdnet-web/examples/screenshot_server.rs:69`. And per D12, chrono is already in
-  the binary.
+  the binary. **Two of the three went:** `history.rs:548` and
+  `screenshot_server.rs:69` now delegate to `birdnet_core::civil`. The scheduler's
+  copy survives deliberately — that crate depends on `serde` and nothing else —
+  and `tests/leap_year_agrees_with_the_scheduler.rs` holds the two in step.
 * **Time zones: there is no time-zone handling at all**, only a single scalar
   "current offset" read from SQLite and cached for 60 s. That is not a bug in the
   function; it is a data model that cannot express a historical instant. It is why
   D9.3 exists and why migration 32 had to be written.
-* **HTML escaping: three implementations** (D11).
+* **HTML escaping: three implementations** (D11) — one now, plus
+  `feeds.rs::escape_xml`, allowlisted by name and gated by
+  `crates/birdnet-web/tests/one_html_escaper.rs`.
 * Two `backoff_delay`s (`birdnet-integrations/src/retry.rs:37`,
-  `src/capture/supervisor.rs:118`), two `url_encode`s.
+  `src/capture/supervisor.rs:118`), two `url_encode`s
+  (`birdnet-integrations/src/species_images/wikipedia.rs:205`,
+  `birdnet-web/src/routes/pages/mod.rs:321`). All four are still there.
 * Justified hand-rolls, for balance: `AnalyticsCache` (a `Mutex<HashMap>` instead of
   `moka`), the xorshift PRNG in the screenshot fixture, and the solar solver — all
   small, all with a stated reason, none duplicated.
@@ -477,6 +576,18 @@ in the repo of a multi-day run, an SD-card-full run, or a clock-step (NTP jump) 
 I found no test that opens the app against a multi-million-row database — every DB
 test I read builds tens or hundreds of rows, which is why D3's cost only shows up
 when you build the big one on purpose.
+
+> Where this stands at `ee795ed`. D13's skip is now a failure on pushes to `main`
+> (`.github/workflows/ci.yml:108`, enforced at `:174`). The kill, the full disk
+> and the clock step have gates — `tests/unclean_shutdown.rs`,
+> `tests/out_of_space.rs`, `tests/clock_steps_backwards.rs` (D18–D20). Backup and
+> restore are gated in halves — the WAL-carrying snapshot, sidecar removal,
+> non-database detection and archive-escape refusal
+> (`crates/birdnet-web/src/routes/admin/system_controls/backup.rs:508-660`) — but
+> **nothing drives one archive through both**, so the round-trip named here is
+> still missing. Still true: no multi-day soak, and no multi-million-row test.
+> `tests/soak.rs:17` `const DEFAULT_N: usize = 20_000` is the largest in the
+> tree, and `:5-8` calls itself a fast proxy.
 
 **What should be done differently?** Three things.
 
@@ -514,6 +625,9 @@ when you build the big one on purpose.
 Per `CLAUDE.md`: every gate written for these must be observed failing against the
 code it was written for, and the commit must say how.
 
+> All ten were done, on the branch that merged to `main`. Item 7's second half —
+> "makes cross-station import honest" — is the one with a residue: see D9.
+
 ---
 
 ## 4. Second pass (2026-08-24): the deployment surface, not the code
@@ -523,7 +637,7 @@ question "what is still not field-ready", and deliberately looked where D1–D13
 had not: the supply chain, the failure modes nothing had ever provoked, and the
 2715 lines of `install.sh`.
 
-All of it is fixed on this branch, each gate observed failing first.
+All of it is fixed, each gate observed failing first; that branch is on `main`.
 
 ### D14–D16 — "could not verify" took the same branch as "verified"
 
@@ -638,3 +752,11 @@ commits of green tests do not move it:
   exercises neither capture, inference, nor the web server.
 * **No web server under concurrent load.** The reader pool is gated; the server
   in front of it is not.
+
+All five still hold at `ee795ed`. The aarch64 job is
+`cargo check --workspace --all-features --target aarch64-unknown-linux-gnu`
+(`.github/workflows/ci.yml:484`); `tests/soak.rs:5-8` still calls itself a fast
+proxy; and no test in `tests/` or `crates/*/tests/` drives concurrent HTTP — the
+only "concurrent" hits are `tests/web_api_migration.rs`, which guards against two
+imports at once. The audio-hardware line is a negative that reading source cannot
+fully settle; nothing found contradicts it.

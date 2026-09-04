@@ -23,9 +23,9 @@ The web server replaces the Python FastAPI application with an axum server
 embedded in the single binary. It serves:
 
 - **REST API** (`/api/v2/*`) for programmatic access and HTMX partial updates
-- **WebSocket** (`/api/v2/ws`, `/api/v2/ws/spectrogram`) for live detection and spectrogram streams
-- **Server-Sent Events** (`/api/v2/detections/stream`, `/api/v2/logs/stream`) for live dashboards and logs
-- **HTMX pages** — fully server-rendered dashboard, species, heatmap, analytics, admin
+- **WebSocket** (`/api/v2/ws/detections`, `/api/v2/ws/spectrogram`) for live detection and spectrogram streams
+- **Server-Sent Events** (`/admin/system/logs`) for the live admin log viewer
+- **HTMX pages** — fully server-rendered homes (Today, Species, Patterns, Recordings, Reports, Station) plus admin
 - **Admin panel** — settings editor, system info, backup management, log viewer, update check
 - **Static assets** — species images cached from Wikipedia, embedded HTMX JS
 
@@ -43,21 +43,24 @@ axum Router
 │   ├── GET /stats                     Detection/species counts
 │   ├── GET /detections                List detections (date?, limit?)
 │   ├── GET /detections/recent         Recent N detections
-│   ├── DELETE /detections/{id}        Delete a detection (HTMX)
-│   ├── GET /detections/stream         SSE live detection feed
+│   ├── POST /detections/delete        Delete a detection (bearer-gated write API)
+│   ├── GET /ws/detections             WebSocket live detection feed
 │   ├── GET /species/top               Top species by count
 │   ├── GET /species/activity          Hourly activity for date
-│   ├── GET /species/{name}/image      Species image (cached)
+│   ├── GET /species/image/{scientific_name}  Species image (cached)
 │   ├── GET /recordings/{filename}     Serve WAV recording file
-│   ├── GET /logs/stream               SSE live log feed
-│   └── GET /analytics/*               DuckDB analytics (see below)
+│   ├── GET /analytics/*               DuckDB analytics (see below)
+│   └── GET /timeseries/*              Time-series analytics (see below)
 │
-├── /pages/                            HTMX server-rendered pages
-│   ├── GET /pages/dashboard           Detection table + live SSE
-│   ├── GET /pages/species             Species summary page
-│   ├── GET /pages/heatmap             Hour×weekday activity SVG
-│   ├── GET /pages/analytics           Trends, co-occurrence, seasonal
-│   └── GET /pages/logs                Live log stream viewer
+├── (top level)                        HTMX server-rendered homes
+│   ├── GET /                          Today — detection table + live updates
+│   ├── GET /species                   Species home (list, photos, life list)
+│   ├── GET /patterns                  Patterns home (heatmap, trends, behaviour)
+│   ├── GET /recordings                Recordings home (clips, live audio)
+│   ├── GET /reports                   Reports home (weekly, year, history)
+│   └── GET /station                   Station health
+│
+├── /pages/*                           HTMX fragments for those homes
 │
 └── /admin/                            Admin panel
     ├── GET  /admin/settings           Settings form
@@ -65,9 +68,10 @@ axum Router
     ├── GET  /admin/system             System info + backup controls
     ├── POST /admin/system/backup      Trigger backup now
     ├── GET  /admin/system/backups     List backup files
-    ├── GET  /admin/system/backups/{n} Download backup file
-    ├── DELETE /admin/system/backups/{n} Delete backup (HTMX)
-    └── GET  /admin/logs               Admin log viewer
+    ├── GET  /admin/system/backups/{name} Download backup file
+    ├── DELETE /admin/system/backups/{name} Delete backup (HTMX)
+    ├── GET  /admin/system/logs        SSE live log feed
+    └── GET  /admin/system/logs/page   Admin log viewer
 ```
 
 ## Application State
@@ -76,13 +80,26 @@ Shared state using `Arc<AppState>`:
 
 ```rust
 pub struct AppState {
-    pub db: Arc<Mutex<rusqlite::Connection>>,
-    pub db_path: PathBuf,
-    pub backup_dir: PathBuf,
-    pub detection_tx: tokio::sync::broadcast::Sender<Detection>,
-    pub log_tx: tokio::sync::broadcast::Sender<String>,
+    inner: Arc<AppStateInner>,
+}
+
+struct AppStateInner {
+    db: Mutex<rusqlite::Connection>,     // the single SQLite writer
+    readers: Option<ReaderPool>,
+    recording_dir: PathBuf,
+    analytics_db: …,
+    image_cache: …,
+    detection_broadcast: …,
+    log_broadcaster: …,
+    spectrogram_broadcast: …,
+    // …and roughly twenty more, all private
 }
 ```
+
+`AppState` is a cheap-to-clone newtype over `Arc<AppStateInner>`; every
+field is private and reached through accessor methods, so handlers cannot
+reach past the invariants the accessors enforce. The backup directory is
+derived from the database path rather than stored.
 
 - Migrations run automatically on startup
 - All SQLite access goes through `with_db()` closure
@@ -127,11 +144,18 @@ pub struct AppState {
 
 | Endpoint | Query Params | Response |
 |----------|-------------|----------|
-| `GET /analytics/trends` | `days?` (default 30) | `{ dates, counts, moving_avg }` |
-| `GET /analytics/heatmap` | `species?` | `{ data: [[hour, weekday, count]] }` |
-| `GET /analytics/top-species` | `period?` (week/month/year) | `{ species: [...] }` |
-| `GET /analytics/correlation` | `min_days?` | `{ pairs: [{ a, b, days }] }` |
-| `GET /analytics/seasonal` | `species?` | `{ months, species, matrix }` |
+Behavioural analytics (DuckDB) live under `/api/v2/analytics/*`:
+`sessions`, `retention`, `funnel`, `funnel-events`, `patterns`,
+`sequence-count`, `sequence-match-events`, `next-species`, `abundance`,
+`phenology`, `status`.
+
+Trend, heatmap and seasonal work is a separate surface under
+`/api/v2/timeseries/*`: `daily`, `weekly`, `hourly`, `diversity`,
+`trend`, `year-over-year`, `peak-windows`, `gaps`, `anomalies`,
+`accumulation`, `heatmap`, `sessions`, `status`.
+
+See [08-behavioral-analytics.md](08-behavioral-analytics.md) for the
+query semantics behind each.
 
 ## HTMX Pages
 
@@ -140,11 +164,18 @@ classes) and HTMX for dynamic updates. No client-side JavaScript framework.
 
 | Page | Route | Key Features |
 |------|-------|-------------|
-| Dashboard | `/pages/dashboard` | Detection table with audio player, SSE live updates, delete buttons |
-| Species | `/pages/species` | All detected species with image thumbnails, counts, confidence |
-| Heatmap | `/pages/heatmap` | SVG hour×weekday activity chart, species filter |
-| Analytics | `/pages/analytics` | Trends, co-occurrence table, seasonal grid |
-| Live Logs | `/pages/logs` | Real-time log stream via SSE |
+| Today | `/` | Detection table with audio player, live updates, review controls |
+| Species | `/species` | All detected species with image thumbnails, counts, confidence; photo and life-list views |
+| Patterns | `/patterns` | Hour×weekday activity chart, trends, co-occurrence, behaviour tabs |
+| Recordings | `/recordings` | Clip browser and live audio |
+| Reports | `/reports` | Weekly, year-in-review and history look-backs |
+| Station | `/station` | Station health and vitals |
+| Live Logs | `/admin/system/logs/page` | Real-time log stream via SSE |
+
+Each home composes HTMX fragments served under `/pages/*`. The retired
+paths (`/heatmap`, `/analytics`, `/timeseries`, `/correlation`, `/today`,
+`/gallery`, `/life-list`, …) are permanent redirects into these homes;
+`crates/birdnet-web/src/routes/redirects.rs` holds the whole map.
 
 ### Dashboard Audio Player
 
@@ -185,7 +216,7 @@ for integration settings; audio settings require restart).
 
 ### System Info (`/admin/system`)
 
-Displays via `sysinfo` 0.32:
+Displays via `sysinfo` 0.39:
 - CPU model + load (1/5/15 min averages)
 - Memory: used / total
 - Disk: used / total / percentage
@@ -206,19 +237,20 @@ Buttons: "Create Backup Now" → `POST /admin/system/backup`, "Manage Backups �
 Security: canonical path check prevents directory traversal; only `.db` files
 with safe names are served. Files streamed via `tokio-util::ReaderStream`.
 
-### Live Admin Logs (`/admin/logs`)
+### Live Admin Logs (`/admin/system/logs/page`)
 
 SSE-based live log viewer wired to a tokio broadcast channel. All
-`tracing` events are forwarded to the channel for real-time display.
+`tracing` events are forwarded to the channel for real-time display. New
+subscribers are warmed up with the last 200 retained lines
+(`RECENT_LOG_CAPACITY`) before the live tail begins.
 
-## Server-Sent Events (SSE)
+## Live streams
 
-Two SSE streams:
-
-| Stream | Endpoint | Payload |
-|--------|----------|---------|
-| Live detections | `/api/v2/detections/stream` | JSON `Detection` objects |
-| Live log lines | `/api/v2/logs/stream` | Plain text log lines |
+| Stream | Endpoint | Transport | Payload |
+|--------|----------|-----------|---------|
+| Live detections | `/api/v2/ws/detections` | WebSocket | JSON `Detection` objects |
+| Live spectrogram | `/api/v2/ws/spectrogram` | WebSocket | Spectrogram frames |
+| Live log lines | `/admin/system/logs` | SSE | JSON `LogLine` records |
 
 Both streams use `tokio::sync::broadcast` channels with `capacity = 256`.
 Subscribers receive events from when they connect; missed events are not

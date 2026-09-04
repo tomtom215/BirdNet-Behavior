@@ -12,17 +12,24 @@ bug on a desk and a corrupted season in a field. Anything that fails silently
 ranks above anything that fails loudly, because a station nobody is watching only
 ever reports what it volunteers.
 
-> **Three statuses below have since moved.** A-4 is largely fixed (migration 26),
-> A-5 is partly fixed (2 of 9 builders wired), and A-6's pre-import half is done
-> while its post-import half is not. The evidence is in
-> [`FIELD_READINESS_AUDIT.md`](FIELD_READINESS_AUDIT.md) §6, which is the
-> follow-on pass. This document is left as written, in the past tense, for the
-> reason given below.
+> **Where this document now stands.** This is the 2026-08-17 pass, written
+> against `f025cbd`. It was superseded twice — first by
+> [`FIELD_READINESS_AUDIT.md`](FIELD_READINESS_AUDIT.md) §6, then by
+> [`POST_0140_AUDIT.md`](POST_0140_AUDIT.md) — and its findings were worked
+> through over the releases that followed. Re-checked against `main` at `ee795ed`
+> (v0.15.0) on 2026-09-04: fifteen of the sixteen numbered findings are fixed,
+> three of them with a residue named in place (A-3's auto-update alerting, A-6's
+> solar overlays, A-7's prose-vs-unit CI check), and **A-5 is partly fixed** —
+> two of nine phenology builders now have production consumers. The body is
+> preserved as the record of what was wrong and why nothing noticed. Per-finding
+> statuses and any statement a reader might still act on have been corrected in
+> place; nothing else has been rewritten into the present tense.
 
-**Status.** Every finding below is now **fixed**, each with gates observed
-failing against the code they were written for. The narrative is kept in the
-past tense deliberately: the value of an audit is partly the record of what was
-wrong and why nothing noticed, which a rewritten-to-present document loses.
+**Status.** Fifteen findings are fixed, each with gates observed failing against
+the code they were written for; A-5 is partly fixed, and its current split is
+recorded in that section. The narrative is kept in the past tense deliberately:
+the value of an audit is partly the record of what was wrong and why nothing
+noticed, which a rewritten-to-present document loses.
 
 **Method.** Every claim below was produced by running something — a gate, a
 probe, a query plan, or a real browser. Where a previous
@@ -52,9 +59,11 @@ run that captured the real exit code.
 
 **Verdict.** The engineering substrate is strong and mostly deserves its
 reputation: the systemd unit is genuinely hardened (`CapabilityBoundingSet=`
-empty, `SystemCallFilter` minus eight groups, watchdog gated on *detection-loop
-progress* rather than mere liveness), the detection deadman closes the
-"everything is green and nothing is being detected" hole that most stations have,
+empty, `SystemCallFilter` minus eight groups, watchdog gated on the detection
+loop still *cycling*, so a hung pipeline is restarted rather than reported healthy
+— see the retraction in §2 for what that does *not* prove), the detection deadman
+closes the "everything is green and nothing is being detected" hole that most
+stations have,
 the disk/network/DB failure paths have fault-injection tests, and the docs are
 better than most commercial products'.
 
@@ -73,7 +82,7 @@ What follows is what a year of unattended operation would expose anyway.
 | A-2 | Five queries ask UTC for "today" while every detection is stamped in local time | **P1** | **fixed this pass** |
 | A-3 | Operational alerting is one-dimensional: only "no detections at all" ever notifies | P2 | **fixed** |
 | A-4 | Reviewer verdicts are collected and then applied to nothing | P2 | **fixed** |
-| A-5 | The `phenology` module — 925 LOC, 12 exports — has no production consumer | P2 | **fixed** |
+| A-5 | The `phenology` module — 925 LOC, 12 exports — has no production consumer | P2 | **partly fixed** — 2 of 9 SQL builders wired |
 | A-6 | Importing another station's history reconciles neither its location nor its clock | P2 | **fixed** |
 | A-7 | The field runbook is not on the docs site, and its memory ceiling is wrong | P3 | **fixed** |
 | A-8 | Live and synced `DuckDB` rows carry different columns | P3 | **fixed** |
@@ -100,8 +109,9 @@ green through it.**
 
 `SQLite` is the source of truth; `DuckDB` is a derived copy that every
 behavioural and time-series dashboard reads. New detections reach both —
-`src/daemon/processor.rs:274` inserts into `DuckDB` right after the `SQLite`
-write. Four ordinary operator actions did not:
+`src/daemon/processor.rs` inserts into `DuckDB` right after the `SQLite` write
+(that call sits at `:685` today; it was at `:274` when this ran). Four ordinary
+operator actions did not:
 
 | Action | Route | What it called |
 |---|---|---|
@@ -211,8 +221,11 @@ TZ=Pacific/Auckland   UTC 12:00 -> date('now')=2026-08-17  local=2026-08-18   UT
   different days regardless of window width.
 
 **Fix.** All five sites now use `date('now','localtime')`, matching the
-convention already documented in `clock.rs` and used by
-`queries/detections/read.rs:114` and `src/maintenance.rs:415`.
+convention documented in `crates/birdnet-db/src/clock.rs` and used by the
+retention cutoffs in `src/maintenance.rs:776`. At `ee795ed` the only bare
+`date('now')` left in the tree are a benchmark
+(`crates/birdnet-db/benches/db_queries.rs:248`) and a comment
+(`src/maintenance.rs:424`).
 
 **Gate.** `tests/local_day_boundary.rs`. SQLite's `localtime` reads the process
 timezone through libc and `std::env::set_var` is `unsafe` in edition 2024 (which
@@ -226,7 +239,7 @@ exactly the failure mode `CLAUDE.md` warns about.
 
 ---
 
-### A-3 — Only one thing can ever page you · P2 · open
+### A-3 — Only one thing can ever page you · P2 · fixed
 
 For an enclosure in a field, the honest question is: *which failures reach a
 human?* Exactly one does.
@@ -266,9 +279,19 @@ backup failure, analytics quarantine, sustained thermal throttling. Roughly one
 new module of the same shape as `deadman.rs`, which is the right precedent to
 copy.
 
+> Since done: `src/integrations/station_health.rs` is that module — *"the
+> conditions that end a season, other than silence"* — spawned beside the deadman
+> at `src/app.rs:386`. It runs six checks (`station_health.rs:222`): `sources`,
+> `disk`, `thermal`, `maintenance`, `quarantined-stores` and `clock`, sharing the
+> deadman's episode semantics. `check_maintenance` (`:523`) reads each job's
+> recorded *verdict* rather than its timestamp, which is what makes a backup that
+> fails every week visible: `mark_ran` used to refresh the timestamp on failure
+> too. The one item on the list above it does not cover is a failed or
+> rolled-back auto-update.
+
 ---
 
-### A-4 — Curation is collected and applied to nothing · P2 · open
+### A-4 — Curation is collected and applied to nothing · P2 · fixed
 
 `detection_reviews` (migration 13) stores a `confirmed` / `rejected` verdict per
 detection, non-destructively and idempotently. The review queue is a real UI with
@@ -295,9 +318,24 @@ stores, defaulting to on. It needs the verdict mirrored into `DuckDB` (the
 mechanism A-1 just built) and one filter clause threaded through the query
 builders.
 
+> Since done, as one view rather than one preference. Migration 26 denormalises
+> the verdict onto `detections` and adds `detections_analytic` — `SELECT * FROM
+> detections WHERE review_verdict IS NOT 'rejected'`
+> (`crates/birdnet-db/src/migration.rs:769`) — with the `DuckDB` twin spelling
+> the same rule as `review_verdict IS DISTINCT FROM 'rejected'`
+> (`crates/birdnet-timeseries/src/queries/mod.rs:97`). The verdict is mirrored
+> into the analytics copy by `AppState` (`state.rs:949`), which is the A-1
+> mechanism doing the work. Migration 34 later added a second clause to that
+> view, for import provenance; see the note under A-6. Two surfaces do **not**
+> read the view, and both carry only the verdict half of it: the dawn chorus
+> spells the predicate out inline because `INDEXED BY` is not valid against a
+> view (`dawn_chorus.rs:119-130`), and `species_summary` is maintained by trigger
+> (`migration.rs:960-967`). For rejections that is the whole rule and both are
+> correct; for imports it is not — see A-6.
+
 ---
 
-### A-5 — A whole analytics module nothing calls · P2 · open
+### A-5 — A whole analytics module nothing calls · P2 · partly fixed
 
 `crates/birdnet-behavioral/src/phenology/` is 925 lines across four files,
 exporting 12 symbols, with its own executing test suite
@@ -340,9 +378,27 @@ effort-corrected abundance, and fixing the two caveats first) or delete it.
 Carrying tested, documented, unreachable code is the thing that makes an
 "is this feature real?" question unanswerable from the outside.
 
+> Since partly done — **two of the nine SQL builders are reachable, seven are
+> not.** `effort_corrected_abundance_sql` and `phenology_timing_sql` are called
+> from `crates/birdnet-web/src/routes/analytics.rs:692` and `:715`, behind
+> `/analytics/abundance` and its sibling. Grepping `crates/`, `src/` and
+> `tests/`, excluding the module and its own tests, the other seven still return
+> nothing: `first_detection_sql`, `monthly_totals_sql`, `interannual_trend_sql`,
+> `peak_weeks_sql`, `weekly_abundance_sql`, `migration_window_sql`,
+> `weekly_richness_sql`.
+>
+> Both caveats above were closed by disclosure rather than by arithmetic, which
+> is the right call for a span: `migration_window_sql` now returns
+> `year_crossing` — true when a species was detected in both the first and last
+> fortnight of the year, exactly when a calendar-year window stops describing a
+> migration — and reports `detected_days` beside `presence_days` so the span and
+> the occupancy cannot be confused. Both are documented at
+> `crates/birdnet-behavioral/src/phenology/timing.rs:150-168`. The leap-day skew
+> recorded in §3 was fixed in the same file, at `:36-76`.
+
 ---
 
-### A-6 — Importing another station's history reconciles nothing · P2 · open
+### A-6 — Importing another station's history reconciles nothing · P2 · fixed
 
 *Directly answering: "what happens if someone uploads historical BirdNET-Pi data
 from a different station location?"*
@@ -400,12 +456,39 @@ fact.
 3. **Offer a clock offset at import.** A single "these recordings were made at
    UTC{±N}" field, applied during import, fixes the hour-of-day class outright.
 
-Until then the honest position is to say so in the migration guide, which
-currently does not mention location or timezone at all.
+Until then the honest position is to say so in the migration guide, which at the
+time did not mention location or timezone at all.
+
+> Since done, with one half outstanding. All three recommendations shipped, and
+> the threshold shipped tighter than the one floated above: `DIFFERENT_SITE_KM`
+> is **5 km, not 25** (`crates/birdnet-migrate/src/provenance.rs:52`), checked
+> before the import from `crates/birdnet-migrate/src/birdnet_pi/mod.rs:183`.
+> Provenance is recorded as `import_batch_id`
+> (`crates/birdnet-db/src/migration.rs:701`), which is what later made an import
+> removable and excludable — migration 34 puts `AND (import_batch_id IS NULL OR
+> NOT EXISTS (SELECT 1 FROM settings WHERE key = 'analytics_exclude_imports' AND
+> value = 'true'))` into `detections_analytic` (`migration.rs:1325-1330`), with
+> the `DuckDB` twin in `crates/birdnet-behavioral/src/queries.rs:117-124`. The
+> clock is converted per row from `source_utc_offset_secs` (`provenance.rs:263`)
+> rather than by a flat shift, and the guide now opens on both facts
+> (`docs/book/guides/migration.md:25`, `:43`).
+>
+> **Still open: the solar overlays.** `solar_times_local`
+> (`crates/birdnet-web/src/routes/pages/mod.rs:375`) reads only the
+> `latitude`/`longitude` settings, so sunrise and sunset markers drawn over
+> imported rows are still this station's, not the source's. No per-batch
+> coordinate is consulted anywhere.
+>
+> **And the provenance clause reaches only what reads the view.** The dawn chorus
+> (`dawn_chorus.rs:126-130`) and `species_summary`
+> (`crates/birdnet-db/src/sqlite/queries/species.rs:44`, `:472`;
+> `migration.rs:960`) carry the verdict half of the predicate and not the
+> provenance half, so with `analytics_exclude_imports` set they still count the
+> excluded batch.
 
 ---
 
-### A-7 — The field runbook is not on the docs site · P3 · open
+### A-7 — The field runbook is not on the docs site · P3 · fixed
 
 `docs/FIELD_DEPLOYMENT.md` is the best document in the repository and the single
 most relevant one to a permanent outdoor install: hardware, power and thermals,
@@ -436,12 +519,23 @@ edit and link fixups), and add a CI check that the unit-file limits quoted in
 prose match `65-service.sh` — the same shape as the existing installer sync-gate.
 
 > Since done: the five runbooks now live in the book itself, under
-> `docs/book/field/`, as the *Running a Permanent Station* part. The paths named
-> above are where they were when the audit ran.
+> `docs/book/field/`, as the *Running a Permanent Station* part
+> (`docs/book/SUMMARY.md:58-62`). The paths named above are where they were when
+> the audit ran; none of them exists at the old location any more. The memory
+> ceiling agrees too — `docs/book/field/deployment.md:180` quotes
+> `MemoryHigh=768M`, `MemoryMax=1G`, which is what
+> `installer/lib/65-service.sh:145-146` sets.
+>
+> **The recommended CI check was not built.** No workflow and no test compares
+> the prose against `65-service.sh`. `scripts/hardening-check.sh:16` opens *"#
+> Directives reproduced, from installer/lib/65-service.sh:"*, but it compares
+> runtime sandbox behaviour rather than the quoted numbers — and no
+> `.github/workflows/*.yml` invokes it, so the script is itself an unrun gate.
+> The two sides agreeing today is exactly when the gate is cheapest to add.
 
 ---
 
-### A-8 — Live and synced `DuckDB` rows carry different columns · P3 · latent
+### A-8 — Live and synced `DuckDB` rows carry different columns · P3 · fixed
 
 `AnalyticsDb::insert_detection` (the live path) writes 6 columns; `SYNC_COLS`
 (the bulk path) writes 12. Rows written live therefore have NULL `Lat`, `Lon`,
@@ -450,10 +544,18 @@ contents depending on whether it arrived live or via a resync — including the
 new drift rebuild, which will now *change* those columns on stations that trigger
 it.
 
-Checked: no `DuckDB`-side query reads any of the six, so nothing is wrong today.
-It is recorded because it is a trap for the next analytic that wants
+Checked: no `DuckDB`-side query reads any of the six, so nothing was wrong at the
+time. It is recorded because it is a trap for the next analytic that wants
 `Lat`/`Week`, and because "the same row means different things depending on how
 it got here" is not a property to leave undocumented.
+
+> Since done: the live insert writes the same thirteen columns as the bulk path,
+> `Lat`/`Lon`/`Cutoff`/`Week`/`Sens`/`Overlap` among them
+> (`crates/birdnet-behavioral/src/connection/sync.rs:400-402`).
+> `import_batch_id` and `review_verdict` are the two deliberate exceptions,
+> documented at `:389-392`: a live detection is by definition this station's own
+> and unreviewed, so offering them as parameters would invite a caller to say
+> otherwise.
 
 ---
 
@@ -681,14 +783,24 @@ functions, not decoration.
 
 ### On the "too many collapsed sections" question
 
-Checked, and the premise does not hold: there are **12 `<details>` elements in
-the entire UI**, and they are used the way progressive disclosure should be —
-"See the numbers" behind a chart, an add-form behind a button, a password hint
-behind a link. Nothing a user needs is hidden behind one.
+Checked, and the premise does not hold: there are **14 `<details>` elements in
+the entire UI** — counted at `ee795ed` across `crates/birdnet-web/src` and
+`crates/birdnet-web/templates`: `templates/timeseries.html` ×4,
+`templates/admin_audio_sources.html` ×3, `routes/pages/correlation.rs` ×2, and
+one each in `templates/dawn_chorus.html`, `templates/login.html`,
+`templates/admin_accounts.html`, `routes/pages/behavioral.rs` and
+`routes/admin/migration/render.rs`. (This pass first reported 12 and
+`POST_0140_AUDIT.md` reported four; neither count was right.) They are used the
+way progressive disclosure should be — "See the numbers" behind a chart, an
+add-form behind a button, a password hint behind a link. Nothing a user needs is
+hidden behind one.
 
-The real navigational problem is the opposite. **Admin is a long flat scroll**:
-`/admin/settings` is one column of full-width sections with no in-page nav, no
-anchors and no way to jump. And entering Admin **replaces the whole app shell** —
+The real navigational problem is the opposite. **Admin was a long flat scroll**:
+`/admin/settings` was one column of full-width sections with no in-page nav, no
+anchors and no way to jump. That half is since fixed — a sticky "On this page"
+jump list now heads the page, one anchored entry per section
+(`crates/birdnet-web/src/routes/admin/settings/render/mod.rs:47`, `:59`,
+`:147`). Entering Admin still **replaces the whole app shell** —
 the Today/Species/Patterns nav disappears, swapped for a dense 12-item admin bar
 with six micro category labels, and the only route back is a breadcrumb. That
 discontinuity, not disclosure, is what makes the settings area feel hard.
@@ -699,24 +811,37 @@ discontinuity, not disclosure, is what makes the settings area feel hard.
 
 Recorded because "we verified this" is worth as much as a finding, and because
 three of these contradict claims made earlier in this same audit before they were
-checked:
+checked. One of them — the watchdog — was itself wrong, and is retracted below
+rather than quietly dropped:
 
 - **Live analytics are not stale.** An early read of the sync call sites
   suggested `DuckDB` was only populated at startup, which would have frozen every
-  analytics page for the life of the process. False: `src/daemon/processor.rs:274`
-  inserts per detection. Verified by reading the processor.
-- **There is a background pre-warmer.** `src/app.rs:397` drives
-  `prewarm_analytics`, so the heavy cached fragments stay hot without a visitor
-  paying for them. An earlier grep scoped to the wrong directories missed it.
+  analytics page for the life of the process. False: `src/daemon/processor.rs`
+  inserts per detection (`:685` today, `:274` when this ran). Verified by reading
+  the processor.
+- **There is a background pre-warmer.** `src/app.rs` drives `prewarm_analytics`
+  (`:500` today, `:397` when this ran), so the heavy cached fragments stay hot
+  without a visitor paying for them. An earlier grep scoped to the wrong
+  directories missed it.
 - **There is operational alerting** — the deadman (A-3). An earlier pass
   concluded there was none.
 - **The systemd unit is genuinely hardened.** Read in full: empty
   `CapabilityBoundingSet`, `SystemCallFilter=@system-service` minus eight groups,
   `ProtectSystem=strict` with explicit `ReadWritePaths`, `UMask=0027`, and a
   documented, deliberate reason for *not* setting `ProcSubset=pid`.
-- **The watchdog proves work, not liveness.** `sd_notify.rs:159` withholds the
-  ping when the detection-loop counter has not advanced, so a hung pipeline is
-  restarted rather than reported healthy.
+- **The watchdog proves the loop is cycling — not that any work happened.**
+  Recorded here as *"the watchdog proves work, not liveness"*, on the strength of
+  `sd_notify.rs`'s own doc comment. **Retracted.** The mechanism is real —
+  `spawn_watchdog_pinger` withholds `WATCHDOG=1` when the counter has not
+  advanced (`src/sd_notify.rs:137-149`), so a hung or blocked pipeline is
+  restarted rather than reported healthy — but the counter it watches is bumped
+  at the top of the daemon's poll loop
+  (`crates/birdnet-core/src/detection/daemon/run.rs:287`), and that loop cycles
+  on a 500 ms `recv_timeout` whether or not a single file has arrived. A station
+  that has recorded nothing for four months keeps it satisfied. The thing that
+  notices silence is the detection deadman (A-3), not the watchdog.
+  `UNATTENDED_DEPLOYMENT_AUDIT.md` §2 carries the same retraction; this is the
+  document that made the claim, so it carries it too.
 - **DST does not corrupt filenames.** `LocalOffset` is refreshed by the capture
   supervisor on every tick rather than snapshotted at start, so a station keeps
   naming files correctly across a daylight-saving change it never restarts for.
@@ -733,15 +858,19 @@ Stated rather than guessed at, because the alternative is prose that reads
 confident and is not:
 
 - **Behaviour on real Pi hardware over months.** Everything here ran on x86_64 in
-  a container. `docs/book/field/hardware-test.md` exists for this and is the right
-  instrument; it has not been run this cycle.
+  a container. `docs/book/field/hardware-test.md` and `scripts/hardware-test.sh`
+  exist for this and are the right instrument. Still unsettled at `ee795ed`:
+  nothing in the tree records a run, and no CI job executes either. This is not a
+  question source-reading can close.
 - **Aggregate cost on Pi-class hardware.** A-9 measured the query shapes at
   four-year scale on x86_64 and fixed the one that was accidentally quadratic in
   history. The remaining full-history aggregates (heat map ~1 s, species
   lifetime ~1.5 s, seasonal phenology ~2.4 s) are inherently O(history) and are
   hidden from page loads by the cache and pre-warmer — but the pre-warmer still
   *runs* them, as background CPU competing with live inference, and that cost
-  grows every year. Not measured on a Pi.
+  grows every year. Still not measured on a Pi: `.github/workflows/ci.yml:484`
+  runs `cargo check --workspace --all-features --target aarch64-unknown-linux-gnu`,
+  so no aggregate has ever *executed* on ARM in this repository.
 - **Leap-day skew in day-of-year comparisons.** *Fixed.* DOY 60 is 29 February
   in a leap year and 1 March otherwise, so cross-year phenology carried a
   one-day skew after February. This was recorded as latent "while A-5 stands";
@@ -752,4 +881,7 @@ confident and is not:
 - **Whether the DuckDB drift rebuild is fast enough at 2 M rows.** The streaming
   appender bounds memory (measured previously: 1 M rows → 541 MiB before
   streaming, bounded after), but the wall-clock cost of a rebuild during startup
-  on a Pi is not measured. It runs only when drift is detected.
+  on a Pi is not measured. It runs only when drift is detected. Still unmeasured
+  at `ee795ed`: the workspace has two bench targets
+  (`crates/birdnet-core/benches/audio_pipeline.rs`,
+  `crates/birdnet-db/benches/db_queries.rs`) and neither touches `full_resync`.

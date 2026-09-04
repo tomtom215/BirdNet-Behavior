@@ -180,27 +180,40 @@ LIMIT 10;
 ## API Endpoints
 
 ```
-GET /api/v2/analytics/trends           → daily count with rolling window
-GET /api/v2/analytics/heatmap          → hour × weekday data
-GET /api/v2/analytics/top-species      → species ranked by period
-GET /api/v2/analytics/correlation      → co-occurrence matrix
-GET /api/v2/analytics/seasonal         → month × species activity
-GET /api/v2/analytics/sessions         → activity sessionization
-GET /api/v2/analytics/retention        → species retention rates
-GET /api/v2/analytics/funnel           → dawn chorus funnel
-GET /api/v2/analytics/next-species     → "what's coming next" prediction
+GET /api/v2/analytics/sessions              → activity sessionization
+GET /api/v2/analytics/retention             → species retention rates
+GET /api/v2/analytics/funnel                → dawn chorus funnel
+GET /api/v2/analytics/funnel-events         → the events behind a funnel step
+GET /api/v2/analytics/patterns              → sequence pattern search
+GET /api/v2/analytics/sequence-count        → sequence match counts
+GET /api/v2/analytics/sequence-match-events → the events behind a match
+GET /api/v2/analytics/next-species          → "what's coming next" prediction
+GET /api/v2/analytics/abundance             → effort-corrected abundance
+GET /api/v2/analytics/phenology             → effort-corrected phenology
+GET /api/v2/analytics/status                → engine availability
 ```
+
+Trends, heatmaps, seasonality and species rankings are **not** part of
+this surface — they are computed by `birdnet-timeseries` and served under
+`/api/v2/timeseries/*` (`daily`, `weekly`, `hourly`, `diversity`,
+`trend`, `year-over-year`, `peak-windows`, `gaps`, `anomalies`,
+`accumulation`, `heatmap`, `sessions`, `status`).
 
 ## Web UI
 
-Analytics are surfaced through several HTMX pages:
+Analytics are surfaced through the **Patterns** home, which folds the
+former standalone pages into tabs:
 
-- `/heatmap` — hour × weekday SVG activity grid
-- `/correlation` — species co-occurrence pairs and companion lookup
-- `/analytics` — sessions, retention, funnel, and next-species widgets
-  (feature-gated)
-- `/timeseries` — activity, diversity, trend, peak, gap, and session
-  time-series dashboards
+- `/patterns` — hour × weekday SVG activity grid
+- `/patterns?tab=together` — species co-occurrence pairs and companion lookup
+- `/patterns?tab=behavior` — sessions, retention, funnel, and next-species
+  widgets (feature-gated)
+- `/patterns?tab=trends` — activity, diversity, trend, peak, gap, and
+  session time-series dashboards
+
+The old paths (`/heatmap`, `/correlation`, `/analytics`, `/timeseries`)
+are still served as permanent redirects into those tabs — see
+`crates/birdnet-web/src/routes/redirects.rs`.
 
 ## Data Preparation
 

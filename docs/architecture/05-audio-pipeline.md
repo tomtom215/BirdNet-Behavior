@@ -209,22 +209,18 @@ exclusivity problem this solves.
 ## Detection Pipeline
 
 Implemented in `crates/birdnet-core/src/detection/pipeline.rs` and
-`crates/birdnet-core/src/detection/daemon.rs`.
-
-```rust
-pub trait DetectionHandler: Send + 'static {
-    fn handle(&self, detection: Detection, file: &Path) -> Result<(), HandlerError>;
-}
-```
+`crates/birdnet-core/src/detection/daemon/`.
 
 - `notify`-based file watcher watches the `StreamData/` directory
 - New WAV files trigger the decode → resample → spectrogram → infer → report chain
-- `DetectionHandler` trait allows swapping backends (SQLite, test doubles)
-- Daemon integration in `src/daemon.rs` wires the pipeline to SQLite and integrations
+- The pipeline yields plain `Detection` values; there is no handler trait —
+  `birdnet-core` exports no traits at all. Dispatch happens in the binary
+- Daemon integration in `src/daemon/processor.rs` wires the pipeline to SQLite
+  and integrations
 
 ### Event processor
 
-The `event_processor` in `src/daemon.rs` handles each detection:
+The `event_processor` in `src/daemon/processor.rs` handles each detection:
 
 1. Insert into SQLite via `birdnet-db`
 2. Post to BirdWeather (if configured)

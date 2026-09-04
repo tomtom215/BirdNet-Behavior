@@ -198,8 +198,11 @@ backwards, analytics break.
 - Enable `systemd-timesyncd` (default on Raspberry Pi OS) **or**
   `chrony` (preferred for cellular deployments — handles long offline
   windows better).
-- The unit waits for `time-sync.target` before launching so the daemon
-  never sees an unsynchronised clock at boot.
+- The unit is *ordered after* `time-sync.target`, so on a host running
+  `systemd-timesyncd` or `chrony` the sync normally lands first. It is
+  ordering only — nothing `Wants=` that target, so the service starts
+  even if the clock never syncs. That is why the daemon fails open on
+  clock-dependent gating (see below) rather than assuming a good clock.
 - For deployments with no network at all, fit a battery-backed RTC
   module (DS3231 on I²C) and load `rtc-ds1307` at boot.
 
@@ -251,9 +254,12 @@ This is the workhorse of unattended operation:
 3. If the daemon hangs (livelock, GPU deadlock, ML thread stuck), the
    pings stop. systemd kills it after `WatchdogSec` and restarts via
    `Restart=always`.
-4. `StartLimitBurst=5` within `StartLimitIntervalSec=300` prevents a
-   tight restart loop on a permanently-broken install — the unit
-   parks itself in `failed` state for operator review.
+4. `StartLimitIntervalSec=0` — the rate limit is off and the unit never
+   gives up. A tight restart loop is prevented by backing off instead
+   (`RestartSec=10`, `RestartSteps=10`, `RestartMaxDelaySec=300`), so a
+   permanently-broken install retries quietly every five minutes for
+   ever and recovers by itself the moment its cause is fixed. An
+   unattended box never parks itself in `failed` waiting for a visit.
 5. `ExecStartPre` runs `birdnet-behavior --doctor`. Exit codes 0
    (clean) and 1 (warnings) allow the service to start; exit code 2
    (errors that will prevent operation) blocks startup so the journal
@@ -563,15 +569,17 @@ journalctl -u birdnet-behavior | grep 'station-health notifier started'
 Field-deployment philosophy: **don't auto-update**.
 
 - The daemon checks for updates daily (logged at INFO when one is
-  available) but **never** applies them automatically. The admin
-  panel's "Update" button is the only way to upgrade.
+  available) but **never** applies them automatically. The admin panel's
+  **Check for Updates** button tells you when one exists; apply it with
+  `sudo bash install.sh update`.
 - Test a new release on a bench unit first. Run it for at least
   72 h before pushing it to field units.
 - When you do push, do it during the species' low-activity window
   (e.g. local 14:00 for songbirds) so a downtime blip costs the fewest
   detections.
-- Keep the previous binary in `/usr/local/bin/birdnet-behavior.prev`
-  so a one-line `mv` rollback is possible if the new build misbehaves.
+- `install.sh` keeps the outgoing binary at
+  `/usr/local/bin/birdnet-behavior.prev`, so a one-line `mv` rollback is
+  available if the new build misbehaves.
 
 ## 11. Pre-flight checklist
 
@@ -627,7 +635,7 @@ Symptom-driven, oldest-known-cause first:
 | Database integrity check fails            | Stop service; restore from `~/BirdNet-Behavior/backups/`                     |
 | Web UI 500s                               | Check `/api/v2/health` for `status`; integrity check most common cause       |
 | Detection latency growing                 | OOM throttling — check `birdnet_process_resident_memory_bytes` over time     |
-| `Restart=always` stuck in failed state    | `StartLimitBurst` exceeded; fix root cause, then `systemctl reset-failed`    |
+| Service retrying every 5 minutes          | Backoff has reached its ceiling; read the `ExecStartPre` doctor output in the journal — an exit-2 preflight blocks startup |
 
 See also: [Troubleshooting](../guides/troubleshooting.md) for general
 diagnostics not specific to field deployments.

@@ -37,7 +37,7 @@ Your detection data is yours, in formats other tools read:
 
 The storage breakdown shows where space is going — the database (including its write-ahead log), your recordings, and the snapshots — measured live, not estimated.
 
-Retention is **not time-based**. There is no "keep 30 days" setting. Two limits apply instead:
+Time-based retention is **off by default**, not absent: set **Keep Clip Audio (days)** (`CLIP_RETENTION_DAYS`, `--clip-retention-days`) for a rolling window — `0`, the default, keeps audio for ever. Two disk-based limits apply alongside it:
 
 - the disk manager purges the **oldest** recordings once the disk crosses `DISK_PURGE_THRESHOLD` (default 95%);
 - `MAX_FILES_SPECIES` keeps at most N clips per species, pruned on the daily maintenance tick.

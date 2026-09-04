@@ -52,12 +52,13 @@ validate ──► ci ──► build (matrix) ──► package ──► githu
 | `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives and SBOMs, signed via GitHub OIDC. |
 | `github-release` | Creates/updates the GitHub Release idempotently, attaches the archives, `SHA256SUMS`, `install.sh`, and SBOMs, and uses the extracted `CHANGELOG` section (plus appended install/Docker/verify notes) as the body. |
 
-**Build targets** (two — there is no armv7 and no musl):
+**Build targets** (three — there is no armv7 and no musl):
 
 | Target | Platform | Built |
 |--------|----------|-------|
 | `aarch64-unknown-linux-gnu` | Raspberry Pi 4 / 5 / 400, ARM64 Linux | cross, on the x86_64 runner via the native GCC 13 aarch64 toolchain |
 | `x86_64-unknown-linux-gnu` | Standard 64-bit Linux | native |
+| `aarch64-apple-darwin` | macOS on Apple Silicon | native, on the `macos-14` runner |
 
 We build on Ubuntu 24.04 (GCC 13, **glibc 2.39**) because pyke's prebuilt
 ONNX Runtime needs glibc ≥ 2.38 and a GCC ≥ 13 libstdc++. We do **not**
@@ -150,7 +151,7 @@ Copy-paste this into the release PR or issue and tick it off:
     (a test asserts it tracks CARGO_PKG_VERSION, so a missed bump fails
      the suite rather than shipping a spec that lies about its version)
 [ ] docs/book/reference/api.md: the sample /api/v2/health response
-[ ] Cargo.lock refreshed (cargo update --workspace)
+[ ] Cargo.lock refreshed (cargo update — NOT --workspace, see the TL;DR)
 [ ] CHANGELOG.md: [Unreleased] rolled into ## [X.Y.Z] - YYYY-MM-DD
 [ ] CHANGELOG.md: fresh empty [Unreleased] section added
 [ ] CHANGELOG.md: link references at the foot updated

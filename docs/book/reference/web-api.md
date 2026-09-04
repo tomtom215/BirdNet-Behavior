@@ -56,6 +56,8 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 | Old URL | → New |
 |---|---|
 | `/today` | `/` |
+| `/gallery` | `/species?view=photos` |
+| `/life-list` | `/species?view=lifelist` |
 | `/heatmap` | `/patterns` |
 | `/analytics/dawn-chorus` | `/patterns?tab=dawn` |
 | `/migration` | `/patterns?tab=migration` |
@@ -75,8 +77,6 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 | URL | Description |
 |---|---|
 | `/species/detail?name=…` | Species detail — hourly chart, trend, companions, photo |
-| `/gallery` | Species photo gallery (also reachable as the Species → Photos view) |
-| `/life-list` | Life list — every species ever detected, with a growth curve |
 | `/quarantine` | Rare-bird review — approve, reject (also surfaced as the Today review nudge) |
 | `/notifications` | Notification center — history and channel stats |
 | `/kiosk` | Kiosk mode — auto-refreshing display for dedicated screens |
@@ -103,7 +103,7 @@ open. See [Remote Access & Security](../admin/remote-access.md).
 | `/admin/backups` | Backups, restore, storage, danger zone |
 | `/admin/system` | CPU / memory / temperature / disk |
 | `/admin/system/logs/page` | Live log viewer (SSE, level filtering) |
-| `/admin/update/check` | Check for and apply binary updates |
+| `/admin/update/check` | Check GitHub Releases for a newer version (JSON). Applying is a separate `POST /admin/update/apply` with no UI button; the panel's **Check for Updates** button points you at `install.sh` instead |
 
 ## Public links & feeds
 
