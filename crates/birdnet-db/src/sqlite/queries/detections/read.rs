@@ -1363,10 +1363,18 @@ mod tests {
                 .unwrap();
         assert!(rows.iter().all(|r| r.date == "2026-03-11"));
 
-        // Truncation reports the same way `all_detections` does.
+        // Truncation reports the same way `all_detections` does: one past the
+        // cap is truncated, exactly the cap is not. The second half is the
+        // discrimination — `>=` in place of `>` survived every assertion above.
         let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 2).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(truncated);
+        let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 3).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            !truncated,
+            "a cap equal to the row count is not a truncation"
+        );
     }
 
     #[test]
