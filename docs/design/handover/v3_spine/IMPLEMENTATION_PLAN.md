@@ -275,9 +275,9 @@ the mocks that lacks a backend today (noted inline during implementation).
   `crates/birdnet-web/openapi.json` documents 44 read-only `/api/v2` paths
   plus the 7 bearer-gated write/settings routes (params + response schemas),
   served live at `/api/v2/openapi.json` for Swagger UI / Redoc / Postman /
-  `openapi-generator`. Seven routed paths are not in it yet — the index,
+  `openapi-generator`. Eight routed paths are not in it yet — the index,
   `analytics/abundance`, `analytics/phenology`, `soundlevel`,
-  `species/tracking` and the two WebSockets. It declares the read endpoints
+  `species/tracking`, the live audio `stream`, and the two WebSockets. It declares the read endpoints
   honestly as unauthenticated (`security: []`) and the write routes with a
   `bearerAuth` scheme; a `redocly.yaml` documents why
   two opinionated default lint rules don't apply (so `redocly lint` is clean). A

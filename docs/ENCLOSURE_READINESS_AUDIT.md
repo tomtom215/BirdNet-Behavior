@@ -276,7 +276,7 @@ display left on the Today page therefore holds a blocking-pool thread for
 
 ### E-5 — The v3 navigation rewrite is 8/14 migrated, the QA table is written in URLs that no longer name what it tests, and four surfaces — `/login` among them — are in neither · **P1**
 
-**[PARTLY FIXED]** — the QA route table is rewritten in the current URLs, so a row named `station-capture` screenshots the Station Capture tab and coverage no longer depends on `redirects.rs`; `/login`, `/station/settings`, `/admin/audit` and `/admin/overview` are now in it. `crates/birdnet-web/tests/qa_routes_cover_the_navigation.rs` fails if a home or a Station tab is missing, and reported all three homes, all six tabs and three standalone screens against the old table. **Still open:** the `/admin/*` pages that render the retired shell — **seven**, not the six this audit first counted: the six in the table below plus `/admin/species/test`, the species-filter preview (`admin/species/render.rs:199` through `admin_subpage_shell`, routed at `species/mod.rs:29`, linked from `docs/book/admin/settings.md:57`), which was already routed and shelled that way at `7c6bf77`. An eighth render site, `render_species_page` (`species/render.rs:8`), is reachable only from its own unit test now that `/admin/species` 308s. Redirecting them is a product decision — `/station/settings` is a task-scoped *slice* of the full settings form, not a superset — and this pass would not make it unilaterally.
+**[PARTLY FIXED]** — the QA route table is rewritten in the current URLs, so a row named `station-capture` screenshots the Station Capture tab and coverage no longer depends on `redirects.rs`; `/login`, `/station/settings`, `/admin/audit` and `/admin/overview` are now in it. `crates/birdnet-web/tests/qa_routes_cover_the_navigation.rs` fails if a home or a Station tab is missing, and reported all three homes, all six tabs and three standalone screens against the old table. **Still open:** the `/admin/*` pages that render the retired shell — **eight**, not the six this audit first counted: the six in the table below plus `/admin/species/test`, the species-filter preview (`admin/species/render.rs:199` through `admin_subpage_shell`, routed at `species/mod.rs:29`, linked from `docs/book/admin/settings.md:57`), and `/admin/notifications/test`, the notification test page (`admin/notification_test.rs:163` through `admin_subpage_shell`, routed at `:65`, linked from the overview's quick links at `admin/overview.rs:169`); both were already routed and shelled that way at `7c6bf77`. A ninth render site, `render_species_page` (`species/render.rs:9`), is reachable only from its own unit test now that `/admin/species` 308s. Redirecting them is a product decision — `/station/settings` is a task-scoped *slice* of the full settings form, not a superset — and this pass would not make it unilaterally.
 
 `crates/birdnet-web/src/routes/redirects.rs` 308-redirects **sixteen** legacy
 public paths to their v3 homes (`redirects.rs:26-48`; sixteen at `7c6bf77` too —
@@ -294,10 +294,10 @@ one against the running server:
 | `/admin/audit` | `/admin/rules` → `/station/alerts#rules` |
 | `/admin/overview` | `/admin/notifications` → `/station/alerts#notifications` |
 | `/admin/species/test` (missed in the first count) | `/admin/backups` → `/station/data#backups` |
-| | `/admin/migrate` → `/station/data#import` |
+| `/admin/notifications/test` (missed in the first count) | `/admin/migrate` → `/station/data#import` |
 | | `/admin/accounts` → `/station/access#accounts` |
 
-Eight of fifteen are done. Seven still ship a second front door into the same
+Eight of sixteen are done. Eight still ship a second front door into the same
 station, with a different shell and different navigation — `/admin/settings`
 most visibly, since it is the page the manual sends people to
 (`docs/book/admin/settings.md:3`).
@@ -804,7 +804,7 @@ open items.
    behind two tabs that do different things (E-6), a manual that describes
    neither accurately (E-12), and thousands of resulting detail pages with a
    dead audio player (E-7).
-2. *Administer the station.* Seven of fifteen admin pages still open the retired
+2. *Administer the station.* Eight of sixteen admin pages still open the retired
    shell (E-5), so "where do I change a setting" has two answers.
 3. *Log in.* `/login` is the only screen an unauthenticated visitor sees and it
    was in no QA gate until E-5's table rewrite put it there
