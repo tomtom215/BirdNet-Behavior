@@ -30,7 +30,7 @@ x86_64 Linux, 4 cores, `rustc 1.97.1`, from a cold `target/`.
 | Gate | Command | Result |
 |---|---|---|
 | Build | `cargo build --workspace --all-targets` | exit 0, 0 warnings |
-| Tests (baseline) | `cargo test --workspace --all-features` | exit 0 — **2 269 passed**, 0 failed, 5 ignored |
+| Tests (baseline) | `cargo test --workspace --all-features` | exit 0 — **2 269 passed**, 0 failed, 5 ignored (this audit's figure at its own commit; the latest recorded in-repo is `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6's **3 674 passed, 0 failed, 7 ignored** in **114** suites, the reconciliation branch over `ee795ed` — re-take rather than carry it) |
 | Clippy | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | exit 0 |
 | Docker quickstart | the real binary under the environment `docker compose config` resolves | **could not start** — see F-1 |
 | Blank-env sweep | every blank `BIRDNET_*`/`BNB_*` key the shipped configs carry, one at a time | **21 of 39 refuse startup** — see F-2 |
@@ -46,7 +46,7 @@ was invisible to 2 269 passing tests, and F-1 was invisible to CI entirely.
 ### F-1 — `docker compose up` cannot start the container · **P0** · fixed here
 
 The documented Docker path is `cp .env.example .env` then `docker compose up -d`
-(`docs/book/getting-started/docker.md:15,42`). It does not start.
+(`docs/book/getting-started/docker.md:15,52`; `:15,42` when this was written). It did not start.
 
 `docker-compose.yml` interpolated fifteen optional settings as
 `KEY: ${KEY:-}`, which puts the key in the container environment as an **empty
@@ -113,11 +113,15 @@ carries a custom parser and a test specifically so it survives.
 reproduced directly, exit 101. The admin settings page's own hint reads *"Leave
 blank to disable HTTP push notifications"*.
 
-Release builds are `panic = "abort"`, and the shipped unit pairs `Restart=always`
-with `StartLimitBurst=5` / `StartLimitIntervalSec=300`. A station that panics on
-start therefore burns its five restarts in fifty seconds and is left `failed`,
-permanently, with no further attempts. On a sealed enclosure that is a site
-visit.
+Release builds are `panic = "abort"` (`Cargo.toml:227`), and the unit shipped
+at the time paired `Restart=always` with `StartLimitBurst=5` /
+`StartLimitIntervalSec=300`, so a station that panicked on start burned its five
+restarts in fifty seconds and was left `failed`, permanently, with no further
+attempts — on a sealed enclosure, a site visit. That half has since changed as
+well (`320de60`): `installer/lib/65-service.sh:75` sets
+`StartLimitIntervalSec=0`, with `RestartSteps=10` / `RestartMaxDelaySec=300`
+(`:123-124`) for backoff, and the old values are quoted there as history
+(`:58-59`).
 
 **Fixed:** blank and whitespace-only values are treated as absent, with a
 counterpart gate so "blank URL + config file" still builds the CLI-only client.
@@ -206,7 +210,7 @@ must be able to find what they rejected.
 
 ### F-7 — the health badge read the whole database, on every page, twice a minute · **P1** · fixed here
 
-`layout.html:66` mounts the health badge with `hx-trigger="load, every 30s"`. It
+`layout.html:66` (now `:75`) mounts the health badge with `hx-trigger="load, every 30s"`. It
 ran `PRAGMA quick_check`, which reads **every page of the database file**.
 
 Measured on the 1.29 GB / 2.76 M-row station, warm cache, `NVMe`:
@@ -427,8 +431,10 @@ Recording these so the next pass does not re-derive them.
 * **`recording_effort`** (migration 27) *is* populated — `src/integrations/effort.rs`
   writes it. I expected it to be another dead table; it is not.
 * **The book's structure.** 44 pages, all reachable from `SUMMARY.md`, no orphans.
-* **`BNB_*` environment variables.** All 8 blank ones start cleanly; the clap
-  fallback is what makes `BIRDNET_*` different.
+* **`BNB_*` environment variables.** All 8 blank ones `.env.example` carried at
+  the time start cleanly; the clap fallback is what makes `BIRDNET_*` different.
+  (`BNB_API_TOKEN=` has been added since, making 9 blank `BNB_*` keys — the same
+  `std::env::var` path, not re-run here.)
 
 ---
 
@@ -437,8 +443,10 @@ Recording these so the next pass does not re-derive them.
 The previous audit's U-1…U-7 stand; this pass adds only what it verified.
 
 **On "we have a lot of collapsed sections — is that the best design?"** The
-premise does not hold: there are **twelve** `<details>` elements in the entire
-UI. Counted and located, they fall into three groups:
+premise does not hold: there are **eleven** `<details>` elements in the entire
+UI (this audit first wrote twelve; the twelfth grep hit was a JavaScript comment
+in `admin_audio_sources.html`, and the count is still eleven today). Counted and
+located, they fall into three groups:
 
 * **Five that are worth reconsidering** — the `pt-disc` "See the numbers"
   disclosures on `correlation` (2), `dawn-chorus`, `behavioral` and `timeseries`.
@@ -446,11 +454,12 @@ UI. Counted and located, they fall into three groups:
   disclosure is right for a reference appendix and wrong for the primary content
   of an analytics screen; a reader who navigated to the co-occurrence page has
   already expressed the intent the disclosure is asking them to re-express.
-* **Four that are fine** — add-forms on `admin_audio_sources` and
-  `admin_accounts` (a `<details>` doing a modal's job; unconventional, works,
-  keyboard-accessible), the `timeseries` API-endpoint reference, the migration
-  preview.
-* **Three that are right** — the login hint, and two genuinely secondary panels.
+* **Five that are fine** — the three add-forms on `admin_audio_sources` (two)
+  and `admin_accounts` (a `<details>` doing a modal's job; unconventional,
+  works, keyboard-accessible), the `timeseries` API-endpoint reference, the
+  migration preview.
+* **One that is right** — the login hint. (This audit first listed "three,
+  and two genuinely secondary panels"; there are no other elements.)
 
 The settings page, notably, resisted the temptation: 54 controls across ~11
 screens with a sticky "On this page" index and **nothing hidden**, with the
@@ -552,6 +561,12 @@ Written after acting on §7. The findings above are unedited; this is the delta.
   station's own imported history, which is the common case; a banner that cries
   wolf on every import is one nobody reads when it matters.
 
+  Since this was written: migration 34 (`a750f4d`, four days later) added the
+  exclusion toggle F-9 asked for — `detections_analytic` drops imported rows when
+  `analytics_exclude_imports` is set — and migration 42 on this branch
+  (`dd10fe7`) keys `species_summary` by provenance so the rollup serves both
+  settings.
+
 * **F-10** — quiet windows are settable from the audio-source form, and both
   they and `fixed:HH:MM-HH:MM` recording windows are now evaluated in the
   station's **local** time. Solar schedules stay on UTC and must:
@@ -641,6 +656,13 @@ addressed; the remaining open work is the list immediately above.
   Nothing was broken. The consolidation buys one place for the eleventh copy not
   to be written, not a bug fix, and saying otherwise would overstate it.
 
+  It held for two weeks. Two fresh Hinnant copies postdate this (both
+  2026-09-02): `crates/birdnet-integrations/src/offsite/s3.rs:348`
+  (`civil_from_days`, `3b4aa24`) and `crates/birdnet-db/src/species_tracking.rs:253`
+  (`684f105`). `146_097` is in four files today — `civil.rs`, the
+  `src/capture/schedule.rs` oracle, and those two — neither of which is checked
+  against `civil`.
+
 * **F-12** — one `book.toml`, one mdBook version, and a link check that runs
   against rendered HTML in both `docs.yml` and `ci.yml`. The published site had
   been built by mdBook 0.4.52 and the in-app manual by `mdbook-driver` 0.5 from
@@ -660,7 +682,10 @@ addressed; the remaining open work is the list immediately above.
   `warning-policy = "error"`.
 
 * **F-8, properly** — `species_summary` (migration 30): one row per (common
-  name, scientific name, hour), maintained by triggers on every write. The
+  name, scientific name, hour), maintained by triggers on every write — re-keyed
+  by migration 42 on this branch (`dd10fe7`) to `(Com_Name, Sci_Name, hour,
+  is_import)`, so a station that sets `analytics_exclude_imports` reads the
+  rollup `WHERE is_import = 0` instead of falling back to a whole-history scan. The
   species list goes 1 482 ms → 0.53 ms and the per-species hour histogram
   138 ms → 0.07 ms on a 2.76 M-row database, for +1.0 MB (0.07 %) and +7.9 % on
   the insert path.

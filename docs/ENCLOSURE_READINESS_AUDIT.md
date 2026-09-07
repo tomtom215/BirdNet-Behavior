@@ -29,7 +29,7 @@ guessing. Five conclusions I reached early and then disproved are marked
 | What | Result |
 |---|---|
 | `cargo build --workspace --all-targets` | exit 0, **12 m 25 s** cold (4-core / 15 GB x86_64 container, empty `target/`) |
-| `cargo test --workspace` | exit 0, **2 516 passed, 0 failed, 7 ignored** at `7c6bf77`; **2 542 / 0** with this branch's fixes and their gates (checked by summing `^test result:` lines, not by trusting the exit code) |
+| `cargo test --workspace` | exit 0, **2 516 passed, 0 failed, 7 ignored** at `7c6bf77`; **2 542 / 0** with this branch's fixes and their gates (checked by summing `^test result:` lines, not by trusting the exit code). Both are this audit's figures at `7c6bf77` and its branch; the latest suite figure recorded in-repo is `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6's **3 674 passed, 0 failed, 7 ignored** in **114** suites (the reconciliation branch over `ee795ed`) — re-take rather than carry it |
 | `cargo fmt --check --all` | exit 0 |
 | `cargo clippy --workspace --all-targets` | exit 0, no warnings |
 | Live server | `examples/screenshot_server` (9 900 seeded detections, 20 demo clips) on `127.0.0.1:8502` |
@@ -44,8 +44,9 @@ guessing. Five conclusions I reached early and then disproved are marked
 
 ## 1. Defects, worst first
 
-> **Status.** Ten of the fifteen are fixed on this branch: E-1, E-2, E-3, E-4,
-> E-5, E-6, E-9, E-12 and two thirds of E-15. Each fix's gate was observed
+> **Status.** Six of the fifteen are fixed outright on this branch — E-1, E-2,
+> E-3, E-4, E-6, E-9 — and three partly: E-5, E-12 and two thirds of E-15
+> (this line first said "ten" and listed nine). Each fix's gate was observed
 > failing against the code it was written for, and the commit message records
 > the exact failure text.
 >
@@ -60,9 +61,10 @@ guessing. Five conclusions I reached early and then disproved are marked
 
 ### E-1 — The Docker image cannot record. Every documented Docker capture path is inoperable, and the health check stays green · **P0**
 
-**[FIXED]** — the runtime stage installs `alsa-utils`, `ffmpeg`, `sox` and `procps`; `tests/container_can_run_what_the_daemon_spawns.rs` cross-checks that list against every `Command::new` in non-test code, and `docker.yml` resolves each binary inside the built image on both architectures. Classifying the spawns for that gate turned up a second defect: `is_tool_available` forked `which`, which is not POSIX and which Debian's `debianutils` no longer ships — so on this very image the probe could fail with `ENOENT` and `CaptureManager::start` would refuse to record with `arecord not found in PATH` while `arecord` sat on the `PATH`. It is now a `PATH` walk that checks the execute bit, and `src/doctor.rs`'s second copy delegates to it.
+**[FIXED]** — the runtime stage installs `alsa-utils`, `ffmpeg`, `sox` and `procps` (and `openssh-client` for the SFTP offsite target — `Dockerfile:300-311`; the gate's provenance table knows it at `tests/container_can_run_what_the_daemon_spawns.rs:101`); `tests/container_can_run_what_the_daemon_spawns.rs` cross-checks that list against every `Command::new` in non-test code, and `docker.yml` resolves each binary inside the built image on both architectures. Classifying the spawns for that gate turned up a second defect: `is_tool_available` forked `which`, which is not POSIX and which Debian's `debianutils` no longer ships — so on this very image the probe could fail with `ENOENT` and `CaptureManager::start` would refuse to record with `arecord not found in PATH` while `arecord` sat on the `PATH`. It is now a `PATH` walk that checks the execute bit, and `src/doctor.rs`'s second copy delegates to it.
 
-`Dockerfile:242` starts the runtime stage from `debian:trixie-slim` and adds
+`Dockerfile:242` (at `7c6bf77`; the stage is now `Dockerfile:244` and installs
+eleven) started the runtime stage from `debian:trixie-slim` and added
 exactly six packages:
 
 ```
@@ -71,19 +73,22 @@ ca-certificates  curl  libasound2t64  libgcc-s1  libstdc++6  tini
 
 That is the complete set — there is no second `apt-get install` in the runtime
 stage (`grep -n "apt-get install" Dockerfile` → two hits, one in the *builder*
-stage at line 116, one here at 267), and `docker/entrypoint.sh` installs
+stage at line 116, one here at 267 — now 118 and 300), and `docker/entrypoint.sh` installs
 nothing.
 
 The daemon does not capture audio in-process. It shells out:
 
 | Call site | Tool | Used for |
 |---|---|---|
-| `crates/birdnet-core/src/audio/capture/process.rs:242` | `arecord` | every ALSA microphone on Linux |
-| `…/process.rs:415, 492, 545` | `ffmpeg` | RTSP and PipeWire sources |
-| `crates/birdnet-web/src/routes/livestream.rs:252` | `ffmpeg` | Listen → Live |
-| `crates/birdnet-core/src/audio/extraction/convert.rs:114, 143` | `ffmpeg`, `sox` | clip conversion |
+| `crates/birdnet-core/src/audio/capture/process.rs:356` | `arecord` | every ALSA microphone on Linux |
+| `…/process.rs:541, 618, 671` | `ffmpeg` | RTSP and PipeWire sources |
+| `crates/birdnet-web/src/routes/livestream.rs:277` | `ffmpeg` | Listen → Live |
+| `crates/birdnet-core/src/audio/extraction/convert.rs:117, 146` (and `:253, :277` in `apply_freq_shift`) | `ffmpeg`, `sox` | clip conversion |
 | `src/doctor/audio.rs:164`, `src/channel_report.rs:355` | `arecord` | `--doctor`, `--channel-report` |
-| `crates/birdnet-web/src/routes/admin/system_controls/service.rs:39` | `kill` | the admin **Restart** button |
+| `crates/birdnet-web/src/routes/admin/system_controls/service.rs:82` | `kill` | the admin **Restart** button |
+
+(Line numbers are as of this branch's head; the table was first written against
+`7c6bf77`, where they were 242 / 415, 492, 545 / 252 / 114, 143 / 39.)
 
 `arecord` is in `alsa-utils`; `libasound2t64` is only the shared library.
 `ffmpeg` and `sox` are not installed either, and neither is in a Debian base
@@ -107,8 +112,9 @@ image. So in the shipped image:
   > dependency rather than an inherited accident. `arecord`, `ffmpeg` and `sox`
   > need no such hedge: nothing in a Debian base image provides them.
 
-**This is the exact failure `install.sh` was fixed to prevent.** `install.sh`
-lines 716–754 carry the reasoning verbatim:
+**This is the exact failure `install.sh` was fixed to prevent.** `install.sh`'s
+`ensure_capture_tool()` (lines 722–751 now; 716–754 at `7c6bf77` — the file is
+generated from `installer/lib/*.sh`) carries the reasoning verbatim:
 
 > The daemon shells out to one of two tools … Only ffmpeg used to be ensured
 > here, on the reasoning that "an ALSA microphone needs no ffmpeg" — [Raspberry
@@ -124,20 +130,32 @@ lesson; the image did not.
 the failure is silent by construction:
 
 * the systemd unit runs `--doctor` as `ExecStartPre`; the container entrypoint
-  does not (`docker/entrypoint.sh:342` is a bare `exec`), so the doctor's own
-  ALSA check never runs;
-* that check would not have failed anyway — `src/doctor/audio.rs:158` returns
+  does not (`docker/entrypoint.sh:481` is a bare `exec` — still, with only a
+  hint string naming `--doctor` at `:448`), so the doctor's own ALSA check
+  never runs;
+* that check would not have failed anyway — `src/doctor/audio.rs:161` returns
   `Check::skip("arecord not installed; cannot verify --alsa-device exists")`,
   a *skip*, not an error;
-* `HEALTHCHECK` (`Dockerfile:315`) curls `/api/v2/health`, and that endpoint
-  (`crates/birdnet-web/src/routes/system.rs:95-127`) returns `200 healthy`
-  whenever SQLite is serving. `detection_silence_secs` is in the body but does
-  not affect the status code.
+* `HEALTHCHECK` (`Dockerfile:353`; `:315` at `7c6bf77`) curls `/api/v2/health`,
+  and at `7c6bf77` that endpoint returned `200 healthy` whenever SQLite was
+  serving. It has moved since (`crates/birdnet-web/src/routes/system.rs:182`
+  `health`, `:223`): `degraded = !db_ok || ingest_halted || (strict &&
+  !daemon_running)` → 503 — halted detection writes are a 503 on every
+  request, a stopped daemon is a 503 only with `?strict=1`, and the default
+  stays 200 by a documented choice (`:200-214`: Docker restarts an unhealthy
+  container, which destroys the journal that says why). `detection_silence_secs`
+  is in the body and still does not affect the status code.
 
 A Docker station therefore comes up, reports healthy to `docker ps`, serves a
 complete dashboard, and records nothing. The only signal is the detection
-deadman (`src/integrations/deadman.rs`, default 6 h) — and only if an Apprise
-target is configured, which on Docker nothing sets up.
+deadman (`src/integrations/deadman.rs:53`, `DEFAULT_DEADMAN_HOURS = 24` — not
+"6 h" as this audit first wrote; the constant has been 24 since `8aec5b4`,
+v0.8.0, and was 24 at `7c6bf77`) — and only if an Apprise target is
+configured, which on Docker nothing sets up. A monitor that polls
+`/api/v2/health?strict=1` now gets a 503 for a stopped daemon, and since
+`d0df731` on this branch also for one that died after boot
+(`DaemonHandle::running_flag()` is cleared by a `RunningGuard` when the loop
+thread exits, and `daemon::mirror_liveness` copies it into the health flag).
 
 > **Not verified here:** no Docker daemon is available in this container, so
 > the image was not built and the failure was not reproduced. The chain above
@@ -149,7 +167,8 @@ target is configured, which on Docker nothing sets up.
 
 **[FIXED]** — `CompressionLayer` with an allow-list predicate (text, JSON, SVG, feeds; never a `206`, never `text/event-stream`, never already-compressed bodies). Measured after: the same eight paths went 596 712 → 144 832 bytes on the wire, **4.1×**. Writing the gate found the defect that mattered: placed *inside* `security_headers_middleware` — which buffers `text/html` and runs `String::from_utf8_lossy` to stamp CSP nonces — every gzip stream came back with its `0x8b` magic byte replaced by U+FFFD. Correct headers, plausible length, and not one page decodable. The layer is now outermost and the gate inflates the body rather than trusting the header.
 
-`Cargo.toml:79` enables `tower-http` with `["cors", "trace", "fs"]`. There is
+`Cargo.toml:79` (at `7c6bf77`; now `:85`, with `"compression-gzip"`) enabled
+`tower-http` with `["cors", "trace", "fs"]`. There was
 no `compression-*` feature, no `CompressionLayer`, and no hand-rolled
 equivalent (`grep -rn "Compression\|gzip\|deflate\|brotli" crates/birdnet-web/src`
 returns only a gzip *content-type* header on backup download and the PNG
@@ -239,26 +258,29 @@ above it, says what should happen instead:
 > For a live dashboard, call this function on a background task with a regular
 > interval.
 
-Six call sites call it synchronously instead. Two of them
+Six call sites called it synchronously instead. Two of them
 (`crates/birdnet-web/src/routes/pages/health.rs:77` and
-`src/integrations/station_health.rs:242`) do it **only to read
+`src/integrations/station_health.rs:242` at `7c6bf77` — both now call
+`cpu_temperature()`, the latter at `:484`; `sample()` has one non-test caller
+left, `pages/station_health.rs:78`) did it **only to read
 `.cpu_temp_celsius`** — a value produced by `sample_cpu_temperature()`
 (`system_info.rs:122`), which reads component sensors and the thermal-zone
 sysfs and has nothing to do with CPU sampling. They pay a 200 ms sleep and a
 full CPU + memory refresh for a sysfs read.
 
 `health.rs:77` is inside `station_health_line_partial`, which
-`templates/today.html:128` polls with `hx-trigger="load, every 60s"`. A kiosk
+`templates/today.html:130` polls with `hx-trigger="load, every 60s"`. A kiosk
 display left on the Today page therefore holds a blocking-pool thread for
 200 ms once a minute, forever — 4.8 minutes of blocked thread per day, plus a
 `df` fork (E-8) on the same tick, to render one temperature and one percentage.
 
 ### E-5 — The v3 navigation rewrite is 8/14 migrated, the QA table is written in URLs that no longer name what it tests, and four surfaces — `/login` among them — are in neither · **P1**
 
-**[PARTLY FIXED]** — the QA route table is rewritten in the current URLs, so a row named `station-capture` screenshots the Station Capture tab and coverage no longer depends on `redirects.rs`; `/login`, `/station/settings`, `/admin/audit` and `/admin/overview` are now in it. `crates/birdnet-web/tests/qa_routes_cover_the_navigation.rs` fails if a home or a Station tab is missing, and reported all three homes, all six tabs and three standalone screens against the old table. **Still open:** the six `/admin/*` pages that render the retired shell. Redirecting them is a product decision — `/station/settings` is a task-scoped *slice* of the full settings form, not a superset — and this pass would not make it unilaterally.
+**[PARTLY FIXED]** — the QA route table is rewritten in the current URLs, so a row named `station-capture` screenshots the Station Capture tab and coverage no longer depends on `redirects.rs`; `/login`, `/station/settings`, `/admin/audit` and `/admin/overview` are now in it. `crates/birdnet-web/tests/qa_routes_cover_the_navigation.rs` fails if a home or a Station tab is missing, and reported all three homes, all six tabs and three standalone screens against the old table. **Still open:** the `/admin/*` pages that render the retired shell — **seven**, not the six this audit first counted: the six in the table below plus `/admin/species/test`, the species-filter preview (`admin/species/render.rs:199` through `admin_subpage_shell`, routed at `species/mod.rs:29`, linked from `docs/book/admin/settings.md:57`), which was already routed and shelled that way at `7c6bf77`. An eighth render site, `render_species_page` (`species/render.rs:8`), is reachable only from its own unit test now that `/admin/species` 308s. Redirecting them is a product decision — `/station/settings` is a task-scoped *slice* of the full settings form, not a superset — and this pass would not make it unilaterally.
 
-`crates/birdnet-web/src/routes/redirects.rs` 308-redirects seventeen legacy
-public paths to their v3 homes. I assumed from that file that the `/admin/*`
+`crates/birdnet-web/src/routes/redirects.rs` 308-redirects **sixteen** legacy
+public paths to their v3 homes (`redirects.rs:26-48`; sixteen at `7c6bf77` too —
+"seventeen" was a miscount). I assumed from that file that the `/admin/*`
 pages were simply left behind. **RETRACTED** — several redirect from inside
 their own handlers instead, which `redirects.rs` does not show. Probed every
 one against the running server:
@@ -271,11 +293,11 @@ one against the running server:
 | `/admin/images` | `/admin/quality` → `/station/data#quality` |
 | `/admin/audit` | `/admin/rules` → `/station/alerts#rules` |
 | `/admin/overview` | `/admin/notifications` → `/station/alerts#notifications` |
-| | `/admin/backups` → `/station/data#backups` |
+| `/admin/species/test` (missed in the first count) | `/admin/backups` → `/station/data#backups` |
 | | `/admin/migrate` → `/station/data#import` |
 | | `/admin/accounts` → `/station/access#accounts` |
 
-Eight of fourteen are done. Six still ship a second front door into the same
+Eight of fifteen are done. Seven still ship a second front door into the same
 station, with a different shell and different navigation — `/admin/settings`
 most visibly, since it is the page the manual sends people to
 (`docs/book/admin/settings.md:3`).
@@ -320,7 +342,9 @@ which of the two tabs they used.
 
 The data model is good. Migration 25 added `import_batches` (source and station
 coordinates, `distance_km`, `source_utc_offset_secs`, applied shift, row count)
-and `detections.import_batch_id`; migration 31 made `detections_analytic`
+and `detections.import_batch_id`; migration 34 (`crates/birdnet-db/src/migration.rs:1253`
+— "31" was wrong when written and 34 at `7c6bf77` too; migration 31 records
+microphone sound levels) made `detections_analytic`
 honour an `analytics_exclude_imports` setting; `provenance.rs:location_check`
 computes a haversine distance and *fails* a file that already contains several
 distinct coordinates; the admin page renders a `NNN km away` pill per batch, a
@@ -363,16 +387,17 @@ The importer copies rows, not audio — there is no file copy anywhere in
 `crates/birdnet-migrate/src/birdnet_pi/importer.rs`. `File_Name` comes across
 verbatim.
 
-`build_audio_section` (`crates/birdnet-web/src/routes/pages/detection_detail.rs:239`)
+`build_audio_section` (`crates/birdnet-web/src/routes/pages/detection_detail.rs:198`)
 renders the "The 3-second clip" card whenever `File_Name` is non-empty. It never
 asks whether the file is on disk. The spectrogram `<img>` carries
-`data-hide-on-error`, and `templates/layout.html:105` does hide it — but there
-is no equivalent for `<audio>`, so the player renders with controls that do
+`data-hide-on-error`, and `templates/layout.html:114-117` does hide it (the
+handler checks `tagName === 'IMG'`) — but there
+is no equivalent for `<audio>` (`detection_detail.rs:218`), so the player renders with controls that do
 nothing, on every imported detection, forever.
 
 ### E-8 — `df` is forked from ordinary page renders, on a premise that is not true · **P2**
 
-`crates/birdnet-core/src/audio/capture/disk/mod.rs:99` explains itself:
+`crates/birdnet-core/src/audio/capture/disk/mod.rs:134` explains itself:
 
 > Shells out to `df` rather than calling `statvfs`, because this workspace sets
 > `unsafe_code = "forbid"` and every safe wrapper for it is an FFI crate.
@@ -380,34 +405,39 @@ nothing, on every imported detection, forever.
 The second clause does not follow. `unsafe_code = "forbid"` is a lint on *this*
 crate's own code; it says nothing about dependencies, and this workspace already
 links `rusqlite`, `duckdb` and `ort` — three large C/C++ FFI surfaces. `sysinfo`,
-*already a direct dependency*, exposes free space behind its `disk` feature. The
+*already a direct dependency*, exposes free space behind its `disk` feature
+(still not enabled: `Cargo.toml:124` has `["system", "component"]`). The
 constraint that is cited does not exist; the choice may still be defensible, but
 not for that reason. (`docs/FIELD_READINESS_AUDIT.md` F-11 found the same
 function parsed two different ways; this is the layer underneath that.)
 
 The cost is that `disk_usage` is called from ordinary request handlers —
-`pages/today.rs:359`, `pages/health.rs:68`, `pages/station_health.rs:83` **and**
-`:93` (twice per snapshot), `routes/system.rs:136`, `admin/system.rs:251`,
-`admin/backup_recovery.rs:125` — so a kiosk on the Today page forks a process
-once a minute forever, and `/station` forks two.
+`pages/today.rs:367`, `pages/health.rs:68` and `:246` (`disk_status_partial`),
+`pages/station_health.rs:83` **and** `:93` (twice per snapshot),
+`routes/system.rs:253`, `admin/system.rs:251`, `admin/backup_recovery.rs:125` —
+so a kiosk on the Today page forks a process once a minute forever, and
+`/station` forks two.
 
-`crates/birdnet-web/src/routes/admin/system_controls/service.rs:100` does the
-same for `getconf CLK_TCK` on every service-status render.
+`crates/birdnet-web/src/routes/admin/system_controls/service.rs:176` does the
+same for `getconf CLK_TCK` on every service-status render, uncached. Still
+entirely open.
 
 ### E-9 — `Cache-Control: immutable` on an unversioned CSS URL · **P2**
 
 **[FIXED]** — every stylesheet link carries `?v=<version>`, in the layout, the login page, the share page and its 404, the admin shell, the log viewer, onboarding, kiosk and the standalone audio player; `sw.js` precaches the same versioned URLs. `crates/birdnet-web/tests/versioned_assets.rs` fails on any `<link>` to `app.css`/`print.css` without the query, and found the share 404 page after the other eight were done.
 
-`crates/birdnet-web/src/routes/static_files.rs:139` defines
-`public, max-age=31536000, immutable` and line 282 applies it to
-`/static/css/app.css` — a URL with no version, no hash and no query string
-(`templates/layout.html:10`). `immutable` instructs the browser not to
+`crates/birdnet-web/src/routes/static_files.rs:139` (now `:142`) defines
+`public, max-age=31536000, immutable` and line 282 (now the `app_css` handler
+at `:322`) applies it to `/static/css/app.css` — at `7c6bf77` a URL with no
+version, no hash and no query string (`templates/layout.html:10`; now `:19`,
+with `?v={{version}}`). `immutable` instructs the browser not to
 revalidate even on an explicit reload.
 
 The service worker versions its *own* caches by build hash
 (`static/sw.js:12-24`) and precaches `app.css`, but `Cache.addAll()` fetches
 through the ordinary HTTP cache unless the request is built with
-`cache: 'reload'`, which it is not (`sw.js:59`).
+`cache: 'reload'`, which it is not (`sw.js:64`; the comment at `:28` now says
+so, and the versioned precache URLs at `:32` make it moot).
 
 So an operator who updates a station — via `/admin/update/apply`, `install.sh`,
 or a new container — gets the new binary serving new HTML against **last
@@ -467,7 +497,8 @@ is exactly the class of confident prose `CLAUDE.md` warns about.
 ### E-11 — Whole-history aggregates carry a measured 20–35 % tax from the analytic view's settings subquery · **P3**
 
 Built a 2 000 000-row `detections` (643 MB) with the shipped DDL, all shipped
-indexes and `ANALYZE`, then compared `detections_analytic` (migration 31)
+indexes and `ANALYZE`, then compared `detections_analytic` (migration 34 —
+see E-6; the settings subquery is at `migration.rs:1324-1331`)
 against the same view without the provenance clause:
 
 | query | analytic view | verdict-only view |
@@ -485,15 +516,16 @@ before someone reads a 1.1 s hour-histogram on x86 and assumes the Pi is fine.
 
 ### E-12 — Documentation drift, measured rather than sampled · **P2**
 
-**[PARTLY FIXED]** — `/admin/recordings` is gone from `admin/backups.md`, replaced by the real control. `guides/migration.md` is rewritten around the features that exist: the source-station fields, what a single offset cannot do, the distance warning and the multi-site refusal, the analytics toggle, per-batch undo, that no audio comes across, and the post-import analytics rebuild. The ALSA examples in `docker.md`, `guides/troubleshooting.md` and `docker-compose.alsa.yml` now use `plughw:CARD=<id>,DEV=0` and say what happens if you do not. **Still open:** the `/admin/*` vs `/station/*` URL split in the manual, which follows the product decision left open in E-5.
+**[PARTLY FIXED]** — `/admin/recordings` is gone from `admin/backups.md`, replaced by the real control. `guides/migration.md` is rewritten around the features that exist: the source-station fields, what a single offset cannot do, the distance warning and the multi-site refusal, the analytics toggle, per-batch undo, that no audio comes across, and the post-import analytics rebuild. The ALSA examples in `docker.md`, `guides/troubleshooting.md` and `docker-compose.alsa.yml` now use `plughw:CARD=<id>,DEV=0` and say what happens if you do not. **Still open:** the `/admin/*` vs `/station/*` URL split in the manual, which follows the product decision left open in E-5; `/admin/recordings` in `docs/book/field/deployment.md:101` (it was there at `7c6bf77` too — the URL extraction below missed it, so "one documented URL" undercounted by one); and `install.sh`, which still shows the index form `plughw:1,0` in its interactive prompt (`installer/lib/70-station.sh:219` → `install.sh:2042`), its end-of-install summary (`80-summary.sh:162` → `:2790`) and the config-template comment (`62-config-file.sh:18` → `:1438`), while `first_alsa_capture_device()` (`70-station.sh:64` → `install.sh:1887`) emits `plughw:CARD=<id>,DEV=0`.
 
 I extracted every `` `/path` `` from `docs/book/**` (59; 51 are URLs rather than
 filesystem paths) and matched each against every `.route(…)` / `.nest(…)` in
 `birdnet-web` plus the legacy-redirect table. Results:
 
-* **One documented URL has no route: `/admin/recordings`**
-  (`docs/book/admin/backups.md:45`), which is where the manual tells the
-  operator to go to *lock* a clip so retention never purges it — the one
+* **One documented URL has no route: `/admin/recordings`** — in two places,
+  not the one this audit first found: `docs/book/admin/backups.md:45` (since
+  fixed) and `docs/book/field/deployment.md:101` (still there). It is where
+  the manual tells the operator to go to *lock* a clip so retention never purges it — the one
   irreversible-data-loss control in the product. The real controls are
   `/pages/recordings-lock` / `-unlock`, driven from `/recordings`.
 * Every other documented URL resolves, including the eight that resolve only
@@ -503,8 +535,8 @@ filesystem paths) and matched each against every `.route(…)` / `.nest(…)` in
 
 Three content gaps, each on a journey the operator will actually take:
 
-1. **`docs/book/guides/migration.md` (189 words) documents none of the import
-   features that exist.** Not the source-station UTC offset — the single most
+1. **`docs/book/guides/migration.md` (189 words at `7c6bf77`; 937 after the
+   rewrite) documented none of the import features that exist.** Not the source-station UTC offset — the single most
    consequential field on the form, and the one that silently shifts an entire
    history if wrong. Not the source-station label. Not the `NNN km away` /
    `same site` provenance pill. Not the "Keep imported detections out of the
@@ -514,19 +546,21 @@ Three content gaps, each on a journey the operator will actually take:
    show (E-6).
 2. **The manual disagrees with itself about `/admin/*` vs `/station/*`** —
    `admin/backups.md:3` already says `/station/data`; `admin/settings.md:3`,
-   `admin/audio.md:3`, `admin/notifications.md:40`, `admin/system.md:50` and the
-   whole URL table in `reference/web-api.md:70-78` still say `/admin/…`.
+   `admin/audio.md:3`, `admin/notifications.md:78`, `admin/system.md:12,50,60` and
+   the whole URL table in `reference/web-api.md:98-106` still say `/admin/…`.
 3. **The one setting that decides whether a field station survives a USB
    re-enumeration is documented three different ways.**
    `docs/book/admin/audio.md:94-130` gets it exactly right — it explains that a
    card *index* is assigned in detection order, and tells you to use
-   `ALSA_CARD=plughw:CARD=<id>,DEV=0`. `install.sh:1587` agrees, emitting the
-   stable form automatically when it can. But
+   `ALSA_CARD=plughw:CARD=<id>,DEV=0` (`audio.md:192,215` now). `install.sh:1887`
+   (`installer/lib/70-station.sh:64`) agrees, emitting the stable form
+   automatically when it can. But
    `docs/book/getting-started/docker.md:28,81`,
-   `docs/book/guides/troubleshooting.md:48-49`, `docker-compose.alsa.yml:12`,
-   and `install.sh`'s own prompt and summary text (`:1742`, `:2483`) all show
-   the index form `plughw:1,0`. A Docker operator copying the documented line
-   gets the fragile one.
+   `docs/book/guides/troubleshooting.md:48-49`, `docker-compose.alsa.yml:12`
+   (those three since corrected — see the `[PARTLY FIXED]` line) and
+   `install.sh`'s own prompt, summary and config-template comment (`:2042`,
+   `:2790`, `:1438` — still the index form) all showed `plughw:1,0`. A Docker
+   operator copying the documented line got the fragile one.
 
    This matters because nothing recovers from it. `src/capture/supervisor.rs`
    holds the device string resolved at start and retries it forever with capped
@@ -540,8 +574,9 @@ Three content gaps, each on a journey the operator will actually take:
 Two of these; both are "we already have the hard part".
 
 * **Weather.** `birdnet-db/src/weather.rs` stores per-sample rows and
-  `src/integrations/weather.rs` fills them. The only reader is the Today page
-  (`pages/today.rs:492, 817`), which displays them. Nothing joins weather to
+  `src/integrations/weather.rs` fills them. The only readers are display-only:
+  the Today page (`pages/today.rs:500, 825`) and the weather strip primitive in
+  `pages/overlays.rs:133`. Nothing joins weather to
   detections — no "activity vs temperature", no "the chorus starts later when
   it rains", no wind/pressure covariate on the phenology curves. The join key
   exists and the data is being collected every hour, indefinitely.
@@ -552,14 +587,16 @@ Two of these; both are "we already have the hard part".
   answers "what threshold should I set for this species on this station" —
   which is the top tuning question in `docs/book/guides/tuning.md` — with this
   station's own data instead of a global default. `grep -rn "calibration"` over
-  the workspace returns nothing.
+  the workspace finds only microphone SPL calibration (`routes/system.rs`,
+  `audio/quality/*`, `audio/soundlevel/*`); no code computes precision per
+  confidence bucket.
 
 ### E-14 — Backups are a fixed count, not a fixed budget · **P3**
 
-`src/maintenance.rs:59` keeps `BACKUP_RETENTION = 14` full snapshots, taken
+`src/maintenance.rs:62` keeps `BACKUP_RETENTION = 14` full snapshots, taken
 weekly before each VACUUM. There is no free-space precondition on either step,
-and pruning happens *after* the new snapshot is written, so peak usage is
-fifteen copies.
+and pruning happens *after* the new snapshot is written (`backup_database` at
+`:962`, `prune_old_backups` at `:999`), so peak usage is fifteen copies.
 
 For scale: the synthetic 2 000 000-row database built for E-11 — about 3½ years
 at 1 600 detections/day, a busy but ordinary garden station — is **643 MB**.
@@ -582,8 +619,8 @@ N, or as many as fit in X GB, whichever is smaller".
 * `adler32` (`png.rs:104`) takes two `%` per byte; the standard NMAX=5552
   deferral is a three-line change. On a 499 KB image that is ~1 M modulo
   operations per render.
-* `Dockerfile:14` says `DEBIAN_CODENAME   Debian base image codename (default:
-  bookworm)`; `Dockerfile:35` is `ARG DEBIAN_CODENAME=trixie`.
+* `Dockerfile:14` said `DEBIAN_CODENAME   Debian base image codename (default:
+  bookworm)`; `Dockerfile:35` (now `:37`) is `ARG DEBIAN_CODENAME=trixie`.
 * `validation_result` (`admin/migration/render.rs:366`) takes `_is_upload: bool`
   and never reads it — the dead half of E-6.
 * `validation_result`'s data-quality line is an `if / else if`: a file with both
@@ -594,10 +631,10 @@ N, or as many as fit in X GB, whichever is smaller".
 
   | where | verdict |
   |---|---|
-  | `birdnet-web/src/routes/pages/history.rs:545` + its `days_in_month` | genuine duplication |
-  | `birdnet-web/examples/screenshot_server.rs:69` | genuine duplication |
+  | `birdnet-web/src/routes/pages/history.rs:545` + its `days_in_month` (now `:548`, delegating to `civil`) | genuine duplication |
+  | `birdnet-web/examples/screenshot_server.rs:69` (since removed) | genuine duplication |
   | `birdnet-scheduler/src/solar.rs:229` + `:235` | **deliberate.** That crate depends on `serde` and nothing else, so the solar arithmetic stays a pure-computation crate; taking `birdnet-core` for two `const fn`s would pull ONNX Runtime, `symphonia` and `rubato` into it |
-  | `src/capture/schedule.rs:473` | **deliberate, and I missed the comment saying so.** It is the *oracle* the conversion beside it is checked against, and the file states in full why an oracle must not call the implementation it verifies |
+  | `src/capture/schedule.rs:476` (`is_leap`) / `:480` (`days_in_month`) | **deliberate, and I missed the comment saying so.** It is the *oracle* the conversion beside it is checked against, and the file states in full why an oracle must not call the implementation it verifies |
 
   So `FIELD_READINESS_AUDIT.md` F-13's remaining tail is two copies, not six.
   The other two need a drift check rather than a merge.
@@ -674,9 +711,14 @@ find out that the station stopped working that does not depend on someone
 looking at it.* The deadman exists and is good, but it is opt-in on a
 notification target that Docker never configures and the installer only offers.
 `/api/v2/health` — the endpoint every external monitor will poll, and the one
-the container health check uses — answers a narrower question than its name
-promises: it is green whenever SQLite opens. A station whose microphone died in
-March reports `healthy` in September.
+the container health check uses — answered a narrower question than its name
+promised at `7c6bf77`: green whenever SQLite opened. It has moved since
+(`routes/system.rs:223`): halted detection writes are a 503 on every request,
+and `?strict=1` returns 503 for a stopped daemon — including, since `d0df731`
+on this branch, one that died after boot. The default reading still stays 200
+with the daemon stopped, by a documented choice (`:200-214`), so a monitor
+that does not add `?strict=1` still sees a station whose microphone died in
+March report `healthy` in September.
 
 Beyond that: an image that can record (E-1), compression (E-2, E-3), and the
 two analytics whose inputs are already being collected (E-13).
@@ -728,10 +770,10 @@ that category.
 **Where do the docs and the GH-Pages site fall short?** E-12. The site itself
 is in good shape — one renderer, one `book.toml`, link-checked against rendered
 HTML on every PR, and every `SUMMARY.md` entry resolves. The shortfall is
-content: a 189-word migration guide for the most consequential and least
-reversible operation in the product; a manual that names two different URLs for
-the same page; and the ALSA device form documented correctly in one place and
-fragilely in five.
+content: a 189-word migration guide (937 since the E-12 rewrite) for the most
+consequential and least reversible operation in the product; a manual that
+names two different URLs for the same page; and the ALSA device form documented
+correctly in one place and fragilely in five (now three, all in `install.sh`).
 
 **What would I do differently?** Put a gate on the *shape* of the thing rather
 than on its internals. Every finding above would have been caught by one of
@@ -762,10 +804,11 @@ open items.
    behind two tabs that do different things (E-6), a manual that describes
    neither accurately (E-12), and thousands of resulting detail pages with a
    dead audio player (E-7).
-2. *Administer the station.* Six of fourteen admin pages still open the retired
+2. *Administer the station.* Seven of fifteen admin pages still open the retired
    shell (E-5), so "where do I change a setting" has two answers.
 3. *Log in.* `/login` is the only screen an unauthenticated visitor sees and it
-   is in no QA gate (E-5).
+   was in no QA gate until E-5's table rewrite put it there
+   (`tools/visual-qa/qa.mjs:102`); E-16 is what that first run found.
 
 **What needs redesigning for the best UI experience?** Not the disclosure
 pattern — see below. The two concrete ones are the light-theme contrast tokens
@@ -809,8 +852,10 @@ used:
   the distance and the offset. Afterwards, the batch shows as `NNN km away`, one
   toggle removes every imported row from every analytic, and one button undoes
   the whole import.
-* **Upload tab** — the same file, the same warning computed, and then discarded
-  (E-6). The import runs. Nothing tells them the file is from 400 km away.
+* **Upload tab** — at `7c6bf77`, the same file, the same warning computed, and
+  then discarded (E-6): the import ran and nothing told them the file was from
+  400 km away. Fixed with E-6: the upload is staged, the same report is
+  rendered, and only `POST /admin/migrate/upload/confirm` imports.
 * **Either way**, three things then hold that the manual does not mention: the
   source's *own* DST is unrecoverable from a single offset (the form says so;
   the manual does not), no audio comes across so every imported detection has a
@@ -869,7 +914,7 @@ because three of these were suspicions I had to abandon.
   rejected counter beside it, which is the right call for a throughput signal.
 * **The seeded UI has no serious a11y violations** under the gate's own rule
   set, across 61 routes × 2 themes — the 37 in the shipped table plus the
-  24 this pass added.
+  24 this pass added (the table has had 38 rows since the E-5 rewrite).
 * **Concurrency holds.** 16 concurrent clients × 64 requests: `/` 170 rps at
   p95 127 ms, `/patterns` 330 rps at p95 54 ms, `/api/v2/health` 322 rps at
   p95 48 ms, zero non-200s. The reader pool does not fall over, and no route
