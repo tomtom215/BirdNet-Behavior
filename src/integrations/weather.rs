@@ -92,7 +92,13 @@ async fn poll_loop(
                                 written += 1;
                             }
                         }
-                        let pruned = conn.prune_older_than_days(RETENTION_DAYS).unwrap_or(0);
+                        // Date-relative, so it takes the same clock guard the
+                        // other retention jobs do (RC-17).
+                        let pruned = if crate::maintenance::clock_is_safe_for_retention() {
+                            conn.prune_older_than_days(RETENTION_DAYS).unwrap_or(0)
+                        } else {
+                            0
+                        };
                         (written, pruned)
                     })
                 })
