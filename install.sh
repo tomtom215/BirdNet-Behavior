@@ -1288,9 +1288,17 @@ download_geomodel() {
     local model_dest="${MODEL_DIR}/${GEOMODEL_FILE}"
     local labels_dest="${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
 
-    if [ -f "${model_dest}" ] && [ -f "${labels_dest}" ]; then
+    # Skip only if both files are present *and* verify — the same rule
+    # `download_model` applies, for the same reason: a partial download is a
+    # file, and this guard used to ask only whether one existed (ON-3). A
+    # half-fetched geomodel then counted as installed on every re-run and
+    # every `repair`, 62-config-file.sh wrote the METADATA_* settings for it,
+    # and the daemon refused the pair on every start with the occurrence
+    # filter silently off. `installer/test/geomodel-resume.sh` holds this.
+    if model_file_is_verified "${model_dest}" "${GEOMODEL_SHA256}" &&
+       model_file_is_verified "${labels_dest}" "${GEOMODEL_LABELS_SHA256}"; then
         GEOMODEL_INSTALLED=1
-        success "Geomodel already present at ${MODEL_DIR} — skipping."
+        success "Geomodel already downloaded and verified at ${MODEL_DIR} — skipping."
         return 0
     fi
 
@@ -1311,7 +1319,7 @@ download_geomodel() {
     mapfile -t model_origins < <(geomodel_origins "${GEOMODEL_FILE}")
     mapfile -t labels_origins < <(geomodel_origins "${GEOMODEL_LABELS_FILE}")
 
-    if [ ! -f "${model_dest}" ] &&
+    if ! model_file_is_verified "${model_dest}" "${GEOMODEL_SHA256}" &&
         ! fetch_verified_model "${model_dest}" "${GEOMODEL_SHA256}" \
             "geomodel (~14 MB)" 0 "${model_origins[@]}"; then
         rm -f "${model_dest}"
@@ -1323,7 +1331,7 @@ download_geomodel() {
         return 0
     fi
 
-    if [ ! -f "${labels_dest}" ] &&
+    if ! model_file_is_verified "${labels_dest}" "${GEOMODEL_LABELS_SHA256}" &&
         ! fetch_verified_model "${labels_dest}" "${GEOMODEL_LABELS_SHA256}" \
             "geomodel labels" 0 "${labels_origins[@]}"; then
         # The model alone cannot be used, and a configured-but-unusable pair is

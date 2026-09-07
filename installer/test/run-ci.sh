@@ -32,6 +32,7 @@ CI_TESTS=(
     config-template.sh
     container-model-cache.sh
     coord-parse.sh
+    geomodel-resume.sh
     location-notice.sh
     model-resume.sh
     pipefail-sigpipe.sh
