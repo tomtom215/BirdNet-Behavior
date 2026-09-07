@@ -1,11 +1,37 @@
 //! Security middleware: response-hardening headers and a stateless CSRF guard.
 //!
-//! The web UI authenticates with HTTP Basic Auth and keeps no cookies or
-//! sessions, so the classic CSRF vector — a malicious page auto-submitting a
-//! form to an admin endpoint while the browser silently attaches the cached
-//! credentials — is mitigated here by a same-origin check on state-changing
-//! requests rather than by per-form synchroniser tokens. This is the
-//! OWASP-recommended defence for an app without a session token to bind to.
+//! # What the CSRF defence actually is
+//!
+//! The web UI authenticates with a **session cookie** — `bnb-session`, issued
+//! by `session::build_set_cookie` with `HttpOnly; SameSite=Lax` — so the
+//! classic CSRF vector applies: a malicious page auto-submits a form to an
+//! admin endpoint and the browser attaches the victim's cookie. Two
+//! mitigations, and both are load-bearing:
+//!
+//! 1. **`SameSite=Lax`** on the cookie. A cross-site `POST` — a form on
+//!    another origin, a scripted submit — does not carry it, so the request
+//!    arrives unauthenticated and the admin middleware refuses it. Lax rather
+//!    than Strict so that a link from an email or a chat into `/station`
+//!    still arrives signed in. `session.rs`'s
+//!    `both_cookies_carry_httponly_and_samesite_lax` holds the attribute.
+//! 2. **The same-origin check** in [`csrf_guard_middleware`]: a state-changing
+//!    request whose `Origin`/`Referer` authority does not match the `Host` it
+//!    was sent to is refused with 403 before any handler runs. This is the
+//!    backstop for the browsers and proxies that get `SameSite` wrong, and
+//!    for the no-password "open admin" mode where there is no cookie at all.
+//!
+//! Per-form synchroniser tokens are not used; with a `SameSite=Lax` session
+//! plus an origin check, OWASP's own guidance treats them as defence in depth
+//! rather than the primary control. Bearer-authenticated calls to the mutating
+//! API are exempt from the origin check for the reason given at
+//! [`csrf_guard_middleware`]'s helper: a cross-site form cannot set an
+//! `Authorization` header.
+//!
+//! This paragraph used to say the UI used HTTP Basic Auth and kept no cookies,
+//! and that the same-origin check was therefore the whole defence. That was
+//! true before `session.rs` landed and wrong for a long time afterwards
+//! (RC-5); the previous wording is recorded here so a reader who meets it
+//! quoted elsewhere knows it is stale.
 
 use axum::extract::Request;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -184,8 +210,16 @@ fn inject_base_path(html: &str, base: &crate::base_path::BasePath) -> String {
 /// Attach defence-in-depth response headers to every response.
 ///
 /// Added as the outermost layer so it decorates errors (401/404/429), static
-/// files, and handler responses alike. No HSTS: the binary serves plain HTTP
-/// and a reverse proxy is expected to terminate TLS and own that header.
+/// files, and handler responses alike.
+///
+/// No HSTS yet. The reason used to read "the binary serves plain HTTP and a
+/// reverse proxy owns that header", which stopped being true when `tls.rs`
+/// landed: the binary terminates TLS itself in three modes. HSTS is still
+/// absent because emitting it correctly is conditional — only when the request
+/// arrived over TLS, and never in the self-signed mode, where pinning HSTS
+/// onto a certificate the browser will one day refuse locks the operator out
+/// of their own station. That is O-10 in `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`,
+/// recorded rather than half-built here.
 pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     // One per-request CSP nonce, minted here so a single place owns the whole
     // dance: it is stamped onto every parser-inserted <script> of an HTML
