@@ -11,6 +11,17 @@ covered, and §6 a fresh handoff. Rows whose status changed say so in place.
 Nothing was carried forward: the counts in this header and in §6 were re-derived
 by command, and two of them were wrong.
 
+**Reconciled again 2026-09-07** at `8e6806f` on branch
+`claude/birdnet-behavior-audit-fixes-2wkl7f`, after eight code commits
+(`dad46d1`, `9f42652`, `c31da32`, `d0df731`, `373ceb2`, `e88a60d`, `95a8272`,
+`dd10fe7`) closed the three P0s the 2026-09-04 pass had added (**ON-3**,
+**OP-1**, **AD-1**) and thirteen further rows, and widened three already
+closed (**OB-4**, **OB-10**, **RC-3**). §3 was re-read row by row first
+(`bd0994b`, `8e6806f`); §0, §1, §2, §4 and §5 were then rewritten to agree with
+it rather than annotated. Every count in this header is from a command run
+that day, and two of them — the row total, and "three of the accessibility
+rows" — were wrong again.
+
 Three questions were asked of this project at once:
 
 1. What is it missing against [`Nachtzuster/BirdNET-Pi`](https://github.com/Nachtzuster/BirdNET-Pi),
@@ -33,14 +44,26 @@ severe findings are.
 trusting the sentence: `^\| \*\*([A-Z]+-[0-9]+)\*\* \| (sev) \|` over §3
 gives 134 distinct ids, no duplicates, summing 5 + 48 + 59 + 20 + 2. Per
 section: PS 19, PR 17, NT 18, LC 16, OB+NL 17, NP 13, S 16, O 16, ARM+AU 2.)
-The reconciliation pass adds **35** rows in §3.12 (`RC-*`) and **86** in §3.13
+The reconciliation pass adds **35** rows in §3.12 (`RC-*`) and **87** in §3.13
 (`ON-*` onboarding, `R-*` research credibility, `AD-*` adversity, `OP-*`
 operability, `UX-*` interface and accessibility, `FR-*`/`UP-*`/`WE-*` against the
-two references), for **255** rows in the register — counted by first id per row,
+two references), for **256** rows in the register — counted by first id per row,
 which is the right measure because a few rows deliberately group several ids
-(`WE-1 … WE-5`, and three of the accessibility rows). Per prefix: PS 19, PR 17,
-NT 18, LC 16, OB 16, NL 1, NP 13, S 16, O 16, ARM 1, AU 1, RC 35, ON 20, R 11,
-AD 9, OP 16, UX 15, FR 6, UP 8, WE 1. **Ten** of the new rows are fixed on the
+(`WE-1 … WE-5`, and four of the accessibility rows). Per prefix: PS 19, PR 17,
+NT 18, LC 16, OB 16, NL 1, NP 13, S 16, O 16, ARM 1, AU 1, RC 35, ON 20, R 12,
+AD 9, OP 16, UX 15, FR 6, UP 8, WE 1. (Counted 2026-09-07:
+`grep -cE '^\| \*\*[A-Z]+-[0-9A-Za-z]+\*\* \|'` over §3 gives 251 single-id
+rows — 252 over the whole file, the extra one being §2.1's `NP-13` correction
+row — and the five grouped rows make 256; §3.1–3.11 134, §3.12 35, §3.13 87.
+`R-DwC` matches that pattern; the digits-only pattern the 2026-09-04 count
+used does not see it, which is where "255" and "R 11" came from.) At
+`8e6806f`, **61** of the rows carry a `**[FIXED…]**` marker, 21 more than at
+`be8886c` where the reconciliation branch merged: sixteen closed by this
+session's code commits — `ON-3`, `OP-1`, `AD-1`, `OP-2`, `PR-5`, `NT-4`, `OB-11`,
+`R-17` (eBird only), `R-18`, `R-19`, `RC-5`, `RC-6`, `RC-7`, `RC-8`, `RC-17`,
+`RC-20` — and five (`LC-15`, `NT-8`, `OB-7`, `RC-25`, `RC-12`) found already
+closed when the register was re-read, `RC-12` by the `480d56f` docs commit.
+**Ten** of the new rows were fixed on the
 reconciliation branch, each with a gate observed failing against the code it
 guards — `RC-1`, `RC-2`, `RC-3` (in part), `RC-4`, `RC-22`, `ON-1`, `ON-2`,
 `ON-14`, `AD-2` and `AD-9` — counted by grepping §3.12 and §3.13 for the marker
@@ -51,8 +74,13 @@ are PS-1, PS-2, NT-1, LC-1 and LC-2 — in each of them the station keeps servin
 a healthy dashboard while it loses, or has already lost, what it exists to
 collect.
 
-**All five, and six further findings, are fixed on this branch** — see
-§4 Stages 0 and 1. Everything else is written down and ordered, not built.
+**All five, and six further findings, were fixed on the first branch** — see
+§4 Stages 0 and 1. The six P0s the reconciliation pass then added in §3.13 —
+`ON-1`, `ON-2`, `ON-3`, `AD-1`, `AD-9`, `OP-1` — are fixed too, the last three
+on this branch: eleven `**P0**` rows in §3, eleven `**[FIXED]**` markers
+(`grep -E '^\| \*\*[A-Z]+-[0-9A-Za-z]+\*\* \| \*\*P0\*\* \|'`, each row
+read for the marker). Everything else is written down and ordered, not
+built — §4 says which items have since landed.
 
 ---
 
@@ -76,6 +104,14 @@ Numbers, re-derived here rather than carried forward:
 | `Nachtzuster/BirdNET-Pi` @ `88985a3` (2026-02-28) | 188 tracked files, 24 961 lines of PHP + Python + shell | `find … \( -name '*.php' -o -name '*.py' -o -name '*.sh' \) \| xargs cat \| wc -l` |
 | `tphakala/birdnet-go` @ `265b6455` (2026-09-02) | 540 967 lines of Go (264 273 excluding `_test.go`), **53** packages under `internal/` | same shape |
 | **BirdNet-Behavior** @ `35acd9e` | 172 482 lines of Rust in `crates/` + `src/`, 186 040 with `tests/` | same shape |
+
+Upstream tips re-checked 2026-09-07 with `git ls-remote <url> HEAD`:
+`Nachtzuster/BirdNET-Pi` is still at `88985a3`; `tphakala/birdnet-go` has moved
+on to `e648f34d`. The birdnet-go row above is as measured at `265b6455` and
+was not re-derived — there is no clone here — and `FEATURE_GAP_ANALYSIS.md`
+has since re-measured at `b184f689` by a different method (`git ls-files`:
+52 subtrees under `internal/`, 137 packages counting nested ones), so the two
+sets of figures are not comparable and neither supersedes the other.
 
 > Two corrections to `FEATURE_GAP_ANALYSIS.md`'s own header while re-deriving
 > these: it says 51 `internal/` packages (53 now — the tree moved) and "~19 k"
@@ -125,9 +161,10 @@ which is a good index of upstream's *settings* and a poor one of its
 *behaviours*. Reading all 57 files in `scripts/` instead produced thirteen
 findings the config file cannot show — including **NP-1**, a link on our own
 species pages that 404s for every species, and **NP-5**, the Raspberry Pi
-undervoltage and throttling telemetry that upstream reads from `vcgencmd` and we
-read from nothing. The same blind spot explains a detail in the prior
-document worth recording: `ACTIVATE_FREQSHIFT_IN_LIVESTREAM` is not in
+undervoltage and throttling telemetry that upstream reads from `vcgencmd` and the
+running station reads from nothing — the only consumer in this tree is the
+one-shot `scripts/hardware-test.sh:218`, which a field unit never runs. The
+same blind spot explains a detail in the prior document worth recording: `ACTIVATE_FREQSHIFT_IN_LIVESTREAM` is not in
 `install_config.sh` at all — it lives only in `advanced.php:73-74`.
 
 ### 1.2 Against `tphakala/birdnet-go`
@@ -166,54 +203,94 @@ header.
 
 ### 1.3 What would jeopardise a year alone in a field
 
-This is the question with the severe answers. Sorted by what actually happens:
+This is the question with the severe answers. Sorted by what actually happens,
+each as it was found at `35acd9e` — and, because most of them have since
+closed, each ending with what is true at `8e6806f`:
 
-**The station stops recording and reports itself healthy.**
-`/api/v2/health` returns `200 "status":"healthy"` whenever SQLite answers
+**The station stopped recording and reported itself healthy.**
+`/api/v2/health` returned `200 "status":"healthy"` whenever SQLite answered
 `SELECT 1` — verified live against the real binary while its own response body
 said `"detection_daemon":"stopped"` (**OB-4/PR-5**). That is the endpoint the
 container `HEALTHCHECK` polls and the one every off-the-shelf monitor gets
-pointed at. A truncated model download reaches the same state and passes four
-separate gates on the way (**LC-2**), because `doctor/model.rs:26-31` accepts
-any file over one megabyte.
+pointed at. Closed in two steps: `?strict=1` folds the daemon flag into the
+verdict and answers 503 (`routes/system.rs:171-223`; the default stays 200 so a
+quiet season does not restart-loop a container), and since `d0df731` the flag
+is *true* — the loop thread clears it on any exit (`RunningGuard`,
+`detection/daemon/mod.rs:307`) and `daemon::mirror_liveness`
+(`src/daemon/mod.rs:355`) copies it into the health flag every 5 s, so a daemon
+that died after boot reads as stopped. A truncated model download reached the
+same state and passed four separate gates on the way (**LC-2**); the installer
+now verifies every model file by checksum before it counts as present
+(`installer/lib/55-model.sh:138` `model_file_is_verified`, extended to the
+geomodel pair by `c31da32`, **ON-3**), but the doctor still accepts any file
+over one megabyte (`doctor/model.rs:24`, `check_model`) — item 1.12.
 
-**Maintenance stops, silently and permanently, and the station keeps recording.**
-Two independent mechanisms do this. `backup_database` uses SQLite's incremental
+**Maintenance stopped, silently and permanently, and the station kept recording.**
+Two independent mechanisms did this. `backup_database` used SQLite's incremental
 backup API with a 50 ms sleep between 100-page steps; SQLite restarts the copy
 from page 0 on **every external write**, so on a station recording a detection
-every 20 seconds it never finishes — measured still running after 300 s with
-eight observed restarts (**PS-1**). And the offsite upload sets only
+every 20 seconds it never finished — measured still running after 300 s with
+eight observed restarts (**PS-1**). And the offsite upload set only
 `connect_timeout`, which a probe against a server that connects and then stalls
-mid-body proved does not bound the transfer (**NT-11**). Either one blocks the
+mid-body proved does not bound the transfer (**NT-11**). Either one blocked the
 single sequential maintenance loop for the life of the process, taking the daily
 integrity check, `VACUUM`, and every retention job with it — converting
-"recoverable corruption" into "total data loss".
+"recoverable corruption" into "total data loss". Both are closed (items 1.1 and
+1.2): one `step(-1)` inside a single read transaction (`copy_whole_database`,
+`resilience.rs:427`), and a `read_timeout` beside the `connect_timeout`
+(`offsite/s3.rs:492-493`), each gated by its reproduction.
 
-**The clock is wrong and everything is filed under the wrong day, for ever.**
-No write path checks clock plausibility (**NT-1**). A Pi with no RTC battery
-boots at the epoch and records detections dated 1970-01-01 that poison
+**The clock was wrong and everything was filed under the wrong day, for ever.**
+No write path checked clock plausibility (**NT-1**). A Pi with no RTC battery
+boots at the epoch and recorded detections dated 1970-01-01 that poison
 first-seen dates, phenology and the history calendar permanently, while the
 audio evidence is later reclaimed by retention because it is older than any
-cutoff. The forward direction is worse: a probe using the exact cutoff
-expression from `maintenance.rs:601` showed a +50-year clock jump reclaiming the
-entire clip library and the 400-day acoustic baseline in one pass, with the
-detection rows surviving so the loss is invisible in every count and chart
-(**NT-4**).
+cutoff. The forward direction was worse: a probe using the exact cutoff
+expression then at `maintenance.rs:601` (now `:813`, in `run_clip_retention`)
+showed a +50-year clock jump reclaiming the entire clip library and the 400-day
+acoustic baseline in one pass, with the detection rows surviving so the loss is
+invisible in every count and chart (**NT-4**). Closed in three steps. An
+implausible date is quarantined, not filed (`implausible_clock`,
+`src/daemon/processor.rs:343-352`, migration 40 — item 1.4). Date-based
+deletion refuses to run below one shared floor (item 1.5). And since `e88a60d`
+the forward direction is guarded too (item 1.11, **AD-1**):
+`clock_looks_plausible` is a range with a 2064-01-01 ceiling
+(`CLOCK_PLAUSIBLE_CEILING_SECS`, `civil.rs:443`), `ForwardStepWatch`
+(`civil.rs:530`) compares the wall clock against the monotonic clock with a
+400-day tolerance (`MAX_FORWARD_STEP_SECS`, `:475`), baselined at the first
+plausible reading, and `maintenance::clock_is_safe_for_retention`
+(`src/maintenance.rs:450`) consults both before clip retention (`:180`), log
+retention (`:193`), the acoustic-health pruner (`acoustic_health.rs:583`) and
+the weather pruner (`weather.rs:97`). What remains is stated in the code
+rather than implied: a jump inside 400 days, or one that happened before the
+process started and lands inside the range, is not seen.
 
-**An upgrade bricks a box nobody can reach.** `install -m 0755` **unlinks the
-running binary and refills the path in place** — traced with `strace`, showing
-`unlinkat` then `openat(O_CREAT|O_EXCL)` with no rename and no `fsync`
-(**LC-1**). A power cut in that window leaves an absent or truncated binary,
-`Restart=always` retries every five minutes for ever, and the `.prev` rollback
-the field manual promises is created by nothing.
+**An upgrade bricked a box nobody could reach.** `install -m 0755` **unlinked
+the running binary and refilled the path in place** — traced with `strace`,
+showing `unlinkat` then `openat(O_CREAT|O_EXCL)` with no rename and no `fsync`
+(**LC-1**). A power cut in that window left an absent or truncated binary,
+`Restart=always` retried every five minutes for ever, and the `.prev` rollback
+the field manual promised was created by nothing. Closed (item 1.6):
+`install_binary_atomically` (`installer/lib/50-binary.sh:41`) copies the live
+binary to `.prev`, stages the new one beside it, syncs, and renames it over the
+path, gated by `installer/test/binary-swap-atomicity.sh` — so the manual's
+promise, left untouched, became true.
 
-**Nobody finds out.** Of 25 realistic ways a station can be broken while looking
-alive, **4 are surfaced cleanly, 6 partly, and 15 not at all** (§3.6). The one
-push-based dead-man fired only when a bird was detected, so its absence could
-not distinguish a dead box from a quiet winter night — fixed on this branch. The
-audit log has no production writer at all: `/admin/audit` is permanently empty
-(**O-2**). The admin log viewer streams a broadcast channel no `tracing` layer
-was ever attached to, so it emits keep-alives for ever (**O-3**).
+**Nobody found out.** Of 25 realistic ways a station can be broken while looking
+alive, **4 were surfaced cleanly, 6 partly, and 15 not at all** at `35acd9e`;
+recounted 2026-09-07, the matrix reads **11 cleanly, 7 partly, 7 not at all**
+(§3.6). The one push-based dead-man fired only when a bird was detected, so its
+absence could not distinguish a dead box from a quiet winter night — fixed on
+the first branch. The audit log had no production writer at all, so
+`/admin/audit` was permanently empty (**O-2**), and the admin log viewer
+streamed a broadcast channel no `tracing` layer was ever attached to, so it
+emitted keep-alives for ever (**O-3**); both closed (items 2.7 and 2.6:
+`crates/birdnet-web/src/audit.rs:45` `audit()`, referenced from 12 files; the
+`LogCapture` layer at `src/log_capture.rs:224`, wired at `src/app.rs:233`). And
+the whole diagnostic apparatus — `--doctor`, the support bundle — was reachable
+only by someone who could already SSH in (**OP-1**); since `9f42652`,
+`GET /admin/doctor.json` and `GET /admin/support-bundle` serve the same
+documents (`routes/admin/doctor.rs:40-42`, item 2.19).
 
 **And the monitoring itself was malformed.** `/api/v2/metrics` declared
 `birdnet_detections_total` twice with two types, which `expfmt.TextParser`
@@ -230,24 +307,30 @@ the next person running the real check.
 
 | Document | Claim | Correction |
 |---|---|---|
-| `FEATURE_GAP_ANALYSIS.md` N-3 | "`GET /api/v2/stream` taps whichever source the capture manager offers" | False. `?source_id=` shipped and is gated by four tests. Only the station-wide default is missing. |
-| `FEATURE_GAP_ANALYSIS.md` G-30 | Upstream backup targets include `s3` | Upstream has no S3 target and the package is dormant. We have more here than they do. |
-| `FEATURE_GAP_ANALYSIS.md` G-15 | Taxonomy aliases cause double-counting | Understated: without them a mismatched name is permanently undetectable. |
-| `FEATURE_GAP_ANALYSIS.md` G-17 | Dog-bark `Remember` is in seconds | It is minutes. |
-| `FEATURE_GAP_ANALYSIS.md` G-20 | "…`auth.rs`, and audit logging" | `crates/birdnet-web/src/auth.rs` does not exist, and the audit log has no writer (**O-2**). |
-| `FEATURE_GAP_ANALYSIS.md` header | 51 `internal/` packages; ~19 k lines upstream | 53 packages; 24 961 lines. |
-| Paths naming `internal/myaudio/`, `internal/birdnet/` | — | Neither exists at `265b6455`; they are now `internal/audiocore/`, `internal/classifier/`, `internal/inference/`. |
-| `PRODUCTION_AUDIT.md` §2 | "the watchdog proves work, not liveness" | **Retracted.** The counter is bumped at the top of the poll loop (`detection/daemon/run.rs:285`), which cycles every 500 ms regardless of audio. It proves the loop cycles; a station that has written no file for four months keeps it satisfied. |
-| `ENCLOSURE_READINESS_AUDIT.md` §2 | USB re-enumeration has no recovery path | Partly superseded: the installer now writes the stable `plughw:CARD=<id>` form (`installer/lib/70-station.sh:64`). `quickstart.sh:196-201` still writes the index (**LC-9**), and a *resolving* index still passes the doctor silently (**AU-1**). |
-| `docs/book/field/deployment.md:200` | "The unit waits for `time-sync.target` … so the daemon never sees an unsynchronised clock at boot" | False. `After=` is ordering only; `time-sync.target` is reached when the NTP client *starts*. The unit that blocks is `systemd-time-wait-sync.service`, enabled nowhere here. |
-| `docs/book/field/deployment.md:254`, `docs/architecture/10-deployment.md:137` | `StartLimitBurst=5`/`300`, and `60`/`3` | The shipped unit sets `StartLimitIntervalSec=0` and never parks in `failed`. Three documents, three values, none matching. |
-| `docs/book/field/deployment.md:534` | "The admin panel's 'Update' button is the only way to upgrade" | There is no such button. `POST /admin/update/apply` has no UI caller and fails `EROFS` under `ProtectSystem=strict` (**LC-3**). |
-| `docs/book/field/deployment.md:541` | "keep the previous binary in `…​.prev` so a one-line `mv` rollback is possible" | Nothing in the product ever creates that file (**LC-1**). |
-| `docs/book/admin/remote-access.md:44` | the self-signed cert "is replaced a month before it expires" | Only if the process restarts inside the 367–397 day window (**NT-3**). |
-| `crates/birdnet-web/src/security.rs:187` | "No HSTS: the binary serves plain HTTP" | Stale since `tls.rs` landed (1 531 lines, three TLS modes). The same file's opening line still says the UI uses HTTP Basic and no cookies. |
-| `crates/birdnet-web/src/metrics.rs:154` | a spike in drop-reason `quality` / `occurrence` diagnoses the microphone | Neither reason is ever emitted in production; both appear only in that file's tests. |
-| `crates/birdnet-integrations/src/offsite/s3.rs:42` | "A wedged connection is caught by this instead" (`connect_timeout`) | Disproved by probe: a body that stalls after headers hung past 45 s (**NT-11**). |
-| `src/maintenance.rs:9` | integrity failures "also pinged to the heartbeat URL in future versions" | Removed on this branch; the heartbeat is now a liveness timer and says nothing about integrity. |
+| `FEATURE_GAP_ANALYSIS.md` N-3 | "`GET /api/v2/stream` taps whichever source the capture manager offers" | False. `?source_id=` shipped and is gated by four tests. Only the station-wide default is missing. **Applied** (`d465ec4`, 2026-09-04): `FEATURE_GAP_ANALYSIS.md:87-89` now says so. |
+| `FEATURE_GAP_ANALYSIS.md` G-30 | Upstream backup targets include `s3` | Upstream has no S3 target and the package is dormant. We have more here than they do. **Applied** (`480d56f`): FGA:398 lists `local`, `ftp`, `sftp`, `rsync`, `gdrive` and says why. |
+| `FEATURE_GAP_ANALYSIS.md` G-15 | Taxonomy aliases cause double-counting | Understated: without them a mismatched name is permanently undetectable. **Applied** (`480d56f`): FGA:260. |
+| `FEATURE_GAP_ANALYSIS.md` G-17 | Dog-bark `Remember` is in seconds | It is minutes. **Applied** (`480d56f`): FGA:276. |
+| `FEATURE_GAP_ANALYSIS.md` G-20 | "…`auth.rs`, and audit logging" | `crates/birdnet-web/src/auth.rs` does not exist and nothing serves HTTP Basic. The audit log had no writer at `35acd9e` (**O-2**) and has had one since item 2.7 — `crates/birdnet-web/src/audit.rs:45` `audit()`, referenced from 12 files — so that half of this correction is itself stale. **Applied** (`480d56f`): FGA:306 now describes the session cookie and the written audit log. |
+| `FEATURE_GAP_ANALYSIS.md` header | 51 `internal/` packages; ~19 k lines upstream | 53 packages; 24 961 lines, at `265b6455`. **Superseded rather than applied**: FGA:24 has since re-measured at `b184f689` with `git ls-files` (52 subtrees, 137 Go packages counting nested ones, ~542 k lines) — a different tip and a different method, so neither figure appears there. |
+| Paths naming `internal/myaudio/`, `internal/birdnet/` | — | Neither exists at `265b6455`; they are now `internal/audiocore/`, `internal/classifier/`, `internal/inference/`. **Applied**: `grep -rn -e internal/myaudio -e internal/birdnet/ docs` finds only this row. |
+| `PRODUCTION_AUDIT.md` §2 | "the watchdog proves work, not liveness" | **Retracted.** The counter is bumped at the top of the poll loop (`detection/daemon/run.rs:293-295`, was `:285`), which cycles every 500 ms regardless of audio. It proves the loop cycles; a station that has written no file for four months keeps it satisfied. **Applied** (`d465ec4`): `PRODUCTION_AUDIT.md:878-879` carries the retraction. |
+| `ENCLOSURE_READINESS_AUDIT.md` §2 | USB re-enumeration has no recovery path | Partly superseded: the installer now writes the stable `plughw:CARD=<id>` form (`installer/lib/70-station.sh:64`). `quickstart.sh:199` (was `:196-201`) still writes the index (**LC-9**), and a *resolving* index still passes the doctor silently (**AU-1**). **Partly applied**: `ENCLOSURE_READINESS_AUDIT.md:552-568` carry the qualification; its closing paragraph (`:793-794`) still says the failure "has no recovery path at all", unqualified. |
+| `docs/book/field/deployment.md:200` | "The unit waits for `time-sync.target` … so the daemon never sees an unsynchronised clock at boot" | False. `After=` is ordering only; `time-sync.target` is reached when the NTP client *starts*. The unit that blocks is `systemd-time-wait-sync.service`, enabled nowhere here. **Partly applied** (`d465ec4`; now `deployment.md:201-205`): the bullet says "ordering only — nothing `Wants=` that target", but still opens with "the sync normally lands first", and `systemd-time-wait-sync` is named nowhere in `docs/`, `installer/` or `docker/`. |
+| `docs/book/field/deployment.md:254`, `docs/architecture/10-deployment.md:137` | `StartLimitBurst=5`/`300`, and `60`/`3` | The shipped unit sets `StartLimitIntervalSec=0` (`installer/lib/65-service.sh:75`) and never parks in `failed`. Three documents, three values, none matching. **Applied**: `deployment.md:257` and `docs/architecture/10-deployment.md:155-156` both give `StartLimitIntervalSec=0`; `FIELD_READINESS_AUDIT.md:117-122` and `POST_0140_AUDIT.md:739-746` keep the old pair only as the history of the change. |
+| `docs/book/field/deployment.md:534` | "The admin panel's 'Update' button is the only way to upgrade" | There is no such button. `POST /admin/update/apply` has no UI caller and fails `EROFS` under `ProtectSystem=strict` (**LC-3**). **Applied** (now `deployment.md:585-587`): the manual names the **Check for Updates** button and `sudo bash install.sh update`. The endpoint is still routed (`routes/admin/update.rs:20`) — item 3.10. |
+| `docs/book/field/deployment.md:541` | "keep the previous binary in `…​.prev` so a one-line `mv` rollback is possible" | Nothing in the product created that file at `35acd9e` (**LC-1**). **Overtaken by the code rather than applied**: the sentence (now `deployment.md:593-595`, last edited in `003676b`, 2026-08-17) was left alone and item 1.6 made it true — `installer/lib/50-binary.sh:45`, in `install_binary_atomically`, keeps `${dst}.prev`. |
+| `docs/book/admin/remote-access.md:44` | the self-signed cert "is replaced a month before it expires" | Only if the process restarts inside the 367–397 day window (**NT-3**). **Not applied**: `remote-access.md:45-46` still says it. `tls.rs` has `RENEW_BEFORE` (`:94`), evaluated only where the resolver is built (`before_renewal`, `:381-394`); `spawn_reloader` (`:724`) restats the files every `RELOAD_POLL` and mints nothing — item 5.5. (`1334320` corrected the neighbouring reload-cadence sentence, not this one.) |
+| `crates/birdnet-web/src/security.rs:187` | "No HSTS: the binary serves plain HTTP" | Stale since `tls.rs` landed (1 531 lines, three TLS modes). The same file's opening line still said the UI uses HTTP Basic and no cookies. **Applied** (`95a8272`, item 8.1): the module doc opens on the `bnb-session` cookie and names both mitigations (`security.rs:1-12`); the HSTS note (`:215-221`) now says why there is none yet and points at **O-10**. |
+| `crates/birdnet-web/src/metrics.rs:154` | a spike in drop-reason `quality` / `occurrence` diagnoses the microphone | Neither reason is ever emitted in production; both appear only in that file's tests. **Applied**: `metrics.rs:176-180` lists the reasons that are emitted and records the old names. |
+| `crates/birdnet-integrations/src/offsite/s3.rs:42` | "A wedged connection is caught by this instead" (`connect_timeout`) | Disproved by probe: a body that stalls after headers hung past 45 s (**NT-11**). **Applied**: `s3.rs:52-55` says what the previous comment got wrong; `.read_timeout` at `:493`. |
+| `src/maintenance.rs:9` | integrity failures "also pinged to the heartbeat URL in future versions" | Removed on the first branch; the heartbeat is now a liveness timer and says nothing about integrity. **Applied**: `grep -n heartbeat src/maintenance.rs` finds nothing. |
+
+Status at `8e6806f`, each row re-checked against its target with `grep`:
+fourteen of the eighteen are applied (one of them, the `.prev` promise, by the
+code catching up with the manual), one is superseded, two are partly applied
+(`deployment.md`'s time-sync bullet, `ENCLOSURE_READINESS_AUDIT.md`'s closing
+paragraph), and one — `remote-access.md:45` — is outstanding.
 
 ### 2.1 Found by the reconciliation pass, 2026-09-04
 
@@ -256,13 +339,13 @@ was recorded and never applied.
 
 | Document | Claim | Correction |
 |---|---|---|
-| This document, header | "133 findings … 5 P0, 47 P1, 59 P2, 20 P3" | 134 rows, 48 P1. Counted from §3 rather than carried; the other three figures hold. |
+| This document, header | "133 findings … 5 P0, 47 P1, 59 P2, 20 P3" | 134 rows, 48 P1. Counted from §3.1–3.11 rather than carried; the other three figures hold. (The header now also counts §3.12 and §3.13, 256 rows in all — see its 2026-09-07 note.) |
 | This document, §3.11 | "61 `Relaxed` uses were reviewed" | True at `35acd9e` and stated without a commit, so it reads as current. 73 at `f33eb9e`, **81** at `ee795ed`, and zero `Acquire`/`Release`/`AcqRel` anywhere. See **RC-9**. |
 | This document, **PS-18** | the 512 MiB cap "can never bind" because the installer mounts at `size=256M` | The mount is not in the service's namespace — `PrivateTmp=yes` gives it a fresh `/tmp` — and `60-dirs.sh:31` skips creating it entirely when `/tmp` is already tmpfs. The cap is the *only* ceiling, not an unreachable one, which makes **PR-3** worse rather than better. The PS-18 row now carries this. |
-| This document, §2 (above) | `security.rs:187`'s "No HSTS: the binary serves plain HTTP" is stale | Still stale, and still there. The same module doc's *opening* line — "the web UI authenticates with HTTP Basic Auth and keeps no cookies or sessions" — is also false and is load-bearing, because the CSRF rationale is built on it. See **RC-5**. Of §2's four code-comment corrections, three were applied (`metrics.rs:180`, `offsite/s3.rs:47`, `src/maintenance.rs`); this one was not. |
+| This document, §2 (above) | `security.rs:187`'s "No HSTS: the binary serves plain HTTP" is stale | Was still stale, and still there, on 2026-09-04. The same module doc's *opening* line — "the web UI authenticates with HTTP Basic Auth and keeps no cookies or sessions" — was also false and load-bearing, because the CSRF rationale was built on it. **Applied 2026-09-07** (`95a8272`, item 8.1): the doc now names the `bnb-session` cookie and both mitigations, and `session.rs:580` asserts the cookie attributes it rests on (**RC-5**, **RC-6**). Of §2's four code-comment corrections, three were applied on the first branch (`metrics.rs:180`, `offsite/s3.rs:52`, `src/maintenance.rs`); this was the fourth. |
 | `crates/birdnet-web/src/routes/pages/dawn_chorus.rs` | the inline predicate is the "same predicate the view applies … and `dawn_chorus_excludes_rejected_detections` holds the two in step" | Neither half was true: the provenance clause was missing and that test only covered the verdict. Fixed, with a gate that holds the two against each other on the same rows (**RC-4**). |
-| `src/doctor.rs:24` | the check submodules are "(`config`, `database`, `paths`, `audio`, `model`, `environment`, `disk`, `watchdog`)" | Fourteen exist; the doc knows eight. Missing: `analytics`, `clock`, `fix`, `offsite`, `tls` — including the two a field operator most needs. See **RC-8**. |
-| `.env.example:99` | "Web UI authentication (HTTP Basic)" | A session cookie. The same mislabel was corrected in five documents on this branch; this is the file every Docker operator copies. See **RC-12**. |
+| `src/doctor.rs:24` | the check submodules are "(`config`, `database`, `paths`, `audio`, `model`, `environment`, `disk`, `watchdog`)" | Fourteen files exist; the doc knew eight. Missing: `analytics`, `clock`, `fix`, `offsite`, `tls` — including the two a field operator most needs. **Applied** (`95a8272`, item 8.2): `src/doctor.rs:18-34` names all thirteen check submodules plus `render`, and `CHECK_FAMILIES` (`:200`, 21 rows) is what `collect` iterates, read back by `every_check_entry_point_is_in_the_table` (`:345`) and `the_module_doc_names_every_submodule` (`:398`). See **RC-8**. |
+| `.env.example:99` | "Web UI authentication (HTTP Basic)" | A session cookie. The same mislabel was corrected in five documents on the first branch; this is the file every Docker operator copies. **Applied** (`480d56f`): `.env.example:99` now reads "a session-cookie login at /login" (**RC-12**). |
 | `crates/birdnet-timeseries/src/executor/mod.rs` | `TimeSeriesDb::new` "ensures the `detections_ts` view is present" | It *replaced* it, dropping a rule the other crate had installed. Now checks rather than creates (**RC-2**). |
 
 One correction runs the other way, and is recorded because a reconciliation that
@@ -850,7 +933,11 @@ it was written for and the failure text recorded in the commit message. The
 workspace suite went from 3 425 passing at the branch point to **3 570** where
 that work merged (`f33eb9e`), with nine Stage 2 items landed (3 465 at the end
 of Stage 1); the installer suite from eight tests to eleven
-(`installer/test/*.sh`, excluding the `run-ci.sh` harness), all passing. Every
+(`installer/test/*.sh`, excluding the `run-ci.sh` harness), all passing — and
+to **twelve** in `run-ci.sh`'s `CI_TESTS` at `8e6806f` (`container-model-cache.sh`
+from `8334255`, `geomodel-resume.sh` from `c31da32`; `pkg-manager.sh` is the
+thirteenth file and is excluded by name at `run-ci.sh:46` because it needs
+Docker). Every
 figure here is from a run, not a running total — this sentence said "eight to
 ten" until the count was taken again, and said "3 567 with seven Stage 2 items"
 until both were taken again at the merge commit.
@@ -877,15 +964,15 @@ until both were taken again at the merge commit.
 > — is not caught, because catching it needs a reference the floor does not
 > have: distinguishing "the clock jumped forward nineteen years" from "nineteen
 > years passed" requires comparing the wall clock against the monotonic clock
-> across one process lifetime. That limit is stated in the code rather than
-> implied, and is item 1.11 below.
+> across one process lifetime. That limit was stated in the code rather than
+> implied, and item 1.11 has since closed it (`e88a60d`).
 
 ### Stage 1 — the rest
 
 | # | Item | Finding | Why here |
 |---|---|---|---|
 | 1.10 | Atomic clip and segment writes | **PS-7**, **S-4** | `.part` + `rename` + `sync_all`; the pattern is already in `entrypoint.sh`. |
-| 1.11 | The monotonic-versus-wall step detector | **NT-4**, remaining half | The forward-jump direction 1.5 does not cover. |
+| 1.11 | The monotonic-versus-wall step detector — **done** (`e88a60d`): `ForwardStepWatch` (`civil.rs:530`) compares the wall clock with the monotonic clock, tolerance `MAX_FORWARD_STEP_SECS` (400 days, `:475`), baselined at the first plausible reading; `clock_looks_plausible` gained a ceiling (`CLOCK_PLAUSIBLE_CEILING_SECS`, `:443`); `maintenance::clock_is_safe_for_retention` (`src/maintenance.rs:450`) consults both and is also called by the acoustic-health and weather pruners. Gates `forward_step_tests` (`civil.rs:1482`) and `clock_floor_tests` (`:1378`), observed failing with `observe_at` reduced to the floor test alone: `left: Sane / right: SteppedForward { by_secs: 619315199 }` | **NT-4**, remaining half; **AD-1** | The forward-jump direction 1.5 did not cover. |
 | 1.12 | Raise `doctor/model.rs` off its one-megabyte threshold | **LC-2**, remaining half | The installer no longer *produces* a truncated model; the doctor still cannot *detect* one that arrived another way. |
 
 
@@ -909,6 +996,8 @@ person 40 km away learns that it stopped.
 | 2.14 | Publish the MQTT status topic that discovery already advertises, with a last will | **OB-8** | 9 gates against a broker stub that *decodes* CONNECT and PUBLISH rather than matching bytes. 8 mutations killed, each by one gate: no will (`"a will was registered"`), a will on the stateless publish too (only the discrimination test fails), the will written after the username — a well-formed packet that publishes the password to whatever the broker reads as the topic — `ping` that writes and never reads (`"an unanswered ping must fail"`), `config.qos` ignored, which is the shipped code (`"an unacknowledged QoS 1 publish must not report success"`, while the `QoS` 0 counterpart stays green — the fix is not "every publish now blocks"), the retain override ignored, also shipped (`"override honoured"`), `shutdown` that disconnects without saying offline (`left: 1, right: 2`), and an unretained will. |
 | 2.15 | Operational alerts reach the notification log | **OB-13**, and **NL-1** found while doing it | 11 gates, 6 mutations killed. `flush` recording nothing — the shipped state — fails 4 and leaves `no_notifier_configured_writes_nothing` green. Then: `Queued` written as `Failed`, a row per retry instead of one per episode, placeholder species columns, a loop sending inline again (the pre-2.2 shape, caught by the source scanner), and the CHECK left un-widened — `"the schema rejects the `queued` status this code writes: CHECK constraint failed"`. That last one is **NL-1**: the two behavioural gates were written, run, and failed against the shipped schema before the migration existed. |
 | 2.16 | "Test notifications" sends what an alert sends, and is live whenever a destination resolved | **OB-9** | 11 gates — 5 behavioural against a local destination through the real admin router, 6 at the renderer. Against the shipped handler four of the five behavioural gates fail: the button reaches nothing (`left: 0, right: 1` requests at the station's own destination), it renders `class="btn-disabled" … disabled` for a station whose native route is working, an open circuit is reported as *"Apprise URL not configured"*, and the module holds two HTTP clients (`left: 2, right: 1`). The fifth — no notifier at all still yields a disabled button and an error, not a send — passes **both** ways, which is what stops the fix being "always enabled". The discrimination is the open circuit: with `Gate::admit_priority` returning `Send` unconditionally the other four stay green and that one fails, so this is a test that goes through the shared guards rather than one that merely reaches the destination. |
+| 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10** (the `config.redacted` half), **OB-11**, **RC-20** | `373ceb2`. One `birdnet_core::config::redact::redact_value` (`redact.rs:150`): `rtsp(s)://` loses only its password, `http(s)://` keeps its host and loses its path, any other scheme keeps only its scheme, and a value holding several URLs has each member redacted; used by the support bundle (`src/support.rs:49`) and `GET /api/v2/settings` (`api_write.rs:611`). Gates observed failing with the body replaced by the old `redact_email_local_part(&redact_url_credentials(v))` composition — `left: "***@camera.local/stream"` — are the scheme tests in `redact.rs` (`:195-273`), `support.rs` `redacted_config_keeps_a_dotted_camera_url_readable_and_hides_a_heartbeat_token` (`:339`) and `api_write.rs` `settings_are_redacted_by_key_and_by_shape` (`:940`), the last of which had pinned the mangled string with a comment endorsing it. |
+| 2.19 | `GET /admin/doctor.json` and a support bundle over HTTP | §3.6, **OP-1** | `9f42652`. `/admin/doctor` renders the full `--doctor` report; `/admin/doctor.json` and `/admin/support-bundle` sit beside it (`routes/admin/doctor.rs:40-42`), through `birdnet_web::diagnostics::Diagnostics` hooks that `src/app.rs:244` installs from `helpers::diagnostics::hooks` — read-only, a GET never implies `--fix`; `support::run` split so `support::build` (`src/support.rs:144`) serves both. Gates `crates/birdnet-web/tests/the_diagnostics_are_reachable_from_the_browser.rs`, `tests/the_station_can_diagnose_itself_from_a_browser.rs` and the `helpers::diagnostics` unit tests: against the shipped `doctor.rs` the routes answer `left: 404 / right: 200`, and a process with no hooks installed `left: 404 / right: 503`. |
 
 **Still to do:**
 
@@ -919,9 +1008,7 @@ person 40 km away learns that it stopped.
 | 2.11 | Prune quarantined stores on a retention schedule (detection and the condition landed with 2.3) | **PS-6**, remaining half |
 | 2.12 | Read-only-remount detection | **PS-9** |
 | 2.13 | `--doctor` measures the card, not the RAM disk | **PS-8** |
-| 2.17 | Redact by shape in the support bundle; stop mangling RTSP URLs | **OB-10**, **OB-11** — the rules moved to `birdnet_core::config::redact` with 5.14, so this is now a one-place fix rather than two. The mangling is measured: `redact_email_local_part(&redact_url_credentials(v))` turns `rtsp://cam:secret@camera.local/stream` into `***@camera.local/stream`, losing the scheme and the username, because the second rule reads the first's output as an email address. `GET /api/v2/settings` discloses the same shape and its gate pins that exact string, so a fix here will show up there |
 | 2.18 | journald drop-in; demote the two per-file INFO lines | **OB-15**, **PS-19**, **O-9** — the volatile-journal half of **OB-15** is now partly covered by `errors.jsonl` (2.6), which survives the reboot; the 1.6–2.8 GB/year of INFO is not |
-| 2.19 | `GET /admin/doctor.json` and a support bundle over HTTP | §3.6 |
 | 2.20 | A "Test notifications" path for email and MQTT | **OB-9**, remaining half |
 
 
@@ -950,7 +1037,7 @@ person 40 km away learns that it stopped.
 | 3.19 | `FULL_DISK=keep` | **NP-2** |
 | 3.20 | Uninstall: one implementation, config removal inside the guard | **LC-14** |
 | 3.21 | `verify_sha256` in the container must not pass when it cannot check | **LC-15** |
-| 3.22 | A provenance dimension in `species_summary`'s key, so the rollup answers both questions and no station pays the scan | **RC-3**, remaining half |
+| 3.22 | A provenance dimension in `species_summary`'s key, so the rollup answers both questions and no station pays the scan — **done** (`dd10fe7`): migration 42 keys `species_summary` by `(Com_Name, Sci_Name, hour, is_import)`, the triggers are rewritten, and `summary_source` (`queries/species.rs:35`) reads the rollup whole or `WHERE is_import = 0`; gates `a_station_that_excludes_imports_still_reads_the_rollup` (against the shipped reader `left: 2, right: 41`) and `the_rollup_keys_provenance_and_the_triggers_keep_it` (`no such column: is_import` against the shipped schema), in `crates/birdnet-db/tests/the_species_list_honours_the_provenance_rule.rs:247,280` | **RC-3**, remaining half |
 
 ### Stage 4 — correctness in the signal path
 
@@ -1034,22 +1121,22 @@ else.
 
 | # | Item | Finding |
 |---|---|---|
-| 8.1 | Assert `HttpOnly` and `SameSite` on the session cookie; then rewrite `security.rs`'s module doc to name the two mitigations that actually exist | **RC-6**, **RC-5** |
-| 8.2 | A named table of `--doctor` check families that a source-scanning gate reads, and a module doc generated from it rather than restating it | **RC-7**, **RC-8** |
+| 8.1 | Assert `HttpOnly` and `SameSite` on the session cookie; then rewrite `security.rs`'s module doc to name the two mitigations that actually exist — **done** (`95a8272`): `session.rs:580` `both_cookies_carry_httponly_and_samesite_lax`, observed failing with the attributes deleted; `security.rs:1-12` names both mitigations and `:215-221` points the missing HSTS at **O-10** | **RC-6**, **RC-5** |
+| 8.2 | A named table of `--doctor` check families that a source-scanning gate reads, and a module doc generated from it rather than restating it — **done** (`95a8272`): `CHECK_FAMILIES` (`src/doctor.rs:200`, 21 rows) is what `collect` iterates; `every_check_entry_point_is_in_the_table` (`:345`) and `the_module_doc_names_every_submodule` (`:398`), observed failing with a row and then a word deleted (`clock::check_clock is a check the doctor no longer runs`) | **RC-7**, **RC-8** |
 | 8.3 | Derive the compose healthcheck's port from `BIRDNET_LISTEN` as the image's own already does, and cover it in `scripts/check-compose-startup.sh` | **RC-11** |
 | 8.4 | One backup-retention constant, or two that name their different jobs; and one ordering for the two pruners | **RC-10**, **RC-23**, and the mechanism behind **PS-15** |
 | 8.5 | Read the recorded database verdict on `/station` instead of running `PRAGMA quick_check` per render | **RC-18** |
 | 8.6 | A test for `OFFSITE_BUDGET`, the outermost guard on the maintenance loop | **RC-16** |
 | 8.7 | Pin `labels.csv`'s digest in CI as the three shipping paths already do | **RC-24** |
 | 8.8 | `CITATION.cff` in the release checklist, since `release.yml` hard-fails on it | **RC-25** |
-| 8.9 | Thread the clock floor through the two purges outside the maintenance loop — for consistency; the data-loss direction is 1.11 and this does not touch it | **RC-17** |
+| 8.9 | Thread the clock floor through the two purges outside the maintenance loop — **done** (`e88a60d`, with 1.11): both now call `maintenance::clock_is_safe_for_retention` (`acoustic_health.rs:583`, `weather.rs:97`), so they inherit the floor, the ceiling and the step watch | **RC-17** |
 | 8.10 | A `Relaxed` census gate, labelled as review debt rather than as a correctness proof; and §3.11's sentence qualified by commit (done) | **RC-9** |
 | 8.11 | Resolve the solar overlay per import batch, using the `source_lat`/`source_lon` migration 25 already stores | **RC-28** |
 | 8.12 | Either join `weather` to detections or say in the schema that it is collected for export only | **RC-29** |
 | 8.13 | Wire the seven unreachable phenology builders or delete them | **RC-27** |
 | 8.14 | Check the clip file exists before rendering a player for it | **RC-31** |
-| 8.15 | `.env.example`: the "HTTP Basic" mislabel, the `plughw:1,0` examples, and a Docker-only block — all of which the **O-7** drift gate (item 3.9) should then hold | **RC-12**, **RC-32**, **RC-13**, **RC-14** |
-| 8.16 | Port the six `/admin/*` pages still on the retired shell, or retire the shell | **RC-30** |
+| 8.15 | `.env.example`: the "HTTP Basic" mislabel — **done** (`480d56f`, **RC-12**) — the `plughw:1,0` example (`.env.example:62`) and a Docker-only block, all of which the **O-7** drift gate (item 3.9) should then hold | **RC-12**, **RC-32**, **RC-13**, **RC-14** |
+| 8.16 | Port the eight `/admin/*` pages still on the retired shell (nine `admin_shell`/`admin_subpage_shell` call sites), or retire the shell | **RC-30** |
 | 8.17 | Make `openapi.rs`'s unrouted detector read the router rather than a 404 body | **RC-33** |
 | 8.18 | `restore_from_backup`'s `step(-1)`, by symmetry with `copy_whole_database` | **RC-22** |
 | 8.19 | Read `CADDY_USER` or refuse it; fix `dependabot.yml`'s dead job name | **RC-34**, **RC-26** |
