@@ -1595,6 +1595,35 @@ mod forward_step_tests {
         assert_eq!(watch.observe_at(NOW, Instant::now()), ClockVerdict::Sane);
     }
 
+    /// The three constants and the one predicate the guard hangs on, pinned
+    /// so a mutant that flips one of them fails here rather than surviving on
+    /// fixtures that happen not to touch it: the tolerance is 400 days
+    /// (`*` → `+` gave 86 800 s and every step test still passed), `Sane` is
+    /// the one verdict that permits deletion, and the floor is inclusive.
+    #[test]
+    fn the_tolerance_the_verdicts_and_the_floor_edge_are_what_they_say() {
+        assert_eq!(MAX_FORWARD_STEP_SECS, 34_560_000, "400 days in seconds");
+        assert!(ClockVerdict::Sane.is_safe_for_retention());
+        for refused in [
+            ClockVerdict::BeforeFloor,
+            ClockVerdict::AfterCeiling,
+            ClockVerdict::SteppedForward { by_secs: 1 },
+        ] {
+            assert!(!refused.is_safe_for_retention(), "{refused:?}");
+        }
+        let mut watch = ForwardStepWatch::default();
+        let t0 = Instant::now();
+        assert_eq!(
+            watch.observe_at(super::CLOCK_PLAUSIBLE_FLOOR_SECS - 1, t0),
+            ClockVerdict::BeforeFloor
+        );
+        assert_eq!(
+            watch.observe_at(super::CLOCK_PLAUSIBLE_FLOOR_SECS, t0),
+            ClockVerdict::Sane,
+            "the floor itself is a plausible reading, as it is for clock_looks_plausible"
+        );
+    }
+
     /// A monotonic reading from before the baseline must not panic the loop
     /// that owns the watch.
     #[test]
