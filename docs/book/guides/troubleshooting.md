@@ -39,7 +39,7 @@ ss -tlnp | grep 8502
 sudo ufw allow 8502/tcp   # if you use the Ubuntu firewall
 ```
 
-No row from `ss` means the daemon never finished starting — see [Service won't start](#service-wont-start) above. If you deliberately restricted access, `BIRDNET_LISTEN` will be `127.0.0.1:8502` (reachable only from the Pi); set it back to `0.0.0.0:8502` for LAN access. Viewing the dashboard needs no login; only `/admin` does — use the auto-generated password from the install summary (see [the admin password FAQ](./faq.md#how-do-i-find-or-reset-the-admin-password)).
+No row from `ss` means the daemon never finished starting — see [Service won't start](#service-wont-start) above. If you deliberately restricted access, `BIRDNET_LISTEN` will be `127.0.0.1:8502` (reachable only from the Pi); set it back to `0.0.0.0:8502` for LAN access. Viewing the dashboard needs no login; `/admin*`, the Station management tabs and every action that changes something do — use the auto-generated password from the install summary (see [the admin password FAQ](./faq.md#how-do-i-find-or-reset-the-admin-password)).
 
 ## No detections appearing (bare metal)
 
@@ -91,7 +91,7 @@ On the **Analytics** page, the Activity Sessions, Species Retention, and Next Sp
 
 The `duckdb-behavioral` community extension is compiled for a **specific DuckDB version**, and DuckDB refuses to load an extension built for a different one (an extension built for DuckDB `v1.5.3` won't load into a binary that bundles `v1.5.5`). This is **non-fatal**: everything that reads SQLite directly — Migration, the Dawn Chorus, the Heatmap, Co-occurrence, and the whole Time-series page — keeps working; only the extension-backed sessionize / retention / next-species queries are unavailable. The Analytics status badge reflects this — it reports the database is *connected* but does not claim behavioral analytics are active.
 
-To fix it, rebuild and republish the extension for the bundled DuckDB version in the [duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) repository (or pin the `duckdb` crate to the version the published extension targets) and rebuild with `--features analytics`. Confirm the bundled version with `birdnet-behavior --doctor`. See the full [TROUBLESHOOTING.md](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md) entry for details.
+To fix it, rebuild and republish the extension for the bundled DuckDB version in the [duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) repository (or pin the `duckdb` crate to the version the published extension targets) and rebuild (analytics is a default Cargo feature). Confirm the bundled version with `birdnet-behavior --doctor`. See the full [TROUBLESHOOTING.md](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md) entry for details.
 
 ## Every analytics dashboard is empty, and the logs say nothing
 

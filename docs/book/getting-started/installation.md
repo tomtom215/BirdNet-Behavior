@@ -44,7 +44,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 3. Creates `~/birdnet-behavior/` for your `.env` and compose files.
 4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL.
 5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipapi.co).
-6. Asks whether to enable DuckDB behavioral analytics (default: no).
+6. (DuckDB behavioral analytics is built into every image and on by default — nothing to choose.)
 7. Writes a short `.env` with only your chosen values.
 8. Starts the container with the matching compose overlay.
 9. Streams logs so you can watch the one-time 541 MB model download.
@@ -155,8 +155,8 @@ docker compose down -v         # also remove volumes (deletes the database!)
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
 cd BirdNet-Behavior
 
-cargo build --release                              # optimized build (~3–5 min)
-cargo build --release --features analytics         # + DuckDB analytics (~7 min first build)
+cargo build --release                              # optimized build; DuckDB analytics is a default feature (~7 min first build)
+cargo build --release --no-default-features        # without analytics (~3–5 min)
 cross build --release --target aarch64-unknown-linux-gnu   # cross-compile for a Pi
 ```
 

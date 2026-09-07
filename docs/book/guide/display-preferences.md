@@ -11,6 +11,6 @@ BirdNet-Behavior adapts to how and where you watch it — a phone on the trail, 
 
 ## How it's applied (no flash on load)
 
-Preferences are stored under the `theme`, `bnb-density`, `bnb-motion`, and `bnb-contrast` keys in `localStorage`. A tiny guard script runs **before first paint** — both inline in the main layout and as `/static/theme-guard.js` for the standalone admin pages — and sets `data-theme` / `data-motion` / `data-contrast` attributes and the `--density` variable on `<html>` immediately. That pre-paint step is what prevents the brief "flash of the wrong theme" (FOUC) when you reload a page.
+Preferences are stored under the `theme`, `bnb-density`, `bnb-motion`, and `bnb-contrast` keys in `localStorage`. A tiny guard script runs **before first paint** — inline in the main layout, where it sets the `data-theme` / `data-motion` / `data-contrast` attributes and the `--density` variable on `<html>` immediately, and as `/static/theme-guard.js` for the standalone admin pages, which applies only the theme and density keys. That pre-paint step is what prevents the brief "flash of the wrong theme" (FOUC) when you reload a page.
 
 Because the values live in the browser, they persist across reloads and survive station restarts, and two people looking at the same station on different devices each get their own settings.

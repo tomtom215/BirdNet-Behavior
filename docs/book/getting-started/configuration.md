@@ -15,7 +15,7 @@ On top of that, a **SQLite settings table** managed through the web UI at **`/ad
 
 ## Environment variables & CLI flags
 
-The full list lives in `.env.example` and `birdnet-behavior --help`. Each row shows the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
+The full list lives in `birdnet-behavior --help`; `.env.example` documents all of them except the multi-microphone `BIRDNET_ALSA_DEVICES` (`--alsa-devices`) and `BIRDNET_CONFIG` itself. Each row shows the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
 
 | Env var | CLI flag | `birdnet.conf` key | Default |
 |---|---|---|---|

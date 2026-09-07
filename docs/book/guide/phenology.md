@@ -23,4 +23,4 @@ The ridgeline uses a deliberately cheap heuristic on the current year's data: a 
 
 ## Not the same as "Migrating from BirdNET-Pi"
 
-This page is about bird migration through your yard. If you're looking to **import data from an existing BirdNET-Pi install**, that's a different feature — see [Migrating from BirdNET-Pi](../guides/migration.md) and the `/admin/migrate` admin page.
+This page is about bird migration through your yard. If you're looking to **import data from an existing BirdNET-Pi install**, that's a different feature — see [Migrating from BirdNET-Pi](../guides/migration.md) and the import panel under Station → Data (`/station/data#import`; the old `/admin/migrate` redirects there).

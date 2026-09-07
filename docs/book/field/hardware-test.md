@@ -103,6 +103,7 @@ Exit status is non-zero if any check failed.
 | `verify` | Binary runs, doctor's verdict, service active, health endpoint, **`--verify-extension` under `unshare -rn`**, systemd hardening actually applied |
 | `capture` | A real capture subprocess is running, segments reach the tmpfs watch dir, recordings persist, and the mic is not delivering digital silence |
 | `detect` | The reference Eurasian Magpie recording, pushed through the watch directory, produces a **new stored** `Pica pica` detection — the total must rise, so a magpie the station recorded last week cannot satisfy it. Real inference against the 11k-species model, on this board |
+| `pipeline` | Accounts for every segment between capture and inference over a ten-minute window — the segments capture wrote against the files the daemon actually opened — and names the stage that drops them |
 | `perf` | Mean decode-to-prediction latency **per stored detection** (a measurement, not a verdict — see below), peak SoC temperature, throttle register under load, RSS against the unit's `MemoryHigh=768M` |
 | `web` | Every documented endpoint answers; the dashboard is reachable from the LAN; whether `/admin` is open without a password |
 | `watchdog` | `SIGSTOP` the daemon → systemd's watchdog kills and restarts it, and the station serves again |
@@ -112,6 +113,7 @@ Exit status is non-zero if any check failed.
 | `dbcorrupt` | 8 KiB of random bytes over the SQLite header → `--check-db` detects it, the station recovers on restart, and ends healthy |
 | `duckdb` | Same against the derived analytics store → it rebuilds rather than refusing to start |
 | `reboot` | Cold reboot → service auto-starts, dashboard serves, **capture resumes** |
+| `report` | Writes the summary `report.md` into the output directory |
 
 ### The headline numbers
 

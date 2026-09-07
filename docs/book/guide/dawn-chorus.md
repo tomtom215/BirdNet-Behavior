@@ -12,17 +12,12 @@ The **Dawn chorus** tab of [Patterns](./patterns.md) (`/patterns?tab=dawn`) show
 
 ## Setting your location
 
-The sun-time overlay uses, in order of preference:
-
-1. `BNB_STATION_LAT` / `BNB_STATION_LON` — set these in the environment for the most explicit control.
-2. `BIRDNET_LATITUDE` / `BIRDNET_LONGITUDE` — the same coordinates used for BirdWeather and the recording scheduler.
-3. A conservative `05:30` / `20:00` fallback if neither is configured.
-
-```bash
-# Example: a station near Boston, MA
-BNB_STATION_LAT=42.3601
-BNB_STATION_LON=-71.0589
-```
+The sunrise/sunset markers use the station's configured coordinates — the
+`latitude` / `longitude` settings you enter in the onboarding wizard or under
+**Location & Recording Schedule** on the settings form. With no coordinates the
+ribbons still draw, but the sun markers and the night wedge are omitted rather
+than guessed (see below). `BNB_STATION_LAT` / `BNB_STATION_LON` are read only by
+the weather integration and have no effect here.
 
 ## A note on time zones
 

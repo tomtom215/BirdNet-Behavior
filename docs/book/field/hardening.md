@@ -58,9 +58,11 @@ session-cookie sign-in enforced by the binary itself.** Treat reachability as th
 
 ## 2. Authentication
 
-Authentication gates **only the `/admin` panel** — viewing the dashboard, the
-read-only `/api/v2/*` endpoints, the WebSockets, and the health check are open
-to anyone who can reach the port. A fresh install auto-generates a strong admin
+Authentication gates **the `/admin*` panel, the Station management tabs
+(`/station/capture|alerts|data|settings|access`) and every page action that
+changes something** — viewing the dashboard, the read-only `/api/v2/*`
+endpoints, the WebSockets, and the health check are open to anyone who can
+reach the port. A fresh install auto-generates a strong admin
 password, so `/admin` is protected by default; for anything LAN- or
 internet-reachable, keep it set (and add TLS off-LAN).
 
@@ -93,7 +95,7 @@ internet-reachable, keep it set (and add TLS off-LAN).
 - **WebSocket caveat.** The live-detection WebSocket (`/api/v2/ws/detections`)
   and the health endpoint (`/api/v2/health`) are intentionally exempt from the
   built-in sign-in layer, because a browser cannot attach credentials to a
-  `WebSocket` handshake. (They are read-only and outside `/admin` in any
+  `WebSocket` handshake. (They are read-only and outside the gated router in any
   case.) The live detection stream is therefore readable by anyone who can reach
   the port. If that matters, gate access at the network layer (VPN / proxy
   allow-list) rather than relying on app-level auth.
@@ -156,7 +158,7 @@ fails fast with an actionable journal entry instead of a restart loop.
 
 ## 6. Data & backups
 
-- **Database backups.** Take a hot backup from **Admin → Backups** or
+- **Database backups.** Take a hot backup from **Station → Data** (`/station/data#backups`) or
   `birdnet-behavior --backup-db`; the periodic maintenance task also rotates
   backups beside the database. Those are on the same card as the database, so
   they cover a corrupt page and not a dead card.
@@ -209,27 +211,47 @@ pin a specific version tag in production rather than `latest`.
 
 ---
 
-## 8. Host hardening (recommended drop-ins)
+## 8. Host hardening (what the unit already ships)
 
-The installed systemd unit runs as a non-root user and gates startup on the
-doctor. For an exposed or multi-tenant host, consider tightening it further with
-a drop-in (`systemctl edit birdnet-behavior`):
+The installed systemd unit runs as a non-root user, gates startup on the
+doctor, and already carries the hardening a drop-in would usually add. From
+`install.sh`'s unit template:
 
 ```ini
 [Service]
-# Filesystem & kernel isolation (adjust paths the service must write to).
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/birdnet-behavior
-PrivateTmp=true
-NoNewPrivileges=true
-ProtectKernelTunables=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectHome=read-only
+ReadWritePaths=<data dir> <config dir> /run /var/log
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+UMask=0027
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module
+DevicePolicy=closed
+SupplementaryGroups=audio
 ```
 
-Verify the service still starts and can reach its audio device and data
-directory after adding these. Pair with a host firewall (`ufw`/`nftables`) that
+Do not paste an older "recommended drop-in" over this. The data directory lives
+under the service user's home (`~/BirdNet-Behavior`), which is why the unit
+relies on `ProtectHome=read-only` plus its own `ReadWritePaths=` line to reach
+it — a drop-in setting `ProtectHome=true` or `ReadWritePaths=/var/lib/birdnet-behavior`
+names a stricter mode and a directory the installer never creates. If you
+tighten further with `systemctl edit birdnet-behavior`, verify the service
+still starts and can reach its audio device and data directory afterwards. Pair with a host firewall (`ufw`/`nftables`) that
 only opens the ports you actually use.
 
 ---

@@ -173,8 +173,10 @@ setting that does nothing tells you, rather than looking like the filter
 working.
 
 Overlap is not free: `OVERLAP=2.0` triples the number of windows and therefore
-the inference work per recording. On a Pi 4 or smaller, check the analysis
-backlog under Station → Health after turning it on.
+the inference work per recording. On a Pi 4 or smaller, watch
+`birdnet_files_analysed_total` against the segment rate (about 5 760 a day per
+source at 15 s) after turning it on — a rate that falls behind means the board
+is not keeping up.
 
 Start at `lenient`. `strict` on a station recording distant or intermittent
 singers will lose real detections — a bird that calls once and moves on is
@@ -185,7 +187,7 @@ indistinguishable, to this filter, from an artefact.
 Two places on the web UI turn your own review history into advice. Both only
 ever suggest; nothing changes until you press the button.
 
-**Suggested thresholds** (Species page). For each species you have both
+**Suggested thresholds** (Station → Capture → Species). For each species you have both
 confirmed and rejected detections of, the station works out the threshold that
 best separates the two, and shows what it would have cost (confirmations lost)
 and caught (rejections stopped) against the reviews it came from. Suggestions

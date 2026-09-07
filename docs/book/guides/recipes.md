@@ -11,9 +11,9 @@ Short, copy-pasteable answers to "how do I…?" Each links to the page with the 
 
 See [Notifications & Integrations](../admin/notifications.md).
 
-## Set up a daily digest instead of per-detection pings
+## Get one alert per species per day instead of per-detection pings
 
-Choose the **Daily digest** notification mode (in the [onboarding wizard](../getting-started/first-steps.md#first-run-wizard) or `/admin/settings → Notifications`) to receive one evening summary rather than a stream of alerts.
+Choose the **First of each species, daily** trigger (`--notify-trigger new-species-daily`, in the [onboarding wizard](../getting-started/first-steps.md#first-run-wizard) or `/admin/settings → Notifications`) to get one alert per species per day instead of one per detection. The trigger modes are `each`, `new-species` and `new-species-daily`; there is no evening-digest mode — the weekly report e-mail is the closest thing to one.
 
 ## Keep a recording forever
 
@@ -53,4 +53,4 @@ Download a **full backup** from the [Data tab](../admin/backups.md) on the old P
 
 ## Import my old BirdNET-Pi history
 
-See [Migrating from BirdNET-Pi](./migration.md) — it's a safe, read-only import at `/admin/migrate`.
+See [Migrating from BirdNET-Pi](./migration.md) — it's a safe, read-only import at `/station/data#import` (the old `/admin/migrate` redirects there).

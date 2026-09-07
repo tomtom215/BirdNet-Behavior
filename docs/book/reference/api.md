@@ -1,14 +1,14 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the eight [write endpoints](#changing-a-station), which need a token.
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the eight token-gated endpoints — seven writes and one read — under [Changing a station](#changing-a-station).
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
-> **Auth:** the built-in session sign-in gates only the `/admin*` UI routes. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+> **Auth:** the built-in session sign-in gates the `/admin*` UI routes, the `/station/<tab>` management pages and the page actions that change something — none of which live under `/api/v2`. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
 >
 > The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
-> **OpenAPI:** a complete, machine-readable **OpenAPI 3.1** description of this API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients.
+> **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It is not yet complete: seven routed paths are absent from it — the index `/api/v2/`, `/api/v2/analytics/abundance`, `/api/v2/analytics/phenology`, `/api/v2/soundlevel`, `/api/v2/species/tracking` and the two WebSockets `/api/v2/ws/detections` and `/api/v2/ws/spectrogram` — and the test that guards it (`every_documented_path_is_routed`) checks only that every *documented* path is routed, not the reverse.
 
 ## Health & metrics
 

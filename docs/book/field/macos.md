@@ -45,7 +45,7 @@ brew install cmake ffmpeg
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
 cd BirdNet-Behavior
-cargo build --release --features analytics    # ONNX Runtime downloads on first build
+cargo build --release    # analytics is a default feature; ONNX Runtime downloads on first build
 ```
 
 The binary lands at `target/release/birdnet-behavior`.
@@ -110,8 +110,9 @@ build, but be aware:
   `cfg`-gated to Linux; the admin "restart service" controls are inert.
 - **`/proc` system metrics** — some host metrics on the System page are
   Linux-specific.
-- **`install.sh`** — a systemd + glibc Linux installer; do not run it on macOS.
-  Use the build-from-source + launchd path above.
+- **`install.sh`** — is OS-aware: on macOS it installs a per-user launchd
+  LaunchAgent instead of a systemd unit (see *Quick install* above); run it
+  without `sudo`.
 
 ## Homebrew (planned)
 

@@ -8,7 +8,7 @@ The station publishes lightweight, public, read-only feeds so you can follow you
 | Rare / first-of-station | `/feeds/rare.ics` | iCalendar |
 | Everything today | `/feeds/today.rss` | RSS 2.0 |
 
-The **rare** feeds list first-ever-at-this-station detections with confidence ≥ 0.85 — a low-noise stream of genuinely new birds. The **today** feed is every detection from the current day (chatty by design).
+The **rare** feeds list first-ever-at-this-station detections with confidence above 0.85 (strictly `> 0.85`) — a low-noise stream of genuinely new birds. The **today** feed is every detection from the current day (chatty by design).
 
 ## Discovery
 

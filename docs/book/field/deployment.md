@@ -98,7 +98,7 @@ the retention each one needs:
   `birds.db`. These are your data, so they are never removed by age. Only the
   disk-full backstop touches them: once usage exceeds `DISK_PURGE_THRESHOLD`
   it removes the oldest clips first, skipping any file the database has marked
-  locked (`/admin/recordings` → "lock"). The locked set is re-read every cycle,
+  locked (the 🔒 **Lock** action on **Recordings**, or on a Today row). The locked set is re-read every cycle,
   so locking a clip takes effect immediately — no restart needed.
 - the **raw capture directory** (`--watch-dir`, typically the RAM-backed
   `/tmp/birdnet-stream`), which the detector reads and never needs again. It is
@@ -175,8 +175,8 @@ The installer's systemd unit (`install.sh`) ships hardened by default:
 - `PrivateTmp=yes`, `NoNewPrivileges=yes`, `LockPersonality=yes`,
   `MemoryDenyWriteExecute=yes`, `RestrictRealtime=yes`,
   `RestrictNamespaces=yes`.
-- `SystemCallFilter=@system-service` minus the privileged / kernel
-  / debug / reboot / mount / cpu-emulation / clock / module groups.
+- `SystemCallFilter=@system-service` minus the `@privileged @resources @mount
+  @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module` groups.
 - `MemoryHigh=768M`, `MemoryMax=1G`, `TasksMax=512`, `LimitNOFILE=65536`,
   `LimitNPROC=256` — bounded resource ceilings; runaway processes can't
   take down the host. The 1 GiB ceiling is sized for the bundled DuckDB
@@ -276,10 +276,12 @@ journalctl -u birdnet-behavior -f
 
 ### Per-source gain and quiet window (manual hardware checks)
 
-Each audio source in **Admin → Audio** carries a software **gain** (dB) and an
-optional **quiet window**. Like every other per-source setting (device, sample
-rate, RTSP transport), these are read when the capture subsystem starts, so
-**restart the service after editing them** for the change to take effect:
+Each audio source (**Station → Capture**, `/station/capture`; the old
+`/admin/audio` redirects there) carries an optional **quiet window** and, in the
+`audio_sources` table, a software **gain** (`gain_db`). Like every other
+per-source setting (device, sample rate, RTSP transport), these are read when
+the capture subsystem starts, so **restart the service after editing them** for
+the change to take effect:
 
 ```bash
 sudo systemctl restart birdnet-behavior
@@ -287,10 +289,15 @@ sudo systemctl restart birdnet-behavior
 
 **Gain (`gain_db`).** At unity gain (0 dB) a local microphone records through
 `arecord` (the lightest path). A non-zero gain routes that source through
-`ffmpeg` instead so the gain can actually be applied — verify on real hardware:
+`ffmpeg` instead so the gain can actually be applied. **There is currently no
+control for `gain_db` in the web UI** — the per-source edit form exposes the
+label, device, quiet window, pipeline toggles and equaliser only, and the value
+is merely shown in the source's detail line — so write the column directly to
+exercise this path, and verify on real hardware:
 
 ```bash
-# Set a source's gain to e.g. +12 dB in Admin → Audio, restart, then:
+# Set a source's gain to e.g. +12 dB (no UI control yet — write the column), restart, then:
+sqlite3 ~/BirdNet-Behavior/birds.db "UPDATE audio_sources SET gain_db = 12 WHERE label = '<label>';"
 ps -ww -C ffmpeg -o args= | grep -- '-af volume'
 # USB mic with gain → ffmpeg: "-f alsa -i <device> … -af volume=12.00dB"
 # Set the gain back to 0, restart, and confirm the mic is back on arecord:
@@ -302,7 +309,8 @@ A captured clip from the gained source should be audibly louder (or quieter for
 a negative dB cut) than at unity gain.
 
 **Quiet window (`schedule_quiet`).** Set a window that *currently* includes the
-time of day, **in the station's local time** — a quiet window means the
+time of day (each end is a clock time such as `22:00` or a solar anchor such as
+`sunset+30` / `sunrise-15`), **in the station's local time** — a quiet window means the
 operator's night, so it is evaluated against the local clock, as is a
 `fixed:HH:MM-HH:MM` recording window. (A **solar** schedule is not: sunrise and
 sunset are absolute instants, so that gate is evaluated in UTC and needs no
@@ -324,7 +332,7 @@ does, so a bogus boot-time date can never silence a source.
 ### Multi-source resilience (USB + several RTSP at once)
 
 You can run one or more local microphones (USB/ALSA or PipeWire) **and** any
-number of RTSP streams simultaneously — set them up in **Admin → Audio**, or
+number of RTSP streams simultaneously — set them up in **Station → Capture**, or
 seed them from the config file with `ALSA_CARDS` (`;`-separated) and
 `RTSP_URLS` (`,`-separated). Each source is captured by its own subprocess and
 recordings carry a per-source tag (`local`/`MIC_n` and `RTSP_n`, or the source
@@ -469,7 +477,8 @@ Once the unit is sealed and shipped, the loop is:
    check that no per-component gauge can answer. The station measures
    how long ago the last detection landed and exports it as
    `birdnet_detection_silence_seconds` (also `detection_silence_secs`
-   on `/api/v2/health`, and the "Last Detection" row on `/system`).
+   on `/api/v2/health`, and the "last detection" figure on **Station →
+   Health**, `/station` — the old `/system` redirects there).
    After `DEADMAN_HOURS` of silence (default 24; `0` disables; also
    `--deadman-hours` / `BIRDNET_DEADMAN_HOURS`) it logs a loud warning
    and — when Apprise is configured — pushes **one** alert per quiet
@@ -483,7 +492,7 @@ Once the unit is sealed and shipped, the loop is:
    batches, exponential backoff up to 1 h, bounded queue). Watch
    `birdnet_outbound_queue_depth{kind="birdweather"}` — a depth that
    only grows means the uplink (or token) has been broken for a while.
-   The `/system` page shows a "Queued Uploads" row whenever the queue
+   **Station → Health** (`/station`) shows a queued-uploads figure whenever the queue
    is non-empty. MQTT and Apprise/email are deliberately NOT queued:
    they are live telemetry and look-now alerts, and replaying them
    hours later is worse than dropping them — the local database is
@@ -507,7 +516,11 @@ Once the unit is sealed and shipped, the loop is:
    visible in the first journal lines.
 6. **`birdnet-behavior --doctor-json`** — for monitoring scripts that
    speak JSON (Home Assistant command sensor, Nagios, Zabbix). Same
-   exit codes as the human-readable mode.
+   exit codes as the human-readable mode. The same report is served over
+   HTTP behind the admin login — `/admin/doctor` (rendered),
+   `/admin/doctor.json` (the `--doctor-json` document) and
+   `/admin/support-bundle` (the redacted archive `--support-bundle`
+   writes) — so a station can be diagnosed from a browser without SSH.
 7. **SSH tunnel via Tailscale / ZeroTier / Cloudflare Tunnel** —
    gives you the web UI from anywhere without exposing a port to the
    open internet. Recommended over plain port-forward.
@@ -630,7 +643,7 @@ Symptom-driven, oldest-known-cause first:
 | ----------------------------------------- | ----------------------------------------------------------------------------|
 | Heartbeat stopped                         | `ssh` in, `systemctl status birdnet-behavior`, then `journalctl -u … -n 200` |
 | `journalctl` shows "Watchdog timeout"     | Look 200 lines earlier for the last activity — likely audio device hang     |
-| `--doctor` reports `[ FAIL ]` for model   | Re-download: `rm /data/model/*.onnx`, then restart the service               |
+| `--doctor` reports `[ FAIL ]` for model   | Re-download: `rm ~/BirdNet-Behavior/models/*.onnx` (bare metal) or `rm /data/model/*.onnx` (Docker), then restart the service |
 | Disk full                                 | `birdnet-behavior --doctor` will say so; lower `MAX_FILES_SPECIES`           |
 | Database integrity check fails            | Stop service; restore from `~/BirdNet-Behavior/backups/`                     |
 | Web UI 500s                               | Check `/api/v2/health` for `status`; integrity check most common cause       |

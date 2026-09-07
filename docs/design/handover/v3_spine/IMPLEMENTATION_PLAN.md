@@ -13,7 +13,7 @@
 > bodies into the `st-*` card treatment, rendered through the main shell with the
 > shared Station sub-tab row but gated inside the admin router; the real forms are
 > reused verbatim and keep posting to their existing `/admin/...` endpoints. The
-> **301 cut** has landed too: the eight folded `/admin/*` management pages (and
+> **redirect cut** (`308`, `Redirect::permanent`) has landed too: the eight folded `/admin/*` management pages (and
 > the `/admin` landing) permanently redirect to their Station tab, while the
 > Health-detail pages (`overview`·`system`·`doctor`) and the all-in-one
 > `/admin/settings` form stay reachable as gated fallbacks. The **Species** home
@@ -100,14 +100,14 @@ cannot drive server-rendered, per-tab gated, Pi-cheap pages. Translation:
    `/species?view=list|photos|lifelist` (the packet itself already uses
    `?view=` for Species and Recordings). Redirects target these URLs.
 2. **`/quarantine` is not redirected.** The handoff table maps it to
-   `/?review` but also says "page still reachable for bulk triage" — a 301
+   `/?review` but also says "page still reachable for bulk triage" — a redirect
    would make that impossible. The tab disappears; Today's Review nudge links
    to `/quarantine` (renamed "Review", `active_nav = today`).
 3. **Station auth split.** `/station` (Health tab) is public — it inherits
    the public `/system` page's job ("check from the field"). The five
    management tabs (`/station/capture|alerts|data|settings|access`) live in
    the gated admin router, exactly as `/admin/*` is gated today. Old admin
-   page GETs 301 to their new tab; **admin POST/action/partial endpoints keep
+   page GETs 308 to their new tab; **admin POST/action/partial endpoints keep
    their `/admin/...` paths** so forms and HTMX wiring don't churn.
 4. **Mobile tab bar: six slots, no "More".** With the MORE table empty and
    all six homes on the bar, the sheet would be empty — the hard-coded More
@@ -136,7 +136,7 @@ cannot drive server-rendered, per-tab gated, Pi-cheap pages. Translation:
   the topnav right rail (opens the existing help drawer); ⌘K unchanged.
 - `cmdk.rs` page table updates to the new vocabulary; long-tail destinations
   (Review, Kiosk, Changelog, Help, detail pages) stay reachable there.
-- Redirect module (301): `/today→/`, `/gallery→/species?view=photos`,
+- Redirect module (308, `Redirect::permanent`): `/today→/`, `/gallery→/species?view=photos`,
   `/life-list→/species?view=lifelist`, `/heatmap→/patterns`,
   `/migration→/patterns?tab=migration`, `/correlation→/patterns?tab=together`,
   `/timeseries→/patterns?tab=trends`, `/analytics→/patterns?tab=behavior`,
@@ -213,7 +213,7 @@ layers, real partials:
   (BirdWeather/MQTT/feeds), kiosk launcher.
 - **Access**: accounts; danger zone with the mock's lockout warning around
   the real network-bind/auth controls that exist today.
-- Existing `/admin/*` GET pages 301 to their tab; POST/partial endpoints
+- Existing `/admin/*` GET pages 308 to their tab; POST/partial endpoints
   unchanged; settings save semantics verified before any form is split.
 
 ## Wave C — tab-shell homes
@@ -272,10 +272,14 @@ the mocks that lacks a backend today (noted inline during implementation).
 **Landed (Wave D).**
 
 - **OpenAPI 3.1 spec for the public JSON API.** A committed, hand-maintained
-  `crates/birdnet-web/openapi.json` documents all 44 read-only `/api/v2`
-  endpoints (params + response schemas), served live at `/api/v2/openapi.json`
-  for Swagger UI / Redoc / Postman / `openapi-generator`. It declares the API
-  honestly as unauthenticated (`security: []`); a `redocly.yaml` documents why
+  `crates/birdnet-web/openapi.json` documents 44 read-only `/api/v2` paths
+  plus the 7 bearer-gated write/settings routes (params + response schemas),
+  served live at `/api/v2/openapi.json` for Swagger UI / Redoc / Postman /
+  `openapi-generator`. Seven routed paths are not in it yet — the index,
+  `analytics/abundance`, `analytics/phenology`, `soundlevel`,
+  `species/tracking` and the two WebSockets. It declares the read endpoints
+  honestly as unauthenticated (`security: []`) and the write routes with a
+  `bearerAuth` scheme; a `redocly.yaml` documents why
   two opinionated default lint rules don't apply (so `redocly lint` is clean). A
   test parses the embedded document and asserts every documented path is routed,
   so the spec can't silently drift from the server. The HTTP-API reference doc

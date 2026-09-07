@@ -32,7 +32,7 @@ sends. The same applies to the minimum notification confidence
 the species allow/exclude lists, and the message templates. Changes take effect
 on the next restart.
 
-The **Send test notification** button on `/admin` uses the values saved on the
+The **Send Test Push Notification** button under **Station → Alerts** (`/station/alerts`) uses the values saved on the
 Settings page, so a successful test means live detections will notify too.
 
 ## MQTT & Home Assistant
@@ -75,7 +75,7 @@ With `--mqtt-ha-discovery`, the station registers itself in Home Assistant autom
 
 ## Alert rules
 
-The **Rules** engine (`/admin/rules`) fires conditional actions on detections — for example, a webhook only when an owl is heard at night above 0.7 confidence, or a rule that suppresses a noisy false-positive species. Each rule matches on species pattern, confidence range, hour-of-day and day-of-week.
+The **Rules** engine (**Station → Alerts**, `/station/alerts#rules`; the old `/admin/rules` redirects there) fires conditional actions on detections — for example, a webhook only when an owl is heard at night above 0.7 confidence, or a rule that suppresses a noisy false-positive species. Each rule matches on species pattern, confidence range, hour-of-day and day-of-week.
 
 A webhook rule can authenticate, so it can target endpoints that need a key
 rather than only ones that authenticate by URL alone:
