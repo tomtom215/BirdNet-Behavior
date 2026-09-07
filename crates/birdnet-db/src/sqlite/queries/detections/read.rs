@@ -349,6 +349,56 @@ pub fn all_detections(
     Ok((rows, truncated))
 }
 
+/// `all_detections`, read through `detections_analytic` and held to a floor.
+///
+/// This is the surface an export that *publishes* should read, because the
+/// view is where the reviewer's verdict and the operator's provenance rule
+/// live, and re-implementing either at an export is how `RC-3` and `RC-4`
+/// happened.
+///
+/// `min_confidence` is inclusive and applied in SQL so the memory bound
+/// `max_rows` describes is the bound on what is materialised.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_detections_above(
+    conn: &Connection,
+    from: Option<&str>,
+    to: Option<&str>,
+    min_confidence: f64,
+    max_rows: u32,
+) -> Result<(Vec<DetectionRow>, bool), DbError> {
+    let fetch = u64::from(max_rows).saturating_add(1);
+    let (date_sql, mut param_values): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        match (from, to) {
+            (Some(f), Some(t)) => (
+                "AND Date >= ?2 AND Date <= ?3",
+                vec![Box::new(f.to_string()), Box::new(t.to_string())],
+            ),
+            (Some(f), None) => ("AND Date >= ?2", vec![Box::new(f.to_string())]),
+            (None, Some(t)) => ("AND Date <= ?2", vec![Box::new(t.to_string())]),
+            (None, None) => ("", vec![]),
+        };
+    param_values.insert(0, Box::new(min_confidence));
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections_analytic \
+         WHERE Confidence >= ?1 {date_sql} \
+         ORDER BY Date DESC, Time DESC LIMIT {fetch}"
+    );
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(AsRef::as_ref).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt
+        .query_map(params_ref.as_slice(), map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    let truncated = u64::try_from(rows.len()).unwrap_or(u64::MAX) > u64::from(max_rows);
+    if truncated {
+        rows.truncate(max_rows as usize);
+    }
+    Ok((rows, truncated))
+}
+
 /// Query recent detections for a specific species by common name.
 ///
 /// # Errors
@@ -1286,6 +1336,37 @@ mod tests {
         let (_tmp, conn) = temp_db_with_data();
         let (rows, _) = all_detections(&conn, None, Some("2026-03-10"), 10_000).unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn analytic_detections_above_reads_the_view_and_holds_the_floor() {
+        let (_tmp, conn) = temp_db_with_data();
+        let (all, _) = all_detections(&conn, None, None, 10_000).unwrap();
+        assert_eq!(all.len(), 4);
+
+        // Reject one row: the table still has four, the analytic read has three.
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Com_Name = 'European Robin'",
+            [],
+        )
+        .unwrap();
+        let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 10_000).unwrap();
+        assert_eq!(rows.len(), 3, "the rejected row must not be read");
+        assert!(rows.iter().all(|r| r.com_name != "European Robin"));
+        assert!(!truncated);
+
+        // The floor is inclusive, applied in SQL, and composes with the dates.
+        let (rows, _) = analytic_detections_above(&conn, None, None, 0.9, 10_000).unwrap();
+        assert!(rows.iter().all(|r| r.confidence >= 0.9), "{rows:?}");
+        let (rows, _) =
+            analytic_detections_above(&conn, Some("2026-03-11"), Some("2026-03-11"), 0.0, 10_000)
+                .unwrap();
+        assert!(rows.iter().all(|r| r.date == "2026-03-11"));
+
+        // Truncation reports the same way `all_detections` does.
+        let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 2).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(truncated);
     }
 
     #[test]

@@ -30,7 +30,7 @@ Your detection data is yours, in formats other tools read:
 
 - **Detections (CSV)** — every detection with date, species and confidence.
 - **Species summary (CSV)** — per-species totals and first-seen dates.
-- **eBird checklist** — record format for submission to eBird.
+- **eBird checklist** — eBird Record Format, one record per species per hour with `Number` written as `X` (present, not counted) and the detection tally in the comment. Only detections at or above a confidence floor (0.75 by default, `?min_confidence=`) that a reviewer has not rejected are included, and the coordinates are the station's configured location — blank, never `0,0`, if none is set. Protocol, observer count, region and completeness are query parameters (`?protocol=Stationary&observers=1&state=&country=&complete=false`), because they are facts about the submitter rather than the station.
 - **BirdNET-Pi `BirdDB.txt`** — tab-separated, for tools expecting the original format.
 
 ## Storage & retention
