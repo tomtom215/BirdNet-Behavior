@@ -98,7 +98,13 @@ pub const fn should_dispatch_notification(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum DispositionDecision {
     /// Detection passes all gates — persist, extract clip, broadcast.
-    Accept,
+    Accept {
+        /// The effective threshold that admitted it — the per-species one when
+        /// the operator set one, otherwise the global floor, either after the
+        /// dynamic adjustment. Persisted as the row's `Cutoff` so a reader
+        /// can tell what bar each row cleared (R-2 / UP-1).
+        threshold: f64,
+    },
     /// Below an operator-set per-species threshold — quarantine for review.
     Quarantine {
         /// The threshold that gated this detection, for the quarantine row.
@@ -160,12 +166,15 @@ pub(super) fn decide_disposition(
                 threshold: effective,
             };
         }
-        return DispositionDecision::Accept;
+        return DispositionDecision::Accept {
+            threshold: effective,
+        };
     }
-    if f64::from(confidence) < adjust(f64::from(global_confidence)) {
+    let floor = adjust(f64::from(global_confidence));
+    if f64::from(confidence) < floor {
         return DispositionDecision::DropBelowGlobal;
     }
-    DispositionDecision::Accept
+    DispositionDecision::Accept { threshold: floor }
 }
 
 /// Wall-clock milliseconds since the Unix epoch.
@@ -274,7 +283,7 @@ mod tests {
         let d = confirmed("Strix aluco");
         // 0.60 is under the 0.70 global but over 0.70 * 0.75 = 0.525.
         let got = decide_disposition(0.60, "Strix aluco", &thresholds(&[]), 0.70, Some(&d), 1000);
-        assert_eq!(got, DispositionDecision::Accept);
+        assert!(matches!(got, DispositionDecision::Accept { .. }));
     }
 
     /// And an unconfirmed species at the same confidence is still dropped.
@@ -320,7 +329,7 @@ mod tests {
         // 0.70 clears 0.90 * 0.75 = 0.675, so it is now accepted.
         assert_eq!(
             decide_disposition(0.70, "Strix aluco", &t, 0.50, Some(&d), 1000),
-            DispositionDecision::Accept
+            DispositionDecision::Accept { threshold: 0.675 }
         );
 
         // 0.60 does not, and the row must say 0.675 rather than 0.90.
@@ -355,7 +364,7 @@ mod tests {
     fn no_per_species_threshold_accepts_above_global() {
         // global=0.5, detection=0.7 → accept (no per-species).
         let d = decide_disposition(0.7, "Pica pica", &thresholds(&[]), 0.5, None, 0);
-        assert_eq!(d, DispositionDecision::Accept);
+        assert!(matches!(d, DispositionDecision::Accept { .. }));
     }
 
     #[test]
@@ -371,7 +380,7 @@ mod tests {
         // per-species=0.8, detection=0.85 → accept.
         let t = thresholds(&[("Pica pica", 0.8)]);
         let d = decide_disposition(0.85, "Pica pica", &t, 0.5, None, 0);
-        assert_eq!(d, DispositionDecision::Accept);
+        assert!(matches!(d, DispositionDecision::Accept { .. }));
     }
 
     #[test]
@@ -401,14 +410,14 @@ mod tests {
         let t = thresholds(&[("Pica pica", 0.95)]);
         let d = decide_disposition(0.6, "Corvus corax", &t, 0.5, None, 0);
         // 0.6 > 0.5 global, no override → accept.
-        assert_eq!(d, DispositionDecision::Accept);
+        assert!(matches!(d, DispositionDecision::Accept { .. }));
     }
 
     #[test]
     fn boundary_at_threshold_is_accept_for_global() {
         // The check uses `<` so equality passes. Pin the contract.
         let d = decide_disposition(0.5, "Pica pica", &thresholds(&[]), 0.5, None, 0);
-        assert_eq!(d, DispositionDecision::Accept);
+        assert!(matches!(d, DispositionDecision::Accept { .. }));
     }
 
     #[test]
@@ -424,7 +433,7 @@ mod tests {
         // boundary mutation.
         let t = thresholds(&[("Pica pica", 0.5)]);
         let d = decide_disposition(0.5, "Pica pica", &t, 0.25, None, 0);
-        assert_eq!(d, DispositionDecision::Accept);
+        assert!(matches!(d, DispositionDecision::Accept { .. }));
     }
 
     #[test]
@@ -433,7 +442,7 @@ mod tests {
         // hit the no-override path; whether it accepts or drops depends
         // on confidence.
         let d = decide_disposition(0.9, "", &thresholds(&[]), 0.5, None, 0);
-        assert_eq!(d, DispositionDecision::Accept);
+        assert!(matches!(d, DispositionDecision::Accept { .. }));
         let d2 = decide_disposition(0.1, "", &thresholds(&[]), 0.5, None, 0);
         assert_eq!(d2, DispositionDecision::DropBelowGlobal);
     }

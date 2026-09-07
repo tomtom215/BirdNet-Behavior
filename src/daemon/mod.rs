@@ -292,6 +292,16 @@ pub fn start_detection_daemon(
 
     let thresholds_for_processor = daemon_config.species_thresholds.clone();
     let global_confidence = confidence;
+    // What every row this run writes will say about the station and the
+    // settings that produced it (R-2 / UP-1). Taken from the same resolved
+    // values the model and the daylight filter use, so the row and the run
+    // cannot disagree.
+    let provenance = processor::RunProvenance {
+        lat: latitude,
+        lon: longitude,
+        sensitivity: f64::from(sensitivity),
+        overlap: f64::from(overlap),
+    };
 
     // Extract clips into the SAME dir the web serves recordings from
     // (AppState::recording_dir) — one source of truth — so clips persist on the
@@ -325,6 +335,7 @@ pub fn start_detection_daemon(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                         dynamic_config,
                     ),
+                    provenance,
                 );
             });
             Some(handle)
