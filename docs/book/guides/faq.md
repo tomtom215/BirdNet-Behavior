@@ -74,7 +74,7 @@ level it was given cannot reject anything. See
 
 ## Do I need anything special for behavioral analytics?
 
-No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source it is a default Cargo feature — `--no-default-features` leaves it out. On a very low-RAM board you can turn it off — see [Troubleshooting](./troubleshooting.md).)
+No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source it is a default Cargo feature — `--no-default-features` leaves it out. On a very low-RAM board you can turn it off by passing an *empty* path, `--analytics-db ""` in the unit or `BIRDNET_ANALYTICS_DB: ""` in a compose override — removing the flag only falls back to `<database>.duckdb`; see [TROUBLESHOOTING.md §5](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md#5-memory--cpu-pressure-on-small-hardware).)
 
 ## Can I use it commercially?
 

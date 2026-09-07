@@ -318,12 +318,15 @@ Mitigations in order of effectiveness:
    V3.0's ~541 MB; both are accepted by the daemon.
 4. **Disable analytics.** Analytics is compiled into every release
    binary and on by default: with no `--analytics-db` the daemon still
-   opens `<database>.duckdb` beside the SQLite file, so removing the flag
-   from the systemd unit does not turn it off, and `docker-compose.yml`
-   sets `BIRDNET_ANALYTICS_DB` directly under `environment:`, so nothing
-   in `.env` can unset it. To run without DuckDB, build the binary
-   yourself with `cargo build --release --no-default-features`. DuckDB
-   roughly doubles RAM usage during sync.
+   opens `<database>.duckdb` beside the SQLite file, so *removing* the
+   flag does not turn it off. Pass an **empty** value instead: change the
+   unit's `--analytics-db ${DATA_DIR}/analytics.db` to `--analytics-db ""`
+   (`systemctl edit birdnet-behavior`, then restart), or in Docker add a
+   compose override that sets `BIRDNET_ANALYTICS_DB: ""` (the compose file
+   sets it under `environment:`, so `.env` alone cannot blank it). The
+   daemon logs `DuckDB analytics disabled via empty --analytics-db` on
+   start. A `--no-default-features` build leaves the engine out entirely.
+   DuckDB roughly doubles RAM usage during sync.
 5. **Throttle the disk manager.** Increase `DISK_PURGE_THRESHOLD` so
    purges happen less often on SD-card storage.
 
