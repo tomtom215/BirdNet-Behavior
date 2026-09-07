@@ -17,7 +17,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 
 use crate::detection::corroboration::ConfirmationLevel;
@@ -290,6 +290,26 @@ pub struct DetectionEvent {
 pub struct DaemonHandle {
     stop_tx: mpsc::Sender<()>,
     heartbeat: Arc<AtomicU64>,
+    /// `true` while the loop thread is alive; cleared by the thread itself as
+    /// it returns, whichever way it returns. See [`RunningGuard`].
+    running: Arc<AtomicBool>,
+}
+
+/// Clears a [`DaemonHandle`]'s `running` flag when dropped.
+///
+/// The loop thread holds one for its whole life, so a `break` on the stop
+/// signal, a watcher disconnect, and any early return all record the exit
+/// without each having to remember to. Before this the flag the health
+/// endpoint reads was stored once at start-up by the binary and cleared by
+/// nothing, so `?strict=1` reported a daemon that had died as running
+/// (`PR-5`, `OP-2`). With `panic = "abort"` there is no unwinding path to
+/// miss.
+struct RunningGuard(Arc<AtomicBool>);
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl fmt::Debug for DaemonHandle {
@@ -302,6 +322,23 @@ impl DaemonHandle {
     /// Signal the daemon to stop.
     pub fn stop(&self) {
         let _ = self.stop_tx.send(());
+    }
+
+    /// A shared flag that is `true` while the detection loop's thread is alive.
+    ///
+    /// The thread clears it as it returns, so a reader that sees `false` is
+    /// looking at a daemon that has exited — not one that is idle, which the
+    /// heartbeat distinguishes. The binary mirrors it into the health
+    /// endpoint's daemon flag.
+    #[must_use]
+    pub fn running_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.running)
+    }
+
+    /// Whether the detection loop's thread is still alive.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::Acquire)
     }
 
     /// A shared counter the detection loop increments on every iteration.
@@ -377,6 +414,7 @@ mod tests {
         let handle = DaemonHandle {
             stop_tx,
             heartbeat: Arc::new(AtomicU64::new(0)),
+            running: Arc::new(AtomicBool::new(true)),
         };
         handle.stop(); // Should not panic even if receiver is alive
     }
@@ -388,12 +426,49 @@ mod tests {
         let handle = DaemonHandle {
             stop_tx,
             heartbeat: Arc::clone(&heartbeat),
+            running: Arc::new(AtomicBool::new(true)),
         };
         // The accessor returns a handle onto the *same* counter, so a watchdog
         // observes the loop's increments.
         assert_eq!(handle.heartbeat().load(Ordering::Relaxed), 7);
         heartbeat.fetch_add(1, Ordering::Relaxed);
         assert_eq!(handle.heartbeat().load(Ordering::Relaxed), 8);
+    }
+
+    /// The flag is cleared when the thread holding the guard returns — and
+    /// not before, which is the counterpart: a live loop must read as live.
+    ///
+    /// Observed failing with `RunningGuard`'s `Drop` body emptied: the final
+    /// assertion reports `the thread returned but the flag still says running`.
+    #[test]
+    fn the_running_flag_is_cleared_when_the_loop_thread_returns_and_not_before() {
+        let running = Arc::new(AtomicBool::new(true));
+        let guard = RunningGuard(Arc::clone(&running));
+        let (go_tx, go_rx) = mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            let _alive = guard;
+            let _ = go_rx.recv();
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            running.load(Ordering::Acquire),
+            "a loop that is still running must read as running"
+        );
+        go_tx.send(()).expect("thread alive");
+        thread.join().expect("join");
+        assert!(
+            !running.load(Ordering::Acquire),
+            "the thread returned but the flag still says running"
+        );
+
+        let (stop_tx, _stop_rx) = mpsc::channel();
+        let handle = DaemonHandle {
+            stop_tx,
+            heartbeat: Arc::new(AtomicU64::new(0)),
+            running: Arc::clone(&running),
+        };
+        assert!(!handle.is_running());
+        assert!(!handle.running_flag().load(Ordering::Acquire));
     }
 
     // ─── Correlation-ID generator ─────────────────────────────────────────

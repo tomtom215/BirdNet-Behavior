@@ -102,11 +102,13 @@ struct AppStateInner {
     /// detection-event pipeline) and the metrics endpoint. Process-local;
     /// values are reset when the process restarts.
     metrics: SharedMetrics,
-    /// Set once at startup to whether the detection daemon actually came up, so
-    /// the health endpoint can distinguish a capturing-and-classifying station
-    /// from one that booted web-only or failed to start the daemon (e.g. a
-    /// misconfigured model/labels/watch dir). An `Arc<AtomicBool>` so the
-    /// orchestrator can flip it after the state has been cloned and shared.
+    /// Whether the detection daemon came up *and is still running*, so the
+    /// health endpoint can distinguish a capturing-and-classifying station
+    /// from one that booted web-only, failed to start the daemon (e.g. a
+    /// misconfigured model/labels/watch dir), or lost it after boot. Set at
+    /// startup and cleared by the binary's liveness mirror when the loop
+    /// thread exits. An `Arc<AtomicBool>` so the orchestrator can flip it
+    /// after the state has been cloned and shared.
     detection_daemon_running: Arc<AtomicBool>,
     /// Short-TTL cache for rendered heavy-analytics fragments (streamgraph,
     /// dawn chorus, phenology, co-occurrence, time-series). Shared so a
@@ -1233,7 +1235,8 @@ impl AppState {
         Arc::clone(&self.inner.detection_daemon_running)
     }
 
-    /// Whether the detection daemon is running, as recorded at startup.
+    /// Whether the detection daemon is running: came up at startup, and its
+    /// loop thread has not exited since.
     #[must_use]
     pub fn detection_daemon_running(&self) -> bool {
         self.inner.detection_daemon_running.load(Ordering::Relaxed)

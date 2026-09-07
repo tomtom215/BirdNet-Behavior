@@ -480,6 +480,16 @@ async fn serve(
         daemon_handle.is_some(),
         std::sync::atomic::Ordering::Relaxed,
     );
+    // ...and keep it true only while the loop thread is alive (PR-5 / OP-2):
+    // stored once, the flag reported a daemon that died after boot as running
+    // to `?strict=1` for the life of the process.
+    if let Some(handle) = daemon_handle.as_ref() {
+        daemon::mirror_liveness(
+            handle.running_flag(),
+            state.detection_status_flag(),
+            std::time::Duration::from_secs(5),
+        );
+    }
 
     // Register Avahi mDNS service for zero-config local discovery.
     let site_name = cli.site_name.as_deref().unwrap_or("BirdNet-Behavior");
