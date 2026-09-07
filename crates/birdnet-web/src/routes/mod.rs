@@ -92,7 +92,8 @@ pub fn public_routes() -> Router<AppState> {
         .fallback(pages::not_found)
 }
 
-/// The `/admin` panel — gated behind HTTP Basic Auth when a password is set.
+/// The `/admin` panel — gated behind the `bnb-session` cookie
+/// (`auth_middleware`) when an admin account exists.
 ///
 /// Settings, software update, system controls, backups, migrations: these can
 /// change configuration and update the software, so they require a password.

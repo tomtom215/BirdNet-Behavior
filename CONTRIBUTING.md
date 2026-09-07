@@ -60,15 +60,19 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
 Documented in [`CLAUDE.md`](CLAUDE.md). The short version:
 
 - No `anyhow`/`thiserror` in library crates — hand-rolled error types
-- No async in library crates (`birdnet-core`, `birdnet-db`) — blocking only
+- No async in the compute/storage library crates (`birdnet-core`, `birdnet-db`) —
+  blocking only. `birdnet-integrations` is the deliberate exception: an async
+  network-client library that constructs no runtime of its own
 - `unsafe` is forbidden workspace-wide (`unsafe_code = "forbid"`)
 - `missing_docs` is enforced — every public item carries a rustdoc comment
 - Clippy pedantic + nursery, warnings denied in CI
 - No fixed-sleep synchronization in tests — signal readiness or poll a
   condition with a deadline (a `sleep` *is* the subject only when testing a
   timeout itself)
-- `rust-toolchain.toml` pins the toolchain; do not bump it without also
-  bumping the MSRV in `Cargo.toml` and the MSRV CI job
+- `rust-toolchain.toml` tracks `channel = "stable"` (it pins components and
+  profile, not a version). The MSRV lives in `Cargo.toml` `rust-version` and
+  in the `msrv` job of `.github/workflows/ci.yml`, which fails if the two
+  disagree — bump both together
 
 ## License
 

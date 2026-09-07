@@ -20,7 +20,9 @@ docker compose exec birdnet birdnet-behavior --doctor
 
 The report prints a status, a message, and a concrete remediation for
 every finding. Exit code 0 = ready; 1 = warnings only; 2 = at least one
-error. If the diagnostic says everything is green and the system still
+error. With a browser but no shell, sign in and open `/admin/doctor`: it
+renders the same report, serves it as JSON at `/admin/doctor.json`, and
+offers a redacted support bundle to download. If the diagnostic says everything is green and the system still
 misbehaves, that is a useful data point — include the report in your
 issue.
 

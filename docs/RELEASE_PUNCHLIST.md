@@ -3,7 +3,9 @@
 > **⚠️ SUPERSEDED — historical record only.** Written 2026-05-29 against the
 > `claude/gallant-feynman-bJs95` integration branch, which no longer exists, at a point
 > long before the current `0.15.0` tree (`Cargo.toml` `workspace.package.version`).
-> Every O-01…O-26 and P1–P3 item below has shipped. Two of its own statements are simply
+> Every O-01…O-26 item and every P1/P2 item below has shipped, and so have P3-1…P3-5;
+> what remains open is P3-4's migration-missing stub (deliberately out of scope) and the
+> three minor P3-5 follow-ups listed under that item. Two of its own statements are simply
 > wrong today and are corrected in place below: the branch model, and the "there is no CI
 > on this repo" note — the repo has **ten** workflows, of which eight gate pushes to
 > `main` (`a11y`, `ci`, `coverage`, `docker`, `docs`, `install-smoke`, `mutation`,
@@ -49,13 +51,14 @@ and `a11y.yml` both carry `claude/**` in their `pull_request.branches`.
 **Gate (run all before opening a PR).** This was written as "the only gate, since there is
 no CI on this repo"; that is false — see the banner. It remains a useful *local* gate, and
 it is still the only one that covers a `claude/**` branch fully, because only `ci.yml` and
-`a11y.yml` run on such a PR (`coverage`, `install-smoke`, `mutation` and `supply-chain`
-are restricted to `main`/`master`):
+`a11y.yml` name `claude/**` — `coverage`, `install-smoke`, `mutation` and `supply-chain`
+restrict `pull_request` to `main`/`master`, while `docs` and `docker` have no branch
+filter at all but run only when their own paths change:
 ```bash
 cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --lib
-cargo test -p birdnet-behavior --bins   # the root crate is bin-only; --lib skips its ~290 unit tests
+cargo test -p birdnet-behavior --bins   # the root crate is bin-only; --lib skips its unit tests (~290 then; ~750 `#[test]` under src/ today)
 # plus any integration test you touched, e.g.:
 cargo test --test web_api_admin
 ```
@@ -276,12 +279,13 @@ script *or style* can no longer silently break the UI — both injectors are exh
 
 ## P2-3 — Extend help links to the remaining analytical screens  · **P2** — ✅ DONE
 
-**✅ Shipped.** `help_link(Topic::…)` added to correlation, behavioral, history, species (list), timeseries, and system-dashboard headers via the `{{help_link}}` placeholder + handler `.replace` pattern. Targets: Analytics ×4, Species, AdminSystem — all existing mdBook pages.
+**✅ Shipped.** `help_link(Topic::…)` added to correlation, behavioral, history, species (list), timeseries, and system-dashboard headers via the `{{help_link}}` placeholder + handler `.replace` pattern. Targets: Analytics ×4, Species, AdminSystem — all existing mdBook pages. (`pages/system_dashboard.rs` was deleted in `be86407`, PR #155; its successor `pages/station_health.rs` carries the `Topic::AdminSystem` link.)
 
 **Evidence.** `help_link(Topic::…)` is wired on 12 screens (dashboard, today, heatmap, dawn_chorus,
 life_list, recordings, quarantine, migration, notification_center, weekly_report, year_in_review, help).
 The analytical screens **without** it: `correlation`, `behavioral`, `history`, `species_pages`,
-`timeseries_dash`, `system_dashboard` (`crates/birdnet-web/src/routes/pages/`). README_v2 explicitly
+`timeseries_dash`, `system_dashboard` (`crates/birdnet-web/src/routes/pages/`; the last is now
+`station_health.rs`). README_v2 explicitly
 deferred these "cross-screen edits" to follow-ups.
 
 **Fix.** Apply the proven #104 pattern: add a `Topic` variant per screen (if missing) and a

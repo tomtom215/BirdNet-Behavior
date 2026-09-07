@@ -23,8 +23,8 @@
 //!
 //! Operators can set `BNB_SESSION_SECRET` to lock the secret across restarts
 //! and process moves. Otherwise the secret is derived deterministically from
-//! the configured admin password (env `CADDY_PWD`, the same source the
-//! existing Basic Auth path reads) via
+//! the configured admin password (env `CADDY_PWD`, the same source
+//! `helpers::auth::bootstrap_admin_password` seeds the admin account from) via
 //! `HMAC-SHA256(CADDY_PWD, b"bnb-session-v1")`. Rotating the password
 //! rotates the secret, which signs out every existing session — that is
 //! the intended semantics. If neither is set, a fail-secure per-process
