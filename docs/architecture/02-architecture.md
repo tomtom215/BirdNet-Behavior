@@ -33,7 +33,7 @@ birdnet-behavior (single binary)
 ├── Web Server (axum)
 │   ├── REST API               /api/v2/*
 │   ├── WebSocket              Live detection stream, live spectrogram
-│   ├── Server-Sent Events     Live logs, detection feed
+│   ├── Server-Sent Events     Live admin log stream (`/admin/system/logs`)
 │   ├── HTMX pages             Dashboard, species, heatmap, analytics
 │   └── Admin panel            Settings, system controls, backups, logs
 │
@@ -42,7 +42,7 @@ birdnet-behavior (single binary)
 │   ├── Apprise                80+ notification channels
 │   ├── Email (lettre)         SMTP / STARTTLS, per-species cooldown
 │   ├── MQTT                   Pure-Rust 3.1.1 publisher + HA discovery
-│   └── Species images         Wikipedia cache
+│   └── Species images         Wikipedia / Flickr provider chain with cache
 │
 ├── Analytics
 │   ├── Behavioral             Sessionize, retention, funnel, phenology
@@ -66,7 +66,7 @@ BirdNet-Behavior/
 │   ├── capture/                    # Audio capture subprocess lifecycle
 │   ├── integrations/               # Integration factories
 │   ├── helpers/                    # Disk manager, mDNS, init helpers
-│   ├── doctor/                     # --doctor / --doctor-json preflight checks
+│   ├── doctor/                     # --doctor / --doctor-json preflight checks, --fix repairs
 │   ├── maintenance.rs              # Weekly VACUUM, backup and clip retention
 │   ├── sd_notify.rs                # READY / WATCHDOG / STOPPING for Type=notify
 │   ├── log_capture.rs              # tracing → admin log viewer broadcast
@@ -79,19 +79,24 @@ BirdNet-Behavior/
 │   ├── birdnet-core/               # Audio, detection pipeline, inference
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── config.rs           # birdnet.conf parser (INI)
+│   │       ├── config.rs + config/ # birdnet.conf parser (INI); validate, locale, redact
 │   │       ├── i18n.rs             # Species name translation
+│   │       ├── civil.rs, season.rs # Calendar arithmetic, season classification
+│   │       ├── file_settle.rs      # Debounce clip events until the capture backend has finished writing
 │   │       ├── audio/
 │   │       │   ├── capture/        # arecord / ffmpeg / tmpfs / disk manager
 │   │       │   ├── decode.rs       # symphonia WAV/FLAC/MP3
 │   │       │   ├── resample.rs     # rubato polynomial resampler
 │   │       │   ├── extraction/     # Per-detection WAV extraction + metadata
-│   │       │   ├── quality/        # SNR, flatness, rain/wind detection
+│   │       │   ├── quality/        # SNR, noise floor, rain, stream faults
+│   │       │   ├── eq/, biquad.rs  # EQ filter chains (tee and ffmpeg backends)
+│   │       │   ├── soundlevel/     # Third-octave sound level measurement
 │   │       │   └── spectrogram/    # Mel spectrogram + live broadcast
 │   │       ├── detection/
 │   │       │   ├── pipeline.rs     # Chunking + inference orchestration
 │   │       │   ├── daemon/         # File-watcher event loop
 │   │       │   ├── privacy.rs      # Human-voice suppression
+│   │       │   ├── corroboration.rs, nocturnal.rs, noise.rs, dynamic_threshold/
 │   │       │   └── types.rs
 │   │       └── inference/
 │   │           ├── model.rs        # ort session wrapper
@@ -106,7 +111,10 @@ BirdNet-Behavior/
 │   │       ├── resilience.rs       # Backup, restore, integrity check
 │   │       ├── settings.rs         # Key-value settings store
 │   │       ├── alert_rules.rs      # Detection-triggered actions
-│   │       └── notifications.rs    # Notification log and stats
+│   │       ├── notifications.rs    # Notification log and stats
+│   │       └── accounts/, audio_sources.rs, audio_levels.rs, sound_levels.rs,
+│   │           clock.rs, dynamic_thresholds.rs, thresholds.rs, outbound_queue.rs,
+│   │           phantoms.rs, species_tracking.rs, weather.rs
 │   │
 │   ├── birdnet-web/                # Web server
 │   │   └── src/
@@ -114,6 +122,10 @@ BirdNet-Behavior/
 │   │       ├── server.rs           # axum setup, graceful shutdown
 │   │       ├── state.rs            # Shared application state
 │   │       ├── auth_middleware.rs  # Session gate on /admin*
+│   │       ├── session.rs, api_token.rs  # Cookie sessions; bearer gate for the write API
+│   │       ├── db_pool.rs          # Read-only ReaderPool beside the single writer
+│   │       ├── security.rs, tls.rs # Security headers + base-path rewrite; TLS hot reload
+│   │       ├── diagnostics.rs      # Hooks for /admin/doctor and the support bundle
 │   │       ├── rate_limit.rs       # Per-IP token-bucket rate limiter
 │   │       ├── system_info.rs      # CPU / memory / temperature
 │   │       └── routes/             # REST API, HTMX pages, admin panel
@@ -123,8 +135,11 @@ BirdNet-Behavior/
 │   │       ├── birdweather.rs
 │   │       ├── apprise.rs
 │   │       ├── email/              # SMTP via lettre + rustls
-│   │       ├── species_images/     # Wikipedia image cache
-│   │       ├── mqtt/               # Pure-Rust MQTT 3.1.1 + HA discovery
+│   │       ├── species_images/     # Wikipedia / Flickr provider chain + cache
+│   │       ├── mqtt/               # Pure-Rust MQTT 3.1.1 (TCP or TLS) + HA discovery
+│   │       ├── dispatch/           # Native delivery for notification services (no apprise CLI)
+│   │       ├── offsite/            # Offsite backup: S3 (SigV4) and SFTP
+│   │       ├── webhook.rs, weather.rs, retry.rs
 │   │       ├── auto_update/        # GitHub Releases update
 │   │       ├── heartbeat.rs
 │   │       ├── notification.rs     # Template rendering
@@ -180,9 +195,11 @@ BirdNet-Behavior/
 | `birdnet-migrate` | Sync | BirdNET-Pi schema detection and transactional import |
 | `birdnet-scheduler` | Sync | Solar calculations and recording window scheduling |
 
-Library crates are synchronous by design. Async is confined to `birdnet-web`
-and the binary itself, so library code can be exercised in tests without an
-async runtime.
+Library crates are synchronous by design. Async is confined to `birdnet-web`,
+the binary itself, and `birdnet-integrations` — the deliberate exception: an
+async *client* library for network I/O that constructs no runtime of its own.
+The compute and storage crates can be exercised in tests without an async
+runtime.
 
 ## Inter-Crate Dependencies
 
@@ -191,18 +208,22 @@ main.rs / daemon/ / integrations/
   ├── birdnet-core         (no cross-deps)
   ├── birdnet-db           (no cross-deps)
   ├── birdnet-scheduler    (no cross-deps)
-  ├── birdnet-integrations (no cross-deps)
   ├── birdnet-behavioral   (no cross-deps)
-  ├── birdnet-timeseries   (no cross-deps)
+  ├── birdnet-timeseries   (no cross-deps; dev-depends on birdnet-behavioral, birdnet-core)
+  ├── birdnet-integrations ─→ birdnet-db
   ├── birdnet-migrate ───→ birdnet-db
-  └── birdnet-web ───────→ birdnet-core, birdnet-db, birdnet-integrations,
-                            birdnet-migrate, birdnet-behavioral, birdnet-timeseries
+  └── birdnet-web ───────→ birdnet-core, birdnet-db, birdnet-scheduler,
+                            birdnet-integrations, birdnet-migrate,
+                            birdnet-behavioral, birdnet-timeseries
 ```
 
 The graph is intentionally shallow. Library crates have no circular
 dependencies. Only `birdnet-web` pulls in multiple sibling crates — it is
 the composition point for HTTP-accessible functionality. `birdnet-migrate`
-depends on `birdnet-db` solely for the target database connection type.
+and `birdnet-integrations` each depend on `birdnet-db` alone (per their
+`Cargo.toml`): the migrator for the target database connection type, the
+integrations crate for shared row types (`birdnet_db::weather::WeatherRow`,
+`birdnet_db::alert_rules::WebhookAuth`).
 
 ---
 

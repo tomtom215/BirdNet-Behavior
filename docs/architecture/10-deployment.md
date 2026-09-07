@@ -38,11 +38,13 @@ build from source.
 | lettre (rustls) | **None** | Pure Rust TLS |
 | rusqlite (bundled) | **None** | Bundles SQLite C source, cc compiles it |
 | `ort` (ONNX Runtime) | **Medium** | Pre-built aarch64 binaries auto-downloaded |
-| `duckdb` | **Medium-High** | Needs C++ cross-toolchain; custom Docker image |
+| `duckdb` | **Medium-High** | Needs a C++ cross-toolchain (the distro `g++-aarch64-linux-gnu` in CI); Docker images build natively per architecture |
 
 ## Build Strategy
 
-**Approach:** `cross-rs` with custom Docker images for targets needing C++ toolchains.
+**Approach:** Ubuntu 24.04's distro GCC 13 aarch64 cross toolchain — that is
+what `.github/workflows/release.yml` uses. `cross-rs` also works for a local
+build; no custom Docker images are maintained for it.
 
 ```bash
 # Install cross

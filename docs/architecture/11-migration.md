@@ -37,6 +37,7 @@ birdnet-migrate/src/
 ├── error.rs                 # MigrateError type
 ├── schema.rs                # Schema detection (SQLite and CSV)
 ├── progress.rs              # Thread-safe progress handle
+├── provenance.rs            # Where an imported history came from vs. where the station stands
 └── birdnet_pi/
     ├── mod.rs               # Public entry points
     ├── validator.rs         # Required + advisory integrity checks
@@ -71,14 +72,16 @@ pub trait Migrator: Send + Sync {
 }
 ```
 
-### BirdNET-Pi Migrator
+### BirdNET-Pi Importer
 
-`BirdNetPiMigrator` implements `Migrator` for the BirdNET-Pi SQLite database format:
+`BirdNetPiImporter` (`birdnet_pi/importer.rs`) implements `Migrator` for the
+BirdNET-Pi SQLite database format; `birdnet_pi/mod.rs` exposes
+`run_migration` / `run_migration_with_options` on top of it:
 
 ```rust
-pub struct BirdNetPiMigrator;
+pub struct BirdNetPiImporter;
 
-impl Migrator for BirdNetPiMigrator {
+impl Migrator for BirdNetPiImporter {
     fn migrate(&self, source_path: &Path, dest_path: &Path, progress: &ProgressHandle)
         -> Result<MigrationSummary, MigrateError> { /* … */ }
 }
@@ -121,20 +124,27 @@ This is displayed to the user before they confirm the import.
 
 ### Step 3: Import
 
-Detection rows are inserted into the target database using upsert logic:
+Detection rows are inserted into the target database naming the
+uniqueness conflict explicitly:
 
 ```sql
-INSERT OR IGNORE INTO detections
-    (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO detections
+    (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, …)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, …)
+ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING;
 ```
 
-`INSERT OR IGNORE` makes the operation idempotent — re-running migration is safe.
+`ON CONFLICT … DO NOTHING` absorbs only the duplicate-key case, which is
+what makes a re-run idempotent. `INSERT OR IGNORE` is banned repo-wide
+(`tests/or_ignore_guard.rs`) because it would also swallow a `NOT NULL` or
+`CHECK` failure and report the row as a duplicate.
 
 ### Step 4: Report
 
-The `MigrationReport` is returned and displayed: rows read, imported, skipped,
-failed, duration, and any error messages.
+A `MigrationSummary` is returned and displayed: `source_rows`,
+`imported_rows`, `skipped_rows`, the detected `schema_name` and the
+`source_path`. There is no per-row failure list — a row that cannot be
+inserted fails the batch.
 
 ## Web UI Workflow
 
@@ -171,26 +181,29 @@ When uploading, the server validates:
 
 ### Source Integrity
 
-Before migration:
-```sql
-PRAGMA integrity_check;   -- must return 'ok'
-PRAGMA quick_check;       -- fast pre-flight
-```
-
-If the source database is corrupt, migration is refused with a clear error message.
+The source is opened read-only (`SQLITE_OPEN_READ_ONLY`, `schema.rs`) and its
+`detections` table is checked with `PRAGMA table_info` for the required
+columns (`date`, `time`, `sci_name`, `com_name`, `confidence`, `lat`, `lon`,
+`cutoff`, `week`, `sens`, …, case-insensitive). There is **no**
+`PRAGMA integrity_check` / `quick_check` pre-flight in `birdnet-migrate`; a
+corrupt source surfaces as a read error during validation or import.
 
 ### Atomicity
 
-The import runs inside a transaction:
+Each batch is inserted inside its own transaction
+(`insert_batch_tagged` / `insert_batch` in `importer.rs`):
 
 ```rust
-conn.execute_batch("BEGIN IMMEDIATE")?;
-// ... batch insert all rows ...
-conn.execute_batch("COMMIT")?;
-// On error: ROLLBACK
+let tx = conn.transaction()?;
+// ... insert this batch's rows with ON CONFLICT … DO NOTHING ...
+tx.commit()?;
+// On error the batch rolls back; earlier batches stay committed
 ```
 
-This ensures the target database is never left in a partial state.
+A failure part-way therefore leaves the rows of completed batches in place.
+Because the insert names its conflict target, re-running the import skips
+those rows and continues, so the end state is the same as an uninterrupted
+run.
 
 ## Schema Compatibility
 
@@ -198,7 +211,7 @@ This ensures the target database is never left in a partial state.
 |--------|--------------|
 | Detection table schema | ✅ Identical columns — no transformation needed |
 | `birdnet.conf` format | ✅ INI parser handles PHP-style quoted values |
-| API endpoint paths | ✅ Same paths as BirdNET-Pi FastAPI |
+| API endpoint paths | ⚠️ Not preserved — this server exposes `/api/v2/*`, which BirdNET-Pi does not have |
 | BirdDB.txt CSV format | ✅ Same format |
 | Settings | ✅ Re-entered via web UI (config values imported from birdnet.conf) |
 | Recording files | ⚠️ Not migrated (files stay at original path; paths stored in DB) |
@@ -231,7 +244,7 @@ Date range: 2022-04-01 → 2026-03-13
 At any phase, the original BirdNET-Pi installation is unchanged:
 
 1. Migration reads the source database **read-only** — never writes to it
-2. If migration fails, target database is rolled back to its pre-import state
+2. If migration fails, the in-flight batch is rolled back; completed batches stay and a re-run is idempotent
 3. Original BirdNET-Pi can be restarted immediately: `systemctl start birdnet_analysis birdnet_web`
 4. Both installations use independent SQLite files
 

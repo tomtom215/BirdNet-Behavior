@@ -34,8 +34,12 @@ WAL for crash safety             Append-only analysis
 - WAL mode enforced on every connection
 - PRAGMAs: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`,
   `cache_size=-2000` (2 MB), `foreign_keys=ON`
-- Single connection wrapped in `Arc<Mutex<Connection>>`
-- No connection pool needed for embedded single-binary use
+- `birdnet-db` hands back plain `rusqlite::Connection`s (`open_connection`,
+  `open_or_create`, `open_readonly`). `birdnet-web` keeps one writer behind
+  a `Mutex<Connection>` (`state.rs`) plus a small read-only `ReaderPool`
+  (`birdnet-web/src/db_pool.rs`) that uses the concurrent readers WAL
+  already allows
+- No third-party connection pool
 
 ### Schema
 
@@ -72,12 +76,22 @@ CREATE TABLE IF NOT EXISTS settings (
 
 -- Performance indexes (migrations v2-v3)
 CREATE INDEX idx_detections_date        ON detections(Date);
-CREATE INDEX idx_detections_com_name    ON detections(Com_Name);
+CREATE INDEX idx_detections_species     ON detections(Com_Name);
 CREATE INDEX idx_detections_sci_name    ON detections(Sci_Name);
 CREATE INDEX idx_detections_confidence  ON detections(Confidence);
 CREATE INDEX idx_detections_datetime    ON detections(Date, Time);
 CREATE INDEX idx_detections_utc         ON detections(detected_at_utc DESC);
 ```
+
+### Species rollup
+
+`species_summary` (migration 30) keeps per-species, per-hour detection counts
+and confidence sums current through `AFTER INSERT / DELETE / UPDATE` triggers
+on `detections`. Since migration 42 it is keyed
+`(Com_Name, Sci_Name, hour, is_import)` — `is_import` is `1` when the row
+came from an import batch — so a station that shows everything reads the
+rollup whole and a station that excludes imports reads `WHERE is_import = 0`
+(`sqlite/queries/species.rs`) instead of falling back to a table scan.
 
 ### Two clocks
 
@@ -137,7 +151,7 @@ installations that have not yet run it. Corrections ship as a new migration.
 pub fn get_or(conn: &Connection, key: &str, default: &str)
     -> Result<String, SettingsError>;
 
-pub fn set(conn: &Connection, key: &str, value: &str)
+pub fn set(conn: &Connection, key: &str, value: &str, category: SettingsCategory)
     -> Result<(), SettingsError>;
 ```
 
@@ -175,9 +189,8 @@ Settings used across the application:
 | `recent_detections()` | Last N detections |
 | `top_species()` | Species ranked by count with avg confidence |
 | `hourly_activity()` | Detection count by hour |
-| `species_on_date()` | All species detected on a given date |
-| `confidence_histogram()` | Confidence score distribution |
-| `co_occurrence_matrix()` | Species co-occurrence with `COUNT(DISTINCT a.Date)` fix |
+| `species_for_date()` | All species detected on a given date (`queries/detections/read.rs`) |
+| `top_cooccurrence_pairs()` / `companion_species()` / `temporal_cooccurrence()` | Species co-occurrence with `COUNT(DISTINCT a.Date)` shared-day counting (`queries/correlation.rs`) |
 
 ### Species co-occurrence
 
@@ -224,21 +237,22 @@ on large datasets:
 
 ### ETL Pipeline
 
-DuckDB can directly attach and query SQLite files:
+DuckDB's `sqlite_scanner` extension (`ATTACH … (TYPE SQLITE)`) is
+deliberately **not** used: it needs a network download, which an air-gapped
+station cannot make. Instead `crates/birdnet-behavioral/src/connection/sync.rs`
+reads rows out of SQLite through rusqlite and inserts them into DuckDB:
 
-```sql
--- Attach SQLite for live ETL
-ATTACH 'birds.db' AS sqlite_db (TYPE SQLITE);
+- `sync_from_sqlite` — incremental bulk sync of rows newer than what DuckDB
+  already holds
+- `full_resync_from_sqlite` — full rebuild, used when a count-based drift
+  check finds the two databases disagree
+- `insert_detection` — single-row live insert
 
--- Incremental sync: only new rows since last sync
-INSERT INTO detections
-SELECT * FROM sqlite_db.detections
-WHERE Date > ? OR (Date = ? AND Time > ?);
-
-DETACH sqlite_db;
-```
-
-Sync runs periodically (configurable interval, default: every 5 minutes).
+There is no periodic timer. `birdnet-web`'s `AppState::new_with_analytics`
+runs the incremental sync (and the drift check) once at startup, and the
+detection daemon's event processor (`src/daemon/processor.rs`) calls
+`insert_detection` for every new detection so DuckDB stays current between
+restarts.
 
 ### Analytics queries implemented
 

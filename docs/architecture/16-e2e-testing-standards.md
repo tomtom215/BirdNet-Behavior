@@ -45,7 +45,8 @@ The rest of this document codifies how we'll catch the eighth bug.
 ## The four-layer testing standard
 
 A non-trivial change touching audio, inference, or persistence must
-demonstrate that it works at **all four** layers before it ships.
+demonstrate that it works at **all four** layers before it ships. A change
+to the web UI has a fifth, browser-level layer of its own (below).
 
 ### Layer 1 — Unit tests (necessary, not sufficient)
 
@@ -67,7 +68,7 @@ For ML inference, that means:
 
 ```bash
 python3 -m birdnet_analyzer <fixture.wav>   # V2.4 reference
-python3 reference_v3.py     <fixture.wav>   # V3.0 reference
+python3 reference_v3.py     <fixture.wav>   # V3.0 reference (birdnet-team/birdnet-V3.0-dev checkout; not in this tree)
 cargo test --test inference_e2e             # our pipeline
 ```
 
@@ -118,6 +119,30 @@ grep -iE "(failed|error|warn)" /var/log/birdnet/daemon.log | head -20
 
 If the DB shows the expected confidence and **zero** WARN-level inserts
 or extraction errors, the change is verified.
+
+### Layer 5 — Browser accessibility and visual QA (UI changes)
+
+A change under `crates/birdnet-web` (pages, templates, `static/`) must
+render in a real browser, not just return 200 in an axum test. The harness
+lives in `tools/visual-qa/` and pairs with the fixture server
+`cargo run -p birdnet-web --example screenshot_server --features analytics`:
+
+- `tools/visual-qa/axe.mjs` — runs axe-core (`@axe-core/playwright`) over
+  every route in the shared `ROUTES` table from `qa.mjs`, in light **and**
+  dark themes (`THEMES`, default `light,dark`), and fails on any violation
+  at or above `AXE_FAIL_ON` (default `serious,critical`). Two rules are
+  deferred to a design-reviewed pass and excluded by default
+  (`AXE_DISABLE`, default `color-contrast,link-in-text-block`); run with
+  `AXE_DISABLE=""` to see the full picture.
+- `scripts/visual_qa.mjs [base_url] [output_dir]` — Playwright screenshots
+  of every page at two viewports, `1440×900` (desktop) and `375×812`
+  (mobile, with `hasTouch`/`isMobile` set because the phone layout sits
+  behind `(pointer: coarse)`), in both themes.
+- `.github/workflows/a11y.yml` ("A11y & Visual QA") builds the screenshot
+  server, installs Playwright + axe-core, then runs the accessibility gate
+  (axe-core, WCAG 2.1 A/AA), the interaction gate (`interactions.mjs`) and
+  the visual-QA sweep (`qa.mjs`: overflow / console errors / broken images),
+  uploading the screenshots as the `visual-qa-shots` artifact.
 
 ---
 
@@ -241,6 +266,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --tests
 cargo mutants --package birdnet-core --file crates/birdnet-core/src/config/validate.rs
 cargo llvm-cov --workspace --summary-only
+
+# UI gate — only required for changes under crates/birdnet-web
+cargo run -p birdnet-web --example screenshot_server --features analytics &
+(cd tools/visual-qa && node axe.mjs && node qa.mjs)
+node scripts/visual_qa.mjs http://127.0.0.1:8502 /tmp/birdnet-screenshots
 
 # Live gate — only required for audio / inference / persistence changes
 ./target/release/birdnet-behavior --doctor

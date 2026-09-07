@@ -62,19 +62,24 @@ users**, with deep analytics underneath for enthusiasts.
 
 ## Current screens (inventory to evaluate and improve)
 
-- **Primary nav:** **Dashboard** (live "right now" hero + live-signal
-  spectrogram + stat tiles + live feed + top species + today heatmap + **best
-  recordings**), **Today** (full day log + timeline), **Species** (+ species
-  detail), **Heatmap** (streamgraph / grid / dawn-chorus / hourly / phenology),
-  **Migration** (phenology ridgeline + diversity + KPI tiles + editorial cards),
-  **Analytics** (behavioral: sessions / retention / funnel / next-species),
-  **Life list**, **Quarantine** (rare-bird review), **System** (real CPU / mem /
-  temp / disk gauges + DB / audio status).
-- **"More" menu:** History, Weekly report, Year in review, **Live audio**
-  (listen + test mic), Recordings, Gallery, Dawn chorus, Co-occurrence, **Time
-  series** (DuckDB), Notifications, **Admin** (settings / audio sources /
-  backups / BirdNET-Pi migration / accounts), Kiosk (wall display), Changelog,
-  Help / methodology.
+- **Primary nav** (`crates/birdnet-web/src/routes/pages/nav.rs`, six
+  entries, identical on desktop and the mobile tab bar): **Today** (`/`: live
+  "right now" hero + live-signal spectrogram + stat tiles + live feed + day
+  log), **Species** (`/species`, views: list / photos / life list, + species
+  detail), **Patterns** (`/patterns`, tabs: grid / together (co-occurrence) /
+  trends (time series) / behavior (sessions / retention / funnel /
+  next-species) / dawn / migration), **Recordings** (`/recordings`: clips +
+  live audio), **Reports** (`/reports`: weekly / year in review / history),
+  **Settings** (`/station`: CPU / mem / temp / disk gauges, DB / audio status;
+  tabs: health / capture / alerts / data / settings / access).
+- **Former standalone pages** (**Dashboard**, **Heatmap**, **Migration**,
+  **Analytics**, **Life list**, **Gallery**, **Co-occurrence**, **Time
+  series**, **Dawn chorus**, **System**, **History**, **Weekly report**, **Year
+  in review**, **Live audio**) are permanent redirects into those homes and
+  tabs — `crates/birdnet-web/src/routes/redirects.rs` holds the map.
+- **Still standalone:** Quarantine (rare-bird review), Notifications, **Admin**
+  (settings / audio sources / backups / BirdNET-Pi migration / accounts /
+  doctor), Kiosk (wall display), Changelog, Help / methodology.
 - **Plus:** Onboarding wizard, Login, Detection detail, Share permalinks,
   iCal / RSS feeds.
 

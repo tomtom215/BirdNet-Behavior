@@ -48,6 +48,9 @@ Detailed documentation is split into focused modules:
 | 11 | [Migration](architecture/11-migration.md) | BirdNET-Pi import, schema detection, rollback |
 | 12 | [Risks](architecture/12-risks.md) | Risk matrix, critical path, mitigations |
 | 13 | [Implementation Status](architecture/13-implementation-status.md) | Current status per crate and test coverage |
+| 14 | [Diagnostics](architecture/14-diagnostics.md) | Config validation, `--doctor` / `--doctor-json` / `--fix` preflight, `/admin/doctor` |
+| 15 | [Model Chunking](architecture/15-model-chunking.md) | Why chunk length follows the model (144 000 samples for the V3.0 preview) |
+| 16 | [E2E Testing Standards](architecture/16-e2e-testing-standards.md) | Layered testing standard, browser/axe gate, anti-patterns |
 
 ## Workspace Structure
 
@@ -62,7 +65,7 @@ BirdNet-Behavior/
 │   ├── capture.rs + capture/
 │   ├── integrations.rs + integrations/
 │   ├── helpers.rs + helpers/
-│   ├── doctor.rs + doctor/ # --doctor checks and the capture watchdog
+│   ├── doctor.rs + doctor/ # --doctor / --doctor-json / --fix checks (incl. the systemd watchdog check)
 │   ├── channel_report.rs   # --channel-report
 │   ├── support.rs          # --support-bundle
 │   ├── maintenance.rs

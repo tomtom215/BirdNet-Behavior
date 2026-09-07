@@ -95,7 +95,7 @@ Implemented in `crates/birdnet-core/src/audio/resample.rs`.
 - Asynchronous polynomial resampler for high-quality rate conversion
 - Chunk-based processing with zero-padded remainder
 - Smart passthrough when input rate already matches the target
-- Primary use: 48 kHz microphone input → 48 kHz (BirdNET+) model input
+- Primary use: 48 kHz microphone input → 32 kHz (BirdNET+ V3.0, the default model) or 48 kHz (BirdNET V2.4) model input
 
 ## Mel Spectrogram
 
@@ -233,7 +233,7 @@ The `event_processor` in `src/daemon/processor.rs` handles each detection:
 
 | Model | Sample Rate | Chunk Duration | Input Shape |
 |-------|------------|----------------|-------------|
-| BirdNET+ V3.0 | 48 000 Hz | 3 seconds | Audio float32 |
+| BirdNET+ V3.0 | 32 000 Hz | 4.5 seconds (144 000 samples) by default for the dynamic-shape preview; 3 seconds for the fixed-shape `[1, 96 000]` build — see [15-model-chunking.md](15-model-chunking.md) | Audio float32 |
 | BirdNET V2.4 FP16 | 48 000 Hz | 3 seconds | Audio float32 |
 | BirdNET V1 | 48 000 Hz | 3 seconds | Audio float32 + metadata |
 

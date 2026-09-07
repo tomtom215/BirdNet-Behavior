@@ -42,7 +42,9 @@ SVG hour-of-day × day-of-week heatmap showing when birds are most active:
 ...
 ```
 
-Route: `GET /pages/heatmap` — full HTMX page with species filter
+Route: `GET /patterns` — the Patterns home composes the grid from HTMX
+partials (`GET /pages/heatmap-grid`, `/pages/hourly-totals`,
+`/pages/activity-streamgraph`, `/pages/dawn-chorus`).
 The SVG is generated server-side in `crates/birdnet-web/src/routes/pages/heatmap.rs`.
 
 ### Species Co-occurrence (✅ Implemented)
@@ -67,12 +69,17 @@ SELECT * FROM pairs ORDER BY shared_days DESC LIMIT 20;
 
 ### Daily Trends with Moving Average (✅ Implemented)
 
-`birdnet-timeseries` computes 7-day rolling averages over detection counts:
+`birdnet-timeseries` computes rolling averages over daily detection counts
+in DuckDB (`crates/birdnet-timeseries/src/executor/trend.rs`):
 
 ```rust
-pub fn rolling_mean(data: &[(Date, f64)], window: usize) -> Vec<(Date, f64)>;
-pub fn detect_trend(data: &[(Date, f64)]) -> TrendDirection;
+impl TrendExecutor<'_> {
+    pub fn moving_average(&self, params: &TrendParams) -> Result<Vec<TrendRow>, TimeSeriesError>;
+}
 ```
+
+The SQL behind it is built in `queries/trend.rs`; the window length is a
+`TrendParams` field rather than a hard-coded 7 days.
 
 ### Seasonal Patterns (✅ Implemented)
 

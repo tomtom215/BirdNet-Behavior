@@ -62,8 +62,9 @@
   also what sets the workspace MSRV floor at Rust 1.95.
 - **axum 0.8** — the routing API uses `IntoResponse`, `Router::merge`,
   `extract::Path`, and `extract::State`.
-- **lettre** — configured with `SmtpsTransport` or `StarttlsRelay` using
-  the `tokio1-rustls-tls` feature; no system OpenSSL is needed.
+- **lettre** — `AsyncSmtpTransport::<Tokio1Executor>` built with `relay`
+  (SMTPS) or `starttls_relay` (`email/smtp.rs`) using the
+  `tokio1-rustls-tls` feature; no system OpenSSL is needed.
 
 ## ML Inference Runtime
 
@@ -104,7 +105,7 @@ TFLite upstream via `tf2onnx`). The model file path is passed via
 |-------|---------------------|
 | `anyhow` | Banned from library crates; hand-rolled errors are more precise |
 | `thiserror` | Derive macro adds compile-time cost; hand-rolling is simple enough |
-| `r2d2` / `deadpool` | Connection pooling not needed; single connection with `Arc<Mutex>` suffices for embedded use |
+| `r2d2` / `deadpool` | No third-party pool: one writer connection behind a `Mutex` plus a small in-house read-only `ReaderPool` (`birdnet-web/src/db_pool.rs`) that uses WAL's concurrent readers |
 | `askama` / `minijinja` | Template engine avoided; HTMX works with format strings; keeps binary smaller |
 | `image` | PNG encoding for spectrograms is hand-rolled over `flate2`; a full image crate would be a large dependency for one writer |
 | `cpal` | Direct audio capture avoided; subprocess `arecord`/`ffmpeg` is simpler and proven |
@@ -122,7 +123,7 @@ Direct dependencies (excluding universal `serde` and `tracing`):
 | `birdnet-core` | symphonia, rubato, audioadapter-buffers, realfft, hound, ort, notify (`ndarray` is transitive via `ort`, not a direct edge) |
 | `birdnet-db` | rusqlite, argon2, password-hash |
 | `birdnet-web` | axum, tower, tower-http, tokio, tokio-util, tokio-stream, sysinfo, reqwest, rustls, rustls-pki-types, tokio-rustls, hyper, hyper-util, rcgen, flate2, form_urlencoded, hmac, sha2, base64, password-hash, rusqlite, tempfile |
-| `birdnet-integrations` | reqwest, tokio, lettre, rustls, ring, hmac, base64, argon2, tokio-util |
+| `birdnet-integrations` | reqwest, tokio, lettre, rustls, rustls-pki-types, rustls-native-certs, ring, hmac, sha2, argon2, tokio-util, birdnet-db |
 | `birdnet-behavioral` | duckdb + rusqlite (optional, `analytics` feature) |
 | `birdnet-timeseries` | duckdb (optional, `analytics` feature) |
 | `birdnet-migrate` | rusqlite, birdnet-db |

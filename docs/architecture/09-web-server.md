@@ -35,7 +35,9 @@ embedded in the single binary. It serves:
 axum Router
 ├── Middleware Stack
 │   ├── TraceLayer (structured request/response logging)
-│   └── CorsLayer (permissive for development)
+│   ├── CorsLayer (permissive for development)
+│   ├── security_headers_middleware (CSP, security headers, base-path rewrite)
+│   └── CompressionLayer (skips text/event-stream, gRPC and image/*)
 │
 ├── /api/v2/                           REST API
 │   ├── GET /                          API info
@@ -104,7 +106,7 @@ derived from the database path rather than stored.
 - Migrations run automatically on startup
 - All SQLite access goes through `with_db()` closure
 - Handlers use `tokio::task::spawn_blocking` for DB queries
-- Broadcast channels for SSE: ring buffer (capacity 256) prevents dropped events
+- `tokio::sync::broadcast` ring buffers feed the live streams: detections 256 slots (`DEFAULT_BROADCAST_CAPACITY`), spectrogram 16 (`SPECTROGRAM_BROADCAST_CAPACITY`), log lines 512 (`LOG_CHANNEL_CAPACITY`)
 
 ## REST API Endpoints
 
@@ -122,8 +124,8 @@ derived from the database path rather than stored.
 |----------|-------------|----------|
 | `GET /detections` | `date?`, `limit?` (default 100) | `{ detections: [...], total }` |
 | `GET /detections/recent` | `limit?` (default 20) | `{ detections: [...], total }` |
-| `DELETE /detections/{id}` | — | 200 + HTMX `HX-Trigger: detection-deleted` |
-| `GET /detections/stream` | — | `text/event-stream` SSE |
+| `POST /detections/delete` | body: detection id | Bearer-gated write API (`routes/api_write.rs`); the Today page's HTMX rows post to `/pages/today-delete` instead |
+| `GET /ws/detections` | — | WebSocket live detection feed (there is no SSE detection stream) |
 
 ### Species
 
@@ -131,14 +133,14 @@ derived from the database path rather than stored.
 |----------|-------------|----------|
 | `GET /species/top` | `limit?` (default 20) | `{ species: [{ name, count, avg_confidence }] }` |
 | `GET /species/activity` | `date` (required) | `{ activity: [{ hour, count }], date }` |
-| `GET /species/{name}/image` | — | Image redirect or 404 |
+| `GET /species/image/{scientific_name}` | — | Image metadata JSON or 404; `/file` suffix serves the cached image |
 
 ### Recordings & Logs
 
 | Endpoint | Response |
 |----------|----------|
 | `GET /recordings/{filename}` | `audio/wav` file stream (chunked) |
-| `GET /logs/stream` | `text/event-stream` SSE of log lines |
+| `GET /admin/system/logs` | `text/event-stream` SSE of log lines (admin session required) |
 
 ### Analytics
 
@@ -252,10 +254,11 @@ subscribers are warmed up with the last 200 retained lines
 | Live spectrogram | `/api/v2/ws/spectrogram` | WebSocket | Spectrogram frames |
 | Live log lines | `/admin/system/logs` | SSE | JSON `LogLine` records |
 
-Both streams use `tokio::sync::broadcast` channels with `capacity = 256`.
-Subscribers receive events from when they connect; missed events are not
-replayed (ring buffer only). The dashboard page reconnects automatically
-on disconnect via `EventSource` built-in retry.
+All three use `tokio::sync::broadcast` channels: detections 256 slots, the
+spectrogram 16, the log stream 512. Subscribers receive events from when
+they connect; missed events are not replayed (ring buffer only). The Today
+page's WebSocket client (`static/live-detections.js`) reconnects on
+disconnect; the log viewer relies on `EventSource`'s built-in retry.
 
 ## Design Decisions
 
@@ -263,9 +266,14 @@ on disconnect via `EventSource` built-in retry.
 has a smaller API surface, and integrates naturally with tokio. It's lighter
 weight for an embedded application.
 
-**Why `Arc<Mutex>` over connection pool:** This is a single-binary embedded
-application, not a multi-tenant web service. One connection with WAL mode
-provides sufficient concurrency. A pool adds complexity without benefit.
+**Why one writer plus an in-house `ReaderPool`, not a pool crate:** `AppState`
+originally held a single `Mutex<Connection>` and every path took it — each
+page render, the health-badge poll on every open tab, `/metrics`, the live
+feed and the detection writer. WAL was enabled the whole time, and a single
+connection uses none of what WAL is for (`db_pool.rs` records a 1.3 s
+lock hold on the history calendar at 3.3 M rows). `birdnet-web::db_pool`
+now opens a few read-only connections for queries and keeps the single
+writer for inserts; no `r2d2`/`deadpool`.
 
 **Why `spawn_blocking` for DB:** SQLite operations block the calling thread.
 Running them on tokio's blocking thread pool keeps the async runtime responsive
@@ -275,9 +283,12 @@ for WebSocket and HTTP handling.
 a JavaScript build pipeline. The binary embeds everything. Pages work
 without client-side JS except for the EventSource SSE connection.
 
-**Why SSE over WebSocket:** SSE is one-directional (server → client), simpler
-to implement, and sufficient for live detection/log updates. WebSocket adds
-complexity without benefit for this use case.
+**Why SSE for the log tail and WebSocket for detections and the spectrogram:**
+the admin log viewer is a one-directional text stream, and SSE with
+`EventSource`'s built-in retry is the simplest fit. The detection feed and
+the live spectrogram use WebSocket (`/api/v2/ws/detections`,
+`/api/v2/ws/spectrogram`); both answer WebSocket ping with pong so dead
+peers are detected and dropped.
 
 **Why the base path is applied by rewriting responses, not by a `url_for()`:**
 `BIRDNET_BASE_PATH` mounts the station under a prefix. `Router::nest` fixes
