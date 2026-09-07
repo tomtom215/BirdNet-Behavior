@@ -1699,6 +1699,144 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_notification_log_channel
             ON notification_log(channel);",
     },
+    Migration {
+        version: 42,
+        description: "Key the species rollup by provenance, so a station that excludes imports still reads it",
+        // ## What was wrong (RC-3, item 3.22)
+        //
+        // `species_summary` (migration 30) is keyed `(Com_Name, Sci_Name,
+        // hour)` and its triggers know one rule: `review_verdict IS NOT
+        // 'rejected'`. Migration 34 gave `detections_analytic` a second rule
+        // — imported rows are excluded when `analytics_exclude_imports` is
+        // `'true'` — and the rollup could not learn it, because the rule
+        // depends on a setting the operator can flip at any moment and the
+        // key had no provenance dimension. Every reader of the rollup went on
+        // counting another station's history after the operator excluded it:
+        // on a two-local, three-imported fixture with the exclusion on, the
+        // species list ranked the imported species first.
+        //
+        // The reader-side fix that closed RC-3 substituted an aggregate over
+        // `detections_analytic` for exactly the stations that both hold
+        // imported rows and exclude them — which put the largest stations, the
+        // ones that merged a previous site's history, back onto the
+        // whole-history scan migration 30 existed to remove.
+        //
+        // ## What this does
+        //
+        // Adds `is_import` — `1` when `import_batch_id IS NOT NULL` — to the
+        // rollup's primary key. A row's provenance is then a bucket of its own,
+        // and both questions are answered from the rollup: every station reads
+        // `species_summary` whole, and a station that excludes imports reads
+        // `WHERE is_import = 0`. At 200 species that is at most 9 600 rows
+        // instead of 4 800, and nobody pays the scan.
+        //
+        // The three triggers are rewritten to carry the dimension. The UPDATE
+        // trigger's guard gains `import_batch_id`, so re-attributing a row (an
+        // import undo, a batch merge) withdraws it from one bucket and admits
+        // it to the other, and a bulk `UPDATE` that touches none of the six
+        // columns still does no work.
+        //
+        // ## Ordering
+        //
+        // Migration 30's own note applies to this one: a rebuild by
+        // drop-and-recreate must drop the triggers first and backfill after,
+        // or the copy is double-counted. That is the order below. The backfill
+        // is one aggregate over `detections` — the same cost migration 30
+        // paid once, paid once more.
+        //
+        // ## Downgrade
+        //
+        // `is_import` has a default, so an older binary's readers, which sum
+        // across every row for a species, keep working (and count imports,
+        // which is what they always did). An older binary's
+        // `rebuild_species_summary` would file everything under `is_import =
+        // 0`; the next start of a current binary's `--doctor --fix`, or this
+        // migration's own backfill re-run by hand, puts it right.
+        up_sql: "DROP TRIGGER IF EXISTS species_summary_ai;
+        DROP TRIGGER IF EXISTS species_summary_ad;
+        DROP TRIGGER IF EXISTS species_summary_au;
+        DROP TABLE IF EXISTS species_summary;
+
+        CREATE TABLE species_summary (
+            Com_Name       TEXT    NOT NULL,
+            Sci_Name       TEXT    NOT NULL,
+            hour           TEXT    NOT NULL,
+            is_import      INTEGER NOT NULL DEFAULT 0 CHECK (is_import IN (0, 1)),
+            detections     INTEGER NOT NULL,
+            confidence_sum REAL    NOT NULL,
+            PRIMARY KEY (Com_Name, Sci_Name, hour, is_import)
+        ) WITHOUT ROWID;
+
+        INSERT INTO species_summary (Com_Name, Sci_Name, hour, is_import, detections, confidence_sum)
+            SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2),
+                   (import_batch_id IS NOT NULL), COUNT(*), SUM(Confidence)
+              FROM detections
+             WHERE review_verdict IS NOT 'rejected'
+             GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2), (import_batch_id IS NOT NULL);
+
+        CREATE TRIGGER species_summary_ai AFTER INSERT ON detections
+        WHEN NEW.review_verdict IS NOT 'rejected'
+        BEGIN
+            INSERT INTO species_summary (Com_Name, Sci_Name, hour, is_import, detections, confidence_sum)
+            VALUES (NEW.Com_Name, NEW.Sci_Name, SUBSTR(NEW.Time, 1, 2),
+                    (NEW.import_batch_id IS NOT NULL), 1, NEW.Confidence)
+            ON CONFLICT(Com_Name, Sci_Name, hour, is_import) DO UPDATE SET
+                detections     = species_summary.detections + 1,
+                confidence_sum = species_summary.confidence_sum + NEW.Confidence;
+        END;
+
+        CREATE TRIGGER species_summary_ad AFTER DELETE ON detections
+        WHEN OLD.review_verdict IS NOT 'rejected'
+        BEGIN
+            UPDATE species_summary
+               SET detections     = detections - 1,
+                   confidence_sum = confidence_sum - OLD.Confidence
+             WHERE Com_Name  = OLD.Com_Name
+               AND Sci_Name  = OLD.Sci_Name
+               AND hour      = SUBSTR(OLD.Time, 1, 2)
+               AND is_import = (OLD.import_batch_id IS NOT NULL);
+            DELETE FROM species_summary
+             WHERE Com_Name  = OLD.Com_Name
+               AND Sci_Name  = OLD.Sci_Name
+               AND hour      = SUBSTR(OLD.Time, 1, 2)
+               AND is_import = (OLD.import_batch_id IS NOT NULL)
+               AND detections <= 0;
+        END;
+
+        CREATE TRIGGER species_summary_au AFTER UPDATE ON detections
+        WHEN OLD.Com_Name   IS NOT NEW.Com_Name
+          OR OLD.Sci_Name   IS NOT NEW.Sci_Name
+          OR OLD.Time       IS NOT NEW.Time
+          OR OLD.Confidence IS NOT NEW.Confidence
+          OR (OLD.review_verdict IS 'rejected') IS NOT (NEW.review_verdict IS 'rejected')
+          OR (OLD.import_batch_id IS NOT NULL) IS NOT (NEW.import_batch_id IS NOT NULL)
+        BEGIN
+            UPDATE species_summary
+               SET detections     = detections - 1,
+                   confidence_sum = confidence_sum - OLD.Confidence
+             WHERE OLD.review_verdict IS NOT 'rejected'
+               AND Com_Name  = OLD.Com_Name
+               AND Sci_Name  = OLD.Sci_Name
+               AND hour      = SUBSTR(OLD.Time, 1, 2)
+               AND is_import = (OLD.import_batch_id IS NOT NULL);
+
+            DELETE FROM species_summary
+             WHERE OLD.review_verdict IS NOT 'rejected'
+               AND Com_Name  = OLD.Com_Name
+               AND Sci_Name  = OLD.Sci_Name
+               AND hour      = SUBSTR(OLD.Time, 1, 2)
+               AND is_import = (OLD.import_batch_id IS NOT NULL)
+               AND detections <= 0;
+
+            INSERT INTO species_summary (Com_Name, Sci_Name, hour, is_import, detections, confidence_sum)
+            SELECT NEW.Com_Name, NEW.Sci_Name, SUBSTR(NEW.Time, 1, 2),
+                   (NEW.import_batch_id IS NOT NULL), 1, NEW.Confidence
+             WHERE NEW.review_verdict IS NOT 'rejected'
+            ON CONFLICT(Com_Name, Sci_Name, hour, is_import) DO UPDATE SET
+                detections     = species_summary.detections + 1,
+                confidence_sum = species_summary.confidence_sum + NEW.Confidence;
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
