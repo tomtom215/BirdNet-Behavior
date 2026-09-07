@@ -22,10 +22,13 @@
 //!   names of secrets (`PASSWORD`, `TOKEN`, `SECRET`, `PWD`, `KEY`, …) rather
 //!   than on an allow-list of known keys, so a setting added next year is
 //!   redacted before anyone remembers this file exists.
-//! * **By shape** — [`redact_url_credentials`] strips `user:pass@` from
-//!   anything URL-shaped in the values that *are* kept, because the key name
-//!   `RTSP_URL` says nothing about a secret while its value very often
-//!   contains one.
+//! * **By shape** — [`redact_value`] handles the values that *are* kept:
+//!   `user:pass@` is stripped from anything URL-shaped, an `http(s)` URL
+//!   loses its path (a heartbeat ping, an Apprise endpoint and a webhook all
+//!   carry their credential there), an Apprise-style notification URL keeps
+//!   only its scheme, and a bare email address loses its local part — because
+//!   the key name `RTSP_URL` or `HEARTBEAT_URL` says nothing about a secret
+//!   while its value very often is one.
 //!
 //! Redaction replaces the value rather than dropping the line: "this station
 //! has an SMTP password set" is diagnostic information, and a missing line
@@ -43,7 +46,7 @@ use std::path::{Path, PathBuf};
 
 use birdnet_core::config::Config;
 pub use birdnet_core::config::redact::{
-    REDACTED, is_secret_key, redact_email_local_part, redact_url_credentials,
+    REDACTED, is_secret_key, redact_url_credentials, redact_value,
 };
 
 use crate::cli::Cli;
@@ -65,7 +68,7 @@ pub fn redacted_config(config: &Config) -> String {
             let shown = if is_secret_key(k) {
                 REDACTED.to_owned()
             } else {
-                redact_email_local_part(&redact_url_credentials(v))
+                redact_value(v)
             };
             format!("{k}={shown}")
         })
@@ -325,6 +328,39 @@ mod tests {
         assert!(
             out.contains("rtsp://u:"),
             "the username and host must remain: {out}"
+        );
+    }
+
+    /// The fixture above has a dotless host, which is the one shape that never
+    /// occurs in the field; with a dotted one the old composition returned
+    /// `RTSP_URL=***@camera.local/stream` (`OB-11`). And a heartbeat URL's
+    /// path is its credential (`OB-10`).
+    #[test]
+    fn redacted_config_keeps_a_dotted_camera_url_readable_and_hides_a_heartbeat_token() {
+        let cfg = Config::parse(
+            "RTSP_URL=rtsp://cam:secret@camera.local/stream\n\
+             HEARTBEAT_URL=https://hc-ping.com/3f1e9c2a-7b44-4d1e-9c0a-5e6f7a8b9c0d\n\
+             APPRISE_URL=http://apprise.local:8000/notify/garden",
+        )
+        .unwrap();
+        let out = redacted_config(&cfg);
+        assert!(
+            out.contains(&format!(
+                "RTSP_URL=rtsp://cam:{REDACTED}@camera.local/stream"
+            )),
+            "{out}"
+        );
+        assert!(
+            !out.contains("3f1e9c2a"),
+            "the heartbeat token leaked: {out}"
+        );
+        assert!(
+            out.contains(&format!("HEARTBEAT_URL=https://hc-ping.com/{REDACTED}")),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("APPRISE_URL=http://apprise.local:8000/{REDACTED}")),
+            "{out}"
         );
     }
 

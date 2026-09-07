@@ -38,9 +38,7 @@ use axum::{
     Json, Router,
     routing::{get, post},
 };
-use birdnet_core::config::redact::{
-    REDACTED, is_secret_key, redact_email_local_part, redact_url_credentials,
-};
+use birdnet_core::config::redact::{REDACTED, is_secret_key, redact_value};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -588,12 +586,11 @@ async fn batch(
 /// The station's settings, with every credential masked.
 ///
 /// Applies the project's existing redaction rule rather than a second copy of
-/// it: [`is_secret_key`] by key name, then [`redact_url_credentials`] and
-/// [`redact_email_local_part`] by value shape. That composition is
-/// `support::redacted_config`'s, and it moved into `birdnet-core` so both
-/// callers share one definition — two copies of "which values are secret" is
-/// the arrangement that once shipped an open `/admin` a diagnostic called
-/// protected.
+/// it: [`is_secret_key`] by key name, then [`redact_value`] by value shape.
+/// That is `support::redacted_config`'s rule, and it lives in `birdnet-core`
+/// so both callers share one definition — two copies of "which values are
+/// secret" is the arrangement that once shipped an open `/admin` a diagnostic
+/// called protected.
 ///
 /// The value is **replaced, not dropped**, for the reason the support-bundle
 /// module records: "this station has an SMTP password set" is information, and
@@ -601,17 +598,17 @@ async fn batch(
 ///
 /// `apprise_url`, `notify_urls` and `heartbeat_url` are the interesting cases.
 /// None of their *names* looks like a secret, and all three routinely carry one
-/// in the value — `ntfy://user:pass@host`, and a heartbeat URL whose path
-/// segment *is* the credential (`NT-16`). The by-shape half catches the first
-/// two; the third is a bare token in a path and is caught by neither, which is
-/// stated here rather than left for a reader to discover.
+/// in the value — `ntfy://user:pass@host` in the authority, and a heartbeat
+/// URL whose path segment *is* the credential (`NT-16`). [`redact_value`]
+/// covers both shapes: an `http(s)` URL keeps its host and loses its path, and
+/// an Apprise-style URL keeps only its scheme.
 fn redacted_settings(raw: &std::collections::HashMap<String, String>) -> BTreeMap<String, String> {
     raw.iter()
         .map(|(k, v)| {
             let shown = if is_secret_key(k) {
                 REDACTED.to_owned()
             } else {
-                redact_email_local_part(&redact_url_credentials(v))
+                redact_value(v)
             };
             (k.clone(), shown)
         })
@@ -947,6 +944,13 @@ mod tests {
             ("birdweather_token", "bw-live-abcdef"),
             // By value shape: nothing about `apprise_url` says "secret".
             ("apprise_url", "ntfy://alice:hunter2@ntfy.example/topic"),
+            // A credential carried as the path (OB-10), and a camera URL with
+            // the dotted host the old composition mangled (OB-11 / RC-20).
+            (
+                "heartbeat_url",
+                "https://hc-ping.com/3f1e9c2a-7b44-4d1e-9c0a",
+            ),
+            ("rtsp_url", "rtsp://cam:secret@camera.local/stream"),
             // Left alone.
             ("confidence_threshold", "0.7"),
             ("site_name", "Back Garden"),
@@ -960,24 +964,27 @@ mod tests {
         assert_eq!(out["email_smtp_pass"], REDACTED);
         assert_eq!(out["birdweather_token"], REDACTED);
 
-        // The exact output, not just "the password is gone", because the two
-        // by-shape rules compose in a way neither one describes on its own.
-        // `redact_url_credentials` alone yields
-        // `ntfy://alice:***REDACTED***@ntfy.example/topic`; running
-        // `redact_email_local_part` over *that* sees `ntfy://alice:…` as an
-        // address local part and replaces the whole thing, scheme included.
-        // So it is the email rule, not the URL rule, that removes the password
-        // here — and a first version of this test asserted only "does not
-        // contain hunter2" and "does contain ntfy.example", both of which were
-        // true for a reason it had not established. This is the support
-        // bundle's composition unchanged (`support::redacted_env`); pinning it
-        // means a change to either rule shows up here rather than silently
-        // altering what a station discloses.
-        assert_eq!(out["apprise_url"], "***@ntfy.example/topic");
+        // The exact output, not just "the password is gone": pinning it means
+        // a change to the shape rule shows up here rather than silently
+        // altering what a station discloses. An earlier version of this test
+        // pinned `***@ntfy.example/topic` — the output of running the email
+        // rule over the URL rule's output — and so endorsed the composition
+        // that mangled every dotted-host RTSP URL (RC-20).
+        assert_eq!(out["apprise_url"], format!("ntfy://{REDACTED}"));
         assert!(
             !out["apprise_url"].contains("hunter2"),
             "a credential inside a URL value survived: {}",
             out["apprise_url"]
+        );
+        assert_eq!(
+            out["heartbeat_url"],
+            format!("https://hc-ping.com/{REDACTED}"),
+            "a heartbeat token in the path was disclosed"
+        );
+        assert_eq!(
+            out["rtsp_url"],
+            format!("rtsp://cam:{REDACTED}@camera.local/stream"),
+            "the camera URL was mangled rather than redacted"
         );
 
         // The counterpart: a blanket `REDACTED` for everything would satisfy

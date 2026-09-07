@@ -329,15 +329,15 @@ URL — `apprise_url` does not *look* like a secret and routinely carries one.
 A withheld value is **replaced** rather than omitted, so "you may not read this"
 stays distinguishable from "this was never configured".
 
-The by-shape rules are the support bundle's, applied in the same order, and they
-are blunt: `ntfy://alice:hunter2@ntfy.example/topic` comes back as
-`***@ntfy.example/topic` — the host and path survive, the scheme and username do
-not. Treat a by-shape redaction as "the host, roughly", not as a value you can
-edit and send back.
-
-> One gap, stated rather than left to be discovered: a URL whose *path segment*
-> is the credential — a heartbeat ping URL, for instance — matches neither rule
-> and is returned in full.
+The by-shape rules are the support bundle's, and they go by scheme: an RTSP
+URL loses only its password (`rtsp://cam:***REDACTED***@camera.local/stream`),
+an `http(s)` URL keeps its host and loses its path, because a heartbeat ping, an
+Apprise endpoint and a webhook all carry their credential there
+(`https://hc-ping.com/***REDACTED***`), and an Apprise-style notification URL
+keeps only its scheme (`ntfy://***REDACTED***`), because those put tokens where
+a URL puts its host. A value holding several URLs has each one redacted. Treat a
+by-shape redaction as "the host, roughly", not as a value you can edit and send
+back.
 
 `PUT` is a partial update; send only the keys you mean to change. Values may be
 strings, numbers or booleans, and each goes through the same normalisation the
