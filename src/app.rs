@@ -237,7 +237,11 @@ async fn serve(
         // `INVOCATION_ID` cannot reach the branch that signals.
         .with_supervised_by_systemd(
             birdnet_web::routes::admin::system_controls::supervised_by_systemd(),
-        );
+        )
+        // OP-1: `--doctor` and `--support-bundle` from the browser. The hooks
+        // are read-only clones of the command line and the configuration, so
+        // a GET runs the checks and never the repairs.
+        .with_diagnostics(helpers::diagnostics::hooks(&cli, config.as_ref()));
 
     // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
     // token. Absent one — the default — those routes answer 404 and this

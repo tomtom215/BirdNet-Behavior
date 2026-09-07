@@ -67,7 +67,7 @@ impl ExplicitArgs {
 }
 
 /// BirdNet-Behavior bird detection and analytics system.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "birdnet-behavior", version, about)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Cli {

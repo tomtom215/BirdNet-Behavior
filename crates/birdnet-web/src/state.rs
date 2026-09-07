@@ -11,6 +11,7 @@ use birdnet_core::i18n::I18nManager;
 use crate::analytics_cache::AnalyticsCache;
 use crate::api_token::ApiToken;
 use crate::db_pool::ReaderPool;
+use crate::diagnostics::Diagnostics;
 use crate::notifier::Notifier;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
@@ -125,6 +126,11 @@ struct AppStateInner {
     /// parallel one of its own (`OB-9`). `None` when nothing is configured to
     /// notify, and in tooling.
     notifier: Option<Notifier>,
+    /// The binary's `--doctor` and `--support-bundle`, so `/admin/doctor` can
+    /// run the real diagnostic and hand over the real bundle (`OP-1`). `None`
+    /// in tooling and tests, where the page falls back to the configuration
+    /// checks it can run in-process.
+    diagnostics: Option<Diagnostics>,
     /// Set when the database has been found corrupt while the station is
     /// running, at which point the per-detection writes stop. See
     /// [`AppState::with_ingest_db`]. An `Arc<AtomicBool>` for the same reason
@@ -221,6 +227,7 @@ impl AppState {
                 capture_status: None,
                 live_audio: None,
                 notifier: None,
+                diagnostics: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
@@ -414,6 +421,7 @@ impl AppState {
                 capture_status: None,
                 live_audio: None,
                 notifier: None,
+                diagnostics: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
@@ -451,6 +459,7 @@ impl AppState {
                 capture_status: None,
                 live_audio: None,
                 notifier: None,
+                diagnostics: None,
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
@@ -580,6 +589,16 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_notifier");
         Self {
             inner: rebuild_inner(inner, |s| s.notifier = Some(notifier)),
+        }
+    }
+
+    /// Attach the binary's diagnostics — `--doctor` and `--support-bundle` —
+    /// so an operator with only a browser can run them (`OP-1`).
+    #[must_use]
+    pub fn with_diagnostics(self, diagnostics: Diagnostics) -> Self {
+        let inner = unwrap_inner(self.inner, "with_diagnostics");
+        Self {
+            inner: rebuild_inner(inner, |s| s.diagnostics = Some(diagnostics)),
         }
     }
 
@@ -1046,6 +1065,12 @@ impl AppState {
     #[must_use]
     pub fn notifier(&self) -> Option<&Notifier> {
         self.inner.notifier.as_ref()
+    }
+
+    /// The binary's diagnostics, if this process installed them.
+    #[must_use]
+    pub fn diagnostics(&self) -> Option<&Diagnostics> {
+        self.inner.diagnostics.as_ref()
     }
 
     /// The station's API token, if the mutating API is enabled.
