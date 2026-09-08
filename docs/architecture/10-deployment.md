@@ -95,6 +95,8 @@ and pull request:
 7. **msrv** — `cargo check --workspace --all-features` against the declared MSRV
 8. **cross-aarch64** — `cargo check --workspace --all-features --target
    aarch64-unknown-linux-gnu`
+9. **test-aarch64** — the target-sensitive crates' tests run natively on an
+   `ubuntu-24.04-arm` runner
 
 A separate workflow (`.github/workflows/docker.yml`) assembles a
 multi-architecture container image on native `ubuntu-24.04` (amd64) and

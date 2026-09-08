@@ -38,6 +38,14 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the target-sensitive crates' tests run natively on aarch64
+
+**A `test-aarch64` CI job** (`ARM-1`). No `cargo test` had ever executed on
+the architecture the station ships to; `cross-aarch64` compiles for the Pi
+and runs nothing. The new job runs `birdnet-core`, `birdnet-scheduler` and
+`birdnet-timeseries` natively on `ubuntu-24.04-arm`, and its comment says
+which crates are excluded and why.
+
 ### Added — detections can be handed to Raven and Audacity
 
 **A Raven selection table and an Audacity label track** (`FR-1`). No output

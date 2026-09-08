@@ -238,6 +238,9 @@ push and pull request:
 7. **msrv** — `cargo check --workspace --all-features` against the declared MSRV
 8. **cross-aarch64** — `cargo check --workspace --all-features --target
    aarch64-unknown-linux-gnu`
+9. **test-aarch64** — on a native `ubuntu-24.04-arm` runner, `cargo test -p
+   birdnet-core -p birdnet-scheduler -p birdnet-timeseries --lib --tests`; the
+   job's comment says which crates are excluded and why
 
 Release builds for `aarch64`, `x86_64` and `aarch64-apple-darwin` are
 produced by `.github/workflows/release.yml`; the two Linux targets use
