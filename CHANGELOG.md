@@ -38,6 +38,24 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a misspelt setting is named, not ignored
+
+**An unknown key is reported with the key it was meant to be** (`LC-7`,
+`O-7`, `RC-14`). `birdnet.conf` is a bag of strings and clap ignores any
+environment variable it was not told about, so `CONFIDENC=0.90` in the file
+and `BIRDNET_LATITUD=…` in a unit file were both accepted by everything and
+changed nothing, with no journal line, no doctor note and no hint in the UI.
+The station now knows which keys it reads — the config-file list is a
+constant kept honest by a source scan in both directions, the environment
+list is built from the command-line definition itself plus the handful of
+direct reads — and names each key set and unread at startup and in
+`--doctor`, with the nearest real name when one is close: *"CONFIDENC is not
+a setting this station reads; did you mean CONFIDENCE?"* `.env.example` is
+now gated against the code in both directions too; that gate documented five
+variables the binary read and the file did not name, and removed the two
+`BIRDNET_QUALITY_*` keys the file shipped, one uncommented, for a feature
+that had been removed.
+
 ### Fixed — the species filter's state is on the station page
 
 **`/station` says what the occurrence filter is doing** (`ON-12`). Whether

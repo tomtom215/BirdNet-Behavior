@@ -87,7 +87,20 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_audio_format(config, &mut out);
     check_info_site(config, &mut out);
     check_lang(config, &mut out);
+    check_unknown_keys(config, &mut out);
     out
+}
+
+/// A key nothing reads is a setting the operator believes is in force and is
+/// not (LC-7). A warning, not an error: the station runs, on the default.
+fn check_unknown_keys(config: &Config, out: &mut Vec<Finding>) {
+    for unknown in config.unknown_keys() {
+        let fix = unknown.did_you_mean.map_or_else(
+            || "remove the line, or check the key against the configuration reference".to_string(),
+            |meant| format!("rename it to {meant}"),
+        );
+        out.push(Finding::warn(unknown.key.clone(), unknown.to_string(), fix));
+    }
 }
 
 /// Convenience predicate: true when no findings are present.
@@ -827,5 +840,31 @@ mod tests {
             let c = cfg(&pairs);
             let _ = validate(&c);
         }
+    }
+
+    /// The gate for LC-7: a misspelt key is reported, named, with the key it
+    /// was meant to be; a file of real keys draws no such finding.
+    #[test]
+    fn a_misspelt_key_is_reported_with_the_key_it_was_meant_to_be() {
+        let cfg = Config::parse("CONFIDENC=0.90\nLATITUDE=42.36\nLONGITUDE=-71.06").unwrap();
+        let findings = validate(&cfg);
+        let f = findings
+            .iter()
+            .find(|f| f.key == "CONFIDENC")
+            .unwrap_or_else(|| panic!("CONFIDENC drew no finding: {findings:?}"));
+        assert_eq!(f.severity, Severity::Warning);
+        assert_eq!(
+            f.message,
+            "CONFIDENC is not a setting this station reads; did you mean CONFIDENCE?"
+        );
+        assert_eq!(f.remediation, "rename it to CONFIDENCE");
+
+        // Counterpart: the same file with the key spelt right draws nothing.
+        let cfg = Config::parse("CONFIDENCE=0.90\nLATITUDE=42.36\nLONGITUDE=-71.06").unwrap();
+        assert!(
+            validate(&cfg).is_empty(),
+            "a correct file drew findings: {:?}",
+            validate(&cfg)
+        );
     }
 }

@@ -197,9 +197,12 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 21] = [
+const CHECK_FAMILIES: [(&str, Family); 22] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
+    }),
+    ("environment::check_environment_variables", |_, _| {
+        environment::check_environment_variables()
     }),
     ("config::check_config_file", |cli, cfg| {
         vec![config::check_config_file(cli, cfg)]

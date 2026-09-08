@@ -15,7 +15,9 @@ On top of that, a **SQLite settings table** managed through the web UI at **`/ad
 
 ## Environment variables & CLI flags
 
-The full list lives in `birdnet-behavior --help`; `.env.example` documents all of them except the multi-microphone `BIRDNET_ALSA_DEVICES` (`--alsa-devices`) and `BIRDNET_CONFIG` itself. Each row shows the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
+The full list lives in `birdnet-behavior --help`, and `.env.example` documents every variable the binary reads; a test keeps the two and the code from drifting apart. Each row shows the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
+
+A key the station does not read is reported rather than ignored: a `birdnet.conf` line such as `CONFIDENC=0.90`, or an environment variable such as `BIRDNET_LATITUD`, is named at startup in the journal and by `--doctor`, with the nearest real name when one is close (*"did you mean CONFIDENCE?"*). Before this, a misspelt key was parsed, stored and silently left at its default.
 
 | Env var | CLI flag | `birdnet.conf` key | Default |
 |---|---|---|---|

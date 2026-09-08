@@ -22,6 +22,7 @@ mod auth;
 mod db;
 pub mod diagnostics;
 pub mod egress;
+pub mod env_keys;
 pub mod instance_lock;
 pub mod offsite;
 pub mod resolve;

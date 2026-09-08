@@ -5,6 +5,35 @@ use birdnet_core::config::Config;
 use super::{Check, tool_exists, writable};
 use crate::cli::Cli;
 
+/// The `BIRDNET_*` / `BNB_*` variables set in the environment that this
+/// binary does not read (LC-7): a typo in a unit file or `.env` is accepted by
+/// everything and changes nothing, so this is the only place it can be seen.
+pub(super) fn check_environment_variables() -> Vec<Check> {
+    let unknown = crate::helpers::env_keys::unknown_env_vars();
+    if unknown.is_empty() {
+        let ours = std::env::vars_os()
+            .filter(|(k, _)| {
+                let k = k.to_string_lossy();
+                k.starts_with("BIRDNET_") || k.starts_with("BNB_")
+            })
+            .count();
+        return vec![Check::pass(
+            "Environment variables",
+            format!("{ours} BIRDNET_/BNB_ variable(s) set, all of them read by this build"),
+        )];
+    }
+    unknown
+        .into_iter()
+        .map(|u| {
+            let fix = u.did_you_mean.as_ref().map_or_else(
+                || "unset it, or check the name against .env.example and `--help`".to_string(),
+                |meant| format!("rename it to {meant}"),
+            );
+            Check::warn(format!("Environment: {}", u.name), u.to_string(), fix)
+        })
+        .collect()
+}
+
 pub(super) fn check_runtime_environment() -> Vec<Check> {
     let mut out = Vec::new();
 

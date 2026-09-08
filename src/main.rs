@@ -206,6 +206,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = match birdnet_core::config::Config::load_from(&cli.config) {
         Ok(c) => {
             tracing::info!(model = c.get_or("MODEL", "unknown"), "configuration loaded");
+            // A key nothing reads is a setting the operator believes is in
+            // force and is not: say so here, where the journal is read, as
+            // well as in the doctor.
+            for unknown in c.unknown_keys() {
+                tracing::warn!(
+                    key = %unknown.key,
+                    config = %cli.config.display(),
+                    "{unknown}"
+                );
+            }
             Some(c)
         }
         Err(e) => {
@@ -213,6 +223,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+
+    for unknown in helpers::env_keys::unknown_env_vars() {
+        tracing::warn!(name = %unknown.name, "{unknown}");
+    }
 
     // Maintenance commands and the doctor preflight each run and exit before
     // any subsystem is constructed. The decision is a pure function so its
