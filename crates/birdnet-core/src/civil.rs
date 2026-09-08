@@ -258,6 +258,53 @@ pub fn unix_secs_from_local(date: &str, time: &str, offset_secs: i64) -> Option<
     parse_civil(date, time).map(|c| unix_secs_from_civil(&c) - offset_secs)
 }
 
+/// The instant `secs` as RFC 3339 in UTC: `2026-07-01T11:00:00Z`.
+#[must_use]
+pub fn rfc3339_utc(secs: i64) -> String {
+    let c = civil_from_unix_secs(secs);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        c.year, c.month, c.day, c.hour, c.minute, c.second
+    )
+}
+
+/// A detection's local wall clock with the offset that was in force, as RFC
+/// 3339: `2026-07-01T12:00:00+01:00`.
+///
+/// `Date`/`Time` carry no offset; `detected_at_utc` is the instant. The offset
+/// is their difference, so it is exact for every row that has both — a row
+/// written live under the offset the daemon knew, and a row the trigger
+/// stamped through the host's zone rules for that date. The repeated autumn
+/// hour is where this earns its keep: `01:30:00+01:00` and `01:30:00+00:00`
+/// are the two readings the bare wall clock could not tell apart.
+///
+/// `None` when the wall clock does not parse or there is no instant: an
+/// `eventDate` that cannot be made offset-bearing is left blank, never guessed.
+/// An offset outside the range real zones span (a corrupt instant) is `None`
+/// too, rather than an `eventDate` claiming a zone that does not exist.
+#[must_use]
+pub fn rfc3339_local(date: &str, time: &str, detected_at_utc: Option<i64>) -> Option<String> {
+    let civil = parse_civil(date, time)?;
+    let instant = detected_at_utc?;
+    let offset = unix_secs_from_civil(&civil) - instant;
+    if !(-14 * 3600..=14 * 3600).contains(&offset) {
+        return None;
+    }
+    let sign = if offset < 0 { '-' } else { '+' };
+    let abs = offset.unsigned_abs();
+    Some(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{sign}{:02}:{:02}",
+        civil.year,
+        civil.month,
+        civil.day,
+        civil.hour,
+        civil.minute,
+        civil.second,
+        abs / 3600,
+        (abs % 3600) / 60
+    ))
+}
+
 /// Parse a `YYYY-MM-DD` / `HH:MM:SS` pair into a [`CivilTime`].
 ///
 /// Strict: both fields must be exactly the documented shape and all-digits
@@ -1632,5 +1679,48 @@ mod forward_step_tests {
         let t0 = Instant::now();
         watch.observe_at(NOW, t0 + Duration::from_secs(100));
         assert_eq!(watch.observe_at(NOW + 1, t0), ClockVerdict::Sane);
+    }
+}
+
+#[cfg(test)]
+mod rfc3339_tests {
+    use super::*;
+
+    /// The two readings of London's repeated hour on 2026-10-25 are the same
+    /// wall clock and different offsets; the hour that never happened on
+    /// 2026-03-29 has no instant and so no `eventDate`.
+    #[test]
+    fn rfc3339_local_carries_the_offset_that_separates_the_repeated_hour() {
+        // 2026-10-25 01:30 London: 00:30Z under BST (+01:00), 01:30Z under GMT.
+        let bst = unix_secs_from_civil(&parse_civil("2026-10-25", "00:30:00").unwrap());
+        let gmt = bst + 3600;
+        assert_eq!(
+            rfc3339_local("2026-10-25", "01:30:00", Some(bst)).as_deref(),
+            Some("2026-10-25T01:30:00+01:00")
+        );
+        assert_eq!(
+            rfc3339_local("2026-10-25", "01:30:00", Some(gmt)).as_deref(),
+            Some("2026-10-25T01:30:00+00:00")
+        );
+        assert_eq!(rfc3339_local("2026-03-29", "01:30:00", None), None);
+        assert_eq!(rfc3339_local("nonsense", "01:30:00", Some(0)), None);
+        // A negative offset formats with its own sign, minutes included.
+        let local = unix_secs_from_civil(&parse_civil("2026-07-01", "12:00:00").unwrap());
+        assert_eq!(
+            rfc3339_local("2026-07-01", "12:00:00", Some(local + 9 * 3600 + 30 * 60)).as_deref(),
+            Some("2026-07-01T12:00:00-09:30")
+        );
+        // An offset no zone has is a corrupt instant, not a zone.
+        assert_eq!(
+            rfc3339_local("2026-07-01", "12:00:00", Some(local - 15 * 3600)),
+            None
+        );
+    }
+
+    #[test]
+    fn rfc3339_utc_renders_the_instant() {
+        assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
+        let t = unix_secs_from_civil(&parse_civil("2026-07-01", "11:00:00").unwrap());
+        assert_eq!(rfc3339_utc(t), "2026-07-01T11:00:00Z");
     }
 }

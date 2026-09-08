@@ -66,6 +66,21 @@ Imported history and rows older than the migration are NULL, never a guess.
 The demo seeder registers a run whose identity is the checksum of the word
 `demo`, so it cannot be mistaken for a release model.
 
+**The exports say which clock they are on, and the instant trigger no longer
+invents a time** (`R-8`). Every export was local `Date`/`Time` with no
+offset, and the instant migration 32 put on every row reached no
+`DetectionRow` field, export or route. `detected_at_utc` is now on
+`DetectionRow` and `/api/v2/detections`; the CSV export carries `Event_Date`
+(the wall clock with the offset that was in force, RFC 3339, so the two
+passes of a repeated autumn hour export as `+01:00` and `+00:00`) and
+`Detected_At_UTC`, and the JSON export `event_date`. Separately, the trigger
+that stamps rows nothing else stamped — imports, the backfill — collapsed a
+local time that does not exist (01:30 on London's spring-forward day) onto the
+instant an hour before it, because that is what SQLite's `'utc'` modifier does.
+Migration 44 converts and converts back, and a time that never happened keeps
+a NULL instant. Rows already stamped are left alone: the same check over
+history would fire on every row of a station whose zone has since changed.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

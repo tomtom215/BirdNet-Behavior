@@ -156,6 +156,12 @@ pub struct DetectionRow {
     /// station did not analyse (imported, or older than migration 43).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<i64>,
+    /// The instant, seconds since the Unix epoch (migration 32). `date`/`time`
+    /// are the local wall clock and carry no offset; this is the point in time.
+    /// `None` for a row that names no point in time — a local time that never
+    /// happened, or an unparseable `Date`/`Time`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detected_at_utc: Option<i64>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -271,6 +277,7 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         duration_secs: row.get(14)?,
         review_verdict: row.get(15)?,
         run_id: row.get(16)?,
+        detected_at_utc: row.get(17)?,
     })
 }
 
@@ -306,13 +313,14 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "Duration_Secs",
     "review_verdict",
     "run_id",
+    "detected_at_utc",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc";
 
 #[cfg(test)]
 mod drift_gate_tests {
@@ -407,7 +415,7 @@ mod drift_gate_tests {
             correlation_id: Some("abc123"),
             source: Some("cam1"),
             duration_secs: None,
-            detected_at_utc: None,
+            detected_at_utc: Some(1_779_181_200),
             run_id: Some(run),
         };
         crate::sqlite::queries::detections::insert_detection(&conn, &record).unwrap();
@@ -433,5 +441,6 @@ mod drift_gate_tests {
         assert_eq!(row.correlation_id.as_deref(), Some("abc123"));
         assert_eq!(row.source.as_deref(), Some("cam1"));
         assert_eq!(row.run_id, Some(run));
+        assert_eq!(row.detected_at_utc, Some(1_779_181_200));
     }
 }

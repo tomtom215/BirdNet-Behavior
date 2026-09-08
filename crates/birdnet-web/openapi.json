@@ -2123,7 +2123,7 @@
           "export"
         ],
         "summary": "Export detections",
-        "description": "The full detection history as CSV (default) or JSON. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported. Every row carries the run that made it: `run_id`, and in the CSV three trailing columns `Run_Id,Model_Name,Model_SHA256`, or in JSON `model_name` and `model_sha256` beside the row — the model file's name and the SHA-256 of its bytes, resolved through `/analysis-runs`. Empty on a row no run of this station produced.",
+        "description": "The full detection history as CSV (default) or JSON. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported. `Date`/`Time` are the station's local wall clock with no offset; every row also carries `Event_Date` (that wall clock with the offset that was in force, RFC 3339 — in the CSV a column, in JSON `event_date`) and `Detected_At_UTC` (the instant; JSON `detected_at_utc`, epoch seconds), both empty on a row that names no point in time. Every row carries the run that made it: `run_id`, and in the CSV three trailing columns `Run_Id,Model_Name,Model_SHA256`, or in JSON `model_name` and `model_sha256` beside the row — the model file's name and the SHA-256 of its bytes, resolved through `/analysis-runs`. Empty on a row no run of this station produced.",
         "operationId": "exportDetections",
         "parameters": [
           {
@@ -2705,7 +2705,7 @@
       },
       "DetectionRow": {
         "type": "object",
-        "description": "One detection. Optional fields are omitted when unknown (historical / imported rows).",
+        "description": "One detection. `date`/`time` are the station's local wall clock with no offset, as BirdNET-Pi wrote them; `detected_at_utc` is the instant. Optional fields are omitted when unknown (historical / imported rows).",
         "properties": {
           "date": {
             "type": "string",
@@ -2794,6 +2794,10 @@
           "run_id": {
             "type": "integer",
             "description": "The analysis run (`/analysis-runs/{id}`) that produced this row: which model bytes, labels and settings. Absent on a row this station did not analyse — imported history, or rows older than the run table."
+          },
+          "detected_at_utc": {
+            "type": "integer",
+            "description": "The instant, seconds since the Unix epoch. Absent on a row that names no point in time: a local time that never happened, or an unparseable date."
           }
         },
         "required": [

@@ -158,6 +158,42 @@ fn the_repeated_autumn_hour_resolves_to_one_of_its_two_real_instants() {
     );
 }
 
+/// The hour that never happened gets no instant (R-8, migration 44).
+///
+/// Berlin springs forward at 02:00 CET → 03:00 CEST on 2026-03-29, so local
+/// 02:30 that day names no point in time. Migration 32's trigger collapsed it
+/// onto 00:30Z — the instant of local 01:30 — because that is what SQLite's
+/// `'utc'` modifier does with a time that does not exist. The row must keep a
+/// NULL instant instead, and its real neighbours must still be stamped, so the
+/// round-trip check is not refusing anything it should accept.
+#[test]
+fn a_local_time_that_never_happened_gets_no_instant() {
+    if !ensure_tz() {
+        return;
+    }
+    let conn = db();
+    raw_insert(&conn, "2026-03-29", "01:30:00", "Before");
+    raw_insert(&conn, "2026-03-29", "02:30:00", "Never");
+    raw_insert(&conn, "2026-03-29", "03:30:00", "After");
+    assert_eq!(
+        utc_of(&conn, "2026-03-29", "02:30:00"),
+        None,
+        "02:30 local does not exist on the spring-forward day; an instant here is invented"
+    );
+    let before = utc_of(&conn, "2026-03-29", "01:30:00").expect("01:30 CET is real");
+    let after = utc_of(&conn, "2026-03-29", "03:30:00").expect("03:30 CEST is real");
+    assert_eq!(
+        after - before,
+        3600,
+        "01:30 CET and 03:30 CEST are one real hour apart"
+    );
+    // Ordinary rows on either side of the transition are unaffected.
+    raw_insert(&conn, "2026-01-15", "12:00:00", "Winter");
+    raw_insert(&conn, "2026-07-15", "12:00:00", "Summer");
+    assert!(utc_of(&conn, "2026-01-15", "12:00:00").is_some());
+    assert!(utc_of(&conn, "2026-07-15", "12:00:00").is_some());
+}
+
 /// A row whose `Date`/`Time` name no point in time must stay unplaceable, not
 /// acquire a plausible-looking instant.
 ///

@@ -1905,6 +1905,58 @@ pub const MIGRATIONS: &[Migration] = &[
 
         ALTER TABLE quarantine ADD COLUMN run_id INTEGER REFERENCES analysis_runs(id);",
     },
+    Migration {
+        version: 44,
+        description: "Stop the instant trigger inventing a time for the hour that never happened",
+        // ## What migration 32's trigger got wrong (R-8)
+        //
+        // Its own comment records it: local 02:30 on a Berlin spring-forward
+        // day does not exist, and SQLite's `'utc'` modifier collapses it onto
+        // 00:30Z — the same instant as local 01:30 — rather than returning
+        // NULL. So an imported history that contains such a time (BirdNET-Pi
+        // wrote whatever the wall clock said, and a Pi whose clock stepped
+        // across the transition writes it) acquired a plausible-looking
+        // instant an hour before the one the next real row carries. Probed
+        // under `TZ=Europe/London` on 2026-09-08: `2026-03-29 01:30` → `00:30Z`.
+        //
+        // ## What this does
+        //
+        // The trigger now converts and converts back. A local time that
+        // exists renders, through the host's zone rules for that date, to the
+        // same `Date`/`Time` it came from; a time that never happened renders
+        // to a different one, and the row keeps a NULL instant — unplaceable,
+        // which is what it is. That is the same standard the migration-32
+        // comment set for rows that name no point in time at all.
+        //
+        // The repeated autumn hour is not touched: both of its readings are
+        // real instants, SQLite chooses the standard-time one, and the choice
+        // is visible rather than silent from now on — the exports carry the
+        // offset per row, so a reader sees `+00:00` against `+01:00`. A row
+        // an explicit writer stamps (the live daemon, which knows the offset
+        // in force) is still never overwritten.
+        //
+        // ## What this deliberately does not do
+        //
+        // It does not re-examine rows already stamped. A round-trip check over
+        // history would also fire on every row of a station whose operator
+        // has since changed its time zone — an exact instant recorded under
+        // one zone does not render to its own wall clock under another — and
+        // would erase a season's ordering to correct two hours a year. The
+        // information to tell those apart is not in the row.
+        up_sql: "DROP TRIGGER IF EXISTS detections_stamp_utc;
+        CREATE TRIGGER detections_stamp_utc AFTER INSERT ON detections
+        WHEN NEW.detected_at_utc IS NULL
+        BEGIN
+            UPDATE detections
+               SET detected_at_utc = (
+                     SELECT CASE
+                              WHEN datetime(u, 'unixepoch', 'localtime') = NEW.Date || ' ' || NEW.Time
+                              THEN u
+                            END
+                       FROM (SELECT CAST(strftime('%s', NEW.Date || ' ' || NEW.Time, 'utc') AS INTEGER) AS u))
+             WHERE rowid = NEW.rowid;
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

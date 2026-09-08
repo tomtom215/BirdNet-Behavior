@@ -178,10 +178,17 @@ pub(super) async fn export_species(
 /// `run_id` resolved through `analysis_runs` to the model's name and the
 /// SHA-256 of its bytes. Both are absent on a row no run of this station
 /// produced — imported history, rows older than migration 43.
+///
+/// It also carries the row's instant in both readings (R-8): `event_date`,
+/// the local wall clock with the offset that was in force, RFC 3339; and
+/// `detected_at_utc` from the row itself. `date`/`time` are the local wall
+/// clock and say nothing about the offset; these two do.
 #[derive(serde::Serialize)]
 struct ExportedDetection<'a> {
     #[serde(flatten)]
     row: &'a birdnet_db::sqlite::DetectionRow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model_name: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,32 +203,43 @@ impl<'a> ExportedDetection<'a> {
         let model = row.run_id.and_then(|id| runs.get(&id));
         Self {
             row,
+            event_date: event_date_of(row),
             model_name: model.map(|m| m.model_name.as_str()),
             model_sha256: model.map(|m| m.model_sha256.as_str()),
         }
     }
 }
 
+/// The row's local wall clock with its offset, RFC 3339 — blank when the row
+/// has no instant, never guessed.
+fn event_date_of(row: &birdnet_db::sqlite::DetectionRow) -> Option<String> {
+    birdnet_core::civil::rfc3339_local(&row.date, &row.time, row.detected_at_utc)
+}
+
 /// Convert detection rows to CSV format.
 ///
-/// The twelve BirdNET-Pi columns first, in BirdNET-Pi's order, then the
-/// run's identity: `Run_Id`, `Model_Name`, `Model_SHA256`. Empty on a row no
-/// run of this station produced.
+/// The twelve BirdNET-Pi columns first, in BirdNET-Pi's order — `Date` and
+/// `Time` are the station's local wall clock with no offset, as BirdNET-Pi
+/// wrote them — then the instant in two readings (`Event_Date`, the same wall
+/// clock with the offset that was in force, RFC 3339; `Detected_At_UTC`, the
+/// instant in UTC), then the run's identity: `Run_Id`, `Model_Name`,
+/// `Model_SHA256`. The instant columns are empty on a row that names no point
+/// in time; the run columns on a row no run of this station produced.
 fn detections_to_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
     runs: &std::collections::HashMap<i64, birdnet_db::sqlite::RunModel>,
 ) -> String {
-    let mut csv = String::with_capacity(rows.len() * 200);
+    let mut csv = String::with_capacity(rows.len() * 240);
     csv.push_str(
         "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
-         Run_Id,Model_Name,Model_SHA256\n",
+         Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256\n",
     );
 
     for row in rows {
         let model = row.run_id.and_then(|id| runs.get(&id));
         let _ = writeln!(
             csv,
-            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&row.date),
             escape_csv(&row.time),
             escape_csv(&row.sci_name),
@@ -234,6 +252,9 @@ fn detections_to_csv(
             row.sens.map_or(String::new(), |v| v.to_string()),
             row.overlap.map_or(String::new(), |v| v.to_string()),
             row.file_name.as_deref().map_or(String::new(), escape_csv),
+            event_date_of(row).unwrap_or_default(),
+            row.detected_at_utc
+                .map_or(String::new(), birdnet_core::civil::rfc3339_utc),
             row.run_id.map_or(String::new(), |v| v.to_string()),
             model.map_or(String::new(), |m| escape_csv(&m.model_name)),
             model.map_or(String::new(), |m| escape_csv(&m.model_sha256)),
@@ -273,8 +294,60 @@ mod tests {
         assert_eq!(
             csv.trim_end(),
             "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
-             Run_Id,Model_Name,Model_SHA256"
+             Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256"
         );
+    }
+
+    /// R-8: the export says which clock its columns are on. `Date`/`Time`
+    /// stay BirdNET-Pi's bare local wall clock; `Event_Date` carries the
+    /// offset that was in force and `Detected_At_UTC` the instant, so the two
+    /// passes of a repeated autumn hour export as different rows.
+    #[test]
+    fn detections_csv_and_json_carry_the_instant_with_its_offset() {
+        // London, 2026-10-25 01:30 local: 00:30Z under BST, 01:30Z under GMT.
+        let bst =
+            birdnet_core::civil::unix_secs_from_local("2026-10-25", "01:30:00", 3600).unwrap();
+        let first = birdnet_db::sqlite::DetectionRow {
+            date: "2026-10-25".into(),
+            time: "01:30:00".into(),
+            sci_name: "Pica pica".into(),
+            com_name: "Eurasian Magpie".into(),
+            confidence: 0.9,
+            detected_at_utc: Some(bst),
+            ..Default::default()
+        };
+        let second = birdnet_db::sqlite::DetectionRow {
+            detected_at_utc: Some(bst + 3600),
+            ..first.clone()
+        };
+        let unplaceable = birdnet_db::sqlite::DetectionRow {
+            date: "2026-03-29".into(),
+            time: "01:30:00".into(),
+            detected_at_utc: None,
+            ..first.clone()
+        };
+        let runs = std::collections::HashMap::new();
+        let csv = detections_to_csv(&[first.clone(), second, unplaceable.clone()], &runs);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(
+            lines[1].contains(",2026-10-25T01:30:00+01:00,2026-10-25T00:30:00Z,"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains(",2026-10-25T01:30:00+00:00,2026-10-25T01:30:00Z,"),
+            "{}",
+            lines[2]
+        );
+        assert!(lines[3].ends_with(",,,,,"), "unplaceable row: {}", lines[3]);
+        assert_eq!(lines[3].matches(',').count(), lines[1].matches(',').count());
+
+        let v = serde_json::to_value(ExportedDetection::new(&first, &runs)).unwrap();
+        assert_eq!(v["event_date"], "2026-10-25T01:30:00+01:00");
+        assert_eq!(v["detected_at_utc"], bst);
+        let v = serde_json::to_value(ExportedDetection::new(&unplaceable, &runs)).unwrap();
+        assert!(v.get("event_date").is_none(), "{v}");
+        assert!(v.get("detected_at_utc").is_none(), "{v}");
     }
 
     /// R-1: the CSV names the model that made each row, and leaves the three
@@ -314,7 +387,7 @@ mod tests {
             "{}",
             lines[1]
         );
-        assert!(lines[2].ends_with(",,,"), "{}", lines[2]);
+        assert!(lines[2].ends_with(",,,,,"), "{}", lines[2]);
         assert_eq!(lines[2].matches(',').count(), lines[1].matches(',').count());
     }
 
