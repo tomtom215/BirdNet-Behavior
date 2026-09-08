@@ -32,7 +32,11 @@
 //! * a Pi sitting at thermal-throttle temperature in a sealed enclosure in
 //!   July, losing inference throughput and shortening the SD card's life;
 //! * a clock that has drifted off its time source, which files a whole season
-//!   under the wrong hour and looks, in every count and chart, like a good one.
+//!   under the wrong hour and looks, in every count and chart, like a good one;
+//! * a start that the boot journal says lost something — a database that held
+//!   a season and holds nothing, a data volume that did not mount, a binary
+//!   older than the one that last ran — which otherwise looks exactly like a
+//!   first run.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -231,7 +235,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 8] = [
+const CHECKS: [(&str, Check); 9] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -240,6 +244,7 @@ const CHECKS: [(&str, Check); 8] = [
     ("maintenance", check_maintenance),
     ("quarantined-stores", check_quarantined_stores),
     ("clock", check_clock),
+    ("boot-anomaly", check_boot_anomalies),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -486,6 +491,32 @@ fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
         return;
     };
     out.extend(data_volume_condition(&volume));
+}
+
+/// What the boot journal found at this start (UP-3). A fact of the run: the
+/// condition holds until the next start, and fires its episode once.
+fn check_boot_anomalies(state: &AppState, out: &mut Vec<Condition>) {
+    out.extend(boot_anomaly_condition(&state.boot_anomalies()));
+}
+
+/// The boot-journal policy, separated from the state so it can be tested.
+fn boot_anomaly_condition(anomalies: &[birdnet_web::boot_journal::Anomaly]) -> Option<Condition> {
+    if anomalies.is_empty() {
+        return None;
+    }
+    let body = anomalies
+        .iter()
+        .map(|a| format!("{}: {}", a.key(), a.describe()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    Some(Condition {
+        key: "boot-anomaly".to_owned(),
+        title: "This start does not match the last one — data may be missing".to_owned(),
+        body: format!(
+            "{body}. Check the data volume and the database before trusting anything \
+             recorded since this start."
+        ),
+    })
 }
 
 /// The data-volume policy, separated from the probe so it can be tested.
@@ -935,6 +966,7 @@ mod tests {
             "maintenance",
             "quarantined-stores",
             "clock",
+            "boot-anomaly",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -943,8 +975,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            8,
-            "a ninth check needs a line in the module doc and in this gate"
+            9,
+            "a tenth check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1497,5 +1529,21 @@ mod tests {
             (POLL_EVERY.as_secs() * u64::from(REQUIRED_CONSECUTIVE_POLLS)) / 60
         );
         assert_eq!(DEBOUNCE_MINUTES, 15);
+    }
+
+    #[test]
+    fn a_boot_anomaly_is_a_condition_and_a_normal_start_is_not() {
+        use birdnet_web::boot_journal::Anomaly;
+        assert!(boot_anomaly_condition(&[]).is_none());
+        let c = boot_anomaly_condition(&[Anomaly::DbLost { before: 40_000 }, Anomaly::MountLost])
+            .expect("a condition");
+        assert_eq!(c.key, "boot-anomaly");
+        assert!(
+            c.body
+                .contains("db_lost: the database held 40000 detections"),
+            "{}",
+            c.body
+        );
+        assert!(c.body.contains("mount_lost:"), "{}", c.body);
     }
 }

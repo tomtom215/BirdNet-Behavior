@@ -7,6 +7,7 @@ pub mod api_token;
 pub mod audit;
 pub mod auth_middleware;
 pub mod base_path;
+pub mod boot_journal;
 pub mod client_ip;
 pub mod data_volume;
 pub mod db_pool;

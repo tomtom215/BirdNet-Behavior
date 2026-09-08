@@ -38,6 +38,20 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a start that lost the database says so
+
+**The station keeps a boot journal outside its database** (`UP-3`). A data
+volume that fails to mount leaves the station starting on the empty directory
+beneath it, which looked exactly like a first run — a fresh database, an empty
+chart, and nothing anywhere saying a season's detections are on a card that
+is not mounted. Each start now writes what it saw (version, database path and
+rows, whether the data directory is its own mount) to `boot-journal.json` in
+the configuration directory, and the next start compares: a database that
+held detections and holds none, a changed database path, a mount that is
+gone, a downgraded binary. Each is an error in the journal, `boot_anomalies`
+on `/api/v2/health` (a strict fault), and the `boot-anomaly` station-health
+condition, so the notifier says it the morning it happens.
+
 ### Fixed — a restore no longer unpacks over the live database
 
 **Restore from file checks, stops, swaps, restarts** (`UP-2`). It used to

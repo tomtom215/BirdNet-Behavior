@@ -19,6 +19,7 @@
 //! callers keep using `helpers::<fn>` unchanged.
 
 mod auth;
+pub mod boot_journal;
 mod db;
 pub mod diagnostics;
 pub mod egress;

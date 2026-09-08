@@ -2712,6 +2712,19 @@
               "failed"
             ],
             "description": "Whether the admin-password bootstrap at start succeeded; `failed` is a strict fault."
+          },
+          "boot_anomalies": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "db_lost",
+                "db_path_changed",
+                "mount_lost",
+                "version_rollback"
+              ]
+            },
+            "description": "What the boot journal found changed since the last start; non-empty is a strict fault."
           }
         }
       },

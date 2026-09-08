@@ -233,10 +233,16 @@ async fn health(
         .as_ref()
         .is_some_and(crate::data_volume::DataVolumeStatus::is_strict_fault);
     let bootstrap_failed = state.admin_bootstrap_failed();
+    // The boot journal (UP-3): a database that held a season and holds
+    // nothing, a data volume that did not mount, a downgraded binary. Each is
+    // a fact about this start that a pager should hear and a container
+    // supervisor should not restart over.
+    let boot_anomalies = state.boot_anomalies();
     let degraded = !db_ok
         || ingest_halted
         || loses_writes
-        || (strict && (!daemon_running || volume_fault || bootstrap_failed));
+        || (strict
+            && (!daemon_running || volume_fault || bootstrap_failed || !boot_anomalies.is_empty()));
 
     let status = if degraded {
         StatusCode::SERVICE_UNAVAILABLE
@@ -256,6 +262,10 @@ async fn health(
             "detection_silence_secs": detection_silence_secs,
             "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
             "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
+            "boot_anomalies": boot_anomalies
+                .iter()
+                .map(crate::boot_journal::Anomaly::key)
+                .collect::<Vec<_>>(),
             // The presence session's state (DD-22): a dead broker was on one
             // Prometheus gauge and nowhere an operator without a scrape looks.
             "mqtt": match state.metrics().mqtt_connected() {

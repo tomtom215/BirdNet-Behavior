@@ -141,6 +141,10 @@ async fn serve(
     // station owns already does, and makes `--doctor`'s "will be created on
     // first run" true rather than aspirational.
     helpers::ensure_db_dir(&db_path)?;
+    // For the boot journal (UP-3): whether the database existed before this
+    // start opened it. `open_or_create` makes the path exist, so it has to be
+    // read here.
+    let db_present_at_start = db_path.exists();
     // One process per data directory (DD-25), before anything opens a file
     // there: a second instance used to quarantine the first one's live
     // analytics store and only then die on the bind. Held until `serve`
@@ -277,6 +281,16 @@ async fn serve(
     // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
     // token. Absent one — the default — those routes answer 404 and this
     // station has no write API at all.
+    // The boot journal (UP-3): this start against the last one, kept outside
+    // the database so a volume that did not mount cannot take the memory of
+    // it with it. Read by the health verdict and the station-health notifier.
+    state.set_boot_anomalies(helpers::boot_journal::record_boot(
+        &cli.config,
+        &db_path,
+        db_present_at_start,
+        &state,
+    ));
+
     let state = match helpers::build_api_token(config.as_ref()) {
         Some(token) => state.with_api_token(token),
         None => state,

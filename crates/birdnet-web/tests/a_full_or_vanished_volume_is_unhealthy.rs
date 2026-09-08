@@ -138,6 +138,38 @@ async fn a_failed_admin_bootstrap_is_a_strict_fault() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// What the boot journal found (UP-3) is on the body and is a strict fault: a
+/// station that lost its database over a restart is the pager's business and
+/// not the container supervisor's.
+#[tokio::test]
+async fn a_boot_anomaly_is_a_strict_fault() {
+    use birdnet_web::boot_journal::Anomaly;
+    let state = station();
+    state.set_data_volume(healthy_volume());
+    // A stopped daemon is a strict fault of its own; mark it running so the
+    // verdict below is the journal's and nothing else's.
+    state
+        .detection_status_flag()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let (status, body) = health(&state, "/api/v2/health?strict=1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["boot_anomalies"], serde_json::json!([]));
+
+    state.set_boot_anomalies(vec![Anomaly::DbLost { before: 40_000 }, Anomaly::MountLost]);
+    let (status, body) = health(&state, "/api/v2/health?strict=1").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(
+        body["boot_anomalies"],
+        serde_json::json!(["db_lost", "mount_lost"])
+    );
+    let (status, _) = health(&state, "/api/v2/health").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "not strict: the supervisor must not restart it"
+    );
+}
+
 /// A station whose watch has not run yet says so, and is not degraded for it.
 #[tokio::test]
 async fn an_unchecked_volume_is_reported_as_unchecked() {

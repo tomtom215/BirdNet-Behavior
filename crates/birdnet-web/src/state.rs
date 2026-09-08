@@ -168,6 +168,9 @@ struct AppStateInner {
     /// The channel probes the binary configured (DD-24). Set after the
     /// integrations exist, which is after the state does.
     notification_probes: std::sync::RwLock<crate::notification_probes::NotificationProbes>,
+    /// What the boot journal found changed since the last start (UP-3):
+    /// empty on a first or ordinary start.
+    boot_anomalies: std::sync::RwLock<Vec<crate::boot_journal::Anomaly>>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -253,6 +256,7 @@ impl AppState {
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
                 ),
+                boot_anomalies: std::sync::RwLock::new(Vec::new()),
             }),
         })
     }
@@ -484,6 +488,7 @@ impl AppState {
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
                 ),
+                boot_anomalies: std::sync::RwLock::new(Vec::new()),
             }),
         })
     }
@@ -528,6 +533,7 @@ impl AppState {
                 notification_probes: std::sync::RwLock::new(
                     crate::notification_probes::NotificationProbes::default(),
                 ),
+                boot_anomalies: std::sync::RwLock::new(Vec::new()),
             }),
         }
     }
@@ -1201,6 +1207,23 @@ impl AppState {
     pub fn notification_probes(&self) -> crate::notification_probes::NotificationProbes {
         self.inner
             .notification_probes
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    /// Record what the boot journal found at this start.
+    pub fn set_boot_anomalies(&self, anomalies: Vec<crate::boot_journal::Anomaly>) {
+        if let Ok(mut guard) = self.inner.boot_anomalies.write() {
+            *guard = anomalies;
+        }
+    }
+
+    /// What the boot journal found at this start; empty when nothing.
+    #[must_use]
+    pub fn boot_anomalies(&self) -> Vec<crate::boot_journal::Anomaly> {
+        self.inner
+            .boot_anomalies
             .read()
             .map(|g| g.clone())
             .unwrap_or_default()

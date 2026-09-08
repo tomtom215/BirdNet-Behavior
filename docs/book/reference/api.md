@@ -33,6 +33,7 @@ curl http://localhost:8502/api/v2/health
     "checked_at": 1788973200
   },
   "admin_bootstrap": "ok",
+  "boot_anomalies": [],
   "strict": false
 }
 ```
@@ -51,6 +52,16 @@ never a separate filesystem, or `unknown`), and the `df` verdict (`disk` is
 is degraded on every reading: the station is running and keeping nothing.
 `disk: critical` or `unknown`, and `admin_bootstrap: failed`, are reported as
 degraded only under `?strict=1`.
+
+`boot_anomalies` is what the boot journal found this start changed since the
+last one: `db_lost` (the database held detections at the last start and holds
+none, or is absent, now), `db_path_changed`, `mount_lost` (the data directory
+was its own mount and is not now — the volume did not mount, and the station
+is writing to the disk beneath it), `version_rollback`. The journal is kept in
+the configuration directory, outside the data volume, so a volume that fails
+to mount cannot take the memory of the last start with it; before it, such a
+start was indistinguishable from a first run. A non-empty list is degraded
+under `?strict=1` and raises the `boot-anomaly` station-health condition.
 
 `database` is `"ok"`, `"unchecked"` or `"error"`. It reports the verdict of the
 **daily maintenance integrity check**, not a check run at request time: that
