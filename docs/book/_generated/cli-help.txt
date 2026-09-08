@@ -182,9 +182,9 @@ Options:
           Process audio files already present in watch directory on startup
 
       --analytics-db <ANALYTICS_DB>
-          Path to the `DuckDB` analytics database file (enables behavioral analytics).
+          Path to the `DuckDB` analytics database file.
 
-          When set, a file-backed `DuckDB` database is opened at this path for behavioral analytics queries.  The file is created if it doesn't exist.
+          Analytics is on by default at `<database>.duckdb` beside the SQLite file; this overrides the path. Pass an empty value (`--analytics-db ""` or `BIRDNET_ANALYTICS_DB=`) to run without `DuckDB` at all.
 
           [env: BIRDNET_ANALYTICS_DB=]
 
