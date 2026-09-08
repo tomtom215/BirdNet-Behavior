@@ -133,7 +133,15 @@ impl SpeciesFilterObserver {
 /// keeps them honest instead is that both sit in the `Ok` arm of
 /// `process_and_infer_filtered`, so "analysed" cannot drift to mean "attempted".
 #[derive(Clone)]
-pub struct ThroughputObserver(std::sync::Arc<dyn Fn(&std::path::Path) + Send + Sync>);
+pub struct ThroughputObserver {
+    analysed: PathCallback,
+    /// A segment the watcher announced that was gone before the pipeline
+    /// opened it (PR-1 / S-3): audio recorded and never analysed.
+    dropped: Option<PathCallback>,
+}
+
+/// A shared callback taking a file path.
+type PathCallback = std::sync::Arc<dyn Fn(&std::path::Path) + Send + Sync>;
 
 impl std::fmt::Debug for ThroughputObserver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -147,12 +155,131 @@ impl ThroughputObserver {
     where
         F: Fn(&std::path::Path) + Send + Sync + 'static,
     {
-        Self(std::sync::Arc::new(f))
+        Self {
+            analysed: std::sync::Arc::new(f),
+            dropped: None,
+        }
+    }
+
+    /// Also report segments that vanished before analysis.
+    #[must_use]
+    pub fn with_dropped<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&std::path::Path) + Send + Sync + 'static,
+    {
+        self.dropped = Some(std::sync::Arc::new(f));
+        self
     }
 
     /// Report that one file finished analysis.
     pub fn analysed(&self, path: &std::path::Path) {
-        (self.0)(path);
+        (self.analysed)(path);
+    }
+
+    /// Report a segment that was gone before the pipeline could open it.
+    pub fn dropped(&self, path: &std::path::Path) {
+        if let Some(f) = &self.dropped {
+            f(path);
+        }
+    }
+}
+
+/// The segments the pipeline is reading right now (PR-1 / S-3): a lease the
+/// stream directory's purge honours, so a segment held open by a live reader
+/// is never the one it deletes.
+///
+/// The daemon claims a segment before opening it and the claim is released
+/// when the guard drops; the disk manager's locked-file provider for the
+/// stream directory lists the claimed names. A probe against the shipped
+/// `DiskManagerConfig` deleted a segment under a live reader before this
+/// existed; the age floor protected nothing once the purge was the
+/// disk-full one, which takes the oldest first whatever its age.
+#[derive(Clone, Default)]
+pub struct InFlight(std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>);
+
+impl std::fmt::Debug for InFlight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("InFlight").field(&self.names()).finish()
+    }
+}
+
+impl InFlight {
+    /// An empty lease table.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Claim `path` (by its file name) until the returned guard drops.
+    pub fn claim(&self, path: &std::path::Path) -> InFlightGuard {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Ok(mut set) = self.0.lock() {
+            set.insert(name.clone());
+        }
+        InFlightGuard {
+            table: self.clone(),
+            name,
+        }
+    }
+
+    /// The file names currently claimed, sorted.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+/// Releases one [`InFlight`] claim when dropped.
+#[derive(Debug)]
+pub struct InFlightGuard {
+    table: InFlight,
+    name: String,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = self.table.0.lock() {
+            set.remove(&self.name);
+        }
+    }
+}
+
+#[cfg(test)]
+mod in_flight_tests {
+    use super::InFlight;
+
+    /// The lease is the whole contract: the name is listed exactly while a
+    /// guard for it is alive.
+    #[test]
+    fn a_claim_lists_the_name_until_the_guard_drops() {
+        let table = InFlight::new();
+        assert!(table.names().is_empty());
+        let a = table.claim(std::path::Path::new(
+            "/tmp/s/2026-05-19-birdnet-06:30:00.wav",
+        ));
+        let b = table.claim(std::path::Path::new(
+            "/tmp/s/2026-05-19-birdnet-06:30:15.wav",
+        ));
+        assert_eq!(
+            table.names(),
+            vec![
+                "2026-05-19-birdnet-06:30:00.wav".to_owned(),
+                "2026-05-19-birdnet-06:30:15.wav".to_owned()
+            ]
+        );
+        drop(a);
+        assert_eq!(
+            table.names(),
+            vec!["2026-05-19-birdnet-06:30:15.wav".to_owned()]
+        );
+        drop(b);
+        assert!(table.names().is_empty());
     }
 }
 
@@ -190,6 +317,23 @@ mod throughput_observer_tests {
             "two files from different sources must not arrive identical, or the \
              per-source label the binary derives from them is meaningless"
         );
+    }
+
+    /// PR-1 / S-3: a dropped segment reaches its own callback, and an
+    /// observer without one stays silent rather than counting it as analysed.
+    #[test]
+    fn a_dropped_segment_reaches_the_dropped_callback_only() {
+        let analysed: Arc<Mutex<Vec<std::path::PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+        let dropped: Arc<Mutex<Vec<std::path::PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+        let (a, d) = (Arc::clone(&analysed), Arc::clone(&dropped));
+        let observer = ThroughputObserver::new(move |p| a.lock().unwrap().push(p.to_path_buf()))
+            .with_dropped(move |p| d.lock().unwrap().push(p.to_path_buf()));
+        observer.dropped(std::path::Path::new("/x/2026-05-19-birdnet-06:30:00.wav"));
+        assert!(analysed.lock().unwrap().is_empty());
+        assert_eq!(dropped.lock().unwrap().len(), 1);
+
+        let plain = ThroughputObserver::new(|_| {});
+        plain.dropped(std::path::Path::new("/x/y.wav"));
     }
 }
 
@@ -244,6 +388,10 @@ pub struct DaemonConfig {
     /// identical, empty series without it. A callback for the same reason as
     /// the field above — `birdnet-core` does not depend on the web crate.
     pub on_file_analysed: Option<ThroughputObserver>,
+    /// The lease table the stream directory's purge honours (PR-1 / S-3):
+    /// a segment is claimed here while the pipeline reads it. `None` claims
+    /// nothing.
+    pub in_flight: Option<InFlight>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
     /// Confidence at or above which a watched non-bird noise class suppresses
@@ -391,6 +539,7 @@ mod tests {
             metadata_labels_path: None,
             on_species_filter_state: None,
             on_file_analysed: None,
+            in_flight: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

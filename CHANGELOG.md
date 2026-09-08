@@ -38,6 +38,16 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a segment being analysed is never the one the purge deletes, and one lost before analysis is counted
+
+**Unanalysed audio is no longer destroyed silently** (`PR-1`, `S-3`). The
+stream directory's drain, size cap and disk-full purge ran on age and size
+alone, and a probe deleted a segment a live reader held open; a segment
+lost before the pipeline read it left a log line identical to the healthy
+case and moved no counter. The daemon now claims each segment while it
+reads it and the purge skips claimed names; a segment gone before analysis
+is a warning and `birdnet_segments_dropped_total`, per source.
+
 ### Fixed — every text reads at WCAG AA contrast, and the gate now checks
 
 **Colour contrast is enforced in the accessibility gate** (`DD-29`, `UX-16`,

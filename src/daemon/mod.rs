@@ -114,6 +114,7 @@ pub fn start_detection_daemon(
     mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
+    in_flight: birdnet_core::detection::daemon::InFlight,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     let Some((model_path, labels_path, watch_dir)) = resolve_required_paths(cli, config) else {
         tracing::warn!(
@@ -272,12 +273,27 @@ pub fn start_detection_daemon(
         // empty. The label is derived here rather than in `birdnet-core`
         // because `derive_source_label` is the one place that knows the
         // convention.
-        on_file_analysed: Some(birdnet_core::detection::daemon::ThroughputObserver::new({
-            let metrics = state.metrics();
-            move |path| {
-                metrics.inc_file_analysed(&crate::daemon::disposition::derive_source_label(path));
-            }
-        })),
+        on_file_analysed: Some(
+            birdnet_core::detection::daemon::ThroughputObserver::new({
+                let metrics = state.metrics();
+                move |path| {
+                    metrics
+                        .inc_file_analysed(&crate::daemon::disposition::derive_source_label(path));
+                }
+            })
+            // A segment gone before the pipeline read it (PR-1 / S-3): the
+            // counter that used to be a log line identical to the healthy case.
+            .with_dropped({
+                let metrics = state.metrics();
+                move |path| {
+                    metrics.inc_segment_dropped(&crate::daemon::disposition::derive_source_label(
+                        path,
+                    ));
+                }
+            }),
+        ),
+        // The stream directory's purge honours these claims (PR-1 / S-3).
+        in_flight: Some(in_flight),
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
@@ -573,7 +589,17 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, filter, template,
+            &cli,
+            None,
+            state,
+            broadcast,
+            None,
+            None,
+            None,
+            None,
+            filter,
+            template,
+            birdnet_core::detection::daemon::InFlight::new(),
         );
 
         assert!(
@@ -625,7 +651,17 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, filter, template,
+            &cli,
+            None,
+            state,
+            broadcast,
+            None,
+            None,
+            None,
+            None,
+            filter,
+            template,
+            birdnet_core::detection::daemon::InFlight::new(),
         );
 
         assert!(
@@ -659,7 +695,17 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, filter, template,
+            &cli,
+            None,
+            state,
+            broadcast,
+            None,
+            None,
+            None,
+            None,
+            filter,
+            template,
+            birdnet_core::detection::daemon::InFlight::new(),
         );
         assert!(
             handle.is_none(),

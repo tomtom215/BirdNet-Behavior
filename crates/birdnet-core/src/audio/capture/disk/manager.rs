@@ -624,6 +624,44 @@ mod tests {
         );
     }
 
+    /// PR-1 / S-3: the lease the daemon holds while reading a segment is what
+    /// the stream drain consults; the segment survives exactly while the
+    /// guard is alive.
+    #[test]
+    fn a_segment_under_analysis_survives_the_stream_drain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for name in ["reading.wav", "done.wav"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, vec![0_u8; 128]).expect("write");
+            filetime::set_file_mtime(&p, filetime::FileTime::from_unix_time(1_000_000, 0))
+                .expect("mtime");
+        }
+        let table = crate::detection::daemon::InFlight::new();
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            stream_retention_secs: 60,
+            locked_provider: Some({
+                let table = table.clone();
+                std::sync::Arc::new(move || table.names())
+            }),
+            ..DiskManagerConfig::default()
+        });
+        let lease = table.claim(&dir.path().join("reading.wav"));
+        assert_eq!(manager.with_fresh_locks().cleanup_stream_segments(), 1);
+        assert!(
+            dir.path().join("reading.wav").exists(),
+            "under analysis: kept"
+        );
+        assert!(!dir.path().join("done.wav").exists());
+        drop(lease);
+        assert_eq!(
+            manager.with_fresh_locks().cleanup_stream_segments(),
+            1,
+            "released: drained"
+        );
+        assert!(!dir.path().join("reading.wav").exists());
+    }
+
     #[test]
     fn a_locked_segment_survives_the_stream_drain() {
         // End-to-end proof that the refreshed set actually protects a file:

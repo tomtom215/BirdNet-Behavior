@@ -51,6 +51,7 @@ pub fn start_disk_manager(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     state: &birdnet_web::state::AppState,
+    in_flight: &birdnet_core::detection::daemon::InFlight,
 ) -> Vec<std::thread::JoinHandle<()>> {
     use birdnet_core::audio::capture::{
         DEFAULT_PURGE_SPECIES_FLOOR, DiskManagerConfig, FullDiskAction, LockedFilesProvider,
@@ -134,7 +135,15 @@ pub fn start_disk_manager(
                 check_interval_secs: 60,
                 exclude_paths: cli.disk_exclude.clone(),
                 locked_file_names: Vec::new(),
-                locked_provider: Some(std::sync::Arc::clone(&locked_provider)),
+                // The segments the pipeline is reading right now (PR-1 / S-3):
+                // the drain, the size cap and the disk-full purge all skip
+                // them. The database's locked clips live in the recordings
+                // dir and never name a raw segment, so they are not consulted
+                // here.
+                locked_provider: Some({
+                    let in_flight = in_flight.clone();
+                    std::sync::Arc::new(move || in_flight.names())
+                }),
                 ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                 stream_retention_secs: retention,
                 stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
@@ -382,7 +391,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cli = default_cli();
         let state = test_state_in(tmp.path());
-        let handles = start_disk_manager(&cli, None, &state);
+        let handles = start_disk_manager(
+            &cli,
+            None,
+            &state,
+            &birdnet_core::detection::daemon::InFlight::new(),
+        );
         assert_eq!(handles.len(), 1, "the recordings dir must be supervised");
         assert!(
             state.recording_dir().is_dir(),
@@ -401,7 +415,12 @@ mod tests {
         let mut cli = default_cli();
         cli.watch_dir = Some(stream);
         let state = test_state_in(tmp.path());
-        let handles = start_disk_manager(&cli, None, &state);
+        let handles = start_disk_manager(
+            &cli,
+            None,
+            &state,
+            &birdnet_core::detection::daemon::InFlight::new(),
+        );
         assert_eq!(
             handles.len(),
             2,
@@ -524,7 +543,12 @@ mod tests {
         let state = test_state_in(tmp.path());
         let mut cli = default_cli();
         cli.watch_dir = Some(state.recording_dir());
-        let handles = start_disk_manager(&cli, None, &state);
+        let handles = start_disk_manager(
+            &cli,
+            None,
+            &state,
+            &birdnet_core::detection::daemon::InFlight::new(),
+        );
         assert_eq!(handles.len(), 1, "the same directory is supervised once");
     }
 }

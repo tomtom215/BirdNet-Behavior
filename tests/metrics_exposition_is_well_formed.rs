@@ -321,3 +321,32 @@ async fn disk_and_maintenance_are_exported() {
         "a failed backup must export as 0: {body}"
     );
 }
+
+/// PR-1 / S-3: a segment gone before the pipeline read it is a counter, not a
+/// log line identical to the healthy case.
+#[tokio::test]
+async fn dropped_segments_are_exported_per_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = station(dir.path());
+    state.metrics().inc_segment_dropped("local");
+    state.metrics().inc_segment_dropped("local");
+    state.metrics().inc_segment_dropped("RTSP_1");
+    let body = metrics_body(&state).await;
+    let types = type_declarations(&body);
+    assert_eq!(
+        types
+            .get("birdnet_segments_dropped_total")
+            .map(|t| t.join(","))
+            .as_deref(),
+        Some("counter"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_dropped_total{source=\"local\"} 2"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_dropped_total{source=\"RTSP_1\"} 1"),
+        "{body}"
+    );
+}

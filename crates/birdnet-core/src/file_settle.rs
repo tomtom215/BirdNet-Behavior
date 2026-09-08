@@ -59,15 +59,41 @@ impl PendingFiles {
 
     /// Return the tracked files whose size has been unchanged for at least
     /// `settle`, removing them so each is yielded exactly once. `sizer` returns
-    /// a file's current size, or `None` if it has vanished (which drops it).
+    /// a file's current size, or `None` if it has vanished (which drops it,
+    /// silently — see [`Self::drain_settled_reporting`] for the caller that
+    /// must know).
     pub fn drain_settled<F>(&mut self, now: Instant, settle: Duration, sizer: F) -> Vec<PathBuf>
     where
         F: Fn(&Path) -> Option<u64>,
     {
+        self.drain_settled_reporting(now, settle, sizer).ready
+    }
+
+    /// [`Self::drain_settled`], also returning the tracked files that vanished
+    /// before they settled (PR-1 / S-3).
+    ///
+    /// A segment the watcher announced and the pipeline never opened is audio
+    /// that was recorded and never analysed. It used to fall out of the set
+    /// with no trace, so a purge running ahead of a backlogged pipeline was
+    /// invisible: the log line was identical to the healthy case and no
+    /// counter moved.
+    pub fn drain_settled_reporting<F>(
+        &mut self,
+        now: Instant,
+        settle: Duration,
+        sizer: F,
+    ) -> Settled
+    where
+        F: Fn(&Path) -> Option<u64>,
+    {
         let mut ready = Vec::new();
+        let mut vanished = Vec::new();
         self.seen
             .retain(|path, (last_size, last_change)| match sizer(path) {
-                None => false,
+                None => {
+                    vanished.push(path.clone());
+                    false
+                }
                 Some(current) if current != *last_size => {
                     *last_size = current;
                     *last_change = now;
@@ -79,8 +105,17 @@ impl PendingFiles {
                 }
                 Some(_) => true,
             });
-        ready
+        Settled { ready, vanished }
     }
+}
+
+/// What one sweep of [`PendingFiles::drain_settled_reporting`] found.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Settled {
+    /// Files whose size has been stable for the settle period, ready to read.
+    pub ready: Vec<PathBuf>,
+    /// Files the watcher announced that no longer exist: never analysed.
+    pub vanished: Vec<PathBuf>,
 }
 
 /// Current size of `path` on disk, or `None` if it cannot be stat'd.
@@ -94,6 +129,25 @@ pub fn file_size(path: &Path) -> Option<u64> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    /// PR-1 / S-3. A pending file that is gone by the next sweep used to be
+    /// forgotten without a word; it is reported now, and once only.
+    #[test]
+    fn a_file_that_vanishes_before_it_settles_is_reported_not_forgotten() {
+        let mut pending = PendingFiles::new();
+        let gone = PathBuf::from("/tmp/birdnet-stream/gone.wav");
+        let here = PathBuf::from("/tmp/birdnet-stream/here.wav");
+        let t0 = Instant::now();
+        pending.note(gone.clone(), t0);
+        pending.note(here.clone(), t0);
+        let sizer = |p: &Path| (p == here).then_some(64_u64);
+        let first = pending.drain_settled_reporting(t0, FILE_SETTLE, sizer);
+        assert_eq!(first.vanished, vec![gone], "{first:?}");
+        assert!(first.ready.is_empty(), "the live file has not settled yet");
+        let second = pending.drain_settled_reporting(t0 + FILE_SETTLE, FILE_SETTLE, sizer);
+        assert!(second.vanished.is_empty(), "reported once, not every sweep");
+        assert_eq!(second.ready, vec![here]);
+    }
 
     #[test]
     fn pending_files_yields_only_after_size_is_stable() {

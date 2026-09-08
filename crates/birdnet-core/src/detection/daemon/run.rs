@@ -158,6 +158,7 @@ pub fn run_daemon(
 
     let filter_observer = config.on_species_filter_state.clone();
     let throughput = config.on_file_analysed.clone();
+    let in_flight = config.in_flight.clone();
     if let Some(observer) = filter_observer.as_ref() {
         observer.report(species_filter.has_model(), None);
     }
@@ -326,9 +327,25 @@ pub fn run_daemon(
             // Process whichever files have finished being written. Polling the
             // size each sweep means a clip settles even after its last watcher
             // event, so the final segment is never stranded.
-            for path in pending.drain_settled(Instant::now(), FILE_SETTLE, |p| {
+            let settled = pending.drain_settled_reporting(Instant::now(), FILE_SETTLE, |p| {
                 std::fs::metadata(p).map(|m| m.len()).ok()
-            }) {
+            });
+            // A segment the watcher announced that is gone before the pipeline
+            // could open it is audio that was recorded and never analysed
+            // (PR-1 / S-3): a purge running ahead of a backlogged pipeline.
+            // It used to fall out of the pending set without a word.
+            for path in &settled.vanished {
+                tracing::warn!(
+                    file = %path.display(),
+                    "segment vanished before analysis — recorded audio the pipeline never \
+                     read is gone; if this repeats, the stream directory is being drained \
+                     faster than inference keeps up"
+                );
+                if let Some(observer) = throughput.as_ref() {
+                    observer.dropped(path);
+                }
+            }
+            for path in settled.ready {
                 // Keep the watchdog fed if a single sweep processes several files.
                 heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
@@ -360,6 +377,9 @@ pub fn run_daemon(
                     "begin processing file"
                 );
 
+                // Claimed for as long as the pipeline reads it (PR-1 / S-3):
+                // the stream directory's purge skips a claimed name.
+                let _lease = in_flight.as_ref().map(|table| table.claim(&path));
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
@@ -391,12 +411,26 @@ pub fn run_daemon(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            correlation_id = %correlation_id,
-                            file = %path.display(),
-                            error = %e,
-                            "failed to process file"
-                        );
+                        // Gone between settling and opening: the same loss as
+                        // a vanished pending file, counted the same way.
+                        if path.exists() {
+                            tracing::warn!(
+                                correlation_id = %correlation_id,
+                                file = %path.display(),
+                                error = %e,
+                                "failed to process file"
+                            );
+                        } else {
+                            tracing::warn!(
+                                correlation_id = %correlation_id,
+                                file = %path.display(),
+                                "segment vanished while being analysed — recorded audio the \
+                                 pipeline never finished reading is gone"
+                            );
+                            if let Some(observer) = throughput.as_ref() {
+                                observer.dropped(&path);
+                            }
+                        }
                     }
                 }
             }
@@ -531,6 +565,7 @@ mod tests {
             metadata_labels_path: None,
             on_species_filter_state: None,
             on_file_analysed: None,
+            in_flight: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

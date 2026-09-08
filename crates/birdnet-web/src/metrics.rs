@@ -203,6 +203,9 @@ pub struct MetricsRegistry {
     /// inference never started. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
     /// (OB-12).
     files_analysed: RwLock<HashMap<String, AtomicU64>>,
+    /// Segments the watcher announced that were gone before the pipeline
+    /// read them, per source (PR-1 / S-3): recorded audio never analysed.
+    segments_dropped: RwLock<HashMap<String, AtomicU64>>,
     /// Notifications that never left the station, by why.
     ///
     /// Both guards on the outbound path — the per-destination circuit breaker
@@ -274,6 +277,7 @@ impl MetricsRegistry {
             mqtt_last_error: RwLock::new(None),
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
+            segments_dropped: RwLock::new(HashMap::new()),
             notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
@@ -337,6 +341,12 @@ impl MetricsRegistry {
     /// answering nothing. Neither of those was distinguishable from outside.
     pub fn inc_file_analysed(&self, source: &str) {
         Self::bump(&self.files_analysed, source);
+    }
+
+    /// Record a segment that vanished before the pipeline analysed it
+    /// (PR-1 / S-3).
+    pub fn inc_segment_dropped(&self, source: &str) {
+        Self::bump(&self.segments_dropped, source);
     }
 
     /// Record a notification that never left the station.
@@ -697,6 +707,7 @@ impl MetricsRegistry {
             mqtt_connected: self.mqtt_connected(),
             detections_dropped: Self::read_map(&self.detections_dropped),
             files_analysed: Self::read_map(&self.files_analysed),
+            segments_dropped: Self::read_map(&self.segments_dropped),
             notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
@@ -769,6 +780,8 @@ pub struct MetricsSnapshot {
     pub detections_dropped: Vec<(String, u64)>,
     /// Audio files the pipeline finished analysing, per source.
     pub files_analysed: Vec<(String, u64)>,
+    /// Segments gone before the pipeline read them, per source.
+    pub segments_dropped: Vec<(String, u64)>,
     /// Notifications that never left the station, by reason.
     pub notifications_dropped: Vec<(String, u64)>,
     /// Capture restarts per source.
@@ -847,6 +860,16 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         let _ = writeln!(
             out,
             "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_segments_dropped_total Raw segments the watcher announced that were gone before the pipeline read them, per source: recorded audio never analysed. Rising means the stream directory is being drained faster than inference keeps up.\n");
+    out.push_str("# TYPE birdnet_segments_dropped_total counter\n");
+    for (source, count) in &snap.segments_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_segments_dropped_total{{source=\"{}\"}} {count}",
             escape_label(source)
         );
     }

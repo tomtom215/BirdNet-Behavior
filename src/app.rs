@@ -512,7 +512,12 @@ async fn serve(
     // mounted, how full — measured now and every minute, read by the health
     // verdict. Nothing else in the process finds out about a read-only remount.
     let _data_volume_watch = birdnet_web::data_volume::spawn_watch(state.clone());
-    let _disk_manager_threads = helpers::start_disk_manager(&cli, config.as_ref(), &state);
+    // Shared between the stream directory's purge and the detection daemon
+    // (PR-1 / S-3): the segments the pipeline is reading are the ones the
+    // purge must not take.
+    let in_flight = birdnet_core::detection::daemon::InFlight::new();
+    let _disk_manager_threads =
+        helpers::start_disk_manager(&cli, config.as_ref(), &state, &in_flight);
     let _live_spectrogram_thread = helpers::start_live_spectrogram(&cli, config.as_ref(), &state);
     let _capture_handle = capture::start_capture_manager(
         &cli,
@@ -552,6 +557,7 @@ async fn serve(
             mqtt_client,
             notification_filter,
             notification_template,
+            in_flight,
         )
     };
 
