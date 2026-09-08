@@ -71,7 +71,14 @@ P0 or P1 after this pass, by the same grep with `FIXED` rows excluded: **1 P0**
 end of the second session that day, same method: **0 P0**, **36 P1**,
 **105 P2**, **30 P3** — and counting a row whose marker says "in part", "the
 first half" or "clips" as open, as it should be, 40 P1 (`PS-6`, `PS-7`,
-`PR-8`, `ON-4`).)
+`PR-8`, `ON-4`). *Corrected later that day:* that 36 tested for the exact
+text `[FIXED]`, so the sixteen P1 rows whose marker is a full fix with a
+descriptive tag — `**[FIXED — "Record who changed what"]**` and the like —
+were counted as open; by the prefix `**[FIXED` it was 29. Re-taken at the
+end of the third stretch, by the prefix, over §3's 288 single-id rows, 132
+of which carry a marker: **0 P0**, **20 P1**, **104 P2**, **30 P3**; counting
+the markers that say "in part", "half" or "clips" as open, **25 P1** (`PS-6`,
+`PS-7`, `PR-8`, `LC-4`, `ON-4`) and **106 P2** (`NT-8`, `OB-9`).)
 `R-DwC` matches that pattern; the digits-only pattern the 2026-09-04 count
 used does not see it, which is where "255" and "R 11" came from.) At
 `8e6806f`, **61** of the rows carry a `**[FIXED…]**` marker, 21 more than at
@@ -1353,31 +1360,37 @@ probe ids in those rows are the names of the reports it came from.
 
 ### What to do first
 
-*Rewritten 2026-09-08, at the end of the second session that day. That
-session worked the previous version of this list through in order and past
-its end. Done, each with its row marked and its gate observed red first:
-`R-1` (`bebddaf`), `R-8` (`25e688f`), `O-6` (`dacb73d`), `DD-32` (`0883b00`),
-`DD-14`+`DD-15` (`b21ca69`), `DD-19`+`DD-20` (`7a584a0`), the first-run batch
-`ON-4`/`ON-5`/`ON-10`/`ON-11` (`a71953f`), `S-4`+`PS-7` (`4e30dec`), `DD-25`
-(`fe2b82f`), `NT-2`+`NT-3` (`ec71f78`), `DD-22`+`DD-24` (`43dc336`), `S-5`
-(`a4c6cc6`), `PR-8` (`e697649`), `ON-12` (`2b5e783`), `LC-7`+`O-7`+`RC-14`
-(`2d19c87`), `DD-23` (`2561b3d`), `UP-2` (`2c48665`), `UP-3` (`981d0ef`),
-`S-14`+`DD-36` (`d106774`), `ON-9`+`OP-13` (`7bc573c`), `LC-6` (`efb4906`).
+*Rewritten 2026-09-08, at the end of the third stretch of work that day,
+which continued the second session's list to its end and then through the
+medium rows. Done, each with its row marked and its gate observed red first
+— the second session: `R-1` (`bebddaf`), `R-8` (`25e688f`), `O-6`
+(`dacb73d`), `DD-32` (`0883b00`), `DD-14`+`DD-15` (`b21ca69`),
+`DD-19`+`DD-20` (`7a584a0`), the first-run batch `ON-4`/`ON-5`/`ON-10`/`ON-11`
+(`a71953f`), `S-4`+`PS-7` (`4e30dec`), `DD-25` (`fe2b82f`), `NT-2`+`NT-3`
+(`ec71f78`), `DD-22`+`DD-24` (`43dc336`), `S-5` (`a4c6cc6`), `PR-8`
+(`e697649`), `ON-12` (`2b5e783`), `LC-7`+`O-7`+`RC-14` (`2d19c87`), `DD-23`
+(`2561b3d`), `UP-2` (`2c48665`), `UP-3` (`981d0ef`), `S-14`+`DD-36`
+(`d106774`), `ON-9`+`OP-13` (`7bc573c`), `LC-6` (`efb4906`); the third
+stretch: `OP-4`+`OP-6`+`OP-7` (`2257c86`), `PS-8`+`ON-8`+`UX-2`+`NP-5`+`OP-3`
+and `LC-4`'s `arecord` half (`3047214`), `PR-7` (`21ff82b`), `UX-1`
+(`ec29a04`), `NP-1` (`09ae447`), `S-2` (`20c287d`), `AU-1`+`S-13`
+(`b520003`), `AD-3` (`3735f1f`), `ON-7`+`NT-6` (`2bfb24a`), `AD-4` and the
+last half of `LC-2` (`a83c8a6`). The full workspace run at `06efa12`,
+before the last of those: 3 879 passed, 0 failed, 9 ignored, 130 suites.
 What follows is the queue as it stands, ordered by what a station in a field
 gains per hour of work.*
 
-**First, the operator-visibility batch — each small, each closing a "the
-station knew and did not say" gap, and all reachable through primitives this
-session built:**
-
-* *`OP-4`, `OP-6` and `OP-7` are done (see their rows).*
-* *`OP-3`, `PS-8`, `NP-5`, `ON-8`, `LC-4` (the `arecord` half) and `UX-2` are
-  done (see their rows).*
-* *`PR-7` is done (see its row).*
-* *`UX-1` is done (see its row).*
-
-**Then the medium ones:** `ON-6`'s remainder, and the contrast numbers in
-`DD-29`/`DD-30`.
+**The medium rows left:** `ON-6`'s remainder was looked for and not found —
+its row is closed in full at `60ead63` and nothing else names a remainder,
+so that entry was stale; the contrast numbers in `DD-29`/`DD-30` (P2) are
+the only medium rows still open. Of the P1 rows outside the large list:
+`OP-5` (a journald drop-in with the unit — small, shell and docs; take it
+with `OB-15`, whose two per-file INFO lines it also demotes), `DD-9`'s
+remainder (record cutoff, sensitivity and overlap at quarantine time —
+a migration and a copy), `R-4` (a retention option that keeps raw audio at
+a duty cycle), and `PR-1`/`S-3` (a lease on segments the daemon has open,
+and a `birdnet_segments_dropped_total` counter — the probe that deleted a
+segment under a live reader is in the row).
 
 **Then the large ones, each its own session:** `R-5`/`FR-2` (re-analysis over
 retained audio keyed to `analysis_runs`), `FR-1`/`R-DwC` (Raven selection
