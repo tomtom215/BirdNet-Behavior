@@ -46,7 +46,7 @@ Audio chunk (f32, model sample rate)
 
 | Model | Species | Input | Metadata | Notes |
 |-------|---------|-------|----------|-------|
-| BirdNET+ V3.0 | ~11 000 | 3 s audio @ 48 kHz | Optional | Default (fetched by the installer from GitHub, Zenodo fallback) |
+| BirdNET+ V3.0 | ~11 000 | 32 kHz audio; 4.5 s (144 000 samples) by default for the dynamic-shape preview, 3 s for the fixed-shape `[1, 96 000]` build ([15-model-chunking.md](15-model-chunking.md)) | Optional | Default (fetched by the installer from GitHub, Zenodo fallback) |
 | BirdNET V2.4 FP16 | 6 362 | 3 s audio @ 48 kHz | Separate metadata model | Legacy compatibility |
 | BirdNET V1 | 6 000+ | 3 s audio @ 48 kHz | Lat/lon/week tensor | Legacy |
 
@@ -88,26 +88,33 @@ pub struct BirdNetModel {
 }
 
 impl BirdNetModel {
-    pub fn load(config: ModelConfig, model_path: &Path, labels: LabelSet) -> Result<Self, InferenceError> {
+    pub fn load(model_path: &Path, labels: LabelSet, config: ModelConfig) -> Result<Self, InferenceError> {
         let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(config.num_threads)?
+            .with_intra_threads(config.num_threads)?   // no explicit graph-optimisation level is set
             .commit_from_file(model_path)?;
         Ok(Self { session, labels, /* … */ })
     }
 
-    pub fn predict(&self, audio: &[f32]) -> Result<Vec<Detection>, InferenceError> {
-        let input = Tensor::from_array(([1, audio.len()], audio.to_vec()))?;
+    pub fn predict(
+        &mut self,
+        audio: &[f32],
+        date: &str, time: &str,
+        start_secs: f32, end_secs: f32,
+        week: u32,
+    ) -> Result<Vec<Detection>, InferenceError> {
+        let input = self.build_input_tensor(audio)?;   // pads / truncates to the model's expected length
         let outputs = self.session.run(ort::inputs![input])?;
-        let (_, logits) = outputs[0].try_extract_tensor::<f32>()?;
-        Ok(self.post_process(logits))
+        // "predictions" output when present (V3.0), else output 0 (V2.4); then compute_confidence
+        /* … */
     }
 }
 ```
 
-The model is held inside an `Arc<Model>` in the detection daemon so it
-can be shared across concurrent detection chunks without cloning the
-underlying session.
+The daemon owns the model by value on its single detection thread
+(`detection/daemon/run.rs`: `let mut model = BirdNetModel::load(…)`) and
+passes `&mut BirdNetModel` into per-file processing (`daemon/process.rs`).
+There is no `Arc` around it and no concurrent inference: files are
+inferred one at a time.
 
 ## Validation
 

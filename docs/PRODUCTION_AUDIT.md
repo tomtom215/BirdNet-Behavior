@@ -17,10 +17,15 @@ ever reports what it volunteers.
 > [`FIELD_READINESS_AUDIT.md`](FIELD_READINESS_AUDIT.md) §6, then by
 > [`POST_0140_AUDIT.md`](POST_0140_AUDIT.md) — and its findings were worked
 > through over the releases that followed. Re-checked against `main` at `ee795ed`
-> (v0.15.0) on 2026-09-04: fifteen of the sixteen numbered findings are fixed,
+> (v0.15.0) on 2026-09-04, with line numbers and counts re-verified at
+> `dd10fe7` on 2026-09-07: fifteen of the sixteen numbered findings are fixed,
 > three of them with a residue named in place (A-3's auto-update alerting, A-6's
 > solar overlays, A-7's prose-vs-unit CI check), and **A-5 is partly fixed** —
-> two of nine phenology builders now have production consumers. The body is
+> two of nine phenology builders now have production consumers. A fourth
+> residue, recorded under A-4 and A-6 — the provenance clause reaching only
+> what reads the view — was closed by `2c708a3`, `1d8bf82` and `17cebc5` on
+> 2026-09-04 and given its lasting fix by migration 42 (`dd10fe7`); it is
+> marked closed in place below. The body is
 > preserved as the record of what was wrong and why nothing noticed. Per-finding
 > statuses and any statement a reader might still act on have been corrected in
 > place; nothing else has been rewritten into the present tense.
@@ -121,13 +126,17 @@ operator actions did not:
 | Approve a quarantined detection | `/pages/quarantine-*` | `approve_quarantine` — `SQLite` only |
 
 **Nothing reconciled the difference afterwards.** The startup sync
-(`crates/birdnet-behavioral/src/connection/sync.rs:43`) is *incremental*: its
+(`crates/birdnet-behavioral/src/connection/sync.rs:43` then; `sync_from_sqlite`
+at `:127`, cutoff at `:135-153`, at `dd10fe7`) is *incremental*: its
 cutoff is the newest row already in `DuckDB`, so it can only ever add newer rows.
 It never removes one, never re-reads a changed one, and skips a back-dated one
 entirely. `full_resync_from_sqlite` was the only repair, and it was reachable
 from exactly one place in the product: finishing a BirdNET-Pi migration
-(`crates/birdnet-web/src/routes/admin/migration.rs:319`). No CLI flag, no admin
-button, no automatic check.
+(`crates/birdnet-web/src/routes/admin/migration.rs:319` then; at `dd10fe7` it
+is reached through `AppState::resync_analytics_full`, `state.rs:746`, from
+`rebuild_analytics_after_import` at `admin/migration.rs:765`, and from the
+startup drift repair at `state.rs:351`). No CLI flag, no admin button, no
+automatic check.
 
 **Measured, not inferred.** `tests/analytics_divergence.rs` was written first and
 run against unmodified code:
@@ -171,12 +180,17 @@ just with different histories — so there was no error to notice, and
    logged rather than returned: the authoritative write has already happened.
 3. **Startup drift repair.** After the incremental sync, the two row counts must
    agree; when they do not, something reached `SQLite` that the copy can never
-   catch up to, and a full rebuild runs automatically. This costs two `COUNT(*)`s
+   catch up to, and a full rebuild runs automatically. As shipped it compared
+   row counts alone; it now compares three signals — row counts,
+   rejected-verdict counts and unstamped `detected_at_utc` counts, each
+   invisible to the others (`state.rs:296-322`) — and costs four `COUNT(*)`s
    per start on a healthy station and — the point — self-heals every station
    already running a release that wrote to `SQLite` alone. No operator action, no
    new CLI surface, nothing to notice.
 
-**Gates.** `tests/analytics_divergence.rs`, seven tests at two levels: four
+**Gates.** `tests/analytics_divergence.rs`, seven tests at two levels when
+written (twelve at `dd10fe7`: `grep -c '#\[\(tokio::\)\?test'
+tests/analytics_divergence.rs`): four
 contract tests on `AppState`, two that drive the real HTTP handlers (a new route
 that reaches for `with_db(|c| birdnet_db::sqlite::…)` compiles and passes the
 contract tests — only the route-level gate catches it), and one that creates an
@@ -222,10 +236,13 @@ TZ=Pacific/Auckland   UTC 12:00 -> date('now')=2026-08-17  local=2026-08-18   UT
 
 **Fix.** All five sites now use `date('now','localtime')`, matching the
 convention documented in `crates/birdnet-db/src/clock.rs` and used by the
-retention cutoffs in `src/maintenance.rs:776`. At `ee795ed` the only bare
-`date('now')` left in the tree are a benchmark
-(`crates/birdnet-db/benches/db_queries.rs:248`) and a comment
-(`src/maintenance.rs:424`).
+retention cutoffs in `src/maintenance.rs:819`. At `dd10fe7` the only bare
+`date('now')` left in production code is a benchmark
+(`crates/birdnet-db/benches/db_queries.rs:248`); the comment at
+`src/maintenance.rs:424` that carried one at `ee795ed` is gone, and what
+remains outside it is test fixtures asking `SELECT date('now')` for a
+fixture date (`grep -rn "date('now'" --include=*.rs crates src tests | grep
+-v localtime`).
 
 **Gate.** `tests/local_day_boundary.rs`. SQLite's `localtime` reads the process
 timezone through libc and `std::env::set_var` is `unsafe` in edition 2024 (which
@@ -281,7 +298,8 @@ copy.
 
 > Since done: `src/integrations/station_health.rs` is that module — *"the
 > conditions that end a season, other than silence"* — spawned beside the deadman
-> at `src/app.rs:386`. It runs six checks (`station_health.rs:222`): `sources`,
+> at `src/app.rs:426` (the deadman at `:410`; `:386` at `ee795ed`). It runs six
+> checks (`station_health.rs:222`): `sources`,
 > `disk`, `thermal`, `maintenance`, `quarantined-stores` and `clock`, sharing the
 > deadman's episode semantics. `check_maintenance` (`:523`) reads each job's
 > recorded *verdict* rather than its timestamp, which is what makes a backup that
@@ -324,21 +342,26 @@ builders.
 > (`crates/birdnet-db/src/migration.rs:769`) — with the `DuckDB` twin spelling
 > the same rule as `review_verdict IS DISTINCT FROM 'rejected'`
 > (`crates/birdnet-timeseries/src/queries/mod.rs:97`). The verdict is mirrored
-> into the analytics copy by `AppState` (`state.rs:949`), which is the A-1
+> into the analytics copy by `AppState` (`state.rs:970`), which is the A-1
 > mechanism doing the work. Migration 34 later added a second clause to that
 > view, for import provenance; see the note under A-6. Two surfaces do **not**
-> read the view, and both carry only the verdict half of it: the dawn chorus
-> spells the predicate out inline because `INDEXED BY` is not valid against a
-> view (`dawn_chorus.rs:119-130`), and `species_summary` is maintained by trigger
-> (`migration.rs:960-967`). For rejections that is the whole rule and both are
-> correct; for imports it is not — see A-6.
+> read the view: the dawn chorus spells the predicate out inline because
+> `INDEXED BY` is not valid against a view (`dawn_chorus.rs:117-142`), and
+> `species_summary` is maintained by trigger (`migration.rs:960-967` at
+> migration 30; re-created by migration 42 at `:1777-1838`). At `ee795ed` both
+> carried only the verdict half; both now honour the import rule too —
+> `CHORUS_SQL` (`dawn_chorus.rs:134-142`) carries both clauses, and the rollup
+> is keyed by provenance, so `summary_source()`
+> (`crates/birdnet-db/src/sqlite/queries/species.rs:35`) reads it whole or
+> `WHERE is_import = 0`. See A-6 for the commits and gates.
 
 ---
 
 ### A-5 — A whole analytics module nothing calls · P2 · partly fixed
 
 `crates/birdnet-behavioral/src/phenology/` is 925 lines across four files,
-exporting 12 symbols, with its own executing test suite
+exporting 12 symbols (1 112 lines at `dd10fe7`, `wc -l`, re-exporting nine SQL
+builders and five types from `mod.rs:49-58`), with its own executing test suite
 (`tests/phenology_execute.rs`).
 
 Checked symbol by symbol: **every one has zero consumers outside the module and
@@ -381,11 +404,18 @@ Carrying tested, documented, unreachable code is the thing that makes an
 > Since partly done — **two of the nine SQL builders are reachable, seven are
 > not.** `effort_corrected_abundance_sql` and `phenology_timing_sql` are called
 > from `crates/birdnet-web/src/routes/analytics.rs:692` and `:715`, behind
-> `/analytics/abundance` and its sibling. Grepping `crates/`, `src/` and
-> `tests/`, excluding the module and its own tests, the other seven still return
-> nothing: `first_detection_sql`, `monthly_totals_sql`, `interannual_trend_sql`,
-> `peak_weeks_sql`, `weekly_abundance_sql`, `migration_window_sql`,
-> `weekly_richness_sql`.
+> `/analytics/abundance` and `/analytics/phenology` (`analytics.rs:34-35`).
+> Re-listed at `dd10fe7` with, for each name,
+> `grep -rn '\b<name>\b' --include=*.rs crates src tests | grep -v
+> birdnet-behavioral/src/phenology/ | grep -v birdnet-behavioral/tests/phenology`:
+> the other seven have no production caller — `first_detection_sql`
+> (`timing.rs:234`), `monthly_totals_sql` (`abundance.rs:210`),
+> `interannual_trend_sql` (`timing.rs:259`), `peak_weeks_sql`
+> (`abundance.rs:166`), `migration_window_sql` (`timing.rs:169`) and
+> `weekly_richness_sql` (`abundance.rs:238`) return nothing at all, and
+> `weekly_abundance_sql` (`abundance.rs:110`) is called only by the crate's own
+> `tests/iso_week_is_iso.rs:67`. The two wired builders also appear in
+> `tests/analytics_divergence.rs:551` and `iso_week_is_iso.rs:184`, both tests.
 >
 > Both caveats above were closed by disclosure rather than by arithmetic, which
 > is the right call for a span: `migration_window_sql` now returns
@@ -479,12 +509,27 @@ time did not mention location or timezone at all.
 > imported rows are still this station's, not the source's. No per-batch
 > coordinate is consulted anywhere.
 >
-> **And the provenance clause reaches only what reads the view.** The dawn chorus
-> (`dawn_chorus.rs:126-130`) and `species_summary`
-> (`crates/birdnet-db/src/sqlite/queries/species.rs:44`, `:472`;
-> `migration.rs:960`) carry the verdict half of the predicate and not the
-> provenance half, so with `analytics_exclude_imports` set they still count the
-> excluded batch.
+> **Closed: the provenance clause originally reached only what read the view.**
+> At `ee795ed` the dawn chorus and `species_summary` carried the verdict half
+> of the predicate and not the provenance half, so with
+> `analytics_exclude_imports` set they still counted the excluded batch. Closed
+> by `1d8bf82` — `CHORUS_SQL` (`dawn_chorus.rs:134-142`) carries both clauses,
+> gated by `dawn_chorus_excludes_an_import_the_operator_excluded` (`:786`),
+> `…_keeps_an_import_the_operator_kept` (`:810`) and
+> `the_inline_predicate_and_the_view_admit_the_same_rows` (`:833`); by
+> `2c708a3` — every rollup reader goes through `summary_source()`
+> (`crates/birdnet-db/src/sqlite/queries/species.rs:35`), gated by
+> `crates/birdnet-db/tests/the_species_list_honours_the_provenance_rule.rs`; by
+> `17cebc5` — the time-series executor
+> (`crates/birdnet-timeseries/src/executor/mod.rs`) no longer re-creates
+> `detections_ts` with the single-rule definition, gated by
+> `tests/analytics_view_ownership.rs`; and lastingly by migration 42
+> (`dd10fe7`, `migration.rs:1703`), which keys the rollup
+> `(Com_Name, Sci_Name, hour, is_import)` (`:1767`) with triggers that carry
+> the dimension (`:1777-1838`), so `summary_source()` reads the rollup whole or
+> `WHERE is_import = 0` instead of falling back to a whole-history aggregate —
+> gated by `a_station_that_excludes_imports_still_reads_the_rollup` and
+> `the_rollup_keys_provenance_and_the_triggers_keep_it`.
 
 ---
 
@@ -820,7 +865,7 @@ rather than quietly dropped:
   inserts per detection (`:685` today, `:274` when this ran). Verified by reading
   the processor.
 - **There is a background pre-warmer.** `src/app.rs` drives `prewarm_analytics`
-  (`:500` today, `:397` when this ran), so the heavy cached fragments stay hot
+  (`:550` at `dd10fe7`, `:397` when this ran), so the heavy cached fragments stay hot
   without a visitor paying for them. An earlier grep scoped to the wrong
   directories missed it.
 - **There is operational alerting** — the deadman (A-3). An earlier pass
@@ -836,8 +881,8 @@ rather than quietly dropped:
   advanced (`src/sd_notify.rs:137-149`), so a hung or blocked pipeline is
   restarted rather than reported healthy — but the counter it watches is bumped
   at the top of the daemon's poll loop
-  (`crates/birdnet-core/src/detection/daemon/run.rs:287`), and that loop cycles
-  on a 500 ms `recv_timeout` whether or not a single file has arrived. A station
+  (`crates/birdnet-core/src/detection/daemon/run.rs:295`), and that loop cycles
+  on a 500 ms `recv_timeout` (`:306`) whether or not a single file has arrived. A station
   that has recorded nothing for four months keeps it satisfied. The thing that
   notices silence is the detection deadman (A-3), not the watchdog.
   `UNATTENDED_DEPLOYMENT_AUDIT.md` §2 carries the same retraction; this is the

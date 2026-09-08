@@ -18,7 +18,7 @@ Either. Point it at a USB microphone, or at an RTSP stream from an IP camera (ma
 
 ## Where are my recordings and database stored?
 
-Under `/data` in Docker (a named volume) or under the configured data directory on bare metal: the SQLite `birdnet.db`, the `recordings/` clips, the cached `model/`, and the Wikipedia image `cache/`.
+Under `/data` in Docker (a named volume) or under the data directory on bare metal (`~/BirdNet-Behavior` for the service user): the SQLite `birds.db`, the `recordings/` clips, the model (`models/` on bare metal, `/data/model` in Docker) and the species-image cache (`image_cache/` on bare metal, `/data/cache` in Docker).
 
 ## How do I keep a recording I love from being deleted?
 
@@ -26,7 +26,7 @@ Retention is disk-based by default — the oldest clips are purged once the disk
 
 ## Is the dashboard exposed on my network? Do I need a login?
 
-By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; only the `/admin` panel is password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. For encryption on the LAN, `--tls-mode self-signed` serves HTTPS on 8503 without a second daemon. Still don't port-forward it to the internet — put a reverse proxy with a publicly-trusted certificate, or a VPN, in front. See [Remote Access & Security](../admin/remote-access.md).
+By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; the `/admin*` panel, the Station management tabs and every action that changes something are password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. For encryption on the LAN, `--tls-mode self-signed` serves HTTPS on 8503 without a second daemon. Still don't port-forward it to the internet — put a reverse proxy with a publicly-trusted certificate, or a VPN, in front. See [Remote Access & Security](../admin/remote-access.md).
 
 ## How do I find or reset the admin password?
 
@@ -74,7 +74,7 @@ level it was given cannot reject anything. See
 
 ## Do I need anything special for behavioral analytics?
 
-No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source, build with `--features analytics`. On a very low-RAM board you can turn it off — see [Troubleshooting](./troubleshooting.md).)
+No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source it is a default Cargo feature — `--no-default-features` leaves it out. On a very low-RAM board you can turn it off by passing an *empty* path, `--analytics-db ""` in the unit or `BIRDNET_ANALYTICS_DB: ""` in a compose override — removing the flag only falls back to `<database>.duckdb`; see [TROUBLESHOOTING.md §5](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md#5-memory--cpu-pressure-on-small-hardware).)
 
 ## Can I use it commercially?
 
@@ -83,9 +83,9 @@ No. BirdNet-Behavior is licensed **CC BY-NC-SA 4.0**, matching upstream BirdNET 
 ## How do I update?
 
 - **Docker:** `docker compose pull && docker compose up -d`.
-- **Bare metal:** re-run the installer, or use the in-app updater at `/admin/update/check`.
+- **Bare metal:** `sudo bash install.sh update` (or re-run the installer). The **Check for Updates** button on `/admin/system` — and `GET /admin/update/check` — only tells you whether a newer release exists; nothing in the UI applies it.
 - Your database, recordings and cached model are preserved across updates.
 
 ## It's not detecting anything — what now?
 
-Almost always an audio-source problem. Run `birdnet-behavior --doctor`, confirm a source is set and reachable, and check the level meter on [Audio & Microphones](../admin/audio.md). The [Troubleshooting](./troubleshooting.md) guide has step-by-step recipes.
+Almost always an audio-source problem. Run `birdnet-behavior --doctor` (or open `/admin/doctor` behind the admin login), confirm a source is set and reachable, and check the level meter on [Audio & Microphones](../admin/audio.md). The [Troubleshooting](./troubleshooting.md) guide has step-by-step recipes.

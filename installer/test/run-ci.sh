@@ -28,10 +28,12 @@ CI_TESTS=(
     admin-login-summary.sh
     alsa-device-detect.sh
     binary-swap-atomicity.sh
+    blank-env-opt-outs.sh
     checksum-refusals.sh
     config-template.sh
     container-model-cache.sh
     coord-parse.sh
+    geomodel-resume.sh
     location-notice.sh
     model-resume.sh
     pipefail-sigpipe.sh

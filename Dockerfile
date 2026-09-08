@@ -330,7 +330,7 @@ COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 #   /data/model        — BirdNET+ ONNX model + labels (downloaded on first run)
 #   /data/recordings   — audio segments captured by the detection pipeline
 #   /data/cache        — Wikipedia species image cache
-#   /data/birdnet.db   — SQLite detections database
+#   /data/birds.db     — SQLite detections database (the binary's default name)
 #   /data/analytics.db — DuckDB behavioral analytics database (optional)
 RUN mkdir -p /data/model /data/recordings /data/cache \
     && chown -R birdnet:birdnet /data

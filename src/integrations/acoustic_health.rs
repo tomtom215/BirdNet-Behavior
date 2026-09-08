@@ -576,7 +576,12 @@ pub fn spawn_acoustic_health(
             }
             super::announce::flush(&mut outbox, apprise.as_ref(), &state).await;
 
-            if last_prune.elapsed() >= PRUNE_EVERY {
+            // The 400-day baseline is date-relative, and a clock that has
+            // jumped forward would reclaim all of it in one pass (NT-4,
+            // RC-17); the same guard the maintenance loop uses answers here.
+            if last_prune.elapsed() >= PRUNE_EVERY
+                && crate::maintenance::clock_is_safe_for_retention()
+            {
                 last_prune = tokio::time::Instant::now();
                 let pruner = state.clone();
                 let _ = tokio::task::spawn_blocking(move || {

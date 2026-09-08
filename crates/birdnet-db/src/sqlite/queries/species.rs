@@ -8,65 +8,39 @@ use crate::sqlite::types::{
     map_detection_row,
 };
 
-/// The rollup, when it may be read, and the truth when it may not.
+/// The rollup, read whole or read for this station's own rows.
 ///
-/// # Why this exists
+/// `species_summary` (migration 30, re-keyed by migration 42) is a
+/// materialised rollup maintained by triggers, so the species list aggregates
+/// a few thousand rows instead of millions and still does in year ten. Its
+/// key carries `is_import` — whether the row came in through an import batch
+/// — so the second rule migration 34 gave `detections_analytic` (imported rows
+/// are excluded when the operator sets `analytics_exclude_imports`) is a
+/// `WHERE` on the rollup rather than a reason to abandon it.
 ///
-/// `species_summary` (migration 30) is a materialised rollup keyed
-/// `(Com_Name, Sci_Name, hour)` and maintained by triggers, so the species list
-/// aggregates a few thousand rows instead of millions and still does in year
-/// ten. Its triggers filter on one thing: `review_verdict IS NOT 'rejected'`.
+/// Before migration 42 the key had no provenance dimension, and this function
+/// substituted an aggregate over `detections_analytic` for the stations that
+/// both held imported rows and excluded them (RC-3). That made the numbers
+/// right by putting exactly the largest stations back onto the whole-history
+/// scan migration 30 existed to remove. `a_station_that_excludes_imports_still_reads_the_rollup`
+/// holds that both sources are now the rollup.
 ///
-/// Migration 34 then gave `detections_analytic` a *second* rule — imported rows
-/// are excluded when the operator sets `analytics_exclude_imports` — and the
-/// rollup could not learn it. Not by oversight: the rule depends on a setting
-/// the operator can flip at any moment, and a trigger-maintained rollup keyed
-/// without a provenance dimension cannot answer both questions from the same
-/// rows. So the rollup answers "everything not rejected", full stop.
-///
-/// The result, measured on a station with two of its own detections and three
-/// imported, with the setting on: `detections_analytic` reports 1 species and
-/// 2 rows, while `species_count` reported 2 and `top_species` ranked the
-/// imported species **first**, at 3 detections — a species that station never
-/// heard, presented as its commonest bird, after the operator had explicitly
-/// asked for it to be excluded. `species_summary()` on the detail page reads
-/// the view directly and was right all along, so the list and the detail page
-/// disagreed about the same species.
-///
-/// # What this does
-///
-/// Returns a `FROM` source with the rollup's exact column shape
-/// (`Com_Name, Sci_Name, hour, detections, confidence_sum`) — either the rollup
-/// table itself, or an equivalent aggregate over `detections_analytic`, which
-/// carries both rules.
-///
-/// The substitute is used only when the station has imported rows **and** has
-/// asked for them to be excluded. Every other station keeps the rollup and its
-/// bounded cost; the one that has opted into the exclusion pays migration 30's
-/// old scan for correct numbers, which is the right way round. `EXISTS` over
-/// `import_batch_id IS NOT NULL` rides the partial index migration 33 built for
-/// exactly that predicate, so the extra check is not a scan.
-///
-/// The lasting fix is a provenance dimension in the rollup's key, so both
-/// answers come from it; that is a schema migration and a trigger rewrite, and
-/// is recorded in `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` rather than half-built
-/// here.
-const SUMMARY_FROM_DETECTIONS: &str = "(SELECT Com_Name, Sci_Name, \
-     SUBSTR(Time, 1, 2) AS hour, COUNT(*) AS detections, \
-     SUM(Confidence) AS confidence_sum \
-     FROM detections_analytic GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2))";
+/// Returns a `FROM` source with the rollup's column shape
+/// (`Com_Name, Sci_Name, hour, detections, confidence_sum`). Only the exact
+/// string `'true'` excludes, which is the same rule the view applies.
+const SUMMARY_OWN_ROWS: &str = "(SELECT Com_Name, Sci_Name, hour, detections, confidence_sum \
+     FROM species_summary WHERE is_import = 0)";
 
-/// Pick the source [`SUMMARY_FROM_DETECTIONS`] documents.
+/// Pick the source [`SUMMARY_OWN_ROWS`] documents.
 fn summary_source(conn: &Connection) -> Result<&'static str, DbError> {
-    let substitute: bool = conn.query_row(
+    let exclude: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM settings
-                        WHERE key = 'analytics_exclude_imports' AND value = 'true')
-            AND EXISTS(SELECT 1 FROM detections WHERE import_batch_id IS NOT NULL)",
+                        WHERE key = 'analytics_exclude_imports' AND value = 'true')",
         [],
         |row| row.get(0),
     )?;
-    Ok(if substitute {
-        SUMMARY_FROM_DETECTIONS
+    Ok(if exclude {
+        SUMMARY_OWN_ROWS
     } else {
         "species_summary"
     })
@@ -466,6 +440,8 @@ pub struct SummaryDrift {
     pub sci_name: String,
     /// Hour-of-day key, as stored (`SUBSTR(Time, 1, 2)`).
     pub hour: String,
+    /// Provenance key: `true` for rows that came in through an import batch.
+    pub is_import: bool,
     /// What `species_summary` claims the count is.
     pub summary_count: i64,
     /// What counting `detections` directly says it is.
@@ -499,21 +475,24 @@ pub struct SummaryDrift {
 pub fn species_summary_drift(conn: &Connection) -> Result<Vec<SummaryDrift>, DbError> {
     let mut stmt = conn.prepare(
         "WITH truth AS (
-             SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2) AS hour, COUNT(*) AS n
+             SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2) AS hour,
+                    (import_batch_id IS NOT NULL) AS is_import, COUNT(*) AS n
                FROM detections
               WHERE review_verdict IS NOT 'rejected'
-              GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2)
+              GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2), (import_batch_id IS NOT NULL)
          )
          SELECT COALESCE(s.Com_Name, t.Com_Name),
                 COALESCE(s.Sci_Name, t.Sci_Name),
                 COALESCE(s.hour, t.hour),
+                COALESCE(s.is_import, t.is_import),
                 COALESCE(s.detections, 0),
                 COALESCE(t.n, 0)
            FROM species_summary s
            FULL OUTER JOIN truth t
-             ON s.Com_Name = t.Com_Name AND s.Sci_Name = t.Sci_Name AND s.hour = t.hour
+             ON s.Com_Name = t.Com_Name AND s.Sci_Name = t.Sci_Name
+            AND s.hour = t.hour AND s.is_import = t.is_import
           WHERE COALESCE(s.detections, 0) <> COALESCE(t.n, 0)
-          ORDER BY 1, 2, 3",
+          ORDER BY 1, 2, 3, 4",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -521,8 +500,9 @@ pub fn species_summary_drift(conn: &Connection) -> Result<Vec<SummaryDrift>, DbE
                 com_name: row.get(0)?,
                 sci_name: row.get(1)?,
                 hour: row.get(2)?,
-                summary_count: row.get(3)?,
-                actual_count: row.get(4)?,
+                is_import: row.get(3)?,
+                summary_count: row.get(4)?,
+                actual_count: row.get(5)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -532,7 +512,7 @@ pub fn species_summary_drift(conn: &Connection) -> Result<Vec<SummaryDrift>, DbE
 /// Recompute `species_summary` from `detections`, discarding what was there.
 ///
 /// The repair half of [`species_summary_drift`]. It is the same statement
-/// migration 30 runs to backfill, so a rebuilt summary is indistinguishable
+/// migration 42 runs to backfill, so a rebuilt summary is indistinguishable
 /// from a freshly migrated one.
 ///
 /// Returns the number of buckets written.
@@ -544,11 +524,12 @@ pub fn rebuild_species_summary(conn: &Connection) -> Result<usize, DbError> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM species_summary", [])?;
     let n = tx.execute(
-        "INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
-             SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2), COUNT(*), SUM(Confidence)
+        "INSERT INTO species_summary (Com_Name, Sci_Name, hour, is_import, detections, confidence_sum)
+             SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2),
+                    (import_batch_id IS NOT NULL), COUNT(*), SUM(Confidence)
                FROM detections
               WHERE review_verdict IS NOT 'rejected'
-              GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2)",
+              GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2), (import_batch_id IS NOT NULL)",
         [],
     )?;
     tx.commit()?;

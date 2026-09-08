@@ -46,7 +46,7 @@ validate ──► ci ──► build (matrix) ──► package ──► githu
 
 | Job | Emits |
 |-----|-------|
-| `validate` | Confirms the tag is valid semver, that `Cargo.toml` `workspace.package.version` equals the tag, and that a non-empty `## [X.Y.Z]` section exists in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. |
+| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z]` section in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. |
 | `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
 | `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in; dormant until `--analytics-db` is passed). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
 | `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives and SBOMs, signed via GitHub OIDC. |
@@ -138,8 +138,9 @@ published**. Use it to prove a release will build cleanly before tagging
 
 - Leave the `version` input blank to rehearse the current
   `Cargo.toml` version, or set it (e.g. `0.2.0`) to rehearse a specific
-  one. `validate` still checks `Cargo.toml` and `CHANGELOG.md`, so a
-  dry run catches a forgotten version bump or changelog entry too.
+  one. `validate` still checks `Cargo.toml`, `CITATION.cff`, `openapi.json`
+  and `CHANGELOG.md`, so a dry run catches a forgotten bump in any of the
+  four, or a missing changelog entry, too.
 
 ## Pre-release checklist
 
@@ -147,6 +148,8 @@ Copy-paste this into the release PR or issue and tick it off:
 
 ```text
 [ ] workspace.package.version in Cargo.toml bumped to X.Y.Z
+[ ] CITATION.cff: version bumped to X.Y.Z and date-released set to the
+    release date  (gated by release validate — the tag fails without it)
 [ ] crates/birdnet-web/openapi.json: info.version bumped to X.Y.Z  (gated by release validate)
     (a test asserts it tracks CARGO_PKG_VERSION, so a missed bump fails
      the suite rather than shipping a spec that lies about its version)
@@ -195,13 +198,14 @@ These are deliberate manual / out-of-scope steps — know them so a release
 isn't half-done:
 
 - **Version bump + changelog roll.** `validate` *checks* that
-  `Cargo.toml` and `CHANGELOG.md` match the tag, but you make the edits
-  (see the checklist). There is no auto-bump.
+  `Cargo.toml`, `CITATION.cff`, `openapi.json` and `CHANGELOG.md` match
+  the tag, but you make the edits (see the checklist). There is no auto-bump.
 - **Tag creation/push.** The pipeline is tag-triggered; creating and
   pushing the tag is the manual "go" action.
 - **Docs versioning + tag-time rebuild.** The mdBook documentation site is
   **"latest tracks `main`"** — it is not snapshotted per release. `docs.yml`
-  rebuilds and deploys it on pushes to `main` that touch `docs/**`. There is
+  rebuilds and deploys it on pushes to `main` that touch `docs/book/**`,
+  `docs/book-theme/**` or `book.toml` (not the audit notes in `docs/*.md`). There is
   no tag-triggered docs build, and it is not needed: a release is cut from
   `main`, so the live docs already reflect the released commit (the docs
   change deployed when its PR merged). Old versions are not archived.

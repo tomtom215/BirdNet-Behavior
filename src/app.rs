@@ -228,6 +228,9 @@ async fn serve(
     // `main` is already writing to — without this the state holds the empty
     // one its constructor made, and `GET /admin/system/logs` streams
     // keep-alives for ever.
+    // The bundle hook wants the same ring the state streams, so the support
+    // bundle an operator downloads carries the process's recent log.
+    let logs_for_bundle = log_broadcaster.clone();
     let state = state
         .with_config_path(cli.config.clone())
         .with_log_broadcaster(log_broadcaster)
@@ -237,7 +240,15 @@ async fn serve(
         // `INVOCATION_ID` cannot reach the branch that signals.
         .with_supervised_by_systemd(
             birdnet_web::routes::admin::system_controls::supervised_by_systemd(),
-        );
+        )
+        // OP-1: `--doctor` and `--support-bundle` from the browser. The hooks
+        // are read-only clones of the command line and the configuration, so
+        // a GET runs the checks and never the repairs.
+        .with_diagnostics(helpers::diagnostics::hooks(
+            &cli,
+            config.as_ref(),
+            logs_for_bundle,
+        ));
 
     // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
     // token. Absent one — the default — those routes answer 404 and this
@@ -476,6 +487,16 @@ async fn serve(
         daemon_handle.is_some(),
         std::sync::atomic::Ordering::Relaxed,
     );
+    // ...and keep it true only while the loop thread is alive (PR-5 / OP-2):
+    // stored once, the flag reported a daemon that died after boot as running
+    // to `?strict=1` for the life of the process.
+    if let Some(handle) = daemon_handle.as_ref() {
+        daemon::mirror_liveness(
+            handle.running_flag(),
+            state.detection_status_flag(),
+            std::time::Duration::from_secs(5),
+        );
+    }
 
     // Register Avahi mDNS service for zero-config local discovery.
     let site_name = cli.site_name.as_deref().unwrap_or("BirdNet-Behavior");

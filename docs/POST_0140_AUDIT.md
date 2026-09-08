@@ -1,13 +1,16 @@
 # Post-0.14.0 audit: what a 24/7/365 enclosure will actually hit
 
 **Date:** 2026-08-21, §4 added 2026-08-24 · **Base:** `9615b9c`, the shipped
-`v0.14.0` line · **Re-checked:** 2026-09-04 against `main` at `ee795ed` (v0.15.0)
+`v0.14.0` line · **Re-checked:** 2026-09-04 against `main` at `ee795ed` (v0.15.0);
+line numbers and counts re-verified 2026-09-07 at `dd10fe7`
 
 > **Status: all twenty-five are fixed, and the branch that fixed them is on
 > `main`.** D1–D13 came from reading the Rust; D14–D25 (§4) came from asking what
 > was still not field-ready and looking at the supply chain, the failure modes
 > nothing had ever provoked, and `install.sh`. Each `[FIXED]` line below was
-> re-checked against `ee795ed` and holds, with one residue recorded under D9.
+> re-checked against `ee795ed` and holds. The one residue that re-check found,
+> under D9, was closed the same day by `17cebc5`, `1d8bf82` and `2c708a3`, and
+> given its lasting fix by migration 42 in `dd10fe7`; see the note under D9.
 >
 > Each fix's gate was observed failing against the code it was written for, and
 > the commit message records the exact failure text — including three cases where
@@ -127,7 +130,7 @@ one call in the code (`resilience::restore_from_backup`).
 
 ### D3 — One `Mutex<Connection>` serialises the entire application
 
-**[FIXED]** — `AppState` now holds one writer plus a pool of four **read-only** connections (`db_pool::ReaderPool`). `with_db` is unchanged and still means "writer"; the twenty-seven unambiguously read-only call sites across six modules moved to `with_read_db`. Read-only is what makes the split safe to do by hand: a write on a read path fails immediately. An in-memory database has no pool and falls back to the writer, which is why the new gates build file-backed states on purpose.
+**[FIXED]** — `AppState` now holds one writer plus a pool of four **read-only** connections (`db_pool::ReaderPool`). `with_db` is unchanged and still means "writer"; the twenty-seven unambiguously read-only call sites across six modules moved to `with_read_db` in `144dc82` — thirty-three sites across nine modules at `dd10fe7` (`git grep -c '\.with_read_db(' -- crates/birdnet-web/src`, excluding `state.rs`). Read-only is what makes the split safe to do by hand: a write on a read path fails immediately. An in-memory database has no pool and falls back to the writer, which is why the new gates build file-backed states on purpose.
 
 `crates/birdnet-web/src/state.rs:53` — `db: Mutex<Connection>`; `:512` — `with_db`.
 
@@ -287,23 +290,45 @@ The dangerous property is the one the module doc already states: the damage is n
 detectable after the fact. A merged dataset cannot be repaired, only discarded —
 and right now it cannot even be discarded selectively.
 
-> **Residue, found re-checking this on 2026-09-04.** The `[FIXED]` note above says
-> the rule lives in `detections_analytic` and its `DuckDB` twin "so the two
-> engines cannot disagree". That is true of the two *views*, and
-> `species_summary` is not one of them. `top_species` reads the rollup directly
-> (`crates/birdnet-db/src/sqlite/queries/species.rs:44-49`), and both the
-> maintaining trigger (`crates/birdnet-db/src/migration.rs:960-967`) and
-> `rebuild_species_summary` (`species.rs:472-484`) filter on `review_verdict` and
-> nothing else. So with `analytics_exclude_imports` set, every view-backed
-> analytic drops the imported batch and the species counts an operator reads
-> beside those charts do not — on the species list, the admin species page,
-> `/species/top`, the CSV export, Year in Review and the heat map's top-five
-> strip. `tests/provenance_filter_two_stores.rs` compares the two views against
-> each other, so it is green through this. Same shape in the dawn chorus, which
-> copies the verdict half of the view's predicate inline and was not updated when
-> migration 34 added the second clause
-> (`crates/birdnet-web/src/routes/pages/dawn_chorus.rs:123-130`) — and its own
-> doc comment still says it copies the whole predicate.
+> **Residue, found re-checking this on 2026-09-04 — closed.** The `[FIXED]`
+> note above says the rule lives in `detections_analytic` and its `DuckDB` twin
+> "so the two engines cannot disagree". That was true of the two *views*, and
+> `species_summary` and the dawn chorus were not views: at `ee795ed` the
+> maintaining trigger (`crates/birdnet-db/src/migration.rs:960-967`, migration
+> 30), `rebuild_species_summary` and the inline chorus predicate all filtered on
+> `review_verdict` and nothing else, so with `analytics_exclude_imports` set
+> every view-backed analytic dropped the imported batch and the species counts
+> beside those charts did not. `tests/provenance_filter_two_stores.rs` compares
+> the two views against each other, so it was green through this. Four commits
+> closed it:
+>
+> * `2c708a3` — every reader of the rollup goes through `summary_source()`
+>   (`crates/birdnet-db/src/sqlite/queries/species.rs:35`; `species_count`
+>   `:58`, `top_species` `:85`, `search_species` `:114` …), gated by
+>   `crates/birdnet-db/tests/the_species_list_honours_the_provenance_rule.rs`
+>   (`the_species_list_excludes_an_import_the_operator_excluded`,
+>   `…_keeps_an_import_the_operator_kept`). At first it substituted an aggregate
+>   over `detections_analytic` for stations that both held and excluded imports.
+> * `1d8bf82` — `CHORUS_SQL`
+>   (`crates/birdnet-web/src/routes/pages/dawn_chorus.rs:134-142`) carries the
+>   whole predicate, verdict and provenance clauses both; gated by
+>   `dawn_chorus_excludes_an_import_the_operator_excluded` (`:786`),
+>   `dawn_chorus_keeps_an_import_the_operator_kept` (`:810`) and
+>   `the_inline_predicate_and_the_view_admit_the_same_rows` (`:833`), which holds
+>   the inline predicate and the view against each other on the same rows.
+> * `17cebc5` — the time-series executor
+>   (`crates/birdnet-timeseries/src/executor/mod.rs`) no longer re-creates
+>   `detections_ts` with the single-rule definition; gated by
+>   `tests/analytics_view_ownership.rs`.
+> * `dd10fe7` — migration 42 (`migration.rs:1703`) re-keys the rollup
+>   `(Com_Name, Sci_Name, hour, is_import)` (`:1767`) and rewrites the three
+>   triggers to carry the dimension (`:1777-1838`); `summary_source()` now reads
+>   the rollup whole or `WHERE is_import = 0` (`species.rs:31-32`), and
+>   `species_summary_drift` (`:475`) / `rebuild_species_summary` (`:523`) group
+>   by the new key. Gated by `a_station_that_excludes_imports_still_reads_the_rollup`
+>   and `the_rollup_keys_provenance_and_the_triggers_keep_it` in the same test
+>   file. This is the lasting fix: the excluding station is back on the rollup
+>   instead of the whole-history scan migration 30 existed to remove.
 
 ### D10 — `iso_week` is not the ISO week
 
@@ -501,8 +526,8 @@ document honestly.
   "exclude imported data" toggle on any chart. **Both exist now** —
   `delete_import_batch` behind a Remove button
   (`crates/birdnet-web/src/routes/admin/migration.rs:186`, `:211`) and the
-  `analytics_exclude_imports` toggle (`:275-295`) — with the caveat recorded
-  under D9.
+  `analytics_exclude_imports` toggle (`:275-295`). The caveat recorded under D9
+  at `ee795ed` is closed.
 * *Notification Center.* Empty forever. **No longer:** D4 wired the writers.
 * *Today.* The "LIVE SIGNAL · LAST 30 S" panel is the largest element above the fold
   and, when idle, is a blank rectangle with no empty state — the one place a new
@@ -517,10 +542,15 @@ document honestly.
   `var(--rare)` (`:144`), and the same rule styles both the review nudge and the
   "No detections for …" outage banner (`routes/pages/today.rs:574`, `:580`). Good
   news and an outage still read identically.
-* *Nav glyphs.* `⌂ ⌬ ▦ ♪ ¶` as bottom-bar icons. `⌬` is a benzene ring standing in
-  for Species and `¶` a pilcrow for Reports; these are text glyphs whose rendering
-  and metrics vary by platform font, and two of them carry no meaning to a general
-  audience. **Unchanged** (`routes/pages/nav.rs:51`, `:57`, `:63`, `:69`, `:75`).
+* *Nav glyphs.* `⌂ ⌬ ▦ ♪ ¶ ⌗` as bottom-bar icons. `⌬` is a benzene ring standing
+  in for Species, `¶` a pilcrow for Reports and `⌗` a viewdata square for
+  Settings; these are text glyphs whose rendering and metrics vary by platform
+  font, and three of them carry no meaning to a general audience. **Unchanged**
+  (`routes/pages/nav.rs:51`, `:57`, `:63`, `:69`, `:75`, `:86`) — the original
+  count here listed five of the six slots. Still rendered as text in
+  `<span class="glyph">` (`nav.rs:116`) in the mono font
+  (`static/css/app.css:2346-2348`); no SVG, no icon font. Each slot carries an
+  `aria-label`, so the finding is visual only.
 
 **Are the collapsed sections the right design?** I counted them rather than guessing,
 and counted wrong: I swept `crates/birdnet-web/src` and missed the templates. There
@@ -542,7 +572,8 @@ is worth a hard look; the `<details>` are not.
 general one.
 
 * **Date and time: entirely hand-rolled.** No `chrono`, `time` or `jiff` in any
-  manifest. `birdnet-core/src/civil.rs` is 830 lines implementing Hinnant's civil
+  manifest. `birdnet-core/src/civil.rs` was 830 lines at 0.14.0 (1 636 at
+  `dd10fe7`, `wc -l`) implementing Hinnant's civil
   algorithms. A previous session consolidated *nine* copies of `days_from_civil`
   into it — good — but **`days_in_month`/leap-year logic still exists three more
   times** in `birdnet-scheduler/src/solar.rs:235`,
@@ -560,9 +591,10 @@ general one.
   `feeds.rs::escape_xml`, allowlisted by name and gated by
   `crates/birdnet-web/tests/one_html_escaper.rs`.
 * Two `backoff_delay`s (`birdnet-integrations/src/retry.rs:37`,
-  `src/capture/supervisor.rs:118`), two `url_encode`s
-  (`birdnet-integrations/src/species_images/wikipedia.rs:205`,
-  `birdnet-web/src/routes/pages/mod.rs:321`). All four are still there.
+  `src/capture/supervisor.rs:118`), two percent-encoders
+  (`birdnet-integrations/src/species_images/wikipedia.rs:205` `url_encode`,
+  `birdnet-web/src/routes/pages/mod.rs:321` — since renamed
+  `simple_url_encode`). All four are still there.
 * Justified hand-rolls, for balance: `AnalyticsCache` (a `Mutex<HashMap>` instead of
   `moka`), the xorshift PRNG in the screenshot fixture, and the solar solver — all
   small, all with a stated reason, none duplicated.
@@ -583,7 +615,7 @@ when you build the big one on purpose.
 > `tests/out_of_space.rs`, `tests/clock_steps_backwards.rs` (D18–D20). Backup and
 > restore are gated in halves — the WAL-carrying snapshot, sidecar removal,
 > non-database detection and archive-escape refusal
-> (`crates/birdnet-web/src/routes/admin/system_controls/backup.rs:508-660`) — but
+> (`crates/birdnet-web/src/routes/admin/system_controls/backup.rs:508-655`) — but
 > **nothing drives one archive through both**, so the round-trip named here is
 > still missing. Still true: no multi-day soak, and no multi-million-row test.
 > `tests/soak.rs:17` `const DEFAULT_N: usize = 20_000` is the largest in the
@@ -626,7 +658,8 @@ Per `CLAUDE.md`: every gate written for these must be observed failing against t
 code it was written for, and the commit must say how.
 
 > All ten were done, on the branch that merged to `main`. Item 7's second half —
-> "makes cross-station import honest" — is the one with a residue: see D9.
+> "makes cross-station import honest" — had a residue at `ee795ed`, closed by
+> the four commits named under D9.
 
 ---
 
@@ -635,7 +668,7 @@ code it was written for, and the commit must say how.
 The thirteen findings above came from reading the Rust. This pass came from the
 question "what is still not field-ready", and deliberately looked where D1–D13
 had not: the supply chain, the failure modes nothing had ever provoked, and the
-2715 lines of `install.sh`.
+2715 lines of `install.sh` (3 194 at `dd10fe7`, `wc -l`).
 
 All of it is fixed, each gate observed failing first; that branch is on `main`.
 
@@ -696,7 +729,7 @@ and the `review_verdict` filter, copied from migration 24's triggers.
 
 ### D21–D25 — `install.sh`
 
-2715 generated lines, the product for most operators, one CI gate
+2715 generated lines (3 194 at `dd10fe7`), the product for most operators, one CI gate
 (`build.sh --check`, which only proves the file matches its sources). Every
 module read.
 
@@ -720,7 +753,8 @@ macOS coordinates commented out as the Linux config already does.
 **Also:** `installer/test/` held five test scripts and **nothing ran any of
 them** — no workflow, no script, no Makefile. Four still passed when run by
 hand. `installer/test/run-ci.sh` now runs the hermetic ones in CI and fails
-when a file there is neither in its run-list nor excluded with a reason.
+when a file there is neither in its run-list nor excluded with a reason; the
+directory holds fourteen files at `dd10fe7` (`ls installer/test | wc -l`).
 
 ### Checked and cleared
 

@@ -1,6 +1,6 @@
 # Remote Access & Security
 
-By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); only the `/admin` panel requires a password**, which a fresh install sets for you. This page covers reaching the station from your network and from elsewhere, safely.
+By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); signing in is required for the `/admin*` panel, the Station management tabs and every action that changes something** — with a password a fresh install sets for you. This page covers reaching the station from your network and from elsewhere, safely.
 
 ## On your local network
 
@@ -68,8 +68,9 @@ birdnet-behavior --tls-mode manual \
   --tls-key  /etc/letsencrypt/live/birds.example.com/privkey.pem
 ```
 
-Both files are re-read when they change on disk, so a `certbot renew` in the
-small hours is picked up on the next handshake — **no restart, no cron hook.**
+Both files are re-checked once a minute and re-read when they change on disk,
+so a `certbot renew` in the small hours is serving within a minute, from the
+next handshake — **no restart, no cron hook.**
 
 ### Checking it before you rely on it
 
@@ -183,7 +184,7 @@ sends, and every request would 404 with nothing to explain why.
 
 ## Built-in admin sign-in
 
-The binary gates the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention for the password. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open; only `/admin*` (settings, audio config, software update, system controls, backups, migration) requires signing in.**
+The binary gates the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention for the password. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open. Signing in is required for the `/admin*` panel, the Station management tabs (`/station/capture`, `/station/alerts`, `/station/data`, `/station/settings`, `/station/access`) and every action that changes something — deleting, relabelling, reviewing or locking a detection, approving or deleting a quarantined record, bulk review from Search, and saving the onboarding wizard.**
 
 Requesting `/admin*` without a session redirects (303) to a sign-in form at `/login`, which issues a session cookie. It is **not** HTTP Basic Auth, so `curl -u user:pass` will not work — post the form, or sign in through the browser.
 
@@ -195,7 +196,7 @@ CADDY_PWD=a-long-random-password
 
 `CADDY_USER` is read from the **process environment only**. Under Docker, where compose passes it through, it renames the sign-in; on a bare-metal install the systemd unit sets no `EnvironmentFile`, so a `CADDY_USER` line in `birdnet.conf` has no effect and the sign-in name stays `admin`.
 
-After editing the config, restart the service (`sudo systemctl restart birdnet-behavior`). This is **still plain HTTP** — only rely on it behind TLS, or on a trusted LAN. **Clearing `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard; if the server binds to a non-loopback address (e.g. the default `0.0.0.0`) with no `CADDY_PWD` set, it logs a prominent warning at startup. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (a browser can't attach Basic-auth headers to a WebSocket handshake), and are read-only and outside `/admin` in any case — restrict those at the network layer if you need to.
+After editing the config, restart the service (`sudo systemctl restart birdnet-behavior`). This is **still plain HTTP** — only rely on it behind TLS, or on a trusted LAN. **Clearing `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard; if the server binds to a non-loopback address (e.g. the default `0.0.0.0`) with no `CADDY_PWD` set, it logs a prominent warning at startup. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (they sit outside the gated router, and a browser cannot attach a session to a `WebSocket` handshake anyway), and are read-only in any case — restrict those at the network layer if you need to.
 
 ## Cross-origin requests (CORS)
 

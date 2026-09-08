@@ -51,7 +51,8 @@ In scope:
 - Remote code execution, privilege escalation, or sandbox escape in any
   binary or container image we publish
 - Authentication or authorisation bypass on the web UI, REST API, or
-  admin panel (including the optional HTTP Basic Auth layer)
+  admin panel (the session-cookie login, `BNB_API_TOKEN` bearer tokens,
+  and signed share links)
 - Path traversal, SSRF, or arbitrary file read/write in audio handling,
   recording downloads, or model loading
 - Cryptographic weakness in stored credentials, tokens, or backup

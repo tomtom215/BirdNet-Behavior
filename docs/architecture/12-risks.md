@@ -39,10 +39,10 @@
 |------|------------|
 | Disk exhaustion on long-running stations | Disk manager with automatic rotation, per-species file caps, and disk-usage thresholds |
 | Database corruption from power loss | WAL mode, integrity checks at startup, auto-recovery from the most recent backup |
-| Memory exhaustion on 1 GB Pi 4 | Target <50 MB RSS; bounded broadcast channels (`capacity = 256`); no unbounded accumulation |
+| Memory exhaustion on 1 GB Pi 4 | Target <50 MB RSS (a design target — nothing in-tree gates it); bounded broadcast channels (detections 256, spectrogram 16, log lines 512); no unbounded accumulation |
 | Network outage blocking BirdWeather uploads | Exponential backoff with offline buffering |
 | Model file corruption or missing weights | Loader refuses to start with an invalid model; the Docker entrypoint re-downloads the model on first run |
-| Migration corrupts target database | Imports run inside a single transaction; source is opened read-only |
+| Migration corrupts target database | Each import batch runs inside its own transaction (`insert_batch_tagged`), so a failure leaves earlier batches committed and the re-run is idempotent via `ON CONFLICT … DO NOTHING`; source is opened read-only |
 | Directory traversal on backup download | Canonical path check + filename allow-list |
 | Unauthorised web access | Session-cookie sign-in on `/admin*` with argon2id password hashing; a bearer token gates the write API; per-IP token-bucket rate limiter on API and admin routes |
 

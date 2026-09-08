@@ -428,22 +428,156 @@ pub fn birdnet_week_from_date(date: &str) -> Option<u32> {
 /// of them use.
 pub const CLOCK_PLAUSIBLE_FLOOR_SECS: u64 = 1_704_067_200;
 
-/// Whether a Unix timestamp is late enough to be a real current time.
+/// Unix-time ceiling at or above which the system clock is not trusted
+/// either: `2064-01-01T00:00:00Z`, forty years past the floor.
 ///
-/// Pure, so the boundary is testable without a clock. A `false` result means
-/// the caller should not make a dated decision: the capture supervisor fails
-/// *open* on it (keep recording rather than trust a bogus date for solar
-/// scheduling), and every destructive retention job refuses to run.
+/// The floor alone let a clock reading 2076 count as "synced" (NT-5), and a
+/// forward jump of that size is the direction that destroys data: every
+/// `older than N days` cutoff moves past the entire clip library at once
+/// (NT-4). A GPS week rollover reaching the station through an upstream NTP
+/// source adds 19.6 years; a `date -s` typo or a carrier NITZ date can add
+/// anything. A binary from this decade cannot legitimately observe 2064, so a
+/// reading there is a fault, not the future. A build still running in 2063
+/// bumps this constant, and `the_ceiling_is_the_date_it_says_it_is` pins the
+/// date so the value and its documentation cannot drift apart.
+pub const CLOCK_PLAUSIBLE_CEILING_SECS: u64 = 2_966_371_200;
+
+/// Whether a Unix timestamp could be a real current time.
 ///
-/// This is a **floor, not a range**. A clock reading far in the *future* is
-/// also wrong and is not caught here, because catching it needs a reference
-/// this function does not have — see `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
-/// (NT-4). What the floor does cover is the common case on this hardware: an
-/// RTC-less board that boots at the epoch and stays there until the network
-/// comes back, which on a field station may be never.
+/// Pure, so the boundaries are testable without a clock. A `false` result
+/// means the caller should not make a dated decision: the capture supervisor
+/// fails *open* on it (keep recording rather than trust a bogus date for solar
+/// scheduling), a detection stamped with it is quarantined rather than filed,
+/// and every destructive retention job refuses to run.
+///
+/// A **range**: `[CLOCK_PLAUSIBLE_FLOOR_SECS, CLOCK_PLAUSIBLE_CEILING_SECS)`.
+/// The floor covers the common case on this hardware — an RTC-less board that
+/// boots at the epoch and stays there until the network comes back — and the
+/// ceiling the absurd forward jump. A forward jump that lands *inside* the
+/// range is not a question a single timestamp can answer; that is
+/// [`ForwardStepWatch`].
 #[must_use]
 pub const fn clock_looks_plausible(secs: u64) -> bool {
-    secs >= CLOCK_PLAUSIBLE_FLOOR_SECS
+    secs >= CLOCK_PLAUSIBLE_FLOOR_SECS && secs < CLOCK_PLAUSIBLE_CEILING_SECS
+}
+
+/// The largest forward step of the wall clock, beyond what the monotonic clock
+/// accounts for, that a running station will still treat as time passing:
+/// 400 days.
+///
+/// Chosen to sit past every retention window this project has — the longest
+/// is the 400-day acoustic baseline — so any step this large would, if
+/// trusted, reclaim everything a station holds in one pass. It is deliberately
+/// generous towards the one legitimate large step: a Pi restoring a stale
+/// `fake-hwclock` time at boot and then being corrected by NTP jumps forward
+/// by the length of the outage, and an outage past 400 days is a
+/// redeployment, not a station.
+pub const MAX_FORWARD_STEP_SECS: u64 = 400 * 86_400;
+
+/// What a [`ForwardStepWatch`] concluded about one reading of the wall clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockVerdict {
+    /// The reading is inside the plausible range and consistent with the time
+    /// that has actually elapsed since the watch's baseline.
+    Sane,
+    /// Below [`CLOCK_PLAUSIBLE_FLOOR_SECS`]: the clock has not been set.
+    BeforeFloor,
+    /// At or past [`CLOCK_PLAUSIBLE_CEILING_SECS`]: an absurd future.
+    AfterCeiling,
+    /// Inside the range, but further ahead of the baseline than the monotonic
+    /// clock can account for, by more than [`MAX_FORWARD_STEP_SECS`].
+    SteppedForward {
+        /// How far the wall clock ran ahead of elapsed time, in seconds.
+        by_secs: u64,
+    },
+}
+
+impl ClockVerdict {
+    /// Whether a dated, destructive decision may be made on this reading.
+    #[must_use]
+    pub const fn is_safe_for_retention(self) -> bool {
+        matches!(self, Self::Sane)
+    }
+}
+
+/// Detects a wall clock that moved forward faster than time passed.
+///
+/// # Why a single timestamp is not enough
+///
+/// "The clock jumped forward nineteen years" and "nineteen years passed" read
+/// identically to anything that looks at the wall clock alone. The reference
+/// that separates them is the monotonic clock, which counts elapsed time and
+/// cannot be set: over one process lifetime, the wall clock should advance by
+/// the same amount the monotonic clock does. A wall reading far ahead of that
+/// is a step, and a step of more than [`MAX_FORWARD_STEP_SECS`] moves every
+/// `older than N days` cutoff past the whole clip library (NT-4).
+///
+/// # The baseline
+///
+/// Taken at the first reading inside the plausible range, not at the first
+/// reading. An RTC-less station boots at 1970 and is corrected by NTP minutes
+/// or weeks later; that correction is the largest forward step a healthy
+/// station ever makes and must not count, so nothing is compared until the
+/// clock has been set once. The baseline is never moved afterwards: a step
+/// that trips the watch keeps it tripped until the process restarts, and the
+/// caller says so in its log line rather than quietly resuming deletion on a
+/// clock nobody has looked at.
+///
+/// Backward steps are not a verdict of their own. An `older than N days`
+/// predicate deletes *less* on an early clock, never more, and the floor
+/// already covers a clock that goes back to the epoch.
+#[derive(Debug)]
+pub struct ForwardStepWatch {
+    baseline: Option<(u64, std::time::Instant)>,
+    max_step_secs: u64,
+}
+
+impl Default for ForwardStepWatch {
+    fn default() -> Self {
+        Self::new(MAX_FORWARD_STEP_SECS)
+    }
+}
+
+impl ForwardStepWatch {
+    /// A watch that tolerates a forward step of up to `max_step_secs`.
+    #[must_use]
+    pub const fn new(max_step_secs: u64) -> Self {
+        Self {
+            baseline: None,
+            max_step_secs,
+        }
+    }
+
+    /// Judge the wall clock reading `wall_secs`, taken now.
+    pub fn observe(&mut self, wall_secs: u64) -> ClockVerdict {
+        self.observe_at(wall_secs, std::time::Instant::now())
+    }
+
+    /// [`observe`](Self::observe) with the monotonic reading supplied, so the
+    /// arithmetic is testable without waiting.
+    pub fn observe_at(&mut self, wall_secs: u64, mono: std::time::Instant) -> ClockVerdict {
+        if wall_secs < CLOCK_PLAUSIBLE_FLOOR_SECS {
+            return ClockVerdict::BeforeFloor;
+        }
+        if wall_secs >= CLOCK_PLAUSIBLE_CEILING_SECS {
+            return ClockVerdict::AfterCeiling;
+        }
+        let Some((base_wall, base_mono)) = self.baseline else {
+            self.baseline = Some((wall_secs, mono));
+            return ClockVerdict::Sane;
+        };
+        // `saturating_duration_since` rather than `duration_since`: a caller
+        // handing in an `Instant` from before the baseline (a test, or a
+        // reordered read) must not panic a maintenance loop.
+        let elapsed = mono.saturating_duration_since(base_mono).as_secs();
+        let expected = base_wall.saturating_add(elapsed);
+        let ahead = wall_secs.saturating_sub(expected);
+        if ahead > self.max_step_secs {
+            ClockVerdict::SteppedForward { by_secs: ahead }
+        } else {
+            ClockVerdict::Sane
+        }
+    }
 }
 
 /// Whether a `YYYY-MM-DD` date could be a real date this station recorded on.
@@ -1269,6 +1403,21 @@ mod clock_floor_tests {
         assert!(clock_looks_plausible(1_788_480_000));
     }
 
+    #[test]
+    fn the_ceiling_is_the_date_it_says_it_is() {
+        use super::CLOCK_PLAUSIBLE_CEILING_SECS;
+        let t = civil_from_unix_secs(i64::try_from(CLOCK_PLAUSIBLE_CEILING_SECS).expect("fits"));
+        assert_eq!((t.year, t.month, t.day), (2064, 1, 1));
+        assert_eq!((t.hour, t.minute, t.second), (0, 0, 0));
+        assert!(!clock_looks_plausible(CLOCK_PLAUSIBLE_CEILING_SECS));
+        assert!(clock_looks_plausible(CLOCK_PLAUSIBLE_CEILING_SECS - 1));
+        // NT-4's probe: a +50-year jump from the deployment era reads 2076.
+        assert!(
+            !clock_looks_plausible(3_345_062_400),
+            "a clock reading 2076 is a fault, not the future"
+        );
+    }
+
     /// The years the two old constants disagreed about.
     ///
     /// `--doctor`'s floor was 2020-01-01 and the capture supervisor's was
@@ -1326,5 +1475,162 @@ mod date_plausibility_tests {
     fn the_boundary_is_the_floors_own_day() {
         assert!(!date_looks_plausible("2023-12-31"));
         assert!(date_looks_plausible("2024-01-01"));
+    }
+}
+
+#[cfg(test)]
+mod forward_step_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{
+        CLOCK_PLAUSIBLE_CEILING_SECS, ClockVerdict, ForwardStepWatch, MAX_FORWARD_STEP_SECS,
+    };
+
+    /// A reading from this project's deployment era.
+    const NOW: u64 = 1_788_480_000;
+    const YEAR: u64 = 365 * 86_400;
+
+    /// The probe NT-4 ran: the exact cutoff expression with a +50-year clock
+    /// reclaimed every clip. Here the jump lands inside the plausible range
+    /// (+19.6 years, a GPS week rollover) so only the monotonic comparison can
+    /// see it.
+    ///
+    /// Observed failing with `observe_at` reduced to the floor test alone (the
+    /// shipped `clock_looks_plausible` semantics): `left: Sane`.
+    #[test]
+    fn a_forward_jump_the_monotonic_clock_cannot_account_for_is_a_step() {
+        let mut watch = ForwardStepWatch::default();
+        let t0 = Instant::now();
+        assert_eq!(watch.observe_at(NOW, t0), ClockVerdict::Sane);
+        let jump = 1_024 * 7 * 86_400; // one GPS week-number rollover
+        let verdict = watch.observe_at(NOW + jump, t0 + Duration::from_secs(1));
+        assert_eq!(verdict, ClockVerdict::SteppedForward { by_secs: jump - 1 });
+        assert!(!verdict.is_safe_for_retention());
+        // Latched: the baseline does not move, so the next reading on the
+        // jumped clock is still a step.
+        assert!(
+            !watch
+                .observe_at(NOW + jump + 60, t0 + Duration::from_secs(61))
+                .is_safe_for_retention()
+        );
+    }
+
+    /// The counterpart: time actually passing is not a step, however much of
+    /// it there is.
+    #[test]
+    fn time_that_actually_passed_is_sane() {
+        let mut watch = ForwardStepWatch::default();
+        let t0 = Instant::now();
+        assert_eq!(watch.observe_at(NOW, t0), ClockVerdict::Sane);
+        for years in [1, 5, 20] {
+            let later = t0 + Duration::from_secs(years * YEAR);
+            assert_eq!(
+                watch.observe_at(NOW + years * YEAR, later),
+                ClockVerdict::Sane,
+                "{years} years of elapsed time must read as sane"
+            );
+        }
+        // NTP's ordinary corrections are seconds, and even a stale
+        // fake-hwclock restore is corrected by less than the tolerance.
+        assert_eq!(
+            watch.observe_at(NOW + MAX_FORWARD_STEP_SECS, t0),
+            ClockVerdict::Sane,
+            "a step at the tolerance is still allowed"
+        );
+        assert_eq!(
+            watch.observe_at(NOW + MAX_FORWARD_STEP_SECS + 1, t0),
+            ClockVerdict::SteppedForward {
+                by_secs: MAX_FORWARD_STEP_SECS + 1
+            },
+            "one second past the tolerance is not"
+        );
+    }
+
+    /// The largest forward step a healthy station makes: NTP setting a clock
+    /// that booted at the epoch. It must not count, so nothing is compared
+    /// before the clock has been plausible once.
+    #[test]
+    fn ntp_setting_an_unset_clock_is_not_a_step() {
+        let mut watch = ForwardStepWatch::default();
+        let t0 = Instant::now();
+        assert_eq!(watch.observe_at(0, t0), ClockVerdict::BeforeFloor);
+        assert_eq!(
+            watch.observe_at(86_400, t0 + Duration::from_secs(86_400)),
+            ClockVerdict::BeforeFloor
+        );
+        // Fifty-six years later on the wall clock, a day later on the
+        // monotonic one: the first plausible reading is the baseline.
+        assert_eq!(
+            watch.observe_at(NOW, t0 + Duration::from_secs(2 * 86_400)),
+            ClockVerdict::Sane
+        );
+        assert_eq!(
+            watch.observe_at(NOW + 600, t0 + Duration::from_secs(2 * 86_400 + 600)),
+            ClockVerdict::Sane
+        );
+    }
+
+    /// Backwards is not a verdict of its own: an older-than cutoff deletes
+    /// less on an early clock, and a later correction nets out. (A step back
+    /// past the floor is `BeforeFloor`, which the floor tests cover.)
+    #[test]
+    fn a_backward_step_and_its_correction_are_sane() {
+        let mut watch = ForwardStepWatch::default();
+        let t0 = Instant::now();
+        watch.observe_at(NOW, t0);
+        let t1 = t0 + Duration::from_secs(3_600);
+        assert_eq!(watch.observe_at(NOW - YEAR, t1), ClockVerdict::Sane);
+        let t2 = t0 + Duration::from_secs(7_200);
+        assert_eq!(watch.observe_at(NOW + 7_200, t2), ClockVerdict::Sane);
+    }
+
+    /// The ceiling needs no baseline: 2076 is a fault on the first reading.
+    #[test]
+    fn a_reading_past_the_ceiling_is_a_fault_before_any_baseline_exists() {
+        let mut watch = ForwardStepWatch::default();
+        let verdict = watch.observe_at(CLOCK_PLAUSIBLE_CEILING_SECS + 1, Instant::now());
+        assert_eq!(verdict, ClockVerdict::AfterCeiling);
+        assert!(!verdict.is_safe_for_retention());
+        // And it did not become the baseline.
+        assert_eq!(watch.observe_at(NOW, Instant::now()), ClockVerdict::Sane);
+    }
+
+    /// The three constants and the one predicate the guard hangs on, pinned
+    /// so a mutant that flips one of them fails here rather than surviving on
+    /// fixtures that happen not to touch it: the tolerance is 400 days
+    /// (`*` → `+` gave 86 800 s and every step test still passed), `Sane` is
+    /// the one verdict that permits deletion, and the floor is inclusive.
+    #[test]
+    fn the_tolerance_the_verdicts_and_the_floor_edge_are_what_they_say() {
+        assert_eq!(MAX_FORWARD_STEP_SECS, 34_560_000, "400 days in seconds");
+        assert!(ClockVerdict::Sane.is_safe_for_retention());
+        for refused in [
+            ClockVerdict::BeforeFloor,
+            ClockVerdict::AfterCeiling,
+            ClockVerdict::SteppedForward { by_secs: 1 },
+        ] {
+            assert!(!refused.is_safe_for_retention(), "{refused:?}");
+        }
+        let mut watch = ForwardStepWatch::default();
+        let t0 = Instant::now();
+        assert_eq!(
+            watch.observe_at(super::CLOCK_PLAUSIBLE_FLOOR_SECS - 1, t0),
+            ClockVerdict::BeforeFloor
+        );
+        assert_eq!(
+            watch.observe_at(super::CLOCK_PLAUSIBLE_FLOOR_SECS, t0),
+            ClockVerdict::Sane,
+            "the floor itself is a plausible reading, as it is for clock_looks_plausible"
+        );
+    }
+
+    /// A monotonic reading from before the baseline must not panic the loop
+    /// that owns the watch.
+    #[test]
+    fn an_earlier_monotonic_reading_does_not_panic() {
+        let mut watch = ForwardStepWatch::default();
+        let t0 = Instant::now();
+        watch.observe_at(NOW, t0 + Duration::from_secs(100));
+        assert_eq!(watch.observe_at(NOW + 1, t0), ClockVerdict::Sane);
     }
 }

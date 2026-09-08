@@ -85,23 +85,32 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 
 ## Admin
 
-The `/admin*` routes are the **only** password-gated part of the UI — they
-require sign-in (a session cookie) when an admin password is set; a fresh
-bare-metal install sets one automatically. The Settings home's **Health** tab is
-public (the operator-grade vital-signs surface that replaced the read-only
-`/system` page, which now redirects to it); the other Settings task groups link
-into these gated pages. Every home above and the JSON/WebSocket API below are
-open. See [Remote Access & Security](../admin/remote-access.md).
+Sign-in (a session cookie) is required, when an admin password is set — a
+fresh bare-metal install sets one automatically — for the `/admin*` routes, the
+five Station management tabs and every page action that changes something (the
+Today delete/relabel/lock posts, detection reviews, recordings lock/unlock/delete,
+quarantine approve/reject/delete, the onboarding save and bulk review from
+Search). The Station home's **Health** tab (`/station`) is public — the
+operator-grade vital-signs surface that replaced the read-only `/system` page,
+which now redirects to it. The management tabs are the gated pages; the old
+`/admin/audio`, `/admin/species`, `/admin/notifications`, `/admin/rules`,
+`/admin/quality`, `/admin/migrate`, `/admin/backups`, `/admin/accounts` and
+`/admin` itself `308`-redirect into them. Every home above, the read-only
+JSON/WebSocket API below and the feeds are open. See
+[Remote Access & Security](../admin/remote-access.md).
 
 | URL | Description |
 |---|---|
-| `/admin/settings` | Audio, location, detection, notifications, email, MQTT, species, system |
-| `/admin/audio` | Microphone & RTSP source management |
-| `/admin/quality` | Data-quality metrics dashboard |
-| `/admin/rules` | Conditional alert-rule engine |
-| `/admin/migrate` | BirdNET-Pi database import |
-| `/admin/backups` | Backups, restore, storage, danger zone |
+| `/station/capture` | Audio sources (`#audio`) and species lists (`#species`) — the old `/admin/audio` and `/admin/species` redirect here |
+| `/station/alerts` | Notifications (`#notifications`) and the alert-rule engine (`#rules`) — was `/admin/notifications`, `/admin/rules` |
+| `/station/data` | Data quality (`#quality`), BirdNET-Pi import (`#import`), backups / restore / danger zone (`#backups`) — was `/admin/quality`, `/admin/migrate`, `/admin/backups` |
+| `/station/settings` | General settings (the tab is labelled **General**) |
+| `/station/access` | Accounts and access (`#accounts`) — was `/admin/accounts` |
+| `/admin/settings` | The all-in-one form: audio, location, detection, notifications, email, MQTT, species, system |
 | `/admin/system` | CPU / memory / temperature / disk |
+| `/admin/overview` | Health-detail overview |
+| `/admin/doctor` | The `--doctor` report rendered in the browser; `/admin/doctor.json` and `/admin/support-bundle` beside it |
+| `/admin/audit` | Audit log (180 days) |
 | `/admin/system/logs/page` | Live log viewer (SSE, level filtering) |
 | `/admin/update/check` | Check GitHub Releases for a newer version (JSON). Applying is a separate `POST /admin/update/apply` with no UI button; the panel's **Check for Updates** button points you at `install.sh` instead |
 
@@ -114,7 +123,7 @@ These are unauthenticated, read-only endpoints. See [Detection Detail & Sharing]
 | `/r/<token>` | Public share page for one detection (HMAC-signed, 30-day expiry) |
 | `/r/<token>/audio.wav` | Redirect to the shared clip's audio |
 | `/r/<token>/spectrogram.png` | Redirect to the shared clip's spectrogram |
-| `/feeds/rare.rss` | RSS 2.0 — first-of-station detections (confidence ≥ 0.85) |
+| `/feeds/rare.rss` | RSS 2.0 — first-of-station detections (confidence > 0.85) |
 | `/feeds/rare.ics` | iCalendar — the same rare detections as calendar events |
 | `/feeds/today.rss` | RSS 2.0 — every detection today |
 

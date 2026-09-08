@@ -33,7 +33,14 @@
 # custom `OsStringValueParser` and a test specifically so it survives clap's
 # stock PathBuf parser, which rejects empty values. Stripping it would silently
 # re-enable image fetching on a station configured not to make them.
-BNB_BLANK_IS_MEANINGFUL="BIRDNET_IMAGE_CACHE_DIR"
+#
+# BIRDNET_ANALYTICS_DB: the same shape. An explicitly empty value is the only
+# runtime way to run without DuckDB (`helpers::state` reads it as "disabled";
+# an *absent* value means the default `<database>.duckdb`), and `src/cli.rs`
+# gives it the same OsString parser. Stripping it turned a compose override
+# that blanked it back into "analytics on", which is the opposite of what the
+# operator asked for. installer/test/blank-env-opt-outs.sh holds both.
+BNB_BLANK_IS_MEANINGFUL="BIRDNET_IMAGE_CACHE_DIR BIRDNET_ANALYTICS_DB"
 
 # Unset every blank (empty or whitespace-only) BIRDNET_* variable, except those
 # named above. Reports what it removed, so an operator reading the container log

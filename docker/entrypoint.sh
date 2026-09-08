@@ -31,7 +31,7 @@ set -eu
 # materialises every optional `${VAR:-}` as an empty string, and clap reads an
 # empty environment variable as a *supplied* value — so `BIRDNET_LATITUDE=`
 # exits 2 during argument parsing rather than meaning "no latitude". See
-# docker/strip-blank-env.sh for the full reasoning and the one exception.
+# docker/strip-blank-env.sh for the full reasoning and the two exceptions.
 BNB_STRIP_LIB="${BNB_STRIP_LIB:-/usr/local/bin/strip-blank-env.sh}"
 if [ ! -r "$BNB_STRIP_LIB" ]; then
     printf '[birdnet] ERROR: %s is missing from the image\n' "$BNB_STRIP_LIB" >&2

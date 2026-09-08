@@ -57,7 +57,7 @@ This project follows a **minimal dependency, pure Rust** philosophy:
 4. **Single binary deployment** — everything embedded, nothing to install
 5. **No runtime overhead** — no garbage collector, no interpreter, no JIT
 6. **Small, single-responsibility modules** — split a file when its purpose stops being one thing. Data-definition and orchestration files are the exception: `migration.rs` is ~3 100 lines by design, one entry per migration.
-7. **Trait abstractions over concrete types** — every major boundary is a trait for testability
+7. **Trait abstractions where a fake is needed** — the migration boundary (`SchemaDetector` / `Validator` / `Migrator`) and the scheduler's clock and solar boundaries (`TimeSource` / `SolarCalculator` / `RecordingGate`) are traits so tests can substitute them; `birdnet-core` exports no traits and dispatches plain values
 
 ### Feature Parity
 
@@ -68,7 +68,7 @@ feature they rely on:
 |----------|--------------------|-----------------------|
 | Detection pipeline | Yes | Yes |
 | Web dashboard | Yes | HTMX + WebSocket + SSE live updates |
-| Species pages with images | Yes | Wikipedia cache |
+| Species pages with images | Yes | Wikipedia / Flickr provider chain with cache |
 | Admin settings UI | Yes | Full settings editor |
 | BirdWeather upload | Yes | With retry queue |
 | Email alerts | Yes | SMTP via `lettre` |

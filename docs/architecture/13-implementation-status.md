@@ -39,20 +39,20 @@
 | Audio quality | `audio/quality/` | SNR, spectral flatness, noise-floor tracking, rain / wind detection |
 | Detection types | `detection/types.rs` | `Detection` struct, `RecordingFile` parser, serde support |
 | Detection pipeline | `detection/pipeline.rs` | Chunking, overlap, spectrogram preparation |
-| Detection daemon | `detection/daemon.rs` | File-watcher event loop, inference dispatch, event broadcast |
+| Detection daemon | `detection/daemon/` (`mod.rs`, `run.rs`, `process.rs`) | File-watcher event loop, inference dispatch, event broadcast |
 | Privacy filter | `detection/privacy.rs` | Human-voice suppression with adjacent-chunk masking |
 | Inference labels | `inference/labels.rs` | BirdNET label format parser, scientific / common name lookup |
-| Inference model | `inference/model.rs` | ort session wrapper, sigmoid / softmax post-processing |
+| Inference model | `inference/model.rs` | ort session wrapper; `compute_confidence` applies sigmoid(sensitivity × logit) to logit models (V2.4) and passes probability-output models (V3.0 preview) through unchanged |
 | Species filter | `inference/species_filter.rs` | Species occurrence metadata model and include / exclude lists |
 
 ### birdnet-db
 
 | Module | Location | Notes |
 |--------|----------|-------|
-| Connection | `sqlite/connection.rs` | WAL mode, `Arc<Mutex<Connection>>`, PRAGMA tuning |
+| Connection | `sqlite/connection.rs` | `open_connection` / `open_or_create` / `open_readonly` / `quick_check`; WAL mode and PRAGMA tuning. The crate hands back plain `Connection`s — the single-writer `Mutex<Connection>` plus read-only `ReaderPool` live in `birdnet-web` (`state.rs`, `db_pool.rs`) |
 | Types | `sqlite/types.rs` | Detection row types, query result types |
-| Query API | `sqlite/queries/` | Detections, species, analytics, correlation, heatmap, images, quarantine |
-| Migrations | `migration.rs` | 41 idempotent schema migrations (v1…v41) with version tracking |
+| Query API | `sqlite/queries/` | Detections, species, analytics, correlation, heatmap, images, quarantine, detection reviews, effort, imports, maintenance |
+| Migrations | `migration.rs` | 42 idempotent schema migrations (v1…v42) with version tracking; v42 re-keys `species_summary` by `(Com_Name, Sci_Name, hour, is_import)` |
 | Settings | `settings.rs` | SQLite-backed key-value store with categories |
 | Resilience | `resilience.rs` | Backup, restore, integrity check, auto-recovery |
 | Alert rules | `alert_rules.rs` | Detection-triggered actions (webhook / log / suppress), glob matching |
@@ -77,9 +77,9 @@
 | Recording routes | `routes/recordings.rs` | Audio listing and secure streaming with path-traversal protection |
 | Image routes | `routes/images.rs` | Species image metadata and file serving |
 | Static files | `routes/static_files.rs` | Embedded HTMX JS and SSE extension |
-| Health | `routes/health.rs` | `/api/v2/health` JSON and `/api/v2/metrics` Prometheus exposition |
-| HTMX pages | `routes/pages/` | Dashboard, species, gallery, life list, heatmap, correlation, behavioral, charts, time-series, quarantine, recordings, today, history, weekly report, audio player, kiosk, livestream, system health, notification center |
-| Admin panel | `routes/admin/` | Settings, species thresholds, species tester, migration, system, backup, logs, notifications, update, alert rules, data quality |
+| Health | `routes/health.rs` + `routes/system.rs` | `/api/v2/metrics` Prometheus exposition (`health.rs`); `/api/v2/health` JSON, `/api/v2/stats`, `/api/v2/system/disk` (`system.rs`) |
+| HTMX pages | `routes/pages/` | Homes (`homes/`: patterns, reports, station) and Today, species pages, life list, heatmap, correlation, behavioral, charts, time-series, quarantine, recordings, history, weekly report, year in review, audio player, kiosk (`dashboard/kiosk.rs`), station health, notification center, detection detail, detection reviews, dawn chorus, migration, onboarding, search, command palette, provenance, changelog, help, `viz/`. `/gallery` is a redirect to `/species?view=photos` (`routes/redirects.rs`); the live stream lives in `routes/livestream.rs` |
+| Admin panel | `routes/admin/` | Settings, species thresholds, species tester (`/admin/species/test`), migration, system, system controls, backup, backup recovery, logs, notifications, notification test, update, alert rules, data quality, accounts, audio sources, EQ curve, images, overview, doctor (`/admin/doctor`, `/admin/doctor.json`, `/admin/support-bundle`) |
 
 ### birdnet-integrations
 
@@ -88,9 +88,9 @@
 | Email | `email/` | SMTP via lettre + rustls, HTML + plain multipart, per-species cooldown |
 | Apprise | `apprise.rs` | 80+ notification channels, cooldown, watchlist, retry backoff |
 | BirdWeather | `birdweather.rs` | Detection and soundscape uploads with retry and exponential backoff |
-| Species images | `species_images/` | Wikipedia / Wikimedia cache with on-disk + in-memory index |
+| Species images | `species_images/` | Provider chain (`chain/`, `provider.rs`) over Wikipedia / Wikimedia and Flickr (`flickr/`) with on-disk + in-memory cache |
 | Auto-update | `auto_update/` | GitHub Releases version check, binary download, atomic replace |
-| MQTT | `mqtt/` | Pure-Rust MQTT 3.1.1 client over TCP; CONNECT / PUBLISH / DISCONNECT; QoS 0 |
+| MQTT | `mqtt/` | Pure-Rust MQTT 3.1.1 publisher over TCP or rustls TLS (`TlsConfig`); CONNECT / PUBLISH / DISCONNECT; detections at the configured `MqttConfig::qos` (default 0), presence and last-will retained at QoS 1 |
 | HA Discovery | `mqtt/discovery.rs` | Home Assistant auto-discovery sensors and binary sensors |
 | Heartbeat | `heartbeat.rs` | Outbound GET ping after each processed detection |
 | Notification templates | `notification.rs` | `$variable` substitution for title / body templates |
@@ -152,18 +152,42 @@
 | Integrations factory | `src/integrations/` + `src/integrations.rs` | Apprise, BirdWeather, email, MQTT client construction |
 | CLI | `src/cli.rs` | clap argument definitions |
 | Maintenance loop | `src/maintenance.rs` | Weekly VACUUM, backup pruning, clip and audit retention |
-| Doctor | `src/doctor/` + `src/doctor.rs` | `--doctor` / `--doctor-json` preflight checks |
+| Doctor | `src/doctor/` + `src/doctor.rs` | `--doctor` / `--doctor-json` preflight checks (21 check families in `CHECK_FAMILIES`), opt-in `--fix` repairs (`doctor/fix.rs`); also served at `/admin/doctor` |
 | Watchdog notifications | `src/sd_notify.rs` | `READY=1` / `WATCHDOG=1` / `STOPPING=1` for `Type=notify` |
 | Log capture | `src/log_capture.rs` + `src/log_filter.rs` | Broadcast of `tracing` events to the admin log viewer |
 | Channel report | `src/channel_report.rs` | `--channel-report` capture diagnostics |
 | Support bundle | `src/support.rs` | Diagnostic bundle generation |
 | Weekly report | `src/weekly_report.rs` | Weekly report runner |
 
+### Modules the tables above do not list
+
+The tables name the modules that carry the architecture; every entry was
+checked against `ls` at commit `dd10fe7`. These modules also exist and are
+not listed above:
+
+- **birdnet-core**: `audio/biquad.rs`, `audio/eq/`, `audio/soundlevel/`,
+  `audio/quality/stream_fault.rs`, `civil.rs`, `season.rs`, `file_settle.rs`,
+  `config/locale.rs`, `config/redact.rs`, `detection/corroboration.rs`,
+  `detection/nocturnal.rs`, `detection/noise.rs`, `detection/dynamic_threshold/`
+- **birdnet-db**: `accounts/`, `audio_levels.rs`, `audio_sources.rs`, `clock.rs`,
+  `dynamic_thresholds.rs`, `outbound_queue.rs`, `phantoms.rs`, `sound_levels.rs`,
+  `species_tracking.rs`, `thresholds.rs`, `weather.rs`
+- **birdnet-web**: `analytics_cache.rs`, `api_token.rs`, `audit.rs`, `base_path/`,
+  `client_ip.rs`, `db_pool.rs`, `diagnostics.rs`, `metrics.rs`, `notifier.rs`,
+  `security.rs`, `session.rs`, `tls.rs`, `tracking.rs`, `urls.rs`;
+  `routes/{api_write,auth_pages,feeds,livestream,openapi,redirects,share}.rs`
+- **birdnet-integrations**: `dispatch/`, `offsite/` (`envelope`, `s3`, `sftp`,
+  `sigv4`), `retry.rs`, `weather.rs`, `webhook.rs`
+- **birdnet-migrate**: `provenance.rs`, `birdnet_pi/detector.rs`
+- **birdnet-behavioral**: `gating.rs`, `phenology/types.rs`,
+  `connection/{analytics,live,sync}.rs`
+- **birdnet-scheduler**: `error.rs`
+
 ---
 
 ## Test Coverage
 
-Counted as `#[test]` / `#[tokio::test]` attributes:
+Counted as `#[test]` / `#[tokio::test]` attributes, at commit `dd10fe7`:
 
 ```bash
 grep -rn --include='*.rs' -E '^\s*#\[(test|tokio::test)' src crates tests | wc -l
@@ -171,17 +195,17 @@ grep -rn --include='*.rs' -E '^\s*#\[(test|tokio::test)' src crates tests | wc -
 
 | Crate | Test count | Coverage |
 |-------|-----------:|----------|
-| birdnet-core | 708 | Audio pipeline, inference, daemon, quality (SNR / flatness / noise floor / rain) |
-| birdnet-db | 411 | SQLite, resilience, heatmap, correlation, settings, notifications, quarantine CRUD |
-| birdnet-web | 819 | Pages, admin, backup, settings, export, auth, WebSocket, rate limiter |
+| birdnet-core | 722 | Audio pipeline, inference, daemon, quality (SNR / flatness / noise floor / rain) |
+| birdnet-db | 432 | SQLite, resilience, heatmap, correlation, settings, notifications, quarantine CRUD |
+| birdnet-web | 831 | Pages, admin, backup, settings, export, auth, WebSocket, rate limiter |
 | birdnet-integrations | 352 | Email, Apprise, BirdWeather, images, MQTT wire encoding, HA discovery |
 | birdnet-behavioral | 105 | Types, query builders, phenology timing and abundance SQL correctness |
 | birdnet-migrate | 72 | Schema, validator, importer, species report |
 | birdnet-timeseries | 40 | All analytics modules |
 | birdnet-scheduler | 27 | Solar calculation and recording-window scheduling |
-| Binary (`src/`) | 799 | CLI, app wiring, daemon, doctor, maintenance, capture |
-| Integration tests (`tests/`) | 290 | Audio pipeline end-to-end, web API, HTMX pages, quarantine routes |
-| **Total** | **3 623** | |
+| Binary (`src/`) | 813 | CLI, app wiring, daemon, doctor, maintenance, capture |
+| Integration tests (`tests/`) | 300 | Audio pipeline end-to-end, web API, HTMX pages, quarantine routes |
+| **Total** | **3 694** | |
 
 Re-derive rather than trusting the figure above; it moves with every
 branch.
@@ -190,25 +214,30 @@ branch.
 
 ## Lines of Code
 
-Counted with:
+Counted at commit `dd10fe7` with:
 
 ```bash
 find src crates -name '*.rs' | xargs cat | wc -l
 ```
 
+Each crate row is the whole crate directory (`src/`, `tests/`, `benches/`).
+
 | Crate | Approx. LOC |
 |-------|------------:|
-| birdnet-core | 29 790 |
-| birdnet-db | 23 574 |
-| birdnet-web | 63 545 |
+| birdnet-core | 30 343 |
+| birdnet-db | 24 986 |
+| birdnet-web | 64 405 |
 | birdnet-integrations | 17 957 |
 | birdnet-migrate | 4 648 |
 | birdnet-behavioral | 6 758 |
-| birdnet-timeseries | 3 561 |
+| birdnet-timeseries | 3 588 |
 | birdnet-scheduler | 1 246 |
-| Binary (`src/`) | 33 425 |
-| Benchmarks | 484 |
-| **Total** | **184 504** |
+| Binary (`src/`) | 34 194 |
+| **Total** | **188 125** |
+
+Of that total, 484 lines are Criterion benchmarks (`crates/birdnet-core/benches/audio_pipeline.rs`,
+`crates/birdnet-db/benches/db_queries.rs`); they are already inside the
+`birdnet-core` and `birdnet-db` rows and are not a separate addend.
 
 Lines are counted with comments and inline tests included. Like the test
 count, re-derive it rather than trusting the figure here.

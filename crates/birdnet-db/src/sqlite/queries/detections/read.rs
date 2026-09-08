@@ -301,14 +301,21 @@ pub fn recent_detections_page(
     Ok(rows)
 }
 
-/// Query all detections, optionally filtered by an inclusive date range.
+/// Every detection the station stands behind, optionally filtered by an
+/// inclusive date range.
+///
+/// Reads `detections_analytic`, so a detection a reviewer rejected, or an
+/// imported one on a station that excludes imports, is not returned. This is
+/// the reader behind the CSV, JSON and `BirdDB.txt` exports — the surfaces
+/// where a dataset leaves the station — and it used to read the raw table,
+/// which undid the verdict at exactly that point (`R-17`).
 ///
 /// Returns rows ordered by date/time descending.
 ///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
-pub fn all_detections(
+pub fn analytic_detections(
     conn: &Connection,
     from: Option<&str>,
     to: Option<&str>,
@@ -332,10 +339,60 @@ pub fn all_detections(
         (None, None) => ("", vec![]),
     };
     let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections {where_sql} \
+        "SELECT {DETECTION_COLS} FROM detections_analytic {where_sql} \
          ORDER BY Date DESC, Time DESC LIMIT {fetch}"
     );
 
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(AsRef::as_ref).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt
+        .query_map(params_ref.as_slice(), map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    let truncated = u64::try_from(rows.len()).unwrap_or(u64::MAX) > u64::from(max_rows);
+    if truncated {
+        rows.truncate(max_rows as usize);
+    }
+    Ok((rows, truncated))
+}
+
+/// `all_detections`, read through `detections_analytic` and held to a floor.
+///
+/// This is the surface an export that *publishes* should read, because the
+/// view is where the reviewer's verdict and the operator's provenance rule
+/// live, and re-implementing either at an export is how `RC-3` and `RC-4`
+/// happened.
+///
+/// `min_confidence` is inclusive and applied in SQL so the memory bound
+/// `max_rows` describes is the bound on what is materialised.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_detections_above(
+    conn: &Connection,
+    from: Option<&str>,
+    to: Option<&str>,
+    min_confidence: f64,
+    max_rows: u32,
+) -> Result<(Vec<DetectionRow>, bool), DbError> {
+    let fetch = u64::from(max_rows).saturating_add(1);
+    let (date_sql, mut param_values): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        match (from, to) {
+            (Some(f), Some(t)) => (
+                "AND Date >= ?2 AND Date <= ?3",
+                vec![Box::new(f.to_string()), Box::new(t.to_string())],
+            ),
+            (Some(f), None) => ("AND Date >= ?2", vec![Box::new(f.to_string())]),
+            (None, Some(t)) => ("AND Date <= ?2", vec![Box::new(t.to_string())]),
+            (None, None) => ("", vec![]),
+        };
+    param_values.insert(0, Box::new(min_confidence));
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections_analytic \
+         WHERE Confidence >= ?1 {date_sql} \
+         ORDER BY Date DESC, Time DESC LIMIT {fetch}"
+    );
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         param_values.iter().map(AsRef::as_ref).collect();
     let mut stmt = conn.prepare(&sql)?;
@@ -1259,46 +1316,112 @@ mod tests {
     }
 
     #[test]
-    fn all_detections_no_filter() {
+    fn analytic_detections_no_filter() {
         let (_tmp, conn) = temp_db_with_data();
-        let (rows, truncated) = all_detections(&conn, None, None, 10_000).unwrap();
+        let (rows, truncated) = analytic_detections(&conn, None, None, 10_000).unwrap();
         assert_eq!(rows.len(), 4);
         assert!(!truncated);
     }
 
     #[test]
-    fn all_detections_date_range() {
+    fn analytic_detections_date_range() {
         let (_tmp, conn) = temp_db_with_data();
         let (rows, _) =
-            all_detections(&conn, Some("2026-03-11"), Some("2026-03-11"), 10_000).unwrap();
+            analytic_detections(&conn, Some("2026-03-11"), Some("2026-03-11"), 10_000).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
-    fn all_detections_from_only() {
+    fn analytic_detections_from_only() {
         let (_tmp, conn) = temp_db_with_data();
-        let (rows, _) = all_detections(&conn, Some("2026-03-11"), None, 10_000).unwrap();
+        let (rows, _) = analytic_detections(&conn, Some("2026-03-11"), None, 10_000).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
-    fn all_detections_to_only() {
+    fn analytic_detections_to_only() {
         let (_tmp, conn) = temp_db_with_data();
-        let (rows, _) = all_detections(&conn, None, Some("2026-03-10"), 10_000).unwrap();
+        let (rows, _) = analytic_detections(&conn, None, Some("2026-03-10"), 10_000).unwrap();
         assert_eq!(rows.len(), 1);
     }
 
     #[test]
-    fn all_detections_truncates_at_max_rows() {
+    fn analytic_detections_above_reads_the_view_and_holds_the_floor() {
+        let (_tmp, conn) = temp_db_with_data();
+        let (all, _) = analytic_detections(&conn, None, None, 10_000).unwrap();
+        assert_eq!(all.len(), 4);
+
+        // Reject one row: the table still has four, the analytic read has three.
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Com_Name = 'European Robin'",
+            [],
+        )
+        .unwrap();
+        let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 10_000).unwrap();
+        assert_eq!(rows.len(), 3, "the rejected row must not be read");
+        assert!(rows.iter().all(|r| r.com_name != "European Robin"));
+        assert!(!truncated);
+
+        // The floor is inclusive, applied in SQL, and composes with the dates.
+        let (rows, _) = analytic_detections_above(&conn, None, None, 0.9, 10_000).unwrap();
+        assert!(rows.iter().all(|r| r.confidence >= 0.9), "{rows:?}");
+        let (rows, _) =
+            analytic_detections_above(&conn, Some("2026-03-11"), Some("2026-03-11"), 0.0, 10_000)
+                .unwrap();
+        assert!(rows.iter().all(|r| r.date == "2026-03-11"));
+
+        // Truncation reports the same way `analytic_detections` does: one past the
+        // cap is truncated, exactly the cap is not. The second half is the
+        // discrimination — `>=` in place of `>` survived every assertion above.
+        let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 2).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(truncated);
+        let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 3).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            !truncated,
+            "a cap equal to the row count is not a truncation"
+        );
+    }
+
+    #[test]
+    fn analytic_detections_truncates_at_max_rows() {
         let (_tmp, conn) = temp_db_with_data();
         // 4 rows exist; cap at 2 → truncated, exactly 2 returned.
-        let (rows, truncated) = all_detections(&conn, None, None, 2).unwrap();
+        let (rows, truncated) = analytic_detections(&conn, None, None, 2).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(truncated);
         // Cap exactly at the row count → not truncated.
-        let (rows, truncated) = all_detections(&conn, None, None, 4).unwrap();
+        let (rows, truncated) = analytic_detections(&conn, None, None, 4).unwrap();
         assert_eq!(rows.len(), 4);
         assert!(!truncated);
+    }
+
+    /// The export reader hides a rejected row and shows an unreviewed or
+    /// confirmed one; the raw table still has all four. A reader that read
+    /// the table would pass the count tests above and fail this one.
+    #[test]
+    fn analytic_detections_hides_a_rejected_row_and_keeps_the_rest() {
+        let (_tmp, conn) = temp_db_with_data();
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Com_Name = 'European Robin'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'confirmed' WHERE Com_Name = 'Great Tit'",
+            [],
+        )
+        .unwrap();
+        let raw: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(raw, 4);
+        let (rows, truncated) = analytic_detections(&conn, None, None, 10_000).unwrap();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(!truncated);
+        assert!(rows.iter().all(|r| r.com_name != "European Robin"));
+        assert!(rows.iter().any(|r| r.com_name == "Great Tit"));
     }
 
     #[test]

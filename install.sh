@@ -1288,9 +1288,17 @@ download_geomodel() {
     local model_dest="${MODEL_DIR}/${GEOMODEL_FILE}"
     local labels_dest="${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
 
-    if [ -f "${model_dest}" ] && [ -f "${labels_dest}" ]; then
+    # Skip only if both files are present *and* verify — the same rule
+    # `download_model` applies, for the same reason: a partial download is a
+    # file, and this guard used to ask only whether one existed (ON-3). A
+    # half-fetched geomodel then counted as installed on every re-run and
+    # every `repair`, 62-config-file.sh wrote the METADATA_* settings for it,
+    # and the daemon refused the pair on every start with the occurrence
+    # filter silently off. `installer/test/geomodel-resume.sh` holds this.
+    if model_file_is_verified "${model_dest}" "${GEOMODEL_SHA256}" &&
+       model_file_is_verified "${labels_dest}" "${GEOMODEL_LABELS_SHA256}"; then
         GEOMODEL_INSTALLED=1
-        success "Geomodel already present at ${MODEL_DIR} — skipping."
+        success "Geomodel already downloaded and verified at ${MODEL_DIR} — skipping."
         return 0
     fi
 
@@ -1311,7 +1319,7 @@ download_geomodel() {
     mapfile -t model_origins < <(geomodel_origins "${GEOMODEL_FILE}")
     mapfile -t labels_origins < <(geomodel_origins "${GEOMODEL_LABELS_FILE}")
 
-    if [ ! -f "${model_dest}" ] &&
+    if ! model_file_is_verified "${model_dest}" "${GEOMODEL_SHA256}" &&
         ! fetch_verified_model "${model_dest}" "${GEOMODEL_SHA256}" \
             "geomodel (~14 MB)" 0 "${model_origins[@]}"; then
         rm -f "${model_dest}"
@@ -1323,7 +1331,7 @@ download_geomodel() {
         return 0
     fi
 
-    if [ ! -f "${labels_dest}" ] &&
+    if ! model_file_is_verified "${labels_dest}" "${GEOMODEL_LABELS_SHA256}" &&
         ! fetch_verified_model "${labels_dest}" "${GEOMODEL_LABELS_SHA256}" \
             "geomodel labels" 0 "${labels_origins[@]}"; then
         # The model alone cannot be used, and a configured-but-unusable pair is
@@ -1684,7 +1692,8 @@ ExecStartPre=/bin/mkdir -p ${STREAM_DIR}
 ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor --config ${CONFIG_FILE} || [ \$? -le 1 ]'
 # DuckDB behavioral analytics is compiled into every release binary and enabled
 # here by default (the database is created on first run). To run without it
-# (e.g. on a very low-RAM board), remove the --analytics-db flag below.
+# (e.g. on a very low-RAM board), change the flag below to --analytics-db "":
+# removing it does not turn analytics off, it falls back to <database>.duckdb.
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${DATA_DIR}/analytics.db
 
 # Restart policy. panic=abort means panics show up as SIGABRT exits;
@@ -2203,7 +2212,7 @@ maybe_start_service() {
             success "Service started."
         else
             success "Service started — finish setup in the dashboard."
-            info  "No audio source yet: pick a microphone in the dashboard's setup wizard"
+            info  "No audio source yet: add one under Settings → Capture (/admin/audio) in the dashboard"
             info  "(or set ALSA_CARD / RTSP_URL in ${CONFIG_FILE}); detection begins once one is set."
         fi
     else
@@ -2762,7 +2771,7 @@ print_summary() {
         if ! config_has_audio_source; then
             echo
             echo "  No audio source yet, so no birds will be detected. Open the dashboard"
-            echo "  to pick a microphone in the setup wizard — or set ALSA_CARD / RTSP_URL"
+            echo "  and add one under Settings → Capture (/admin/audio) — or set ALSA_CARD / RTSP_URL"
             echo "  in ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
         fi
         # Live and listening, but with no coordinates the species filter cannot

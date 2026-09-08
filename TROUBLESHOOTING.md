@@ -35,6 +35,10 @@ JSON:
 birdnet-behavior --doctor-json | jq .
 ```
 
+With a browser but no shell, sign in and open `/admin/doctor`: it renders
+the same report, serves the JSON at `/admin/doctor.json`, and offers a
+redacted support bundle (`/admin/support-bundle`) to download.
+
 ---
 
 ## 1. The service won't start
@@ -49,11 +53,11 @@ Common causes and fixes:
 
 | Symptom in the logs                                            | Fix                                                                                                |
 | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `config not found: /etc/birdnet/birdnet.conf`                  | Run `install.sh` again, or copy `.env.example` to `/etc/birdnet/birdnet.conf` and edit it          |
+| `config not found: /etc/birdnet/birdnet.conf`                  | Run `sudo bash install.sh reinstall`, which writes it. Do **not** copy `.env.example` there: that is the Docker environment file (`BIRDNET_*` keys), while `birdnet.conf` uses unprefixed keys (`CONFIDENCE=`, `RECS_DIR=`, …) and no prefix mapping is applied |
 | `Failed to set up mount namespacing: /tmp/birdnet-stream: No such file or directory` (exit `226/NAMESPACE`) | An older unit listed the tmpfs stream dir in `ReadWritePaths=`, which conflicts with `PrivateTmp=`. Upgrade to the latest release, or run `sudo bash install.sh repair` to rewrite the unit. |
 | `database recovery failed`                                     | Run `birdnet-behavior --check-db`; restore from `~/BirdNet-Behavior/backups/` if corruption is real |
 | `failed to install Ctrl+C handler` / `SIGTERM handler`         | Likely running under a non-Unix or sandboxed environment without signal support                    |
-| `address already in use`                                       | Another service is on port 8502; change `BIRDNET_PORT` or stop the conflicting service             |
+| `address already in use`                                       | Another service is on port 8502; change the bind address with `BIRDNET_LISTEN=0.0.0.0:<port>` (the binary reads `--listen`/`BIRDNET_LISTEN`; `BIRDNET_PORT` is only the Docker host-port mapping) or stop the conflicting service |
 | `permission denied` reading `/etc/birdnet/birdnet.conf`        | The config is `0640 root:<service-group>` (it holds secrets). Run `sudo bash install.sh repair` to restore correct ownership/permissions. |
 
 Still stuck? `sudo bash install.sh repair` re-creates missing directories, fixes
@@ -66,8 +70,9 @@ ownership/permissions, rewrites the systemd unit, and restarts — fixing most
 docker compose logs --tail=200 birdnet
 ```
 
-The entrypoint will say *which* of the three failure modes it hit
-(network, Zenodo, disk). If the message is unclear, run the doctor
+The entrypoint lists the common causes when the model download fails (no
+internet in the container, GitHub and Zenodo both unreachable, or the
+volume out of disk). If the message is unclear, run the doctor
 inside a one-shot container:
 
 ```bash
@@ -131,8 +136,9 @@ grep -E "^ALSA_CARD|^RTSP_URL|^PIPEWIRE_DEVICE" /etc/birdnet/birdnet.conf
 grep -E "^BIRDNET_(ALSA|PIPEWIRE|RTSP)" .env
 ```
 
-Only **one** of those three should be set. If multiple are, the doctor
-will warn and the daemon will pick the first one it finds.
+A local microphone (PipeWire takes precedence over ALSA if both are set)
+runs alongside any number of RTSP streams; the doctor reports every
+source the daemon will start.
 
 ### 3.2 Recordings exist but the database stays empty
 
@@ -289,7 +295,7 @@ sudo systemctl edit birdnet-behavior
 # [Service]
 # Environment=HOME=/home/pi/BirdNet-Behavior     # your data dir; pi → your user
 sudo systemctl restart birdnet-behavior
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/v2/timeseries/daily
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8502/api/v2/timeseries/daily
 ```
 
 The override is harmless to leave in place after upgrading, and unnecessary.
@@ -303,15 +309,23 @@ loop, inference latency spikes, detections lag minutes behind audio.
 
 Mitigations in order of effectiveness:
 
-1. **Enable ZRAM.** The bare-metal installer offers this automatically
-   on hosts with ≤ 2 GB RAM. To re-run: `SKIP_ZRAM=0 sudo install.sh`.
+1. **Enable ZRAM.** The bare-metal installer sets this up automatically
+   on hosts with ≤ 2 GB RAM during `install`/`reinstall` (not `repair`);
+   `SKIP_ZRAM=1` opts out. To re-run it: `sudo bash install.sh reinstall`.
 2. **Reduce overlap.** `BIRDNET_OVERLAP=0.0` halves inference cost
    compared with `OVERLAP=1.5`.
 3. **Use a smaller model.** BirdNET V2.4 FP16 is ~50 MB vs BirdNET+
    V3.0's ~541 MB; both are accepted by the daemon.
-4. **Disable analytics.** Analytics is on by default. On a tiny board,
-   turn it off: bare-metal, remove the `--analytics-db` flag from the
-   systemd unit; Docker, unset `BIRDNET_ANALYTICS_DB` in your `.env`.
+4. **Disable analytics.** Analytics is compiled into every release
+   binary and on by default: with no `--analytics-db` the daemon still
+   opens `<database>.duckdb` beside the SQLite file, so *removing* the
+   flag does not turn it off. Pass an **empty** value instead: change the
+   unit's `--analytics-db ${DATA_DIR}/analytics.db` to `--analytics-db ""`
+   (`systemctl edit birdnet-behavior`, then restart), or in Docker add a
+   compose override that sets `BIRDNET_ANALYTICS_DB: ""` (the compose file
+   sets it under `environment:`, so `.env` alone cannot blank it). The
+   daemon logs `DuckDB analytics disabled via empty --analytics-db` on
+   start. A `--no-default-features` build leaves the engine out entirely.
    DuckDB roughly doubles RAM usage during sync.
 5. **Throttle the disk manager.** Increase `DISK_PURGE_THRESHOLD` so
    purges happen less often on SD-card storage.

@@ -2043,7 +2043,7 @@
           "export"
         ],
         "summary": "Export detections",
-        "description": "The full detection history as CSV (default) or JSON.",
+        "description": "The full detection history as CSV (default) or JSON. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported.",
         "operationId": "exportDetections",
         "parameters": [
           {
@@ -2131,7 +2131,7 @@
           "export"
         ],
         "summary": "Export detections (eBird CSV)",
-        "description": "An eBird Record Format CSV for one day, suitable for import into eBird.",
+        "description": "An eBird Record Format CSV (no header row) suitable for import into eBird. Reads the analytic view, so rejected detections and excluded imports are never exported. Coordinates come from the station's configured location unless `lat` and `lon` are both given; an unlocated station writes them blank, never 0,0. Detections under `min_confidence` (default 0.75) are not claimed; each species is one record per hour with `Number` = `X` (present, not counted) and the detection tally in Species Comments.",
         "operationId": "exportEbird",
         "parameters": [
           {
@@ -2143,7 +2143,8 @@
             "required": false,
             "schema": {
               "type": "number"
-            }
+            },
+            "description": "Latitude override; must be paired with `lon`."
           },
           {
             "name": "lon",
@@ -2151,7 +2152,8 @@
             "required": false,
             "schema": {
               "type": "number"
-            }
+            },
+            "description": "Longitude override; must be paired with `lat`."
           },
           {
             "name": "location",
@@ -2159,7 +2161,65 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Location name; defaults to the `station_name` setting."
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "description": "Lowest confidence a detection may have to be claimed (default 0.75)."
+          },
+          {
+            "name": "protocol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "eBird protocol, one word (default `Stationary`)."
+          },
+          {
+            "name": "observers",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Number of observers (default 1)."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "State or province code (1–3 characters)."
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Country code (2 characters)."
+          },
+          {
+            "name": "complete",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Whether every species heard is reported (default false, written as `N`)."
           }
         ],
         "responses": {
@@ -2188,7 +2248,7 @@
           "export"
         ],
         "summary": "Export detections (BirdNET-Pi BirdDB.txt)",
-        "description": "The BirdNET-Pi legacy `BirdDB.txt` tab-separated format, for tooling that expects it.",
+        "description": "The BirdNET-Pi legacy `BirdDB.txt` tab-separated format, for tooling that expects it. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported.",
         "operationId": "exportBirddb",
         "parameters": [
           {

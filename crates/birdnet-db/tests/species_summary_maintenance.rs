@@ -529,7 +529,8 @@ fn the_drift_check_reports_a_summary_that_has_been_corrupted() {
     // A bucket that exists only in the summary must also be reported: an
     // inner join would miss it and report nothing.
     conn.execute(
-        "INSERT INTO species_summary VALUES ('Ghost', 'Nonexistent avis', '04', 3, 2.1)",
+        "INSERT INTO species_summary (Com_Name, Sci_Name, hour, is_import, detections, confidence_sum)
+         VALUES ('Ghost', 'Nonexistent avis', '04', 0, 3, 2.1)",
         [],
     )
     .expect("phantom bucket");

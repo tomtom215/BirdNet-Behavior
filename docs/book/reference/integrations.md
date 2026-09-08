@@ -107,6 +107,18 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_notifications_dropped_total` | counter | Notifications that never left the station, labeled by `reason`: `circuit_open` (the destination is considered down after three consecutive failures), `rate_limited` (over `NOTIFY_RATE_PER_MINUTE`), `send_failed` (the destination refused or was unreachable), `no_destination` (nothing configured that this station can deliver to). Detection notifications dominate this on a busy station; an alert about the station itself is exempt from the rate limit and is retried at every poll until it lands, so `circuit_open` rising while a health condition is open means the operator is not being told. |
 | `birdnet_noise_floor_dbfs` | gauge | The station's measured background noise floor per capture `source`, averaged over the last 7 days. Typical quiet outdoor background is −60 to −40 dBFS. |
 | `birdnet_noise_floor_drift_db` | gauge | How far a source's noise floor has moved against **its own** preceding 30-day average, in dB. Absent for a source with no baseline yet — "never measured" is not "unchanged". |
+| `birdnet_info` | gauge | Build information — always `1`, with the release in its `version` label. |
+| `birdnet_uptime_seconds` | gauge | Process uptime in seconds. |
+| `birdnet_cpu_count` | gauge | Number of CPU cores available. |
+| `birdnet_process_resident_memory_bytes` | gauge | Resident memory size in bytes. |
+| `birdnet_analytics_enabled` | gauge | Whether DuckDB analytics is enabled. |
+| `birdnet_detections_dropped_total` | counter | Classifications produced and then discarded, labeled by `reason`. |
+| `birdnet_capture_restarts_total` | counter | Capture processes restarted by the supervisor, labeled by `source`. |
+| `birdnet_capture_stalls_total` | counter | Capture processes found alive but producing no segments, labeled by `source`. |
+| `birdnet_occurrence_filter_active` | gauge | `1` when species occurrence filtering is running, `0` when every species the classifier knows is admitted. |
+| `birdnet_occurrence_candidates` | gauge | Species the occurrence filter currently admits. |
+| `birdnet_http_responses_total` | counter | Web responses served, labeled by status `class`. |
+| `birdnet_http_request_duration_seconds` | histogram | Web request handling latency in seconds. |
 
 > **Renamed.** Three gauges used to carry a `_total` suffix, and one
 > of them — `birdnet_detections_total` — collided with the per-species counter
@@ -137,7 +149,8 @@ season's uploads pile up. Alert on **any** increase in
 `birdnet_detection_write_failures_total` as well: it is zero on a healthy
 station, and non-zero means a full or read-only disk, a locked database, or the
 one local hour daylight-saving repeats each autumn (see
-[Time synchronisation](../field/deployment.md#6-time-synchronisation)). A
+[Time synchronisation](../field/deployment.md#6-time-synchronisation)).
+
 The two noise-floor series answer the question no other gauge here can. A
 microphone that fails outright is caught by `birdnet_audio_source_up` and by the
 detection deadman. A microphone that merely goes **deaf** — water in the capsule,
@@ -182,7 +195,7 @@ in-flight retries is parked in the local database and replayed **oldest-first**
 when the network returns (bounded so a months-long outage can't fill the disk).
 Detection never blocks on the network. Watch the
 `birdnet_outbound_queue_depth{kind="birdweather"}` gauge and the "Queued
-Uploads" row on the [System](../admin/system.md) page; full mechanics are in the
+Uploads" figure on [Station → Health](../admin/system.md); full mechanics are in the
 [Field Deployment Runbook](../field/deployment.md#9-remote-diagnostics-and-monitoring).
 
 ### Self-hosted ingest (sensitive species)

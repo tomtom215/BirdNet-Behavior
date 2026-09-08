@@ -1,7 +1,8 @@
 //! First-run onboarding wizard.
 //!
 //! A full-bleed, no-chrome six-step setup flow (Welcome → Location →
-//! Microphone → Accuracy → Notifications → Done) served at `/onboarding`. The
+//! Microphone → Accuracy → Notifications → Done) served at `/onboarding`,
+//! behind the admin gate (see [`gated_router`]). The
 //! wizard persists: the Location step auto-detects coordinates (and the
 //! timezone) via the existing `/admin/settings/detect-location` endpoint and
 //! submits to `POST /onboarding/save`, which writes the chosen settings and
@@ -35,7 +36,7 @@ use std::fmt::Write as _;
 
 use axum::extract::State;
 use axum::response::{Html, Redirect};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Form, Router};
 
 use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, SourceKind};
@@ -67,23 +68,33 @@ pub const ONBOARDING_SETTING_KEYS: &[&str] = &[
     "onboarding_complete",
 ];
 
-/// Mount the first-run onboarding wizard routes.
-pub fn router() -> Router<AppState> {
-    Router::new().route("/onboarding", get(onboarding_page))
-}
-
-/// The state-changing half, mounted behind the admin auth middleware.
+/// The wizard, page and save together, mounted behind the admin auth
+/// middleware.
 ///
-/// The wizard *page* stays public so a fresh station still shows it. The save
-/// writes the station's coordinates, time zone and notification policy, which
-/// is configuration and belongs behind the same gate as the settings form.
+/// The save writes the station's coordinates, time zone and notification
+/// policy, which is configuration and belongs behind the same gate as the
+/// settings form. The page used to stay public "so a fresh station still shows
+/// it", which put the two halves on opposite sides of the gate: on the
+/// installer's default station — a generated `CADDY_PWD`, and on a headless
+/// install no location — the first page load was the wizard, and Finish
+/// answered a bare `401 Sign in required.` whose `Location` led, after signing
+/// in, to `405 GET /onboarding/save` with every answer gone (`ON-6`).
 ///
-/// On a station with no admin password — a fresh Docker run, or an operator who
-/// cleared it — the middleware bypasses and this behaves exactly as it did. The
-/// only case that changes is "a password is set and nobody has signed in", where
-/// the operator is sent to the login page and returned to the wizard afterwards.
-pub fn mutating_router() -> Router<AppState> {
-    Router::new().route("/onboarding/save", post(onboarding_save))
+/// A fresh station still shows the wizard to anyone: with no admin password —
+/// a fresh Docker run, or an operator who cleared it — the middleware bypasses.
+/// With a password set, the operator signs in first and then answers the six
+/// steps as that account, which is also what lets the Location step's
+/// auto-detect (an admin endpoint) work.
+///
+/// `GET /onboarding/save` is where the old 401's `Location` sent people after
+/// login; it goes back to the wizard instead of answering 405.
+pub fn gated_router() -> Router<AppState> {
+    Router::new()
+        .route("/onboarding", get(onboarding_page))
+        .route(
+            "/onboarding/save",
+            get(|| async { Redirect::to("/onboarding") }).post(onboarding_save),
+        )
 }
 
 /// The settings the wizard must show as they already are, rather than as it
@@ -297,6 +308,64 @@ fn valid_trigger(raw: &str) -> bool {
     matches!(raw, "each" | "new-species" | "new-species-daily")
 }
 
+/// A coordinate the station can use: parses after the decimal-separator
+/// normalisation the settings form applies, and lies inside the range the
+/// config validator accepts. Returns the canonical string to store.
+///
+/// The wizard used to guard these with `is_empty()` alone, so
+/// `latitude=999&longitude=abc` was persisted, the settings overlay dropped
+/// the pair silently at the next start, and the doctor said "no
+/// latitude/longitude set" while the wizard prefilled `999`.
+fn valid_coordinate(raw: &str, limit: f64) -> Option<String> {
+    let value = birdnet_core::config::locale::normalize_decimal(raw.trim());
+    let parsed: f64 = value.parse().ok()?;
+    (parsed.is_finite() && parsed.abs() <= limit).then_some(value)
+}
+
+/// The zoneinfo tree `timedatectl` and the tz database read; when it is
+/// present, a zone the wizard stores must exist in it.
+const ZONEINFO_DIR: &str = "/usr/share/zoneinfo";
+
+/// Whether `raw` names a time zone this host knows.
+///
+/// Shape first — an IANA name is one to three `/`-separated segments of
+/// letters, digits, `_`, `+` and `-`, the first starting with a letter — and
+/// then, on a host that has a zoneinfo tree (every Debian image the installer
+/// targets, and the container image), the file must exist there. A host with
+/// no tree falls back to the shape check rather than refusing every zone,
+/// because the auto-detect step writes this value and a station with no
+/// tzdata still needs it stored. `Mars/Olympus` used to be accepted, and the
+/// doctor then told the operator to run `timedatectl set-timezone
+/// Mars/Olympus`.
+fn plausible_timezone(raw: &str) -> bool {
+    let name = raw.trim();
+    if name.is_empty() || name.len() > 64 {
+        return false;
+    }
+    let segments: Vec<&str> = name.split('/').collect();
+    let shape_ok = (1..=3).contains(&segments.len())
+        && segments.iter().all(|seg| {
+            !seg.is_empty()
+                && seg != &"."
+                && seg != &".."
+                && seg
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'-'))
+        })
+        && segments[0]
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphabetic());
+    if !shape_ok {
+        return false;
+    }
+    let tree = std::path::Path::new(ZONEINFO_DIR);
+    if tree.is_dir() {
+        return tree.join(name).is_file();
+    }
+    true
+}
+
 /// Persist the wizard's choices and mark onboarding complete, then return to the
 /// dashboard. Only non-empty values are written; the DB settings overlay applies
 /// latitude/longitude and the confidence threshold on the next start.
@@ -313,14 +382,38 @@ async fn onboarding_save(
         let lon = form.longitude.trim();
         let tz = form.timezone.trim();
         let mode = form.notification_mode.trim();
-        if !lat.is_empty() {
+        // A location is a pair: both coordinates in range, or nothing. Half a
+        // pair used to be written, so two wizard runs — one with the longitude
+        // left blank — could leave the station at a point nobody typed. The
+        // page script already treats a half pair as "Not set"; the store now
+        // agrees with it. A rejected value is logged rather than dropped in
+        // silence, so the log says why the doctor still reports no location.
+        let coordinates = match (
+            valid_coordinate(lat, 90.0),
+            valid_coordinate(lon, 180.0),
+        ) {
+            (Some(lat), Some(lon)) => Some((lat, lon)),
+            _ if lat.is_empty() && lon.is_empty() => None,
+            _ => {
+                tracing::warn!(
+                    latitude = lat,
+                    longitude = lon,
+                    "onboarding: location not stored; both coordinates must be numbers within ±90 / ±180"
+                );
+                None
+            }
+        };
+        if let Some((lat, lon)) = coordinates.as_ref() {
             items.push(("latitude", lat, SettingsCategory::Location));
-        }
-        if !lon.is_empty() {
             items.push(("longitude", lon, SettingsCategory::Location));
         }
-        if !tz.is_empty() {
+        if plausible_timezone(tz) {
             items.push(("timezone", tz, SettingsCategory::Location));
+        } else if !tz.is_empty() {
+            tracing::warn!(
+                timezone = tz,
+                "onboarding: time zone not stored; it is not a zone this host knows"
+            );
         }
         // `notify_trigger` — the key the notification filter actually reads
         // (bridged onto `APPRISE_TRIGGER`). The wizard used to write

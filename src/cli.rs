@@ -67,7 +67,7 @@ impl ExplicitArgs {
 }
 
 /// BirdNet-Behavior bird detection and analytics system.
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "birdnet-behavior", version, about)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Cli {
@@ -316,11 +316,20 @@ pub struct Cli {
     #[arg(long)]
     pub process_existing: bool,
 
-    /// Path to the `DuckDB` analytics database file (enables behavioral analytics).
+    /// Path to the `DuckDB` analytics database file.
     ///
-    /// When set, a file-backed `DuckDB` database is opened at this path for
-    /// behavioral analytics queries.  The file is created if it doesn't exist.
-    #[arg(long, env = "BIRDNET_ANALYTICS_DB")]
+    /// Analytics is on by default at `<database>.duckdb` beside the SQLite
+    /// file; this overrides the path. Pass an empty value (`--analytics-db ""`
+    /// or `BIRDNET_ANALYTICS_DB=`) to run without `DuckDB` at all.
+    //
+    // The explicit OsString→PathBuf parser is the same fix `image_cache_dir`
+    // carries: clap's stock PathBuf parser rejects an empty value, which made
+    // the empty-path opt-out `helpers::state` implements unreachable.
+    #[arg(
+        long,
+        env = "BIRDNET_ANALYTICS_DB",
+        value_parser = clap::builder::OsStringValueParser::new().map(PathBuf::from)
+    )]
     pub analytics_db: Option<PathBuf>,
 
     /// Reinstall the behavioral `DuckDB` extension and exit.
@@ -1060,6 +1069,35 @@ mod tests {
     }
 
     /// A non-empty value still parses as a normal path.
+    /// The documented analytics opt-out has the same shape and had the same
+    /// hole: `src/helpers/state.rs` treats an empty `--analytics-db` as
+    /// "no DuckDB", but the stock `PathBuf` parser refused the empty value
+    /// with `a value is required for '--analytics-db <ANALYTICS_DB>' but none
+    /// was supplied`, so the branch was unreachable and there was no runtime
+    /// way to turn analytics off.
+    #[test]
+    fn empty_analytics_db_parses_as_opt_out() {
+        // `try_parse_from`, not `parse_from`: a rejected value must fail this
+        // test, not exit the whole test binary.
+        let cli = Cli::try_parse_from(["birdnet-behavior", "--analytics-db", ""])
+            .expect("an empty --analytics-db must parse");
+        assert_eq!(cli.analytics_db, Some(std::path::PathBuf::new()));
+
+        let cli = Cli::try_parse_from(["birdnet-behavior", "--analytics-db="])
+            .expect("an empty --analytics-db= must parse");
+        assert_eq!(cli.analytics_db, Some(std::path::PathBuf::new()));
+    }
+
+    /// Counterpart: a real path still arrives as that path.
+    #[test]
+    fn non_empty_analytics_db_parses_as_path() {
+        let cli = Cli::parse_from(["birdnet-behavior", "--analytics-db", "/data/analytics.db"]);
+        assert_eq!(
+            cli.analytics_db,
+            Some(std::path::PathBuf::from("/data/analytics.db"))
+        );
+    }
+
     #[test]
     fn non_empty_image_cache_dir_parses_as_path() {
         let cli = Cli::parse_from(["birdnet-behavior", "--image-cache-dir", "/var/cache/img"]);

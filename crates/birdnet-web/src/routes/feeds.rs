@@ -132,7 +132,7 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
         &base,
         "Rare birds",
         "/feeds/rare.rss",
-        "First-ever detections at this station (confidence ≥ 0.85).",
+        "First-ever detections at this station (confidence above 0.85).",
     );
 
     rss_response(body)

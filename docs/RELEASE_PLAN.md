@@ -47,10 +47,12 @@ x86_64 Linux, 4 cores, 15 GB RAM, rustc 1.97.1, from a cold `target/`.
 | HTTP surface | all 40 non-parameterised paths in `openapi.json` | **all 200 or 400** (400 = missing required param, by design) |
 | Auth, password set | `CADDY_PWD` set, probe `/admin/*` | **303 → `/login`**; unauthenticated `POST` → **401**; public dashboard still 200 |
 | Auth, no password | `CADDY_PWD` unset | open by design, documented, warned at startup — see **S-10** |
-| Actions pinning | 24 `uses:` refs | 21 SHA-pinned; 3 `dtolnay/rust-toolchain` by ref — see **S-08** |
+| Actions pinning | 24 `uses:` refs | 21 SHA-pinned; 3 `dtolnay/rust-toolchain` by ref — see **S-08** (today 22 of 24 are SHA-pinned; only `@stable` ×13 and `@1.95` ×1 remain by ref, by intent — Slice 4) |
 
-**CI on `main` at `e98c8a0`:** all nine workflows green (CI, Coverage, Docker,
-Docs, Install smoke, Supply chain, A11y & Visual QA, Mutation, plus Dependabot).
+**CI on `main` at `e98c8a0`:** all eight push-triggered workflows green (CI,
+Coverage, Docker, Docs, Install smoke test, Supply chain, A11y & Visual QA,
+Mutation testing), plus Dependabot; the other two workflow files, `release`
+(tag push) and `publish-model` (dispatch), do not run on a push to `main`.
 0 open issues, 7 open PRs — all Dependabot.
 
 **Verdict.** The engineering substrate is genuinely strong and the previous
@@ -338,9 +340,11 @@ carrying a PR that can never be green.
 
 ### S-08 — the release build's toolchain action is unpinned · **P2**
 
-21 of 24 distinct `uses:` refs are SHA-pinned. Every exception is
+21 of 24 distinct `uses:` refs were SHA-pinned at `e98c8a0`. Every exception was
 `dtolnay/rust-toolchain`, used 17 times across 8 workflows under three refs —
 `@stable` (13), `@1.95` (1), and `@master` (**3, all in `release.yml`**).
+(Today: 22 of 24 pinned; the `@master` three are SHA `6c977a6…`, and `@stable`
+/ `@1.95` remain by ref — see Slice 4.)
 
 The `@master` three sit **inside the jobs that compile the binaries that get
 SLSA-attested, cosign-signed and pulled by field stations**. A moving branch ref
@@ -617,10 +621,12 @@ instruction in a comment is not a gate. The parser was verified against the
 stale value (correctly rejects `0.8.0` for tag `0.11.0`) before the bump, and
 all four `validate` gates were then simulated green against `v0.11.0`.
 
-**Not done, deliberately: the tag.** `RELEASING.md` is explicit that creating
-and pushing the tag is the manual "go" action — it publishes a GitHub Release,
-Docker images, and the install path real stations pull from. That is the
-maintainer's call.
+**The tag was left to the maintainer, and was made.** `RELEASING.md` is explicit
+that creating and pushing the tag is the manual "go" action — it publishes a
+GitHub Release, Docker images, and the install path real stations pull from.
+`v0.11.0` points at `7aef2f7`, the merge of PR #197 on 2026-08-09, and every
+release since (`v0.12.0`, `v0.13.0`, `v0.13.1`, `v0.14.0`, `v0.15.0`) was tagged
+the same way (`git ls-remote --tags origin`).
 
 ---
 
@@ -757,9 +763,12 @@ maintainer's call.
 
     Two items are carried forward rather than done:
 
-    * **MQTT / Home Assistant discovery — 8 flags, no UI at all.** The command
-      palette advertises "mqtt" as a searchable term and there is nowhere to
-      send the operator. Deferred by decision, not oversight.
+    * **MQTT / Home Assistant discovery — still CLI/env only, no settings
+      section.** Nothing under `crates/birdnet-web/src/routes/admin/settings/`
+      mentions MQTT. The command palette (`routes/pages/cmdk.rs`) now sends the
+      search term "mqtt" to `/station/alerts#notifications`, which explains the
+      channel but cannot configure the broker. Deferred by decision, not
+      oversight.
     * **`birdnet_core::audio::quality` still does not gate inference.** ~1,700
       lines of SNR, spectral flatness, rain/wind assessment and noise-floor
       tracking, with benchmarks. "Never called" was true at `e98c8a0` and is

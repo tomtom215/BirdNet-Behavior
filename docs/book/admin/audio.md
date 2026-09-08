@@ -1,6 +1,6 @@
 # Audio & Microphones
 
-Microphone setup is the single most common support topic, so it gets its own page (`/admin/audio`) designed to be bulletproof.
+Microphone setup is the single most common support topic, so it gets its own tab (**Station → Capture**, `/station/capture`; the old `/admin/audio` redirects there) designed to be bulletproof.
 
 ![The audio settings page](../images/admin-audio.png)
 
@@ -20,16 +20,14 @@ Every source is supervised on its own, which is what makes a multi-camera statio
 
 ## Tuning a source
 
-Expand any source with **▸ tune** to open its control panel:
+Open a source's **edit** panel to change:
 
-- **Input gain** (−12 → +24 dB) with a zero mark,
-- **Sample rate** (8 / 16 / 22.05 / 44.1 / 48 kHz),
-- **Channels** (mono / left / right / stereo) — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below before leaving this on mono,
-- **Bit depth** (16 / 24-bit PCM),
-- **RTSP transport** (auto / TCP / UDP) for camera sources — auto resolves to the NAT-robust TCP default; force UDP only for a camera that needs it,
-- **Quiet window** — an optional per-source `HH:MM`–`HH:MM` pause in the **station's local time**, e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
+- **Label** and **device**,
+- **Quiet window** — an optional per-source pause in the **station's local time**, each end a clock time (`22:00`) or a solar anchor (`sunset`, `sunset+30`, `sunrise-15`), e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
 - **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, RTSP keepalive.
 - **Equaliser** — a filter chain of your own, when the toggles are not the right shape. See below.
+
+**Sample rate** (48 or 44.1 kHz) and, for camera sources, **RTSP transport** (auto / TCP / UDP — auto resolves to the NAT-robust TCP default; force UDP only for a camera that needs it) are chosen when the source is **added**. Per-source **gain**, the **channel pick** (mono / left / right / stereo — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below) and **bit depth** are stored with the source and shown in its detail line, but are **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds.
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
@@ -148,9 +146,10 @@ would each hand the model. Run it while birds are actually singing: the
 cancellation is direction-dependent, so ambient noise alone can look benign on a
 microphone that loses badly on real song.
 
-Act on the answer with the **Channels** control above — picking `left` or
-`right` takes one capsule intact instead of averaging two — and restart the
-service.
+Act on the answer by setting the source's channel pick — `left` or `right`
+takes one capsule intact instead of averaging two. There is not yet a UI
+control for it: set the `channels` column of the source's `audio_sources` row
+(`mono` / `left` / `right` / `stereo`) directly and restart the service.
 
 > This matters most for exactly the deployments that can least afford it: a
 > sealed enclosure nobody opens for a season. A station losing 66 dB to its own
@@ -221,7 +220,7 @@ the card that *is* present and prints the exact line to set.
 
 ## Listening live
 
-The **Listen → Live** tab plays whatever the station is recording *right now*.
+The **Recordings → Live** view (`/recordings?view=live`; the old `/listen` redirects there) plays whatever the station is recording *right now*.
 It does not open the microphone itself — an ALSA capture device only allows one
 opener, so anything that tried would be refused with `Device or resource busy`
 for as long as recording was in progress, which on a working station is always.

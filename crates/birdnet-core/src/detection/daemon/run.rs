@@ -2,7 +2,7 @@
 //! settled clip through the processing pipeline.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -227,6 +227,11 @@ pub fn run_daemon(
     let heartbeat = Arc::new(AtomicU64::new(0));
     let heartbeat_loop = Arc::clone(&heartbeat);
 
+    // Liveness of the loop thread itself: `true` until the thread returns.
+    // The guard travels into the thread so every exit path clears it.
+    let running = Arc::new(AtomicBool::new(true));
+    let running_guard = super::RunningGuard(Arc::clone(&running));
+
     // Start file watcher. The `RecommendedWatcher` MUST live for the
     // lifetime of the spawned thread — dropping it stops delivery and
     // closes the channel. Bound to a name that the closure captures so
@@ -247,6 +252,9 @@ pub fn run_daemon(
         // backend stops, and `file_rx` immediately reports
         // `Disconnected` — silently breaking the watch path.
         let _watcher = file_watcher;
+        // Dropped when this closure returns, however it returns, clearing
+        // `DaemonHandle::running_flag`.
+        let _alive = running_guard;
         tracing::info!("detection daemon started");
 
         // Process any pre-existing backlog here, on the loop thread, rather
@@ -386,7 +394,11 @@ pub fn run_daemon(
         tracing::info!("detection daemon stopped");
     });
 
-    Ok(DaemonHandle { stop_tx, heartbeat })
+    Ok(DaemonHandle {
+        stop_tx,
+        heartbeat,
+        running,
+    })
 }
 
 /// Process any audio files already present in the watch directory.

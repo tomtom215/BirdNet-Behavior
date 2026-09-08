@@ -92,8 +92,8 @@ impl std::error::Error for DecodeError {
 
 ## Async Convention
 
-- **No async in library crates** (`birdnet-core`, `birdnet-db` are synchronous)
-- **Tokio only in application code** (`birdnet-web` uses `tokio` with full features)
+- **No async in the compute/storage library crates** (`birdnet-core`, `birdnet-db` are synchronous)
+- **Tokio only in application code** (`birdnet-web` uses `tokio` with full features) and in `birdnet-integrations`, the deliberate exception: an async client library for network I/O that never constructs a runtime of its own
 - Blocking operations via `tokio::task::spawn_blocking` for DB queries, file I/O, inference
 
 This keeps library crates portable and testable without an async runtime.
@@ -105,15 +105,15 @@ These rules are **hard requirements**, not suggestions:
 ### 1. Prefer files under 500 lines
 
 500 lines is the point at which a file should be justified rather than a
-hard cap: a data table with one entry per row (`migration.rs`, ~3 100
-lines) or a single orchestration loop legitimately exceeds it, and about
+hard cap: a data table with one entry per row (`migration.rs`, ~3 200
+lines) or a single orchestration loop legitimately exceeds it, and over
 a hundred files in the workspace do. Behaviour spread across 500 lines
 usually should not. When a file grows past it for no such reason, split
 it using Rust's module system:
 
 ```
 routes/admin/mod.rs      → sub-module declarations + router assembly
-routes/admin/settings.rs → settings form logic only
+routes/admin/settings/   → settings form logic only (mod.rs, handler.rs, form.rs, render/)
 routes/admin/backup.rs   → backup list/download/delete only
 routes/admin/system.rs   → system info + backup trigger only
 routes/admin/logs.rs     → log streaming only
@@ -124,7 +124,7 @@ routes/admin/logs.rs     → log streaming only
 Each `.rs` file has one clear purpose. Examples:
 - `settings.rs` — only key-value settings CRUD
 - `migration.rs` — only the versioned schema-migration chain
-- `email.rs` — only SMTP email composition and delivery
+- `email/` (`mod.rs`, `smtp.rs`, `templates.rs`, `types.rs`) — only SMTP email composition and delivery
 
 ### 3. Trait-based abstraction at every boundary
 
@@ -145,9 +145,13 @@ pub trait Migrator: Send + Sync {
         -> Result<MigrationSummary, MigrateError>;
 }
 
-// ✅ Good: integration trait
-pub trait NotificationSink: Send + Sync {
-    fn notify(&self, detection: &Detection) -> impl Future<Output = Result<bool, Error>>;
+// ✅ Good: a clock boundary (birdnet-scheduler/src/traits.rs) so schedule
+// logic is tested against a fake clock rather than the wall clock
+pub trait TimeSource: Send + Sync {
+    /// Returns minutes since midnight (0–1439) in local time.
+    fn minutes_since_midnight(&self) -> u32;
+    /// Returns the current day-of-year (1–366).
+    fn day_of_year(&self) -> u32;
 }
 ```
 
@@ -163,10 +167,17 @@ pub mod types;
 // birdnet-db/src/settings.rs, birdnet-db/src/migration.rs
 
 // In birdnet-db/src/sqlite/queries/mod.rs
-pub mod detections;
-pub mod species;
-pub mod correlation;
 pub mod analytics;
+pub mod correlation;
+pub mod detection_reviews;
+pub mod detections;       // itself split into read.rs / write.rs / …
+pub mod effort;
+pub mod heatmap;
+pub mod images;
+pub mod imports;
+pub mod maintenance;
+pub mod quarantine;
+pub mod species;
 ```
 
 ### 5. Re-export via `pub use` at crate root
@@ -186,10 +197,10 @@ pub use queries::correlation::{FollowOn, SpeciesPair};
 - **Property-based testing** with `proptest` for data pipeline validation
 - **Criterion.rs benchmarks** with HTML reports for performance-critical paths
 - End-to-end tests against real WAV fixtures and real SQLite databases
-- Coverage tracked via `cargo-tarpaulin`
+- Coverage tracked via `cargo-llvm-cov` (`.github/workflows/coverage.yml`)
 - MSRV explicitly specified (1.95) and CI-enforced
-- **Current test count**: 3 623 `#[test]` / `#[tokio::test]` attributes across
-  the workspace — re-derive with
+- **Current test count**: 3 694 `#[test]` / `#[tokio::test]` attributes across
+  the workspace at commit `dd10fe7` — re-derive with
   `grep -rn --include='*.rs' -E '^\s*#\[(test|tokio::test)' src crates tests | wc -l`
   rather than trusting this figure
 

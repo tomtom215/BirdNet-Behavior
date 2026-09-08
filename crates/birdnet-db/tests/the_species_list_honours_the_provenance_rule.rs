@@ -231,3 +231,88 @@ fn the_two_sources_agree_when_there_is_nothing_to_exclude() {
          nothing to exclude, so switching between them changes the answer"
     );
 }
+
+/// Item 3.22: the lasting fix. The reader-side substitute that closed RC-3
+/// made the numbers right by putting exactly the stations that had merged
+/// another site's history — the large ones — back onto the whole-history
+/// scan migration 30 existed to remove. With a provenance dimension in the
+/// rollup's key both answers come from the rollup and nobody pays.
+///
+/// Same mechanical check as the test above: a value the base table cannot
+/// produce, asserted through every reader — with the exclusion **on** and
+/// imported rows **present**, which is the one configuration the substitute
+/// served from the scan. Observed failing against the substitute:
+/// `left: 2, right: 41`.
+#[test]
+fn a_station_that_excludes_imports_still_reads_the_rollup() {
+    let conn = station(Some("true"));
+    conn.execute(
+        "UPDATE species_summary SET detections = 41 WHERE Com_Name = 'Eurasian Blackbird'",
+        [],
+    )
+    .expect("tamper");
+
+    let top = top_species(&conn, 10).expect("top");
+    assert_eq!(top.len(), 1, "the excluded import is still listed: {top:?}");
+    assert_eq!(
+        top[0].count, 41,
+        "the species list stopped reading the rollup on the one station that \
+         paid the scan — migration 30's bounded cost is gone for exactly the \
+         stations that need it"
+    );
+    let hours = species_hourly_activity(&conn, "Eurasian Blackbird").expect("hours");
+    assert_eq!(hours.iter().map(|h| h.count).sum::<i64>(), 41, "{hours:?}");
+    let batch =
+        species_hourly_activity_batch(&conn, &["Eurasian Blackbird".to_string()]).expect("batch");
+    assert_eq!(batch["Eurasian Blackbird"].iter().sum::<i64>(), 41);
+    assert!(
+        search_species(&conn, "Tit", 10).expect("search").is_empty(),
+        "and the excluded import is still excluded"
+    );
+}
+
+/// The rollup carries provenance in its key and the triggers maintain it
+/// through every path a row's provenance can change: an import lands in the
+/// imported bucket, a row that is re-attributed moves between buckets, and
+/// an undone import is subtracted from the right one. `species_summary_drift`
+/// — the recount `--doctor` runs — is the arbiter throughout.
+#[test]
+fn the_rollup_keys_provenance_and_the_triggers_keep_it() {
+    let conn = station(None);
+    let bucket = |is_import: i64| -> i64 {
+        conn.query_row(
+            "SELECT COALESCE(SUM(detections), 0) FROM species_summary WHERE is_import = ?1",
+            [is_import],
+            |r| r.get(0),
+        )
+        .expect("bucket")
+    };
+    let drift =
+        || birdnet_db::sqlite::queries::species::species_summary_drift(&conn).expect("drift");
+    assert_eq!((bucket(0), bucket(1)), (2, 3), "two local, three imported");
+    assert!(drift().is_empty(), "{:?}", drift());
+
+    // Re-attribute one local row to the import batch: it moves buckets.
+    conn.execute(
+        "UPDATE detections SET import_batch_id = 1
+          WHERE Com_Name = 'Eurasian Blackbird' AND Time = '06:00:00'",
+        [],
+    )
+    .expect("re-attribute");
+    assert_eq!((bucket(0), bucket(1)), (1, 4));
+    assert!(drift().is_empty(), "{:?}", drift());
+
+    // Undo the import: the imported bucket empties, the local one is untouched.
+    conn.execute("DELETE FROM detections WHERE import_batch_id = 1", [])
+        .expect("undo import");
+    assert_eq!((bucket(0), bucket(1)), (1, 0));
+    assert!(drift().is_empty(), "{:?}", drift());
+    let rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM species_summary WHERE is_import = 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("rows");
+    assert_eq!(rows, 0, "an emptied bucket is deleted, not left at zero");
+}

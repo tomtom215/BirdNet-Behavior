@@ -6,7 +6,8 @@
 //!   GET /pages/dawn-list                right-rail per-species strips
 //!
 //! Sunrise/sunset are taken from the configured station lat/lon if available;
-//! falls back to a conservative 05:30 / 20:00.
+//! without coordinates the sun markers and night wedge are omitted rather than
+//! guessed (see `solar_times_local` below).
 //!
 //! # No panicking operations in this module
 //!

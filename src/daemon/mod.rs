@@ -15,7 +15,10 @@
 //! the obstacle out of existence rather than lifting a threshold.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::time::Duration;
 
 use birdnet_core::audio::extraction::Extractor;
 use birdnet_integrations::notification::{NotificationFilter, NotificationTemplate};
@@ -289,6 +292,16 @@ pub fn start_detection_daemon(
 
     let thresholds_for_processor = daemon_config.species_thresholds.clone();
     let global_confidence = confidence;
+    // What every row this run writes will say about the station and the
+    // settings that produced it (R-2 / UP-1). Taken from the same resolved
+    // values the model and the daylight filter use, so the row and the run
+    // cannot disagree.
+    let provenance = processor::RunProvenance {
+        lat: latitude,
+        lon: longitude,
+        sensitivity: f64::from(sensitivity),
+        overlap: f64::from(overlap),
+    };
 
     // Extract clips into the SAME dir the web serves recordings from
     // (AppState::recording_dir) — one source of truth — so clips persist on the
@@ -322,6 +335,7 @@ pub fn start_detection_daemon(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                         dynamic_config,
                     ),
+                    provenance,
                 );
             });
             Some(handle)
@@ -330,6 +344,98 @@ pub fn start_detection_daemon(
             tracing::error!(error = %e, "failed to start detection daemon");
             None
         }
+    }
+}
+
+/// Keep the health endpoint's daemon flag true only while the loop thread is
+/// alive (`PR-5`, `OP-2`).
+///
+/// `source` is [`birdnet_core::detection::daemon::DaemonHandle::running_flag`],
+/// cleared by the loop thread as it returns; `target` is
+/// `AppState::detection_status_flag`, which `/api/v2/health?strict=1` reads.
+/// Before this the target was stored once at start-up and cleared by nothing,
+/// so a daemon that died after boot went on reporting itself running for the
+/// life of the process — on the one endpoint a container healthcheck or a
+/// monitor is told to point at.
+///
+/// Polled rather than pushed because the loop thread is `birdnet-core`'s and
+/// the flag is the web crate's; a poll every few seconds is far inside the
+/// 15-minute alerting debounce and costs one atomic load. The task ends once
+/// it has recorded the exit: a daemon is not restarted in-process, so there
+/// is nothing further to mirror.
+pub fn mirror_liveness(
+    source: Arc<AtomicBool>,
+    target: Arc<AtomicBool>,
+    every: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(every);
+        loop {
+            tick.tick().await;
+            if !source.load(Ordering::Acquire) {
+                target.store(false, Ordering::Relaxed);
+                tracing::error!(
+                    "detection daemon thread has exited; /api/v2/health?strict=1 now reports it                      stopped. The web UI keeps serving; restart the service to resume detection"
+                );
+                return;
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+mod liveness_mirror_tests {
+    use super::*;
+
+    const TICK: Duration = Duration::from_millis(10);
+
+    async fn settle() {
+        tokio::time::sleep(TICK * 8).await;
+    }
+
+    /// A daemon that exits is reported as stopped — and one that is still
+    /// running is not, which is the counterpart that stops "always clear"
+    /// from passing.
+    ///
+    /// Observed failing with the mirror's `store(false)` removed: the
+    /// transition assertion reports `the daemon exited but the health flag
+    /// still says running`.
+    #[tokio::test]
+    async fn the_health_flag_follows_the_loop_thread_down_and_not_before() {
+        let source = Arc::new(AtomicBool::new(true));
+        let target = Arc::new(AtomicBool::new(true));
+        let task = mirror_liveness(Arc::clone(&source), Arc::clone(&target), TICK);
+
+        settle().await;
+        assert!(
+            target.load(Ordering::Relaxed),
+            "a running daemon must keep reading as running"
+        );
+        assert!(
+            !task.is_finished(),
+            "the mirror must keep watching a live daemon"
+        );
+
+        source.store(false, Ordering::Release);
+        settle().await;
+        assert!(
+            !target.load(Ordering::Relaxed),
+            "the daemon exited but the health flag still says running"
+        );
+        assert!(
+            task.is_finished(),
+            "nothing is left to mirror once the exit is recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_daemon_that_never_came_up_is_reported_at_the_first_tick() {
+        let source = Arc::new(AtomicBool::new(false));
+        let target = Arc::new(AtomicBool::new(true));
+        let task = mirror_liveness(Arc::clone(&source), Arc::clone(&target), TICK);
+        settle().await;
+        assert!(!target.load(Ordering::Relaxed));
+        assert!(task.is_finished());
     }
 }
 

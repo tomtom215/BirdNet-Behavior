@@ -212,7 +212,7 @@ means *while running*:
 
 | Setting | Reloading it means |
 |---|---|
-| `confidence_threshold`, `sf_thresh` | trivial — read per detection |
+| `confidence_threshold`, `sf_thresh` | the global pair is resolved once at daemon start (`resolve_confidence` in `src/daemon/config.rs`, `SF_THRESH` in `src/daemon/mod.rs`); per-species thresholds already reload through a 30 s `ThresholdCache` (`src/daemon/processor.rs`), so only the global pair needs new plumbing |
 | `species_include` / `exclude` | already live (`SpeciesListsProvider`, ~30 s TTL) |
 | `latitude` / `longitude` | invalidate the occurrence-filter cache, recompute the schedule |
 | `segment_duration`, `alsa_device`, `rtsp_url` | restart the capture process for that source |

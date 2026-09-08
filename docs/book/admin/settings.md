@@ -44,7 +44,7 @@ Rare-bird **quarantine** rules decide which detections are held for manual revie
 
 ### Allow and exclude lists
 
-The two lists on `/admin/species` decide which birds the station records at all:
+The two lists under **Station → Capture → Species** (`/station/capture#species`; the old `/admin/species` redirects there) decide which birds the station records at all:
 
 - **Exclude** — these species are never recorded. Nothing is written to the
   database, no notification is sent, and nothing is uploaded to BirdWeather.
@@ -125,4 +125,4 @@ The Settings sidebar also covers **Location**, **Audio** (see [Audio & Microphon
 
 ## Data quality
 
-The **Quality** dashboard (`/admin/quality`) summarizes the health of your detection database — the confidence distribution, a 30-day confidence trend, an hourly quality profile, and a ranked list of low-confidence species that are good candidates for a stricter per-species threshold.
+The **Quality** dashboard (**Station → Data**, `/station/data#quality`; the old `/admin/quality` redirects there) summarizes the health of your detection database — the confidence distribution, a 30-day confidence trend, an hourly quality profile, and a ranked list of low-confidence species that are good candidates for a stricter per-species threshold.

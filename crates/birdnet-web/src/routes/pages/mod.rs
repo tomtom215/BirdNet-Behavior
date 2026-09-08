@@ -127,7 +127,6 @@ pub fn router() -> Router<AppState> {
         .merge(life_list::router())
         .merge(notification_center::router())
         .merge(year_in_review::router())
-        .merge(onboarding::router())
         .merge(migration::router())
         .merge(dawn_chorus::router())
         .merge(homes::router())
@@ -155,7 +154,7 @@ pub fn mutating_router() -> Router<AppState> {
         .merge(detection_reviews::mutating_router())
         .merge(recordings::mutating_router())
         .merge(quarantine::mutating_router())
-        .merge(onboarding::mutating_router())
+        .merge(onboarding::gated_router())
         .merge(search::mutating_router())
 }
 

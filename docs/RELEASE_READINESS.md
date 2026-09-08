@@ -23,7 +23,8 @@ Pi or Linux box, analytics on by default, surviving every realistic edge case wi
 maintenance"* — plus the concrete gap backlog and a sequenced plan to close it. Written so
 it can be picked up cold: every item carries evidence (`file:line`), root cause, a fix plan,
 effort/risk, blockers, and how to verify. Companion to `docs/RELEASE_PUNCHLIST.md` (the
-functional punchlist, which is essentially complete — only P3-4 cosmetics remain there).
+functional punchlist, which is essentially complete — only P3-4's migration-missing stub and
+three minor P3-5 follow-ups remain there).
 
 _Last audited: 2026-06-03, against integration tip `claude/gallant-feynman-bJs95` (`dc7d3c1`,
 after PR #139); G-13 (model bundling) landed this cycle. Re-run the inventory greps if the tree
@@ -83,7 +84,8 @@ north-star:
   WAL + integrity-check + hot-backup + corruption quarantine/recovery, bounded queues
   everywhere, capped-backoff network integrations — most with fault-injection tests.
 - A comprehensive **doctor** (CLI + web) with plain-language remediation, and a mature docs
-  site (mdBook on GitHub Pages) + README + TROUBLESHOOTING + SECURITY_HARDENING + FIELD_DEPLOYMENT.
+  site (mdBook on GitHub Pages, now home to the hardening and field-deployment guides under
+  `docs/book/field/`) + README + TROUBLESHOOTING.
 
 **Overall verdict: the product is at a solid beta/GA-candidate bar.** What remains is a
 focused set of gaps, not a rebuild. The highest-leverage items are (1) closing two genuine
@@ -120,13 +122,13 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Item | Verdict | Evidence |
 |---|---|---|
 | `curl \| sudo bash` one-liner | ✅ | `install.sh:14`; generated from `installer/lib/*.sh` by `installer/build.sh` (CI sync-gate) |
-| Arch detection (Pi 5/4B/400, x86_64) | ✅ | `installer/lib/30-platform.sh:50` `detect_arch()`; rejects armv6/armv7 with guidance |
+| Arch detection (Pi 5/4B/400, x86_64) | ✅ | `installer/lib/30-platform.sh:156` `detect_arch()`; rejects armv6/armv7 with guidance |
 | Prebuilt-binary fetch (no on-device compile) | ✅ | `installer/lib/50-binary.sh:11`; GH Releases URL; `sha256sum -c SHA256SUMS` verify |
 | ONNX Runtime in the binary | ✅ static | `ort` `download-binaries` links `libonnxruntime.a` at **build** time; released tarball ships **binary only** and runs (empirically confirmed by v0.5.x field installs) |
 | Models/labels as shared GitHub asset, sha256-verified | ✅ | `installer/lib/55-model.sh` + `docker/entrypoint.sh` fetch the ~541 MB model from the stable `models-v3.0-preview3` GitHub release (same origin as the binary, resumable), verify the pinned sha256, fall back to Zenodo; published once by `publish-model.yml` (G-13) |
 | Web assets / fonts | ✅ | server-rendered (axum/HTMX); self-hosted fonts; no separate bundling needed |
-| Help docs embedded | ✅ | `build.rs` renders mdBook into `_generated/html/`, served at `/help/*` |
-| Analytics ON by default | ✅ | `installer/lib/65-service.sh:90` hardcodes `--analytics-db …`; release built `--features analytics` |
+| Help docs embedded | ✅ | the root `build.rs` renders mdBook into `docs/book/_generated/html/`, served at `/help/*` |
+| Analytics ON by default | ✅ | `installer/lib/65-service.sh:114` (`ExecStart=`) hardcodes `--analytics-db …`; release built `--features analytics` |
 | Audio device auto-detect | ✅ | `installer/lib/70-station.sh` `detect_first_audio_device()` (`arecord -l`) |
 | Location / timezone auto-detect | ✅ | IP-geolocation (`/admin/settings/detect-location` → ip-api.com) returns IANA tz (G-08) and is wired into the onboarding wizard's auto-detect (G-09); doctor clock/tz check (G-08) |
 | systemd install + enable + dashboard URL print | ✅ | `65-service.sh`, `75-start.sh`, `80-summary.sh:38` (URL + mDNS + IP) |
@@ -143,7 +145,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Disk-full handling | ✅ | `crates/birdnet-core/src/audio/capture/disk/{manager,purge}.rs`: 95% purge of oldest 10%, per-species caps, Purge/Keep modes; tests present |
 | SQLite WAL + corruption recovery + backups | ✅ | `crates/birdnet-db/src/resilience.rs`: WAL, `quick_check`/`integrity_check`, hot backup API, rotation (5), `check_and_recover()` restore-from-backup, quarantine corrupt DB; daily/weekly maintenance ticks; tests present |
 | DuckDB **analytics** DB resilience | ✅ | was 🟡. `AnalyticsDb::open_or_quarantine` (`crates/birdnet-behavioral/src/connection/mod.rs`) quarantines an unusable analytics DB and rebuilds it from SQLite — "analytics database is unusable; quarantining it and rebuilding from SQLite" (G-11) |
-| Network capped backoff / graceful offline | ✅ | BirdWeather `MAX_RETRIES=3`, Apprise `MAX_RETRIES=2` (+ cooldown-map prune), exp backoff, log-and-continue; MQTT fail-fast (re-queued by supervisor) |
+| Network capped backoff / graceful offline | ✅ | BirdWeather and Apprise each make up to `MAX_ATTEMPTS = 3` attempts (`crates/birdnet-integrations/src/birdweather.rs`, `apprise.rs`; Apprise also prunes its cooldown map), exp backoff, log-and-continue; MQTT fail-fast (re-queued by supervisor) |
 | Bounded queues / backpressure | ✅ | detection `sync_channel` cap 1024, broadcast 256, log ring 512/200, rate-limiter cleanup — no unbounded growth vectors |
 | Safe auto-update (verify + rollback) | ✅ | was 🟡 (atomic swap only, `SHA256SUMS` *skipped*). `crates/birdnet-integrations/src/auto_update/mod.rs` now reads the asset's digest from the release's `SHA256SUMS` (erroring when the release publishes none), verifies the download against it, and smoke-tests the staged binary before the swap — `UpdateError::Integrity` / `::SmokeTest` (G-01) |
 
@@ -151,7 +153,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 
 | Item | Verdict | Evidence |
 |---|---|---|
-| First-run admin password | ✅ | argon2id `crates/birdnet-db/src/accounts.rs`; `src/helpers/auth.rs` bootstrap; installer auto-generates a strong password (user `admin`) and prints it once |
+| First-run admin password | ✅ | argon2id `crates/birdnet-db/src/accounts/` (module directory); `src/helpers/auth.rs` bootstrap; installer auto-generates a strong password (user `admin`) and prints it once |
 | Health/doctor page (CLI + web) | ✅ | `src/doctor/*` (audio/model/db/paths/disk/env/config/watchdog) + `/admin/doctor`; plain-language remediation per finding |
 | Doctor **self-heal** | ✅ | `--fix` creates missing configured dirs (recordings + image-cache) before reporting; safe/idempotent, never needs root (G-07) |
 | Web onboarding wizard persists | ✅ | `POST /onboarding/save` persists location/timezone/notify + `onboarding_complete`; fresh box is redirected to the wizard; auto-detect wired (G-09) |
@@ -170,9 +172,9 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Item | Verdict | Evidence |
 |---|---|---|
 | CI: fmt/clippy×2/test×4/doc/build/MSRV/aarch64-cross | ✅ | `.github/workflows/ci.yml` |
-| CI gates the **integration branch** | 🟡 | Was ❌ (`ci.yml` triggered on `main`/`master` only). `ci.yml` and `a11y.yml` now carry `claude/**` in `pull_request.branches`, which covers a PR whose *base* is a `claude/**` branch — a PR *from* one into `main` already ran every gate, because the filter reads the base. `coverage.yml`, `install-smoke.yml`, `mutation.yml` and `supply-chain.yml` still lack the glob, so only that stacked case is uncovered (G-02) |
+| CI gates the **integration branch** | 🟡 | Was ❌ (`ci.yml` triggered on `main`/`master` only). `ci.yml` and `a11y.yml` now carry `claude/**` in `pull_request.branches`, which covers a PR whose *base* is a `claude/**` branch — a PR *from* one into `main` already ran every gate, because the filter reads the base. `coverage.yml`, `install-smoke.yml`, `mutation.yml` and `supply-chain.yml` still lack the glob (`docs.yml` and `docker.yml` have no `pull_request` branch filter at all, only path filters), so only that stacked case is uncovered (G-02) |
 | inline-style guard | ✅ | `crates/birdnet-web/tests/inline_style_guard.rs` (runs under `cargo test --tests`) |
-| Coverage / Mutation / Supply-chain / Docs / Docker | ✅ | `coverage.yml` (llvm-cov), `mutation.yml` (cargo-mutants), `supply-chain.yml` (deny/audit/machete/typos/shellcheck), `docs.yml` (mdbook→Pages), `docker.yml` (multi-arch GHCR) |
+| Coverage / Mutation / Supply-chain / Docs / Docker | ✅ | `coverage.yml` (llvm-cov), `mutation.yml` (cargo-mutants), `supply-chain.yml` (deny/audit/machete/typos/shellcheck/installer unit tests), `docs.yml` (mdbook→Pages), `docker.yml` (multi-arch GHCR) |
 | Dependabot CI green | ❌ | cargo-bump branch fails **Clippy (pedantic+nursery, -D warnings)** — `main` unaffected (G-03) |
 | Full-pipeline E2E (audio→infer→DB→web) | ✅ | `tests/pipeline_e2e.rs`: CI layer (real decode/resample + real `insert_detection`→web read) + model-gated full chain (G-04) |
 | BirdNET-Pi migration integration test | ✅ | `crates/birdnet-migrate/tests/migration_e2e.rs`: fixture→import→assert dest rows/values/schema + idempotency + clamping + CSV (G-05) |
@@ -183,7 +185,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Item | Verdict | Evidence |
 |---|---|---|
 | README with one-liner | ✅ | `README.md:88-110` |
-| Install / upgrade / troubleshoot guides | ✅ | mdBook site, `TROUBLESHOOTING.md`, `RELEASING.md`, `SECURITY_HARDENING.md`, `FIELD_DEPLOYMENT.md`, `MACOS.md` |
+| Install / upgrade / troubleshoot guides | ✅ | mdBook site (`docs/book/field/{deployment,hardening,macos}.md` — formerly the root `FIELD_DEPLOYMENT.md`, `SECURITY_HARDENING.md`, `MACOS.md`), `TROUBLESHOOTING.md`, `RELEASING.md` |
 | This readiness doc kept current | ✅ (new) | `docs/RELEASE_READINESS.md` |
 
 ---
@@ -375,10 +377,13 @@ afterwards. Verified in a real run (local GitHub stand-in + live Zenodo): GitHub
 fetch+verify (Zenodo untouched), a tampered asset is detected and falls back, a file that fails on
 **both** origins is **never** left on disk (fatal), and a GitHub 404 falls back to live Zenodo —
 11/11 assertions green. Mirrored in README, RELEASING.md ("The shared model release"), the release
-notes, and quickstart. **Operational note:** publish `models-v3.0-preview3` (run the workflow) so
-0.6.0+ installs hit GitHub first; until then they transparently fall back to Zenodo.
+notes, and quickstart. **Published:** the `models-v3.0-preview3` tag exists on origin
+(`git ls-remote --tags origin` → `374c2b5`), so 0.6.0+ installs hit GitHub first and fall back to
+Zenodo only on failure.
 
-**G-14 — glibc / Bookworm portability.** *(Track A · P1 · M–L · med)* **Blocked-by:** D-1.
+**G-14 — glibc / Bookworm portability.** *(Track A · P1 · M–L · med)* **Settled, not built:** the
+release stays on Ubuntu 24.04 / glibc 2.39; `installer/lib/30-platform.sh` `detect_glibc_version()`
+refuses Bookworm (glibc 2.36) and points at Docker instead (see `RELEASING.md` "Build targets").
 
 ---
 
@@ -402,11 +407,11 @@ notes, and quickstart. **Operational note:** publish `models-v3.0-preview3` (run
   - PR7: **G-09** onboarding persistence + first-boot redirect — ✅ done.
   - PR8: **G-08** geolocation timezone surfacing + doctor clock check — ✅ done.
   - PR9: **G-07** doctor self-heal (`--fix`) — ✅ done.
-- **Wave 4 — portability & offline *(pending D-1/D-2)*.**
-  - PR10: **G-14** glibc/Bookworm.
+- **Wave 4 — portability & offline.** D-1 settled (refuse Bookworm, document Docker), D-2 done.
+  - PR10: **G-14** glibc/Bookworm — settled as documented-and-refused by the installer (see G-14).
   - PR11: **G-13** model bundling — ✅ done (shared `models-v3.0-preview3` GitHub release; installer + Docker fetch GitHub-first, sha256-verified, resumable, Zenodo fallback; `publish-model.yml`).
-- **Wave 5 — polish.**
-  - PR12: **G-10** cosmetics + a11y sweep; **G-11** DuckDB resilience; **G-12** MQTT buffer.
+- **Wave 5 — polish.** ✅ all three closed (see §4).
+  - PR12: **G-10** a11y sweep — ✅ standing `a11y.yml` gate; **G-11** DuckDB resilience — ✅ `AnalyticsDb::open_or_quarantine`; **G-12** MQTT buffer — ✅ closed by decision (fire-and-forget; no buffer).
 
 ---
 

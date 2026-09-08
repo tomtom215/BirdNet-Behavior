@@ -243,6 +243,26 @@ fn record_notification(
     }
 }
 
+/// What the station and this run were when a row was written — the columns
+/// BirdNET-Pi has always filled and this daemon left NULL (R-2 / UP-1).
+///
+/// `lat`/`lon` are the resolved station coordinates (`None` when the station
+/// has none configured: the column stays NULL rather than reading 0,0);
+/// `sensitivity` and `overlap` are the inference settings the run started
+/// with. The confidence cutoff is not here because it is per row: it is the
+/// threshold `decide_disposition` admitted the detection at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct RunProvenance {
+    /// Station latitude, decimal degrees.
+    pub lat: Option<f64>,
+    /// Station longitude, decimal degrees.
+    pub lon: Option<f64>,
+    /// BirdNET sigmoid sensitivity the model ran with.
+    pub sensitivity: f64,
+    /// Analysis-window overlap in seconds.
+    pub overlap: f64,
+}
+
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
 #[allow(
     clippy::needless_pass_by_value,
@@ -266,6 +286,7 @@ pub(super) fn event_processor(
     duplicate_interval_secs: i64,
     daylight: crate::daemon::daylight::DaylightFilter,
     dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
+    provenance: RunProvenance,
 ) {
     tracing::debug!("event processor started");
     let mut species_thresholds = ThresholdCache::new(species_thresholds);
@@ -404,7 +425,7 @@ pub(super) fn event_processor(
         // Detections that pass the global threshold but fail a stricter
         // per-species threshold are quarantined for manual review rather
         // than silently dropped.
-        match decide_disposition(
+        let admitted_at = match decide_disposition(
             detection.confidence,
             &detection.scientific_name,
             species_thresholds,
@@ -435,8 +456,8 @@ pub(super) fn event_processor(
                     } else {
                         Some(file_str.as_ref())
                     },
-                    lat: None,
-                    lon: None,
+                    lat: provenance.lat,
+                    lon: provenance.lon,
                     week: week_str.parse::<i32>().ok(),
                 };
                 if let Some(Err(e)) = state
@@ -459,8 +480,8 @@ pub(super) fn event_processor(
                 state.metrics().inc_detection_dropped("confidence");
                 continue;
             }
-            DispositionDecision::Accept => {}
-        }
+            DispositionDecision::Accept { threshold } => threshold,
+        };
 
         // One continuous song is one detection. Applied *after* the threshold
         // gates so a suppressed duplicate cannot consume the interval on
@@ -539,12 +560,16 @@ pub(super) fn event_processor(
             sci_name: &detection.scientific_name,
             com_name: &detection.common_name,
             confidence: f64::from(detection.confidence),
-            lat: None,
-            lon: None,
-            cutoff: None,
+            // Station and run provenance (R-2 / UP-1): the coordinates the
+            // station resolved at start (NULL when it has none — never 0,0),
+            // the threshold this row actually cleared, and the inference
+            // settings of the run. BirdNET-Pi filled these on every row.
+            lat: provenance.lat,
+            lon: provenance.lon,
+            cutoff: Some(admitted_at),
             week: Some(i64::from(detection.week)),
-            sensitivity: None,
-            overlap: None,
+            sensitivity: Some(provenance.sensitivity),
+            overlap: Some(provenance.overlap),
             file_name: &file_str,
             // Without this, every chunk of one recording shares the same
             // UNIQUE key (Date, Time, Sci_Name, File_Name) and only the
@@ -1452,6 +1477,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
+                TEST_PROVENANCE,
             );
         })
         .await
@@ -1549,6 +1575,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
+                TEST_PROVENANCE,
             );
         })
         .await
@@ -1627,6 +1654,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
+                TEST_PROVENANCE,
             );
         })
         .await
@@ -1725,6 +1753,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
+                TEST_PROVENANCE,
             );
         })
         .await
@@ -1860,6 +1889,95 @@ mod tests {
     // DB / disposition / alert-rule logic, not the network sinks.
 
     /// Build a `DetectionEvent` with the given species and confidence.
+    /// R-2 / UP-1: a row must say which station wrote it and what bar it
+    /// cleared. BirdNET-Pi fills `Lat`, `Lon`, `Cutoff`, `Sens` and `Overlap`
+    /// on every row; this daemon wrote NULL to all five, so an exported
+    /// dataset could not be located, and a confidence could not be read
+    /// against the threshold that admitted it. Two rows: one admitted by a
+    /// per-species threshold, one by the global floor — the cutoff must be
+    /// the one that actually applied, not a constant.
+    ///
+    /// Observed failing against the shipped insert (every column NULL):
+    /// `Pica pica: lat=None lon=None cutoff=None sens=None overlap=None`.
+    /// `(Sci_Name, Lat, Lon, Cutoff, Sens, Overlap)` as read back.
+    type ProvenanceRow = (
+        String,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+    );
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_accepted_row_records_the_station_and_the_threshold_it_cleared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let events = vec![
+            make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "c1",
+            ),
+            make_event(
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.50,
+                tmp.path().join("b.wav"),
+                "c2",
+            ),
+        ];
+        let mut thresholds = HashMap::new();
+        thresholds.insert("Pica pica".to_owned(), 0.80);
+        run_processor(&state, events, thresholds, 0.25).await;
+
+        let rows: Vec<ProvenanceRow> = state.with_db(|conn| {
+            conn.prepare(
+                "SELECT Sci_Name, Lat, Lon, Cutoff, Sens, Overlap FROM detections ORDER BY Sci_Name",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+        });
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        for (sci, lat, lon, cutoff, sens, overlap) in &rows {
+            let expected_cutoff = if sci == "Pica pica" { 0.80 } else { 0.25 };
+            assert_eq!(
+                (*lat, *lon, *cutoff, *sens, *overlap),
+                (
+                    Some(51.48),
+                    Some(-0.13),
+                    Some(expected_cutoff),
+                    Some(1.25),
+                    Some(1.5)
+                ),
+                "{sci}: lat={lat:?} lon={lon:?} cutoff={cutoff:?} sens={sens:?} overlap={overlap:?}"
+            );
+        }
+    }
+
+    /// The station every processor test runs as, so a row's provenance
+    /// columns have known values to assert against.
+    const TEST_PROVENANCE: super::RunProvenance = super::RunProvenance {
+        lat: Some(51.48),
+        lon: Some(-0.13),
+        sensitivity: 1.25,
+        overlap: 1.5,
+    };
+
     fn make_event(
         sci: &str,
         com: &str,
@@ -1997,6 +2115,7 @@ mod tests {
                 duplicate_interval_secs,
                 daylight,
                 dynamic,
+                TEST_PROVENANCE,
             );
         })
         .await

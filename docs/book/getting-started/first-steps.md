@@ -8,7 +8,7 @@ http://<your-ip>:8502
 
 > Not sure of your Pi's IP? Run `hostname -I` on the Pi, or check your router's device list.
 
-The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; only the **Admin** panel does. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `admin`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-admin-sign-in) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
+The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; the **Admin** panel, the Station management tabs and every action that changes something do. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `admin`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-admin-sign-in) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
 
 If you set your latitude/longitude and an audio source, detections start appearing within a minute or two of the first bird call — no further configuration required.
 
@@ -25,7 +25,7 @@ The UI has six homes — the tabs along the top (and the phone bottom bar):
 
 ## First-run wizard
 
-If you'd like a guided setup, open **`/onboarding`** for a six-step wizard — location, microphone, detection accuracy, and alert preferences — that gets a new station listening in about ninety seconds. A fresh station is sent here automatically the first time you open the dashboard.
+If you'd like a guided setup, open **`/onboarding`** for a six-step wizard — location, microphone, detection accuracy, and alert preferences — that gets a new station listening in about ninety seconds. A fresh station is sent here automatically the first time you open the dashboard. If the installer generated an admin password for you, you are asked to sign in first and then land on the wizard; the location it saves must be a real coordinate pair (both values, within ±90 / ±180) and a time zone this host knows, or it is left unset and the server log says why.
 
 ![The first-run onboarding wizard](../images/onboarding.png)
 

@@ -418,44 +418,87 @@ async fn run_summary_audit(db_path: &Path) {
     }
 }
 
-/// Current wall-clock time as Unix seconds.
-/// Whether the wall clock is trustworthy enough to delete things by date.
+/// Whether the clock is trustworthy enough to run a date-based deletion.
 ///
-/// Every retention job in this loop computes its cutoff from `date('now')`.
-/// That is fine when the clock is right and catastrophic when it is not: a
-/// probe using `run_clip_retention`'s own cutoff expression reclaimed the entire
-/// clip library under a clock reading fifty years ahead, while the detection
-/// rows survived — so the loss is invisible in every count and chart the
-/// operator looks at.
+/// Every retention job in this process is an `older than N days` predicate,
+/// and such a predicate is only as good as the `now` it subtracts from. Two
+/// clocks are wrong in ways that matter here:
 ///
-/// A Raspberry Pi has no battery-backed RTC. Before NTP lands it reads the
-/// epoch, and on a station whose uplink is down that may be for weeks. In that
-/// state every cutoff is nonsense and nothing dated should be deleted; the
-/// station should keep recording and wait, which is what the capture supervisor
-/// already does for scheduling.
+/// * **Too early.** A Raspberry Pi has no battery-backed RTC. Before NTP lands
+///   it reads the epoch, and on a station whose uplink is down that may be for
+///   weeks. Every cutoff is then before anything recorded, so nothing would be
+///   deleted — but the floor is kept so the decision is explicit rather than
+///   accidental, and so the log says why.
+/// * **Jumped forward.** A GPS week rollover reaching the station through an
+///   upstream NTP source, a carrier NITZ date, a `date -s` typo. Every cutoff
+///   then moves past the entire clip library and the 400-day acoustic
+///   baseline at once, the rows survive, and the loss is invisible in every
+///   count (NT-4; the probe used this file's own cutoff expression). This is
+///   the direction that destroys data, and a floor cannot see it.
 ///
-/// # What this does not cover
+/// The second is caught by [`birdnet_core::civil::ForwardStepWatch`]: one
+/// process-wide watch, baselined at the first plausible reading, comparing the
+/// wall clock's advance against the monotonic clock's. A step of more than
+/// [`birdnet_core::civil::MAX_FORWARD_STEP_SECS`] — 400 days, past every
+/// retention window — refuses every date-based deletion until the process
+/// restarts, and says so on every tick. The absurd case, a reading past 2064,
+/// needs no baseline and is refused on sight.
 ///
-/// The floor catches a clock that is too *early*. A clock far in the *future* —
-/// a GPS week rollover upstream, a carrier NITZ date, a `date -s` typo — is the
-/// direction the probe demonstrated and is **not** caught here, because
-/// catching it needs a reference this function does not have. Distinguishing
-/// "the clock jumped forward nineteen years" from "nineteen years passed"
-/// requires comparing the wall clock against the monotonic clock across one
-/// process lifetime. That is recorded as the remaining half of NT-4 in
-/// `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` rather than half-built here.
-fn clock_is_safe_for_retention() -> bool {
+/// The same guard is consulted by the acoustic-health and weather pruners,
+/// which run in their own loops (RC-17), so there is one answer to "may this
+/// process delete by date right now" rather than three.
+pub fn clock_is_safe_for_retention() -> bool {
     let now = now_unix();
-    let plausible = u64::try_from(now).is_ok_and(birdnet_core::civil::clock_looks_plausible);
-    if !plausible {
-        tracing::warn!(
-            now_unix = now,
-            "skipping every date-based retention job: the clock reads before \
-             2024, so it has not been set or NTP-synced and every cutoff would \
-             be nonsense. Recording continues."
-        );
+    let verdict =
+        u64::try_from(now).map_or(birdnet_core::civil::ClockVerdict::BeforeFloor, |secs| {
+            retention_clock()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .observe(secs)
+        });
+    match verdict {
+        birdnet_core::civil::ClockVerdict::Sane => true,
+        birdnet_core::civil::ClockVerdict::BeforeFloor => {
+            tracing::warn!(
+                now_unix = now,
+                "skipping every date-based retention job: the clock reads before \
+                 2024, so it has not been set or NTP-synced and every cutoff would \
+                 be nonsense. Recording continues."
+            );
+            false
+        }
+        birdnet_core::civil::ClockVerdict::AfterCeiling => {
+            tracing::error!(
+                now_unix = now,
+                "skipping every date-based retention job: the clock reads past 2064, \
+                 which no station running this build can legitimately see. Every \
+                 'older than N days' cutoff would reclaim the whole clip library. \
+                 Fix the clock; recording continues."
+            );
+            false
+        }
+        birdnet_core::civil::ClockVerdict::SteppedForward { by_secs } => {
+            tracing::error!(
+                now_unix = now,
+                jumped_forward_days = by_secs / 86_400,
+                "skipping every date-based retention job: the clock has run ahead of \
+                 elapsed time by more than 400 days since this process started, so \
+                 every 'older than N days' cutoff would reclaim the whole clip \
+                 library. Recording continues. Retention stays off until the service \
+                 restarts on a clock that has been checked."
+            );
+            false
+        }
     }
-    plausible
+}
+
+/// The one [`ForwardStepWatch`](birdnet_core::civil::ForwardStepWatch) for
+/// the process. Global because three loops consult it and a baseline per loop
+/// would let one of them miss a step another had seen.
+fn retention_clock() -> &'static std::sync::Mutex<birdnet_core::civil::ForwardStepWatch> {
+    static WATCH: std::sync::OnceLock<std::sync::Mutex<birdnet_core::civil::ForwardStepWatch>> =
+        std::sync::OnceLock::new();
+    WATCH.get_or_init(|| std::sync::Mutex::new(birdnet_core::civil::ForwardStepWatch::default()))
 }
 
 fn now_unix() -> i64 {

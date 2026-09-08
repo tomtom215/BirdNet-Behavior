@@ -429,9 +429,10 @@ pub(super) enum CaptureState {
     Up,
     /// Sources are configured and none is up.
     Down,
-    /// Sources are configured but no gauge has been published yet (the
-    /// supervisor has not reconciled them, e.g. in the first seconds after a
-    /// start, or in a web-only process). Not an outage — just not known.
+    /// Sources are configured, the detection daemon is running, and no gauge
+    /// has been published yet (the supervisor has not reconciled them, e.g.
+    /// in the first seconds after a start). Not an outage — just not known.
+    /// A process with no running daemon and no gauge is [`Self::Down`].
     Unknown,
 }
 
@@ -452,7 +453,23 @@ pub(super) fn live_capture_state(state: &AppState) -> CaptureState {
     if gauges.contains(&Some(true)) {
         CaptureState::Up
     } else if gauges.iter().all(Option::is_none) {
-        CaptureState::Unknown
+        // No gauge was ever published. With the detection daemon running that
+        // is the first seconds after a start, before the supervisor has
+        // reconciled the sources: not known yet, not an outage. With no
+        // running daemon nothing will ever publish one — a source added while
+        // the daemon is down, a thread that never started, a `--web-only`
+        // process — and this used to read as `Unknown` and grade "Healthy"
+        // while `/api/v2/health?strict=1` on the same process said the daemon
+        // was stopped. The flag is set before the listener binds and cleared
+        // by the loop thread on exit, so this is not a boot-time flash. A
+        // gauge that *does* say up is believed even with the flag clear: the
+        // capture supervisor is not the detection loop, and a dead detector
+        // under a live microphone is `?strict=1`'s to report, not this pill's.
+        if state.detection_daemon_running() {
+            CaptureState::Unknown
+        } else {
+            CaptureState::Down
+        }
     } else {
         CaptureState::Down
     }
@@ -1059,6 +1076,55 @@ async fn unlock_detection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configured source on a process whose detection daemon is not running
+    /// is not capturing, whatever the gauges say — and they say nothing, since
+    /// nothing ever reconciled them. The badge read that as `Unknown` and
+    /// graded it "Healthy" while `/api/v2/health?strict=1` on the same process
+    /// said `detection_daemon: stopped` (`ops-4`). With the daemon running,
+    /// an unpublished gauge is still "not known yet", not an outage.
+    #[test]
+    fn a_configured_source_without_a_running_daemon_reads_as_down() {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+        use std::sync::atomic::Ordering;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        assert_eq!(live_capture_state(&state), CaptureState::NoSource);
+
+        state
+            .with_db(|conn| {
+                conn.insert(&NewAudioSource::defaults(
+                    "mic0",
+                    SourceKind::Rtsp,
+                    "rtsp://127.0.0.1:1/dead",
+                ))
+            })
+            .unwrap();
+        assert_eq!(
+            live_capture_state(&state),
+            CaptureState::Down,
+            "a source on a process with no detection daemon is not capturing"
+        );
+
+        state.detection_status_flag().store(true, Ordering::SeqCst);
+        assert_eq!(
+            live_capture_state(&state),
+            CaptureState::Unknown,
+            "the counterpart: a running daemon that has not reconciled yet is not an outage"
+        );
+        state.metrics().set_source_up("mic0", true);
+        assert_eq!(live_capture_state(&state), CaptureState::Up);
+        state.metrics().set_source_up("mic0", false);
+        assert_eq!(live_capture_state(&state), CaptureState::Down);
+
+        // A gauge that says up is the capture supervisor's word and stands
+        // even when the detection flag is clear: capture and detection are
+        // different threads, and `?strict=1` is what reports a dead detector.
+        state.metrics().set_source_up("mic0", true);
+        state.detection_status_flag().store(false, Ordering::SeqCst);
+        assert_eq!(live_capture_state(&state), CaptureState::Up);
+    }
 
     #[test]
     fn hour_formatting() {

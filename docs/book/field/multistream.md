@@ -9,10 +9,12 @@ cameras + the on-board mic) can hear the same bird at once.
   source (the RTSP stream id, e.g. `cam1`, or `local` for the on-board mic).
   Non-destructive; historical / imported rows stay `NULL`. See migration 18 and
   `DetectionRecord.source`.
-- **Stage 2 — the operator-facing UX: specified here, not yet implemented.** It
-  is deliberately routed through the UI design pass (see the "per-source /
-  multi-stream UI" item in [`docs/DESIGN_BRIEF.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/DESIGN_BRIEF.md)) so it ships as
-  one coherent experience rather than bolted-on widgets.
+- **Stage 2 — the operator-facing UX: partly shipped.** The corroboration card
+  (§1 below, "Also heard by") is live on the detection-detail page. The
+  per-source analytics filter (§2) and the time-window collapse (§3) remain
+  unimplemented; they are deliberately routed through the UI design pass (see
+  the "per-source / multi-stream UI" item in [`docs/DESIGN_BRIEF.md`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/DESIGN_BRIEF.md)) so they
+  ship as one coherent experience rather than bolted-on widgets.
 
 ## The problem
 

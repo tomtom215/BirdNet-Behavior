@@ -22,10 +22,13 @@
 //!   names of secrets (`PASSWORD`, `TOKEN`, `SECRET`, `PWD`, `KEY`, …) rather
 //!   than on an allow-list of known keys, so a setting added next year is
 //!   redacted before anyone remembers this file exists.
-//! * **By shape** — [`redact_url_credentials`] strips `user:pass@` from
-//!   anything URL-shaped in the values that *are* kept, because the key name
-//!   `RTSP_URL` says nothing about a secret while its value very often
-//!   contains one.
+//! * **By shape** — [`redact_value`] handles the values that *are* kept:
+//!   `user:pass@` is stripped from anything URL-shaped, an `http(s)` URL
+//!   loses its path (a heartbeat ping, an Apprise endpoint and a webhook all
+//!   carry their credential there), an Apprise-style notification URL keeps
+//!   only its scheme, and a bare email address loses its local part — because
+//!   the key name `RTSP_URL` or `HEARTBEAT_URL` says nothing about a secret
+//!   while its value very often is one.
 //!
 //! Redaction replaces the value rather than dropping the line: "this station
 //! has an SMTP password set" is diagnostic information, and a missing line
@@ -43,7 +46,7 @@ use std::path::{Path, PathBuf};
 
 use birdnet_core::config::Config;
 pub use birdnet_core::config::redact::{
-    REDACTED, is_secret_key, redact_email_local_part, redact_url_credentials,
+    REDACTED, is_secret_key, redact_url_credentials, redact_value,
 };
 
 use crate::cli::Cli;
@@ -65,7 +68,7 @@ pub fn redacted_config(config: &Config) -> String {
             let shown = if is_secret_key(k) {
                 REDACTED.to_owned()
             } else {
-                redact_email_local_part(&redact_url_credentials(v))
+                redact_value(v)
             };
             format!("{k}={shown}")
         })
@@ -116,12 +119,54 @@ fn stage(dir: &Path, name: &str, contents: &str) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| format!("writing {}: {e}", path.display()))
 }
 
+/// What [`build`] produced: the archive's size, and anything it could not
+/// stage — a member that failed is reported, not fatal, because a station too
+/// broken to answer one question is exactly the one that needs the rest.
+#[derive(Debug)]
+pub struct Bundle {
+    /// Size of the archive at `dest`, in bytes.
+    pub size: u64,
+    /// Members that could not be staged, one message each.
+    pub warnings: Vec<String>,
+}
+
 /// Collect a support bundle and write it to `dest`.
 ///
-/// Returns the process exit code: `0` on success, `2` when the bundle could
-/// not be written. The diagnostic itself failing is *not* an error — a station
-/// too broken to pass `--doctor` is exactly the one that needs a bundle.
-pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
+/// The one implementation behind both `--support-bundle` and
+/// `GET /admin/support-bundle` (`OP-1`), so the archive an operator downloads
+/// from the browser is byte-for-byte the shape of the one they would have
+/// produced at a terminal — same members, same redaction.
+///
+/// # Errors
+///
+/// The staging directory could not be created, or `tar` could not produce the
+/// archive. The diagnostic itself failing is *not* an error.
+pub fn build(cli: &Cli, config: Option<&Config>, dest: &Path) -> Result<Bundle, String> {
+    build_with_recent_log(cli, config, dest, None)
+}
+
+/// The name of the member carrying the running process's in-memory log ring.
+pub const RECENT_LOG_NAME: &str = "recent.log";
+
+/// [`build`], plus the last lines the running process logged.
+///
+/// `journal.log` is empty on a default Raspberry Pi OS, whose journal is
+/// volatile, and on any install not under systemd — both bundles a probe
+/// pulled from a container held "No journal files were found" and nothing
+/// else — while `/admin/system/logs` was replaying a 200-line in-process ring
+/// the bundle never staged. The web hook passes that ring here as
+/// `recent_log`; the command line, a separate process, has none and passes
+/// `None`, and the member is then absent rather than empty.
+///
+/// # Errors
+///
+/// As [`build`].
+pub fn build_with_recent_log(
+    cli: &Cli,
+    config: Option<&Config>,
+    dest: &Path,
+    recent_log: Option<&str>,
+) -> Result<Bundle, String> {
     // Staged beside the destination rather than in a temp dir: same
     // filesystem, so `tar` writes the archive without crossing a device, and
     // an operator who ran out of space sees it at the path they chose rather
@@ -130,15 +175,13 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
     let staging = staging_dir(dest);
     let _cleanup = Cleanup(staging.clone());
     let dir = staging.join("birdnet-support");
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("support: could not create a staging directory: {e}");
-        return 2;
-    }
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create a staging directory: {e}"))?;
 
-    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     let mut push = |r: Result<(), String>| {
         if let Err(e) = r {
-            errors.push(e);
+            warnings.push(e);
         }
     };
 
@@ -190,6 +233,10 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
         &read_error_log(config),
     ));
 
+    if let Some(recent) = recent_log {
+        push(stage(&dir, RECENT_LOG_NAME, recent));
+    }
+
     push(stage(&dir, "uname.txt", &capture("uname", &["-a"])));
     push(stage(&dir, "disk.txt", &capture("df", &["-h"])));
     push(stage(
@@ -209,12 +256,6 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
         ),
     ));
 
-    if !errors.is_empty() {
-        for e in &errors {
-            eprintln!("support: {e}");
-        }
-    }
-
     // `tar` rather than a crate, matching how the web backup builds its archive
     // — one fewer dependency and one fewer way for the two to disagree.
     let status = std::process::Command::new("tar")
@@ -223,14 +264,29 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
         .arg("-C")
         .arg(&staging)
         .arg("birdnet-support")
-        .status();
+        .status()
+        .map_err(|e| format!("could not run tar: {e}"))?;
+    if !status.success() {
+        return Err(format!("tar exited with {status}"));
+    }
+    let size = std::fs::metadata(dest).map_or(0, |m| m.len());
+    Ok(Bundle { size, warnings })
+}
 
-    match status {
-        Ok(s) if s.success() => {
-            let size = std::fs::metadata(dest).map_or(0, |m| m.len());
+/// `--support-bundle`: build the archive at `dest` and report on stdout.
+///
+/// Returns the process exit code: `0` on success, `2` when the bundle could
+/// not be written.
+pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
+    match build(cli, config, dest) {
+        Ok(bundle) => {
+            for w in &bundle.warnings {
+                eprintln!("support: {w}");
+            }
             println!(
-                "Support bundle written to {} ({size} bytes)",
-                dest.display()
+                "Support bundle written to {} ({} bytes)",
+                dest.display(),
+                bundle.size
             );
             println!();
             println!("It contains the diagnostic report, the station's version, a redacted");
@@ -241,12 +297,8 @@ pub fn run(cli: &Cli, config: Option<&Config>, dest: &Path) -> i32 {
             let _ = std::io::stdout().flush();
             0
         }
-        Ok(s) => {
-            eprintln!("support: tar exited with {s}");
-            2
-        }
         Err(e) => {
-            eprintln!("support: could not run tar: {e}");
+            eprintln!("support: {e}");
             2
         }
     }
@@ -305,6 +357,39 @@ mod tests {
         assert!(
             out.contains("rtsp://u:"),
             "the username and host must remain: {out}"
+        );
+    }
+
+    /// The fixture above has a dotless host, which is the one shape that never
+    /// occurs in the field; with a dotted one the old composition returned
+    /// `RTSP_URL=***@camera.local/stream` (`OB-11`). And a heartbeat URL's
+    /// path is its credential (`OB-10`).
+    #[test]
+    fn redacted_config_keeps_a_dotted_camera_url_readable_and_hides_a_heartbeat_token() {
+        let cfg = Config::parse(
+            "RTSP_URL=rtsp://cam:secret@camera.local/stream\n\
+             HEARTBEAT_URL=https://hc-ping.com/3f1e9c2a-7b44-4d1e-9c0a-5e6f7a8b9c0d\n\
+             APPRISE_URL=http://apprise.local:8000/notify/garden",
+        )
+        .unwrap();
+        let out = redacted_config(&cfg);
+        assert!(
+            out.contains(&format!(
+                "RTSP_URL=rtsp://cam:{REDACTED}@camera.local/stream"
+            )),
+            "{out}"
+        );
+        assert!(
+            !out.contains("3f1e9c2a"),
+            "the heartbeat token leaked: {out}"
+        );
+        assert!(
+            out.contains(&format!("HEARTBEAT_URL=https://hc-ping.com/{REDACTED}")),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("APPRISE_URL=http://apprise.local:8000/{REDACTED}")),
+            "{out}"
         );
     }
 

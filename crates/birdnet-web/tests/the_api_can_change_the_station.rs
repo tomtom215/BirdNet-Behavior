@@ -457,13 +457,19 @@ async fn the_api_reads_settings_with_the_credentials_removed() {
         "an ordinary value was redacted too, which leaves nothing to read: {body}"
     );
     // Redacted by value shape, not by key name: nothing about `apprise_url`
-    // says "secret", and it routinely carries one. The host survives; the
-    // scheme and user do not, because the two shape rules compose — see
+    // says "secret", and it routinely carries one. For a notification scheme
+    // only the scheme survives — Apprise URLs put tokens in the authority and
+    // the path (`tgram://token/chat`, `discord://id/token`), so the host is
+    // not safe to keep as it is for `rtsp://` or `https://`. See
     // `settings_are_redacted_by_key_and_by_shape` in `api_write.rs`, which
-    // pins the exact output and says which rule produces it.
+    // pins the same output and says which rule produces it.
     assert!(
-        body.contains("ntfy.example"),
-        "the URL's host should survive so the value stays recognisable: {body}"
+        body.contains("\"apprise_url\":\"ntfy://***REDACTED***\""),
+        "a notification URL should keep its scheme and nothing else: {body}"
+    );
+    assert!(
+        !body.contains("ntfy.example"),
+        "the host of a notification URL is part of what gets redacted: {body}"
     );
 }
 

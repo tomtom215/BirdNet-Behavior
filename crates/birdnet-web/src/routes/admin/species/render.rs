@@ -35,7 +35,7 @@ pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> Stri
       .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; margin-bottom:1rem; }}
       .pills {{ margin-bottom:1rem; min-height:2rem; }}
       .pill-x {{ background:none; border:none; color:var(--rare); cursor:pointer; padding:0; font-size:0.9rem; line-height:1; }}
-      .empty-note {{ color:var(--border-2); font-size:0.85rem; }}
+      .empty-note {{ color:var(--fg-2); font-size:0.85rem; }}
       .empty-note.mb {{ margin-bottom:1rem; }}
       .inline-form {{ display:inline; margin:0; }}
       .add-row {{ display:flex; gap:0.5rem; align-items:center; }}

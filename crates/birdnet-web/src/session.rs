@@ -23,8 +23,8 @@
 //!
 //! Operators can set `BNB_SESSION_SECRET` to lock the secret across restarts
 //! and process moves. Otherwise the secret is derived deterministically from
-//! the configured admin password (env `CADDY_PWD`, the same source the
-//! existing Basic Auth path reads) via
+//! the configured admin password (env `CADDY_PWD`, the same source
+//! `helpers::auth::bootstrap_admin_password` seeds the admin account from) via
 //! `HMAC-SHA256(CADDY_PWD, b"bnb-session-v1")`. Rotating the password
 //! rotates the secret, which signs out every existing session — that is
 //! the intended semantics. If neither is set, a fail-secure per-process
@@ -564,5 +564,49 @@ mod tests {
         let v = build_clear_cookie(None);
         assert!(v.contains("Max-Age=0"));
         assert!(v.contains("bnb-session="));
+    }
+
+    /// The two attributes that carry the defence, on both cookies.
+    ///
+    /// `HttpOnly` keeps the session token out of reach of any script that
+    /// gets to run in the page (a stored XSS in a species name, say), and
+    /// `SameSite=Lax` is half of the CSRF defence: a cross-site form post does
+    /// not carry the cookie, so the same-origin check in `security.rs` is the
+    /// second half rather than the only one. Neither was asserted anywhere;
+    /// deleting `SameSite=Lax` from `build_set_cookie` passed the entire suite
+    /// (RC-6). Observed failing against exactly that deletion:
+    /// `the issued cookie has lost SameSite=Lax`.
+    #[test]
+    fn both_cookies_carry_httponly_and_samesite_lax() {
+        for (label, cookie) in [
+            (
+                "issued",
+                build_set_cookie("v2.sid.1.x", 60_000, Some("https://birds.example.com")),
+            ),
+            (
+                "issued (plain http)",
+                build_set_cookie("v2.sid.1.x", 60_000, None),
+            ),
+            ("cleared", build_clear_cookie(None)),
+        ] {
+            let attrs: Vec<&str> = cookie.split("; ").skip(1).collect();
+            assert!(
+                attrs.contains(&"HttpOnly"),
+                "the {label} cookie has lost HttpOnly: {cookie}"
+            );
+            assert!(
+                attrs.contains(&"SameSite=Lax"),
+                "the {label} cookie has lost SameSite=Lax: {cookie}"
+            );
+            // Not Strict: a link from an email or a chat into `/station`
+            // must arrive signed in, and Strict would drop the cookie on
+            // exactly that top-level navigation.
+            assert!(
+                !attrs
+                    .iter()
+                    .any(|a| a.eq_ignore_ascii_case("SameSite=Strict")),
+                "{label}: {cookie}"
+            );
+        }
     }
 }
