@@ -4,6 +4,13 @@
 use std::process::Command;
 use std::time::Duration;
 
+use birdnet_core::process::run_with_timeout;
+
+/// How long a device listing (`arecord -l`, `pactl list`) may take. `pactl`
+/// with no reachable server retries its connection for a while; the doctor
+/// should say so, not hang.
+const LISTING_TIMEOUT: Duration = Duration::from_secs(15);
+
 use birdnet_core::config::Config;
 
 use super::{Check, tool_exists};
@@ -161,7 +168,7 @@ fn probe_alsa_device(device: &str) -> Check {
             "arecord not installed; cannot verify --alsa-device exists",
         );
     }
-    match Command::new("arecord").arg("-l").output() {
+    match run_with_timeout(Command::new("arecord").arg("-l"), LISTING_TIMEOUT) {
         Ok(out) if out.status.success() => {
             let listing = String::from_utf8_lossy(&out.stdout);
             match parse_card_ref(device) {
@@ -330,10 +337,10 @@ fn probe_pulse_source(source: &str) -> Check {
             "pactl not installed; cannot verify --pipewire-device exists",
         );
     }
-    match Command::new("pactl")
-        .args(["list", "short", "sources"])
-        .output()
-    {
+    match run_with_timeout(
+        Command::new("pactl").args(["list", "short", "sources"]),
+        LISTING_TIMEOUT,
+    ) {
         Ok(out) if out.status.success() => {
             let listing = String::from_utf8_lossy(&out.stdout);
             if source == "default" || listing.contains(source) {

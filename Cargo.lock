@@ -589,6 +589,7 @@ name = "birdnet-integrations"
 version = "0.15.0"
 dependencies = [
  "argon2",
+ "birdnet-core",
  "birdnet-db",
  "hmac",
  "lettre",

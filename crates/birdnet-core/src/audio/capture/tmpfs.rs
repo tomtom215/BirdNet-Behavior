@@ -12,6 +12,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+use crate::process::run_with_timeout;
+
+/// How long `mount` or `umount` may take before it is killed. Both are
+/// kernel calls that answer at once or not at all.
+const MOUNT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Configuration for a tmpfs mount.
 #[derive(Debug, Clone)]
@@ -103,9 +110,10 @@ pub fn mount_tmpfs(config: &TmpfsConfig) -> Result<(), TmpfsError> {
     let size_arg = format!("size={}m", config.size_mb);
     let mount_path = config.mount_point.to_string_lossy();
 
-    let output = Command::new("mount")
-        .args(["-t", "tmpfs", "-o", &size_arg, "tmpfs", mount_path.as_ref()])
-        .output()?;
+    let output = run_with_timeout(
+        Command::new("mount").args(["-t", "tmpfs", "-o", &size_arg, "tmpfs", mount_path.as_ref()]),
+        MOUNT_TIMEOUT,
+    )?;
 
     if output.status.success() {
         Ok(())
@@ -128,7 +136,10 @@ pub fn mount_tmpfs(config: &TmpfsConfig) -> Result<(), TmpfsError> {
 pub fn unmount_tmpfs(path: &Path) -> Result<(), TmpfsError> {
     let mount_path = path.to_string_lossy();
 
-    let output = Command::new("umount").arg(mount_path.as_ref()).output()?;
+    let output = run_with_timeout(
+        Command::new("umount").arg(mount_path.as_ref()),
+        MOUNT_TIMEOUT,
+    )?;
 
     if output.status.success() {
         Ok(())

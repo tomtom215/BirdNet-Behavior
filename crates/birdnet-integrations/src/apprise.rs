@@ -26,6 +26,11 @@ use std::time::{Duration, Instant};
 /// Default request timeout for the Apprise server.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long the `apprise` CLI may take to deliver one notification. It
+/// contacts every configured service in turn; a blocking-thread per hung
+/// delivery is a thread pool that empties one notification at a time.
+const CLI_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Default cooldown between notifications for the same species (5 minutes).
 const DEFAULT_COOLDOWN_SECS: u64 = 300;
 
@@ -676,15 +681,17 @@ impl Client {
         let body = body.to_string();
 
         tokio::task::spawn_blocking(move || {
-            let output = std::process::Command::new("apprise")
-                .arg("-c")
-                .arg(&config_path)
-                .arg("-t")
-                .arg(&title)
-                .arg("-b")
-                .arg(&body)
-                .output()
-                .map_err(|e| AppriseError::Cli(format!("apprise CLI not found: {e}")))?;
+            let output = birdnet_core::process::run_with_timeout(
+                std::process::Command::new("apprise")
+                    .arg("-c")
+                    .arg(&config_path)
+                    .arg("-t")
+                    .arg(&title)
+                    .arg("-b")
+                    .arg(&body),
+                CLI_TIMEOUT,
+            )
+            .map_err(|e| AppriseError::Cli(format!("apprise CLI not found: {e}")))?;
 
             if output.status.success() {
                 Ok(())

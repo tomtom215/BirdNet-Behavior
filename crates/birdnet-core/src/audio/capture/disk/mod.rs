@@ -8,7 +8,13 @@ mod purge;
 pub mod manager;
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::time::Duration;
+
+use crate::process::run_with_timeout;
+
+/// How long `df` may take before it is killed.
+const DF_TIMEOUT: Duration = Duration::from_secs(15);
 
 use super::process::is_audio_file;
 use super::types::CaptureError;
@@ -146,12 +152,10 @@ fn parse_df_pk(stdout: &str) -> Option<DiskUsage> {
 /// Returns `CaptureError` if `df` is not available, `path` doesn't exist, or
 /// the output is not the format POSIX specifies.
 pub fn disk_usage(path: &Path) -> Result<DiskUsage, CaptureError> {
-    let output = Command::new("df")
-        .args(DF_ARGS)
-        .arg(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
+    // `df` on a path under a dead network mount blocks in `statfs` for as long
+    // as the mount does; the disk manager asks every cycle, so that used to be
+    // a disk manager that never ran again.
+    let output = run_with_timeout(Command::new("df").args(DF_ARGS).arg(path), DF_TIMEOUT)
         .map_err(CaptureError::Spawn)?;
 
     if !output.status.success() {

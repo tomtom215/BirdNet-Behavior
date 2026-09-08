@@ -52,6 +52,11 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// How long `timedatectl` may take to answer. It asks systemd over the bus;
+/// a bus that does not answer used to hold the health probe, and every check
+/// after it, for ever.
+const TIMEDATECTL_TIMEOUT: Duration = Duration::from_secs(10);
+
 use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
@@ -281,10 +286,15 @@ pub(super) enum NtpState {
 /// One subprocess per five-minute poll. On a Pi that is a few seconds of CPU a
 /// day, which is not worth caching state to avoid.
 fn probe_ntp_state() -> NtpState {
-    match std::process::Command::new("timedatectl")
-        .args(["show", "-p", "NTPSynchronized", "--value"])
-        .output()
-    {
+    match birdnet_core::process::run_with_timeout(
+        std::process::Command::new("timedatectl").args([
+            "show",
+            "-p",
+            "NTPSynchronized",
+            "--value",
+        ]),
+        TIMEDATECTL_TIMEOUT,
+    ) {
         Ok(out) if out.status.success() => {
             return match String::from_utf8_lossy(&out.stdout).trim() {
                 "yes" => NtpState::Synced,

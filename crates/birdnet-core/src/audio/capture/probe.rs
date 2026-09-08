@@ -29,6 +29,15 @@
 //! catch — so the code is arranged such that being wrong costs nothing.
 
 use std::process::Command;
+use std::time::Duration;
+
+use crate::process::run_with_timeout;
+
+/// How long the one-second probe recording may take. A device that is present
+/// but wedged makes `arecord` block on the first read for ever; the probe is
+/// consulted at start-up, before capture, so a wedge here used to be a station
+/// that never started.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What rates a device reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,10 +161,12 @@ pub fn pick_rate(support: &RateSupport, preferred: u32) -> Option<u32> {
 /// treated as failure — only an absent binary or unreadable output is.
 #[must_use]
 pub fn probe_alsa_rates(device: &str) -> RateSupport {
-    let output = Command::new("arecord")
-        .args(["-D", device, "--dump-hw-params", "-d", "1"])
-        .arg("/dev/null")
-        .output();
+    let output = run_with_timeout(
+        Command::new("arecord")
+            .args(["-D", device, "--dump-hw-params", "-d", "1"])
+            .arg("/dev/null"),
+        PROBE_TIMEOUT,
+    );
 
     match output {
         Ok(out) => {

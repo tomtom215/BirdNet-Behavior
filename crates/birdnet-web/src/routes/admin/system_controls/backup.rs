@@ -1,5 +1,15 @@
 //! Full tar.gz backup download and restore upload.
 
+use birdnet_core::process::run_with_timeout;
+
+/// How long `tar` may take to build or restore an archive. A backup of a
+/// mature station's recordings is tens of gigabytes read from an SD card and
+/// gzipped on a Pi, which is hours; the ceiling is against a `tar` that has
+/// stopped, not a slow one.
+const ARCHIVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+/// How long listing an uploaded archive's members may take.
+const LISTING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse};
@@ -157,10 +167,18 @@ pub(super) async fn full_backup(State(state): State<AppState>) -> axum::response
             args.push(name.to_string_lossy().to_string());
         }
 
-        let status = std::process::Command::new("tar").args(&args).status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => return Err(format!("tar exited with status {s}")),
+        match run_with_timeout(
+            std::process::Command::new("tar").args(&args),
+            ARCHIVE_TIMEOUT,
+        ) {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                return Err(format!(
+                    "tar exited with status {}: {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
             Err(e) => return Err(format!("failed to run tar: {e}")),
         }
 
@@ -408,10 +426,11 @@ pub(super) async fn restore_backup(
         let _archive = tmp;
         let tmp_str = tmp_path.to_string_lossy().to_string();
 
-        let list_output = std::process::Command::new("tar")
-            .args(["tzf", &tmp_str])
-            .output()
-            .map_err(|e| format!("failed to list archive: {e}"))?;
+        let list_output = run_with_timeout(
+            std::process::Command::new("tar").args(["tzf", &tmp_str]),
+            LISTING_TIMEOUT,
+        )
+        .map_err(|e| format!("failed to list archive: {e}"))?;
 
         if !list_output.status.success() {
             return Err("invalid archive (tar returned error)".to_string());
@@ -420,13 +439,23 @@ pub(super) async fn restore_backup(
         let listing = String::from_utf8_lossy(&list_output.stdout);
         check_archive_members(&listing)?;
 
-        let status = std::process::Command::new("tar")
-            .args(["xzf", &tmp_str, "-C", &target_dir.to_string_lossy()])
-            .status()
-            .map_err(|e| format!("failed to extract: {e}"))?;
+        let extract = run_with_timeout(
+            std::process::Command::new("tar").args([
+                "xzf",
+                &tmp_str,
+                "-C",
+                &target_dir.to_string_lossy(),
+            ]),
+            ARCHIVE_TIMEOUT,
+        )
+        .map_err(|e| format!("failed to extract: {e}"))?;
 
-        if !status.success() {
-            return Err(format!("tar extract failed with status {status}"));
+        if !extract.status.success() {
+            return Err(format!(
+                "tar extract failed with status {}: {}",
+                extract.status,
+                String::from_utf8_lossy(&extract.stderr).trim()
+            ));
         }
 
         finalize_restore(&db_path)?;

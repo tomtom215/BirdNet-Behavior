@@ -332,7 +332,9 @@ fn no_command_spawn_hides_below_a_cfg_test() {
     // The production/test split above cuts at the first `#[cfg(test)]`. If a
     // real spawn ever lands below one, this catches it: everything in the tail
     // must be either classified or a known test-only helper.
-    const TEST_ONLY: &[&str] = &["sleep"];
+    // `sh` and the nonexistent path are what `birdnet_core::process`'s own
+    // tests spawn to prove a deadline kills and a missing program is reported.
+    const TEST_ONLY: &[&str] = &["sleep", "sh", "/nonexistent/birdnet-no-such-tool"];
     let mut stray: Vec<String> = Vec::new();
     for file in source_files() {
         let Ok(src) = std::fs::read_to_string(&file) else {

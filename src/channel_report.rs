@@ -20,7 +20,10 @@
 //! reduction would hand the model, so the choice between Mono / Left / Right /
 //! Stereo can be made from numbers rather than from a datasheet.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::time::Duration;
+
+use birdnet_core::process::run_with_timeout;
 
 use crate::cli::Cli;
 
@@ -347,13 +350,18 @@ impl std::fmt::Display for RecordError {
 
 /// Record `secs` of raw interleaved stereo S16LE from `device` via `arecord`.
 ///
-/// Uses `output()` rather than draining the pipes by hand. Reading stdout to
-/// the end while stderr goes unread deadlocks the moment `arecord` writes more
-/// than a pipe buffer of complaints: it blocks on stderr, stops producing
-/// stdout, and both processes wait forever. `output()` drains both.
+/// Goes through `run_with_timeout` rather than draining the pipes by hand.
+/// Reading stdout to the end while stderr goes unread deadlocks the moment
+/// `arecord` writes more than a pipe buffer of complaints: it blocks on
+/// stderr, stops producing stdout, and both processes wait forever. The helper
+/// drains both, and kills a device that stops delivering.
 fn record_stereo(device: &str, sample_rate: u32, secs: u32) -> Result<Vec<u8>, RecordError> {
-    let out = Command::new("arecord")
-        .args([
+    // The recording is `secs` long by construction; anything much beyond that
+    // is a device that stopped delivering samples and an `arecord` that will
+    // wait for them for ever.
+    let deadline = Duration::from_secs(u64::from(secs) + 30);
+    let out = run_with_timeout(
+        Command::new("arecord").args([
             "-D",
             device,
             "-f",
@@ -366,17 +374,16 @@ fn record_stereo(device: &str, sample_rate: u32, secs: u32) -> Result<Vec<u8>, R
             "raw",
             "-d",
             &secs.to_string(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                RecordError::ArecordMissing
-            } else {
-                RecordError::Failed(format!("could not run arecord: {e}"))
-            }
-        })?;
+        ]),
+        deadline,
+    )
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            RecordError::ArecordMissing
+        } else {
+            RecordError::Failed(format!("could not run arecord: {e}"))
+        }
+    })?;
 
     if out.stdout.is_empty() {
         return Err(RecordError::NoAudio {

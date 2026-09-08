@@ -12,6 +12,9 @@ categories.workspace = true
 description = "External service integrations: BirdWeather, Apprise, Wikipedia, email, MQTT, auto-update"
 
 [dependencies]
+# `birdnet_core::process::run_with_timeout`: the one bounded way to wait on a
+# child process, shared with every other crate that shells out (PR-8).
+birdnet-core.workspace = true
 birdnet-db.workspace = true
 serde.workspace = true
 serde_json.workspace = true

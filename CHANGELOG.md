@@ -38,6 +38,24 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — no child process can hang the station
+
+**Every tool the station shells out to has a deadline** (`PR-8`). `ffmpeg`,
+`sox`, `tar`, `df`, `arecord`, `mount`, `timedatectl`, `systemctl`, `apprise`:
+twenty-odd production spawns, all reaped, none with a timeout, because
+`std::process` has no bounded wait. Several of them sit on the single
+event-processor thread or in a periodic probe, so one `df` on a dead network
+mount or one `ffmpeg` on a device that stopped answering held that thread for
+ever: the detection channel filled, the heartbeat stopped, and the watchdog
+restarted the station with no line saying why. `birdnet_core::process::
+run_with_timeout` is now the one synchronous wait — both pipes drained on their
+own threads, the child polled to a deadline, then killed, reaped and reported
+as `TimedOut` with the program and the limit in the message — and every spawn
+in the workspace goes through it, with a limit sized to the job (a minute for
+a clip conversion, hours for a backup archive). A source scan keeps the next
+spawn from waiting on its own. Moving the clip conversion off the event thread
+is deliberately not part of this; the register row says why.
+
 ### Fixed — the privacy threshold now does something
 
 **`BIRDNET_PRIVACY_THRESHOLD` binds** (`S-5`). The filter inherited

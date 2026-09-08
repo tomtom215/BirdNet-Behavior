@@ -4,8 +4,21 @@
 //! and frequency shifting for accessibility.
 
 use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
 
 use super::{AudioFormat, ExtractionError};
+use crate::process::run_with_timeout;
+
+/// The longest a converter may take on one clip before it is killed.
+///
+/// A detection clip is a few seconds of audio, and even an MP3 encode of one
+/// on a Pi Zero finishes in well under a minute; the frequency-shift path caps
+/// its output at [`MAX_FREQ_SHIFT_OUTPUT_SECS`]. The conversion runs on the
+/// event-processor thread, so a converter that hangs — on a device that
+/// stopped answering, on a codec bug — used to stop every detection after it
+/// until the watchdog restarted the station (PR-8).
+pub const CONVERTER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The ffmpeg `-codec:a` (and quality) arguments for a target format.
 ///
@@ -116,8 +129,6 @@ fn convert_with_ffmpeg(
     output_path: &Path,
     format: AudioFormat,
 ) -> Result<(), ExtractionError> {
-    use std::process::Command;
-
     // WAV needs no transcode — short-circuit before spawning ffmpeg.
     let Some(codec_args) = ffmpeg_codec_args(format) else {
         return Ok(());
@@ -132,8 +143,7 @@ fn convert_with_ffmpeg(
     cmd.args(codec_args);
     cmd.arg(output_path);
 
-    let output = cmd
-        .output()
+    let output = run_with_timeout(&mut cmd, CONVERTER_TIMEOUT)
         .map_err(|e| ExtractionError::Conversion(format!("ffmpeg: {e}")))?;
 
     if output.status.success() {
@@ -150,13 +160,11 @@ fn convert_with_ffmpeg(
 
 /// Convert WAV to target format using sox.
 fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), ExtractionError> {
-    use std::process::Command;
-
-    let output = Command::new("sox")
-        .arg(wav_path)
-        .arg(output_path)
-        .output()
-        .map_err(|e| ExtractionError::Conversion(format!("sox: {e}")))?;
+    let output = run_with_timeout(
+        Command::new("sox").arg(wav_path).arg(output_path),
+        CONVERTER_TIMEOUT,
+    )
+    .map_err(|e| ExtractionError::Conversion(format!("sox: {e}")))?;
 
     if output.status.success() {
         Ok(())
@@ -249,8 +257,6 @@ pub(super) fn apply_freq_shift(
     sample_rate: u32,
     shift_hz: i32,
 ) -> bool {
-    use std::process::Command;
-
     // ffmpeg approach: use asetrate to shift the sample rate, then resample back.
     // This is equivalent to speeding up/slowing down, shifting all frequencies.
     // shift_hz > 0 shifts up, < 0 shifts down; down is the accessibility
@@ -259,8 +265,8 @@ pub(super) fn apply_freq_shift(
     let filter = format!("asetrate={new_rate},aresample={sample_rate}");
     let max_secs = MAX_FREQ_SHIFT_OUTPUT_SECS.to_string();
 
-    let ffmpeg_ok = Command::new("ffmpeg")
-        .args([
+    let ffmpeg_ok = run_with_timeout(
+        Command::new("ffmpeg").args([
             "-y",
             "-i",
             &input_path.to_string_lossy(),
@@ -271,9 +277,10 @@ pub(super) fn apply_freq_shift(
             "-loglevel",
             "error",
             &output_path.to_string_lossy(),
-        ])
-        .status()
-        .is_ok_and(|s| s.success());
+        ]),
+        CONVERTER_TIMEOUT,
+    )
+    .is_ok_and(|out| out.status.success());
 
     if ffmpeg_ok {
         return true;
@@ -283,12 +290,14 @@ pub(super) fn apply_freq_shift(
     // 1 Hz shift ~ 100 * log2(1 + shift_hz / sample_rate) * 100 cents (approximation).
     let cents = freq_shift_cents(sample_rate, shift_hz);
 
-    Command::new("sox")
-        .arg(input_path)
-        .arg(output_path)
-        .args(["pitch", &cents.to_string()])
-        .status()
-        .is_ok_and(|s| s.success())
+    run_with_timeout(
+        Command::new("sox")
+            .arg(input_path)
+            .arg(output_path)
+            .args(["pitch", &cents.to_string()]),
+        CONVERTER_TIMEOUT,
+    )
+    .is_ok_and(|out| out.status.success())
 }
 
 #[cfg(test)]
