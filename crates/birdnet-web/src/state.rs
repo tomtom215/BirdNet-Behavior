@@ -16,6 +16,7 @@ use crate::login_throttle::LoginThrottle;
 use crate::notifier::Notifier;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -94,6 +95,11 @@ struct AppStateInner {
     site_name: Option<String>,
     /// Species info link site: "ebird", "allaboutbirds", or "none".
     info_site: String,
+    /// eBird species code by lower-cased scientific name, from the geomodel's
+    /// label file (NP-1). Empty when the station has no such file, in which
+    /// case the species page says so instead of linking to a page that does
+    /// not exist.
+    species_codes: HashMap<String, String>,
     /// Custom species image directory (checked before Wikipedia cache).
     custom_image_dir: Option<PathBuf>,
     /// Path to the active configuration file, threaded from the CLI so the
@@ -241,6 +247,7 @@ impl AppState {
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                species_codes: HashMap::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -476,6 +483,7 @@ impl AppState {
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                species_codes: HashMap::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -524,6 +532,7 @@ impl AppState {
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                species_codes: HashMap::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -596,6 +605,26 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_info_site");
         Self {
             inner: rebuild_inner(inner, |s| s.info_site = site),
+        }
+    }
+
+    /// Install the eBird species codes the species page links with (NP-1),
+    /// as (scientific name, code) pairs; the lookup is case-insensitive on
+    /// the name.
+    #[must_use]
+    pub fn with_species_codes<I, S, C>(self, codes: I) -> Self
+    where
+        I: IntoIterator<Item = (S, C)>,
+        S: AsRef<str>,
+        C: Into<String>,
+    {
+        let map: HashMap<String, String> = codes
+            .into_iter()
+            .map(|(sci, code)| (sci.as_ref().to_lowercase(), code.into()))
+            .collect();
+        let inner = unwrap_inner(self.inner, "with_species_codes");
+        Self {
+            inner: rebuild_inner(inner, |s| s.species_codes = map),
         }
     }
 
@@ -1395,6 +1424,16 @@ impl AppState {
     /// Get the species info link site ("ebird", "allaboutbirds", or "none").
     pub fn info_site(&self) -> &str {
         &self.inner.info_site
+    }
+
+    /// The eBird species code for a scientific name, if the station's label
+    /// file supplied one (NP-1).
+    #[must_use]
+    pub fn ebird_species_code(&self, scientific_name: &str) -> Option<&str> {
+        self.inner
+            .species_codes
+            .get(&scientific_name.to_lowercase())
+            .map(String::as_str)
     }
 
     /// Shared handle to the detection-daemon-running flag, for the orchestrator

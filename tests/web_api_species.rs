@@ -370,3 +370,49 @@ async fn htmx_species_info_partial() {
     assert!(html.contains("No additional info for"), "got: {html}");
     assert!(html.contains("--image-cache-dir"));
 }
+
+/// NP-1. Every "View on eBird" link put the scientific name in the path,
+/// and eBird keys its species pages on the eBird species code, so every
+/// one of them 404'd. With a code the link carries it; without one the
+/// panel says so and names the flag that supplies it, rather than linking
+/// to a page that is not there.
+#[tokio::test]
+async fn the_ebird_link_uses_the_species_code_and_says_when_there_is_none() {
+    async fn panel(app: axum::Router) -> String {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/pages/species-info?name=Eurasian%20Blackbird")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&body).into_owned()
+    }
+
+    let with_code = test_state().with_species_codes([("Turdus merula", "eurbla")]);
+    let html = panel(build_router(with_code)).await;
+    assert!(
+        html.contains(r#"href="https://ebird.org/species/eurbla""#),
+        "the link must carry the eBird code, not the scientific name: {html}"
+    );
+    assert!(
+        !html.contains("ebird.org/species/Turdus"),
+        "the name-in-path link 404s on eBird: {html}"
+    );
+
+    let html = panel(app()).await;
+    assert!(
+        !html.contains("ebird.org/species/"),
+        "with no code there is no page to link to: {html}"
+    );
+    assert!(
+        html.contains("No eBird link") && html.contains("--metadata-labels"),
+        "the panel must say why, and what supplies the code: {html}"
+    );
+}

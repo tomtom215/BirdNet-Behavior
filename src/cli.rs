@@ -606,6 +606,10 @@ pub struct Cli {
     /// classifier (a matched BirdNET pair). The station verifies that at
     /// startup and refuses a mismatched model rather than reporting one bird
     /// under another bird's name.
+    ///
+    /// This file also carries each species' eBird code, which the species
+    /// page's "View on eBird" link is built from; without it that link is
+    /// not shown.
     #[arg(long, env = "BIRDNET_METADATA_LABELS")]
     pub metadata_labels: Option<PathBuf>,
 

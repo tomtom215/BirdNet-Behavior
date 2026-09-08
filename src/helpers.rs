@@ -47,7 +47,8 @@ pub use db::{
 };
 pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
 pub use state::{
-    init_i18n, init_image_cache, init_site_name, run_refresh_extension, run_verify_extension,
+    init_i18n, init_image_cache, init_site_name, init_species_codes, run_refresh_extension,
+    run_verify_extension,
 };
 pub use system::{
     maybe_install_avahi_service, start_disk_manager, start_live_spectrogram, stream_dir,

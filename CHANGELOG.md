@@ -38,6 +38,16 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — "View on eBird" reaches a page
+
+**The species page's eBird link is built from the eBird species code**
+(`NP-1`). eBird keys its species pages on the six-letter code, and the link
+put the scientific name in the path, so every one of them 404'd. The code
+is on every station that has the geomodel's label file — column 1, which
+the parser used to drop — and is now kept, loaded at startup, and used for
+the link. A station without that file gets a line saying so, and which flag
+supplies it, instead of a dead link.
+
 ### Fixed — the setup wizard's preference cards work from the keyboard
 
 **The threshold and alert cards are real radio inputs** (`UX-1`). The seven

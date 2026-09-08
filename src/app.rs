@@ -367,6 +367,7 @@ async fn serve(
     } else {
         state.with_info_site(cli.info_site.clone())
     };
+    let state = helpers::init_species_codes(state, &cli, config.as_ref());
     let state = helpers::init_i18n(state, &cli, config.as_ref());
 
     // The capture supervisor publishes per-source health into this shared

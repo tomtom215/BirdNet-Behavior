@@ -79,6 +79,11 @@ Options:
       --check-db
           Run database integrity check and exit
 
+      --apply-config <FILE>
+          Validate FILE, install it as the configuration, restart the service, and exit.
+
+          The safe way to change the configuration on a running station: a file with errors is refused and nothing changes; a good one is installed behind a timestamped backup of the previous file and the service is restarted. Should the station fail to start on it anyway, it runs on the last configuration a start succeeded on and says so at /station.
+
       --backup-db
           Create database backup and exit
 
@@ -400,6 +405,8 @@ Options:
           The metadata model and the classifier do not score the same species list — BirdNET Geomodel v3.0 covers 12 012 species where the V3.0 Global 11K classifier emits 11 560 — so the model's output positions mean nothing without the labels it shipped with. Supply them and the two are matched by scientific name.
 
           Omit this only for a metadata model indexed identically to the classifier (a matched BirdNET pair). The station verifies that at startup and refuses a mismatched model rather than reporting one bird under another bird's name.
+
+          This file also carries each species' eBird code, which the species page's "View on eBird" link is built from; without it that link is not shown.
 
           [env: BIRDNET_METADATA_LABELS=]
 
