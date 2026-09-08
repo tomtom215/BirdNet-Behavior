@@ -199,6 +199,16 @@ microphones report the same id, and then only the index can tell them apart.
 
 After editing the config, apply it with `sudo bash install.sh repair`.
 
+A station still addressing its card by index is told so twice. `--doctor`
+grades a resolving index as an advisory naming the exact `CARD=` form for the
+card it resolved to (an absent index was already a warning). And at every
+start the station writes the id it finds behind each index-form device into its
+boot journal and compares it with the last start: if `plughw:1,0` was `PRO`
+then and is something else now, that is the `audio_card_moved` boot anomaly,
+which reaches `/api/v2/health`, the station-health notification, and the log
+as an error, because the station is recording from a different device than
+it was set up with.
+
 ### Pinning your own names (recommended for multi-mic stations)
 
 The id comes from the device's own firmware, so two identical microphones give

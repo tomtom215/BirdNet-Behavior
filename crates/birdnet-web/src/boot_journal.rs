@@ -11,6 +11,7 @@
 //! journal (`internal/diagnostics`) and diffs consecutive boots for the same
 //! four anomalies.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,13 @@ pub struct BootRecord {
     pub separate_mount: Option<bool>,
     /// Seconds since the Unix epoch.
     pub booted_at: u64,
+    /// For each configured ALSA device addressed by card *index*
+    /// (`plughw:1,0`), the id of the card that sat at that index at this
+    /// start, from `/proc/asound` (AU-1). Empty for id-form devices and for
+    /// stations without ALSA sources. Absent from journals written before
+    /// this field existed, which is read as empty.
+    #[serde(default)]
+    pub alsa_cards: BTreeMap<String, String>,
 }
 
 /// Something that changed between two consecutive starts and should not have.
@@ -76,6 +84,17 @@ pub enum Anomaly {
         /// The errors, as `key: message`.
         errors: Vec<String>,
     },
+    /// An ALSA device addressed by card index resolves to a different card
+    /// than it did at the last start: the index moved on re-enumeration, and
+    /// the station is recording from whatever now sits at it (AU-1).
+    AudioCardMoved {
+        /// The device string as configured.
+        device: String,
+        /// The card id behind it at the last start.
+        from: String,
+        /// The card id behind it now.
+        to: String,
+    },
 }
 
 impl Anomaly {
@@ -89,6 +108,7 @@ impl Anomaly {
             Self::VersionRollback { .. } => "version_rollback",
             Self::ConfigReverted { .. } => "config_reverted",
             Self::ConfigRejected { .. } => "config_rejected",
+            Self::AudioCardMoved { .. } => "audio_card_moved",
         }
     }
 
@@ -123,6 +143,13 @@ impl Anomaly {
                  back to, so the station is running web-only and recording nothing; fix the \
                  file and restart, or apply a corrected file with --apply-config",
                 errors.join("; ")
+            ),
+            Self::AudioCardMoved { device, from, to } => format!(
+                "audio device {device} was card `{from}` at the last start and is card `{to}` \
+                 now: the card index moved when the devices re-enumerated, and the station is \
+                 recording from a different device. Address the card by id instead — \
+                 plughw:CARD={from},DEV=0 on /admin/audio or as ALSA_CARD — so it survives \
+                 the next re-enumeration"
             ),
         }
     }
@@ -217,6 +244,17 @@ pub fn compare(previous: &BootRecord, now: &BootRecord) -> Vec<Anomaly> {
             to: now.version.clone(),
         });
     }
+    for (device, to) in &now.alsa_cards {
+        if let Some(from) = previous.alsa_cards.get(device)
+            && from != to
+        {
+            out.push(Anomaly::AudioCardMoved {
+                device: device.clone(),
+                from: from.clone(),
+                to: to.clone(),
+            });
+        }
+    }
     out
 }
 
@@ -253,7 +291,71 @@ mod tests {
             detections: rows,
             separate_mount: mount,
             booted_at: 1_788_973_200,
+            alsa_cards: BTreeMap::new(),
         }
+    }
+
+    fn with_card(mut r: BootRecord, device: &str, id: &str) -> BootRecord {
+        r.alsa_cards.insert(device.into(), id.into());
+        r
+    }
+
+    /// AU-1. The same microphone was card 1 before a reboot and card 3 after
+    /// it; a station addressing it as `plughw:1,0` recorded from whatever
+    /// then sat at 1. The journal keeps the id behind each index-form device
+    /// and reports a change; a device new to the journal, or the same id, is
+    /// nothing.
+    #[test]
+    fn a_card_index_that_now_resolves_to_another_card_is_an_anomaly() {
+        let last = with_card(
+            rec("0.15.0", "/data/birds.db", true, 40_000, Some(true)),
+            "plughw:1,0",
+            "PRO",
+        );
+        let same = with_card(
+            rec("0.15.0", "/data/birds.db", true, 40_100, Some(true)),
+            "plughw:1,0",
+            "PRO",
+        );
+        assert!(compare(&last, &same).is_empty());
+        let moved = with_card(
+            rec("0.15.0", "/data/birds.db", true, 40_100, Some(true)),
+            "plughw:1,0",
+            "Device",
+        );
+        assert_eq!(
+            compare(&last, &moved),
+            vec![Anomaly::AudioCardMoved {
+                device: "plughw:1,0".into(),
+                from: "PRO".into(),
+                to: "Device".into(),
+            }]
+        );
+        let new_device = with_card(
+            rec("0.15.0", "/data/birds.db", true, 40_100, Some(true)),
+            "plughw:2,0",
+            "Device",
+        );
+        assert!(
+            compare(&last, &new_device).is_empty(),
+            "nothing to compare with"
+        );
+        let unplugged = rec("0.15.0", "/data/birds.db", true, 40_100, Some(true));
+        assert!(
+            compare(&last, &unplugged).is_empty(),
+            "no card at the index now is the doctor's finding, not a move"
+        );
+        assert_eq!(compare(&last, &moved)[0].key(), "audio_card_moved");
+        assert!(
+            compare(&last, &moved)[0]
+                .describe()
+                .contains("plughw:CARD=PRO,DEV=0")
+        );
+
+        // A journal written before the field existed still reads.
+        let old_json = r#"{"version":"0.15.0","db_path":"/data/birds.db","db_present":true,"detections":3,"separate_mount":true,"booted_at":1}"#;
+        let parsed: BootRecord = serde_json::from_str(old_json).expect("an older journal parses");
+        assert!(parsed.alsa_cards.is_empty());
     }
 
     /// The gate for UP-3's four anomalies, one at a time, and their absence.

@@ -4,6 +4,7 @@
 use std::process::Command;
 use std::time::Duration;
 
+use birdnet_core::audio::capture::alsa::{CardRef, parse_card_ref};
 use birdnet_core::process::run_with_timeout;
 
 /// How long a device listing (`arecord -l`, `pactl list`) may take. `pactl`
@@ -182,34 +183,7 @@ fn probe_alsa_device(device: &str) -> Check {
     }
     match run_with_timeout(Command::new("arecord").arg("-l"), LISTING_TIMEOUT) {
         Ok(out) if out.status.success() => {
-            let listing = String::from_utf8_lossy(&out.stdout);
-            match parse_card_ref(device) {
-                Some(card) if listing_has_card(&listing, &card) => Check::pass(
-                    "ALSA device probe",
-                    format!("{device} matches an entry in `arecord -l`"),
-                ),
-                // An index that is absent is the failure this release exists to
-                // stop being silent, so the remedy names the stable form and
-                // the card actually present rather than "check the number".
-                Some(CardRef::Index(idx)) => Check::warn(
-                    "ALSA device probe",
-                    format!("{device} refers to card {idx}, which is not in `arecord -l`"),
-                    stable_form_hint(&listing).unwrap_or_else(|| {
-                        "run `arecord -l`: no capture card is present at all".to_string()
-                    }),
-                ),
-                Some(CardRef::Id(id)) => Check::warn(
-                    "ALSA device probe",
-                    format!("{device} names card id `{id}`, which is not in `arecord -l`"),
-                    "run `arecord -l` and compare the id (the word after `card N:`); \
-                     if you pinned it with usb-audio-mapper, check the udev rule applied"
-                        .to_string(),
-                ),
-                None => Check::skip(
-                    "ALSA device probe",
-                    format!("cannot tell which card `{device}` refers to; not verifying it"),
-                ),
-            }
+            grade_listing(device, &String::from_utf8_lossy(&out.stdout))
         }
         Ok(_) => Check::warn(
             "ALSA device probe",
@@ -224,67 +198,93 @@ fn probe_alsa_device(device: &str) -> Check {
     }
 }
 
-/// How a configured ALSA device string identifies its card.
+/// The verdict on a device string against an `arecord -l` listing.
 ///
-/// Two forms reach us, and they are checked against `arecord -l` differently:
-///
-/// * an **index** (`plughw:1,0`) — assigned in detection order, and not stable:
-///   the same microphone was `card 1` before a cold reboot on a Raspberry Pi 4
-///   and `card 3` after it;
-/// * an **id** (`plughw:CARD=PRO,DEV=0`) — the name ALSA gives the card, which
-///   `usb-audio-mapper` pins via a udev rule (`ATTR{id}="<name>"`).
-///
-/// The id form used to be unrecognised here, so it fell through to "not found
-/// in `arecord -l`" and warned on every startup — the diagnostic telling
-/// operators that the robust configuration was the broken one.
-#[derive(Debug, PartialEq, Eq)]
-enum CardRef {
-    Index(String),
-    Id(String),
+/// An index that resolves is not a pass in full (AU-1): it resolves to
+/// whatever sits at that index today, and the index moves on re-enumeration —
+/// the same microphone was `card 1` before a reboot and `card 3` after it. So
+/// a resolving index is graded as an advisory naming the stable form, when the
+/// listing offers a usable id for that card; the id form is the pass.
+fn grade_listing(device: &str, listing: &str) -> Check {
+    match parse_card_ref(device) {
+        Some(CardRef::Index(idx)) if listing_has_card(listing, &CardRef::Index(idx.clone())) => {
+            match card_entry(listing, Some(&idx)).filter(|(_, id, _)| usable_id(id)) {
+                Some((_, id, dev)) => Check::warn(
+                    "ALSA device probe",
+                    format!(
+                        "{device} resolves to card {idx} (`{id}`) today, by index — an index is \
+                         assigned in detection order and moves when USB devices re-enumerate, \
+                         so after a reboot it can point at a different device"
+                    ),
+                    format!(
+                        "set ALSA_CARD=plughw:CARD={id},DEV={dev} (or change the device on \
+                         /admin/audio): the id survives re-enumeration. Then run `sudo bash \
+                         install.sh repair`; see docs/book/admin/audio.md"
+                    ),
+                ),
+                None => Check::pass(
+                    "ALSA device probe",
+                    format!(
+                        "{device} matches card {idx} in `arecord -l`; its id is not usable as a \
+                         name, so the index is the only way to address it (consider \
+                         usb-audio-mapper to pin one)"
+                    ),
+                ),
+            }
+        }
+        Some(card @ CardRef::Id(_)) if listing_has_card(listing, &card) => Check::pass(
+            "ALSA device probe",
+            format!("{device} matches an entry in `arecord -l`"),
+        ),
+        // An index that is absent is the failure this release exists to
+        // stop being silent, so the remedy names the stable form and
+        // the card actually present rather than "check the number".
+        Some(CardRef::Index(idx)) => Check::warn(
+            "ALSA device probe",
+            format!("{device} refers to card {idx}, which is not in `arecord -l`"),
+            stable_form_hint(listing).unwrap_or_else(|| {
+                "run `arecord -l`: no capture card is present at all".to_string()
+            }),
+        ),
+        Some(CardRef::Id(id)) => Check::warn(
+            "ALSA device probe",
+            format!("{device} names card id `{id}`, which is not in `arecord -l`"),
+            "run `arecord -l` and compare the id (the word after `card N:`); \
+             if you pinned it with usb-audio-mapper, check the udev rule applied"
+                .to_string(),
+        ),
+        None => Check::skip(
+            "ALSA device probe",
+            format!("cannot tell which card `{device}` refers to; not verifying it"),
+        ),
+    }
 }
 
-/// Parse the card out of an ALSA device string.
-///
-/// Accepts `plughw:1,0`, `hw:1,0`, `1,0`, `1`, and the id form
-/// `plughw:CARD=PRO,DEV=0` / `hw:CARD=PRO`. Returns `None` for anything else
-/// (`default`, a PipeWire node name, empty), which the caller reports as
-/// unverifiable rather than as broken.
-fn parse_card_ref(device: &str) -> Option<CardRef> {
-    // Strip a leading PCM plugin name ("plughw:", "hw:") if present. Split on
-    // the FIRST colon: an id could in principle contain one, and everything
-    // after it belongs to the argument list.
-    let args = match device.split_once(':') {
-        Some((_plugin, rest)) => rest,
-        None => device,
-    };
-
-    // Named-argument form: CARD=<id>[,DEV=<n>][,SUBDEV=<n>]. alsa-lib declares
-    // CARD as `type string` in its own alsa.conf, so the value is a name.
-    for field in args.split(',') {
-        if let Some(id) = field.trim().strip_prefix("CARD=") {
-            let id = id.trim();
-            if !id.is_empty() {
-                return Some(CardRef::Id(id.to_string()));
-            }
-            return None;
-        }
-    }
-
-    // Positional form: the card is the first argument.
-    let first = args.split(',').next().unwrap_or(args).trim();
-    if !first.is_empty() && first.chars().all(|c| c.is_ascii_digit()) {
-        return Some(CardRef::Index(first.to_string()));
-    }
-    None
+/// Whether a card id can be written into `CARD=<id>`.
+fn usable_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// First capture card in an `arecord -l` listing, as `(index, id, device)`.
 ///
 /// A line reads `card 3: PRO [Comica_Traxshot PRO], device 0: USB Audio [...]`.
 fn first_card(listing: &str) -> Option<(String, String, String)> {
+    card_entry(listing, None)
+}
+
+/// The capture card at `index` — or the first one, with `None` — in an
+/// `arecord -l` listing, as `(index, id, device)`.
+fn card_entry(listing: &str, index: Option<&str>) -> Option<(String, String, String)> {
     listing.lines().map(str::trim_start).find_map(|line| {
         let rest = line.strip_prefix("card ")?;
-        let (index, tail) = rest.split_once(':')?;
+        let (index_here, tail) = rest.split_once(':')?;
+        if index.is_some_and(|want| want != index_here.trim()) {
+            return None;
+        }
+        let index = index_here;
         let id = tail.split_whitespace().next()?;
         // `device N:` appears after the card's description on the same line.
         let device = tail
@@ -302,11 +302,7 @@ fn first_card(listing: &str) -> Option<(String, String, String)> {
 /// it out. Returns `None` when the listing holds no capture card at all.
 fn stable_form_hint(listing: &str) -> Option<String> {
     let (index, id, device) = first_card(listing)?;
-    let portable = !id.is_empty()
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    if portable {
+    if usable_id(&id) {
         Some(format!(
             "card {index} is present with id `{id}` — set ALSA_CARD=plughw:CARD={id},DEV={device} \
              and run `sudo bash install.sh repair`. The id survives the re-enumeration that moved \
@@ -449,8 +445,8 @@ fn parse_host_port(hp: &str, default: u16) -> (String, u16) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CardRef, check_audio_source, effective_alsa_devices, first_card, listing_has_card,
-        parse_card_ref, parse_host_port, probe_rtsp_url, stable_form_hint,
+        CardRef, check_audio_source, effective_alsa_devices, first_card, grade_listing,
+        listing_has_card, parse_card_ref, parse_host_port, probe_rtsp_url, stable_form_hint,
     };
     use crate::cli::Cli;
     use crate::doctor::Status;
@@ -586,6 +582,34 @@ card 3: PRO [Comica_Traxshot PRO], device 0: USB Audio [USB Audio]
         // that was sitting right there, at whichever index.
         assert!(listing_has_card(PI_BEFORE, &card));
         assert!(listing_has_card(PI_AFTER, &card));
+    }
+
+    /// AU-1. An index that resolves used to pass silently, and still passed
+    /// after the reboot moved the microphone from card 1 to card 3 — with the
+    /// station recording from whatever now sat at 1. The pass is now an
+    /// advisory that names the stable form for the very card it resolved to.
+    #[test]
+    fn a_resolving_index_is_advised_to_move_to_the_id_it_resolves_to() {
+        let c = grade_listing("plughw:1,0", PI_BEFORE);
+        assert_eq!(c.status, Status::Warn, "{c:?}");
+        assert!(c.message.contains("card 1 (`PRO`)"), "{}", c.message);
+        let fix = c.remediation.expect("names the stable form");
+        assert!(fix.contains("plughw:CARD=PRO,DEV=0"), "{fix}");
+
+        // The id form is the pass, at either index the hardware showed.
+        for listing in [PI_BEFORE, PI_AFTER] {
+            let c = grade_listing("plughw:CARD=PRO,DEV=0", listing);
+            assert_eq!(c.status, Status::Pass, "{c:?}");
+        }
+        // The absent index is still the warning it was.
+        let c = grade_listing("plughw:1,0", PI_AFTER);
+        assert_eq!(c.status, Status::Warn);
+        assert!(c.message.contains("not in `arecord -l`"), "{}", c.message);
+        // An id that cannot be written into CARD= leaves the index a pass.
+        let odd = "card 0: Odd.c [Odd (c)], device 0: USB Audio [USB Audio]\n";
+        let c = grade_listing("plughw:0,0", odd);
+        assert_eq!(c.status, Status::Pass, "{c:?}");
+        assert!(c.message.contains("not usable as a name"), "{}", c.message);
     }
 
     #[test]

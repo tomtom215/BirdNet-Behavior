@@ -17,6 +17,7 @@
 //! | `tmpfs` | `TmpfsConfig`, `TmpfsError`, tmpfs mount/unmount helpers |
 //! | `status` | `CaptureStatus` — the supervisor→web per-source health seam |
 
+pub mod alsa;
 pub mod disk;
 pub mod live;
 pub mod manager;

@@ -38,6 +38,18 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a microphone addressed by card index is watched for moving
+
+**A resolving ALSA card index is an advisory, and a moved card is a boot
+anomaly** (`AU-1`, `S-13`). The same microphone was `card 1` before a reboot
+and `card 3` after it; a station addressing it as `plughw:1,0` passed the
+doctor before and after, recording from whatever then sat at 1. `--doctor`
+now grades a resolving index as an advisory naming the `CARD=<id>` form for
+the very card it resolved to, and every start records the card id the
+kernel reports behind each index-form device and compares it with the last
+start: a change is the `audio_card_moved` boot anomaly, on the health
+endpoint, in the station-health notification, and in the log.
+
 ### Fixed — the disk-full purge keeps every species
 
 **A full disk no longer costs the rarest bird its only clip** (`S-2`). The

@@ -59,8 +59,11 @@ none, or is absent, now), `db_path_changed`, `mount_lost` (the data directory
 was its own mount and is not now — the volume did not mount, and the station
 is writing to the disk beneath it), `version_rollback`, `config_reverted` (the
 configuration file has errors and the station is running on the last one a
-start succeeded on) and `config_rejected` (errors and no last-good copy: the
-station is running web-only so this report is reachable). The journal is kept in
+start succeeded on), `config_rejected` (errors and no last-good copy: the
+station is running web-only so this report is reachable) and `audio_card_moved`
+(an ALSA device addressed by card index, `plughw:1,0`, resolves to a different
+card than at the last start: the index moved on re-enumeration and the station
+is recording from another device; address the card by id). The journal is kept in
 the configuration directory, outside the data volume, so a volume that fails
 to mount cannot take the memory of the last start with it; before it, such a
 start was indistinguishable from a first run. A non-empty list is degraded
