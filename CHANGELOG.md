@@ -151,6 +151,17 @@ condition; the disk endpoint answers a failed `df` with `503 unknown` instead
 of `500`; and the journal gets one line on a transition instead of one a
 minute.
 
+**Four first-run gaps** (`ON-4`, `ON-5`, `ON-10`, `ON-11`). The wizard's Done
+step said detections would roll in within a minute or two; the settings it had
+just saved take effect on the next start, which `/admin/settings` said and
+the wizard did not — it now says so and links the restart. `CONFIDENCE=0.99`
+and `SF_THRESH=0.5` drew no finding: the validator warns above 0.95 and 0.3,
+as it always warned below 0.1. The first-run checklist's model row was a
+hard-coded tick that read "Model bundled … included" on a process with no
+model; it now reads the detector's liveness and says "Detector not running"
+with a link to the doctor. The compose file's health check says why it is not
+`?strict=1` and where the strict probe is for.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

@@ -148,6 +148,15 @@ services:
     # starts reuse the cached model in the named volume and come up almost
     # instantly, so the long start_period has no steady-state cost.
     # -------------------------------------------------------------------------
+    # Deliberately NOT `?strict=1`. The plain probe answers 200 whenever the
+    # database is serving and the data volume takes writes; it stays 200 with
+    # the detection daemon stopped, and that is the point: Docker restarts an
+    # unhealthy container, and a station whose daemon is down is exactly the
+    # one that must stay up to be diagnosed — a restart loop destroys the
+    # journal that says why. Point a monitor that should wake a human at
+    # `/api/v2/health?strict=1` instead (see the integrations reference); it
+    # returns 503 for a stopped daemon, a critically full disk and a failed
+    # admin bootstrap as well.
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent",
              "http://localhost:8502/api/v2/health"]

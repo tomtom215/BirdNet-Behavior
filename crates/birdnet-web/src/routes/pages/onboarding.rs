@@ -788,7 +788,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <div>
           <div class="ob-eyebrow">All set</div>
           <h1 class="ob-h">You're <em>listening</em>.</h1>
-          <p class="ob-p">The pipeline is warming up. Within a minute or two you'll see the first detections roll in.</p>
+          <p class="ob-p">Your answers are saved. The location, accuracy and alert settings take effect the next time the station starts — restart it from <a href="/admin/system">Settings → System</a> (or reboot the Pi); detections then start rolling in within a minute or two.</p>
           <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
             <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>

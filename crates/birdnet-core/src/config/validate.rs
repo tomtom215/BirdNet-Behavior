@@ -74,7 +74,9 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_coords(config, &mut out);
     check_unit_range(config, "CONFIDENCE", 0.0, 1.0, &mut out);
     check_confidence_floor(config, &mut out);
+    check_confidence_ceiling(config, &mut out);
     check_unit_range(config, "SF_THRESH", 0.0, 1.0, &mut out);
+    check_sf_thresh_ceiling(config, &mut out);
     check_unit_range(config, "PRIVACY_THRESHOLD", 0.0, 1.0, &mut out);
     check_bounded(config, "SENSITIVITY", 0.5, 1.5, &mut out);
     check_bounded(config, "OVERLAP", 0.0, 2.9, &mut out);
@@ -194,6 +196,66 @@ fn check_confidence_floor(config: &Config, out: &mut Vec<Finding>) {
              SF_THRESH a CONFIDENCE of 0 does not mean \"disabled\"",
             super::DEFAULT_CONFIDENCE_THRESHOLD
         ),
+    ));
+}
+
+/// Threshold above which `CONFIDENCE` is treated as a probable mistake.
+///
+/// The classifier's scores for a real, clear call sit mostly between 0.5 and
+/// 0.9; a station asked for more than 0.95 records a few calls a day from a
+/// dawn chorus of hundreds, and one asked for 0.99 records almost nothing at
+/// all — which looks, from the dashboard, exactly like a dead microphone.
+/// The floor has warned since the low-side slip was first seen; the high side
+/// drew no finding (ON-5).
+const CONFIDENCE_CEILING: f64 = 0.95;
+
+/// Threshold above which `SF_THRESH` is treated as a probable mistake.
+///
+/// `SF_THRESH` is the occurrence probability below which the geomodel drops
+/// a species from the candidate list. Its default is 0.03; even common
+/// species sit under 0.3 for most weeks of the year, so a value above that
+/// silences most of the list, and the station reports fewer species without
+/// saying why.
+const SF_THRESH_CEILING: f64 = 0.3;
+
+/// Warn about a `CONFIDENCE` that is in range but implausibly high.
+fn check_confidence_ceiling(config: &Config, out: &mut Vec<Finding>) {
+    let Some(Ok(v)) = parse_float(config, "CONFIDENCE") else {
+        return;
+    };
+    if v <= CONFIDENCE_CEILING {
+        return;
+    }
+    out.push(Finding::warn(
+        "CONFIDENCE",
+        format!(
+            "CONFIDENCE={v} is very high — only the clearest calls will be recorded, and a \
+             quiet station is indistinguishable from a deaf one"
+        ),
+        format!(
+            "unless this is deliberate, set CONFIDENCE={} (the default); review the \
+             uncertain detections in the quarantine queue instead of raising the bar",
+            super::DEFAULT_CONFIDENCE_THRESHOLD
+        ),
+    ));
+}
+
+/// Warn about an `SF_THRESH` that is in range but implausibly high.
+fn check_sf_thresh_ceiling(config: &Config, out: &mut Vec<Finding>) {
+    let Some(Ok(v)) = parse_float(config, "SF_THRESH") else {
+        return;
+    };
+    if v <= SF_THRESH_CEILING {
+        return;
+    }
+    out.push(Finding::warn(
+        "SF_THRESH",
+        format!(
+            "SF_THRESH={v} is very high — the occurrence filter will drop most species from \
+             the candidate list, including common ones outside their peak weeks"
+        ),
+        "unless this is deliberate, set SF_THRESH=0.03 (the default); the filter is meant to \
+         remove species that never occur here, not to rank the ones that do",
     ));
 }
 
@@ -444,11 +506,40 @@ mod tests {
         }
     }
 
+    /// ON-5: the high side warns as the low side does. `1.0` used to sit in
+    /// the "normal" list below; a station at 1.0 records nothing, which is
+    /// the case this exists for.
+    #[test]
+    fn implausibly_high_confidence_and_sf_thresh_are_warned() {
+        for v in ["0.96", "0.99", "1.0"] {
+            let findings = validate(&cfg(&[("CONFIDENCE", v)]));
+            let hit = findings
+                .iter()
+                .find(|f| f.key == "CONFIDENCE")
+                .unwrap_or_else(|| panic!("CONFIDENCE={v} must warn, got {findings:?}"));
+            assert_eq!(
+                hit.severity,
+                Severity::Warning,
+                "usable, so a warning: {hit:?}"
+            );
+            assert!(hit.message.contains("very high"), "{hit:?}");
+        }
+        let findings = validate(&cfg(&[("SF_THRESH", "0.5")]));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.key == "SF_THRESH" && f.severity == Severity::Warning),
+            "{findings:?}"
+        );
+        // The boundaries themselves are inside the plausible range.
+        assert!(validate(&cfg(&[("CONFIDENCE", "0.95"), ("SF_THRESH", "0.3")])).is_empty());
+    }
+
     #[test]
     fn ordinary_confidence_is_not_warned() {
-        // Counter-test: the floor must not fire on real configurations,
-        // including the default itself and the boundary value.
-        for v in ["0.1", "0.25", "0.5", "0.7", "0,7", "0.95", "1.0"] {
+        // Counter-test: neither the floor nor the ceiling may fire on real
+        // configurations, including the default itself and both boundaries.
+        for v in ["0.1", "0.25", "0.5", "0.7", "0,7", "0.95"] {
             let findings = validate(&cfg(&[("CONFIDENCE", v)]));
             assert!(
                 !findings.iter().any(|f| f.key == "CONFIDENCE"),
@@ -645,11 +736,11 @@ mod tests {
         /// The only CONFIDENCE finding in range is the low-threshold warning,
         /// and it fires exactly below the floor — never at or above it.
         #[test]
-        fn confidence_warning_tracks_the_floor(c in 0.0_f64..=1.0_f64) {
+        fn confidence_warning_tracks_the_floor_and_the_ceiling(c in 0.0_f64..=1.0_f64) {
             let cfg_ = cfg(&[("CONFIDENCE", &c.to_string())]);
             let findings = validate(&cfg_);
             let warned = findings.iter().any(|f| f.key == "CONFIDENCE");
-            prop_assert_eq!(warned, c < CONFIDENCE_FLOOR, "c={}", c);
+            prop_assert_eq!(warned, c < CONFIDENCE_FLOOR || c > CONFIDENCE_CEILING, "c={}", c);
         }
 
         /// CONFIDENCE outside [0, 1] always errors. Restrict to a finite,
