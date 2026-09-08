@@ -38,6 +38,127 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the head of the audit's queue, and what running the station found
+
+The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in
+the order it was written, and every document in `docs/` was then reconciled
+against the code a second time, in place. Each fix below landed with a gate
+that was first watched failing against the code it now guards; the failure
+text is in each commit message.
+
+**The eBird export now produces a checklist eBird can accept** (`dad46d1`,
+`R-18`, `R-19`). It read latitude and longitude as 0, 0 while the real
+coordinates sat in settings; it applied no confidence floor and no
+one-per-hour deduplication, so one blackbird detected two hundred times went
+out as two hundred birds; and it hard-coded `Protocol=S, Observers=1`. It now
+takes its coordinates from the station's settings, leaves them blank rather
+than inventing an equator crossing when none are set, rejects a half pair or an
+off-globe pair with 400, applies a 0.75 confidence floor
+(`?min_confidence=`), writes one record per species per hour with `Number=X`
+and the detection count in the comment, and takes protocol, observers, state,
+country and completeness from the caller. Its rows come from the analytic
+view, so a rejected or excluded detection no longer reaches a public database.
+The CSV, JSON and BirdDB exports still read the raw table with no verdict
+column; that is recorded, not fixed (`R-17`).
+
+**An operator with only a browser can now run the doctor and download a
+support bundle** (`9f42652`, `OP-1`). `/admin/doctor` renders the full
+`--doctor` report; `/admin/doctor.json` serves the same document
+`--doctor-json` prints; `/admin/support-bundle` streams the archive
+`--support-bundle` writes, built beside the database and removed afterwards.
+The binary hands the web layer two hooks at startup; the hooks are read-only,
+so a `--fix` on the command line is never implied by a `GET`. A process built
+without the hooks, as tooling and tests build it, answers 503 with a body that
+says what is missing, rather than 404 like a typo or 500 like a bug. The end-to-end
+gate boots the real binary and untars what it downloads.
+
+**The installer verifies the geomodel pair by checksum, not by presence**
+(`c31da32`, `ON-3`). The classifier download had been taught that a partial
+download is a file; the geomodel half of the same module still treated
+`[ -f ]` as installed, so a fetch that dropped at 60 % was "already present"
+on every re-run and every `repair`, the config writer then pointed the daemon at
+it, and the daemon refused the pair on every start with the occurrence filter
+silently off. Third instance of one shape.
+
+**A detection daemon that dies after boot is now reported as stopped**
+(`d0df731`, `OP-2`, the second clause of `PR-5`, the remainder of `OB-4`).
+The daemon's `AtomicBool` was written once at startup and no exit path cleared
+it, so `/api/v2/health?strict=1` kept answering "running" for a thread that had
+returned. The loop thread now holds a guard that clears the flag when it
+returns, however it returns, and the binary mirrors that flag into the health
+flag every five seconds.
+
+**Configuration values are redacted by shape** (`373ceb2`, item 2.17,
+`OB-10`, `OB-11`, `RC-20`). The old rule ran an email-address redactor over
+every value and turned `rtsp://user:pass@camera.local/stream` into
+`***@camera.local/stream`, destroying the scheme an operator needs to recognise
+the source while keeping the host. One function now decides by shape: an
+`rtsp://` URL keeps scheme, user, host and path and loses only the password; an
+`http(s)://` URL keeps its host and loses its path, because the token in a
+heartbeat or webhook URL is the path; any other scheme keeps only the scheme,
+because Apprise-style URLs carry their tokens in the authority; lists are
+split and each element treated alone. The support bundle and
+`GET /api/v2/settings` share it. `1c1be04` re-pointed the one API gate that
+still asserted the old host-keeping output.
+
+**A forward clock step no longer deletes the clip library** (`e88a60d`, item
+1.11, the remaining half of `NT-4`, `AD-1`). The plausibility check was a
+floor only, so a clock that jumped fifty years forward passed it and every
+date-relative purge reclaimed everything. The check is now a range, with a
+ceiling at 2064-01-01, and a watch compares the wall clock with the monotonic
+clock from the first plausible reading and refuses retention when the two
+disagree by more than 400 days. Clip and log retention, the acoustic-health
+pruner and the weather pruner all consult it. The residual: a jump inside 400
+days, or one that happens before the process starts and lands inside the range.
+
+**The CSRF defence is asserted, and the doctor's check set is written down
+once** (`95a8272`, `RC-5` to `RC-8`, items 8.1 and 8.2). `security.rs`
+argued that no synchroniser token was needed because there was no session to
+bind to, long after a session cookie existed; the actual defence is
+`SameSite=Lax` plus the same-origin check, and nothing asserted either. Both
+cookies are now asserted `HttpOnly` and `SameSite=Lax`, the module doc names
+the two mitigations, and `src/doctor.rs` has a table of its twenty-one check
+families that a source-scanning gate holds against the check functions in the
+tree, so a check cannot be added without being listed.
+
+**The species rollup is keyed by provenance** (`dd10fe7`, the lasting half of
+`RC-3`, item 3.22). The reader-side fallback that made the species list correct
+on a station that excludes imports did so by putting exactly those stations
+back onto the unbounded scan migration 30 existed to remove. Migration 42 adds
+`is_import` to `species_summary`'s key, rewrites the three triggers, and the
+readers select the rollup whole or `WHERE is_import = 0`. Both answers come
+from the rollup; nobody pays the scan.
+
+**The documented analytics opt-out was unreachable** (`12776c7`, `RC-36`).
+The code has treated an empty `--analytics-db` as "run without DuckDB" since
+analytics became a default feature, and the documentation promised that form,
+but clap's stock parser rejected an empty value with exit 2 and the Docker
+entrypoint's blank-variable scrubber unset an empty `BIRDNET_ANALYTICS_DB`
+before the binary saw it. Removing the flag, as the unit template advised,
+falls back to `<database>.duckdb` and turns nothing off; the only working
+opt-out was a `--no-default-features` build. Same defect `--image-cache-dir`
+had; same fix.
+
+**Every detection row now records where and under what settings it was
+made** (`e3f9b80`, `R-2`, `UP-1`). The processor wrote `Lat`, `Lon`, `Cutoff`,
+`Sensitivity` and `Overlap` as NULL on every row it inserted, while BirdNET-Pi
+fills all five; an exported dataset could not be located, and a row's
+confidence could not be read against the threshold that admitted it. The
+daemon now builds the run's provenance once from the same resolved values the
+model uses and the disposition decision carries the effective threshold, per
+species where one is set, after the dynamic adjustment, so `Cutoff` is the bar
+each row actually cleared. A station with no coordinates keeps NULL, never
+0, 0.
+
+**The documents were reconciled a second time** (`480d56f`, `200e768`,
+`849a2e2`, `1334320`, `bd0994b`, `8e6806f`, `290009b`, `df5fa7a`). Eleven
+planning and audit documents, the architecture set, the mdBook, the design
+handover and the root documents were re-read against the source by fifteen
+independent read-only passes and then corrected in place by eleven editing
+passes, each claim re-verified by a command before it was written and every
+count re-derived. What that found is in `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
+§0 and §6, including the two counts that were wrong again.
+
 ### Fixed — eight ways the station vouched for something it had not checked
 
 This project accumulated eleven planning and audit documents written at
@@ -146,20 +267,11 @@ full card would not have let it record anyway.
 ### Found and not fixed
 
 Recorded so nothing discovered goes untraced. The full register is
-`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.12 and §3.13 — 121 new rows with
-severity, evidence and a remedy each. The ones an operator should know about:
+`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.12 and §3.13 — 123 rows with
+severity, evidence and a remedy each (counted 2026-09-08 by first id per row;
+three of the original entries here were fixed on this branch and moved up).
+The ones an operator should know about:
 
-* **The eBird export writes latitude 0, longitude 0**, applies no confidence
-  floor and no one-per-hour deduplication, and writes raw detection tallies as
-  bird counts — so one blackbird detected two hundred times is exported as two
-  hundred birds. BirdNET-Pi does all of this correctly. It is the only defect
-  here whose output leaves the station and enters a public database (`R-19`).
-* **The support bundle and `--doctor` are reachable only over SSH**, though both
-  are already written, tested, and embedded in each other (`OP-1`).
-* **A forward clock step still deletes the clip library**, and a comment in
-  `civil.rs` claims every destructive retention job refuses to run on an
-  implausible clock. The function it names has no caller in the maintenance loop
-  (`AD-1`).
 * **The onboarding wizard's answers do not reach the running station** until a
   restart, and the wizard's final step says detections will start arriving in a
   minute or two (`ON-4`).
