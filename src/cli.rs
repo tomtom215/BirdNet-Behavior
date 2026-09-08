@@ -607,8 +607,11 @@ pub struct Cli {
 
     /// Privacy filter threshold for human voice detection (0.0 = disabled).
     ///
-    /// When enabled, audio chunks containing human voice are suppressed along
-    /// with adjacent chunks. Typical values: 0.01-0.03.
+    /// The model's confidence for its human classes (speech, whistling, other
+    /// human sounds) at or above which an analysis window is suppressed, along
+    /// with the windows either side of it. Read from the model's output before
+    /// the detection threshold applies, so this value binds on its own: lower
+    /// suppresses more. Typical values: 0.01-0.03.
     #[arg(long, default_value = "0.0", env = "BIRDNET_PRIVACY_THRESHOLD")]
     pub privacy_threshold: f32,
 

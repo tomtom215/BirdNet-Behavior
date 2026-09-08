@@ -38,6 +38,25 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the privacy threshold now does something
+
+**`BIRDNET_PRIVACY_THRESHOLD` binds** (`S-5`). The filter inherited
+BirdNET-Pi's rule — flag a chunk when a human label sits within the top
+`max(10, 6000 × threshold / 100)` of its predictions — and applied it to a
+detection list that was at most ten long and had already been cut at the
+*detection* threshold. So the setting never mattered: speech was suppressed
+exactly when it scored above the detection threshold, and lowering that
+threshold to catch quieter birds silently tightened privacy while raising it
+loosened it. The model now reports a per-chunk *human score* — the highest
+confidence among its human classes, read from its output before either cut —
+and the filter suppresses a chunk and its neighbours when that score reaches
+the threshold. The value is a confidence on the same scale as a detection's,
+and lower suppresses more; the CLI help, the settings form, the recording page
+and the hardening guide now say so in one voice, where before one told the
+operator to raise it towards `0.5` near a footpath and another said it routed
+rows to a log that does not exist. A station whose loaded label set has no
+human class is warned at start that the filter cannot fire.
+
 ### Fixed — every detection row now says which model made it
 
 **A detection row records the model that produced it** (`R-1`, the register's

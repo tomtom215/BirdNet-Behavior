@@ -127,8 +127,8 @@ pub struct SettingsForm {
     /// Species frequency threshold (0.0–1.0). Filters species whose expected occurrence
     /// frequency in the region falls below this value.
     pub sf_thresh: Option<String>,
-    /// Confidence threshold below which detections are written to the privacy-filtered log
-    /// rather than the main detections table.
+    /// Human-class confidence at or above which an analysis window and its
+    /// neighbours are suppressed (`0` = disabled).
     pub privacy_threshold: Option<String>,
     /// How much agreement from neighbouring analysis windows a species needs
     /// before it is recorded: `off`, `lenient`, `moderate`, `balanced` or

@@ -174,6 +174,12 @@ pub fn run_daemon(
             threshold = config.privacy_threshold,
             "privacy filter enabled"
         );
+        if !model.has_human_labels() {
+            tracing::warn!(
+                "privacy filter enabled but no label in the loaded model names a human class; \
+                 the filter can never fire with this model"
+            );
+        }
     }
     if chunk_filters.noise.is_enabled() {
         tracing::info!(

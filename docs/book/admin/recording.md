@@ -25,7 +25,7 @@ The [scheduler](../reference/architecture.md) computes sunrise and sunset from y
 
 ## Privacy threshold
 
-`BIRDNET_PRIVACY_THRESHOLD` (default `0.0`, disabled) discards segments where **human speech** is the dominant sound above the given confidence, so casual conversation near the mic isn't written to disk. Raise it (e.g. `0.5`) if the microphone is near a patio or path.
+`BIRDNET_PRIVACY_THRESHOLD` (default `0.0`, disabled) discards every analysis window in which the model's confidence for a **human** class (speech, whistling, other human sounds) reaches the value, and the windows either side of it, so casual conversation near the mic isn't written to disk. The confidence is read from the model's output before the detection threshold applies, so the setting binds on its own: changing the detection threshold does not change what the privacy filter does. Lower values suppress more. `0.02` is a usual starting point; *lower* it (towards `0.01`) if the microphone is near a patio or path, and raise it if birdsong is being suppressed.
 
 ## Retention — how clips are purged
 

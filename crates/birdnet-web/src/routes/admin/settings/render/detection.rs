@@ -103,7 +103,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <input id="privacy_threshold" name="privacy_threshold" type="text"
              inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
              value="{priv_t}" placeholder="0.0" class="bnb-w-num">
-      <p class="hint">Suppress detections when human voice is detected. Typical: 0.01–0.03. 0 = disabled (BirdNET-Pi: PRIVACY_THRESHOLD)</p>
+      <p class="hint">Suppress an analysis window, and its neighbours, when the model's confidence for a human class reaches this value. Lower = suppresses more. Independent of the confidence threshold above. Typical: 0.01–0.03. 0 = disabled (BirdNET-Pi: PRIVACY_THRESHOLD)</p>
     </div>
     <div>
       <label for="confirmation_level">Repeat Confirmation</label>

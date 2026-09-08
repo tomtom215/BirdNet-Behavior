@@ -143,8 +143,10 @@ regardless of this setting.
 The station listens to a live microphone, so audio handling is privacy-relevant.
 
 - **Human-voice filter.** Set `BIRDNET_PRIVACY_THRESHOLD` (0.0–1.0; `0.02` is a
-  good start) to suppress analysis windows that contain human speech. `0.0`
-  disables it.
+  usual start, and lower suppresses more) to suppress analysis windows in which
+  the model's confidence for a human class reaches the value, and their
+  neighbours. `0.0` disables it. It binds independently of the detection
+  threshold.
 - **Recording retention.** Extracted detection clips accumulate on disk; cap
   them with `BIRDNET_MAX_FILES_PER_SPECIES` and rely on the disk manager's
   purge threshold. Audio you never want persisted should be filtered at the

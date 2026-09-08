@@ -39,16 +39,17 @@ pub struct ChunkFilters {
 impl ChunkFilters {
     /// Apply every filter in order: privacy, noise, then corroboration.
     ///
-    /// `starts[i]` is the start time in seconds of the chunk whose predictions
-    /// are `predictions[i]`; it is only read by the corroboration stage, which
-    /// needs to know which chunks are near each other.
+    /// `starts[i]` is the start time in seconds of the chunk whose prediction
+    /// is `chunks[i]`; it is only read by the corroboration stage, which needs
+    /// to know which chunks are near each other. The privacy stage reads each
+    /// chunk's human score; the later stages read only its detections.
     #[must_use]
     pub fn apply(
         &self,
         starts: &[f32],
-        predictions: &[Vec<types::Detection>],
+        chunks: &[types::ChunkPrediction],
     ) -> Vec<Vec<types::Detection>> {
-        let after_privacy = self.privacy.filter_predictions(predictions);
+        let after_privacy = self.privacy.filter_predictions(chunks);
         let after_noise = self.noise.filter_predictions(&after_privacy);
         corroboration::corroborate(self.confirmation, starts, &after_noise)
     }
@@ -63,9 +64,28 @@ impl ChunkFilters {
 #[cfg(test)]
 mod chunk_filter_tests {
     use super::{
-        ChunkFilters, corroboration::ConfirmationLevel, noise::NoiseFilter, privacy::PrivacyFilter,
-        types::Detection,
+        ChunkFilters,
+        corroboration::ConfirmationLevel,
+        noise::NoiseFilter,
+        privacy::PrivacyFilter,
+        types::{ChunkPrediction, Detection},
     };
+
+    /// A chunk the model heard no human in.
+    fn quiet(detections: Vec<Detection>) -> ChunkPrediction {
+        ChunkPrediction {
+            detections,
+            human_score: 0.0,
+        }
+    }
+
+    /// A chunk the model heard a human in, clearly.
+    fn voiced(detections: Vec<Detection>) -> ChunkPrediction {
+        ChunkPrediction {
+            detections,
+            human_score: 0.8,
+        }
+    }
 
     /// A detection with the given names and confidence.
     fn d(sci: &str, com: &str, confidence: f32) -> Detection {
@@ -101,15 +121,14 @@ mod chunk_filter_tests {
         // scans an empty chunk, finds no human, and leaves the neighbours
         // alone — so a recording of someone talking survives, in the chunks
         // either side, because a dog happened to bark over the middle of it.
-        let both_present = vec![
-            d("Homo sapiens", "Human", 0.80),
+        let both_present = voiced(vec![
             d("Dog", "Dog", 0.91),
             d("Turdus merula", "Eurasian Blackbird", 0.82),
-        ];
-        // The neighbours must carry no human label of their own, or they are
+        ]);
+        // The neighbours must carry no human score of their own, or they are
         // flagged on their own merit and the gate passes whatever the order —
         // which is exactly how the first version of this test was wrong.
-        let neighbour = vec![d("Parus major", "Great Tit", 0.9)];
+        let neighbour = quiet(vec![d("Parus major", "Great Tit", 0.9)]);
 
         let out = both().apply(
             &[0.0, 3.0, 6.0],
@@ -128,9 +147,12 @@ mod chunk_filter_tests {
         // Counterpart: the ordering gate above is satisfied by any arrangement
         // that suppresses everything, so pin that each filter is actually
         // consulted and that neither one's verdict is the other's.
-        let bark = vec![d("Dog", "Dog", 0.91), d("Turdus merula", "Blackbird", 0.82)];
-        let voice = vec![d("Homo sapiens", "Human", 0.8)];
-        let quiet = vec![d("Parus major", "Great Tit", 0.9)];
+        let bark = quiet(vec![
+            d("Dog", "Dog", 0.91),
+            d("Turdus merula", "Blackbird", 0.82),
+        ]);
+        let voice = voiced(vec![d("Parus major", "Great Tit", 0.8)]);
+        let tit = quiet(vec![d("Parus major", "Great Tit", 0.9)]);
 
         // Noise only: the bark chunk goes, the voice chunk stays.
         let noise_only = ChunkFilters {
@@ -148,7 +170,7 @@ mod chunk_filter_tests {
             noise: NoiseFilter::with_default_classes(0.0),
             confirmation: ConfirmationLevel::Off,
         };
-        let out = privacy_only.apply(&[0.0, 3.0], &[bark, quiet]);
+        let out = privacy_only.apply(&[0.0, 3.0], &[bark, tit]);
         assert_eq!(out[0].len(), 2, "the noise filter acted while disabled");
     }
 
@@ -176,9 +198,12 @@ mod chunk_filter_tests {
         let out = filters.apply(
             &[0.0, 3.0, 6.0],
             &[
-                vec![d("Dog", "Dog", 0.91), d("Turdus merula", "Blackbird", 0.82)],
-                vec![d("Turdus merula", "Blackbird", 0.82)],
-                vec![d("Turdus merula", "Blackbird", 0.82)],
+                quiet(vec![
+                    d("Dog", "Dog", 0.91),
+                    d("Turdus merula", "Blackbird", 0.82),
+                ]),
+                quiet(vec![d("Turdus merula", "Blackbird", 0.82)]),
+                quiet(vec![d("Turdus merula", "Blackbird", 0.82)]),
             ],
         );
         assert!(
