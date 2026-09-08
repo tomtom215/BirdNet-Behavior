@@ -78,7 +78,12 @@ were counted as open; by the prefix `**[FIXED` it was 29. Re-taken at the
 end of the third stretch, by the prefix, over §3's 288 single-id rows, 132
 of which carry a marker: **0 P0**, **20 P1**, **104 P2**, **30 P3**; counting
 the markers that say "in part", "half" or "clips" as open, **25 P1** (`PS-6`,
-`PS-7`, `PR-8`, `LC-4`, `ON-4`) and **106 P2** (`NT-8`, `OB-9`).)
+`PS-7`, `PR-8`, `LC-4`, `ON-4`) and **106 P2** (`NT-8`, `OB-9`). Re-taken at
+the end of the fourth stretch the same day, same method, the section bounded
+by its headings rather than by line numbers (the earlier fixed bounds had
+drifted as lines were added above §3): 288 single-id rows, 141 marked, **0
+P0**, **15 P1**, **101 P2**, **29 P3**; with the partial markers counted as
+open, **20 P1** and **103 P2**.)
 `R-DwC` matches that pattern; the digits-only pattern the 2026-09-04 count
 used does not see it, which is where "255" and "R 11" came from.) At
 `8e6806f`, **61** of the rows carry a `**[FIXED…]**` marker, 21 more than at
@@ -1375,22 +1380,25 @@ stretch: `OP-4`+`OP-6`+`OP-7` (`2257c86`), `PS-8`+`ON-8`+`UX-2`+`NP-5`+`OP-3`
 and `LC-4`'s `arecord` half (`3047214`), `PR-7` (`21ff82b`), `UX-1`
 (`ec29a04`), `NP-1` (`09ae447`), `S-2` (`20c287d`), `AU-1`+`S-13`
 (`b520003`), `AD-3` (`3735f1f`), `ON-7`+`NT-6` (`2bfb24a`), `AD-4` and the
-last half of `LC-2` (`a83c8a6`). The full workspace run at `06efa12`,
-before the last of those: 3 879 passed, 0 failed, 9 ignored, 130 suites.
-What follows is the queue as it stands, ordered by what a station in a field
-gains per hour of work.*
+last half of `LC-2` (`a83c8a6`); the fourth stretch: `OP-5`+`OB-15`+`PS-19`
+(`a2284d0`), `DD-9` (`d9f53b4`), `DD-30` (`3a6ace8`), `DD-29`+`UX-16`+`UX-17`
+(`71097d8`), `PR-1`+`S-3` (`e402d54`), `R-4` (`1517fee`). The full workspace
+run at `09b8fad`, before `R-4`: 3 885 passed, 0 failed, 9 ignored, 131
+suites; `cargo doc` with warnings denied exits 0 there. What follows is the
+queue as it stands, ordered by what a station in a field gains per hour of
+work.*
 
-**The medium rows left:** `ON-6`'s remainder was looked for and not found —
-its row is closed in full at `60ead63` and nothing else names a remainder,
-so that entry was stale; the contrast numbers in `DD-29`/`DD-30` (P2) are
-the only medium rows still open. Of the P1 rows outside the large list:
-`OP-5` (a journald drop-in with the unit — small, shell and docs; take it
-with `OB-15`, whose two per-file INFO lines it also demotes), `DD-9`'s
-remainder (record cutoff, sensitivity and overlap at quarantine time —
-a migration and a copy), `R-4` (a retention option that keeps raw audio at
-a duty cycle), and `PR-1`/`S-3` (a lease on segments the daemon has open,
-and a `birdnet_segments_dropped_total` counter — the probe that deleted a
-segment under a live reader is in the row).
+**The medium rows are done.** `ON-6`'s remainder was looked for and not
+found — its row is closed in full at `60ead63` and nothing else names a
+remainder, so that entry was stale. Every P1 row still open is on the large
+list below; the fifteen are `PS-3`, `PS-4`, `PR-2`, `PR-3`, `PR-4`, `LC-3`,
+`LC-5`, `S-1`, `O-4`, `ARM-1`, `R-5`, `R-DwC`, `FR-1`, `FR-2`, `FR-3`. Two
+notes for whoever takes them: `R-5`/`FR-2` is now unblocked — `R-4` keeps the
+raw audio under `<recordings>/raw` with its capture time and source in the
+name, and `analysis_runs` (`R-1`) is the row a re-analysis keys to; and
+`PR-2`'s queue-depth gauge has a natural home in the same `PendingFiles`
+sweep that now reports vanished segments (`PR-1`), since the pending set *is*
+the queue.
 
 **Then the large ones, each its own session:** `R-5`/`FR-2` (re-analysis over
 retained audio keyed to `analysis_runs`), `FR-1`/`R-DwC` (Raven selection
