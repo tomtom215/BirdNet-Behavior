@@ -96,6 +96,21 @@ extend-ignore-re = [
     # repository is still caught, and this project has a `confidence_threshold`
     # setting whose name it would then stop protecting.
     'confidence_treshold',
+    # `did_you_mean` in `config/known_keys.rs` answers a misspelt key with the
+    # nearest real one; its gate asks for `LATTITUDE` and expects `LATITUDE`.
+    # Same shape as `confidence_treshold`: the misspelling is the fixture, and
+    # it is matched as the whole token so "lattitude" stays caught elsewhere.
+    'LATTITUDE',
+    # `BIRDNET_PUBLIC_ACCESS` refuses a carve-out name that does not exist,
+    # because a misspelt `live_audo` silently dropping the one carve-out the
+    # operator meant is the failure private mode exists to prevent. The
+    # parser's gate, the doctor's and the manual's example all send the same
+    # string. Whole token, so "audo" for "audio" is still caught elsewhere.
+    'live_audo',
+    # SHA-256 of the three bytes `abc`, the standard test vector, quoted in
+    # `doctor/model.rs` as the digest a fixture model must report. typos
+    # splits it at the first digit and reads `ba` as a word.
+    'ba7816bf8f01[0-9a-f]*',
 ]
 
 [default.extend-words]

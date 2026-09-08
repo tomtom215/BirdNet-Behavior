@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(unchanged.status, Status::Pass, "{unchanged:?}");
         assert!(unchanged.message.contains("ba7816bf8f01"), "{unchanged:?}");
 
-        std::fs::write(&model, b"abd").unwrap();
+        std::fs::write(&model, b"abx").unwrap();
         let swapped = check_identity(&model, &db);
         assert_eq!(swapped.status, Status::Warn, "{swapped:?}");
         assert!(swapped.message.contains("has changed"), "{swapped:?}");

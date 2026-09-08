@@ -153,7 +153,7 @@ async fn a_sixth_attempt_from_another_address_is_not_affected() {
 /// Four mistakes and then the right password: signed in, and the slate is
 /// clean, so the next mistake is the first of a new five.
 #[tokio::test]
-async fn a_successful_sign_in_clears_the_addresss_failures() {
+async fn a_successful_sign_in_clears_the_address_failures() {
     let state = state_with_admin();
     for _ in 0..4 {
         post_login(&state, "203.0.113.7", "wrong").await;

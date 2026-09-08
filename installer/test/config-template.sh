@@ -87,6 +87,8 @@ render() {
         DB_PATH="/var/lib/birdnet/birds.db"
         ANALYTICS_DB_PATH="/var/lib/birdnet/analytics.duckdb"
         SERVICE_USER="birdnet"
+        INSTALL_DIR="/usr/local/bin"
+        BINARY_NAME="birdnet-behavior"
         LISTEN_ADDR="0.0.0.0:8502"
         ALSA_CARD_VALUE=""
         RTSP_URL_VALUE=""

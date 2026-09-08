@@ -218,7 +218,7 @@ mod tests {
     fn edit_distance_is_levenshtein() {
         assert_eq!(edit_distance("", ""), 0);
         assert_eq!(edit_distance("abc", "abc"), 0);
-        assert_eq!(edit_distance("abc", "abd"), 1);
+        assert_eq!(edit_distance("abc", "abx"), 1);
         assert_eq!(edit_distance("abc", "ab"), 1);
         assert_eq!(edit_distance("kitten", "sitting"), 3);
     }
