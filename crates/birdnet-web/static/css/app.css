@@ -2489,6 +2489,7 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .bkr-stat-label   { margin-top: 6px; }
 .bkr-split        { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .bkr-main         { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.bkr-main > *     { min-width: 0; }
 .bkr-h1           { font-size: 34px; margin: 6px 0 4px; }
 .bkr-lede         { margin-bottom: 20px; }
 .bkr-mt           { margin-top: 16px; }
@@ -2512,7 +2513,13 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .bkr-storage-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 8px; }
 
 /* Snapshot rows */
-.bkr-snap-row     { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; border-top: 0.5px solid var(--hairline); }
+/* `minmax(0, 1fr)` and `min-width: 0` on the children (DD-30): a `1fr` track
+   is `minmax(auto, 1fr)`, so the snapshot's unbreakable `birds.db.backup.<stamp>`
+   name widened the track to its min-content and the page scrolled sideways at
+   390 px once a station had a single snapshot. The name may wrap anywhere. */
+.bkr-snap-row     { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; border-top: 0.5px solid var(--hairline); min-width: 0; }
+.bkr-snap-row > * { min-width: 0; }
+.bkr-snap-row .mono { overflow-wrap: anywhere; }
 .bkr-snap-row.today { background: var(--moss-soft); }
 .bkr-dot.auto     { background: var(--moss); }
 .bkr-dot.manual   { background: var(--dawn); }

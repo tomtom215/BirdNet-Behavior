@@ -38,6 +38,13 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the backup page no longer scrolls sideways on a phone
+
+**A snapshot row fits a 390 px viewport** (`DD-30`). Once a station had one
+backup snapshot, its unbreakable file name widened the row's grid track and
+the whole page scrolled sideways on a phone. The track is now
+`minmax(0, 1fr)`, the children may shrink, and the name wraps.
+
 ### Fixed — an approved quarantine row keeps its provenance
 
 **A quarantined detection records the bar it was heard under** (`DD-9`).
