@@ -12,6 +12,7 @@ use crate::analytics_cache::AnalyticsCache;
 use crate::api_token::ApiToken;
 use crate::db_pool::ReaderPool;
 use crate::diagnostics::Diagnostics;
+use crate::login_throttle::LoginThrottle;
 use crate::notifier::Notifier;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
@@ -154,6 +155,10 @@ struct AppStateInner {
     /// a GitHub Actions runner sets. See
     /// `routes::admin::system_controls::service::supervised_by_systemd`.
     supervised_by_systemd: bool,
+    /// Failed sign-ins per client address (O-6), consulted before Argon2
+    /// runs. Process-lifetime state: a restart forgives, which is the
+    /// reference project's behaviour too.
+    login_throttle: LoginThrottle,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -233,6 +238,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                login_throttle: LoginThrottle::default(),
             }),
         })
     }
@@ -427,6 +433,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                login_throttle: LoginThrottle::default(),
             }),
         })
     }
@@ -465,6 +472,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                login_throttle: LoginThrottle::default(),
             }),
         }
     }
@@ -1101,6 +1109,12 @@ impl AppState {
     #[must_use]
     pub fn ingest_halt_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.inner.ingest_halted)
+    }
+
+    /// The sign-in throttle (O-6): failed attempts per client address.
+    #[must_use]
+    pub fn login_throttle(&self) -> &LoginThrottle {
+        &self.inner.login_throttle
     }
 
     /// Whether the per-detection writes are currently refused.

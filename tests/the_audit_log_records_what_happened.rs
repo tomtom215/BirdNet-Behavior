@@ -278,6 +278,7 @@ const ACTIONS: &[&str] = &[
     "audio.source.update",
     "auth.login.fail",
     "auth.login.ok",
+    "auth.login.throttled",
     "auth.logout",
     "data.backup.run",
     "data.database.restore",

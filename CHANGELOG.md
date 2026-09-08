@@ -81,6 +81,18 @@ Migration 44 converts and converts back, and a time that never happened keeps
 a NULL instant. Rows already stamped are left alone: the same check over
 history would fire on every row of a station whose zone has since changed.
 
+**The sign-in form is throttled** (`O-6`). The "Too many attempts" page
+existed and the flag that rendered it was set in one place: a unit test.
+`login_submit` never set it, so the global limiter's tens of posts a second per
+address were all Argon2id hashes the Pi computed for whoever asked. Five
+failures from one client address inside fifteen minutes now answer `429 Too
+Many Requests` with a `Retry-After` and the form disabled, before the password
+is checked — a correct password from a throttled address gets the same answer
+and no cookie. Each refusal is in the audit log as `auth.login.throttled`; a
+successful sign-in clears the address; a restart forgives everything; another
+address is never affected, because a blanket lock is a denial of service any
+stranger can trigger against the operator.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

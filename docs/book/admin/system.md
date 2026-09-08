@@ -65,7 +65,7 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 
 | Family | Actions |
 |---|---|
-| `auth.` | `login.ok`, `login.fail`, `logout` |
+| `auth.` | `login.ok`, `login.fail`, `login.throttled`, `logout` |
 | `account.` | `user.create`, `user.delete`, `password.set`, `session.revoke`, `session.revoke_others` |
 | `settings.` | `update` |
 | `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `threshold.set`, `threshold.delete` |
@@ -77,6 +77,11 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 A failed sign-in records the *submitted* username and no actor — "someone tried
 to sign in as `admin` sixty times last night" is the thing worth knowing, and a
 username that does not exist is as interesting as one that does.
+`login.throttled` is an attempt the station refused without checking the
+password: after five failures from one address inside fifteen minutes, that
+address is answered `429` until its oldest failure is a quarter-hour old, and
+each refused attempt is recorded here too. A successful sign-in clears the
+address; a restart forgives everything.
 
 **Values are never recorded.** A settings save lists the names of the keys that
 changed and nothing else. `rtsp_url` is why: an RTSP URL routinely carries

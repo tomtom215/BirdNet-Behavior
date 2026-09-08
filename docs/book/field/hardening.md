@@ -82,6 +82,16 @@ internet-reachable, keep it set (and add TLS off-LAN).
   from `birdnet.conf` — the systemd unit sets no `EnvironmentFile`, so on a
   bare-metal install the sign-in name stays `admin`.
 
+  The form is throttled per client address: five failed attempts inside
+  fifteen minutes and that address is answered `429 Too Many Requests` (with a
+  `Retry-After`) until its oldest failure is a quarter-hour old — the password
+  is not even checked, so a guessing script costs the Pi a map lookup rather
+  than an Argon2 hash per guess. Each refused attempt is in the audit log as
+  `auth.login.throttled`; a successful sign-in clears the address, and a
+  restart forgives everything. Behind a reverse proxy the address is the
+  visitor's only if the proxy is trusted (`--trusted-proxies`); otherwise every
+  visitor shares the proxy's bucket, which is the conservative failure.
+
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. The password
   crosses the wire in clear text unless TLS is on — turn on `--tls-mode`, put a
   proxy in front, or keep the station on a trusted LAN. **Clearing `CADDY_PWD`

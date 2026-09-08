@@ -10,6 +10,7 @@ pub mod base_path;
 pub mod client_ip;
 pub mod db_pool;
 pub mod diagnostics;
+pub mod login_throttle;
 pub mod metrics;
 pub mod notifier;
 pub mod rate_limit;
