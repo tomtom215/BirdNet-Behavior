@@ -136,7 +136,9 @@ fn throughput_observer(
 /// mutation run inside the closure (`>=` for `<`, `||` for `&&`) because
 /// nothing could call a closure that reads the real sensor.
 fn thermal_limit_reached(cpu_temp_c: Option<f32>, throttled_now: bool) -> bool {
-    cpu_temp_c.is_some_and(|t| t >= crate::integrations::THERMAL_ALERT_C) || throttled_now
+    cpu_temp_c.is_some_and(
+        |t| t < /* ~ changed by cargo-mutants ~ */ crate::integrations::THERMAL_ALERT_C,
+    ) || throttled_now
 }
 
 /// One segment in two while the queue is deep or the board is at its thermal

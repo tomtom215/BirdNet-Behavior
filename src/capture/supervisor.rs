@@ -145,6 +145,18 @@ fn should_warn_down(down_since: Option<Instant>, last_warn: Option<Instant>, now
     last_warn.is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
 }
 
+/// Whether the flapping warning is due: the source has (re)started at least
+/// [`FLAP_THRESHOLD`] times inside the window, and the last such warning is
+/// at least [`DOWN_WARN_EVERY`] old or never happened.
+///
+/// A pure function for the same reason as the one above: the caller only
+/// writes a log line, so every operator in this decision survived a
+/// mutation run while it lived there.
+fn flap_warning_due(restarts: u32, last_warn: Option<Instant>, now: Instant) -> bool {
+    restarts >= FLAP_THRESHOLD
+        && last_warn.is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
+}
+
 /// One end of a per-source quiet window.
 ///
 /// A clock time is fixed all year; a solar time is not, and for a bird station
@@ -355,13 +367,7 @@ impl<S: Source> SupervisedSource<S> {
     /// never down for long, so this is the log line such a source gets.
     fn maybe_warn_flapping(&mut self, now: Instant) {
         let restarts = self.restarts_in_window(now);
-        if restarts < FLAP_THRESHOLD {
-            return;
-        }
-        if self
-            .last_flap_warn
-            .is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
-        {
+        if flap_warning_due(restarts, self.last_flap_warn, now) {
             tracing::warn!(
                 source = %self.label,
                 restarts_last_hour = restarts,
@@ -1140,6 +1146,65 @@ mod tests {
         let snap = sup.sources[0].snapshot(later, 1_700_003_601);
         assert_eq!(snap.restarts_last_hour, 0);
         assert!(!snap.flapping);
+    }
+
+    /// The flapping warning, as a table. `T` is `FLAP_THRESHOLD`, `E` is
+    /// `DOWN_WARN_EVERY`.
+    ///
+    /// | restarts | last warning     | due? |
+    /// |----------|------------------|------|
+    /// | T - 1    | never            | no   |
+    /// | T        | never            | yes  |
+    /// | T + 3    | never            | yes  |
+    /// | T        | E - 1 s ago      | no   |
+    /// | T        | exactly E ago    | yes  |
+    ///
+    /// Row two separates `<` from `<=` and `==`, row one from `>`; the last
+    /// two rows separate `>=` from `<` on the interval.
+    #[test]
+    fn the_flapping_warning_is_due_at_the_threshold_and_once_per_interval() {
+        let now = Instant::now();
+        assert!(!flap_warning_due(FLAP_THRESHOLD - 1, None, now));
+        assert!(flap_warning_due(FLAP_THRESHOLD, None, now));
+        assert!(flap_warning_due(FLAP_THRESHOLD + 3, None, now));
+        let last = now;
+        assert!(!flap_warning_due(
+            FLAP_THRESHOLD,
+            Some(last),
+            last + DOWN_WARN_EVERY.checked_sub(Duration::from_secs(1)).unwrap()
+        ));
+        assert!(flap_warning_due(
+            FLAP_THRESHOLD,
+            Some(last),
+            last + DOWN_WARN_EVERY
+        ));
+    }
+
+    /// And the wrapper acts on it: a flapping source records when it was
+    /// warned about, and a tick inside the interval leaves that stamp alone.
+    #[test]
+    fn a_flapping_source_records_when_it_was_last_warned_about() {
+        let mut sup = one(FakeSource::healthy());
+        let t0 = Instant::now();
+        for i in 0..FLAP_THRESHOLD {
+            sup.sources[0]
+                .restarts
+                .push_back(t0 + Duration::from_secs(u64::from(i)));
+        }
+        let warned_at = t0 + Duration::from_secs(60);
+        sup.sources[0].maybe_warn_flapping(warned_at);
+        assert_eq!(sup.sources[0].last_flap_warn, Some(warned_at));
+        sup.sources[0].maybe_warn_flapping(warned_at + Duration::from_secs(1));
+        assert_eq!(
+            sup.sources[0].last_flap_warn,
+            Some(warned_at),
+            "inside the interval"
+        );
+        sup.sources[0].maybe_warn_flapping(warned_at + DOWN_WARN_EVERY);
+        assert_eq!(
+            sup.sources[0].last_flap_warn,
+            Some(warned_at + DOWN_WARN_EVERY)
+        );
     }
 
     /// The window's edge, stated: a restart exactly `FLAP_WINDOW` ago is
