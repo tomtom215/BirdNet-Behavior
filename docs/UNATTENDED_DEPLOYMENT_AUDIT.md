@@ -1410,6 +1410,33 @@ re-analysis keys to; and `R-DwC` can now fill `eventTime` from
 `occurrenceID`, coordinates on the row (`UP-1`), or a deployment record
 (`FR-3`), so `FR-3` first.
 
+**The pull request.** Opened as a draft the same day, #239 against `main`,
+because `pull_request`-triggered gates never see an un-PR'd branch and the
+branch had never had one. Its first run found what a local `cargo test` cannot:
+the spelling check (nine deliberate misspellings in fixtures and one real one,
+`f91511d`), the installer harness missing two variables the config template had
+gained (`f91511d`), a stale generated CLI help (`d7eac17`), and — the substance
+— **twenty surviving mutants** across nine `mutation.yml` rows, every one a
+behaviour this branch added whose only gate was end-to-end and so outside the
+`--lib`/`--bins` scoping: convert, extractor (20 of 23), validate, civil,
+migration, the detections reader (`984091e`); the daemon's thermal shed input,
+`applicable_threshold`, `path_text` (`26a05d2`); the supervisor's restart window
+and flapping warning (`26a05d2`, `03ff327`). Each was reproduced locally with the
+workflow's own selection before a unit gate was written, and the two decisions
+that lived inside closures reading real sensors or writing only a log line were
+lifted into pure functions with truth-table tests (`thermal_limit_reached`,
+`flap_warning_due`). Confirmed mechanically at the end: a local run over the 25
+mutants in those functions, 23 caught and 2 unviable, and on CI at `44b8778`
+every shard green, the arm job green, the full x86 suite green.
+
+*One incident, recorded so it is not repeated:* `03ff327` was pushed carrying a
+cargo-mutants mutant (`t <` for `t >=` in `thermal_limit_reached`, with the
+tool's own `~ changed by cargo-mutants ~` marker). A local `--in-place` run had
+been killed, a child of it rewrote the file after the tree was restored, and
+`git add -A` swept it in. `44b8778` restores the line. The rule, now in
+`CLAUDE.md`: never stage while an in-place mutation run may be alive, and grep
+the marker before every commit.
+
 **Then the large ones, each its own session:** `R-5`/`FR-2` (re-analysis
 over retained audio keyed to `analysis_runs`), `FR-3` (a deployment
 record) then `R-DwC` (Darwin Core), `S-1` (the 15 s seam), `PS-4` (write

@@ -125,6 +125,14 @@ Corollaries, each learned the same way:
   as failing against the code it guards and then as failing again without it —
   the second result was the first one's binary. `touch` the file after
   restoring it, and check a new gate passes *before* trusting that it fails.
+- **A killed in-place `cargo mutants` run can leave its mutant in the tree.**
+  `--in-place` (what `mutation.yml` uses) rewrites the source file for each
+  mutant and restores it afterwards; a run killed mid-mutant, or a child of it
+  that outlives the kill, leaves the file mutated — and `git add -A` commits it.
+  A commit on PR #239 shipped `t <` for `t >=` with the tool's own
+  `~ changed by cargo-mutants ~` marker in the line. Before staging anything
+  while such a run may be alive: `pgrep -f 'cargo.mutants'` must be empty and
+  `grep -rn "changed by cargo-mutants" src crates` must find nothing.
 - **`pull_request`-triggered gates never see un-PR'd branches.** Open a draft PR
   early, or run the gates locally; work has sat broken on a pushed branch for
   hours because nothing was watching it.
