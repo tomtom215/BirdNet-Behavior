@@ -67,7 +67,11 @@ AD 9, OP 16, UX 15, FR 6, UP 8, WE 1, DD 35. (Counted 2026-09-08:
 rows and the five grouped rows make 292; §3.1–3.11 134, §3.12 36 (RC-36 added
 2026-09-07 for a defect found by this session), §3.13 87, §3.14 35. Open at
 P0 or P1 after this pass, by the same grep with `FIXED` rows excluded: **1 P0**
-(**R-1**, upgraded on 2026-09-08) and **57 P1**.)
+(**R-1**, upgraded on 2026-09-08) and **57 P1**. Re-taken 2026-09-08 after
+the second session that day, same method: **0 P0**, **40 P1**,
+**108 P2**, **31 P3** — and counting a row whose marker says
+"in part", "the first half" or "clips" as open, as it should be, 44 P1
+(`PS-6`, `PS-7`, `PR-8`, `ON-4`).)
 `R-DwC` matches that pattern; the digits-only pattern the 2026-09-04 count
 used does not see it, which is where "255" and "R 11" came from.) At
 `8e6806f`, **61** of the rows carry a `**[FIXED…]**` marker, 21 more than at
@@ -472,7 +476,7 @@ verified in sync (`installer/build.sh --check`), `shellcheck`-clean bar one
 | **LC-4** | P1 | VERIFIED | **Zero occurrences** of `unattended-upgrades`, `apt-mark hold`, `needrestart` or `Automatic-Reboot` anywhere in the repository. Every apt package is unpinned and non-fatal. And for an ALSA station a missing `arecord` is a `Check::skip`, not a `Check::fail` — so an OS update that removes `alsa-utils` leaves a green station recording nothing, where the RTSP path correctly fails on a missing `ffmpeg`. | A real ALSA capture-backend check mirroring `environment.rs:106-123`, with the counterpart test that it stays `pass` when present; record resolved tool paths at install and warn when they move; write the operator guidance. |
 | **LC-5** | P1 | VERIFIED | CI runs `install.sh` **once**, offline, model-less, on a container with no systemd. Never covered: a second run (idempotency — which `00-usage.sh:31` claims and **LC-2** disproves), `update`, `repair`, `uninstall`, the model path at all, a systemd host, reboot recovery. | A second invocation with a hash assertion; a systemd job; an N-1 → N upgrade job. (`model-resume.sh`, `binary-swap-atomicity.sh` and `geomodel-resume.sh` are now in `CI_TESTS` — twelve entries — and `supply-chain.yml:139` runs `installer/test/run-ci.sh` on every push and PR to `main`.) |
 | **LC-6** | P1 | READ | A bad config edit **takes the station down with no way back**: validation runs inside the new process after systemd killed the old one, and some settings abort before the socket binds. With `StartLimitIntervalSec=0` the station fails every five minutes for ever, with no web UI and no revert. The dry-run validator already exists — `--doctor --config` is what `ExecStartPre` runs — and nothing points at it. | Change the generated config header to a two-step form; ship `--apply-config` (validate, restart, restore on failure); consider an `ExecStartPre` fallback to `--web-only`. |
-| **LC-7** | P1 | VERIFIED | **134 documented settings, 14 validated (18 key names counting aliases), zero unknown-key detection.** `CONFIDENC=0.90` is parsed, stored and ignored with no journal line, no doctor note and no UI hint. About a dozen settings would break a station if wrong; three of those are validated. Two documented settings are dead, one of them shipped **uncommented** (`BIRDNET_QUALITY_MIN_SNR=3.0`), and the comment at `src/cli.rs:943` onward records that the CLI half was removed for exactly that reason while the `.env.example` half survived. Same evidence as **O-7**. | Generate `KNOWN_CONFIG_KEYS` from `.env.example` + the clap `env =` attributes; warn on unknown keys with a "did you mean"; a bidirectional drift gate in the shape of `tests/documented_samples_match_the_build.rs`. **[FIXED]** (`2d19c87`, 2026-09-08): both namespaces. *`birdnet.conf`:* `birdnet_core::config::known_keys::KNOWN_CONFIG_KEYS` (116 keys) with `did_you_mean` (prefix added or removed, case, or two edits); `Config::unknown_keys()`; `validate()` emits a warning finding per unknown key, which reaches `--doctor`, the web doctor page and the startup journal (*"CONFIDENC is not a setting this station reads; did you mean CONFIDENCE?"*). *Environment:* `helpers::env_keys::known_env_names()` is built from the clap definition itself (`Cli::command()`) plus the 23 direct `env::var` reads, the API-token constant and the derived `BIRDNET_OFFSITE_*` names; `unknown_env_vars()` names every `BIRDNET_*`/`BNB_*` variable set and unread, at startup and as the doctor check `environment::check_environment_variables`. *Gates:* `tests/every_config_key_is_known.rs` scans the workspace by read shape in both directions — it found `PORT` in the list with no reader outside a test, which is exactly the class of entry it exists to refuse — and failed with *"CONFIDENCE (read in …validate.rs, …daemon/config.rs, …settings_overlay.rs)"* when that key was dropped from the list; `env_keys::tests::direct_reads_match_the_source` (both directions) and `env_example_matches_what_is_read` (every variable the binary reads is in `.env.example`; everything in `.env.example` is read by the binary, the container tooling or the config parser), which against the previous `.env.example` named the five undocumented variables `BIRDNET_ALSA_DEVICES`, `BIRDNET_CONFIG`, `BIRDNET_REQUIRE_LIVE_EXTENSION`, `BNB_HELP_DIR`, `BNB_INSTANCE_LOCK_GRACE_SECS` (now documented) and would next have named the two dead `BIRDNET_QUALITY_*` keys (now removed). The validator gate `a_misspelt_key_is_reported_with_the_key_it_was_meant_to_be` failed *"CONFIDENC drew no finding: []"* with the check unwired. Closes **O-7** and **RC-14**. |
+| **LC-7** | P1 | VERIFIED | **134 documented settings, 14 validated (18 key names counting aliases), zero unknown-key detection.** `CONFIDENC=0.90` is parsed, stored and ignored with no journal line, no doctor note and no UI hint. About a dozen settings would break a station if wrong; three of those are validated. Two documented settings are dead, one of them shipped **uncommented** (`BIRDNET_QUALITY_MIN_SNR=3.0`), and the comment at `src/cli.rs:943` onward records that the CLI half was removed for exactly that reason while the `.env.example` half survived. Same evidence as **O-7**. | Generate `KNOWN_CONFIG_KEYS` from `.env.example` + the clap `env =` attributes; warn on unknown keys with a "did you mean"; a bidirectional drift gate in the shape of `tests/documented_samples_match_the_build.rs`. **[FIXED]** (`2d19c87`, 2026-09-08): both namespaces. *`birdnet.conf`:* `birdnet_core::config::known_keys::KNOWN_CONFIG_KEYS` (108 keys) with `did_you_mean` (prefix added or removed, case, or two edits); `Config::unknown_keys()`; `validate()` emits a warning finding per unknown key, which reaches `--doctor`, the web doctor page and the startup journal (*"CONFIDENC is not a setting this station reads; did you mean CONFIDENCE?"*). *Environment:* `helpers::env_keys::known_env_names()` is built from the clap definition itself (`Cli::command()`) plus the 23 direct `env::var` reads, the API-token constant and the derived `BIRDNET_OFFSITE_*` names; `unknown_env_vars()` names every `BIRDNET_*`/`BNB_*` variable set and unread, at startup and as the doctor check `environment::check_environment_variables`. *Gates:* `tests/every_config_key_is_known.rs` scans the workspace by read shape in both directions — it found `PORT` in the list with no reader outside a test, which is exactly the class of entry it exists to refuse — and failed with *"CONFIDENCE (read in …validate.rs, …daemon/config.rs, …settings_overlay.rs)"* when that key was dropped from the list; `env_keys::tests::direct_reads_match_the_source` (both directions) and `env_example_matches_what_is_read` (every variable the binary reads is in `.env.example`; everything in `.env.example` is read by the binary, the container tooling or the config parser), which against the previous `.env.example` named the five undocumented variables `BIRDNET_ALSA_DEVICES`, `BIRDNET_CONFIG`, `BIRDNET_REQUIRE_LIVE_EXTENSION`, `BNB_HELP_DIR`, `BNB_INSTANCE_LOCK_GRACE_SECS` (now documented) and would next have named the two dead `BIRDNET_QUALITY_*` keys (now removed). The validator gate `a_misspelt_key_is_reported_with_the_key_it_was_meant_to_be` failed *"CONFIDENC drew no finding: []"* with the check unwired. Closes **O-7** and **RC-14**. |
 | **LC-8** | P2 | READ | `write_config` early-returns on an existing file and there is no config schema version, so a release that adds a required setting can never reach an existing install. Three accidents currently prevent it biting. | `CONFIG_TEMPLATE_VERSION`; append new commented blocks under a dated banner rather than skipping. |
 | **LC-9** | P2 | READ | `quickstart.sh` pins nothing (`main` + `:latest`), writes the **unstable ALSA card index** the bare-metal installer spends a paragraph warning against, and tells the operator to run `docker compose up -d`, which silently drops the `/dev/snd` overlay and leaves a green container with no microphone. | Reuse `70-station.sh`'s id-preferring detection; write `COMPOSE_FILE` into the generated `.env`; default the tag to the newest release. |
 | **LC-10** | P2 | READ | The in-app updater replaces only the binary — not the unit, the bundled manual, or the pinned model hashes — and under Docker writes into the container layer, so the "update" silently reverts on the next recreate. | Make it a full-release applier, or refuse inside a container and point at `docker compose pull`. |
@@ -1292,22 +1296,21 @@ final commit is in the paragraph that follows this block's date line; the
 session's final message quotes the same run.
 
 **The count for this branch**, `cargo test --workspace --all-features
---no-fail-fast` at the tree of `3b8942e` plus the documentation commits, summed
-by the command above: **3 730 passed, 0 failed, 7 ignored** in **120** suites,
-exit 0. The branch point `be8886c` reported 3 674 in 114 suites, so this pass
-added 56 gates and six suites (`the_bulk_exports_honour_the_verdict`,
-`the_setup_wizard_is_gated_and_keeps_only_a_real_location`,
-`a_partial_that_fails_to_load_says_so`, `the_ebird_export_is_a_checklist_ebird_can_accept`,
-`the_diagnostics_are_reachable_from_the_browser`,
-`the_station_can_diagnose_itself_from_a_browser`). The one commit after that
-run renames a test for spelling and re-ran its own binary's suite green; the
-count is unchanged by a rename, but re-take it anyway.
+--no-fail-fast` at the tree of `5df8c83` (the documentation commits after it
+change no code), summed by the command above, with `~/.duckdb` moved aside
+first: **3 822 passed, 0 failed, 9 ignored** in **127** suites, exit 0. The
+ignored count rose from 7 to 9 with the two `--ignored` worker halves of the
+self-spawning gates (`S-4`, `DD-25`). `RUSTDOCFLAGS="-D warnings" cargo doc
+--workspace --no-deps --document-private-items --all-features` and `cargo
+clippy --workspace --all-targets` exit 0 at the same tree. The previous session's
+figure, at `3b8942e`, was 3 730 passed in 120 suites; this session's commits
+are listed under "What to do first" below with their gates.
 
 **Lines.** `find crates src -name '*.rs' | xargs cat | wc -l` gives
-**189 133** lines of Rust in **468** files under `crates/` and `src/`, and
-**204 900** with `tests/`. `grep -cE '^\s+version: [0-9]+,'
-crates/birdnet-db/src/migration.rs` over-counts by one (a version line that is
-not a `Migration`); the last `Migration { version: N` is **42**.
+**196 329** lines of Rust in **484** files under `crates/` and `src/`, and
+**212 945** with `tests/` (re-taken 2026-09-08, this session). The last
+`Migration { version: N` is **45** (`grep -oE "version: [0-9]+"
+crates/birdnet-db/src/migration.rs | sort -n | tail -1`).
 
 **Upstream tips** by `git ls-remote … HEAD` on 2026-09-08:
 `Nachtzuster/BirdNET-Pi` `88985a3` (unchanged since §0 first read it; its tip
@@ -1348,87 +1351,87 @@ probe ids in those rows are the names of the reports it came from.
 
 ### What to do first
 
-*Rewritten 2026-09-08 after the deep-dive pass. The previous head of this
-list — `R-19`, then `OP-1`, then item 3.22, then `RC-5`–`RC-8` — is done in
-full: `dad46d1`, `9f42652`, `dd10fe7`, `95a8272`, each with its row and gate.
-So is everything the previous paragraphs named as cheaper than it looked:
-1.11 (`e88a60d`), 2.17 (`373ceb2`), 2.19 (`9f42652`), and the remaining half of
-`PR-5` (`d0df731`). What follows is the queue as it stands.*
+*Rewritten 2026-09-08 (second session that day), after the queue the previous
+version of this section named was worked through in order. Done, each with
+its row marked and its gate observed red first: `R-1` (`bebddaf`), `R-8`
+(`25e688f`), `O-6` (`dacb73d`), `DD-32` (`0883b00`), `DD-14`+`DD-15`
+(`b21ca69`), `DD-19`+`DD-20` (`7a584a0`), the first-run batch `ON-4`/`ON-5`/
+`ON-10`/`ON-11` (`a71953f`), `S-4`+`PS-7` (`4e30dec`), `DD-25` (`fe2b82f`),
+`NT-2`+`NT-3` (`ec71f78`), `DD-22`+`DD-24` (`43dc336`), `S-5` (`a4c6cc6`),
+`PR-8` (`e697649`), `ON-12` (`2b5e783`), `LC-7`+`O-7`+`RC-14` (`2d19c87`).
+What follows is the queue as it stands.*
 
-**`R-1` is the head, and it is the register's only open P0.** No detection
-row records which model produced it: no model column, no `analysis_runs`
-table, nothing in the tree that writes a model version or checksum to the
-database. `e3f9b80` made every row carry its coordinates, threshold,
-sensitivity and overlap, which makes this sharper — a row now says everything
-about how it was made except *what made it*. The shape is small: an
-`analysis_runs` table (model file sha, labels sha, declared version, the
-resolved threshold configuration, started-at), one row per daemon start, a
-`run_id` on `detections` written at insert (the same place `e3f9b80` writes
-`Cutoff`), and the run's model fields in every export. The gate is the one
-`e3f9b80` wrote, extended: two inserts under two run ids must carry two
-different model shas. Do this before anyone swaps the model on a station with
-history.
+**`DD-23` first**: drift repair between SQLite and DuckDB is count-based and
+blind to net-zero drift. Compare a checksum of `(Date, Time, Sci_Name,
+chunk)` per day, repair the days that differ. It is the last correctness gap
+in the analytics store that a researcher would hit without noticing.
 
-**Then `R-8`, because it is cheap and it is what a researcher hits first.**
-`detected_at_utc` is on every row and reaches no `DetectionRow` field, export
-or route; every export is local `Date`/`Time` with no offset. Add the column
-to `DetectionRow`, an `eventDate` with offset to CSV/JSON, and say in the
-header which clock the other two columns are. Separately, the import path's
-local-to-UTC conversion invents an instant for the spring-forward hour and
-picks the second autumn hour silently — the probe's exact inputs are in the
-row; a gate is three `INSERT`s under `TZ=Europe/London`.
+**Then `UP-2` and `UP-3` together**, the restore and the boot journal. A
+restore runs `tar` over open SQLite handles with no quiesce and no free-space
+check; and a volume that fails to mount is indistinguishable from a first
+run. `PS-5`'s ingest halt is the quiesce primitive the restore needs;
+`DD-20`'s device-id comparison in `data_volume.rs` is half of the boot
+journal already.
 
-**Then `O-6`.** The login throttle's "Too many attempts" branch is dead code:
-the flag that reaches it is set only inside a test. The counter is a
-`Mutex<HashMap<IpAddr, VecDeque<Instant>>>` on the state, five failures per
-fifteen minutes per address to match the reference, consulted before Argon2
-runs. The gate posts six bad passwords and expects the sixth to be refused
-without hashing.
+**Then `S-14`**, the orphan-clip pass — more worthwhile now that `S-4`'s
+`.part` files are what a kill leaves behind — and `DD-36` beside it (a
+failed conversion renames a WAV under the `.mp3` name).
 
-**Then `DD-32`**, the one item where the data leaving the station is
-*silently worthless* rather than wrong: every BirdWeather post has no
-soundscape, so nothing there can be listened to. `post_soundscape` is written
-and tested; call it, carry the id on the detection post, store it on the row.
+**Then `ON-9`'s remaining half**: the doctor hashes nothing about the model;
+`R-1` now records the SHA-256 on every run, so the doctor can compare the
+file against the last run's row and say when the model changed under a
+station with history.
 
-**Then the first-run pair, `DD-14` and `DD-15`.** A password step at the head
-of the wizard when no password and no account exist, so the first browser to
-finish setup owns the station; and a session secret that survives a restart on
-bare metal — a generated secret persisted beside the database, ahead of the
-`CADDY_PWD` derivation — so the access page's "fourteen days" is true. The
-gate for the second boots the real binary twice on one config with no
-environment and presents a cookie from the first boot to the second.
+**Then `LC-6`**: a bad config edit takes the station down with no way back.
+`LC-7` now names an unknown key; the two-step form and `--apply-config` are
+what is left.
 
-**Then the two adversity conditions that lie**, `DD-19` and `DD-20`: a full
-card and a vanished data volume both leave `/api/v2/health` at 200 "healthy".
-Fold the disk verdict and a failed admin bootstrap into the strict verdict;
-compare the data directory's device id with its parent's on each disk poll.
+After those, the P1 groups the previous queue never reached, in no
+particular order: `PS-3`/`PS-4` (write amplification; batched inserts),
+`PR-3`/`PR-4`/`PR-7`, `R-5`/`FR-2`, `R-DwC`/`FR-1`, `FR-3`, `NP-1`, `O-4`,
+`S-1`, `S-2`/`S-3`, `S-13`/`AU-1`, `AD-3`, `ARM-1`, `LC-3`–`LC-5`, `NP-5`,
+`ON-6`–`ON-8`, `OP-3`–`OP-7`, `PS-8`, `UX-1`/`UX-2`, and the contrast numbers
+in `DD-29`/`DD-30`. §4's tables still hold the older queue; nothing there
+outranks this list.
 
-After those, in no particular order: `DD-25` (a lock on the analytics store
-read as corruption during an overlapping restart — retry for the shutdown
-grace before quarantining), `DD-23` (checksum drift repair), `DD-24` (a
-notification test that says "passed" when it tested nothing), the contrast
-numbers in `DD-29` with `color-contrast` then enabled in the axe sweep, and
-`DD-30` with a seeded snapshot so the overflow gate can see it. §4's tables
-still hold the older queue; nothing there outranks this list.
+Found this session and not fixed, each recorded in its row: the fallback
+that renames a WAV under the `.mp3` name (**DD-36**); the metric vocabulary's
+`privacy` reason has no caller, so privacy suppressions are invisible
+(**S-5**); moving clip conversion off the event thread was declined, with the
+reason (**PR-8**).
 
-Four things about method, from this pass, that the next one should not
+Six things about method, from this session, that the next one should not
 relearn:
 
-* **The first run of all six probes was lost to an API session limit** before
-  any wrote a report, and everything they had found went with them. The
-  second run created its report in its first tool calls and appended each
-  finding as it got the evidence. Do that from the start.
-* **`pkill -f <pattern>` kills the shell that runs it** when the pattern is in
-  that shell's own command line. A character class on the first letter,
-  `pgrep -f '[b]irdnet-behavior --web-only'`, does not match itself.
-* **ESM `import` ignores `NODE_PATH`.** A Playwright script outside
-  `tools/visual-qa` needs a `node_modules` symlink beside it, not an
-  environment variable.
-* **A test can encode the defect.** `public_router_is_read_only.rs` asserted
-  the wizard was public and `web_api_pages.rs` asserted a capturing station
-  was healthy without a daemon flag; the first was the old design and the
-  second was right and caught an over-reach in a fix. Both had to be read,
-  not just made green.
+* **A gate that passes its mutant is not a gate.** Three of this session's
+  first drafts did: the kill-mid-write test slept a fixed 5 ms and killed
+  the worker before it had opened anything, so old and new code both left
+  nothing; the login-throttle mutant `.and(Ok(()))` was a no-op, and the
+  claim that the gate discriminated was withdrawn until `.or(Ok(()))` went
+  red; the persisted-secret gate asserted on the secret file before the
+  cookie, so it failed for the wrong reason. Each was rewritten until the
+  mutant produced the failure the row describes.
+* **A prefix split at the first `#[cfg(test)]` is not "the production
+  half".** A `#[cfg(test)] mod tests;` declared at the top of a module hid
+  every read below it from the first draft of the config-key scan; `PORT`
+  looked read and three environment reads looked absent. Strip test items
+  by brace depth (`tests/every_child_process_has_a_deadline.rs` and
+  `tests/every_config_key_is_known.rs` share the routine), and pin the
+  scanner with a fixture that has a read after an early test module.
+* **The session disk allowance fills during a long branch.** `target/` grew
+  to 18 GB; the workspace run then failed with "No space left on device"
+  inside the ICU tests and cargo printed nothing. Prune
+  `target/debug/deps` to the newest binary per stem, drop
+  `target/debug/incremental`, and check `df` before a full run. Deleting
+  the active `libduckdb-sys-*` build directory costs a ten-minute rebuild.
+* **A tiny model whose output is a slice of its input is a unit-test
+  instrument.** `tiny_v30_test.onnx` returns `audio[i]` at output `i`, which
+  is what let `S-5` put a human class at exactly 0.02 without the real model.
+* **`~/.duckdb` was present at the start of this session's final run** and
+  was moved aside before it, per the note in `CLAUDE.md`.
+* **A number in a row is re-taken before it is pinned.** The LC-7 row first
+  said 116 keys; `grep -c` said 108. The figure was written before the
+  count was taken, which is the habit this whole section exists to break.
 
 ### A gap in the mutation matrix — a proposal, not a change
 
