@@ -13,6 +13,7 @@ pub mod db_pool;
 pub mod diagnostics;
 pub mod login_throttle;
 pub mod metrics;
+pub mod notification_probes;
 pub mod notifier;
 pub mod rate_limit;
 pub mod routes;

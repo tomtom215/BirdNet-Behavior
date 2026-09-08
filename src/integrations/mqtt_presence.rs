@@ -188,6 +188,7 @@ async fn tick_presence(
                 // see, which is why it is a warning and not a debug line.
                 tracing::warn!(error = %e, "MQTT presence session lost; reconnecting");
                 state.metrics().set_mqtt_connected(false);
+                state.metrics().set_mqtt_error(&e.to_string());
                 *backoff = RECONNECT_MIN;
                 *next_attempt = Instant::now() + RECONNECT_MIN;
                 None
@@ -195,6 +196,7 @@ async fn tick_presence(
             Err(e) => {
                 tracing::warn!(error = %e, "MQTT keepalive task failed");
                 state.metrics().set_mqtt_connected(false);
+                state.metrics().set_mqtt_error(&e.to_string());
                 None
             }
         };
@@ -216,6 +218,10 @@ async fn tick_presence(
             // fires every fifteen seconds at first. The state is carried by
             // `birdnet_mqtt_connected`, which does not scroll.
             tracing::debug!(error = %e, retry_in_secs = backoff.as_secs(), "MQTT presence connect failed");
+            // Down, and since when (DD-22): a broker dead from boot never
+            // reached the gauge before — it stayed at "not configured".
+            state.metrics().set_mqtt_connected(false);
+            state.metrics().set_mqtt_error(&e.to_string());
             *next_attempt = Instant::now() + *backoff;
             *backoff = next_backoff(*backoff);
             None

@@ -197,6 +197,18 @@ day 397 served an expired certificate; it is now checked daily and swapped
 into the running listener without a restart. The doctor reports the
 certificate's real expiry date.
 
+**A dead MQTT broker is an alert, and "Test all channels" tests all of them**
+(`DD-22`, `DD-24`). A silent broker was handled soundly and reported at
+`debug!` and on one Prometheus gauge; a broker dead from boot never reached
+even that. The presence loop now dates the outage and keeps the last error,
+the station-health alerts carry an `mqtt` condition after ten minutes, and the
+health body says `mqtt: off|connected|disconnected`. The notifications test
+page's "Test all" answered "All configured channels passed" with MQTT dead,
+because it tested push and BirdWeather only and called an empty run a pass;
+it now publishes a real test message over MQTT and sends a test email through
+the configured notifier, and a run in which every channel was skipped says
+that nothing was tested.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

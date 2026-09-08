@@ -161,6 +161,13 @@ pub struct MetricsRegistry {
     /// `u64::MAX` = MQTT is not configured, so the series is absent rather
     /// than reporting a broker that was never asked for as broken.
     mqtt_connected: AtomicU64,
+    /// When the presence session was last seen to be down, Unix seconds; `0`
+    /// while it is up or MQTT is not configured. What the station-health
+    /// condition measures a broker outage from (DD-22).
+    mqtt_disconnected_since: AtomicU64,
+    /// The last MQTT connect or keepalive error, for the operator-facing
+    /// condition; cleared on reconnect.
+    mqtt_last_error: RwLock<Option<String>>,
     /// Classifications the pipeline produced and then discarded, by reason.
     ///
     /// A station that is "detecting nothing" is either hearing nothing or
@@ -243,6 +250,8 @@ impl MetricsRegistry {
             detection_silence_secs: AtomicU64::new(u64::MAX),
             clock_synced: AtomicU64::new(u64::MAX),
             mqtt_connected: AtomicU64::new(u64::MAX),
+            mqtt_disconnected_since: AtomicU64::new(0),
+            mqtt_last_error: RwLock::new(None),
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
             notifications_dropped: RwLock::new(HashMap::new()),
@@ -473,6 +482,40 @@ impl MetricsRegistry {
     /// reachability is a real question.
     pub fn set_mqtt_connected(&self, up: bool) {
         self.mqtt_connected.store(u64::from(up), Ordering::Relaxed);
+        if up {
+            self.mqtt_disconnected_since.store(0, Ordering::Relaxed);
+            if let Ok(mut e) = self.mqtt_last_error.write() {
+                *e = None;
+            }
+        } else if self.mqtt_disconnected_since.load(Ordering::Relaxed) == 0 {
+            // The first observation of the outage, not the latest: the
+            // condition measures how long the broker has been gone.
+            self.mqtt_disconnected_since
+                .store(unix_now_secs().max(1), Ordering::Relaxed);
+        }
+    }
+
+    /// Record why the last MQTT connect or keepalive failed.
+    pub fn set_mqtt_error(&self, error: &str) {
+        if let Ok(mut e) = self.mqtt_last_error.write() {
+            *e = Some(error.chars().take(300).collect());
+        }
+    }
+
+    /// When the MQTT presence session was first seen down, or `None` while
+    /// it is up or MQTT is not configured.
+    #[must_use]
+    pub fn mqtt_disconnected_since(&self) -> Option<u64> {
+        match self.mqtt_disconnected_since.load(Ordering::Relaxed) {
+            0 => None,
+            t => Some(t),
+        }
+    }
+
+    /// The last MQTT error, if the session is down.
+    #[must_use]
+    pub fn mqtt_last_error(&self) -> Option<String> {
+        self.mqtt_last_error.read().ok().and_then(|e| e.clone())
     }
 
     /// MQTT presence connection state, or `None` when MQTT is not configured.
@@ -813,6 +856,13 @@ pub(crate) fn escape_label(s: &str) -> String {
         }
     }
     out
+}
+
+/// Seconds since the Unix epoch, `0` before it.
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Wrap the registry in `Arc` so it can live in `AppState`.

@@ -372,6 +372,12 @@ async fn serve(
     let apprise_client = integrations::create_apprise_client(&cli, config.as_ref());
     let birdweather_client = integrations::create_birdweather_client(&cli, config.as_ref());
     let email_notifier = integrations::create_email_notifier(&state);
+    // What "Test all channels" can reach (DD-24): the integrations this
+    // binary built, wrapped as probes the web layer runs on demand.
+    state.set_notification_probes(integrations::notification_probes(
+        integrations::get_mqtt_client_ref(&cli, config.as_ref()),
+        email_notifier.clone(),
+    ));
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
     // Cloned before the detection pipeline takes ownership: the presence

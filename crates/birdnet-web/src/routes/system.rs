@@ -256,6 +256,13 @@ async fn health(
             "detection_silence_secs": detection_silence_secs,
             "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
             "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
+            // The presence session's state (DD-22): a dead broker was on one
+            // Prometheus gauge and nowhere an operator without a scrape looks.
+            "mqtt": match state.metrics().mqtt_connected() {
+                None => "off",
+                Some(true) => "connected",
+                Some(false) => "disconnected",
+            },
             "strict": strict,
         })),
     )

@@ -44,6 +44,15 @@ BIRDNET_MQTT_HOST=192.168.1.10
 BIRDNET_MQTT_HA_DISCOVERY=1     # publish Home Assistant auto-discovery config
 ```
 
+A broker the station cannot reach is reported, not just retried: after ten
+minutes without a session the station-health alerts carry an `mqtt`
+condition with the last error, `/api/v2/health` says `"mqtt": "disconnected"`,
+and Home Assistant shows the station offline in the meantime. **Test all
+channels** on the notifications test page publishes a real message to
+`<prefix>/test` (never retained) and sends a test email through the configured
+notifier, beside push and BirdWeather; a run in which no channel is configured
+says that nothing was tested rather than that everything passed.
+
 ### TLS
 
 ```text

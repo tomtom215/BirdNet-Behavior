@@ -165,6 +165,9 @@ struct AppStateInner {
     /// Whether the admin-password bootstrap at start failed (DD-19): a
     /// station that could not write its own admin credential.
     admin_bootstrap_failed: AtomicBool,
+    /// The channel probes the binary configured (DD-24). Set after the
+    /// integrations exist, which is after the state does.
+    notification_probes: std::sync::RwLock<crate::notification_probes::NotificationProbes>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -247,6 +250,9 @@ impl AppState {
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
+                notification_probes: std::sync::RwLock::new(
+                    crate::notification_probes::NotificationProbes::default(),
+                ),
             }),
         })
     }
@@ -456,6 +462,9 @@ impl AppState {
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
+                notification_probes: std::sync::RwLock::new(
+                    crate::notification_probes::NotificationProbes::default(),
+                ),
             }),
         })
     }
@@ -497,6 +506,9 @@ impl AppState {
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
+                notification_probes: std::sync::RwLock::new(
+                    crate::notification_probes::NotificationProbes::default(),
+                ),
             }),
         }
     }
@@ -1156,6 +1168,23 @@ impl AppState {
         if let Ok(mut guard) = self.inner.data_volume.write() {
             *guard = Some(status);
         }
+    }
+
+    /// Install the channel probes the binary configured (DD-24).
+    pub fn set_notification_probes(&self, probes: crate::notification_probes::NotificationProbes) {
+        if let Ok(mut guard) = self.inner.notification_probes.write() {
+            *guard = probes;
+        }
+    }
+
+    /// The channel probes, absent ones included.
+    #[must_use]
+    pub fn notification_probes(&self) -> crate::notification_probes::NotificationProbes {
+        self.inner
+            .notification_probes
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     /// Record that the admin-password bootstrap failed at start.

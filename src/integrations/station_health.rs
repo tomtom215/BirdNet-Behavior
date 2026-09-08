@@ -20,6 +20,9 @@
 //!   errors, a card full to the byte, or a mount that has gone away with the
 //!   station writing into the directory underneath it — while every detection
 //!   is classified and then discarded;
+//! * an MQTT broker the station has not been able to reach for ten minutes,
+//!   so Home Assistant shows it offline and nothing built on its presence can
+//!   tell that from a station that has died;
 //! * a failing integrity check or a backup that has not completed in weeks —
 //!   the two things standing between a corrupt database and a lost season;
 //! * either database quarantined and started over — the analytics store
@@ -223,10 +226,11 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 7] = [
+const CHECKS: [(&str, Check); 8] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
+    ("mqtt", check_mqtt),
     ("thermal", |_state, out| check_thermal(out)),
     ("maintenance", check_maintenance),
     ("quarantined-stores", check_quarantined_stores),
@@ -415,6 +419,52 @@ fn check_disk(state: &AppState, out: &mut Vec<Condition>) {
         return;
     };
     out.extend(disk_condition(usage.used_percent()));
+}
+
+/// How long the MQTT presence session must have been down before it is a
+/// condition. The presence loop reconnects with backoff up to a few minutes;
+/// a broker that is still unreachable after ten is gone, not restarting.
+const MQTT_ALERT_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// An MQTT broker the station cannot reach (DD-22).
+///
+/// The presence loop handled a silent broker soundly — timeouts, backoff, no
+/// leak — and reported it at `debug!` and on one Prometheus gauge; the
+/// health page, the alerts and the overview showed nothing. Home Assistant
+/// then shows the station offline, which is the one state an operator
+/// cannot tell from a dead station.
+fn check_mqtt(state: &AppState, out: &mut Vec<Condition>) {
+    let metrics = state.metrics();
+    let since = metrics.mqtt_disconnected_since();
+    let now = super::unix_now_secs();
+    out.extend(mqtt_condition(
+        since,
+        now,
+        metrics.mqtt_last_error().as_deref(),
+    ));
+}
+
+/// The MQTT policy, separated from the gauges so it can be tested.
+fn mqtt_condition(
+    disconnected_since: Option<u64>,
+    now: u64,
+    last_error: Option<&str>,
+) -> Option<Condition> {
+    let since = disconnected_since?;
+    let down_for = Duration::from_secs(now.saturating_sub(since));
+    (down_for >= MQTT_ALERT_AFTER).then(|| Condition {
+        key: "mqtt".to_owned(),
+        title: "MQTT broker unreachable — Home Assistant shows the station offline".to_owned(),
+        body: format!(
+            "The station has not been able to keep a session with the MQTT broker for \
+             {} minutes ({}). Detections are still recorded here; nothing is reaching the \
+             broker, and anything built on the station's MQTT presence sees it as offline. \
+             Check the broker, its address and credentials in Admin → Settings → MQTT, and \
+             the network between them.",
+            down_for.as_secs() / 60,
+            last_error.unwrap_or("no error detail recorded")
+        ),
+    })
 }
 
 /// A data volume that is not taking writes: read-only, full to the byte, or
@@ -870,6 +920,7 @@ mod tests {
             "sources",
             "disk",
             "data-volume",
+            "mqtt",
             "thermal",
             "maintenance",
             "quarantined-stores",
@@ -882,9 +933,34 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            7,
-            "an eighth check needs a line in the module doc and in this gate"
+            8,
+            "a ninth check needs a line in the module doc and in this gate"
         );
+    }
+
+    /// The MQTT policy (DD-22): down for ten minutes is a condition carrying
+    /// the last error; a shorter outage, or no MQTT at all, is not.
+    #[test]
+    fn a_broker_down_for_ten_minutes_is_a_condition() {
+        assert!(
+            mqtt_condition(None, 10_000, None).is_none(),
+            "MQTT off or up"
+        );
+        assert!(
+            mqtt_condition(Some(9_500), 10_000, Some("timed out")).is_none(),
+            "500 s: still reconnecting"
+        );
+        let c = mqtt_condition(
+            Some(9_000),
+            10_000,
+            Some("connection refused (os error 111)"),
+        )
+        .expect("1000 s is an outage");
+        assert_eq!(c.key, "mqtt");
+        assert!(c.body.contains("16 minutes"), "{}", c.body);
+        assert!(c.body.contains("os error 111"), "{}", c.body);
+        let c = mqtt_condition(Some(1), 100_000, None).unwrap();
+        assert!(c.body.contains("no error detail"), "{}", c.body);
     }
 
     /// The data-volume policy: a vanished mount or a failed write is a
