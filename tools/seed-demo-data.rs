@@ -250,6 +250,8 @@ fn run(args: &Args) -> Result<usize, String> {
             // trigger's tz conversion is exactly right for it.
             detected_at_utc: None,
             run_id: Some(run_id),
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         // Each row carries a unique correlation_id and a unique file_name,
         // so the schema's UNIQUE key never trips. Failures here are real.

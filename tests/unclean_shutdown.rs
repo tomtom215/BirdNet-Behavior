@@ -127,6 +127,8 @@ fn writer_child(db_path: &str, journal_mode: &str) -> ! {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).expect("child: insert");
         i += 1;
@@ -359,6 +361,8 @@ fn a_killed_station_can_keep_recording() {
         duration_secs: None,
         detected_at_utc: None,
         run_id: None,
+        clip_offset_secs: None,
+        detection_secs: None,
     };
     insert_detection(&conn, &record).expect("insert after an unclean restart");
     drop(conn);

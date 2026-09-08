@@ -109,6 +109,8 @@ fn detection(i: usize) -> DetectionRecord<'static> {
         duration_secs: None,
         detected_at_utc: None,
         run_id: None,
+        clip_offset_secs: None,
+        detection_secs: None,
     }
 }
 

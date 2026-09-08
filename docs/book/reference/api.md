@@ -243,6 +243,8 @@ page:
 
 CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
 
+For verification tools: `GET /api/v2/detections/export/raven?from=&to=` is a Raven selection table over every detection with a clip, in BirdNET-Analyzer's column layout with `Begin Path` naming the clip; `GET /api/v2/recordings/{clip}/raven.txt` is one clip's table and `GET /api/v2/recordings/{clip}/labels.txt` the same selections as an Audacity label track. All three read the reviewed set, so a rejected detection is in none of them; a clip no detection names is `404`. See [Export](../admin/backups.md#export) for how each selection is placed.
+
 ## Changing a station
 
 Eight method-and-path pairs across seven routes, and they are the only ones in

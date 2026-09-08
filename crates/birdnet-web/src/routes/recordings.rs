@@ -249,7 +249,7 @@ async fn list_recordings(
 ///
 /// Only allows: ASCII alphanumeric, hyphens, underscores, dots, colons.
 /// Rejects: path separators, null bytes, `..`, or non-UTF-8 sequences.
-fn is_safe_filename(name: &str) -> bool {
+pub(crate) fn is_safe_filename(name: &str) -> bool {
     if name.is_empty() || name.len() > 255 {
         return false;
     }

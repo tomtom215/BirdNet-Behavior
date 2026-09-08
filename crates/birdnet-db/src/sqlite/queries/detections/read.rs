@@ -356,6 +356,31 @@ pub fn analytic_detections(
     Ok((rows, truncated))
 }
 
+/// Every detection the station stands behind that was cut from one clip,
+/// in the order they occur in it (FR-1).
+///
+/// Read through `detections_analytic`, so a rejected detection is not handed
+/// to Raven either. The clip is named by its bare file name, as
+/// `File_Name` stores it.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_for_clip(
+    conn: &Connection,
+    file_name: &str,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections_analytic WHERE File_Name = ?1 \
+         ORDER BY clip_offset_secs, Time"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![file_name], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// `all_detections`, read through `detections_analytic` and held to a floor.
 ///
 /// This is the surface an export that *publishes* should read, because the
@@ -942,6 +967,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: utc,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(conn, &record).unwrap();
     }
@@ -1086,6 +1113,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
 
@@ -1267,6 +1296,8 @@ mod tests {
                 duration_secs: None,
                 detected_at_utc: None,
                 run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &r).unwrap();
         };
@@ -1599,6 +1630,8 @@ mod tests {
                 duration_secs: None,
                 detected_at_utc: None,
                 run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1711,6 +1744,8 @@ mod tests {
                 duration_secs: None,
                 detected_at_utc: None,
                 run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1852,6 +1887,8 @@ mod tests {
                 duration_secs: None,
                 detected_at_utc: None,
                 run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };

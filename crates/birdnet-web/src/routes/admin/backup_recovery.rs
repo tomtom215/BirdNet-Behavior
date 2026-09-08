@@ -433,6 +433,12 @@ fn render_body(f: &DataFacts) -> String {
             "/detections/export/birddb",
             "BirdDB.txt",
         ),
+        (
+            "Raven selection table",
+            "one table over every clip, for Raven Pro / Lite; each clip also has its own at /api/v2/recordings/<clip>/raven.txt and an Audacity label track at …/labels.txt",
+            "/detections/export/raven",
+            "detections.raven.txt",
+        ),
     ] {
         let _ = write!(
             exports,

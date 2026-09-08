@@ -22,8 +22,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc, run_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc, run_id, clip_offset_secs, detection_secs) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             record.date,
             record.time,
@@ -48,6 +48,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             // see `birdnet_core::civil::unix_secs_from_local`.
             record.detected_at_utc,
             record.run_id,
+            record.clip_offset_secs,
+            record.detection_secs,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -149,6 +151,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         let first = insert_detection(&conn, &record).unwrap();
         let second = insert_detection(
@@ -195,6 +199,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -226,6 +232,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         // A second row at a different second with no source = the historical
         // shape (e.g. an imported BirdNET-Pi row).
@@ -331,6 +339,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
 
         insert_detection(&conn, &record).unwrap();
@@ -385,6 +395,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
@@ -424,6 +436,8 @@ mod tests {
             duration_secs: None,
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();
@@ -476,6 +490,8 @@ mod tests {
                 duration_secs: None,
                 detected_at_utc: None,
                 run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &r).unwrap();
         }
@@ -517,6 +533,8 @@ mod tests {
             duration_secs: Some(15.0),
             detected_at_utc: None,
             run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();

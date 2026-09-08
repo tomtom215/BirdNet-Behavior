@@ -1992,6 +1992,26 @@ pub const MIGRATIONS: &[Migration] = &[
         ALTER TABLE quarantine ADD COLUMN sens REAL;
         ALTER TABLE quarantine ADD COLUMN overlap REAL;",
     },
+    Migration {
+        version: 47,
+        description: "Record where a detection sits inside its clip, so a selection table can point at it",
+        // ## Why (FR-1)
+        //
+        // A Raven selection table or an Audacity label track is a begin and
+        // an end in seconds *within an audio file*. The clip written for a
+        // detection is the detection plus a lead-in and a tail, and the
+        // lead-in is not the configured one: a window that reached past the
+        // start of the source segment and found no earlier segment is shorter
+        // at the front (`extraction::span`). Only the extractor knows what it
+        // wrote, and until now it told nobody — `chunk_offset_secs` is the
+        // start in the *source segment*, which is drained minutes later.
+        //
+        // `clip_offset_secs` is the detection's start inside the saved clip;
+        // `detection_secs` its length. NULL is "written before this
+        // migration", and the exports then fall back to the whole clip.
+        up_sql: "ALTER TABLE detections ADD COLUMN clip_offset_secs REAL;
+        ALTER TABLE detections ADD COLUMN detection_secs REAL;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

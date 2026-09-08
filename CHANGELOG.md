@@ -38,6 +38,20 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — detections can be handed to Raven and Audacity
+
+**A Raven selection table and an Audacity label track** (`FR-1`). No output
+of the station was one a verification tool read; the ecologist opened the
+clip and found the call by ear. `GET /api/v2/detections/export/raven` is one
+table over every detection with a clip, in BirdNET-Analyzer's column layout
+with `Begin Path` naming the clip, so Raven Pro opens it against the
+recordings folder; each clip has its own table and an Audacity label track
+at `/api/v2/recordings/<clip>/raven.txt` and `…/labels.txt`. Each selection
+is placed where the detection sits inside its clip: migration 47 records
+the lead-in the extractor actually wrote and the window's length, which
+`chunk_offset_secs` (the start in the source segment) never said. Rows from
+before that span their clip; rows with no clip are left out.
+
 ### Fixed — the weekly space reclaim no longer rewrites the database
 
 **`PRAGMA incremental_vacuum` in place of `VACUUM`** (`PS-3`). The weekly

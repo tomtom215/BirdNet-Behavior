@@ -732,6 +732,17 @@ pub(super) fn event_processor(
             // Which model made it (R-1): the run registered before this
             // processor consumed its first event.
             run_id: Some(provenance.run_id),
+            // Where the detection sits inside the clip just written (FR-1):
+            // the lead-in as extracted, not as configured, and the window's
+            // own length. NULL when no clip was written.
+            clip_offset_secs: extracted
+                .as_ref()
+                .ok()
+                .map(|clip| f64::from(clip.pre_detection_secs)),
+            detection_secs: extracted
+                .as_ref()
+                .ok()
+                .map(|clip| f64::from(clip.detection_secs)),
         };
 
         let metrics = state.metrics();

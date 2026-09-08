@@ -89,6 +89,14 @@ pub struct DetectionRecord<'a> {
     /// The live daemon always writes `Some`; it registers its run before it
     /// consumes its first event and refuses to start without one.
     pub run_id: Option<i64>,
+    /// Where the detection starts inside the saved clip, in seconds
+    /// (migration 47, FR-1): the lead-in the extractor actually wrote. `None`
+    /// when no clip was written, or the row is older than the column.
+    pub clip_offset_secs: Option<f64>,
+    /// The detection's own length in seconds (`stop - start` of the analysis
+    /// window). With `clip_offset_secs` it is the selection a Raven table or
+    /// an Audacity label names.
+    pub detection_secs: Option<f64>,
 }
 
 /// A detection row read from the database.
@@ -162,6 +170,13 @@ pub struct DetectionRow {
     /// happened, or an unparseable `Date`/`Time`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detected_at_utc: Option<i64>,
+    /// The detection's start inside its clip, seconds (migration 47). `None`
+    /// on a row written before the column or without a clip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_offset_secs: Option<f64>,
+    /// The detection's length in seconds (migration 47).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detection_secs: Option<f64>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -278,6 +293,8 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         review_verdict: row.get(15)?,
         run_id: row.get(16)?,
         detected_at_utc: row.get(17)?,
+        clip_offset_secs: row.get(18)?,
+        detection_secs: row.get(19)?,
     })
 }
 
@@ -314,13 +331,15 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "review_verdict",
     "run_id",
     "detected_at_utc",
+    "clip_offset_secs",
+    "detection_secs",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc, clip_offset_secs, detection_secs";
 
 #[cfg(test)]
 mod drift_gate_tests {
@@ -417,6 +436,8 @@ mod drift_gate_tests {
             duration_secs: None,
             detected_at_utc: Some(1_779_181_200),
             run_id: Some(run),
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         crate::sqlite::queries::detections::insert_detection(&conn, &record).unwrap();
 

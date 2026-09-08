@@ -308,6 +308,8 @@ fn the_write_path_carries_an_explicit_instant_through_to_the_row() {
         duration_secs: None,
         detected_at_utc: Some(CEST_READING),
         run_id: None,
+        clip_offset_secs: None,
+        detection_secs: None,
     };
     birdnet_db::sqlite::insert_detection(&conn, &record).expect("insert");
 
