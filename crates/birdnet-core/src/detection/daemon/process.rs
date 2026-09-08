@@ -120,7 +120,9 @@ pub fn process_and_infer(
     }
 
     let total = start.elapsed();
-    tracing::info!(
+    // DEBUG, not INFO: one of the two per-file lines OB-15 measured at 92 % of
+    // the journal's volume; the counter carries the count.
+    tracing::debug!(
         correlation_id,
         file = %path.display(),
         detections = events.len(),
@@ -245,7 +247,9 @@ pub fn process_and_infer_filtered(
     }
 
     let total = start.elapsed();
-    tracing::info!(
+    // DEBUG, not INFO: one of the two per-file lines OB-15 measured at 92 % of
+    // the journal's volume; the counter carries the count.
+    tracing::debug!(
         correlation_id,
         file = %path.display(),
         detections = events.len(),

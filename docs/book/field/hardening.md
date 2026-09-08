@@ -242,6 +242,16 @@ pin a specific version tag in production rather than `latest`.
 
 ## 8. Host hardening (what the unit already ships)
 
+The installer also writes a journald drop-in,
+`/etc/systemd/journald.conf.d/birdnet-behavior.conf`, with
+`Storage=persistent` and `SystemMaxUse=200M`. On a default Raspberry Pi OS
+the journal is volatile, so a power cut or a watchdog restart erased the
+evidence of what caused it; persistent and bounded, it keeps more than a
+year of the station's logging in 200 MB (the two per-file INFO lines that
+were most of the volume are DEBUG now) and cannot fill the card. The setting
+is host-wide, as journald's configuration is; `install.sh uninstall` removes
+the drop-in and leaves the journal itself.
+
 The installed systemd unit runs as a non-root user, gates startup on the
 doctor, and already carries the hardening a drop-in would usually add. From
 `install.sh`'s unit template:

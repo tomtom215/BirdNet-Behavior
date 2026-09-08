@@ -38,6 +38,18 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the journal survives a reboot and cannot fill the card
+
+**The installer writes a persistent, bounded journald drop-in** (`OP-5`,
+`OB-15`, `PS-19`). On a default Raspberry Pi OS the journal was volatile:
+about a month on a 2 GB Pi and nothing across a reboot, so every watchdog
+bounce, power cut and update erased the evidence of what caused it. The
+installer now sets `Storage=persistent` and `SystemMaxUse=200M` beside the
+unit, and `uninstall` removes the drop-in. The two per-file INFO lines
+("begin processing file", "file processing complete"), measured at 92 % of
+the journal's volume and 1.6–2.8 GB a year, are DEBUG; the
+`birdnet_files_analysed_total` counter carries what they said.
+
 ### Fixed — a silent station is a strict fault
 
 **The detection deadman's verdict is on the health endpoint** (`AD-4`).

@@ -349,7 +349,12 @@ pub fn run_daemon(
                 // file so the operator can trace one file through the entire
                 // pipeline by grepping a single string.
                 let correlation_id = new_event_correlation_id();
-                tracing::info!(
+                // DEBUG, not INFO (OB-15): with "file processing complete"
+                // this was two lines per 15 s segment, 92 % of the journal's
+                // volume and 1.6-2.8 GB a year, carrying nothing the
+                // `birdnet_files_analysed_total` counter does not. The
+                // per-detection line keeps the correlation id at INFO.
+                tracing::debug!(
                     correlation_id = %correlation_id,
                     file = %path.display(),
                     "begin processing file"

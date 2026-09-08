@@ -227,10 +227,39 @@ LogRateLimitBurst=1000
 WantedBy=multi-user.target
 EOF
 
+    # ── journald: persistent and bounded (OB-15, PS-19, OP-5) ─────────────
+    #
+    # On a default Raspberry Pi OS there is no /var/log/journal, so the journal
+    # is volatile: about a month on a 2 GB Pi and nothing across a reboot. Every
+    # watchdog bounce, power cut and update erased the evidence of what caused
+    # it — the one time the journal is needed is the one time it is gone. This
+    # is host-wide by nature (journald has one configuration), which is the
+    # right trade for a dedicated station and is undone by `uninstall`.
+    # SystemMaxUse bounds it: the station's own INFO volume is ~150 MB/year
+    # after the per-file lines were demoted, so 200 MB holds more than a year.
+    if [ -n "${JOURNALD_DROPIN:-}" ]; then
+        mkdir -p "$(dirname "${JOURNALD_DROPIN}")"
+        cat > "${JOURNALD_DROPIN}" <<'JOURNALD'
+# Installed by BirdNet-Behavior (install.sh); removed by `install.sh uninstall`.
+# Keep the journal across reboots, and bound what it may take of the card.
+[Journal]
+Storage=persistent
+SystemMaxUse=200M
+SystemMaxFileSize=32M
+JOURNALD
+    fi
+
     if has_systemd; then
         systemctl daemon-reload
         systemctl enable birdnet-behavior.service
-        success "Service installed and enabled (Type=notify, hardened, watchdog active)."
+        # journald reads its configuration at start; restart it so the
+        # drop-in takes effect now rather than at the next reboot. A failure
+        # here is not worth aborting an install over: the drop-in is in place
+        # and applies at the next boot regardless.
+        if ! systemctl restart systemd-journald 2>/dev/null; then
+            warn "systemd-journald could not be restarted; the persistent-journal setting applies at the next boot"
+        fi
+        success "Service installed and enabled (Type=notify, hardened, watchdog active); journal persistent and capped at 200 MB."
     else
         success "Service unit written to ${SERVICE_FILE} (Type=notify, hardened, watchdog active)."
         warn "systemd is not running here — not enabling/starting the unit."

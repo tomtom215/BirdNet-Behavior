@@ -22,6 +22,10 @@ MODEL_DIR="${DATA_DIR}/models"
 DB_PATH="${DATA_DIR}/birds.db"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_NAME="birdnet-behavior.service"
+# The journald drop-in installed beside the unit (OB-15 / PS-19 / OP-5): a
+# persistent, bounded journal, so a reboot does not erase the evidence of
+# what caused it and the journal cannot fill the card.
+JOURNALD_DROPIN="/etc/systemd/journald.conf.d/birdnet-behavior.conf"
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 # Bind to all interfaces by default so the dashboard is reachable on the LAN out
 # of the box (a localhost-only default left non-technical users staring at

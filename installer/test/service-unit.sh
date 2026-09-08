@@ -76,6 +76,8 @@ UNIT="${WORK}/birdnet-behavior.service"
     IMAGE_CACHE_DIR="/home/birdnet/BirdNet-Behavior/image_cache"
     # shellcheck disable=SC2034
     DATA_DIR="/home/birdnet/BirdNet-Behavior"
+    # shellcheck disable=SC2034  # the journald drop-in install_service writes beside the unit
+    JOURNALD_DROPIN="${WORK}/journald-birdnet-behavior.conf"
 
     install_service
 ) >/dev/null 2>&1
@@ -109,6 +111,35 @@ else
     fail "systemd-analyze is not installed, so unit validity was NOT checked. \
 This is a gap, not a pass — install systemd (Debian/Ubuntu: apt install systemd) \
 or run this on a host that has it."
+fi
+
+echo
+echo "=== 1b. the journal survives a reboot and is bounded (OB-15, PS-19, OP-5) ==="
+# On a default Raspberry Pi OS with no /var/log/journal the journal is
+# volatile: ~30-45 days on a 2 GB Pi and nothing across a reboot, so every
+# watchdog bounce, power cut and update erased the evidence of what caused it.
+# The installer writes a journald drop-in beside the unit; it has to say both
+# halves, persistence and a bound, or it trades one failure for the other.
+DROPIN="${WORK}/journald-birdnet-behavior.conf"
+if [ ! -s "${DROPIN}" ]; then
+    fail "install_service wrote no journald drop-in (expected ${DROPIN})"
+else
+    pass "install_service wrote a journald drop-in"
+    if grep -qE '^Storage=persistent$' "${DROPIN}"; then
+        pass "Storage=persistent — the journal is kept on disk, across reboots"
+    else
+        fail "the drop-in does not set Storage=persistent; the journal stays volatile"
+    fi
+    if grep -qE '^SystemMaxUse=[0-9]+[KMG]?$' "${DROPIN}"; then
+        pass "SystemMaxUse bounds what the journal may take of the card"
+    else
+        fail "the drop-in sets no SystemMaxUse; a persistent journal with no bound fills the card"
+    fi
+    if grep -qE '^\[Journal\]$' "${DROPIN}"; then
+        pass "the drop-in is a [Journal] section"
+    else
+        fail "the drop-in has no [Journal] section header, so journald ignores it"
+    fi
 fi
 
 echo
