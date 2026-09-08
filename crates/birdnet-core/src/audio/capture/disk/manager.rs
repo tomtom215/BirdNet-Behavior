@@ -1,7 +1,8 @@
 //! Disk manager for automatic disk usage monitoring and purging.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use crate::audio::capture::process::is_audio_file;
@@ -69,6 +70,9 @@ pub struct DiskManagerConfig {
     /// exceeded. Like [`Self::stream_retention_secs`], only set for the transient
     /// stream dir.
     pub stream_max_bytes: u64,
+    /// Where to publish that the purge has stopped achieving anything (PR-7),
+    /// for the health surfaces; `None` publishes nowhere.
+    pub ineffective_flag: Option<Arc<AtomicBool>>,
 }
 
 impl Default for DiskManagerConfig {
@@ -84,7 +88,54 @@ impl Default for DiskManagerConfig {
             locked_provider: None,
             stream_retention_secs: 0,
             stream_max_bytes: 0,
+            ineffective_flag: None,
         }
+    }
+}
+
+/// Whether a purge pass is worth running, from what the last one achieved
+/// (PR-7).
+///
+/// When the card fills for a reason that is not recordings — the database,
+/// the analytics store, the backup ring, a runaway log — the purge deleted 10 %
+/// of the operator's clips every minute until every one was gone and the disk
+/// was still 96.9 % full. A pass that removed files and moved usage by nothing
+/// is proof the space is elsewhere, and deleting more clips will not find it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PurgeGovernor {
+    /// Set by a pass that removed files without lowering usage; cleared when
+    /// usage falls below the threshold again by any means.
+    ineffective: bool,
+}
+
+impl PurgeGovernor {
+    /// Below one fifth of a per cent is the filesystem breathing, not a purge
+    /// working: a 3-second clip on a 32 GB card is 0.001 %.
+    const MIN_EFFECT_PERCENT: f64 = 0.2;
+
+    /// Whether to purge now, at `percent` used against `threshold`.
+    pub fn should_purge(&mut self, percent: f64, threshold: f64) -> bool {
+        if percent < threshold {
+            self.ineffective = false;
+            return false;
+        }
+        !self.ineffective
+    }
+
+    /// What the pass achieved: `removed` files, usage from `before` to
+    /// `after` per cent. Returns whether the pass was ineffective.
+    pub fn observe(&mut self, removed: u32, before: f64, after: f64) -> bool {
+        if removed > 0 && before - after < Self::MIN_EFFECT_PERCENT {
+            self.ineffective = true;
+        }
+        self.ineffective
+    }
+
+    /// Whether the last pass found the space to be somewhere the purge
+    /// cannot reach.
+    #[must_use]
+    pub const fn is_ineffective(&self) -> bool {
+        self.ineffective
     }
 }
 
@@ -105,6 +156,7 @@ impl std::fmt::Debug for DiskManagerConfig {
             .field("locked_provider", &self.locked_provider.is_some())
             .field("stream_retention_secs", &self.stream_retention_secs)
             .field("stream_max_bytes", &self.stream_max_bytes)
+            .field("ineffective_flag", &self.ineffective_flag.is_some())
             .finish()
     }
 }
@@ -117,12 +169,25 @@ impl std::fmt::Debug for DiskManagerConfig {
 #[derive(Debug, Clone)]
 pub struct DiskManager {
     config: DiskManagerConfig,
+    /// What the last purge achieved; shared across the per-cycle copies
+    /// [`Self::with_fresh_locks`] makes, so the verdict survives a cycle.
+    governor: Arc<Mutex<PurgeGovernor>>,
 }
 
 impl DiskManager {
     /// Create a new disk manager with the given configuration.
-    pub const fn new(config: DiskManagerConfig) -> Self {
-        Self { config }
+    #[must_use]
+    pub fn new(config: DiskManagerConfig) -> Self {
+        Self {
+            config,
+            governor: Arc::new(Mutex::new(PurgeGovernor::default())),
+        }
+    }
+
+    /// Whether the last purge removed recordings without lowering usage.
+    #[must_use]
+    pub fn purge_ineffective(&self) -> bool {
+        self.governor.lock().is_ok_and(|g| g.is_ineffective())
     }
 
     /// Return a reference to the disk manager configuration.
@@ -152,6 +217,11 @@ impl DiskManager {
                 threshold = self.config.purge_threshold,
                 "disk usage below threshold"
             );
+            // Usage fell, by whatever means: the purge is allowed again.
+            if let Ok(mut g) = self.governor.lock() {
+                g.should_purge(percent, threshold);
+            }
+            self.publish_ineffective(false);
             return Ok(0);
         }
 
@@ -166,6 +236,23 @@ impl DiskManager {
                 "disk full: stopping recording (full_disk_action=Keep)".into(),
             )),
             FullDiskAction::Purge => {
+                // PR-7: a pass that removed recordings and moved usage by
+                // nothing proved the space is elsewhere; deleting more finds
+                // nothing and costs the operator their clips.
+                let allowed = self
+                    .governor
+                    .lock()
+                    .map_or(true, |mut g| g.should_purge(percent, threshold));
+                if !allowed {
+                    self.publish_ineffective(true);
+                    tracing::error!(
+                        used_pct = format!("{percent:.1}"),
+                        dir = %self.config.monitored_dir.display(),
+                        "disk is over the purge threshold and the last purge freed nothing: the \
+                         space is not in recordings; not deleting more"
+                    );
+                    return Ok(0);
+                }
                 let mut removed = purge_oldest_files(
                     &self.config.monitored_dir,
                     &self.config.exclude_paths,
@@ -183,8 +270,32 @@ impl DiskManager {
                     &self.config.locked_file_names,
                 );
                 cleanup_empty_dirs(&self.config.monitored_dir);
+                let after =
+                    disk_usage(&self.config.monitored_dir).map_or(percent, |u| u.used_percent());
+                let ineffective = self
+                    .governor
+                    .lock()
+                    .is_ok_and(|mut g| g.observe(removed, percent, after));
+                self.publish_ineffective(ineffective);
+                if ineffective {
+                    tracing::error!(
+                        removed,
+                        before_pct = format!("{percent:.1}"),
+                        after_pct = format!("{after:.1}"),
+                        dir = %self.config.monitored_dir.display(),
+                        "purge removed recordings and usage did not fall: the space is not in \
+                         recordings (database, analytics store, backups, logs); stopping"
+                    );
+                }
                 Ok(removed)
             }
+        }
+    }
+
+    /// Publish the governor's verdict where the health surfaces read it.
+    fn publish_ineffective(&self, ineffective: bool) {
+        if let Some(flag) = &self.config.ineffective_flag {
+            flag.store(ineffective, Ordering::Relaxed);
         }
     }
 
@@ -355,7 +466,10 @@ impl DiskManager {
         };
         let mut config = self.config.clone();
         config.locked_file_names = provider();
-        std::borrow::Cow::Owned(Self::new(config))
+        std::borrow::Cow::Owned(Self {
+            config,
+            governor: Arc::clone(&self.governor),
+        })
     }
 
     /// Run the disk manager loop (blocking).
@@ -655,5 +769,57 @@ mod tests {
         h.extend_from_slice(b"data");
         h.extend_from_slice(&0_u32.to_le_bytes());
         h
+    }
+
+    /// The gate for PR-7. The governor's decisions, one pass at a time:
+    /// a pass that removed files and moved usage by nothing stops the next;
+    /// a pass that lowered usage does not; usage below the threshold clears
+    /// the stop.
+    #[test]
+    fn a_pass_that_frees_nothing_stops_the_purge_until_usage_falls() {
+        let mut g = PurgeGovernor::default();
+        assert!(g.should_purge(96.9, 95.0), "over the threshold: purge");
+        // Deleted ten clips; usage did not move — the row's exact case.
+        assert!(g.observe(10, 96.9, 96.9), "reported as ineffective");
+        assert!(
+            !g.should_purge(96.9, 95.0),
+            "the next pass must be refused: the space is not in recordings"
+        );
+        assert!(g.is_ineffective());
+        assert!(
+            !g.should_purge(94.0, 95.0) && !g.is_ineffective(),
+            "below: cleared"
+        );
+        assert!(
+            g.should_purge(96.0, 95.0),
+            "over again after clearing: purge"
+        );
+
+        // Counterpart: a pass that worked keeps the purge running.
+        let mut working = PurgeGovernor::default();
+        assert!(working.should_purge(96.0, 95.0));
+        assert!(!working.observe(10, 96.0, 95.1), "usage fell: effective");
+        assert!(working.should_purge(95.5, 95.0), "still allowed");
+        // A pass that removed nothing says nothing about where the space is.
+        assert!(!working.observe(0, 95.5, 95.5));
+    }
+
+    #[test]
+    fn the_ineffective_verdict_reaches_the_shared_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: PathBuf::from("/tmp"),
+            purge_threshold: 99,
+            ineffective_flag: Some(Arc::clone(&flag)),
+            ..DiskManagerConfig::default()
+        });
+        manager.publish_ineffective(true);
+        assert!(flag.load(Ordering::Relaxed));
+        assert!(
+            !manager.purge_ineffective(),
+            "the governor itself has seen no pass"
+        );
+        manager.publish_ineffective(false);
+        assert!(!flag.load(Ordering::Relaxed));
     }
 }

@@ -38,6 +38,17 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a purge that frees nothing stops, and says what is filling the card
+
+**The disk-full purge stops when a pass achieves nothing** (`PR-7`). When
+the card filled for a reason that was not recordings — the database, the
+analytics store, the backup ring — the purge deleted a tenth of the
+operator's clips every minute until every one was gone and the disk was
+still full. A pass that removes recordings and lowers usage by nothing now
+marks the purge ineffective; no further pass runs until usage falls, the
+`purge` condition names what to look at, and `birdnet_purge_ineffective`
+exports the mark.
+
 ### Fixed — six smaller gaps a station in a field would find
 
 **The doctor grades the card, not the RAM disk** (`PS-8`): its disk check

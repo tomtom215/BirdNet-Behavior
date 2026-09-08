@@ -118,6 +118,18 @@ const TOOLS: &[(&str, Provenance)] = &[
         "umount",
         Provenance::NotInContainer("the counterpart to `mount` — host-side tmpfs teardown"),
     ),
+    (
+        "vcgencmd",
+        // `system_info::pi_throttled` asks the Raspberry Pi firmware for its
+        // under-voltage and throttling bits. The binary comes with the Pi OS
+        // firmware packages, not Debian; everywhere else (this container
+        // included) the spawn fails, the reading is `None`, and the power
+        // condition simply does not exist. Installing it in the container would
+        // not help: it needs the VideoCore mailbox, which is the host's.
+        Provenance::NotInContainer(
+            "Raspberry Pi firmware tool; needs the host's VideoCore mailbox",
+        ),
+    ),
 ];
 
 /// Repository root, from `CARGO_MANIFEST_DIR` (this test lives in the root

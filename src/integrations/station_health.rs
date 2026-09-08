@@ -42,7 +42,11 @@
 //!   saying `"analytics": true`;
 //! * a Raspberry Pi's firmware reporting under-voltage or throttling — the
 //!   commonest field failure on a Pi, the one that corrupts cards, and one
-//!   that presents as random instability with no other signal.
+//!   that presents as random instability with no other signal;
+//! * a disk-full purge that deleted recordings and freed nothing, because the
+//!   card is full of something else — the database, the analytics store, the
+//!   backup ring, a log — and would otherwise have gone on deleting until every
+//!   clip was gone with the disk still full.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -241,7 +245,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 11] = [
+const CHECKS: [(&str, Check); 12] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -253,6 +257,7 @@ const CHECKS: [(&str, Check); 11] = [
     ("boot-anomaly", check_boot_anomalies),
     ("analytics-mirror", check_analytics_mirror),
     ("power", |_state, out| check_power(out)),
+    ("purge", check_purge),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -515,6 +520,25 @@ fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
         return;
     };
     out.extend(data_volume_condition(&volume));
+}
+
+/// A purge that stopped achieving anything (PR-7).
+fn check_purge(state: &AppState, out: &mut Vec<Condition>) {
+    out.extend(purge_condition(state.metrics().purge_ineffective()));
+}
+
+/// The purge policy, separated from the flag so it can be tested.
+fn purge_condition(ineffective: bool) -> Option<Condition> {
+    ineffective.then(|| Condition {
+        key: "purge".to_owned(),
+        title: "Disk is full of something the purge cannot reclaim".to_owned(),
+        body: "The disk manager deleted recordings in its last pass and usage did not fall, \
+               so the space is not in recordings: the database, the analytics store, the \
+               backup ring or a log. It has stopped deleting recordings until usage falls. \
+               Run `du -sh <data dir>/*` to see what is filling the card, and `--doctor` to \
+               grade each; free or move it and the purge resumes on its own."
+            .to_owned(),
+    })
 }
 
 /// The Pi's own account of its power (NP-5).
@@ -1097,6 +1121,7 @@ mod tests {
             "boot-anomaly",
             "analytics-mirror",
             "power",
+            "purge",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -1105,8 +1130,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            11,
-            "a twelfth check needs a line in the module doc and in this gate"
+            12,
+            "a thirteenth check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1735,5 +1760,15 @@ mod tests {
             power_condition(Some(PiThrottle { bits: 0x50000 })).is_none(),
             "history alone: the supply has recovered, the episode ends"
         );
+    }
+
+    /// PR-7: the flag is a condition naming what to look at; clear is nothing.
+    #[test]
+    fn an_ineffective_purge_is_a_condition() {
+        assert!(purge_condition(false).is_none());
+        let c = purge_condition(true).expect("a condition");
+        assert_eq!(c.key, "purge");
+        assert!(c.body.contains("du -sh"), "{}", c.body);
+        assert!(c.body.contains("stopped deleting"), "{}", c.body);
     }
 }

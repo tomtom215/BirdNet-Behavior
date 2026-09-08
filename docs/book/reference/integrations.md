@@ -119,6 +119,7 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_occurrence_candidates` | gauge | Species the occurrence filter currently admits. |
 | `birdnet_orphaned_clips` | gauge | Detections whose clip the disk no longer had, found and stamped by the last daily reconciliation pass; absent until one has run. |
 | `birdnet_analytics_mirror_failures_total` | counter | Detections the database accepted and the DuckDB analytics copy refused since process start. |
+| `birdnet_purge_ineffective` | gauge | `1` when the last disk-full purge removed recordings without lowering usage: the card is full of something the purge cannot reach, and it has stopped deleting until usage falls. |
 | `birdnet_disk_used_percent` | gauge | Space used on the volume, labeled `volume="data"` (the database's directory) and, when it is a different filesystem, `volume="scratch"` (the temporary directory). |
 | `birdnet_disk_available_bytes` | gauge | Bytes this user can still write on the volume, same labels. |
 | `birdnet_cpu_temperature_celsius` | gauge | CPU temperature from the board's sensor; absent where none is exposed. |

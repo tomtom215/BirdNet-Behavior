@@ -124,6 +124,7 @@ pub fn start_disk_manager(
                 exclude_paths: cli.disk_exclude.clone(),
                 locked_file_names: Vec::new(),
                 locked_provider: Some(std::sync::Arc::clone(&locked_provider)),
+                ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                 stream_retention_secs: retention,
                 stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
             },
@@ -162,6 +163,7 @@ pub fn start_disk_manager(
                     exclude_paths: cli.disk_exclude.clone(),
                     locked_file_names: Vec::new(),
                     locked_provider: Some(locked_provider),
+                    ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                     // Never age- or size-drain the operator's clips: they are
                     // only ever removed by the disk-full backstop above, and
                     // then oldest-first and never if locked.

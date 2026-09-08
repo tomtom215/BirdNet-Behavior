@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Fixed exponential histogram buckets (seconds).
 ///
@@ -235,6 +235,10 @@ pub struct MetricsRegistry {
     analytics_mirror_last_failure: AtomicU64,
     /// The last mirror error's text, for the condition.
     analytics_mirror_last_error: RwLock<Option<String>>,
+    /// Set by a disk manager whose last purge removed recordings and lowered
+    /// usage by nothing (PR-7): the card is full of something the purge
+    /// cannot reach, and it has stopped deleting. Shared with the manager.
+    purge_ineffective: Arc<AtomicBool>,
     /// HTTP responses served, by status class (`2xx`, `4xx`, …).
     http_responses: RwLock<HashMap<String, AtomicU64>>,
     /// Web request latency.
@@ -275,6 +279,7 @@ impl MetricsRegistry {
             analytics_mirror_failures_total: AtomicU64::new(0),
             analytics_mirror_last_failure: AtomicU64::new(0),
             analytics_mirror_last_error: RwLock::new(None),
+            purge_ineffective: Arc::new(AtomicBool::new(false)),
             http_responses: RwLock::new(HashMap::new()),
             http_duration: Histogram::new(),
         }
@@ -356,6 +361,19 @@ impl MetricsRegistry {
             .store(u64::from(active), Ordering::Relaxed);
         self.occurrence_candidates
             .store(candidates.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// The flag a disk manager sets when its purge stopped achieving
+    /// anything (PR-7), for the manager to hold.
+    #[must_use]
+    pub fn purge_ineffective_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.purge_ineffective)
+    }
+
+    /// Whether the last purge removed recordings without lowering usage.
+    #[must_use]
+    pub fn purge_ineffective(&self) -> bool {
+        self.purge_ineffective.load(Ordering::Relaxed)
     }
 
     /// Record a detection the DuckDB copy refused (OP-7).
@@ -665,6 +683,7 @@ impl MetricsRegistry {
             occurrence_candidates: self.occurrence_filter().candidates,
             orphaned_clips: self.orphaned_clips(),
             analytics_mirror_failures: self.analytics_mirror_failures(),
+            purge_ineffective: self.purge_ineffective(),
             http_responses: Self::read_map(&self.http_responses),
             http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
@@ -744,6 +763,8 @@ pub struct MetricsSnapshot {
     pub orphaned_clips: Option<u64>,
     /// Detections the DuckDB copy refused since process start.
     pub analytics_mirror_failures: u64,
+    /// Whether the last disk purge removed recordings without lowering usage.
+    pub purge_ineffective: bool,
     /// HTTP responses by status class.
     pub http_responses: Vec<(String, u64)>,
     /// Web request latency.
@@ -935,6 +956,14 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     out.push_str("# HELP birdnet_watchdog_pings_total Total successful WATCHDOG=1 notifications sent to systemd since process start.\n");
     out.push_str("# TYPE birdnet_watchdog_pings_total counter\n");
     let _ = writeln!(out, "birdnet_watchdog_pings_total {}", snap.watchdog_pings);
+
+    out.push_str("# HELP birdnet_purge_ineffective 1 when the last disk-full purge removed recordings without lowering usage — the card is full of something the purge cannot reach, and it has stopped deleting.\n");
+    out.push_str("# TYPE birdnet_purge_ineffective gauge\n");
+    let _ = writeln!(
+        out,
+        "birdnet_purge_ineffective {}",
+        u8::from(snap.purge_ineffective)
+    );
 
     out.push_str("# HELP birdnet_analytics_mirror_failures_total Detections the database accepted and the DuckDB analytics copy refused since process start.\n");
     out.push_str("# TYPE birdnet_analytics_mirror_failures_total counter\n");
