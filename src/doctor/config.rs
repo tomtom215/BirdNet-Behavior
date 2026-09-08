@@ -136,11 +136,49 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
         );
     }
 
+    // ON-9: `exists()` was the whole check. Load it the way the daemon does,
+    // which also compares its declared width with the vocabulary it will be
+    // read against; a truncated download or a model for another classifier
+    // fails here and not on the first inference of a station nobody watches.
+    let classifier_labels = cli
+        .labels
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("LABELS_PATH").map(PathBuf::from)))
+        .filter(|p| p.exists())
+        .and_then(|p| birdnet_core::inference::labels::LabelSet::load(&p).ok());
+    let meta_labels = labels
+        .as_ref()
+        .and_then(|p| birdnet_core::inference::labels::LabelSet::load(p).ok());
+    if let Some(classifier) = classifier_labels.as_ref()
+        && let Err(e) = birdnet_core::inference::species_filter::SpeciesFilter::load_with_vocabulary(
+            &model,
+            meta_labels,
+            classifier.len(),
+            birdnet_core::inference::species_filter::SpeciesFilterConfig::default(),
+        )
+    {
+        return Check::fail(
+            NAME,
+            format!(
+                "{} is present but cannot be used as a metadata model ({e}); the daemon would \
+                 fall back to admitting every species",
+                model.display()
+            ),
+            "download the metadata model that matches the installed classifier again, and \
+             the label file it shipped with",
+        );
+    }
+
     let how = labels.map_or_else(
         || " (indexed against the classifier's labels)".to_owned(),
         |l| format!(" (matched by name through {})", l.display()),
     );
-    Check::pass(NAME, format!("active — {}{how}", model.display()))
+    let loaded = if classifier_labels.is_some() {
+        "; loads, and its width matches the vocabulary"
+    } else {
+        "; not loaded here because the classifier's labels file could not be read"
+    };
+    Check::pass(NAME, format!("active — {}{how}{loaded}", model.display()))
 }
 
 /// Is the repeat-confirmation filter set to something that can actually reject?

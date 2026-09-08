@@ -524,6 +524,30 @@ impl BirdNetModel {
         &self.labels
     }
 
+    /// The width of the model's class output — how many classes it scores —
+    /// or `None` when the output's last dimension is dynamic.
+    ///
+    /// Read from the session's output metadata, from the same output
+    /// [`Self::predict_chunk`] scores (`predictions` on a two-output V3.0
+    /// model, the only output on V2.4). A model whose width is not the label
+    /// count is mispaired with its labels file or is not the model its name
+    /// says: species are assigned positionally, so every row it produces is
+    /// suspect. The doctor compares this with the label count before a
+    /// station runs on it (ON-9).
+    #[must_use]
+    pub fn output_dimension(&self) -> Option<usize> {
+        let outputs = self.session.outputs();
+        let output = outputs.get(usize::from(outputs.len() > 1))?;
+        match output.dtype() {
+            ValueType::Tensor { shape, .. } => shape
+                .last()
+                .copied()
+                .and_then(|d| usize::try_from(d).ok())
+                .filter(|d| *d >= 1),
+            _ => None,
+        }
+    }
+
     /// Whether the label set names at least one human class.
     ///
     /// Without one the human score is always `0.0` and the privacy filter can
@@ -1516,6 +1540,31 @@ mod tests {
         assert!(
             (chunk.human_score - compute_confidence(0.9, 1.25, false)).abs() < 1e-6,
             "sensitivity must scale the score as it scales a detection"
+        );
+    }
+
+    /// ON-9: the class width is read from the model, not assumed, and a
+    /// labels file of the wrong length is detectable before any inference.
+    #[test]
+    fn the_output_dimension_is_the_class_width_of_the_scored_output() {
+        let v30 = load_tiny_v30();
+        assert_eq!(
+            v30.output_dimension(),
+            Some(11),
+            "the V3.0 predictions output"
+        );
+        let v24 = load_tiny_v24();
+        assert_eq!(v24.output_dimension(), Some(11), "the V2.4 single output");
+        let short = BirdNetModel::load_from_bytes(
+            TINY_V30_MODEL,
+            LabelSet::from_entries(vec![("A".into(), "a".into())]),
+            ModelConfig::default(),
+        )
+        .expect("loads with any labels");
+        assert_ne!(
+            short.output_dimension(),
+            Some(short.labels().len()),
+            "a one-label file does not match an eleven-class model"
         );
     }
 }

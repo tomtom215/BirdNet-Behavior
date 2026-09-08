@@ -18,6 +18,10 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
         .model
         .clone()
         .or_else(|| config?.get("MODEL_PATH").map(PathBuf::from));
+    let labels_path = cli
+        .labels
+        .clone()
+        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
     let mut out = Vec::new();
 
     if let Some(p) = model_path {
@@ -43,6 +47,7 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
                 )),
             }
             out.push(check_identity(&p, &db_path_from_config(config)));
+            out.push(check_model_loads(&p, labels_path.as_deref()));
         } else {
             out.push(Check::fail(
                 "ONNX model file",
@@ -57,10 +62,6 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
         ));
     }
 
-    let labels_path = cli
-        .labels
-        .clone()
-        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
     if let Some(p) = labels_path {
         if p.exists() {
             out.push(Check::pass(
@@ -87,6 +88,87 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
 ///
 /// Reads the whole model file; the shipped FP32 model is 541 MB, which is
 /// seconds on a Pi 4. The doctor is a diagnostic run by hand, not a poll.
+/// Load the model with ONNX Runtime and compare its class width with the
+/// labels file (ON-9).
+///
+/// The size check above is what the doctor used to stop at: a 3 MB stand-in
+/// for a 541 MB model, a download cut off past the first megabyte, or a
+/// labels file from another model version all passed it. Loading is what
+/// tells a file from a model, and the output width against the label count
+/// is what tells a matched pair from a mispaired one — species are assigned
+/// positionally, so a mispaired station names every bird wrong and looks,
+/// in its logs, like a classifier having a bad day.
+fn check_model_loads(model: &Path, labels: Option<&Path>) -> Check {
+    const NAME: &str = "Model integrity";
+    let label_set = match labels {
+        Some(path) if path.exists() => {
+            match birdnet_core::inference::labels::LabelSet::load(path) {
+                Ok(set) => Some(set),
+                Err(e) => {
+                    return Check::fail(
+                        NAME,
+                        format!("{} could not be read as a labels file: {e}", path.display()),
+                        "the labels file ships alongside the model; re-run `install.sh`",
+                    );
+                }
+            }
+        }
+        _ => None,
+    };
+    let label_count = label_set
+        .as_ref()
+        .map(birdnet_core::inference::labels::LabelSet::len);
+    let loaded = birdnet_core::inference::model::BirdNetModel::load(
+        model,
+        label_set
+            .unwrap_or_else(|| birdnet_core::inference::labels::LabelSet::from_entries(Vec::new())),
+        birdnet_core::inference::model::ModelConfig {
+            num_threads: 1,
+            ..birdnet_core::inference::model::ModelConfig::default()
+        },
+    );
+    let loaded = match loaded {
+        Ok(m) => m,
+        Err(e) => {
+            return Check::fail(
+                NAME,
+                format!(
+                    "{} is not a model ONNX Runtime can load ({e}); a truncated or corrupt \
+                     download passes the size check and fails here",
+                    model.display()
+                ),
+                "delete the file and let the entrypoint or `install.sh` download it again",
+            );
+        }
+    };
+    match (loaded.output_dimension(), label_count) {
+        (Some(width), Some(labels)) if width != labels => Check::fail(
+            NAME,
+            format!(
+                "the model scores {width} classes and the labels file names {labels}; species \
+                 are assigned by position, so every detection would carry the wrong name"
+            ),
+            "install the labels file that shipped with this model, or the model that \
+             matches these labels",
+        ),
+        (Some(width), Some(_)) => Check::pass(
+            NAME,
+            format!("loads; {width} classes, and the labels file names {width}"),
+        ),
+        (Some(width), None) => Check::pass(
+            NAME,
+            format!("loads; {width} classes (no labels file configured to check against)"),
+        ),
+        (None, _) => Check::warn(
+            NAME,
+            "loads, but declares a dynamic class width, so the label count cannot be checked \
+             before the first inference",
+            "nothing, unless detections carry unexpected names; the daemon warns once at \
+             the first inference if the widths disagree",
+        ),
+    }
+}
+
 fn check_identity(model: &Path, db_path: &Path) -> Check {
     let digest = match birdnet_core::inference::identity::file_digest(model) {
         Ok(d) => d,
@@ -203,6 +285,53 @@ mod tests {
         cli.model = Some(model);
         let checks = check_model(&cli, None);
         assert_eq!(identity_of(&checks).status, Status::Pass);
+    }
+
+    const TINY_V30_MODEL: &[u8] =
+        include_bytes!("../../crates/birdnet-core/src/testdata/tiny_v30_test.onnx");
+
+    /// A labels file naming `n` species, in the V2.4 text form.
+    fn labels_file(dir: &Path, n: usize) -> PathBuf {
+        let path = dir.join("labels.txt");
+        let body: Vec<String> = (0..n).map(|i| format!("Species_{i}_Bird {i}")).collect();
+        std::fs::write(&path, body.join("\n")).unwrap();
+        path
+    }
+
+    /// The gate for ON-9: a file that is not a model fails, a model whose
+    /// class width is not the label count fails naming both, and a matched
+    /// pair passes.
+    #[test]
+    fn the_doctor_loads_the_model_and_checks_its_width_against_the_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("model.onnx");
+        std::fs::write(&model, TINY_V30_MODEL).unwrap();
+
+        let matched = check_model_loads(&model, Some(&labels_file(dir.path(), 11)));
+        assert_eq!(matched.status, Status::Pass, "{matched:?}");
+        assert!(matched.message.contains("11 classes"), "{matched:?}");
+
+        let mispaired = check_model_loads(&model, Some(&labels_file(dir.path(), 12)));
+        assert_eq!(mispaired.status, Status::Fail, "{mispaired:?}");
+        assert!(
+            mispaired.message.contains("scores 11 classes")
+                && mispaired.message.contains("names 12"),
+            "both counts must be named: {mispaired:?}"
+        );
+
+        // The 3 MB stand-in the row describes: past the size check, not a model.
+        let stand_in = dir.path().join("stand-in.onnx");
+        std::fs::write(&stand_in, vec![0u8; 3_000_000]).unwrap();
+        let garbage = check_model_loads(&stand_in, Some(&labels_file(dir.path(), 11)));
+        assert_eq!(garbage.status, Status::Fail, "{garbage:?}");
+        assert!(garbage.message.contains("not a model"), "{garbage:?}");
+
+        let unchecked = check_model_loads(&model, None);
+        assert_eq!(unchecked.status, Status::Pass, "{unchecked:?}");
+        assert!(
+            unchecked.message.contains("no labels file"),
+            "{unchecked:?}"
+        );
     }
 
     fn fixture_run(model_sha256: &str) -> birdnet_db::sqlite::NewAnalysisRun<'_> {

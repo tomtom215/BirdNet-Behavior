@@ -38,6 +38,18 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the doctor loads the model instead of weighing it
+
+**`--doctor` checks the model as a model** (`ON-9`, `OP-13`). It used to
+check that the file was larger than a megabyte, so a truncated download or
+a stand-in passed, and it checked the metadata model for nothing but
+existence. It now loads the classifier with ONNX Runtime and compares the
+class width of the output the daemon scores with the labels file's count —
+species are assigned by position, so a mispaired station names every bird
+wrong — and loads the metadata model through the daemon's own loader, which
+checks its width against the vocabulary. A file that is not a model, and a
+model that is not the labels file's, both fail with both numbers named.
+
 ### Fixed — clips that vanished behind the database's back are reconciled
 
 **A daily reconciliation pass finds clips the disk no longer has** (`S-14`).
