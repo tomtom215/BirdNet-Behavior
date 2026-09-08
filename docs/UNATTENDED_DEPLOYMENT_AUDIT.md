@@ -67,11 +67,11 @@ AD 9, OP 16, UX 15, FR 6, UP 8, WE 1, DD 35. (Counted 2026-09-08:
 rows and the five grouped rows make 292; §3.1–3.11 134, §3.12 36 (RC-36 added
 2026-09-07 for a defect found by this session), §3.13 87, §3.14 35. Open at
 P0 or P1 after this pass, by the same grep with `FIXED` rows excluded: **1 P0**
-(**R-1**, upgraded on 2026-09-08) and **57 P1**. Re-taken 2026-09-08 after
-the second session that day, same method: **0 P0**, **40 P1**,
-**108 P2**, **31 P3** — and counting a row whose marker says
-"in part", "the first half" or "clips" as open, as it should be, 44 P1
-(`PS-6`, `PS-7`, `PR-8`, `ON-4`).)
+(**R-1**, upgraded on 2026-09-08) and **57 P1**. Re-taken 2026-09-08 at the
+end of the second session that day, same method: **0 P0**, **36 P1**,
+**105 P2**, **30 P3** — and counting a row whose marker says "in part", "the
+first half" or "clips" as open, as it should be, 40 P1 (`PS-6`, `PS-7`,
+`PR-8`, `ON-4`).)
 `R-DwC` matches that pattern; the digits-only pattern the 2026-09-04 count
 used does not see it, which is where "255" and "R 11" came from.) At
 `8e6806f`, **61** of the rows carry a `**[FIXED…]**` marker, 21 more than at
@@ -1296,19 +1296,21 @@ final commit is in the paragraph that follows this block's date line; the
 session's final message quotes the same run.
 
 **The count for this branch**, `cargo test --workspace --all-features
---no-fail-fast` at the tree of `5df8c83` (the documentation commits after it
-change no code), summed by the command above, with `~/.duckdb` moved aside
-first: **3 822 passed, 0 failed, 9 ignored** in **127** suites, exit 0. The
-ignored count rose from 7 to 9 with the two `--ignored` worker halves of the
-self-spawning gates (`S-4`, `DD-25`). `RUSTDOCFLAGS="-D warnings" cargo doc
---workspace --no-deps --document-private-items --all-features` and `cargo
-clippy --workspace --all-targets` exit 0 at the same tree. The previous session's
+--no-fail-fast` at the tree of `fc0bda7` (the commit after it changes two
+doc-comment lines and this document), summed by the command above, with
+`~/.duckdb` moved aside first: **3 844 passed, 0 failed, 9 ignored** in
+**129** suites, exit 0. (An earlier run the same
+session, at `5df8c83`, gave 3 822 / 0 / 9 in 127 suites; the ignored count
+had risen from 7 to 9 with the two `--ignored` worker halves of the
+self-spawning gates, `S-4` and `DD-25`.) `RUSTDOCFLAGS="-D warnings" cargo
+doc --workspace --no-deps --document-private-items --all-features` and
+`cargo clippy --workspace --all-targets` exit 0 at the same tree. The previous session's
 figure, at `3b8942e`, was 3 730 passed in 120 suites; this session's commits
 are listed under "What to do first" below with their gates.
 
 **Lines.** `find crates src -name '*.rs' | xargs cat | wc -l` gives
-**196 329** lines of Rust in **484** files under `crates/` and `src/`, and
-**212 945** with `tests/` (re-taken 2026-09-08, this session). The last
+**198 683** lines of Rust in **487** files under `crates/` and `src/`, and
+**215 637** with `tests/` (re-taken 2026-09-08, end of the second session). The last
 `Migration { version: N` is **45** (`grep -oE "version: [0-9]+"
 crates/birdnet-db/src/migration.rs | sort -n | tail -1`).
 
@@ -1351,42 +1353,67 @@ probe ids in those rows are the names of the reports it came from.
 
 ### What to do first
 
-*Rewritten 2026-09-08 (second session that day), after the queue the previous
-version of this section named was worked through in order. Done, each with
-its row marked and its gate observed red first: `R-1` (`bebddaf`), `R-8`
-(`25e688f`), `O-6` (`dacb73d`), `DD-32` (`0883b00`), `DD-14`+`DD-15`
-(`b21ca69`), `DD-19`+`DD-20` (`7a584a0`), the first-run batch `ON-4`/`ON-5`/
-`ON-10`/`ON-11` (`a71953f`), `S-4`+`PS-7` (`4e30dec`), `DD-25` (`fe2b82f`),
-`NT-2`+`NT-3` (`ec71f78`), `DD-22`+`DD-24` (`43dc336`), `S-5` (`a4c6cc6`),
-`PR-8` (`e697649`), `ON-12` (`2b5e783`), `LC-7`+`O-7`+`RC-14` (`2d19c87`).
-What follows is the queue as it stands.*
+*Rewritten 2026-09-08, at the end of the second session that day. That
+session worked the previous version of this list through in order and past
+its end. Done, each with its row marked and its gate observed red first:
+`R-1` (`bebddaf`), `R-8` (`25e688f`), `O-6` (`dacb73d`), `DD-32` (`0883b00`),
+`DD-14`+`DD-15` (`b21ca69`), `DD-19`+`DD-20` (`7a584a0`), the first-run batch
+`ON-4`/`ON-5`/`ON-10`/`ON-11` (`a71953f`), `S-4`+`PS-7` (`4e30dec`), `DD-25`
+(`fe2b82f`), `NT-2`+`NT-3` (`ec71f78`), `DD-22`+`DD-24` (`43dc336`), `S-5`
+(`a4c6cc6`), `PR-8` (`e697649`), `ON-12` (`2b5e783`), `LC-7`+`O-7`+`RC-14`
+(`2d19c87`), `DD-23` (`2561b3d`), `UP-2` (`2c48665`), `UP-3` (`981d0ef`),
+`S-14`+`DD-36` (`d106774`), `ON-9`+`OP-13` (`7bc573c`), `LC-6` (`efb4906`).
+What follows is the queue as it stands, ordered by what a station in a field
+gains per hour of work.*
 
-*`DD-23`, the head of this queue when it was written, is done (see its row).*
+**First, the operator-visibility batch — each small, each closing a "the
+station knew and did not say" gap, and all reachable through primitives this
+session built:**
 
-**`UP-2` and `UP-3` together, first**, the restore and the boot journal. A
-restore runs `tar` over open SQLite handles with no quiesce and no free-space
-check; and a volume that fails to mount is indistinguishable from a first
-run. `PS-5`'s ingest halt is the quiesce primitive the restore needs;
-`DD-20`'s device-id comparison in `data_volume.rs` is half of the boot
-journal already.
+* **`OP-4`** — an endpoint over the station-health `CHECKS` table, so "what
+  is wrong right now?" can be asked, not only pushed. `evaluate` is private;
+  make it answer `/api/v2/health/conditions`.
+* **`OP-6`** — the doctor reads the maintenance verdicts (`station_health.rs`
+  already makes the call): "your backup has failed for a year" from `--doctor`.
+* **`OP-7`** — a DuckDB mirror write failure is `warn!`-only while health
+  asserts `"analytics": true`: a counter and a condition.
+* **`OP-3`** — export disk, CPU temperature, maintenance outcome and scratch
+  usage as metrics; all four are measured already.
+* **`PS-8`** — the doctor's disk check reads `--watch-dir` (the tmpfs); check
+  the data partition explicitly and report both.
+* **`NP-5`** — `vcgencmd get_throttled` through `run_with_timeout`:
+  undervoltage is the commonest Pi field failure and presents as nothing.
+* **`PR-7`** — the purge that frees nothing keeps deleting clips; stop when a
+  pass frees nothing, and raise a condition naming what is filling the card.
+* **`ON-8`** — the doctor's timezone check should compare against the host
+  zone unconditionally.
+* **`LC-4`** — a missing `arecord` on an ALSA station is a `skip`; make it a
+  `fail`.
+* **`UX-2`** (a `<button>`) and **`UX-1`** (radio semantics on the wizard's
+  preference cards).
 
-*`S-14` and `DD-36` are done (see their rows).*
+**Then the medium ones:** `NP-1` (eBird links by species code — the code is
+in the geomodel label file), `S-2` (purge ordering with a per-species floor),
+`AU-1`/`S-13` (device identity by bus path; an index that resolves is not a
+match), `AD-3` (a flapping source is invisible), `ON-7` (Docker has no
+timezone handling), `ON-6`'s remainder, and the contrast numbers in
+`DD-29`/`DD-30`.
 
-*`ON-9` (with `OP-13`) and `LC-6` are done (see their rows).*
+**Then the large ones, each its own session:** `R-5`/`FR-2` (re-analysis over
+retained audio keyed to `analysis_runs`), `FR-1`/`R-DwC` (Raven selection
+tables, Audacity labels, Darwin Core), `FR-3` (a deployment record), `O-4`
+(a private mode), `S-1` (the 15 s seam), `PS-3`/`PS-4` (VACUUM and write
+amplification), `PR-3`/`PR-4` (the memory budget, measured), `LC-3` (a
+remote upgrade path on bare metal), `LC-5` (installer coverage on a systemd
+host), `ARM-1` (an aarch64 `cargo test` that has actually run). §4's tables
+still hold the older queue; nothing there outranks this list.
 
-Next, the P1 groups the previous queue never reached, in no
-particular order: `PS-3`/`PS-4` (write amplification; batched inserts),
-`PR-3`/`PR-4`/`PR-7`, `R-5`/`FR-2`, `R-DwC`/`FR-1`, `FR-3`, `NP-1`, `O-4`,
-`S-1`, `S-2`/`S-3`, `S-13`/`AU-1`, `AD-3`, `ARM-1`, `LC-3`–`LC-5`, `NP-5`,
-`ON-6`–`ON-8`, `OP-3`–`OP-7`, `PS-8`, `UX-1`/`UX-2`, and the contrast numbers
-in `DD-29`/`DD-30`. §4's tables still hold the older queue; nothing there
-outranks this list.
-
-Found this session and not fixed, each recorded in its row: the fallback
-that renames a WAV under the `.mp3` name (**DD-36**); the metric vocabulary's
-`privacy` reason has no caller, so privacy suppressions are invisible
-(**S-5**); moving clip conversion off the event thread was declined, with the
-reason (**PR-8**).
+Found this session and not fixed, each recorded in its row: the metric
+vocabulary's `privacy` reason has no caller, so privacy suppressions are
+invisible (**S-5**); moving clip conversion off the event thread was
+declined, with the reason (**PR-8**); the backup names the recordings
+directory by basename and a restore places it beside the database whatever
+`recording_dir` is (**UP-2**).
 
 Six things about method, from this session, that the next one should not
 relearn:

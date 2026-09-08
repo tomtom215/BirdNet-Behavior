@@ -203,8 +203,8 @@ const FULL_REBUILD_ABOVE_DAYS: usize = 60;
 
 impl AnalyticsDb {
     /// Per-day fingerprints of the `SQLite` side, read from the source of
-    /// truth. Columns the source predates (see [`VERDICT_COL`],
-    /// [`INSTANT_COL`]) fold in as absent, which is what the copy holds for
+    /// truth. Columns the source predates (`review_verdict`,
+    /// `detected_at_utc`) fold in as absent, which is what the copy holds for
     /// them too.
     ///
     /// # Errors
