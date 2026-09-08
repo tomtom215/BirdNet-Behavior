@@ -223,6 +223,10 @@ pub struct MetricsRegistry {
     /// How many species the occurrence filter currently admits. `u64::MAX`
     /// until the filter has run once.
     occurrence_candidates: AtomicU64,
+    /// Clips the database referenced and the disk did not have, found and
+    /// stamped by the last reconciliation pass (S-14). `u64::MAX` until a
+    /// pass has run.
+    orphaned_clips: AtomicU64,
     /// HTTP responses served, by status class (`2xx`, `4xx`, …).
     http_responses: RwLock<HashMap<String, AtomicU64>>,
     /// Web request latency.
@@ -259,6 +263,7 @@ impl MetricsRegistry {
             capture_stalls: RwLock::new(HashMap::new()),
             occurrence_filter_active: AtomicU64::new(0),
             occurrence_candidates: AtomicU64::new(u64::MAX),
+            orphaned_clips: AtomicU64::new(u64::MAX),
             http_responses: RwLock::new(HashMap::new()),
             http_duration: Histogram::new(),
         }
@@ -340,6 +345,22 @@ impl MetricsRegistry {
             .store(u64::from(active), Ordering::Relaxed);
         self.occurrence_candidates
             .store(candidates.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Record what the last clip-reconciliation pass found: rows whose clip
+    /// the disk no longer had.
+    pub fn set_orphaned_clips(&self, found: u64) {
+        self.orphaned_clips.store(found, Ordering::Relaxed);
+    }
+
+    /// Orphaned clips found by the last reconciliation pass; `None` until one
+    /// has run.
+    #[must_use]
+    pub fn orphaned_clips(&self) -> Option<u64> {
+        match self.orphaned_clips.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            n => Some(n),
+        }
     }
 
     /// The occurrence filter's live state: whether it is running, and how
@@ -597,6 +618,7 @@ impl MetricsRegistry {
             capture_stalls: Self::read_map(&self.capture_stalls),
             occurrence_filter_active: self.occurrence_filter().active,
             occurrence_candidates: self.occurrence_filter().candidates,
+            orphaned_clips: self.orphaned_clips(),
             http_responses: Self::read_map(&self.http_responses),
             http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
@@ -671,6 +693,9 @@ pub struct MetricsSnapshot {
     pub occurrence_filter_active: bool,
     /// Species the occurrence filter admits (`None` = not yet run).
     pub occurrence_candidates: Option<u64>,
+    /// Orphaned clips found by the last reconciliation pass; `None` until one
+    /// has run.
+    pub orphaned_clips: Option<u64>,
     /// HTTP responses by status class.
     pub http_responses: Vec<(String, u64)>,
     /// Web request latency.
@@ -744,6 +769,12 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
             "birdnet_notifications_dropped_total{{reason=\"{}\"}} {count}",
             escape_label(reason)
         );
+    }
+
+    if let Some(n) = snap.orphaned_clips {
+        out.push_str("# HELP birdnet_orphaned_clips Detections whose clip the disk no longer had, found and stamped by the last reconciliation pass.\n");
+        out.push_str("# TYPE birdnet_orphaned_clips gauge\n");
+        let _ = writeln!(out, "birdnet_orphaned_clips {n}");
     }
 
     out.push_str("# HELP birdnet_capture_restarts_total Capture processes restarted by the supervisor, per source.\n");

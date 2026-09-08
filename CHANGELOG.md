@@ -38,6 +38,23 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — clips that vanished behind the database's back are reconciled
+
+**A daily reconciliation pass finds clips the disk no longer has** (`S-14`).
+The two retention passes stamp the rows whose audio they reclaim; nothing
+stamped a row whose clip went any other way — the disk-full purge deletes
+the oldest files by name and never opens the database, and so does a person
+tidying a card — so those rows kept offering a play button that answered 404,
+and nothing counted them. The pass stamps every such row, removes the
+`.part` files a killed writer left behind, and reports both, to the log and
+as the `birdnet_orphaned_clips` gauge.
+
+**A clip that could not be converted keeps its `.wav` name** (`DD-36`). When
+both `ffmpeg` and `sox` failed, the WAV was renamed under the `.mp3`,
+`.flac` or `.ogg` name, so the file was a WAV under the wrong extension and
+the detection said the wrong format. The WAV now stays a `.wav`, and the
+row, the metadata step and the BirdWeather upload record what is there.
+
 ### Fixed — a start that lost the database says so
 
 **The station keeps a boot journal outside its database** (`UP-3`). A data

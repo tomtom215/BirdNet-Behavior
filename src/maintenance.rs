@@ -89,6 +89,7 @@ pub fn spawn_database_maintenance(
     clip_retention_days: u32,
     offsite: Option<Arc<OffsiteConfig>>,
     ingest_halted: Arc<AtomicBool>,
+    metrics: Option<birdnet_web::metrics::SharedMetrics>,
 ) {
     tokio::spawn(async move {
         run_loop(
@@ -99,6 +100,7 @@ pub fn spawn_database_maintenance(
             clip_retention_days,
             offsite,
             &ingest_halted,
+            metrics.as_deref(),
         )
         .await;
     });
@@ -112,6 +114,7 @@ async fn run_loop(
     clip_retention_days: u32,
     offsite: Option<Arc<OffsiteConfig>>,
     ingest_halted: &AtomicBool,
+    metrics: Option<&birdnet_web::metrics::MetricsRegistry>,
 ) {
     tracing::info!(
         db_path = %db_path.display(),
@@ -179,6 +182,12 @@ async fn run_loop(
             run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
             if clock_is_safe_for_retention() {
                 run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
+            }
+            // After the passes that delete on purpose: whatever else deleted a
+            // clip — the disk-full purge, a hand on the card — is found here.
+            let found = run_clip_reconciliation(&db_path, &recordings_dir).await;
+            if let Some(m) = metrics {
+                m.set_orphaned_clips(u64::try_from(found.orphans_stamped).unwrap_or(u64::MAX));
             }
             mark_ran(&db_path, JOB_SPECIES_CAP, &mut attempted).await;
         }
@@ -771,6 +780,119 @@ fn reclaim_clips(
         }
     }
     removed
+}
+
+/// What one reconciliation pass found and did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Reconciliation {
+    /// Detections whose clip the disk no longer had, now stamped as pruned.
+    pub orphans_stamped: usize,
+    /// `.part` files older than [`STALE_PART_AGE`] removed from the recordings
+    /// directory: what a kill mid-write leaves behind (S-4).
+    pub stale_parts_removed: usize,
+}
+
+/// How old a `.part` file must be before it is taken for abandoned. A clip is
+/// written in well under a second; an hour is a writer that died.
+const STALE_PART_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// Reconcile the database's clip references with the recordings directory
+/// (S-14).
+///
+/// The two retention passes above stamp the rows whose clips they delete.
+/// Nothing stamped a row whose clip went any other way — the disk-full purge
+/// deletes the oldest files by name and never opens the database, and so does
+/// a person tidying a card — so after any such purge `File_Name` rows pointed
+/// at files that were not there, the clips browser offered play buttons that
+/// answered 404, and nothing counted them. This pass stamps every such row,
+/// removes the `.part` files a killed writer left, and reports both.
+async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Reconciliation {
+    if !db_path.exists() {
+        return Reconciliation::default();
+    }
+    let db_path = db_path.to_path_buf();
+    let recordings_dir = recordings_dir.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> Result<Reconciliation, String> {
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT File_Name FROM detections \
+                 WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                   AND Clip_Pruned_At IS NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let referenced: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        drop(stmt);
+
+        let mut out = Reconciliation::default();
+        for file_name in referenced {
+            let Some(base) = Path::new(&file_name).file_name() else {
+                continue;
+            };
+            if recordings_dir.join(base).exists() {
+                continue;
+            }
+            match conn.execute(
+                "UPDATE detections SET Clip_Pruned_At = ?2 \
+                 WHERE File_Name = ?1 AND Clip_Pruned_At IS NULL",
+                rusqlite::params![file_name, now_unix()],
+            ) {
+                Ok(_) => out.orphans_stamped += 1,
+                Err(e) => tracing::warn!(
+                    file = %file_name,
+                    error = %e,
+                    "clip is missing from disk but the detection could not be stamped"
+                ),
+            }
+        }
+
+        if let Ok(entries) = std::fs::read_dir(&recordings_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !birdnet_core::atomic_file::is_part_path(&path) {
+                    continue;
+                }
+                let abandoned = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|age| age >= STALE_PART_AGE);
+                if abandoned && std::fs::remove_file(&path).is_ok() {
+                    out.stale_parts_removed += 1;
+                }
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    match result {
+        Ok(Ok(found)) => {
+            if found == Reconciliation::default() {
+                tracing::debug!("clip reconciliation: every referenced clip is on disk");
+            } else {
+                tracing::warn!(
+                    orphans = found.orphans_stamped,
+                    stale_parts = found.stale_parts_removed,
+                    "clip reconciliation: detections referenced clips the disk no longer had; \
+                     stamped as pruned so the clips browser stops offering them"
+                );
+            }
+            found
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "clip reconciliation failed");
+            Reconciliation::default()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "clip reconciliation task panicked");
+            Reconciliation::default()
+        }
+    }
 }
 
 /// Reclaim clip audio older than `days` days (`CLIP_RETENTION_DAYS`).
@@ -2073,6 +2195,74 @@ mod tests {
             )
             .unwrap();
         seed_clip(conn, dir, com, &date, file);
+    }
+
+    /// The gate for S-14: a clip deleted behind the database's back — by the
+    /// disk-full purge, by a hand on the card — is found, its rows stamped,
+    /// and counted; rows whose clips are present are left alone; an abandoned
+    /// `.part` is removed and a fresh one is not.
+    #[tokio::test]
+    async fn orphaned_clips_are_stamped_and_counted_and_abandoned_parts_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip(&conn, &recs, "European Robin", "2026-05-01", "present.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-05-02", "purged.wav");
+            seed_clip(&conn, &recs, "Great Tit", "2026-05-03", "also-purged.mp3");
+        }
+        // The disk-full purge, or a person: files go, rows do not.
+        std::fs::remove_file(recs.join("purged.wav")).unwrap();
+        std::fs::remove_file(recs.join("also-purged.mp3")).unwrap();
+        // A writer killed mid-clip an hour ago, and one writing right now.
+        let stale = recs.join("killed.part.wav");
+        std::fs::write(&stale, b"half").unwrap();
+        let old = std::time::SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+        std::fs::File::open(&stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let fresh = recs.join("writing.part.wav");
+        std::fs::write(&fresh, b"half").unwrap();
+
+        let found = run_clip_reconciliation(&db, &recs).await;
+
+        assert_eq!(
+            found,
+            Reconciliation {
+                orphans_stamped: 2,
+                stale_parts_removed: 1
+            }
+        );
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let stamped = |file: &str| -> bool {
+            conn.query_row(
+                "SELECT Clip_Pruned_At IS NOT NULL FROM detections WHERE File_Name = ?1",
+                [file],
+                |r| r.get::<_, bool>(0),
+            )
+            .unwrap()
+        };
+        assert!(
+            stamped("purged.wav"),
+            "a missing clip's row must be stamped"
+        );
+        assert!(stamped("also-purged.mp3"));
+        assert!(
+            !stamped("present.wav"),
+            "a clip that is there must not be stamped"
+        );
+        assert!(!stale.exists(), "an abandoned .part must go");
+        assert!(fresh.exists(), "a .part being written must stay");
+
+        // Idempotent: a second pass finds nothing new.
+        assert_eq!(
+            run_clip_reconciliation(&db, &recs).await,
+            Reconciliation::default()
+        );
     }
 
     #[tokio::test]

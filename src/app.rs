@@ -379,6 +379,7 @@ async fn serve(
     // the one that has to stop the detection writes, so it holds a clone of the
     // latch the ingest path reads.
     let ingest_halt_for_maintenance = state.ingest_halt_flag();
+    let metrics_for_maintenance = state.metrics();
 
     let broadcast = state.detection_broadcast();
 
@@ -765,6 +766,7 @@ async fn serve(
         clip_retention_days,
         offsite,
         ingest_halt_for_maintenance,
+        Some(metrics_for_maintenance),
     );
 
     // Bind every listener the plan calls for before telling systemd we are up:

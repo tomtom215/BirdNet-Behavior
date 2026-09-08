@@ -3,7 +3,7 @@
 //! Handles conversion from WAV to MP3, FLAC, and OGG using ffmpeg or sox,
 //! and frequency shifting for accessibility.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -76,19 +76,25 @@ fn freq_shift_cents(sample_rate: u32, shift_hz: i32) -> i32 {
     (1200.0_f64 * (1.0 + f64::from(shift_hz) / f64::from(sample_rate)).log2()) as i32
 }
 
-/// Convert a WAV file to the target format using ffmpeg (preferred) or sox.
+/// Convert a WAV file to the target format using ffmpeg (preferred) or sox,
+/// and return the path that is on disk afterwards.
 ///
-/// On success the source WAV file is removed.
+/// On success that is `output_path` and the source WAV is removed. When both
+/// converters fail the WAV is kept — under its own `.wav` name, beside where
+/// the converted clip would have been (DD-36). It used to be renamed to the
+/// target name, so a `.mp3` on disk was a WAV under the wrong extension and
+/// the row's `File_Name` said the wrong format; the caller now records what
+/// the return value names.
 ///
 /// # Errors
 ///
-/// Returns [`ExtractionError::Conversion`] if neither ffmpeg nor sox is
-/// available or the conversion process fails.
+/// Returns [`ExtractionError::Write`] if the kept WAV cannot be committed
+/// under its name; a converter failure is not an error, it is the fallback.
 pub(super) fn convert_audio_format(
     wav_path: &Path,
     output_path: &Path,
     format: AudioFormat,
-) -> Result<(), ExtractionError> {
+) -> Result<PathBuf, ExtractionError> {
     // The converters write a `.part` sibling (the extension stays last, so
     // both infer the format from it), which is synced and renamed into place
     // only once the tool has exited successfully (PS-7, S-4). Try ffmpeg
@@ -107,18 +113,21 @@ pub(super) fn convert_audio_format(
             if let Err(e) = std::fs::remove_file(wav_path) {
                 tracing::debug!(path = %wav_path.display(), error = %e, "failed to remove intermediate WAV");
             }
-            Ok(())
+            Ok(output_path.to_path_buf())
         }
         Err(e) => {
             let _ = std::fs::remove_file(&part);
-            // Clean up the intermediate WAV (rename it to the target as fallback).
+            let kept = output_path.with_extension(AudioFormat::Wav.extension());
             tracing::warn!(
                 error = %e,
                 format = %format,
-                "format conversion failed, keeping WAV"
+                kept = %kept.display(),
+                "format conversion failed, keeping the WAV under its own name"
             );
-            crate::atomic_file::commit(wav_path, output_path)?;
-            Ok(())
+            if kept != wav_path {
+                crate::atomic_file::commit(wav_path, &kept)?;
+            }
+            Ok(kept)
         }
     }
 }
@@ -429,32 +438,32 @@ mod tests {
         );
     }
 
+    /// The gate for DD-36. Garbage bytes cannot be decoded, so ffmpeg fails
+    /// and (with sox absent) sox fails too; this runs with or without the
+    /// tools. The WAV must survive under its *own* name and the return value
+    /// must name it: renamed to `notaudio.flac`, as it used to be, the file on
+    /// disk was a WAV under the wrong extension and the row said `flac`.
     #[test]
-    fn convert_audio_format_falls_back_to_rename_on_failure() {
-        // Garbage bytes can't be decoded, so ffmpeg fails and (with sox
-        // absent) sox fails too. The data must be preserved by renaming the
-        // source to the target path rather than silently lost. This runs
-        // unconditionally: with or without ffmpeg the conversion fails, so
-        // the rename fallback is the observable behaviour either way.
+    fn a_failed_conversion_keeps_the_wav_under_its_own_name_and_says_so() {
         let tmp = tempfile::tempdir().unwrap();
         let wav = tmp.path().join("notaudio.wav");
         let out = tmp.path().join("notaudio.flac");
         std::fs::write(&wav, b"this is not a WAV file").unwrap();
 
-        convert_audio_format(&wav, &out, AudioFormat::Flac).expect("rename fallback returns Ok");
+        let kept = convert_audio_format(&wav, &out, AudioFormat::Flac)
+            .expect("a failed conversion keeps the data");
 
-        assert!(
-            out.exists(),
-            "source must be renamed to the target on failure"
-        );
-        assert!(!wav.exists(), "source WAV must not survive the rename");
         assert_eq!(
-            std::fs::read(&out).unwrap(),
-            b"this is not a WAV file",
-            "renamed file must carry the original bytes"
+            kept, wav,
+            "the caller must be told the WAV is what is on disk"
         );
+        assert!(wav.exists(), "the WAV must keep its .wav name");
+        assert!(
+            !out.exists(),
+            "nothing may sit under the target name that is not the target format"
+        );
+        assert_eq!(std::fs::read(&wav).unwrap(), b"this is not a WAV file");
     }
-
     #[test]
     fn convert_audio_format_wav_target_is_noop_and_removes_source() {
         // AudioFormat::Wav yields no codec args, so convert_with_ffmpeg

@@ -146,6 +146,12 @@ impl Extractor {
         let output_path = claim_unused_path(output_dir, &filename);
 
         // 6. Write the WAV file using hound (with optional frequency shifting).
+        //
+        // What ends up on disk is what the row records: a conversion that
+        // fails keeps the WAV under its own name, and the path and format
+        // returned say so (DD-36).
+        let mut written_path = output_path.clone();
+        let mut written_format = self.config.target_format;
         if self.config.freq_shift_hz != 0 || self.config.target_format.needs_conversion() {
             // Write to a temporary WAV first, then apply shift and/or convert.
             let wav_path = output_path.with_extension("wav");
@@ -166,7 +172,7 @@ impl Extractor {
                 if shift_ok {
                     let _ = std::fs::remove_file(&wav_path);
                     if self.config.target_format.needs_conversion() {
-                        convert_audio_format(
+                        written_path = convert_audio_format(
                             &shifted_path,
                             &output_path,
                             self.config.target_format,
@@ -182,20 +188,29 @@ impl Extractor {
                     );
                     let _ = std::fs::remove_file(&shifted_path);
                     if self.config.target_format.needs_conversion() {
-                        convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+                        written_path = convert_audio_format(
+                            &wav_path,
+                            &output_path,
+                            self.config.target_format,
+                        )?;
                     } else {
                         std::fs::rename(&wav_path, &output_path)?;
                     }
                 }
             } else {
-                convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+                written_path =
+                    convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+            }
+            if written_path != output_path {
+                written_format = super::format::AudioFormat::Wav;
             }
         } else {
             write_wav_clip(clip_samples, audio.sample_rate, &output_path)?;
         }
+        let output_path = written_path;
 
         // Embed RIFF INFO metadata into WAV files (best-effort, non-fatal).
-        if self.config.target_format == super::format::AudioFormat::Wav {
+        if written_format == super::format::AudioFormat::Wav {
             let meta = DetectionMeta {
                 common_name: detection.common_name.clone(),
                 scientific_name: detection.scientific_name.clone(),
@@ -232,7 +247,7 @@ impl Extractor {
             path: output_path,
             pre_detection_secs: (detection.start - clip_start_secs).max(0.0),
             detection_secs: (detection.stop - detection.start).max(0.0),
-            format: self.config.target_format,
+            format: written_format,
         })
     }
 }
@@ -248,7 +263,8 @@ pub struct ExtractedClip {
     pub pre_detection_secs: f32,
     /// The detection's own length in seconds (`stop - start`).
     pub detection_secs: f32,
-    /// The format the clip was written in.
+    /// The format the clip was written in — the target format, or WAV when
+    /// every converter failed and the WAV was kept (DD-36).
     pub format: super::format::AudioFormat,
 }
 
