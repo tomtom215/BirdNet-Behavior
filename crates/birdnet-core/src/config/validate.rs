@@ -726,6 +726,51 @@ mod tests {
         assert!(!is_usable(&with_error));
     }
 
+    /// `PRIVATE_MODE` takes the boolean spellings the file and the form
+    /// produce, in any case, and nothing else. A value the station would
+    /// silently read as "off" is an error here, because an operator who wrote
+    /// `PRIVATE_MODE=enabled` believes the station is closed. The gate for
+    /// the whole feature is end-to-end in the web crate; nothing in this
+    /// crate read these two checks back, and cargo-mutants emptied both
+    /// without a test noticing.
+    #[test]
+    fn private_mode_must_be_a_boolean_spelling() {
+        for ok in [
+            "true", "False", "1", "0", "YES", "no", "on", "Off", " true ",
+        ] {
+            let findings = validate(&cfg(&[("PRIVATE_MODE", ok)]));
+            assert!(is_clean(&findings), "{ok:?}: {findings:?}");
+        }
+        let findings = validate(&cfg(&[("PRIVATE_MODE", "enabled")]));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].severity, Severity::Error);
+        assert_eq!(findings[0].key, "PRIVATE_MODE");
+        assert!(findings[0].message.contains("enabled"), "{findings:?}");
+    }
+
+    /// `PUBLIC_ACCESS` names only the carve-outs the web crate implements.
+    /// Hyphens, case, spaces and a trailing comma are forgiven; an unknown
+    /// name is an error that quotes it, one finding per unknown name.
+    #[test]
+    fn public_access_names_only_the_carve_outs_that_exist() {
+        let findings = validate(&cfg(&[(
+            "PUBLIC_ACCESS",
+            "live_audio, Share,METRICS, live-audio,",
+        )]));
+        assert!(is_clean(&findings), "{findings:?}");
+
+        let findings = validate(&cfg(&[("PUBLIC_ACCESS", "share,live_audo,dashboard")]));
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .all(|f| f.severity == Severity::Error && f.key == "PUBLIC_ACCESS"),
+            "{findings:?}"
+        );
+        assert!(findings[0].message.contains("live_audo"), "{findings:?}");
+        assert!(findings[1].message.contains("dashboard"), "{findings:?}");
+    }
+
     #[test]
     fn is_clean_distinguishes_empty_from_populated() {
         // The counter-direction matters as much as the positive case: a

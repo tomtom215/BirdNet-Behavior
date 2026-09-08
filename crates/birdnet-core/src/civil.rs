@@ -1715,6 +1715,22 @@ mod rfc3339_tests {
             rfc3339_local("2026-07-01", "12:00:00", Some(local - 15 * 3600)),
             None
         );
+        // The range is real zones' range in both directions: +14:00 (Kiribati)
+        // is a zone, one second past it is not. Nothing above +01:00 was
+        // asserted before this, so the upper bound could be (and, under
+        // cargo-mutants, was) 3 614 seconds without a test noticing.
+        assert_eq!(
+            rfc3339_local("2026-07-01", "12:00:00", Some(local - 14 * 3600)).as_deref(),
+            Some("2026-07-01T12:00:00+14:00")
+        );
+        assert_eq!(
+            rfc3339_local("2026-07-01", "12:00:00", Some(local - 14 * 3600 - 1)),
+            None
+        );
+        assert_eq!(
+            rfc3339_local("2026-07-01", "12:00:00", Some(local + 14 * 3600)).as_deref(),
+            Some("2026-07-01T12:00:00-14:00")
+        );
     }
 
     #[test]

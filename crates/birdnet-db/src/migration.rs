@@ -2444,6 +2444,35 @@ mod tests {
         conn
     }
 
+    /// PS-3: a database this binary creates is in incremental auto-vacuum
+    /// from before its first table, so its free pages are reclaimed a step at
+    /// a time; one that already has tables is left as it is, because the
+    /// pragma does nothing there and the conversion is `resilience`'s job.
+    /// The end-to-end gate lives in `tests/`; nothing in this crate's unit
+    /// tests read the mode back, and cargo-mutants emptied the function and
+    /// inverted its test without a failure.
+    #[test]
+    fn an_empty_file_is_put_into_incremental_auto_vacuum_and_a_populated_one_is_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = |conn: &Connection| -> i64 {
+            conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        let fresh = Connection::open(dir.path().join("fresh.db")).unwrap();
+        set_incremental_vacuum_on_empty(&fresh).unwrap();
+        assert_eq!(mode(&fresh), 2, "INCREMENTAL is mode 2");
+
+        let populated = Connection::open(dir.path().join("populated.db")).unwrap();
+        populated.execute_batch("CREATE TABLE t(x);").unwrap();
+        set_incremental_vacuum_on_empty(&populated).unwrap();
+        assert_eq!(
+            mode(&populated),
+            0,
+            "a populated file keeps its mode; converting it is resilience's job"
+        );
+    }
+
     #[test]
     fn fresh_db_starts_at_version_zero() {
         let conn = memory_db();

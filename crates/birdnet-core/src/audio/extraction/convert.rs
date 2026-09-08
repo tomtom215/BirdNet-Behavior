@@ -312,8 +312,8 @@ pub(super) fn apply_freq_shift(
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioFormat, apply_freq_shift, convert_audio_format, ffmpeg_codec_args, freq_shift_cents,
-        freq_shift_resample_rate,
+        AudioFormat, ExtractionError, apply_freq_shift, convert_audio_format, convert_with_sox,
+        ffmpeg_codec_args, freq_shift_cents, freq_shift_resample_rate,
     };
     use hound::{SampleFormat, WavSpec, WavWriter};
     use std::path::Path;
@@ -464,6 +464,31 @@ mod tests {
         );
         assert_eq!(std::fs::read(&wav).unwrap(), b"this is not a WAV file");
     }
+    /// A converter that ran nothing must not say it converted.
+    ///
+    /// `convert_with_sox` is the last fallback before the WAV is kept under
+    /// its own name (DD-36), and a version of it returning `Ok(())` without
+    /// producing a file left every test here green: the caller then commits a
+    /// `.part` that does not exist, which fails, which falls back, which is
+    /// what the DD-36 gate asserts. cargo-mutants reported exactly that
+    /// (`replace convert_with_sox -> Ok(())` missed). The input does not
+    /// exist, so this holds with sox installed (non-zero exit) and without
+    /// it (spawn failure); both are the conversion error the chain expects.
+    #[test]
+    fn a_converter_that_ran_nothing_does_not_report_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist.wav");
+        let out = tmp.path().join("out.flac.part");
+
+        let err = convert_with_sox(&missing, &out).expect_err("no input, no success");
+
+        assert!(matches!(err, ExtractionError::Conversion(_)), "{err:?}");
+        assert!(
+            !out.exists(),
+            "nothing may be written for an input that does not exist"
+        );
+    }
+
     #[test]
     fn convert_audio_format_wav_target_is_noop_and_removes_source() {
         // AudioFormat::Wav yields no codec args, so convert_with_ffmpeg

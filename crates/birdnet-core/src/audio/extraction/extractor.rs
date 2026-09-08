@@ -237,12 +237,11 @@ impl Extractor {
         // Where the clip begins on the source segment's timeline: the wanted
         // start when it lay inside the segment; otherwise as far before the
         // segment as the neighbour could supply (`window.lead_in_secs`), which
-        // is zero when there was no neighbour to draw on.
-        let clip_start_secs = if want_start < 0.0 {
-            -window.lead_in_secs
-        } else {
-            want_start
-        };
+        // is zero when there was no neighbour to draw on. One expression
+        // rather than a branch on the sign: a wanted start at or after zero
+        // has no lead-in, so both arms agree there, and the branch carried an
+        // equivalent mutant (`<` for `<=`) that no test could tell apart.
+        let clip_start_secs = want_start.max(-window.lead_in_secs);
         Ok(ExtractedClip {
             path: output_path,
             pre_detection_secs: (detection.start - clip_start_secs).max(0.0),
@@ -922,6 +921,117 @@ mod tests {
     // `shift_ok != ` flip in the fallback path, and the
     // `target_format == AudioFormat::Wav` flip on the metadata-embed
     // guard.
+
+    /// The clip says where the detection sits inside it: `pre_detection_secs`
+    /// is the audio written before the detection's start, `detection_secs` its
+    /// length, and `detection_span` the two as a start and an end. The Raven
+    /// table and the Audacity labels (FR-1) are placed from these, so a wrong
+    /// sign or a swapped operand puts the selection on silence — and until
+    /// this test nothing in this crate read them back (cargo-mutants: 20
+    /// survivors on these lines). A detection well inside the segment: the
+    /// clip begins `spacer` before it.
+    #[test]
+    fn the_clip_records_where_the_detection_sits_inside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0, // spacer = 1.5
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
+        });
+
+        let clip = extractor
+            .extract_detection_clip(&src, &det(10.0, 12.0))
+            .expect("extraction succeeds");
+
+        assert!((clip.pre_detection_secs - 1.5).abs() < 1e-4, "{clip:?}");
+        assert!((clip.detection_secs - 2.0).abs() < 1e-4, "{clip:?}");
+        let (start, end) = clip.detection_span();
+        assert!(
+            (start - 1.5).abs() < 1e-4 && (end - 3.5).abs() < 1e-4,
+            "span {start}..{end}"
+        );
+        assert_eq!(clip.format, AudioFormat::Wav, "{clip:?}");
+    }
+
+    /// A detection at the start of a segment draws its lead-in from the
+    /// predecessor (`super::span`), and the clip's account must include that
+    /// audio: the clip begins `lead_in_secs` before the segment — not at the
+    /// wanted start, which lies further back than the neighbour supplied, and
+    /// not at zero. Without the predecessor the same detection's clip begins
+    /// at the segment, and the account says so.
+    #[test]
+    fn a_lead_in_drawn_from_the_predecessor_counts_as_pre_detection_audio() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&prev, 15.0, 48_000);
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:15.wav");
+        write_silent_wav(&src, 15.0, 48_000);
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 15.0,
+            extraction_length: 6.0, // spacer = 1.5
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
+        });
+
+        // want_start = 0.5 - 1.5 = -1.0: one second comes from the predecessor.
+        let clip = extractor
+            .extract_detection_clip(&src, &det(0.5, 3.0))
+            .expect("extraction succeeds");
+        assert!((clip.pre_detection_secs - 1.5).abs() < 1e-4, "{clip:?}");
+        assert!((clip.detection_secs - 2.5).abs() < 1e-4, "{clip:?}");
+        let (start, end) = clip.detection_span();
+        assert!(
+            (start - 1.5).abs() < 1e-4 && (end - 4.0).abs() < 1e-4,
+            "span {start}..{end}"
+        );
+
+        std::fs::remove_file(&prev).unwrap();
+        let clip = extractor
+            .extract_detection_clip(&src, &det(0.5, 3.0))
+            .expect("extraction succeeds without a predecessor");
+        assert!((clip.pre_detection_secs - 0.5).abs() < 1e-4, "{clip:?}");
+    }
+
+    /// `format` is the format on disk. With a converter on PATH a FLAC target
+    /// yields a FLAC and the clip says so; without one the WAV is kept under
+    /// its own name (DD-36) and the clip says *that*. Either way a check that
+    /// inverts the comparison of the written path with the target path names
+    /// the wrong format, so this runs with or without ffmpeg and sox.
+    #[test]
+    fn the_format_recorded_is_the_format_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "flac".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Flac,
+            freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
+        });
+
+        let clip = extractor
+            .extract_detection_clip(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds, converted or kept");
+
+        let ext = clip.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        match ext {
+            "flac" => assert_eq!(clip.format, AudioFormat::Flac, "{clip:?}"),
+            "wav" => assert_eq!(clip.format, AudioFormat::Wav, "{clip:?}"),
+            other => panic!("unexpected extension {other:?}: {clip:?}"),
+        }
+    }
 
     fn has_ffmpeg_or_sox() -> bool {
         let Ok(path) = std::env::var("PATH") else {
