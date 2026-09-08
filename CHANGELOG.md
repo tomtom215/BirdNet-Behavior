@@ -184,6 +184,19 @@ anything opens a file there, the process takes an advisory lock on
 instance to go, and otherwise refuses to start saying so
 (`BNB_INSTANCE_LOCK_GRACE_SECS` lengthens the wait).
 
+**No certificate is minted on an unset clock, and the self-signed one renews
+while the station runs** (`NT-2`, `NT-3`). A first boot before NTP minted a
+local CA and leaf valid 1969-12-31 to 1971-02-01, nothing regenerated them
+while the process ran, `--doctor` reported "valid 397 days" from the
+configured number, and recovery was physical. A clock below the plausibility
+floor now mints nothing: the station serves plain HTTP on its address, says
+so, and restarts itself once the clock is set so the next start mints a real
+certificate; material minted on a good clock is still served on a bad one.
+Separately, the leaf was renewed only at process start, so a station up past
+day 397 served an expired certificate; it is now checked daily and swapped
+into the running listener without a restart. The doctor reports the
+certificate's real expiry date.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

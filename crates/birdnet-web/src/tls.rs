@@ -224,6 +224,10 @@ pub enum TlsError {
     Rustls(rustls::Error),
     /// Self-signed generation failed.
     Generate(String),
+    /// The clock reads a time before any this software could have run at, so
+    /// a certificate minted now would carry a 1970 validity window. Carries
+    /// the clock's reading (NT-2).
+    ClockNotSet(i64),
     /// The listener could not be bound or the accept loop failed.
     Serve(io::Error),
 }
@@ -241,6 +245,13 @@ impl fmt::Display for TlsError {
             Self::Pem(p, e) => write!(f, "{} is not readable PEM: {e}", p.display()),
             Self::Rustls(e) => write!(f, "rustls rejected the certificate/key: {e}"),
             Self::Generate(m) => write!(f, "could not generate a self-signed certificate: {m}"),
+            Self::ClockNotSet(now) => write!(
+                f,
+                "the clock reads {} — before this software existed — so no certificate is \
+                 minted: HTTPS is deferred until the clock is set (NTP), and the station \
+                 restarts itself to mint one when it is",
+                civil_date(*now)
+            ),
             Self::Serve(e) => write!(f, "TLS listener failed: {e}"),
         }
     }
@@ -252,7 +263,11 @@ impl std::error::Error for TlsError {
             Self::Io(_, e) | Self::Serve(e) => Some(e),
             Self::Rustls(e) => Some(e),
             Self::Pem(_, e) => Some(e),
-            Self::Mode(_) | Self::MissingPath(_) | Self::Empty(..) | Self::Generate(_) => None,
+            Self::Mode(_)
+            | Self::MissingPath(_)
+            | Self::Empty(..)
+            | Self::Generate(_)
+            | Self::ClockNotSet(_) => None,
         }
     }
 }
@@ -463,6 +478,29 @@ pub fn ensure_self_signed(
     hostnames: &[String],
     validity_days: u32,
 ) -> Result<Arc<CertifiedKey>, TlsError> {
+    ensure_self_signed_at(state_dir, hostnames, validity_days, unix_now())
+}
+
+/// As [`ensure_self_signed`], with the clock supplied.
+///
+/// Refuses to mint on a clock that has not been set (NT-2): a Pi has no
+/// battery-backed clock, and a first boot before NTP lands reads the epoch.
+/// A certificate minted then is valid from 1969 to 1971, nothing regenerates
+/// it while the process runs, and recovery is physical. The reading is
+/// checked against the same floor the capture scheduler and the detection
+/// quarantine use, so the three cannot disagree about what "unset" means.
+/// Stored material that is still usable is served regardless of the clock:
+/// it was minted when the clock was right.
+///
+/// # Errors
+///
+/// As [`ensure_self_signed`], plus [`TlsError::ClockNotSet`].
+pub fn ensure_self_signed_at(
+    state_dir: &Path,
+    hostnames: &[String],
+    validity_days: u32,
+    now: i64,
+) -> Result<Arc<CertifiedKey>, TlsError> {
     if hostnames.is_empty() {
         return Err(TlsError::Generate(
             "no hostnames to put in the certificate".into(),
@@ -476,7 +514,6 @@ pub fn ensure_self_signed(
     let leaf_key_path = state_dir.join(LEAF_KEY);
     let meta_path = state_dir.join(META);
 
-    let now = unix_now();
     let meta = std::fs::read_to_string(&meta_path)
         .ok()
         .as_deref()
@@ -496,6 +533,12 @@ pub fn ensure_self_signed(
         return load_pair(&leaf_cert_path, &leaf_key_path);
     }
 
+    // Minting needs a clock. Reuse above did not: material minted on a good
+    // clock is fine to serve on a bad one.
+    if !birdnet_core::civil::clock_looks_plausible(u64::try_from(now).unwrap_or(0)) {
+        return Err(TlsError::ClockNotSet(now));
+    }
+
     // Reuse the CA whenever it is still good, so a leaf rotation does not
     // invalidate a trust-store import the operator already did.
     let (ca_key_pem, ca_cert_pem, ca_not_after) = if ca_ok {
@@ -506,11 +549,11 @@ pub fn ensure_self_signed(
         let expiry = meta.as_ref().map_or(0, |m| m.ca_not_after);
         (key, cert, expiry)
     } else {
-        generate_ca()?
+        generate_ca(now)?
     };
 
     let (leaf_cert_pem, leaf_key_pem, not_after) =
-        generate_leaf(&ca_key_pem, hostnames, validity_days)?;
+        generate_leaf(&ca_key_pem, hostnames, validity_days, now)?;
 
     if !ca_ok {
         write_private(&ca_cert_path, &ca_cert_pem, 0o644)?;
@@ -566,9 +609,8 @@ fn ca_params() -> rcgen::CertificateParams {
 }
 
 /// Mint the local CA. Returns `(key PEM, certificate PEM, notAfter)`.
-fn generate_ca() -> Result<(String, String, i64), TlsError> {
+fn generate_ca(now: i64) -> Result<(String, String, i64), TlsError> {
     let mut params = ca_params();
-    let now = unix_now();
     let (not_before, not_after) = validity_window(now, CA_VALIDITY_DAYS);
     let (y, m, d) = civil_ymd(not_before);
     params.not_before = rcgen::date_time_ymd(y, m, d);
@@ -588,6 +630,7 @@ fn generate_leaf(
     ca_key_pem: &str,
     hostnames: &[String],
     validity_days: u32,
+    now: i64,
 ) -> Result<(String, String, i64), TlsError> {
     let mut params = rcgen::CertificateParams::new(hostnames.to_vec())
         .map_err(|e| TlsError::Generate(e.to_string()))?;
@@ -603,7 +646,6 @@ fn generate_leaf(
     ];
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
 
-    let now = unix_now();
     let (not_before, not_after) = validity_window(now, validity_days);
     let (y, m, d) = civil_ymd(not_before);
     params.not_before = rcgen::date_time_ymd(y, m, d);
@@ -659,6 +701,122 @@ fn civil_ymd(unix_secs: i64) -> (i32, u8, u8) {
         u8::try_from(m).unwrap_or(1),
         u8::try_from(d).unwrap_or(1),
     )
+}
+
+/// `YYYY-MM-DD` in UTC for a Unix time, for messages.
+fn civil_date(unix_secs: i64) -> String {
+    let (y, m, d) = civil_ymd(unix_secs);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// When the stored self-signed material expires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelfSignedExpiry {
+    /// The served certificate's `notAfter`, Unix seconds.
+    pub leaf_not_after: i64,
+    /// The local CA's `notAfter`, Unix seconds.
+    pub ca_not_after: i64,
+}
+
+impl SelfSignedExpiry {
+    /// Whole days from `now` until the leaf expires; negative once it has.
+    #[must_use]
+    pub const fn leaf_days_left(&self, now: i64) -> i64 {
+        (self.leaf_not_after - now).div_euclid(24 * 60 * 60)
+    }
+
+    /// The leaf's expiry as `YYYY-MM-DD`.
+    #[must_use]
+    pub fn leaf_expires_on(&self) -> String {
+        civil_date(self.leaf_not_after)
+    }
+}
+
+/// Read the stored material's expiry, if a sidecar exists and parses.
+///
+/// This is what the doctor reports: the certificate's real `notAfter`, not
+/// the configured number of days (NT-2).
+#[must_use]
+pub fn self_signed_expiry(state_dir: &Path) -> Option<SelfSignedExpiry> {
+    let meta = std::fs::read_to_string(state_dir.join(META)).ok()?;
+    let meta = SelfSignedMeta::decode(&meta)?;
+    Some(SelfSignedExpiry {
+        leaf_not_after: meta.not_after,
+        ca_not_after: meta.ca_not_after,
+    })
+}
+
+/// How often the self-signed leaf is checked for renewal while serving.
+///
+/// The leaf is good for 397 days by default and is replaced 30 days before
+/// it expires; a daily check meets that window on any station that has been
+/// up more than a day, which is every station this is for.
+const RENEW_POLL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Re-mint the self-signed leaf if it is inside its renewal window, and hand
+/// the new keypair to `resolver`. Returns whether it was replaced.
+///
+/// [`ensure_self_signed_at`] is the whole policy: it reuses material that is
+/// still good and re-mints what is not, so this is one call and a compare.
+/// The leaf was renewed only at process start before (NT-3), so a station up
+/// past day 397 served an expired certificate — exactly when someone finally
+/// drove out to it.
+///
+/// # Errors
+///
+/// As [`ensure_self_signed_at`]; the caller keeps serving what it has.
+pub fn renew_if_due(
+    settings: &TlsSettings,
+    resolver: &Resolver,
+    now: i64,
+) -> Result<bool, TlsError> {
+    let next = ensure_self_signed_at(
+        &settings.state_dir,
+        &settings.hostnames,
+        settings.validity_days,
+        now,
+    )?;
+    let current = resolver.current();
+    let same = current.cert.first().map(AsRef::<[u8]>::as_ref)
+        == next.cert.first().map(AsRef::<[u8]>::as_ref);
+    if same {
+        return Ok(false);
+    }
+    resolver.replace(next);
+    Ok(true)
+}
+
+/// Check the self-signed leaf once a day and swap a renewed one into
+/// `resolver` (NT-3). Self-signed mode only; manual mode has
+/// [`spawn_reloader`].
+pub fn spawn_renewer(resolver: Arc<Resolver>, settings: TlsSettings) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(RENEW_POLL).await;
+            let settings_for_task = settings.clone();
+            let resolver_for_task = Arc::clone(&resolver);
+            let outcome = tokio::task::spawn_blocking(move || {
+                renew_if_due(&settings_for_task, &resolver_for_task, unix_now())
+            })
+            .await;
+            match outcome {
+                Ok(Ok(true)) => {
+                    let expiry = self_signed_expiry(&settings.state_dir);
+                    tracing::info!(
+                        expires_on =
+                            expiry.map_or_else(|| "unknown".to_owned(), |e| e.leaf_expires_on()),
+                        "self-signed certificate renewed and swapped in without a restart"
+                    );
+                }
+                Ok(Ok(false)) => {}
+                Ok(Err(e)) => tracing::warn!(
+                    error = %e,
+                    "self-signed certificate renewal failed; still serving the current one"
+                ),
+                Err(e) => tracing::warn!(error = %e, "certificate renewal task failed"),
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1366,6 +1524,75 @@ mod tests {
             first, second,
             "a certificate inside its renewal window must be replaced, or the \
              station stops serving HTTPS on a date nobody is watching"
+        );
+    }
+
+    /// NT-2: a clock that reads the epoch mints nothing and writes nothing —
+    /// the alternative was a certificate valid 1969-12-31 to 1971-02-01 that
+    /// nothing regenerated while the process ran. Material minted on a good
+    /// clock is still served on a bad one.
+    #[test]
+    fn no_certificate_is_minted_on_an_unset_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let hosts = names(&["localhost"]);
+        let err = ensure_self_signed_at(dir.path(), &hosts, 397, 0).expect_err("refused");
+        assert!(matches!(err, TlsError::ClockNotSet(0)), "{err}");
+        assert!(err.to_string().contains("1970-01-01"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "nothing is written on a refused mint"
+        );
+        // A mint on a real clock, then the same bad clock: served, not refused.
+        ensure_self_signed_at(dir.path(), &hosts, 397, unix_now()).expect("minted");
+        ensure_self_signed_at(dir.path(), &hosts, 397, 0).expect("stored material is reused");
+        let expiry = self_signed_expiry(dir.path()).expect("sidecar");
+        assert!(expiry.leaf_days_left(unix_now()) >= 396, "{expiry:?}");
+        assert_eq!(expiry.leaf_expires_on().len(), 10);
+    }
+
+    /// NT-3: the renewer replaces a leaf inside its renewal window in the
+    /// running resolver, and leaves one outside it alone.
+    #[test]
+    fn the_renewer_replaces_a_leaf_inside_its_window_and_leaves_one_outside_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let hosts = names(&["localhost"]);
+        let settings = TlsSettings {
+            mode: TlsMode::SelfSigned,
+            cert: None,
+            key: None,
+            state_dir: dir.path().to_path_buf(),
+            hostnames: hosts.clone(),
+            validity_days: 397,
+        };
+        let initial = ensure_self_signed(dir.path(), &hosts, 397).unwrap();
+        let resolver = Resolver::new(Arc::clone(&initial));
+
+        // Far from expiry: nothing to do, and the served keypair is the same.
+        assert!(!renew_if_due(&settings, &resolver, unix_now()).unwrap());
+        assert!(Arc::ptr_eq(&resolver.current(), &initial));
+
+        // Inside the window: re-minted and swapped in.
+        std::fs::write(
+            dir.path().join(META),
+            SelfSignedMeta {
+                not_after: unix_now() + 24 * 60 * 60,
+                ca_not_after: unix_now() + 3600 * 24 * 3650,
+                hostnames: hosts,
+            }
+            .encode(),
+        )
+        .unwrap();
+        assert!(renew_if_due(&settings, &resolver, unix_now()).unwrap());
+        let served = resolver.current();
+        assert!(!Arc::ptr_eq(&served, &initial));
+        assert_ne!(served.cert[0].as_ref(), initial.cert[0].as_ref());
+        assert!(
+            self_signed_expiry(dir.path())
+                .unwrap()
+                .leaf_days_left(unix_now())
+                >= 396,
+            "the sidecar records the new expiry"
         );
     }
 

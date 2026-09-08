@@ -596,8 +596,22 @@ async fn serve(
     // writes to disk in self-signed mode, and doing that before the database
     // and configuration have been validated would leave material behind from a
     // start that never completed.
+    // A clock that has not been set yet (NT-2) is not a reason to refuse to
+    // start, and not a reason to mint a 1970 certificate either: serve plain
+    // HTTP for this run, and restart once the clock is set so the next run
+    // mints a real one. `Restart=always` and `restart: unless-stopped` bring
+    // the process back after a clean exit.
+    let mut tls_deferred_for_clock = false;
     let tls_server_config = match birdnet_web::tls::server_config(&tls_plan.settings) {
         Ok(v) => v,
+        Err(e @ birdnet_web::tls::TlsError::ClockNotSet(_)) => {
+            tracing::error!(
+                error = %e,
+                "HTTPS deferred: serving plain HTTP on {addr} until the clock is set"
+            );
+            tls_deferred_for_clock = true;
+            None
+        }
         Err(e) => {
             return Err(format!(
                 "TLS is enabled (--tls-mode {}) but the certificate could not be prepared: {e}",
@@ -737,7 +751,9 @@ async fn serve(
     // `Type=notify` treats READY=1 as "the socket is accepting", and a station
     // that reports ready and then fails to bind 8503 is a worse outcome than
     // one that fails to start at all.
-    let listener = if tls_plan.wants_plain_listener() {
+    // With HTTPS deferred, the plain listener is the only way in, even on a
+    // plan that would have served HTTPS alone on this port.
+    let listener = if tls_plan.wants_plain_listener() || tls_deferred_for_clock {
         Some(tokio::net::TcpListener::bind(addr).await?)
     } else {
         None
@@ -755,6 +771,10 @@ async fn serve(
                 )
             {
                 birdnet_web::tls::spawn_reloader(resolver, cert, key);
+            } else if tls_plan.settings.mode == birdnet_web::tls::TlsMode::SelfSigned {
+                // The leaf used to be renewed only at process start (NT-3):
+                // a station up past day 397 served an expired certificate.
+                birdnet_web::tls::spawn_renewer(resolver, tls_plan.settings.clone());
             }
             tracing::info!(
                 addr = %https_addr,
@@ -791,6 +811,30 @@ async fn serve(
     // sockets and the drain finishes in milliseconds, instead of every restart
     // waiting out SHUTDOWN_GRACE.
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+    if tls_deferred_for_clock {
+        // Wait for the clock (NTP), then leave cleanly so the supervisor's
+        // restart mints the certificate. Checked once a minute; the clock
+        // moving from 1970 to today is not a thing that half-happens.
+        let tx = shutdown_tx.clone();
+        let state_for_restart = shutdown_state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                if birdnet_core::civil::clock_looks_plausible(now) {
+                    tracing::warn!(
+                        "the clock has been set since boot; restarting to mint the HTTPS \
+                         certificate that was deferred"
+                    );
+                    state_for_restart.begin_shutdown();
+                    let _ = tx.send(());
+                    return;
+                }
+            }
+        });
+    }
     {
         let tx = shutdown_tx.clone();
         tokio::spawn(async move {
@@ -818,7 +862,9 @@ async fn serve(
     let plain_task = listener.map(|listener| {
         // With `--tls-redirect` the plain port stops serving the application
         // and answers only "the same URL, over HTTPS".
-        let router = if tls_plan.redirect {
+        // A redirect to a port that is not listening is a dead station: with
+        // HTTPS deferred, the plain port serves the application.
+        let router = if tls_plan.redirect && !tls_deferred_for_clock {
             let port = tls_plan
                 .https_addr
                 .map_or_else(|| addr.port(), |a| a.port());
