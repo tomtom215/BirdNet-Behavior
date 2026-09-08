@@ -1,18 +1,21 @@
 //! Background database-maintenance tasks for unattended deployments.
 //!
-//! A 24/7/365 field installation has nobody to run `VACUUM`, prune old
-//! backups, or notice that the integrity check started failing. This
+//! A 24/7/365 field installation has nobody to reclaim the database's free
+//! pages, prune old backups, or notice that the integrity check started
+//! failing. This
 //! module fills that gap with a single supervised tokio task that:
 //!
 //!   * Runs a **`PRAGMA integrity_check`** once per day at a fixed UTC
 //!     offset from boot, logging WARN on failure.
 //!   * Prunes **expired login sessions** on the same daily tick so the
 //!     `sessions` table stays compact over months of continuous use.
-//!   * Runs **`VACUUM`** once per week to reclaim space from deletes
-//!     and keep the page layout from fragmenting over months of
-//!     continuous appends.
+//!   * Runs **`PRAGMA incremental_vacuum`** once per week, a MiB at a
+//!     time, to return the pages that deletes freed to the filesystem. Not
+//!     `VACUUM`: that rewrote the whole file through the temp directory
+//!     under one lock — three times the file size written, and a detection
+//!     lost to `database is locked` while it ran (PS-3).
 //!   * Rotates database **backups**: takes a fresh snapshot before each
-//!     VACUUM, then prunes the backup directory down to the most recent
+//!     reclaim, then prunes the backup directory down to the most recent
 //!     N files so backups themselves do not fill the disk.
 //!
 //! Every step is best-effort and fully logged. Failures never kill the
@@ -1122,23 +1125,28 @@ async fn run_backup_and_vacuum(
         tracing::warn!(error = %e, "backup pruning failed");
     }
 
-    // Step 3: checkpoint the WAL (so VACUUM sees a clean state) and then VACUUM.
+    // Step 3: checkpoint the WAL, then return the free pages a step at a time.
     let db_path_v = db_path.to_path_buf();
     let vac = tokio::task::spawn_blocking(move || {
-        // Best-effort checkpoint: VACUUM works even if this fails.
+        // Best-effort checkpoint: the reclaim works even if this fails.
         if let Err(e) = birdnet_db::resilience::checkpoint_wal(&db_path_v) {
-            tracing::warn!(error = %e, "WAL checkpoint failed before VACUUM");
+            tracing::warn!(error = %e, "WAL checkpoint failed before the space reclaim");
         }
-        birdnet_db::resilience::vacuum_database(&db_path_v)
+        birdnet_db::resilience::reclaim_free_pages(&db_path_v)
     })
     .await;
     match vac {
-        Ok(Ok(())) => tracing::info!("scheduled VACUUM complete"),
-        Ok(Err(e)) => tracing::warn!(error = %e, "scheduled VACUUM failed"),
-        Err(e) => tracing::warn!(error = %e, "scheduled VACUUM task panicked"),
+        Ok(Ok(r)) => tracing::info!(
+            pages_freed = r.pages_freed,
+            bytes_before = r.bytes_before,
+            bytes_after = r.bytes_after,
+            "scheduled space reclaim complete"
+        ),
+        Ok(Err(e)) => tracing::warn!(error = %e, "scheduled space reclaim failed"),
+        Err(e) => tracing::warn!(error = %e, "scheduled space reclaim task panicked"),
     }
 
-    // The local verdict is the *backup's*, not the VACUUM's. A failed VACUUM
+    // The local verdict is the *backup's*, not the reclaim's. A failed reclaim
     // costs disk space; a failed backup costs the ability to recover at all,
     // and that is the value a health check keys on.
     BackupOutcome {
@@ -1426,23 +1434,31 @@ mod tests {
     }
 
     #[test]
-    fn vacuum_works_on_empty_sqlite() {
+    fn the_weekly_reclaim_works_on_a_database_this_binary_created() {
         // Uses the public birdnet-db API; smoke-tests the maintenance task
-        // can actually call the function it depends on.
+        // can actually call the function it depends on, on a file
+        // `migrate` created — which is what puts it in incremental mode.
         let tmp = tempfile::tempdir().unwrap();
         let db = tmp.path().join("t.db");
         {
             let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
             conn.execute_batch(
-                "CREATE TABLE x(i INTEGER PRIMARY KEY); INSERT INTO x VALUES (1),(2),(3); DELETE FROM x;",
+                "CREATE TABLE x(i INTEGER PRIMARY KEY, pad BLOB); \
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200) \
+                 INSERT INTO x(pad) SELECT zeroblob(4000) FROM n; \
+                 DELETE FROM x;",
             )
             .unwrap();
         }
         let before = std::fs::metadata(&db).unwrap().len();
-        birdnet_db::resilience::vacuum_database(&db).unwrap();
+        let r = birdnet_db::resilience::reclaim_free_pages(&db).unwrap();
         let after = std::fs::metadata(&db).unwrap().len();
-        // VACUUM should not grow the file (often shrinks it after deletes).
-        assert!(after <= before, "VACUUM grew file: {before} -> {after}");
+        assert!(r.pages_freed > 0, "{r:?}");
+        assert!(
+            after < before,
+            "the reclaim did not shrink the file: {before} -> {after}"
+        );
     }
 
     #[tokio::test]

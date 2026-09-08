@@ -23,7 +23,7 @@ password-hash.workspace = true
 proptest.workspace = true
 tempfile = "3"
 criterion.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["trace"] }
 
 [[bench]]
 name = "db_queries"

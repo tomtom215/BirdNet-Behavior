@@ -2249,6 +2249,22 @@ fn backup_before_rewrite(
 }
 
 /// Ensure the `schema_version` tracking table exists.
+/// Put an empty database into `auto_vacuum=INCREMENTAL` before its first
+/// table exists (PS-3).
+///
+/// The mode is a property of the file: on an empty one the pragma takes
+/// effect at once and costs nothing; on a populated one it needs a full
+/// `VACUUM`, which is `resilience::ensure_incremental_vacuum`'s job at
+/// startup. Setting it here is what makes every database this binary creates
+/// reclaim its free pages a step at a time rather than by a weekly rewrite.
+fn set_incremental_vacuum_on_empty(conn: &Connection) -> Result<(), MigrationError> {
+    let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
+    if tables == 0 {
+        conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
+    }
+    Ok(())
+}
+
 fn ensure_version_table(conn: &Connection) -> Result<(), MigrationError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_version (
@@ -2316,6 +2332,7 @@ const fn any_migrations_applied(applied: u32) -> bool {
 /// re-run the migration and hard-fail any non-idempotent step such as
 /// `ALTER TABLE ADD COLUMN`).
 pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
+    set_incremental_vacuum_on_empty(conn)?;
     ensure_version_table(conn)?;
     let current = current_version(conn)?;
     let mut applied = 0;

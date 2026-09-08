@@ -22,6 +22,9 @@ pub enum ResilienceError {
     NoBackup,
     /// Database is corrupt and unrecoverable.
     Unrecoverable(String),
+    /// The file is not in incremental auto-vacuum mode, or could not be put
+    /// into it (PS-3).
+    AutoVacuum(String),
     /// A verified backup was found and could not be put in place.
     ///
     /// Kept apart from [`Self::NoBackup`] and [`Self::Unrecoverable`] because
@@ -50,6 +53,7 @@ impl fmt::Display for ResilienceError {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::NoBackup => write!(f, "no backup available for recovery"),
             Self::Unrecoverable(msg) => write!(f, "unrecoverable: {msg}"),
+            Self::AutoVacuum(msg) => write!(f, "auto-vacuum: {msg}"),
             Self::RestoreFailed { backup, detail } => write!(
                 f,
                 "the database is corrupt and a good backup exists at {}, but it \
@@ -66,7 +70,10 @@ impl std::error::Error for ResilienceError {
         match self {
             Self::Sqlite(e) => Some(e),
             Self::Io(e) => Some(e),
-            Self::NoBackup | Self::Unrecoverable(_) | Self::RestoreFailed { .. } => None,
+            Self::NoBackup
+            | Self::Unrecoverable(_)
+            | Self::AutoVacuum(_)
+            | Self::RestoreFailed { .. } => None,
         }
     }
 }
@@ -85,12 +92,26 @@ impl From<std::io::Error> for ResilienceError {
 
 /// Busy-timeout (ms) applied to every maintenance connection in this module.
 ///
-/// Matches the per-connection `PRAGMA busy_timeout=5000` set by
-/// `sqlite::open_or_create`. Without it the maintenance helpers open with a 0 ms
-/// busy handler and return `SQLITE_BUSY` on the first contended lock, so a
-/// scheduled VACUUM on a busy station would frequently no-op for a week even
-/// though the lock would have been free in milliseconds.
+/// The reader connections' `PRAGMA busy_timeout=5000` (`sqlite::connection`);
+/// the live writer waits longer (`WRITER_BUSY_TIMEOUT_MS` there), because a
+/// detection is the thing that must not be lost to a lock. Without a busy
+/// handler the maintenance helpers return `SQLITE_BUSY` on the first contended
+/// lock, so a scheduled reclaim on a busy station would frequently no-op for a
+/// week even though the lock would have been free in milliseconds.
 const MAINTENANCE_BUSY_TIMEOUT_MS: u32 = 5_000;
+
+/// `PRAGMA auto_vacuum` as SQLite reports incremental mode.
+pub const AUTO_VACUUM_INCREMENTAL: i64 = 2;
+
+/// Pages moved per `PRAGMA incremental_vacuum(N)` step: 256 × 4 KiB, one MiB.
+///
+/// The write lock is held for one step at a time and released between steps,
+/// so the live writer's insert interleaves with the reclaim instead of waiting
+/// behind a whole-file rewrite (PS-3).
+pub const INCREMENTAL_VACUUM_STEP_PAGES: u32 = 256;
+
+/// The pause between reclaim steps, so a waiting writer gets the lock.
+const INCREMENTAL_VACUUM_STEP_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Open a writer connection with the standard busy-timeout applied. Internal
 /// helper that the maintenance entry points (`enforce_wal_mode`,
@@ -145,22 +166,165 @@ pub fn enforce_wal_mode(db_path: &Path) -> Result<(), ResilienceError> {
     Ok(())
 }
 
-/// Reclaim space and defragment the on-disk layout via `VACUUM`.
+/// What [`ensure_incremental_vacuum`] found and did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VacuumMode {
+    /// The file was already in incremental mode; nothing was written.
+    AlreadyIncremental,
+    /// The file was rewritten once into incremental mode. Sizes in bytes,
+    /// before and after, from the file's metadata.
+    Converted {
+        /// Size before the one-time `VACUUM`.
+        bytes_before: u64,
+        /// Size after it.
+        bytes_after: u64,
+    },
+}
+
+/// Put an existing database into `auto_vacuum=INCREMENTAL`, once (PS-3).
 ///
-/// Intended to be called from a low-frequency background task (the binary
-/// schedules this weekly). Returns when the operation finishes — VACUUM
-/// holds an exclusive lock, so callers should make sure no other writer
-/// is active. The operation is idempotent and safe to run on a healthy
-/// database; on a corrupted one it returns an error rather than masking it.
+/// `auto_vacuum` is a property of the file and can only change through a full
+/// `VACUUM`, so a station created before this mode existed pays one whole-file
+/// rewrite — at startup, before the daemon writes, rather than every week
+/// while it does. That rewrite stages its copy through
+/// `temp_store_directory`, set here to the database's own directory: the
+/// default is the process temp dir, which under the unit's `PrivateTmp` is a
+/// tmpfs charged to `MemoryMax`, and a 275 MB copy of a 92 MB database inside
+/// a 1 GiB budget is how the weekly job used to get the writer killed.
+///
+/// A file that is already incremental is left alone, so this is safe to call
+/// on every start. A missing file is left alone too: `migration::migrate`
+/// sets the mode on an empty file before the first table exists, where it
+/// costs nothing.
 ///
 /// # Errors
 ///
-/// Returns `ResilienceError` if the database cannot be opened or `VACUUM`
-/// fails.
-pub fn vacuum_database(db_path: &Path) -> Result<(), ResilienceError> {
+/// Returns `ResilienceError` if the file cannot be opened or the conversion
+/// fails, and [`ResilienceError::AutoVacuum`] if SQLite reports a mode other
+/// than incremental after it.
+pub fn ensure_incremental_vacuum(db_path: &Path) -> Result<VacuumMode, ResilienceError> {
     let conn = open_with_busy_timeout(db_path)?;
-    conn.execute_batch("VACUUM;")?;
-    Ok(())
+    if auto_vacuum_mode(&conn)? == AUTO_VACUUM_INCREMENTAL {
+        return Ok(VacuumMode::AlreadyIncremental);
+    }
+    let bytes_before = std::fs::metadata(db_path)?.len();
+    convert_to_incremental(&conn, db_path.parent().unwrap_or_else(|| Path::new(".")))?;
+    let bytes_after = std::fs::metadata(db_path)?.len();
+    Ok(VacuumMode::Converted {
+        bytes_before,
+        bytes_after,
+    })
+}
+
+/// The conversion itself, on an open connection, so a test can trace the
+/// statements it issues.
+///
+/// # Errors
+///
+/// As [`ensure_incremental_vacuum`].
+pub fn convert_to_incremental(conn: &Connection, temp_dir: &Path) -> Result<(), ResilienceError> {
+    // The pragma takes a string literal; a quote in the path is doubled.
+    let temp = temp_dir.to_string_lossy().replace('\'', "\'\'");
+    conn.execute_batch(&format!(
+        "PRAGMA temp_store_directory = '{temp}';
+         PRAGMA auto_vacuum = INCREMENTAL;
+         VACUUM;"
+    ))?;
+    let mode = auto_vacuum_mode(conn)?;
+    if mode == AUTO_VACUUM_INCREMENTAL {
+        Ok(())
+    } else {
+        Err(ResilienceError::AutoVacuum(format!(
+            "auto_vacuum is {mode} after the conversion, not {AUTO_VACUUM_INCREMENTAL}"
+        )))
+    }
+}
+
+/// `PRAGMA auto_vacuum` for a connection (0 none, 1 full, 2 incremental).
+///
+/// # Errors
+///
+/// Returns the SQLite error if the pragma cannot be read.
+pub fn auto_vacuum_mode(conn: &Connection) -> Result<i64, ResilienceError> {
+    Ok(conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?)
+}
+
+/// What one weekly reclaim moved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reclaimed {
+    /// Free-list pages returned to the filesystem.
+    pub pages_freed: u64,
+    /// File size before, in bytes.
+    pub bytes_before: u64,
+    /// File size after, in bytes.
+    pub bytes_after: u64,
+}
+
+/// Return the database's free pages to the filesystem, a step at a time
+/// (PS-3).
+///
+/// The weekly job used to be `VACUUM`: a rewrite of the whole file into the
+/// temp directory and back — 3.0× the file size written, measured, for a
+/// database that had a few free pages — under one exclusive lock held for the
+/// duration, past which a detection insert timed out and was logged lost. In
+/// incremental mode the free pages are already tracked; this asks SQLite to
+/// move [`INCREMENTAL_VACUUM_STEP_PAGES`] of them at a time and pauses between
+/// steps, so what is written is the free pages and what is locked is a MiB at
+/// a time. The WAL is checkpointed after, so the truncation reaches the main
+/// file.
+///
+/// # Errors
+///
+/// [`ResilienceError::AutoVacuum`] if the file is not in incremental mode —
+/// the startup conversion is the fix, and a full `VACUUM` here would be the
+/// defect this replaces — or the SQLite error of a step that failed.
+pub fn reclaim_free_pages(db_path: &Path) -> Result<Reclaimed, ResilienceError> {
+    let conn = open_with_busy_timeout(db_path)?;
+    let bytes_before = std::fs::metadata(db_path)?.len();
+    let pages_freed = reclaim_free_pages_on(&conn)?;
+    let bytes_after = std::fs::metadata(db_path)?.len();
+    Ok(Reclaimed {
+        pages_freed,
+        bytes_before,
+        bytes_after,
+    })
+}
+
+/// The reclaim on an open connection; returns the pages freed.
+///
+/// # Errors
+///
+/// As [`reclaim_free_pages`].
+pub fn reclaim_free_pages_on(conn: &Connection) -> Result<u64, ResilienceError> {
+    let mode = auto_vacuum_mode(conn)?;
+    if mode != AUTO_VACUUM_INCREMENTAL {
+        return Err(ResilienceError::AutoVacuum(format!(
+            "auto_vacuum is {mode}, not incremental; the startup conversion has not run"
+        )));
+    }
+    let freelist = |conn: &Connection| -> Result<u64, ResilienceError> {
+        let n: i64 = conn.query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    };
+    let start = freelist(conn)?;
+    let mut remaining = start;
+    while remaining > 0 {
+        conn.execute_batch(&format!(
+            "PRAGMA incremental_vacuum({INCREMENTAL_VACUUM_STEP_PAGES});"
+        ))?;
+        let now = freelist(conn)?;
+        if now >= remaining {
+            // Nothing moved: SQLite could not free what it reported. Stop
+            // rather than spin; the count is reported as it stands.
+            break;
+        }
+        remaining = now;
+        std::thread::sleep(INCREMENTAL_VACUUM_STEP_PAUSE);
+    }
+    // Best effort: the pages are freed either way; the checkpoint is what
+    // shortens the main file now rather than at the next one.
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    Ok(start.saturating_sub(remaining))
 }
 
 /// Force a WAL checkpoint to flush pending writes back into the main

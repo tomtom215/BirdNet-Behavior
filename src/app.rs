@@ -222,6 +222,29 @@ async fn serve(
         }
     }
 
+    // PS-3: a database from before incremental auto-vacuum is rewritten into
+    // it once, here, before anything writes — so the weekly reclaim never has
+    // to. The copy is staged beside the file, not in the unit's tmpfs.
+    if db_path.exists() {
+        match birdnet_db::resilience::ensure_incremental_vacuum(&db_path) {
+            Ok(birdnet_db::resilience::VacuumMode::AlreadyIncremental) => {}
+            Ok(birdnet_db::resilience::VacuumMode::Converted {
+                bytes_before,
+                bytes_after,
+            }) => tracing::info!(
+                bytes_before,
+                bytes_after,
+                "database converted to incremental auto-vacuum (a one-time rewrite; the \
+                 weekly reclaim now moves only the free pages)"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "database could not be converted to incremental auto-vacuum; the weekly space \
+                 reclaim will fail until it is (free space beside the database is what it needs)"
+            ),
+        }
+    }
+
     // Build app state.
     let addr: std::net::SocketAddr = cli.listen.parse()?;
 

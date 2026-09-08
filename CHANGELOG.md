@@ -38,6 +38,17 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the weekly space reclaim no longer rewrites the database
+
+**`PRAGMA incremental_vacuum` in place of `VACUUM`** (`PS-3`). The weekly
+`VACUUM` wrote three times the file size, staged the copy in the unit's
+memory-charged `/tmp` inside `MemoryMax=1G`, and held the write lock long
+enough for a detection to time out and be logged lost. New databases are
+created in `auto_vacuum=INCREMENTAL`; an existing one is converted once at
+the next start, with the copy staged beside the file, and the weekly job
+then moves only the free pages, a MiB at a time, pausing between steps.
+The writer's lock wait is fifteen seconds, up from five.
+
 ### Added — a private mode puts the whole station behind the sign-in
 
 **`BIRDNET_PRIVATE_MODE` and `BIRDNET_PUBLIC_ACCESS`** (`O-4`). The default

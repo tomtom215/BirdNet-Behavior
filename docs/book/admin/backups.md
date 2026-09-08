@@ -132,7 +132,7 @@ birdnet-behavior --doctor
 
 reports the destination, how many backups it will keep, and — for SSH — whether the key exists, whether its permissions are ones OpenSSH will accept, and whether the host is known. It makes no connection: `--doctor` runs on every start, and a diagnostic that dials a remote host fails whenever the uplink is down.
 
-Uploads are logged at `info` on success and `warn` on failure, with the destination named. A failed upload never affects the local backup or the VACUUM that follows it.
+Uploads are logged at `info` on success and `warn` on failure, with the destination named. A failed upload never affects the local backup or the space reclaim that follows it.
 
 ### Restoring one
 
