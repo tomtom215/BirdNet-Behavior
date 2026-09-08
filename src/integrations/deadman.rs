@@ -190,6 +190,11 @@ pub fn spawn_detection_deadman(
             "detection deadman started"
         );
         let threshold_secs = u64::from(threshold_hours) * 3600;
+        // The verdict is published for `/api/v2/health?strict=1` (AD-4): a
+        // week of silence used to be on the body and in no status code.
+        state
+            .metrics()
+            .set_detection_deadman((threshold_secs > 0).then_some(false));
         // `Some` while an episode is open, carrying its re-notification clock.
         // A bool here is what made "announced once, ever" the whole policy.
         let mut episode: Option<Reminders> = None;
@@ -300,6 +305,9 @@ pub fn spawn_detection_deadman(
                 }
                 Transition::None => {}
             }
+            state
+                .metrics()
+                .set_detection_deadman(Some(episode.is_some()));
 
             // Anything the state machine raised — this tick or an earlier one
             // that never got out — is offered again here.

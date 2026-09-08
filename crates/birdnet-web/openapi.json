@@ -2662,6 +2662,15 @@
             ],
             "description": "Seconds since the most recent stored detection, or null before the first measurement."
           },
+          "detection_deadman": {
+            "type": "string",
+            "enum": [
+              "off",
+              "ok",
+              "tripped"
+            ],
+            "description": "The detection deadman's verdict: `tripped` while it has an open quiet episode (no detections for longer than its threshold, or never), a strict fault; `off` when its threshold is 0."
+          },
           "strict": {
             "type": "boolean",
             "description": "Which mode this response answered in."

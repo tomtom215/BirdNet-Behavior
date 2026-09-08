@@ -319,6 +319,15 @@ mod tests {
             "both counts must be named: {mispaired:?}"
         );
 
+        // LC-2's remaining half: a download cut off part-way. The size check
+        // cannot see it (the shipped model is 541 MB and the cut can land
+        // anywhere past the first megabyte); loading it can.
+        let truncated = dir.path().join("truncated.onnx");
+        std::fs::write(&truncated, &TINY_V30_MODEL[..TINY_V30_MODEL.len() / 2]).unwrap();
+        let cut = check_model_loads(&truncated, Some(&labels_file(dir.path(), 11)));
+        assert_eq!(cut.status, Status::Fail, "{cut:?}");
+        assert!(cut.message.contains("not a model"), "{cut:?}");
+
         // The 3 MB stand-in the row describes: past the size check, not a model.
         let stand_in = dir.path().join("stand-in.onnx");
         std::fs::write(&stand_in, vec![0u8; 3_000_000]).unwrap();

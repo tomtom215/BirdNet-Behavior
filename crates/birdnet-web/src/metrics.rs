@@ -153,6 +153,9 @@ pub struct MetricsRegistry {
     /// Seconds since the most recent stored detection, refreshed by the
     /// deadman task. `u64::MAX` = not yet measured / no detections ever.
     detection_silence_secs: AtomicU64,
+    /// The deadman's own verdict (AD-4): `0` quiet within its threshold, `1`
+    /// tripped (an episode is open), `u64::MAX` = the deadman is off.
+    detection_deadman: AtomicU64,
     /// Whether the system reports its clock as synchronised: `0` no, `1` yes,
     /// `u64::MAX` = nothing here can answer, so the series is absent rather
     /// than reporting a container's host clock as broken.
@@ -264,6 +267,7 @@ impl MetricsRegistry {
             detection_write_failures_total: AtomicU64::new(0),
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
+            detection_deadman: AtomicU64::new(u64::MAX),
             clock_synced: AtomicU64::new(u64::MAX),
             mqtt_connected: AtomicU64::new(u64::MAX),
             mqtt_disconnected_since: AtomicU64::new(0),
@@ -550,6 +554,23 @@ impl MetricsRegistry {
         match self.detection_silence_secs.load(Ordering::Relaxed) {
             u64::MAX => None,
             v => Some(v),
+        }
+    }
+
+    /// Publish the deadman's verdict (AD-4): `None` when it is off,
+    /// `Some(true)` while an episode is open.
+    pub fn set_detection_deadman(&self, tripped: Option<bool>) {
+        self.detection_deadman
+            .store(tripped.map_or(u64::MAX, u64::from), Ordering::Relaxed);
+    }
+
+    /// The deadman's verdict: `None` off, `Some(false)` quiet within its
+    /// threshold, `Some(true)` tripped.
+    #[must_use]
+    pub fn detection_deadman(&self) -> Option<bool> {
+        match self.detection_deadman.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v == 1),
         }
     }
 

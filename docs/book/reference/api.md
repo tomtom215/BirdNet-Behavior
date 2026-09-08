@@ -25,6 +25,7 @@ curl http://localhost:8502/api/v2/health
   "detection_daemon": "running",
   "detection_writes": "accepted",
   "detection_silence_secs": 142,
+  "detection_deadman": "ok",
   "data_volume": {
     "writable": true,
     "mount": "intact",
@@ -52,6 +53,13 @@ never a separate filesystem, or `unknown`), and the `df` verdict (`disk` is
 is degraded on every reading: the station is running and keeping nothing.
 `disk: critical` or `unknown`, and `admin_bootstrap: failed`, are reported as
 degraded only under `?strict=1`.
+
+`detection_deadman` is the detection deadman's own verdict: `tripped` while it
+has an open quiet episode (no detections for longer than its threshold, or
+never, once the station has listened that long), `ok` otherwise, `off` when
+its threshold is 0. `tripped` is degraded under `?strict=1`, so a monitor
+polling the strict endpoint goes red at the moment the notifier fires rather
+than reading `detection_silence_secs` against a threshold of its own.
 
 `boot_anomalies` is what the boot journal found this start changed since the
 last one: `db_lost` (the database held detections at the last start and holds

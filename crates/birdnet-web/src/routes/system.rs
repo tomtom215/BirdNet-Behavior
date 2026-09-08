@@ -254,11 +254,22 @@ async fn health(
     // a fact about this start that a pager should hear and a container
     // supervisor should not restart over.
     let boot_anomalies = state.boot_anomalies();
+    // The deadman's verdict (AD-4). `detection_silence_secs` was on the body
+    // and in no status code, so a week of silence left even the strict
+    // endpoint green. The verdict is the deadman's own — one threshold, one
+    // moment the pager and the notifier agree on — rather than a second
+    // reading of the silence here.
+    let deadman = state.metrics().detection_deadman();
+    let deadman_tripped = deadman == Some(true);
     let degraded = !db_ok
         || ingest_halted
         || loses_writes
         || (strict
-            && (!daemon_running || volume_fault || bootstrap_failed || !boot_anomalies.is_empty()));
+            && (!daemon_running
+                || volume_fault
+                || bootstrap_failed
+                || !boot_anomalies.is_empty()
+                || deadman_tripped));
 
     let status = if degraded {
         StatusCode::SERVICE_UNAVAILABLE
@@ -276,6 +287,11 @@ async fn health(
             "detection_daemon": if daemon_running { "running" } else { "stopped" },
             "detection_writes": if ingest_halted { "halted" } else { "accepted" },
             "detection_silence_secs": detection_silence_secs,
+            "detection_deadman": match deadman {
+                None => "off",
+                Some(false) => "ok",
+                Some(true) => "tripped",
+            },
             "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
             "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
             "boot_anomalies": boot_anomalies

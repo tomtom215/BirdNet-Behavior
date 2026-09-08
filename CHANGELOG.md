@@ -38,6 +38,18 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a silent station is a strict fault
+
+**The detection deadman's verdict is on the health endpoint** (`AD-4`).
+`detection_silence_secs` was on the body and in no status code, so a week
+without a detection left even `?strict=1` green. The deadman now publishes
+its verdict, `/api/v2/health` carries it as `detection_deadman`, and
+`tripped` is degraded under `?strict=1`: the pager and the notifier agree
+on one threshold and one moment. The plain endpoint stays 200, since a
+silent station is the one a container supervisor must not restart. The
+doctor's model-integrity gate also covers a download cut off part-way,
+closing the last half of `LC-2`.
+
 ### Fixed — the container knows what time it is
 
 **The image carries zoneinfo and the compose file passes `TZ` through**
