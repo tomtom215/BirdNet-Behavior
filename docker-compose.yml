@@ -67,6 +67,13 @@ services:
       # Web server — must bind to all interfaces inside the container
       BIRDNET_LISTEN: ${BIRDNET_LISTEN:-0.0.0.0:8502}
 
+      # Timezone. Detections are filed under the container's local hours, and
+      # those come from TZ (the image carries the zoneinfo files it needs).
+      # Unset, the station runs on UTC and every hour on the dashboard is a
+      # UTC hour. Set it in .env: TZ=Europe/Berlin. This one is written with a
+      # real default so it is never a blank string.
+      TZ: ${TZ:-UTC}
+
       # Data paths inside the container (change only if you remap the volumes)
       BIRDNET_WATCH_DIR: /data/recordings
       BIRDNET_ANALYTICS_DB: /data/analytics.db

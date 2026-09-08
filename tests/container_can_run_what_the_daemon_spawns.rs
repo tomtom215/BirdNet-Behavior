@@ -415,3 +415,38 @@ fn the_alsa_overlay_is_only_shipped_if_the_image_can_use_it() {
          cannot be spawned and the container records nothing"
     );
 }
+
+/// ON-7 / NT-6. Detections are filed under local hours, and in the container
+/// those come from `TZ`: glibc reads it, and SQLite's `localtime` (the one
+/// source of the station's offset) with it. That needs the zoneinfo files
+/// (`tzdata`, which `debian:*-slim` does not carry) and the variable passed
+/// through. Without both, every container station filed a season under UTC
+/// hours while its operator read local ones — and with `TZ` set but no
+/// zoneinfo, glibc falls back to UTC silently, which looks configured.
+#[test]
+fn the_image_carries_zoneinfo_and_compose_passes_tz_through() {
+    assert!(
+        runtime_stage_packages().contains("tzdata"),
+        "the runtime stage must install tzdata, or TZ resolves to UTC whatever it says"
+    );
+    let compose = std::fs::read_to_string(repo_root().join("docker-compose.yml")).unwrap();
+    // Assembled from two halves so no literal holds a brace pair the
+    // formatting-argument lint would read as one.
+    let tz_line = ["TZ: ${", "TZ:-UTC}"].concat();
+    assert!(
+        compose.contains(&tz_line),
+        "docker-compose.yml must pass TZ into the container (defaulting to UTC, never blank)"
+    );
+    let entrypoint = std::fs::read_to_string(repo_root().join("docker/entrypoint.sh")).unwrap();
+    assert!(
+        entrypoint.contains("/usr/share/zoneinfo/$TZ"),
+        "the entrypoint must check TZ names a zone the image knows"
+    );
+    let env_example = std::fs::read_to_string(repo_root().join(".env.example")).unwrap();
+    assert!(
+        env_example
+            .lines()
+            .any(|l| l.trim_start().starts_with("#TZ=") || l.starts_with("TZ=")),
+        ".env.example must document TZ"
+    );
+}

@@ -19,6 +19,8 @@
 #   BIRDNET_MODEL               Path to ONNX model file (auto-set if blank)
 #   BIRDNET_LABELS              Path to labels CSV file (auto-set if blank)
 #   BIRDNET_LISTEN              Web server address (default: 0.0.0.0:8502)
+#   TZ                          IANA zone the station files detections under
+#                               (unset: UTC, and a warning on the way in)
 #
 # All other BIRDNET_* variables are passed through to the binary unchanged.
 # =============================================================================
@@ -49,6 +51,26 @@ fi
 # shellcheck source=docker/strip-blank-env.sh
 . "$BNB_STRIP_LIB"
 strip_blank_birdnet_env
+
+# ---------------------------------------------------------------------------
+# Timezone (ON-7)
+# ---------------------------------------------------------------------------
+# Detections are filed under the container's local hours, which come from TZ:
+# glibc reads it, and SQLite's localtime — the one source of the station's
+# offset — with it. Unset, the container runs on UTC and every hour on the
+# dashboard is a UTC hour. Set to a name the image does not know, glibc falls
+# back to UTC just as silently, which is the worse failure because it looks
+# configured. Either way, say so on the way in; neither stops the station.
+case "${TZ:-}" in
+    "")
+        printf '[birdnet] WARNING: TZ is not set: the station runs on UTC and files detections under UTC hours. Set TZ=<Area/City> in .env (for example TZ=Europe/Berlin)\n' >&2
+        ;;
+    *)
+        if [ ! -f "/usr/share/zoneinfo/$TZ" ]; then
+            printf '[birdnet] WARNING: TZ=%s is not a zone this image knows, so the station runs on UTC. Use an IANA name such as Europe/Berlin\n' "$TZ" >&2
+        fi
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Helpers

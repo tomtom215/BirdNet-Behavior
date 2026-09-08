@@ -38,6 +38,19 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the container knows what time it is
+
+**The image carries zoneinfo and the compose file passes `TZ` through**
+(`ON-7`, `NT-6`). Detections are filed under local hours, and in the
+container those come from `TZ`, which needed zoneinfo the slim image did
+not carry: every container station filed a season under UTC hours while
+its operator read local ones, and a `TZ` the image did not know fell back
+to UTC just as silently. The image now installs `tzdata`, compose sets
+`TZ` from `.env` (UTC when unset), the entrypoint warns when it is unset or
+unknown, and `--doctor` reads `TZ` first, warns when no zone is configured
+at all (that used to be silence), warns on a zone it does not know, and
+reports the zoneinfo version.
+
 ### Fixed — a flapping audio source is reported
 
 **A source that keeps dying and coming back is called flapping** (`AD-3`).

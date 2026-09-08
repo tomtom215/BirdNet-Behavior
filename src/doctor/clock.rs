@@ -56,9 +56,11 @@ pub(super) fn check_clock(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     {
         out.push(check);
     }
-    if let Some(check) = timezone_mismatch_check(system_timezone(), detected_timezone(config)) {
-        out.push(check);
-    }
+    out.push(timezone_mismatch_check(
+        system_timezone(),
+        detected_timezone(config),
+        zoneinfo_version().as_deref(),
+    ));
     if let Some(check) = solar_window_check(cli, config) {
         out.push(check);
     }
@@ -209,23 +211,59 @@ fn solar_window_verdict(
 ///
 /// A warning, never an error: the station works, its timestamps are just
 /// shifted, and only the operator can say which is right.
-fn timezone_mismatch_check(system: Option<String>, detected: Option<String>) -> Option<Check> {
-    let system = system?;
+fn timezone_mismatch_check(
+    system: Option<String>,
+    detected: Option<String>,
+    zoneinfo: Option<&str>,
+) -> Check {
+    use birdnet_web::routes::pages::onboarding::plausible_timezone;
+    let zoneinfo = zoneinfo.map_or_else(
+        || "no zoneinfo version file".to_owned(),
+        |v| format!("zoneinfo {v}"),
+    );
+    // No zone anywhere used to be silence (NT-6) — and it is exactly the
+    // containerised case, where the answer is guaranteed wrong: the station
+    // runs on UTC and files every detection under UTC hours.
+    let Some(system) = system else {
+        return Check::warn(
+            "Timezone",
+            format!(
+                "no timezone is configured on this machine ({zoneinfo}): local time is UTC, \
+                 so detections are filed under UTC hours"
+            ),
+            "in a container, set TZ=<Area/City> in .env (for example TZ=Europe/Berlin); on a \
+             host, sudo timedatectl set-timezone <Area/City>. Then restart the station",
+        );
+    };
+    // A zone glibc does not know is UTC with a configured-looking name — the
+    // worse failure. `TZ=Nowhere/Fake` gets here.
+    if !plausible_timezone(&system) {
+        return Check::warn(
+            "Timezone",
+            format!(
+                "this machine's timezone is set to {system}, which is not a known zone \
+                 ({zoneinfo}): local time falls back to UTC, so detections are filed under \
+                 UTC hours"
+            ),
+            "use an IANA name such as Europe/Berlin: TZ in .env for a container, \
+             sudo timedatectl set-timezone on a host. Then restart the station",
+        );
+    }
     // The wizard's row is operator-writable and used to be trusted as it was
     // (ON-8): `timezone=Mars/Olympus` made the doctor say "set-timezone
     // Mars/Olympus". A row that is not a zone is reported as that, and never
     // compared against.
     let Some(detected) = detected else {
-        return Some(Check::pass(
+        return Check::pass(
             "Timezone",
             format!(
-                "{system} (this machine's clock); the setup wizard has not recorded the \
-                 station's zone, so there is nothing to compare it against"
+                "{system} (this machine's clock, {zoneinfo}); the setup wizard has not \
+                 recorded the station's zone, so there is nothing to compare it against"
             ),
-        ));
+        );
     };
-    if !birdnet_web::routes::pages::onboarding::plausible_timezone(&detected) {
-        return Some(Check::warn(
+    if !plausible_timezone(&detected) {
+        return Check::warn(
             "Timezone",
             format!(
                 "the station's recorded zone, {detected}, is not a known zone, so this \
@@ -233,15 +271,15 @@ fn timezone_mismatch_check(system: Option<String>, detected: Option<String>) -> 
             ),
             "re-run Detect on the setup wizard's location step, or set the timezone \
              setting to an IANA zone name such as Europe/London",
-        ));
+        );
     }
     if system == detected {
-        return Some(Check::pass(
+        return Check::pass(
             "Timezone",
-            format!("{system} — matches the station's location"),
-        ));
+            format!("{system} — matches the station's location ({zoneinfo})"),
+        );
     }
-    Some(Check::warn(
+    Check::warn(
         "Timezone",
         format!(
             "this machine's clock is set to {system}, but the station's location is in {detected}"
@@ -251,26 +289,63 @@ fn timezone_mismatch_check(system: Option<String>, detected: Option<String>) -> 
              Fix with:  sudo timedatectl set-timezone {detected}   \
              (then restart: sudo systemctl restart birdnet-behavior)"
         ),
+    )
+}
+
+/// The version of the zoneinfo the machine keeps local time with, from the
+/// first line of `tzdata.zi` (`# version 2025b`); `None` without the file.
+/// Reported, not judged (NT-6): there is nothing offline to compare it to.
+fn zoneinfo_version() -> Option<String> {
+    zoneinfo_version_in(std::path::Path::new(
+        birdnet_web::routes::pages::onboarding::ZONEINFO_DIR,
     ))
 }
 
-/// The host's configured timezone name, e.g. `Europe/Berlin`.
-///
-/// `/etc/timezone` is the plain-text form Debian and Raspberry Pi OS keep;
-/// `/etc/localtime` is a symlink into the zoneinfo tree on systemd hosts. Try
-/// both, since neither is universal. `None` when the host uses neither
-/// convention — this check then stays silent rather than guessing.
+/// [`zoneinfo_version`] against another zoneinfo root, for tests.
+fn zoneinfo_version_in(root: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("tzdata.zi")).ok()?;
+    let first = text.lines().next()?;
+    let version = first.strip_prefix("# version ")?.trim();
+    (!version.is_empty()).then(|| version.to_owned())
+}
+
+/// The zone this machine keeps local time in, e.g. `Europe/Berlin`.
 fn system_timezone() -> Option<String> {
-    if let Ok(raw) = std::fs::read_to_string("/etc/timezone") {
+    let localtime = std::fs::read_link("/etc/localtime").ok();
+    system_timezone_from(
+        std::env::var("TZ").ok().as_deref(),
+        std::fs::read_to_string("/etc/timezone").ok().as_deref(),
+        localtime.as_deref().and_then(std::path::Path::to_str),
+    )
+}
+
+/// [`system_timezone`] from its three inputs, in the order glibc consults
+/// them (ON-7): `TZ` first — it is what SQLite's `localtime`, the one source
+/// of the station's offset, ends up using, and it is how a container is told
+/// its zone; then `/etc/timezone`, the plain-text form Debian and Raspberry
+/// Pi OS keep; then the `/etc/localtime` symlink into the zoneinfo tree on
+/// systemd hosts. A leading `:` on `TZ` is glibc's "this is a file" marker,
+/// not part of the name. `None` when none of the three says anything, which
+/// the check reports as UTC rather than staying silent.
+fn system_timezone_from(
+    tz_env: Option<&str>,
+    etc_timezone: Option<&str>,
+    localtime_target: Option<&str>,
+) -> Option<String> {
+    if let Some(tz) = tz_env {
+        let tz = tz.trim().trim_start_matches(':');
+        if !tz.is_empty() {
+            return Some(tz.to_string());
+        }
+    }
+    if let Some(raw) = etc_timezone {
         let name = raw.trim();
         if !name.is_empty() {
             return Some(name.to_string());
         }
     }
-    let target = std::fs::read_link("/etc/localtime").ok()?;
-    let s = target.to_str()?;
     // ".../zoneinfo/Europe/Berlin" → "Europe/Berlin"
-    let (_, zone) = s.split_once("/zoneinfo/")?;
+    let (_, zone) = localtime_target?.split_once("/zoneinfo/")?;
     (!zone.is_empty()).then(|| zone.to_string())
 }
 
@@ -582,8 +657,7 @@ mod tests {
 
     #[test]
     fn mismatched_timezone_warns_with_the_exact_fix() {
-        let check = timezone_mismatch_check(Some("UTC".into()), Some("Europe/Berlin".into()))
-            .expect("a mismatch must be reported");
+        let check = timezone_mismatch_check(Some("UTC".into()), Some("Europe/Berlin".into()), None);
         assert_eq!(check.status, Status::Warn);
         assert!(check.message.contains("UTC"), "{}", check.message);
         assert!(check.message.contains("Europe/Berlin"));
@@ -596,24 +670,93 @@ mod tests {
 
     #[test]
     fn matching_timezone_passes() {
-        let check =
-            timezone_mismatch_check(Some("Europe/Berlin".into()), Some("Europe/Berlin".into()))
-                .expect("a match is still worth reporting");
+        let check = timezone_mismatch_check(
+            Some("Europe/Berlin".into()),
+            Some("Europe/Berlin".into()),
+            Some("2025b"),
+        );
         assert_eq!(check.status, Status::Pass);
+        assert!(
+            check.message.contains("zoneinfo 2025b"),
+            "{}",
+            check.message
+        );
+    }
+
+    /// NT-6 / ON-7. No zone on the machine used to be silence, and it is
+    /// exactly the containerised case, where the station is on UTC. It is a
+    /// warning now, naming both fixes; a zone glibc does not know is the same
+    /// warning, since glibc falls back to UTC for it just as quietly.
+    #[test]
+    fn no_timezone_on_the_machine_is_a_warning_not_silence() {
+        for detected in [None, Some("Europe/Berlin".to_owned())] {
+            let check = timezone_mismatch_check(None, detected, None);
+            assert_eq!(check.status, Status::Warn, "{check:?}");
+            assert!(check.message.contains("UTC hours"), "{}", check.message);
+            let fix = check.remediation.expect("a fix");
+            assert!(fix.contains("TZ=") && fix.contains("timedatectl"), "{fix}");
+        }
+        let check = timezone_mismatch_check(Some("Nowhere/Fake".into()), None, Some("2025b"));
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert!(
+            check.message.contains("not a known zone"),
+            "{}",
+            check.message
+        );
+        assert!(
+            check.message.contains("zoneinfo 2025b"),
+            "{}",
+            check.message
+        );
+        // A known host zone with no recorded station zone is reported as a
+        // pass naming the zone (ON-8), which is information, not a nag.
+        assert_eq!(
+            timezone_mismatch_check(Some("UTC".into()), None, None).status,
+            Status::Pass
+        );
+    }
+
+    /// ON-7: `TZ` is what a container is told its zone with, and what glibc
+    /// (so SQLite's `localtime`) consults first, so it outranks the two files;
+    /// glibc's leading `:` is not part of the name.
+    #[test]
+    fn tz_outranks_the_files_and_the_files_still_work() {
+        assert_eq!(
+            system_timezone_from(
+                Some("Europe/Berlin"),
+                Some("Etc/UTC\n"),
+                Some("/usr/share/zoneinfo/Etc/UTC")
+            )
+            .as_deref(),
+            Some("Europe/Berlin")
+        );
+        assert_eq!(
+            system_timezone_from(Some(":Asia/Tokyo"), None, None).as_deref(),
+            Some("Asia/Tokyo")
+        );
+        assert_eq!(
+            system_timezone_from(Some(""), Some("Europe/London\n"), None).as_deref(),
+            Some("Europe/London"),
+            "a blank TZ is unset, not a zone"
+        );
+        assert_eq!(
+            system_timezone_from(None, None, Some("/usr/share/zoneinfo/America/New_York"))
+                .as_deref(),
+            Some("America/New_York")
+        );
+        assert_eq!(system_timezone_from(None, None, None), None);
+        assert_eq!(
+            system_timezone_from(None, None, Some("/etc/localtime.bak")),
+            None
+        );
     }
 
     #[test]
-    fn timezone_check_is_silent_when_either_side_is_unknown() {
-        // Nothing to compare: never guess, and never nag a station that simply
-        // has not been through the wizard.
-        assert!(timezone_mismatch_check(None, Some("Europe/Berlin".into())).is_none());
-        assert!(timezone_mismatch_check(None, None).is_none());
-        // A known host zone with no recorded station zone is reported as a
-        // pass naming the zone (ON-8), which is information, not a nag.
-        assert!(
-            timezone_mismatch_check(Some("UTC".into()), None)
-                .is_some_and(|c| c.status == crate::doctor::Status::Pass)
-        );
+    fn the_zoneinfo_version_is_read_from_tzdata_zi() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(zoneinfo_version_in(root.path()), None);
+        std::fs::write(root.path().join("tzdata.zi"), "# version 2025b\n# ...\n").unwrap();
+        assert_eq!(zoneinfo_version_in(root.path()).as_deref(), Some("2025b"));
     }
 
     #[test]
@@ -631,9 +774,11 @@ mod tests {
     /// silently skipped.
     #[test]
     fn a_bogus_stored_zone_is_reported_not_compared_against() {
-        let check =
-            timezone_mismatch_check(Some("Europe/Berlin".into()), Some("Mars/Olympus".into()))
-                .expect("a check");
+        let check = timezone_mismatch_check(
+            Some("Europe/Berlin".into()),
+            Some("Mars/Olympus".into()),
+            None,
+        );
         assert_eq!(check.status, crate::doctor::Status::Warn, "{check:?}");
         assert!(check.message.contains("not a known zone"), "{check:?}");
         assert!(
@@ -645,7 +790,7 @@ mod tests {
             "the bogus zone must not become the fix: {check:?}"
         );
 
-        let check = timezone_mismatch_check(Some("Europe/Berlin".into()), None).expect("a check");
+        let check = timezone_mismatch_check(Some("Europe/Berlin".into()), None, None);
         assert_eq!(check.status, crate::doctor::Status::Pass, "{check:?}");
         assert!(check.message.contains("Europe/Berlin"), "{check:?}");
         assert!(check.message.contains("not recorded"), "{check:?}");

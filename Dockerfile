@@ -309,6 +309,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         procps \
         sox \
         tini \
+        tzdata \
     && groupadd --system --gid 10001 birdnet \
     && useradd  --system --uid 10001 --gid birdnet \
                 --groups audio \

@@ -26,6 +26,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
 | `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` / `RTSP_URLS` | — |
 | `BIRDNET_LISTEN` | `--listen` | — | `0.0.0.0:8502` |
+| `TZ` | — | — | UTC in the container. An IANA zone name (`Europe/Berlin`); the container files detections under this zone's local hours, and warns at start when it is unset or not a zone the image knows. On a host, the zone comes from the system (`timedatectl set-timezone`). |
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | `RECORDING_SCHEDULE` | `all-day` |
 | `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |

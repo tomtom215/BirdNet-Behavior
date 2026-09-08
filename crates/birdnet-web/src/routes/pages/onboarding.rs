@@ -386,7 +386,11 @@ fn valid_coordinate(raw: &str, limit: f64) -> Option<String> {
 
 /// The zoneinfo tree `timedatectl` and the tz database read; when it is
 /// present, a zone the wizard stores must exist in it.
-const ZONEINFO_DIR: &str = "/usr/share/zoneinfo";
+/// Where the zoneinfo tree lives.
+///
+/// [`plausible_timezone`] checks a name against it, and the doctor reads the
+/// zoneinfo version from it.
+pub const ZONEINFO_DIR: &str = "/usr/share/zoneinfo";
 
 /// Whether `raw` names a time zone this host knows.
 ///
