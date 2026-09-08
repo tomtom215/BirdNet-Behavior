@@ -123,7 +123,239 @@ pub struct LiveDetection<'a> {
     pub run_id: Option<i64>,
 }
 
+/// Which `SQLite` rows a stream reads.
+#[derive(Debug, Clone, Copy)]
+enum RowFilter<'a> {
+    /// Every row.
+    All,
+    /// Rows at or after a `"YYYY-MM-DD HH:MM:SS"` cutoff (the incremental sync).
+    AtOrAfter(&'a str),
+    /// Rows on one `YYYY-MM-DD` date (a per-day repair).
+    OnDate(&'a str),
+}
+
+/// What one store holds for one day, reduced to a number that changes when
+/// any row does (DD-23).
+///
+/// `digest` is an order-independent sum of per-row FNV-1a hashes over the
+/// columns both stores carry and every analytic reads — `Time`, `Sci_Name`,
+/// `Confidence`, `review_verdict`, `detected_at_utc` — so a delete paired with
+/// a back-dated insert, which leaves every count the startup check compares
+/// exactly where it was, moves the digest of the day it happened on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DayFingerprint {
+    /// Rows on the day.
+    pub rows: u64,
+    /// Order-independent digest of the rows.
+    pub digest: u64,
+}
+
+impl DayFingerprint {
+    /// Fold one row in.
+    fn add(
+        &mut self,
+        time: &str,
+        sci_name: &str,
+        confidence: f64,
+        verdict: Option<&str>,
+        instant: Option<i64>,
+    ) {
+        let mut h = Fnv1a::new();
+        h.write(time.as_bytes());
+        h.write(b"\x1f");
+        h.write(sci_name.as_bytes());
+        h.write(b"\x1f");
+        h.write(&confidence.to_bits().to_le_bytes());
+        h.write(b"\x1f");
+        h.write(verdict.unwrap_or("\0").as_bytes());
+        h.write(b"\x1f");
+        h.write(&instant.map_or([0xff; 8], i64::to_le_bytes));
+        self.rows += 1;
+        self.digest = self.digest.wrapping_add(h.finish());
+    }
+}
+
+/// Per-day fingerprints of a store, keyed by `Date`.
+pub type DayFingerprints = std::collections::BTreeMap<String, DayFingerprint>;
+
+/// 64-bit FNV-1a: small, dependency-free, and only ever compared against
+/// itself on the same machine.
+struct Fnv1a(u64);
+
+impl Fnv1a {
+    const fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 ^= u64::from(b);
+            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    const fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// Above this many differing days a full rebuild is cheaper than a per-day
+/// repair, and more likely to be what happened (an import, a wholesale edit).
+const FULL_REBUILD_ABOVE_DAYS: usize = 60;
+
 impl AnalyticsDb {
+    /// Per-day fingerprints of the `SQLite` side, read from the source of
+    /// truth. Columns the source predates (see [`VERDICT_COL`],
+    /// [`INSTANT_COL`]) fold in as absent, which is what the copy holds for
+    /// them too.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the read fails.
+    pub fn sqlite_day_fingerprints(
+        sqlite_conn: &rusqlite::Connection,
+    ) -> Result<DayFingerprints, AnalyticsError> {
+        let read_err =
+            |e: rusqlite::Error| AnalyticsError::InvalidData(format!("SQLite read error: {e}"));
+        let verdict_col = if has_column(sqlite_conn, VERDICT_COL) {
+            VERDICT_COL
+        } else {
+            "NULL"
+        };
+        let instant_col = if has_column(sqlite_conn, INSTANT_COL) {
+            INSTANT_COL
+        } else {
+            "NULL"
+        };
+        let sql = format!(
+            "SELECT Date, Time, Sci_Name, Confidence, {verdict_col}, {instant_col} FROM detections"
+        );
+        let mut stmt = sqlite_conn.prepare(&sql).map_err(read_err)?;
+        let mut rows = stmt.query([]).map_err(read_err)?;
+        let mut out = DayFingerprints::new();
+        while let Some(row) = rows.next().map_err(read_err)? {
+            let date: String = row.get(0).map_err(read_err)?;
+            let time: String = row.get(1).map_err(read_err)?;
+            let sci: String = row.get(2).map_err(read_err)?;
+            let confidence: f64 = row.get(3).map_err(read_err)?;
+            let verdict: Option<String> = row.get(4).map_err(read_err)?;
+            let instant: Option<i64> = row.get(5).map_err(read_err)?;
+            out.entry(date)
+                .or_default()
+                .add(&time, &sci, confidence, verdict.as_deref(), instant);
+        }
+        Ok(out)
+    }
+
+    /// Per-day fingerprints of this copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the read fails.
+    pub fn day_fingerprints(&self) -> Result<DayFingerprints, AnalyticsError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT Date, Time, Sci_Name, Confidence, review_verdict, detected_at_utc \
+             FROM detections",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = DayFingerprints::new();
+        while let Some(row) = rows.next()? {
+            let date: String = row.get(0)?;
+            let time: String = row.get(1)?;
+            let sci: String = row.get(2)?;
+            let confidence: f64 = row.get(3)?;
+            let verdict: Option<String> = row.get(4)?;
+            let instant: Option<i64> = row.get(5)?;
+            out.entry(date)
+                .or_default()
+                .add(&time, &sci, confidence, verdict.as_deref(), instant);
+        }
+        Ok(out)
+    }
+
+    /// The days on which this copy and `SQLite` hold different rows, sorted.
+    ///
+    /// A day present on one side only is out of step; so is a day whose row
+    /// count agrees and whose digest does not — the net-zero drift that the
+    /// count-based startup check can never see.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either read fails.
+    pub fn days_out_of_step(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+    ) -> Result<Vec<String>, AnalyticsError> {
+        let truth = Self::sqlite_day_fingerprints(sqlite_conn)?;
+        let copy = self.day_fingerprints()?;
+        let mut days: Vec<String> = truth
+            .keys()
+            .chain(copy.keys())
+            .filter(|d| truth.get(*d) != copy.get(*d))
+            .cloned()
+            .collect();
+        days.sort();
+        days.dedup();
+        Ok(days)
+    }
+
+    /// Rebuild the named days of this copy from `SQLite`: each day's rows are
+    /// deleted and re-read from the source of truth. Returns the rows written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a delete, read or append fails; days already
+    /// repaired stay repaired.
+    pub fn repair_days(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+        days: &[String],
+    ) -> Result<u64, AnalyticsError> {
+        let mut written = 0_u64;
+        for day in days {
+            self.conn
+                .execute("DELETE FROM detections WHERE Date = ?", params![day])?;
+            written +=
+                self.stream_sqlite_into(sqlite_conn, "detections", RowFilter::OnDate(day))?;
+        }
+        if !days.is_empty() {
+            self.refresh_view_from(sqlite_conn)?;
+        }
+        Ok(written)
+    }
+
+    /// Find every day on which this copy disagrees with `SQLite` and repair
+    /// it: day by day when few days differ, by a full rebuild when many do.
+    /// Returns the days that were out of step, sorted; empty means the two
+    /// stores agreed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the comparison or the repair fails.
+    pub fn repair_drift(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+    ) -> Result<Vec<String>, AnalyticsError> {
+        let days = self.days_out_of_step(sqlite_conn)?;
+        if days.is_empty() {
+            return Ok(days);
+        }
+        if days.len() > FULL_REBUILD_ABOVE_DAYS {
+            let rows = self.full_resync_from_sqlite(sqlite_conn)?;
+            tracing::info!(
+                days = days.len(),
+                rows,
+                "analytics copy disagreed with the database on many days; rebuilt in full"
+            );
+        } else {
+            let rows = self.repair_days(sqlite_conn, &days)?;
+            tracing::info!(
+                days = ?days,
+                rows,
+                "analytics copy disagreed with the database on some days; those days rebuilt"
+            );
+        }
+        Ok(days)
+    }
+
     /// Sync detections from a `SQLite` connection into `DuckDB`.
     ///
     /// Performs an incremental sync — only rows newer than the latest
@@ -165,7 +397,13 @@ impl AnalyticsDb {
             )?;
         }
 
-        let count = self.stream_sqlite_into(sqlite_conn, "detections", cutoff.as_deref())?;
+        let count = self.stream_sqlite_into(
+            sqlite_conn,
+            "detections",
+            cutoff
+                .as_deref()
+                .map_or(RowFilter::All, RowFilter::AtOrAfter),
+        )?;
 
         if count > 0 {
             self.refresh_view_from(sqlite_conn)?;
@@ -209,7 +447,7 @@ impl AnalyticsDb {
         self.conn.execute_batch(
             "CREATE OR REPLACE TABLE detections_staging AS SELECT * FROM detections WHERE false;",
         )?;
-        let count = self.stream_sqlite_into(sqlite_conn, "detections_staging", None)?;
+        let count = self.stream_sqlite_into(sqlite_conn, "detections_staging", RowFilter::All)?;
 
         self.conn.execute_batch("BEGIN TRANSACTION;")?;
         let swap = self.conn.execute_batch(
@@ -267,7 +505,7 @@ impl AnalyticsDb {
         &self,
         sqlite_conn: &rusqlite::Connection,
         table: &str,
-        after: Option<&str>,
+        filter: RowFilter<'_>,
     ) -> Result<u64, AnalyticsError> {
         let read_err =
             |e: rusqlite::Error| AnalyticsError::InvalidData(format!("SQLite read error: {e}"));
@@ -302,19 +540,23 @@ impl AnalyticsDb {
             cols.push_str(", ");
             cols.push_str(col);
         }
-        let sql = if after.is_some() {
-            format!(
+        let sql = match filter {
+            RowFilter::All => format!("SELECT {cols} FROM detections ORDER BY Date, Time"),
+            RowFilter::AtOrAfter(_) => format!(
                 "SELECT {cols} FROM detections \
                  WHERE (Date || ' ' || Time) >= ? ORDER BY Date, Time"
-            )
-        } else {
-            format!("SELECT {cols} FROM detections ORDER BY Date, Time")
+            ),
+            RowFilter::OnDate(_) => {
+                format!("SELECT {cols} FROM detections WHERE Date = ? ORDER BY Date, Time")
+            }
         };
 
         let mut stmt = sqlite_conn.prepare(&sql).map_err(read_err)?;
-        let mut rows = match after {
-            Some(ts) => stmt.query(rusqlite::params![ts]).map_err(read_err)?,
-            None => stmt.query([]).map_err(read_err)?,
+        let mut rows = match filter {
+            RowFilter::AtOrAfter(ts) | RowFilter::OnDate(ts) => {
+                stmt.query(rusqlite::params![ts]).map_err(read_err)?
+            }
+            RowFilter::All => stmt.query([]).map_err(read_err)?,
         };
 
         let mut appender = self.conn.appender(table)?;
@@ -1115,5 +1357,158 @@ mod tests {
         assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
         assert_eq!(db.detection_count().unwrap(), 2);
         assert!(!staging_exists(&db));
+    }
+
+    /// The gate for DD-23: a delete paired with a back-dated insert leaves
+    /// every count the startup check compares unchanged, and used to leave the
+    /// copy permanently wrong. The day fingerprint sees it, and only that day
+    /// is rebuilt.
+    #[test]
+    fn net_zero_drift_is_found_by_the_day_fingerprint_and_only_that_day_is_rebuilt() {
+        let (db, _tmp) = make_db();
+        let sc = rusqlite::Connection::open_in_memory().unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT, \
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER, Sens REAL, \
+             Overlap REAL, File_Name TEXT, review_verdict TEXT, detected_at_utc INTEGER);",
+        )
+        .unwrap();
+        for (date, time, sci, com) in [
+            ("2026-03-11", "06:00:00", "Turdus merula", "Blackbird"),
+            ("2026-03-11", "06:30:00", "Parus major", "Great Tit"),
+            ("2026-03-12", "06:00:00", "Turdus merula", "Blackbird"),
+            ("2026-03-12", "07:15:00", "Erithacus rubecula", "Robin"),
+            ("2026-03-13", "06:00:00", "Turdus merula", "Blackbird"),
+            ("2026-03-13", "06:30:00", "Parus major", "Great Tit"),
+        ] {
+            sc.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+                 VALUES (?1, ?2, ?3, ?4, 0.85)",
+                rusqlite::params![date, time, sci, com],
+            )
+            .unwrap();
+        }
+        assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 6);
+        assert!(db.days_out_of_step(&sc).unwrap().is_empty(), "fixture");
+
+        // The drift: the robin is deleted and an owl is written back-dated
+        // onto the same day, in SQLite only.
+        sc.execute(
+            "DELETE FROM detections WHERE Date = '2026-03-12' AND Sci_Name = 'Erithacus rubecula'",
+            [],
+        )
+        .unwrap();
+        sc.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+             VALUES ('2026-03-12', '03:10:00', 'Strix aluco', 'Tawny Owl', 0.91)",
+            [],
+        )
+        .unwrap();
+
+        // Vacuity guard: after the incremental sync (which re-reads only the
+        // latest second, on another day) every signal the count-based check
+        // compares agrees.
+        db.sync_from_sqlite(&sc).unwrap();
+        let sqlite_rows: i64 = sc
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            u64::try_from(sqlite_rows).unwrap(),
+            db.detection_count().unwrap()
+        );
+        assert_eq!(db.rejected_detection_count().unwrap(), 0);
+        let owl_before: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Sci_Name = 'Strix aluco'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(owl_before, 0, "the copy is wrong, as it would be");
+
+        assert_eq!(
+            db.days_out_of_step(&sc).unwrap(),
+            vec!["2026-03-12".to_string()],
+            "the day fingerprint must name exactly the day that drifted"
+        );
+        assert_eq!(
+            db.repair_drift(&sc).unwrap(),
+            vec!["2026-03-12".to_string()]
+        );
+
+        let count = |sci: &str| -> i64 {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM detections WHERE Sci_Name = ?",
+                    params![sci],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(
+            count("Strix aluco"),
+            1,
+            "the back-dated owl reached the copy"
+        );
+        assert_eq!(count("Erithacus rubecula"), 0, "the deleted robin left it");
+        assert_eq!(db.detection_count().unwrap(), 6);
+        assert!(db.days_out_of_step(&sc).unwrap().is_empty(), "repaired");
+
+        // Counterpart: the other days were not touched — their rows are the
+        // same, and a repair of nothing writes nothing.
+        assert_eq!(db.repair_days(&sc, &[]).unwrap(), 0);
+        let per_day: Vec<(String, i64)> = {
+            let mut st = db
+                .conn
+                .prepare("SELECT Date, COUNT(*) FROM detections GROUP BY Date ORDER BY Date")
+                .unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(
+            per_day,
+            vec![
+                ("2026-03-11".to_string(), 2),
+                ("2026-03-12".to_string(), 2),
+                ("2026-03-13".to_string(), 2)
+            ]
+        );
+    }
+
+    /// A verdict is part of the fingerprint: rejecting a row in `SQLite` alone
+    /// moves that day, and no other.
+    #[test]
+    fn a_changed_verdict_moves_only_its_day() {
+        let (db, _tmp) = make_db();
+        let sc = rusqlite::Connection::open_in_memory().unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT, \
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER, Sens REAL, \
+             Overlap REAL, File_Name TEXT, review_verdict TEXT, detected_at_utc INTEGER);",
+        )
+        .unwrap();
+        for date in ["2026-03-11", "2026-03-12"] {
+            sc.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+                 VALUES (?1, '06:00:00', 'Turdus merula', 'Blackbird', 0.85)",
+                rusqlite::params![date],
+            )
+            .unwrap();
+        }
+        db.full_resync_from_sqlite(&sc).unwrap();
+        sc.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Date = '2026-03-12'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            db.days_out_of_step(&sc).unwrap(),
+            vec!["2026-03-12".to_string()]
+        );
+        db.repair_drift(&sc).unwrap();
+        assert_eq!(db.rejected_detection_count().unwrap(), 1);
     }
 }

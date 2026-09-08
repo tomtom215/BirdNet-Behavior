@@ -384,6 +384,25 @@ impl AppState {
                     }
                 }
 
+                // The fourth signal, and the one the other three cannot be
+                // (DD-23): a delete paired with a back-dated insert leaves
+                // every count above exactly where it was and the copy
+                // permanently wrong. A per-day fingerprint of the rows both
+                // stores carry sees it, and only the days that differ are
+                // rebuilt.
+                match adb.repair_drift(&conn) {
+                    Ok(days) if days.is_empty() => {}
+                    Ok(days) => tracing::warn!(
+                        days = days.len(),
+                        first = %days[0],
+                        last = %days[days.len() - 1],
+                        "analytics copy held different rows from the database on some days; repaired"
+                    ),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "analytics day-fingerprint drift check failed (non-fatal)");
+                    }
+                }
+
                 // Recording effort: the denominator every effort-corrected
                 // analytic divides by. Small and mutable (today's row is
                 // incremented every five minutes), so it is replaced wholesale

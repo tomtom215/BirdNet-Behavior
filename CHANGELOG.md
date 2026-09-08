@@ -38,6 +38,17 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the analytics copy notices drift that nets to zero
+
+**Net-zero drift between the database and its analytics copy is found and
+repaired** (`DD-23`). The startup check compared three counts — rows,
+rejected rows, unstamped rows — so a detection deleted and another written
+back-dated onto the same day left every count where it was and the copy
+wrong for ever: the owl in SQLite and not in DuckDB, the robin the other way
+round, the totals equal. Both stores now reduce each day to a fingerprint of
+the rows they hold, and the days whose fingerprints differ are rebuilt from
+the database — day by day when a few differ, in full when many do.
+
 ### Fixed — a misspelt setting is named, not ignored
 
 **An unknown key is reported with the key it was meant to be** (`LC-7`,
