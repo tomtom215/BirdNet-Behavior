@@ -179,6 +179,9 @@ fn approving_a_quarantined_detection_admits_it_to_the_olap_copy() {
                     lon: None,
                     week: None,
                     run_id: None,
+                    cutoff: None,
+                    sensitivity: None,
+                    overlap: None,
                 },
             )
         })

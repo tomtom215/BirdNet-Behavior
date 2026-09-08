@@ -130,6 +130,15 @@ pub struct QuarantineRecord<'a> {
     /// The daemon run that heard it (migration 43); carried into `detections`
     /// on approval. `None` only for a row no live run wrote.
     pub run_id: Option<i64>,
+    /// The confidence bar in force when it was heard (migration 46): the
+    /// per-species threshold it failed, or the one it would have been
+    /// admitted at when it was quarantined for another reason. Becomes the
+    /// detection's `Cutoff` on approval (DD-9).
+    pub cutoff: Option<f64>,
+    /// The run's BirdNET sensitivity; `Sens` on approval.
+    pub sensitivity: Option<f64>,
+    /// The run's analysis-window overlap in seconds; `Overlap` on approval.
+    pub overlap: Option<f64>,
 }
 
 /// A quarantine row read from the database.
@@ -168,6 +177,13 @@ pub struct QuarantineRow {
     /// The daemon run that heard it (migration 43), `None` for a row no live
     /// run wrote.
     pub run_id: Option<i64>,
+    /// The confidence bar in force when it was heard (migration 46); `None`
+    /// for a row quarantined before it was recorded.
+    pub cutoff: Option<f64>,
+    /// The run's sensitivity (migration 46).
+    pub sensitivity: Option<f64>,
+    /// The run's overlap in seconds (migration 46).
+    pub overlap: Option<f64>,
 }
 
 /// Aggregate counts for the quarantine queue.
@@ -209,8 +225,8 @@ pub enum QuarantineFilter {
 /// executes.
 pub(crate) const INSERT_QUARANTINE_SQL: &str = "INSERT INTO quarantine
             (date, time, sci_name, com_name, confidence, sf_probability,
-             reason, file_name, lat, lon, week, run_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             reason, file_name, lat, lon, week, run_id, cutoff, sens, overlap)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(date, time, sci_name) DO NOTHING";
 
 /// Insert a new quarantine entry.
@@ -244,6 +260,9 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
             record.lon,
             record.week,
             record.run_id,
+            record.cutoff,
+            record.sensitivity,
+            record.overlap,
         ],
     )?;
     Ok(())
@@ -275,7 +294,7 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
              Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id)
          SELECT date, time, sci_name, com_name, confidence,
-                lat, lon, NULL, week, NULL, NULL, file_name, 0, 'confirmed', run_id
+                lat, lon, cutoff, week, sens, overlap, file_name, 0, 'confirmed', run_id
          FROM quarantine WHERE id = ?1
          ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
         params![id],
@@ -343,7 +362,8 @@ pub fn prune_quarantine(conn: &Connection, days: u32) -> Result<u64, DbError> {
 pub fn get_quarantine(conn: &Connection, id: i64) -> Result<Option<QuarantineRow>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
-                reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id
+                reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id,
+                cutoff, sens, overlap
          FROM quarantine WHERE id = ?1",
     )?;
 
@@ -376,7 +396,8 @@ pub fn list_quarantine(
 
     let sql = format!(
         "SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
-                reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id
+                reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id,
+                cutoff, sens, overlap
          FROM quarantine
          {where_clause}
          ORDER BY created_at DESC
@@ -480,6 +501,9 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QuarantineRow> {
         week: row.get(13)?,
         created_at: row.get(14)?,
         run_id: row.get(15)?,
+        cutoff: row.get(16)?,
+        sensitivity: row.get(17)?,
+        overlap: row.get(18)?,
     })
 }
 
@@ -514,6 +538,9 @@ mod tests {
             lon: Some(-0.12),
             week: Some(13),
             run_id: None,
+            cutoff: Some(0.8),
+            sensitivity: Some(1.25),
+            overlap: Some(0.5),
         }
     }
 
@@ -560,6 +587,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(verdict.as_deref(), Some("confirmed"));
+        // DD-9's remainder: the bar it was heard under and the run's settings
+        // used to be written as NULL here, so a hand-approved rare-species
+        // record had the least provenance of any row.
+        let (cutoff, sens, overlap): (Option<f64>, Option<f64>, Option<f64>) = conn
+            .query_row(
+                "SELECT Cutoff, Sens, Overlap FROM detections WHERE Sci_Name = 'Upupa epops'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((cutoff, sens, overlap), (Some(0.8), Some(1.25), Some(0.5)));
+        let row = get_quarantine(&conn, id).unwrap().unwrap();
+        assert_eq!(row.cutoff, Some(0.8), "the quarantine row keeps them too");
     }
 
     #[test]
@@ -734,6 +774,9 @@ mod tests {
             None::<f64>,
             Some(3_i32),
             None::<i64>,
+            None::<f64>,
+            None::<f64>,
+            None::<f64>,
         ];
         assert_eq!(conn.execute(super::INSERT_QUARANTINE_SQL, args).unwrap(), 1);
         assert_eq!(
@@ -766,6 +809,9 @@ mod tests {
                     None::<f64>,
                     Some(3_i32),
                     None::<i64>,
+                    None::<f64>,
+                    None::<f64>,
+                    None::<f64>,
                 ],
             )
             .expect_err("an unknown reason must not be silently discarded");
@@ -796,6 +842,9 @@ mod tests {
                     None::<f64>,
                     Some(3_i32),
                     None::<i64>,
+                    None::<f64>,
+                    None::<f64>,
+                    None::<f64>,
                 ],
             )
             .expect_err("a NULL in a NOT NULL column must not be silently discarded");

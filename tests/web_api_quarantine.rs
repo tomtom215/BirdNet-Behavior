@@ -41,6 +41,9 @@ fn state_with_quarantine(reason: QuarantineReason) -> AppState {
         lon: Some(-0.12),
         week: Some(13),
         run_id: None,
+        cutoff: None,
+        sensitivity: None,
+        overlap: None,
     };
     insert_quarantine(&conn, &record).unwrap();
 

@@ -177,6 +177,32 @@ pub(super) fn decide_disposition(
     DispositionDecision::Accept { threshold: floor }
 }
 
+/// The confidence bar in force for a detection, whatever else is decided
+/// about it: what [`decide_disposition`] would admit or quarantine it at.
+/// `None` when it is below the global floor with no per-species override,
+/// which is a drop and never a row (DD-9).
+pub(super) fn applicable_threshold(
+    confidence: f32,
+    sci_name: &str,
+    per_species_thresholds: &HashMap<String, f64>,
+    global_confidence: f32,
+    dynamic: Option<&DynamicThresholds>,
+    now_ms: i64,
+) -> Option<f64> {
+    match decide_disposition(
+        confidence,
+        sci_name,
+        per_species_thresholds,
+        global_confidence,
+        dynamic,
+        now_ms,
+    ) {
+        DispositionDecision::Accept { threshold }
+        | DispositionDecision::Quarantine { threshold } => Some(threshold),
+        DispositionDecision::DropBelowGlobal => None,
+    }
+}
+
 /// Wall-clock milliseconds since the Unix epoch.
 ///
 /// The dynamic-threshold tracker takes time as a parameter so its rules are

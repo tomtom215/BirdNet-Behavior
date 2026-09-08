@@ -1976,6 +1976,22 @@ pub const MIGRATIONS: &[Migration] = &[
         // task — which is why `insert_detection` now returns the rowid.
         up_sql: "ALTER TABLE detections ADD COLUMN birdweather_soundscape_id INTEGER;",
     },
+    Migration {
+        version: 46,
+        description: "Record the threshold and inference settings a quarantined detection was heard under",
+        // ## Why (DD-9)
+        //
+        // A detection admitted straight away carries the bar it cleared and
+        // the run's sensitivity and overlap (`Cutoff`, `Sens`, `Overlap`,
+        // migration 43's provenance). A quarantined one carried none of them,
+        // so on approval `approve_quarantine` wrote NULLs: the rows an operator
+        // had looked at hardest were the ones with the least provenance. The
+        // three are recorded at quarantine time now and copied across on
+        // approval. NULL is "quarantined before this migration".
+        up_sql: "ALTER TABLE quarantine ADD COLUMN cutoff REAL;
+        ALTER TABLE quarantine ADD COLUMN sens REAL;
+        ALTER TABLE quarantine ADD COLUMN overlap REAL;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -3273,6 +3289,9 @@ mod tests {
                 lon: None,
                 week: Some(3),
                 run_id: None,
+                cutoff: None,
+                sensitivity: None,
+                overlap: None,
             };
             crate::sqlite::insert_quarantine(&conn, &record).unwrap();
 

@@ -38,6 +38,15 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — an approved quarantine row keeps its provenance
+
+**A quarantined detection records the bar it was heard under** (`DD-9`).
+The quarantine table never held the confidence threshold, sensitivity or
+overlap, so approving a row wrote NULLs into the detection: the records an
+operator had looked at hardest had the least provenance. Migration 46 adds
+the three columns, the daemon fills them at quarantine time, and approval
+copies them across.
+
 ### Fixed — the journal survives a reboot and cannot fill the card
 
 **The installer writes a persistent, bounded journald drop-in** (`OP-5`,

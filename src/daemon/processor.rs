@@ -452,6 +452,18 @@ pub(super) fn event_processor(
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
                 run_id: Some(provenance.run_id),
+                // The bar it would have been judged against, and the run's
+                // settings (DD-9): approval copies them onto the detection.
+                cutoff: crate::daemon::disposition::applicable_threshold(
+                    detection.confidence,
+                    &detection.scientific_name,
+                    species_thresholds,
+                    global_confidence,
+                    dynamic.tracker(),
+                    now_ms,
+                ),
+                sensitivity: Some(provenance.sensitivity),
+                overlap: Some(provenance.overlap),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -500,6 +512,18 @@ pub(super) fn event_processor(
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
                 run_id: Some(provenance.run_id),
+                // The bar it would have been judged against, and the run's
+                // settings (DD-9): approval copies them onto the detection.
+                cutoff: crate::daemon::disposition::applicable_threshold(
+                    detection.confidence,
+                    &detection.scientific_name,
+                    species_thresholds,
+                    global_confidence,
+                    dynamic.tracker(),
+                    now_ms,
+                ),
+                sensitivity: Some(provenance.sensitivity),
+                overlap: Some(provenance.overlap),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -554,6 +578,11 @@ pub(super) fn event_processor(
                     lon: provenance.lon,
                     week: week_str.parse::<i32>().ok(),
                     run_id: Some(provenance.run_id),
+                    // The per-species bar it failed, and the run's settings
+                    // (DD-9): approval copies them onto the detection.
+                    cutoff: Some(threshold),
+                    sensitivity: Some(provenance.sensitivity),
+                    overlap: Some(provenance.overlap),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -2640,6 +2669,23 @@ mod tests {
         assert_eq!(
             pending, 1,
             "a detection below its per-species threshold must be quarantined for review"
+        );
+        // DD-9: the row records the bar it failed and the run's settings, so
+        // an approval carries provenance rather than NULLs.
+        let row = state.with_db(|c| {
+            birdnet_db::sqlite::list_quarantine(
+                c,
+                birdnet_db::sqlite::QuarantineFilter::Pending,
+                1,
+                0,
+            )
+            .unwrap()
+            .remove(0)
+        });
+        assert_eq!(row.cutoff, Some(0.80), "{row:?}");
+        assert!(
+            row.sensitivity.is_some() && row.overlap.is_some(),
+            "the run's sensitivity and overlap must be on the row: {row:?}"
         );
     }
 
