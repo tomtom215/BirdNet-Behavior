@@ -606,8 +606,12 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   .ob-field label { font-size:12.5px; font-weight:500; }
   .ob-field input { padding:9px 12px; border-radius:var(--r-sm); border:0.5px solid var(--border-2); background:var(--surface); color:var(--fg); font:inherit; }
   .ob-cards { display:grid; gap:12px; }
-  .ob-card { display:flex; gap:14px; align-items:center; padding:14px; border-radius:var(--r-md); border:0.5px solid var(--border); background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s; }
+  .ob-card { position:relative; display:flex; gap:14px; align-items:center; padding:14px; border-radius:var(--r-md); border:0.5px solid var(--border); background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s; }
   .ob-card.sel { border-color:var(--moss); background:var(--moss-soft); }
+  /* The real radio behind each preference card (UX-1): kept in the tab order
+     and off the screen, never display:none, which would take it out of both. */
+  .ob-card .ob-pick { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; opacity:0; }
+  .ob-card:focus-within { outline:2px solid var(--moss); outline-offset:2px; }
   .ob-card .ic { width:34px; height:34px; flex-shrink:0; border-radius:8px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--fg-2); }
   .ob-card .t { font-weight:500; font-size:14px; }
   .ob-card .s { font-size:12px; color:var(--fg-3); }
@@ -756,13 +760,13 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <!-- Step 4 — Detection threshold -->
     <section class="ob-step" data-step="4">
       <div class="ob-eyebrow">How sure is sure</div>
-      <h1 class="ob-h">How picky should it be?</h1>
+      <h1 class="ob-h" id="ob-conf-h">How picky should it be?</h1>
       <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
-      <div class="ob-cards cols2">
-        <div class="ob-card" data-radio="conf" data-value="0.9"><div class="ob-grow"><div class="t">Strict</div><div class="s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></div>
-        <div class="ob-card" data-radio="conf" data-value="0.75"><div class="ob-grow"><div class="t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">0.75 — realistic results without over-filtering. Start here.</div></div></div>
-        <div class="ob-card" data-radio="conf" data-value="0.6"><div class="ob-grow"><div class="t">Sensitive</div><div class="s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></div>
-        <div class="ob-card" data-radio="conf" data-value="0.4"><div class="ob-grow"><div class="t">Everything</div><div class="s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></div>
+      <div class="ob-cards cols2" role="radiogroup" aria-labelledby="ob-conf-h">
+        <label class="ob-card" data-radio="conf" data-value="0.9"><input class="ob-pick" type="radio" name="conf_card" value="0.9" aria-labelledby="ob-conf-strict-t" aria-describedby="ob-conf-strict-s"><div class="ob-grow"><div class="t" id="ob-conf-strict-t">Strict</div><div class="s" id="ob-conf-strict-s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.75"><input class="ob-pick" type="radio" name="conf_card" value="0.75" aria-labelledby="ob-conf-balanced-t" aria-describedby="ob-conf-balanced-s"><div class="ob-grow"><div class="t" id="ob-conf-balanced-t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-conf-balanced-s">0.75 — realistic results without over-filtering. Start here.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.6"><input class="ob-pick" type="radio" name="conf_card" value="0.6" aria-labelledby="ob-conf-sensitive-t" aria-describedby="ob-conf-sensitive-s"><div class="ob-grow"><div class="t" id="ob-conf-sensitive-t">Sensitive</div><div class="s" id="ob-conf-sensitive-s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.4"><input class="ob-pick" type="radio" name="conf_card" value="0.4" aria-labelledby="ob-conf-everything-t" aria-describedby="ob-conf-everything-s"><div class="ob-grow"><div class="t" id="ob-conf-everything-t">Everything</div><div class="s" id="ob-conf-everything-s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></label>
       </div>
       <input type="hidden" name="confidence_threshold" id="ob-conf" value="{{confidence}}">
       <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/admin">Settings → Detection</a>, and set per-species thresholds under Species.</p>
@@ -771,12 +775,12 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <!-- Step 5 — Notifications -->
     <section class="ob-step" data-step="5">
       <div class="ob-eyebrow">Who gets told</div>
-      <h1 class="ob-h">When should we ping you?</h1>
+      <h1 class="ob-h" id="ob-notify-h">When should we ping you?</h1>
       <p class="ob-p ob-mb-18">This sets <em>how often</em> alerts go out. Nothing is sent until you add somewhere to send it — you can do that whenever you like.</p>
-      <div class="ob-cards">
-        <div class="ob-card" data-radio="notify" data-value="new-species"><div class="ob-grow"><div class="t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only birds you have barely heard lately — the interesting ones.</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="new-species-daily"><div class="ob-grow"><div class="t">First of each species, daily</div><div class="s">One alert per species per day. A good middle ground.</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="each"><div class="ob-grow"><div class="t">Every detection</div><div class="s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></div>
+      <div class="ob-cards" role="radiogroup" aria-labelledby="ob-notify-h">
+        <label class="ob-card" data-radio="notify" data-value="new-species"><input class="ob-pick" type="radio" name="notify_card" value="new-species" aria-labelledby="ob-notify-weekly-t" aria-describedby="ob-notify-weekly-s"><div class="ob-grow"><div class="t" id="ob-notify-weekly-t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-notify-weekly-s">Only birds you have barely heard lately — the interesting ones.</div></div></label>
+        <label class="ob-card" data-radio="notify" data-value="new-species-daily"><input class="ob-pick" type="radio" name="notify_card" value="new-species-daily" aria-labelledby="ob-notify-daily-t" aria-describedby="ob-notify-daily-s"><div class="ob-grow"><div class="t" id="ob-notify-daily-t">First of each species, daily</div><div class="s" id="ob-notify-daily-s">One alert per species per day. A good middle ground.</div></div></label>
+        <label class="ob-card" data-radio="notify" data-value="each"><input class="ob-pick" type="radio" name="notify_card" value="each" aria-labelledby="ob-notify-each-t" aria-describedby="ob-notify-each-s"><div class="ob-grow"><div class="t" id="ob-notify-each-t">Every detection</div><div class="s" id="ob-notify-each-s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></label>
       </div>
       <input type="hidden" name="notification_mode" id="ob-notify" value="{{notify_trigger}}">
       <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/admin/settings">Settings → Notifications</a>. Until then this setting is simply waiting.</p>
@@ -889,12 +893,25 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     var input = document.getElementById(mirrors[group]);
     if (!input) { return; }
     document.querySelectorAll('[data-radio="' + group + '"]').forEach(function (c) {
-      if (c.dataset.value === input.value) { c.classList.add('sel'); }
+      if (c.dataset.value === input.value) {
+        c.classList.add('sel');
+        var pick = c.querySelector('.ob-pick');
+        if (pick) { pick.checked = true; }
+      }
     });
   });
 
-  document.querySelectorAll('[data-radio]').forEach(function (card) {
-    card.addEventListener('click', function () {
+  // Each card is a <label> around a real radio input (UX-1), so Tab reaches
+  // the group and the arrow keys move within it. A click on the card and an
+  // arrow key both end in the input's `change`, so one handler serves both;
+  // the delegated click handler this replaces was unreachable without a
+  // mouse. The radios' own names (`conf_card`, `notify_card`) are not what
+  // the server reads: the mirrored hidden input still carries the value, so
+  // a station whose current setting matches no card keeps it.
+  document.querySelectorAll('[data-radio] .ob-pick').forEach(function (pick) {
+    pick.addEventListener('change', function () {
+      var card = pick.closest('[data-radio]');
+      if (!card || !pick.checked) { return; }
       document.querySelectorAll('[data-radio="' + card.dataset.radio + '"]').forEach(function (c) {
         c.classList.remove('sel');
       });

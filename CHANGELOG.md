@@ -38,6 +38,16 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the setup wizard's preference cards work from the keyboard
+
+**The threshold and alert cards are real radio inputs** (`UX-1`). The seven
+cards were `<div>`s with a click handler: nothing a keyboard could reach, so
+an operator without a mouse could set neither the detection threshold nor
+the alert mode during first-run setup. Each card is now a label around a
+radio input in a labelled group: Tab reaches the group, the arrow keys move
+within it, and the card draws a focus ring. The interaction gate drives
+this in a real browser.
+
 ### Fixed — a purge that frees nothing stops, and says what is filling the card
 
 **The disk-full purge stops when a pass achieves nothing** (`PR-7`). When

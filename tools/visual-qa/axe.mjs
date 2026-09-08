@@ -26,6 +26,9 @@ import { ROUTES } from './qa.mjs';
 const AxeBuilder = AxeModule.default || AxeModule.AxeBuilder || AxeModule;
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
+// Explicit browser binary, for sandboxes that ship their own Chromium rather
+// than the build this playwright pinned (same knob as interactions.mjs).
+const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '';
 const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
 const FAIL_ON = new Set(
   (process.env.AXE_FAIL_ON || 'serious,critical').split(',').filter(Boolean),
@@ -51,7 +54,7 @@ const DISABLED_RULES = (process.env.AXE_DISABLE ?? 'color-contrast,link-in-text-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
   let blocking = 0;
   let total = 0;
   const seen = new Set(); // unique "[impact] rule" pairs, for the summary
