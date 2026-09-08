@@ -608,6 +608,13 @@ Options:
           [env: BIRDNET_STREAM_MAX_MB=]
           [default: 0]
 
+      --raw-audio-keep-every <RAW_AUDIO_KEEP_EVERY>
+          Keep one raw capture segment in N on the data disk.
+
+          The raw audio is otherwise gone once analysed, so only what already triggered a detection survives and a season can never be re-analysed under a new model. With this set, one aged segment in N (in capture order) is copied to `<recordings>/raw` before the stream directory drains it; `1` keeps every segment. Budget it: a 15 s segment at 48 kHz mono is about 1.4 MB, so `1` is roughly 8 GB a day per source and `10` about 0.8 GB. The disk-full purge takes kept raw audio before any clip. Config file: `RAW_AUDIO_KEEP_EVERY`; unset or 0, nothing is kept.
+
+          [env: BIRDNET_RAW_AUDIO_KEEP_EVERY=]
+
       --custom-image-dir <CUSTOM_IMAGE_DIR>
           Directory containing custom species images (checked before Wikipedia cache).
 

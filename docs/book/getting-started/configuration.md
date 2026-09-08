@@ -72,6 +72,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_PURGE_SPECIES_FLOOR` | `--purge-species-floor` | `PURGE_SPECIES_FLOOR` | `5` (`0` = no floor) |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
+| `BIRDNET_RAW_AUDIO_KEEP_EVERY` | `--raw-audio-keep-every` | `RAW_AUDIO_KEEP_EVERY` | `0` (keep no raw audio; `1` keeps every segment, `N` one in N) |
 | `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | `CADDY_PWD` auto-set on bare-metal install; sign in as `admin` (`CADDY_USER` is environment-only — see [Remote access](../admin/remote-access.md)) |
 | `BIRDNET_CORS_ALLOWED_ORIGINS` | — | — | — (same-origin only) |
 

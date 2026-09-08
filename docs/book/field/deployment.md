@@ -108,6 +108,13 @@ the retention each one needs:
   `/tmp/birdnet-stream`), which the detector reads and never needs again. It is
   drained continuously by age and by a total-size ceiling
   (`STREAM_RETENTION_SECS`, `STREAM_MAX_MB`) so the tmpfs self-empties.
+  Set `RAW_AUDIO_KEEP_EVERY=N` to copy one aged segment in N (in capture
+  order) into `<recordings>/raw` before the drain removes it: that is the
+  audio a season can be re-analysed from under a new model, and without it
+  only the audio that already triggered a detection survives. Budget it — a
+  15 s segment at 48 kHz mono is about 1.4 MB, so `1` is roughly 8 GB a day
+  per source and `10` about 0.8 GB — and know that the disk-full purge takes
+  kept raw audio before it takes any clip.
 
 Two further limits are enforced from the database on the daily maintenance
 tick, and both leave the detection rows intact — only the audio is reclaimed,

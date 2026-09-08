@@ -55,7 +55,7 @@ pub fn start_disk_manager(
 ) -> Vec<std::thread::JoinHandle<()>> {
     use birdnet_core::audio::capture::{
         DEFAULT_PURGE_SPECIES_FLOOR, DiskManagerConfig, FullDiskAction, LockedFilesProvider,
-        PurgePolicy,
+        PurgePolicy, RAW_KEEP_SUBDIR, RawKeep,
     };
 
     let max_files_per_species = if cli.max_files_per_species > 0 {
@@ -92,6 +92,25 @@ pub fn start_disk_manager(
             .and_then(|c| c.get_parsed::<u32>("PURGE_SPECIES_FLOOR").ok())
             .unwrap_or(DEFAULT_PURGE_SPECIES_FLOOR)
     });
+
+    // Raw audio kept at a duty cycle (R-4): one aged segment in N is copied
+    // to `<recordings>/raw` before the stream drain removes it. 0 keeps none.
+    let raw_keep_every = cli.raw_audio_keep_every.unwrap_or_else(|| {
+        config
+            .and_then(|c| c.get_parsed::<u32>("RAW_AUDIO_KEEP_EVERY").ok())
+            .unwrap_or(0)
+    });
+    let raw_keep = (raw_keep_every > 0).then(|| RawKeep {
+        dir: state.recording_dir().join(RAW_KEEP_SUBDIR),
+        every: raw_keep_every,
+    });
+    if let Some(policy) = &raw_keep {
+        tracing::info!(
+            every = policy.every,
+            dir = %policy.dir.display(),
+            "keeping one raw segment in N on the data disk; the disk-full purge takes it first"
+        );
+    }
 
     // Re-read once per purge cycle rather than snapshotted here: `/admin/recordings`
     // → "lock" writes `is_locked` at runtime, so a set captured at startup
@@ -149,6 +168,7 @@ pub fn start_disk_manager(
                 stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
                 // Raw segments carry no species; oldest-first is right here.
                 purge_policy: PurgePolicy::OldestFirst,
+                raw_keep,
             },
             "stream",
         ));
@@ -194,6 +214,9 @@ pub fn start_disk_manager(
                     purge_policy: PurgePolicy::KeepEverySpecies {
                         floor: species_floor,
                     },
+                    // The kept raw audio lives under this directory and the
+                    // species-aware purge walks it; nothing is kept from here.
+                    raw_keep: None,
                     stream_max_bytes: 0,
                 },
                 "recordings",

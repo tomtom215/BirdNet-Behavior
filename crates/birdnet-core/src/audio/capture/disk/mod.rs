@@ -22,7 +22,7 @@ use super::types::CaptureError;
 // Re-export public API from sub-modules.
 pub use manager::{
     DEFAULT_PURGE_SPECIES_FLOOR, DiskManager, DiskManagerConfig, FullDiskAction,
-    LockedFilesProvider, PurgePolicy,
+    LockedFilesProvider, PurgePolicy, RAW_KEEP_SUBDIR, RawKeep,
 };
 
 /// Disk space information for a filesystem.

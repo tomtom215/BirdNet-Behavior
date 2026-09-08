@@ -38,6 +38,15 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — raw audio can be kept at a duty cycle
+
+**`RAW_AUDIO_KEEP_EVERY` keeps one raw capture segment in N** (`R-4`). The
+raw audio was gone once analysed, so only what already triggered a
+detection survived and a season could never be re-scored under a new
+model. One aged segment in N, in capture order, is now copied into
+`<recordings>/raw` before the stream directory drains it; the disk-full
+purge takes that raw audio before any clip.
+
 ### Fixed — a segment being analysed is never the one the purge deletes, and one lost before analysis is counted
 
 **Unanalysed audio is no longer destroyed silently** (`PR-1`, `S-3`). The

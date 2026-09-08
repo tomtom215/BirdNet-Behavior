@@ -858,6 +858,19 @@ pub struct Cli {
     #[arg(long, default_value = "0", env = "BIRDNET_STREAM_MAX_MB")]
     pub stream_max_mb: u64,
 
+    /// Keep one raw capture segment in N on the data disk.
+    ///
+    /// The raw audio is otherwise gone once analysed, so only what already
+    /// triggered a detection survives and a season can never be re-analysed
+    /// under a new model. With this set, one aged segment in N (in capture
+    /// order) is copied to `<recordings>/raw` before the stream directory
+    /// drains it; `1` keeps every segment. Budget it: a 15 s segment at 48 kHz
+    /// mono is about 1.4 MB, so `1` is roughly 8 GB a day per source and `10`
+    /// about 0.8 GB. The disk-full purge takes kept raw audio before any clip.
+    /// Config file: `RAW_AUDIO_KEEP_EVERY`; unset or 0, nothing is kept.
+    #[arg(long, env = "BIRDNET_RAW_AUDIO_KEEP_EVERY")]
+    pub raw_audio_keep_every: Option<u32>,
+
     /// Directory containing custom species images (checked before Wikipedia cache).
     ///
     /// Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g.

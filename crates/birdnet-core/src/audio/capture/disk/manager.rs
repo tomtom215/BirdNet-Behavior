@@ -35,6 +35,23 @@ pub enum PurgePolicy {
 /// The per-species floor the recordings purge keeps when nothing sets one.
 pub const DEFAULT_PURGE_SPECIES_FLOOR: u32 = 5;
 
+/// Where kept raw audio lives, under the recordings directory (R-4).
+pub const RAW_KEEP_SUBDIR: &str = "raw";
+
+/// Keep a share of the raw segments the stream drain would delete (R-4).
+///
+/// The raw audio used to be worth nothing once analysed: only what already
+/// triggered a detection survived, so the archive was selected by the very
+/// model under test and nothing could be re-scored. Kept at a duty cycle —
+/// one segment in `every` — it is what a season can be re-analysed from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawKeep {
+    /// Where the kept segments go; created on first use.
+    pub dir: PathBuf,
+    /// Keep one aged segment in this many, in capture order; `1` keeps all.
+    pub every: u32,
+}
+
 /// What to do when the disk reaches the purge threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FullDiskAction {
@@ -96,6 +113,9 @@ pub struct DiskManagerConfig {
     pub ineffective_flag: Option<Arc<AtomicBool>>,
     /// What the disk-full purge takes first (S-2).
     pub purge_policy: PurgePolicy,
+    /// Keep a share of the raw segments the age drain removes (R-4); `None`
+    /// keeps nothing. Only meaningful on the transient stream directory.
+    pub raw_keep: Option<RawKeep>,
 }
 
 impl Default for DiskManagerConfig {
@@ -115,6 +135,7 @@ impl Default for DiskManagerConfig {
             purge_policy: PurgePolicy::KeepEverySpecies {
                 floor: DEFAULT_PURGE_SPECIES_FLOOR,
             },
+            raw_keep: None,
         }
     }
 }
@@ -184,6 +205,7 @@ impl std::fmt::Debug for DiskManagerConfig {
             .field("stream_max_bytes", &self.stream_max_bytes)
             .field("ineffective_flag", &self.ineffective_flag.is_some())
             .field("purge_policy", &self.purge_policy)
+            .field("raw_keep", &self.raw_keep)
             .finish()
     }
 }
@@ -199,6 +221,8 @@ pub struct DiskManager {
     /// What the last purge achieved; shared across the per-cycle copies
     /// [`Self::with_fresh_locks`] makes, so the verdict survives a cycle.
     governor: Arc<Mutex<PurgeGovernor>>,
+    /// Aged segments the drain has seen, for the keep cadence (R-4).
+    raw_seen: Arc<Mutex<u64>>,
 }
 
 impl DiskManager {
@@ -208,6 +232,7 @@ impl DiskManager {
         Self {
             config,
             governor: Arc::new(Mutex::new(PurgeGovernor::default())),
+            raw_seen: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -361,6 +386,10 @@ impl DiskManager {
                 Duration::from_secs(self.config.stream_retention_secs),
                 &self.config.exclude_paths,
                 &self.config.locked_file_names,
+                self.config
+                    .raw_keep
+                    .as_ref()
+                    .map(|policy| (policy, &*self.raw_seen)),
             );
         }
         if self.config.stream_max_bytes > 0 {
@@ -508,6 +537,7 @@ impl DiskManager {
         std::borrow::Cow::Owned(Self {
             config,
             governor: Arc::clone(&self.governor),
+            raw_seen: Arc::clone(&self.raw_seen),
         })
     }
 
