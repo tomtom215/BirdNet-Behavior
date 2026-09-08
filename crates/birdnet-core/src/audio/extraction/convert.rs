@@ -76,9 +76,17 @@ pub(super) fn convert_audio_format(
     output_path: &Path,
     format: AudioFormat,
 ) -> Result<(), ExtractionError> {
-    // Try ffmpeg first, fall back to sox.
-    let result = convert_with_ffmpeg(wav_path, output_path, format)
-        .or_else(|_| convert_with_sox(wav_path, output_path));
+    // The converters write a `.part` sibling (the extension stays last, so
+    // both infer the format from it), which is synced and renamed into place
+    // only once the tool has exited successfully (PS-7, S-4). Try ffmpeg
+    // first, fall back to sox.
+    let part = crate::atomic_file::part_path(output_path);
+    let result = convert_with_ffmpeg(wav_path, &part, format)
+        .or_else(|_| convert_with_sox(wav_path, &part))
+        .and_then(|()| {
+            crate::atomic_file::commit(&part, output_path)
+                .map_err(|e| ExtractionError::Write(e.to_string()))
+        });
 
     match result {
         Ok(()) => {
@@ -89,13 +97,14 @@ pub(super) fn convert_audio_format(
             Ok(())
         }
         Err(e) => {
+            let _ = std::fs::remove_file(&part);
             // Clean up the intermediate WAV (rename it to the target as fallback).
             tracing::warn!(
                 error = %e,
                 format = %format,
                 "format conversion failed, keeping WAV"
             );
-            std::fs::rename(wav_path, output_path)?;
+            crate::atomic_file::commit(wav_path, output_path)?;
             Ok(())
         }
     }

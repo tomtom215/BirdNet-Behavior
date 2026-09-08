@@ -162,6 +162,15 @@ model; it now reads the detector's liveness and says "Detector not running"
 with a link to the doctor. The compose file's health check says why it is not
 `?strict=1` and where the strict probe is for.
 
+**A clip is on disk whole or not at all** (`S-4`, `PS-7`). Clips were written
+straight to their final names, so a power cut mid-write — the field station's
+ordinary way of stopping — left a truncated WAV the database row pointed at
+for ever, indistinguishable from a short recording; `sync_all` appeared at one
+production site in the whole workspace, none of them in the audio path. Clips
+and converted clips are now written as `name.part.ext`, synced, renamed into
+place, and the directory synced. The gate kills a worker mid-write and looks
+at what is left.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

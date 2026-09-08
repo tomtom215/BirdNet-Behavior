@@ -3,6 +3,7 @@
 //! Provides audio processing, ML inference, detection types, and configuration
 //! parsing for the BirdNET-Pi bird classification system.
 
+pub mod atomic_file;
 pub mod audio;
 pub mod civil;
 pub mod config;
