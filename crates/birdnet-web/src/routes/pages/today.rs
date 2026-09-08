@@ -432,7 +432,7 @@ pub(super) enum CaptureState {
     /// Sources are configured, the detection daemon is running, and no gauge
     /// has been published yet (the supervisor has not reconciled them, e.g.
     /// in the first seconds after a start). Not an outage — just not known.
-    /// A process with no running daemon is [`Self::Down`], never this.
+    /// A process with no running daemon and no gauge is [`Self::Down`].
     Unknown,
 }
 
@@ -446,15 +446,6 @@ pub(super) fn live_capture_state(state: &AppState) -> CaptureState {
     if sources.is_empty() {
         return CaptureState::NoSource;
     }
-    // A process whose detection daemon is not running captures nothing,
-    // whatever the gauges last said — and when the daemon never started they
-    // say nothing, which used to read as `Unknown` and grade "Healthy" while
-    // `/api/v2/health?strict=1` on the same process said the daemon was
-    // stopped. The flag is set before the listener binds and cleared by the
-    // loop thread on exit, so this is not a boot-time flash.
-    if !state.detection_daemon_running() {
-        return CaptureState::Down;
-    }
     let gauges: Vec<Option<bool>> = sources
         .iter()
         .map(|s| state.metrics().source_up(&s.id))
@@ -462,7 +453,23 @@ pub(super) fn live_capture_state(state: &AppState) -> CaptureState {
     if gauges.contains(&Some(true)) {
         CaptureState::Up
     } else if gauges.iter().all(Option::is_none) {
-        CaptureState::Unknown
+        // No gauge was ever published. With the detection daemon running that
+        // is the first seconds after a start, before the supervisor has
+        // reconciled the sources: not known yet, not an outage. With no
+        // running daemon nothing will ever publish one — a source added while
+        // the daemon is down, a thread that never started, a `--web-only`
+        // process — and this used to read as `Unknown` and grade "Healthy"
+        // while `/api/v2/health?strict=1` on the same process said the daemon
+        // was stopped. The flag is set before the listener binds and cleared
+        // by the loop thread on exit, so this is not a boot-time flash. A
+        // gauge that *does* say up is believed even with the flag clear: the
+        // capture supervisor is not the detection loop, and a dead detector
+        // under a live microphone is `?strict=1`'s to report, not this pill's.
+        if state.detection_daemon_running() {
+            CaptureState::Unknown
+        } else {
+            CaptureState::Down
+        }
     } else {
         CaptureState::Down
     }
@@ -1110,6 +1117,13 @@ mod tests {
         assert_eq!(live_capture_state(&state), CaptureState::Up);
         state.metrics().set_source_up("mic0", false);
         assert_eq!(live_capture_state(&state), CaptureState::Down);
+
+        // A gauge that says up is the capture supervisor's word and stands
+        // even when the detection flag is clear: capture and detection are
+        // different threads, and `?strict=1` is what reports a dead detector.
+        state.metrics().set_source_up("mic0", true);
+        state.detection_status_flag().store(false, Ordering::SeqCst);
+        assert_eq!(live_capture_state(&state), CaptureState::Up);
     }
 
     #[test]
