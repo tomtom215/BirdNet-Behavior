@@ -429,9 +429,10 @@ pub(super) enum CaptureState {
     Up,
     /// Sources are configured and none is up.
     Down,
-    /// Sources are configured but no gauge has been published yet (the
-    /// supervisor has not reconciled them, e.g. in the first seconds after a
-    /// start, or in a web-only process). Not an outage — just not known.
+    /// Sources are configured, the detection daemon is running, and no gauge
+    /// has been published yet (the supervisor has not reconciled them, e.g.
+    /// in the first seconds after a start). Not an outage — just not known.
+    /// A process with no running daemon is [`Self::Down`], never this.
     Unknown,
 }
 
@@ -444,6 +445,15 @@ pub(super) fn live_capture_state(state: &AppState) -> CaptureState {
         .unwrap_or_default();
     if sources.is_empty() {
         return CaptureState::NoSource;
+    }
+    // A process whose detection daemon is not running captures nothing,
+    // whatever the gauges last said — and when the daemon never started they
+    // say nothing, which used to read as `Unknown` and grade "Healthy" while
+    // `/api/v2/health?strict=1` on the same process said the daemon was
+    // stopped. The flag is set before the listener binds and cleared by the
+    // loop thread on exit, so this is not a boot-time flash.
+    if !state.detection_daemon_running() {
+        return CaptureState::Down;
     }
     let gauges: Vec<Option<bool>> = sources
         .iter()
@@ -1059,6 +1069,48 @@ async fn unlock_detection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configured source on a process whose detection daemon is not running
+    /// is not capturing, whatever the gauges say — and they say nothing, since
+    /// nothing ever reconciled them. The badge read that as `Unknown` and
+    /// graded it "Healthy" while `/api/v2/health?strict=1` on the same process
+    /// said `detection_daemon: stopped` (`ops-4`). With the daemon running,
+    /// an unpublished gauge is still "not known yet", not an outage.
+    #[test]
+    fn a_configured_source_without_a_running_daemon_reads_as_down() {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+        use std::sync::atomic::Ordering;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        assert_eq!(live_capture_state(&state), CaptureState::NoSource);
+
+        state
+            .with_db(|conn| {
+                conn.insert(&NewAudioSource::defaults(
+                    "mic0",
+                    SourceKind::Rtsp,
+                    "rtsp://127.0.0.1:1/dead",
+                ))
+            })
+            .unwrap();
+        assert_eq!(
+            live_capture_state(&state),
+            CaptureState::Down,
+            "a source on a process with no detection daemon is not capturing"
+        );
+
+        state.detection_status_flag().store(true, Ordering::SeqCst);
+        assert_eq!(
+            live_capture_state(&state),
+            CaptureState::Unknown,
+            "the counterpart: a running daemon that has not reconciled yet is not an outage"
+        );
+        state.metrics().set_source_up("mic0", true);
+        assert_eq!(live_capture_state(&state), CaptureState::Up);
+        state.metrics().set_source_up("mic0", false);
+        assert_eq!(live_capture_state(&state), CaptureState::Down);
+    }
 
     #[test]
     fn hour_formatting() {

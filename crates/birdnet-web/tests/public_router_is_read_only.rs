@@ -114,7 +114,10 @@ async fn the_mutating_routes_are_still_mounted_somewhere() {
 async fn reading_the_dashboard_still_needs_no_login() {
     // The other half of the contract, which the fix must not have broken: the
     // pages themselves stay open. A regression here is somebody over-correcting
-    // by gating the whole of `pages::router()`.
+    // by gating the whole of `pages::router()`. (`/onboarding` used to be in
+    // this list; it now sits behind the gate with its own save — `ON-6` — and
+    // `the_setup_wizard_is_gated_and_keeps_only_a_real_location.rs` holds
+    // that an open station still serves it through the full router.)
     let public = birdnet_web::routes::public_routes().with_state(test_state());
 
     for path in [
@@ -122,7 +125,6 @@ async fn reading_the_dashboard_still_needs_no_login() {
         "/pages/quarantine-list",
         "/pages/recordings-clips",
         "/pages/detection-reviews-queue",
-        "/onboarding",
     ] {
         let status = status_of(public.clone(), Method::GET, path).await;
         assert!(
