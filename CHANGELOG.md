@@ -171,6 +171,19 @@ and converted clips are now written as `name.part.ext`, synced, renamed into
 place, and the directory synced. The gate kills a worker mid-write and looks
 at what is left.
 
+**A live sibling's lock is not corruption, and one process owns a data
+directory** (`DD-25`). A second instance on the same data directory — a
+`systemctl restart` overlapping a slow shutdown, or the binary started by hand
+beside the unit — met DuckDB's "Could not set lock on file", took it for a
+damaged store, moved the first process's live analytics database aside and
+rebuilt an empty one, and only then died on the port. A lock conflict is now
+retried for the shutdown grace (30 s) and, if still held, reported as locked
+with analytics off for that start; the file is never touched. And before
+anything opens a file there, the process takes an advisory lock on
+`birdnet.lock` beside the database, waits the same grace for a previous
+instance to go, and otherwise refuses to start saying so
+(`BNB_INSTANCE_LOCK_GRACE_SECS` lengthens the wait).
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

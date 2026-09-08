@@ -408,6 +408,18 @@ impl AppState {
 
                 Some(Mutex::new(adb))
             }
+            Err(e @ birdnet_behavioral::connection::AnalyticsError::Locked(_)) => {
+                // Another process has the store (DD-25). It was left alone, and
+                // this start runs without analytics: a second instance on one
+                // data directory is stopped by the instance lock before it gets
+                // here, so this is a restart overlapping a very slow shutdown.
+                tracing::error!(
+                    error = %e,
+                    "DuckDB analytics database is held by another process; analytics are \
+                     off for this start and the file was not touched"
+                );
+                None
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "DuckDB analytics database not available (non-fatal)");
                 None

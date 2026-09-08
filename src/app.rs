@@ -141,6 +141,17 @@ async fn serve(
     // station owns already does, and makes `--doctor`'s "will be created on
     // first run" true rather than aspirational.
     helpers::ensure_db_dir(&db_path)?;
+    // One process per data directory (DD-25), before anything opens a file
+    // there: a second instance used to quarantine the first one's live
+    // analytics store and only then die on the bind. Held until `serve`
+    // returns.
+    let instance_lock = helpers::instance_lock::acquire(
+        db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
+        helpers::instance_lock::grace_from_env(),
+    )?;
+    tracing::debug!(lock = %instance_lock.path.display(), "data directory locked for this process");
     let backup_dir = db_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))

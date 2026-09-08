@@ -59,6 +59,7 @@ Common causes and fixes:
 | `failed to install Ctrl+C handler` / `SIGTERM handler`         | Likely running under a non-Unix or sandboxed environment without signal support                    |
 | `address already in use`                                       | Another service is on port 8502; change the bind address with `BIRDNET_LISTEN=0.0.0.0:<port>` (the binary reads `--listen`/`BIRDNET_LISTEN`; `BIRDNET_PORT` is only the Docker host-port mapping) or stop the conflicting service |
 | `permission denied` reading `/etc/birdnet/birdnet.conf`        | The config is `0640 root:<service-group>` (it holds secrets). Run `sudo bash install.sh repair` to restore correct ownership/permissions. |
+| `another instance is running on this data directory (…/birdnet.lock is locked …)` | A previous process still holds the data directory — a restart overlapping a slow shutdown, or the binary started by hand beside the unit. The new process waits 30 s for it (`BNB_INSTANCE_LOCK_GRACE_SECS` to wait longer) and then refuses rather than opening the same files; `sudo systemctl stop birdnet-behavior`, check `pgrep -a birdnet-behavior`, and start once. |
 
 Still stuck? `sudo bash install.sh repair` re-creates missing directories, fixes
 ownership/permissions, rewrites the systemd unit, and restarts — fixing most

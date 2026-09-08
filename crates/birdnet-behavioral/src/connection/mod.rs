@@ -21,6 +21,7 @@ pub use sync::LiveDetection;
 use duckdb::{Connection, Error as DuckDbError};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::queries;
 
@@ -39,6 +40,10 @@ pub enum AnalyticsError {
     ExtensionLoad(String),
     /// Query returned unexpected data.
     InvalidData(String),
+    /// Another process holds the database file's lock, and kept holding it
+    /// for the whole grace period. Not corruption: the file is fine and in
+    /// use, and must not be moved aside (DD-25).
+    Locked(String),
 }
 
 impl fmt::Display for AnalyticsError {
@@ -47,6 +52,9 @@ impl fmt::Display for AnalyticsError {
             Self::Database(e) => write!(f, "DuckDB error: {e}"),
             Self::ExtensionLoad(msg) => write!(f, "extension load error: {msg}"),
             Self::InvalidData(msg) => write!(f, "invalid data: {msg}"),
+            Self::Locked(msg) => {
+                write!(f, "analytics database is locked by another process: {msg}")
+            }
         }
     }
 }
@@ -55,7 +63,7 @@ impl std::error::Error for AnalyticsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Database(e) => Some(e),
-            Self::ExtensionLoad(_) | Self::InvalidData(_) => None,
+            Self::ExtensionLoad(_) | Self::InvalidData(_) | Self::Locked(_) => None,
         }
     }
 }
@@ -315,6 +323,52 @@ pub enum OpenOutcome {
     },
 }
 
+/// How long a lock held by another process is waited out (DD-25).
+///
+/// Matches the unit's `TimeoutStopSec=30`: a restart that overlaps a slow
+/// shutdown resolves inside this window, and a sibling that is still there
+/// after it is a second instance, not a slow one.
+pub const SIBLING_GRACE: Duration = Duration::from_secs(30);
+
+/// How often the open is retried while the file is locked.
+const LOCK_RETRY_EVERY: Duration = Duration::from_millis(500);
+
+/// Whether an error is `DuckDB` refusing to open a file another process has
+/// locked, rather than anything wrong with the file.
+///
+/// The two phrasings are `local_file_system.cpp`'s: the `IOException` on the
+/// failed `flock`, and the detail it appends naming the holder.
+#[must_use]
+pub fn is_lock_conflict(error: &AnalyticsError) -> bool {
+    let text = error.to_string();
+    text.contains("Could not set lock on file") || text.contains("Conflicting lock is held")
+}
+
+/// Run `attempt` until it succeeds, fails with something other than a lock
+/// conflict, or `grace` has passed with the lock still held — in which case
+/// the last conflict is returned as [`AnalyticsError::Locked`].
+fn retry_while_locked<T>(
+    grace: Duration,
+    every: Duration,
+    mut attempt: impl FnMut() -> Result<T, AnalyticsError>,
+) -> Result<T, AnalyticsError> {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) if is_lock_conflict(&e) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(AnalyticsError::Locked(e.to_string()));
+                }
+                std::thread::sleep(
+                    every.min(deadline.saturating_duration_since(std::time::Instant::now())),
+                );
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Move an unusable analytics database (and its `.wal` sidecar) aside.
 ///
 /// Returns the path it was moved to. The suffix carries a Unix-seconds stamp so
@@ -502,7 +556,28 @@ impl AnalyticsDb {
     /// or if the freshly-created replacement also fails to open — either of
     /// which means the analytics directory itself is not writable.
     pub fn open_or_quarantine(path: &Path) -> Result<(Self, OpenOutcome), AnalyticsError> {
-        let probe_failure = match Self::open(path) {
+        Self::open_or_quarantine_with_grace(path, SIBLING_GRACE)
+    }
+
+    /// As [`Self::open_or_quarantine`], waiting up to `grace` for another
+    /// process to release the file's lock before giving up on it.
+    ///
+    /// A lock held by a live sibling is not corruption (DD-25). A
+    /// `systemctl restart` that overlaps a slow shutdown, or a second
+    /// instance started by hand, meets `DuckDB`'s "Could not set lock on
+    /// file" — and treating that as "unusable" moved the first process's
+    /// live store aside and rebuilt an empty one next to it. The open is
+    /// retried for the grace period, and a lock still held at its end is
+    /// reported as [`AnalyticsError::Locked`], never quarantined.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open_or_quarantine`], plus [`AnalyticsError::Locked`].
+    pub fn open_or_quarantine_with_grace(
+        path: &Path,
+        grace: Duration,
+    ) -> Result<(Self, OpenOutcome), AnalyticsError> {
+        let probe_failure = match retry_while_locked(grace, LOCK_RETRY_EVERY, || Self::open(path)) {
             Ok(db) => match db.probe() {
                 Ok(()) => return Ok((db, OpenOutcome::Opened)),
                 // Drop the handle before renaming the file underneath it.
@@ -511,6 +586,16 @@ impl AnalyticsDb {
                     e
                 }
             },
+            Err(e @ AnalyticsError::Locked(_)) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    grace_secs = grace.as_secs(),
+                    error = %e,
+                    "analytics database is held by another process and was not released \
+                     within the grace period; leaving it alone"
+                );
+                return Err(e);
+            }
             Err(e) => e,
         };
 
@@ -820,6 +905,53 @@ impl AnalyticsDb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DD-25: the classifier reads `DuckDB`'s two lock phrasings and nothing
+    /// else, and the retry gives up as `Locked` only once the grace has
+    /// passed — never by quarantining.
+    #[test]
+    fn a_lock_conflict_is_retried_for_the_grace_and_then_reported_as_locked() {
+        let lock = || {
+            AnalyticsError::InvalidData(
+                "IO Error: Could not set lock on file \"/data/a.duckdb\": Conflicting lock is \
+                 held in /usr/bin/birdnet-behavior (PID 4242)"
+                    .into(),
+            )
+        };
+        assert!(is_lock_conflict(&lock()));
+        assert!(!is_lock_conflict(&AnalyticsError::InvalidData(
+            "checksum mismatch".into()
+        )));
+
+        // Locked for the first three attempts, then free: succeeds.
+        let mut calls = 0;
+        let out = retry_while_locked(Duration::from_secs(5), Duration::from_millis(1), || {
+            calls += 1;
+            if calls < 4 { Err(lock()) } else { Ok(calls) }
+        });
+        assert_eq!(out.unwrap(), 4);
+
+        // Locked throughout: `Locked`, after the grace, carrying the text.
+        let started = std::time::Instant::now();
+        let out = retry_while_locked(Duration::from_millis(60), Duration::from_millis(5), || {
+            Err::<(), _>(lock())
+        });
+        assert!(started.elapsed() >= Duration::from_millis(60));
+        match out {
+            Err(AnalyticsError::Locked(msg)) => assert!(msg.contains("PID 4242"), "{msg}"),
+            other => panic!("expected Locked, got {other:?}"),
+        }
+
+        // Anything else is returned at once, untouched.
+        let mut calls = 0;
+        let out = retry_while_locked(Duration::from_secs(5), Duration::from_millis(1), || {
+            calls += 1;
+            Err::<(), _>(AnalyticsError::InvalidData("corrupt".into()))
+        });
+        assert!(matches!(out, Err(AnalyticsError::InvalidData(_))));
+        assert_eq!(calls, 1);
+    }
+
     use tempfile::TempDir;
 
     fn make_db() -> (AnalyticsDb, TempDir) {

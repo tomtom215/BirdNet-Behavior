@@ -175,19 +175,19 @@ mod tests {
                 interrupted += 1;
             }
             if let Ok(meta) = std::fs::metadata(&final_path) {
-                    // Present means complete: it decodes to every sample.
-                    let reader = hound::WavReader::open(&final_path).unwrap_or_else(|e| {
-                        panic!(
-                            "a file under the final name must be a whole WAV ({} bytes): {e}",
-                            meta.len()
-                        )
-                    });
-                    assert_eq!(
-                        reader.len(),
-                        WORKER_SAMPLES,
-                        "a file under the final name must be the whole clip ({} bytes)",
+                // Present means complete: it decodes to every sample.
+                let reader = hound::WavReader::open(&final_path).unwrap_or_else(|e| {
+                    panic!(
+                        "a file under the final name must be a whole WAV ({} bytes): {e}",
                         meta.len()
-                    );
+                    )
+                });
+                assert_eq!(
+                    reader.len(),
+                    WORKER_SAMPLES,
+                    "a file under the final name must be the whole clip ({} bytes)",
+                    meta.len()
+                );
             }
         }
         assert!(
