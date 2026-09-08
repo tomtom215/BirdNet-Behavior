@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10  # observed 14s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + rustfmt)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -58,7 +58,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 7m47s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -107,7 +107,7 @@ jobs:
       # controls could not catch the fetch failing, which is the whole defect.
       BIRDNET_REQUIRE_LIVE_EXTENSION: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '' }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free up runner disk space
         # The all-features step compiles the workspace a 4th time (bundled
         # DuckDB + analytics) atop the earlier lib/bins, integration-test, and
@@ -238,7 +238,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 11m14s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free up runner disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
@@ -326,7 +326,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 8m50s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install native build dependencies
@@ -348,7 +348,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 9m39s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install native build dependencies
@@ -397,7 +397,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30  # observed 8m39s
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The MSRV is stated in three places that must agree: this job's
       # toolchain ref, `workspace.package.rust-version` in Cargo.toml, and
@@ -463,7 +463,7 @@ jobs:
       CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
       AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + aarch64 target)
         uses: dtolnay/rust-toolchain@stable
         with:
