@@ -145,6 +145,65 @@ fn a_successful_restore_still_replaces_the_database() {
     );
 }
 
+/// A restore replaces the live database with an *older* copy. Everything the
+/// station recorded after that backup was taken is in the file being replaced
+/// and nowhere else — a torn `birds.db` is usually a few bad pages, not a lost
+/// history — so that file must be kept beside the live one, under the same
+/// `.corrupt.<timestamp>` name the no-backup path uses, where the doctor's
+/// quarantine scan finds it. It used to be deleted, and the log said only
+/// "database restored from backup".
+#[test]
+fn a_restore_keeps_the_damaged_original_beside_the_live_database() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("birds.db");
+    station(&db, 3);
+    // Tear it the way a power cut does: truncate to half.
+    let full = std::fs::metadata(&db).expect("meta").len();
+    let torn_len = full / 2;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&db)
+        .expect("open")
+        .set_len(torn_len)
+        .expect("truncate");
+
+    let backup = dir.path().join("birds.db.backup.20260101-000000");
+    station(&backup, 99);
+
+    birdnet_db::resilience::restore_from_backup(&backup, &db).expect("restore");
+    assert_eq!(rows_in(&db), Some(99));
+
+    let kept: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read_dir")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            let n = p.file_name().unwrap().to_string_lossy().into_owned();
+            n.starts_with("birds.db.corrupt.") && !n.ends_with("-wal") && !n.ends_with("-shm")
+        })
+        .collect();
+    assert_eq!(
+        kept.len(),
+        1,
+        "the damaged original must be kept, not deleted: {kept:?}"
+    );
+    assert_eq!(
+        std::fs::metadata(&kept[0]).expect("meta").len(),
+        torn_len,
+        "and it must be the torn file as it was"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .expect("read_dir")
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("restore-tmp"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the verification's sidecars were left behind: {leftovers:?}"
+    );
+}
+
 /// Restoring over a destination that does not exist at all is the ordinary
 /// first-recovery case and must still work.
 #[test]

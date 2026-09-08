@@ -159,9 +159,39 @@ fn quarantine_verdict(found: &[PathBuf]) -> Check {
     let Some(newest) = found.last() else {
         return Check::pass(
             QUARANTINE_NAME,
-            "no quarantined analytics databases — the analytics store has not had to be rebuilt",
+            "no quarantined databases — neither store has had to be set aside",
         );
     };
+    // The two stores mean opposite things when quarantined. An analytics
+    // (`.duckdb`) quarantine is rebuilt from SQLite and loses nothing. A
+    // detection (`.db`) quarantine *is* the detection history: `birds.db`
+    // failed its check with no usable backup, or a backup was restored over
+    // it and it holds everything recorded after that backup was taken. This
+    // used to describe both as "no detections were lost".
+    let sqlite: Vec<&PathBuf> = found
+        .iter()
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains(".db.corrupt."))
+        })
+        .collect();
+    if let Some(newest_db) = sqlite.last() {
+        return Check::warn(
+            QUARANTINE_NAME,
+            format!(
+                "{} quarantined detection database(s) found; the most recent is {}",
+                sqlite.len(),
+                newest_db.display()
+            ),
+            "That file is detection history that is not in the live database: either it \
+             failed its integrity check with no usable backup, or a backup was restored over \
+             it and it holds everything recorded after the backup was taken. Recover its rows \
+             (`sqlite3 <file> .recover | sqlite3 rescued.db`, then import) or restore a newer \
+             backup, and do not delete it until you have. Repeated quarantines point at \
+             failing storage.",
+        );
+    }
     Check::warn(
         QUARANTINE_NAME,
         format!(
@@ -217,6 +247,47 @@ mod tests {
             c.message.contains("1800000000"),
             "the most recent quarantine should be named: {}",
             c.message
+        );
+    }
+
+    /// `birds.db.corrupt.<ts>` is the whole detection history, set aside
+    /// because it failed its check with no usable backup — or, since the
+    /// restore keeps it, the file a backup replaced, holding everything
+    /// recorded after that backup. The check used to describe every
+    /// quarantine as "analytics … rebuilt automatically from SQLite, so no
+    /// detections were lost", which for this file is the opposite of true.
+    #[test]
+    fn a_quarantined_detection_database_is_never_described_as_lossless() {
+        let c = quarantine_verdict(&[PathBuf::from(
+            "/var/lib/birdnet/birds.db.corrupt.1800000000",
+        )]);
+        assert_eq!(c.status, Status::Warn);
+        let advice = c.remediation.clone().unwrap_or_default();
+        assert!(
+            !advice.contains("no detections were lost"),
+            "a detection-database quarantine was called lossless: {advice}"
+        );
+        assert!(
+            c.message.contains("detection database"),
+            "the message must say which store this is: {}",
+            c.message
+        );
+        assert!(
+            advice.contains(".recover") || advice.contains("restore"),
+            "the advice must say how to get the history back: {advice}"
+        );
+
+        // The counterpart: an analytics-only quarantine keeps the reassurance,
+        // because for that store it is true.
+        let c = quarantine_verdict(&[PathBuf::from(
+            "/var/lib/birdnet/birds.duckdb.corrupt.1800000000",
+        )]);
+        assert!(
+            c.remediation
+                .clone()
+                .unwrap_or_default()
+                .contains("no detections were lost"),
+            "{c:?}"
         );
     }
 

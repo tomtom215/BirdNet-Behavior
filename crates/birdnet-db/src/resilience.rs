@@ -565,29 +565,57 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
         }
     }
 
-    // Only now is the old database in the way. Use `with_suffix` (raw append)
-    // rather than `with_extension`: the WAL/SHM sidecars are `<db_path>-wal` /
-    // `-shm`, and `with_extension("db-wal")` only produces that for a path
-    // literally ending in `.db`. For any other name (e.g. `/data/station` or
-    // `my.archive.db`) it would target the wrong file and leave the real
-    // sidecars attached to the freshly restored DB, risking re-corruption — the
-    // same bug `quarantine_corrupt_database` already avoids with `with_suffix`.
-    remove_if_present(db_path);
-    remove_if_present(&with_suffix(db_path, "-wal"));
-    remove_if_present(&with_suffix(db_path, "-shm"));
+    // Only now is the old database in the way — and it is set aside, not
+    // deleted. A backup is older than the file it replaces, so everything the
+    // station recorded after the backup was taken is in that file and nowhere
+    // else; a torn `birds.db` is usually a few bad pages over an intact
+    // history, and `sqlite3 .recover` gets most of it back. It used to be
+    // removed here, and the log said only "database restored from backup":
+    // reproduced with 3 100 rows over a backup of 3 000, the restore left
+    // 3 000 rows, no copy of the other 100, and a health page that said
+    // healthy. `quarantine_corrupt_database` gives it the `.corrupt.<ts>` name
+    // the doctor's quarantine scan reports, and moves the WAL/SHM sidecars
+    // with it (`with_suffix`, raw append: `with_extension("db-wal")` only
+    // produces `<db>-wal` for a path literally ending in `.db`, and for any
+    // other name would leave the real sidecars attached to the restored file).
+    let kept = if db_path.exists() {
+        Some(
+            quarantine_corrupt_database(db_path).map_err(|e| ResilienceError::RestoreFailed {
+                backup: backup_path.to_path_buf(),
+                detail: format!("the damaged database could not be set aside: {e}"),
+            })?,
+        )
+    } else {
+        remove_if_present(&with_suffix(db_path, "-wal"));
+        remove_if_present(&with_suffix(db_path, "-shm"));
+        None
+    };
 
     std::fs::rename(&tmp, db_path).map_err(|e| ResilienceError::RestoreFailed {
         backup: backup_path.to_path_buf(),
         detail: format!("the restored copy could not be moved into place: {e}"),
     })?;
+    // The verification above opened the temporary and left its sidecars
+    // behind; they belong to a file that no longer exists under that name.
+    remove_if_present(&with_suffix(&tmp, "-wal"));
+    remove_if_present(&with_suffix(&tmp, "-shm"));
 
     enforce_wal_mode(db_path)?;
 
-    tracing::warn!(
-        backup = %backup_path.display(),
-        target = %db_path.display(),
-        "database restored from backup"
-    );
+    match kept {
+        Some(kept) => tracing::warn!(
+            backup = %backup_path.display(),
+            target = %db_path.display(),
+            kept = %kept.display(),
+            "database restored from backup; the damaged original is kept beside it and holds \
+             everything recorded after the backup was taken — recover it before deleting it"
+        ),
+        None => tracing::warn!(
+            backup = %backup_path.display(),
+            target = %db_path.display(),
+            "database restored from backup"
+        ),
+    }
 
     Ok(())
 }
