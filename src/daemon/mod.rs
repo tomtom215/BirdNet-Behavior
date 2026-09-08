@@ -128,6 +128,17 @@ fn throughput_observer(
             })
 }
 
+/// Whether the board is at the limit the shed policy backs off at: the CPU
+/// at or above the thermal-alert line, or the firmware throttling now.
+///
+/// The sensor reads stay in [`shed_policy`]'s closure; the decision is here
+/// so it can be stated as a table. Both of its operators survived a full
+/// mutation run inside the closure (`>=` for `<`, `||` for `&&`) because
+/// nothing could call a closure that reads the real sensor.
+fn thermal_limit_reached(cpu_temp_c: Option<f32>, throttled_now: bool) -> bool {
+    cpu_temp_c.is_some_and(|t| t >= crate::integrations::THERMAL_ALERT_C) || throttled_now
+}
+
 /// One segment in two while the queue is deep or the board is at its thermal
 /// limit (PR-2); the thermal condition and this read the same sensor and the
 /// same line, so the notification and the shed agree.
@@ -136,11 +147,11 @@ fn shed_policy() -> birdnet_core::detection::daemon::ShedPolicy {
         birdnet_core::detection::daemon::DEFAULT_SHED_BACKLOG_ABOVE,
     )
     .with_thermal(|| {
-        let hot = birdnet_web::system_info::cpu_temperature()
-            .is_some_and(|t| t >= crate::integrations::THERMAL_ALERT_C);
-        let throttled = birdnet_web::system_info::pi_throttled()
-            .is_some_and(birdnet_web::system_info::PiThrottle::throttled_now);
-        hot || throttled
+        thermal_limit_reached(
+            birdnet_web::system_info::cpu_temperature(),
+            birdnet_web::system_info::pi_throttled()
+                .is_some_and(birdnet_web::system_info::PiThrottle::throttled_now),
+        )
     })
 }
 
@@ -509,6 +520,30 @@ mod liveness_mirror_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shed policy's thermal input, as a table.
+    ///
+    /// | CPU temperature        | throttled now | at the limit? |
+    /// |------------------------|---------------|---------------|
+    /// | unknown                | no            | no            |
+    /// | below the alert line   | no            | no            |
+    /// | exactly the alert line | no            | yes           |
+    /// | above it               | no            | yes           |
+    /// | unknown                | yes           | yes           |
+    /// | below the alert line   | yes           | yes           |
+    ///
+    /// The exact-line row separates `>=` from `>` and from `<`; the two
+    /// throttled rows with a cool or unknown CPU separate `||` from `&&`.
+    #[test]
+    fn the_thermal_limit_is_the_alert_line_or_the_firmware_throttling() {
+        let line = crate::integrations::THERMAL_ALERT_C;
+        assert!(!thermal_limit_reached(None, false));
+        assert!(!thermal_limit_reached(Some(line - 0.5), false));
+        assert!(thermal_limit_reached(Some(line), false));
+        assert!(thermal_limit_reached(Some(line + 10.0), false));
+        assert!(thermal_limit_reached(None, true));
+        assert!(thermal_limit_reached(Some(line - 20.0), true));
+    }
 
     /// The full truth table for the "enabled but inert" warning.
     ///

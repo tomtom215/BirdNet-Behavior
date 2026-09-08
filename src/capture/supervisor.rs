@@ -1142,6 +1142,22 @@ mod tests {
         assert!(!snap.flapping);
     }
 
+    /// The window's edge, stated: a restart exactly `FLAP_WINDOW` ago is
+    /// still inside the window (`>` drops only what is older), and one
+    /// nanosecond past it is not. The test above looks a full second past
+    /// the edge, which is why cargo-mutants' `>=` survived it.
+    #[test]
+    fn a_restart_exactly_one_window_old_is_still_counted() {
+        let mut sup = one(FakeSource::healthy());
+        let t0 = Instant::now();
+        sup.sources[0].restarts.push_back(t0);
+        assert_eq!(sup.sources[0].restarts_in_window(t0 + FLAP_WINDOW), 1);
+        assert_eq!(
+            sup.sources[0].restarts_in_window(t0 + FLAP_WINDOW + Duration::from_nanos(1)),
+            0
+        );
+    }
+
     // ---- multiple sources are independent ---------------------------------
 
     #[test]

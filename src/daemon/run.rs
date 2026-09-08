@@ -218,6 +218,10 @@ mod tests {
         );
         assert_eq!((row.lat, row.lon), (Some(51.48), Some(-0.13)));
         assert!(row.geomodel_sha256.is_none());
+        // The paths are the row's, verbatim: a re-analysis (R-5) finds the
+        // model by them, so a placeholder there is a silent loss.
+        assert_eq!(row.model_path, m.model_path.to_string_lossy());
+        assert_eq!(row.labels_path, m.labels_path.to_string_lossy());
     }
 
     #[test]
