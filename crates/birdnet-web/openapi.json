@@ -2662,6 +2662,13 @@
             ],
             "description": "Seconds since the most recent stored detection, or null before the first measurement."
           },
+          "analysis_queue_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Raw segments waiting for analysis after the daemon's last sweep, or null before it reports. Above the shed threshold the daemon analyses one segment in two and raises the `backlog` condition."
+          },
           "detection_deadman": {
             "type": "string",
             "enum": [

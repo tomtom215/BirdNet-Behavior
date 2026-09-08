@@ -16,7 +16,10 @@ use crate::inference::model::BirdNetModel;
 use crate::inference::species_filter::SpeciesFilter;
 
 use super::process::process_and_infer_filtered;
-use super::{DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, new_event_correlation_id};
+use super::{
+    DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, ShedReason, new_event_correlation_id,
+    shed_split,
+};
 
 /// How stale the operator's species include/exclude lists may get before the
 /// next file re-reads them.
@@ -159,6 +162,9 @@ pub fn run_daemon(
     let filter_observer = config.on_species_filter_state.clone();
     let throughput = config.on_file_analysed.clone();
     let in_flight = config.in_flight.clone();
+    let shed_policy = config.shed.clone();
+    // The shed decision is logged on change, not on every 500 ms sweep.
+    let mut shedding: Option<ShedReason> = None;
     if let Some(observer) = filter_observer.as_ref() {
         observer.report(species_filter.has_model(), None);
     }
@@ -345,7 +351,45 @@ pub fn run_daemon(
                     observer.dropped(path);
                 }
             }
-            for path in settled.ready {
+            // The queue is what is still settling plus what this sweep will
+            // analyse (PR-2). Published once per sweep; the shed policy
+            // decides on it.
+            let queue_depth = pending.len() + settled.ready.len();
+            if let Some(observer) = throughput.as_ref() {
+                observer.queue_depth(queue_depth);
+            }
+            let decision = shed_policy.as_ref().and_then(|p| p.decide(queue_depth));
+            if decision != shedding {
+                if let Some(reason) = decision {
+                    tracing::warn!(
+                        queue_depth,
+                        reason = reason.as_str(),
+                        "analysing one segment in two until this clears — inference is \
+                         behind real time here; the skipped segments are counted in \
+                         birdnet_segments_shed_total, not lost quietly"
+                    );
+                } else {
+                    tracing::info!(
+                        queue_depth,
+                        "shedding stopped; every segment is analysed again"
+                    );
+                }
+                shedding = decision;
+            }
+            let ready = match decision {
+                Some(reason) => {
+                    let (analyse, shed) = shed_split(settled.ready);
+                    for path in &shed {
+                        tracing::debug!(file = %path.display(), reason = reason.as_str(), "segment shed");
+                        if let Some(observer) = throughput.as_ref() {
+                            observer.shed(path, reason);
+                        }
+                    }
+                    analyse
+                }
+                None => settled.ready,
+            };
+            for path in ready {
                 // Keep the watchdog fed if a single sweep processes several files.
                 heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
@@ -566,6 +610,7 @@ mod tests {
             on_species_filter_state: None,
             on_file_analysed: None,
             in_flight: None,
+            shed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

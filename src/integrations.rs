@@ -38,6 +38,7 @@ pub use mqtt::{MqttHandle, create_mqtt_client, get_mqtt_client_ref, publish_ha_d
 pub use mqtt_presence::spawn_mqtt_presence;
 pub use notification::{create_notification_filter, create_notification_template};
 pub use probes::notification_probes;
+pub use station_health::THERMAL_ALERT_C;
 pub use station_health::maintenance_condition;
 pub use station_health::spawn_station_health;
 pub use store_forward::spawn_birdweather_drainer;

@@ -51,7 +51,10 @@
 //!   marginal USB connection, an under-powered hub, a stream that keeps
 //!   dropping — which every signal built on *consecutive* failure reads as
 //!   healthy: the liveness gauge is up at every poll, the backoff never grows,
-//!   the "still down" warning never elapses, and the uptime strip is green.
+//!   the "still down" warning never elapses, and the uptime strip is green;
+//! * inference falling behind real time — a model too big for the board, a
+//!   board that is throttling, too many sources — which resolved to "delete
+//!   the oldest audio and say nothing" while every series stayed green.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -122,7 +125,9 @@ const DISK_ALERT_PERCENT: f64 = birdnet_core::audio::capture::DiskUsage::LOW_PER
 /// The soft limit is 80 °C on Pi 4/5 (hard limit 85 °C). Alerting at the soft
 /// limit gives an operator the chance to add a fan or vent before throughput
 /// starts dropping.
-const THERMAL_ALERT_C: f32 = 80.0;
+/// Also the shed policy's thermal line (PR-2): the daemon analyses one
+/// segment in two while the board is at or above it.
+pub const THERMAL_ALERT_C: f32 = 80.0;
 
 /// How long since a scheduled maintenance job last completed before it is
 /// treated as failing.
@@ -250,7 +255,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 13] = [
+const CHECKS: [(&str, Check); 14] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -264,6 +269,7 @@ const CHECKS: [(&str, Check); 13] = [
     ("power", |_state, out| check_power(out)),
     ("purge", check_purge),
     ("flapping", check_flapping),
+    ("backlog", check_backlog),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -583,6 +589,32 @@ fn flapping_conditions(sources: &[(String, u32, bool)]) -> Vec<Condition> {
             ),
         })
         .collect()
+}
+
+/// Inference falling behind real time (PR-2).
+fn check_backlog(state: &AppState, out: &mut Vec<Condition>) {
+    out.extend(backlog_condition(state.metrics().analysis_queue_depth()));
+}
+
+/// The backlog policy, separated from the gauge so it can be tested. `None`
+/// means the daemon has not reported a depth, which is no condition.
+fn backlog_condition(queue_depth: Option<u64>) -> Option<Condition> {
+    let depth = queue_depth?;
+    let threshold = u64::try_from(birdnet_core::detection::daemon::DEFAULT_SHED_BACKLOG_ABOVE)
+        .unwrap_or(u64::MAX);
+    (depth > threshold).then(|| Condition {
+        key: "backlog".to_owned(),
+        title: format!("Analysis is falling behind: {depth} segments waiting"),
+        body: format!(
+            "{depth} raw segments are waiting for analysis, more than the {threshold} at which \
+             the daemon starts analysing one segment in two (the rest are counted in \
+             birdnet_segments_shed_total, not lost quietly). Inference is slower than real \
+             time on this board: the model may be too big for it, it may be throttling for \
+             heat or power (see those conditions), or it may have more sources than it can \
+             keep up with. The queue drains at twice the rate while shedding; if it never \
+             does, reduce the sources or the segment rate, or move to a faster board."
+        ),
+    })
 }
 
 /// The Pi's own account of its power (NP-5).
@@ -1167,6 +1199,7 @@ mod tests {
             "power",
             "purge",
             "flapping",
+            "backlog",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -1175,8 +1208,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            13,
-            "a fourteenth check needs a line in the module doc and in this gate"
+            14,
+            "a fifteenth check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1810,6 +1843,26 @@ mod tests {
     /// PR-7: the flag is a condition naming what to look at; clear is nothing.
     /// AD-3: the flapping verdict from the snapshot becomes a condition per
     /// source; a source below the threshold, however many restarts, does not.
+    /// PR-2: a queue deeper than the shed threshold is a condition; at it,
+    /// below it, or unreported, nothing.
+    #[test]
+    fn a_deep_analysis_queue_is_a_condition() {
+        let t = u64::try_from(birdnet_core::detection::daemon::DEFAULT_SHED_BACKLOG_ABOVE).unwrap();
+        assert!(
+            backlog_condition(None).is_none(),
+            "unreported is not a backlog"
+        );
+        assert!(backlog_condition(Some(0)).is_none());
+        assert!(
+            backlog_condition(Some(t)).is_none(),
+            "at the threshold: not yet"
+        );
+        let c = backlog_condition(Some(t + 1)).expect("a condition");
+        assert_eq!(c.key, "backlog");
+        assert!(c.body.contains("one segment in two"), "{}", c.body);
+        assert!(c.body.contains("birdnet_segments_shed_total"), "{}", c.body);
+    }
+
     #[test]
     fn a_flapping_source_is_a_condition() {
         assert!(flapping_conditions(&[]).is_empty());

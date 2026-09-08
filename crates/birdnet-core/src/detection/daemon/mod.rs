@@ -138,10 +138,187 @@ pub struct ThroughputObserver {
     /// A segment the watcher announced that was gone before the pipeline
     /// opened it (PR-1 / S-3): audio recorded and never analysed.
     dropped: Option<PathCallback>,
+    /// The analysis queue's depth, once per sweep (PR-2).
+    queue_depth: Option<std::sync::Arc<dyn Fn(usize) + Send + Sync>>,
+    /// A segment the shed policy chose not to analyse, and why (PR-2).
+    shed: Option<ShedCallback>,
 }
 
 /// A shared callback taking a file path.
 type PathCallback = std::sync::Arc<dyn Fn(&std::path::Path) + Send + Sync>;
+/// A shared callback taking a shed segment's path and the reason.
+type ShedCallback = std::sync::Arc<dyn Fn(&std::path::Path, ShedReason) + Send + Sync>;
+
+/// Why a sweep analysed one segment in two (PR-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShedReason {
+    /// More segments were waiting than the policy's backlog threshold:
+    /// inference is slower than real time here.
+    Backlog,
+    /// The board is at its thermal limit or throttling; analysing less is
+    /// what lets it cool.
+    Thermal,
+}
+
+impl ShedReason {
+    /// The metric label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Backlog => "backlog",
+            Self::Thermal => "thermal",
+        }
+    }
+}
+
+/// Segments waiting above which the daemon sheds (PR-2).
+///
+/// Forty is ten minutes of 15 s segments from one source: well past any
+/// burst a settle period explains, and well before a 600 s stream drain
+/// starts taking unanalysed audio.
+pub const DEFAULT_SHED_BACKLOG_ABOVE: usize = 40;
+
+/// When to analyse one segment in two rather than fall further behind (PR-2).
+///
+/// "Inference slower than real time for an hour" used to resolve to "delete
+/// the oldest audio and say nothing": the stream drain took unanalysed
+/// segments by age while the pipeline worked through a queue nothing
+/// measured. The policy is deliberately simple and stated here so an operator
+/// can predict it: while the queue is deeper than `backlog_above`, or while
+/// the thermal signal says the board is at its limit, every second ready
+/// segment in capture order is skipped, reported through
+/// [`ThroughputObserver::shed`] with its reason, and left for the stream
+/// drain (and the raw-audio keep, R-4) like any other analysed segment. The
+/// queue then drains at twice the rate it would otherwise, the skipped audio
+/// is counted rather than lost quietly, and nothing else changes.
+#[derive(Clone)]
+pub struct ShedPolicy {
+    /// Shed while more than this many segments are waiting.
+    pub backlog_above: usize,
+    thermal: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
+}
+
+impl std::fmt::Debug for ShedPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShedPolicy")
+            .field("backlog_above", &self.backlog_above)
+            .field("thermal", &self.thermal.is_some())
+            .finish()
+    }
+}
+
+impl ShedPolicy {
+    /// A policy that sheds on backlog only.
+    #[must_use]
+    pub const fn new(backlog_above: usize) -> Self {
+        Self {
+            backlog_above,
+            thermal: None,
+        }
+    }
+
+    /// Also shed while `signal` says the board is at its thermal limit.
+    #[must_use]
+    pub fn with_thermal<F>(mut self, signal: F) -> Self
+    where
+        F: Fn() -> bool + Send + Sync + 'static,
+    {
+        self.thermal = Some(std::sync::Arc::new(signal));
+        self
+    }
+
+    /// Whether this sweep sheds, and why. Backlog is named first: it is the
+    /// measurable one, and the thermal signal is only consulted when the
+    /// queue alone does not decide it.
+    #[must_use]
+    pub fn decide(&self, queue_depth: usize) -> Option<ShedReason> {
+        if queue_depth > self.backlog_above {
+            return Some(ShedReason::Backlog);
+        }
+        if self.thermal.as_ref().is_some_and(|f| f()) {
+            return Some(ShedReason::Thermal);
+        }
+        None
+    }
+}
+
+/// Split a sweep's ready segments under a shed: in capture order (the file
+/// name carries it), the first, third, fifth … are analysed and the rest shed.
+#[must_use]
+pub fn shed_split(mut ready: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    ready.sort();
+    let mut analyse = Vec::new();
+    let mut shed = Vec::new();
+    for (i, path) in ready.into_iter().enumerate() {
+        if i % 2 == 0 {
+            analyse.push(path);
+        } else {
+            shed.push(path);
+        }
+    }
+    (analyse, shed)
+}
+
+#[cfg(test)]
+mod shed_tests {
+    use super::{DEFAULT_SHED_BACKLOG_ABOVE, ShedPolicy, ShedReason, shed_split};
+    use std::path::PathBuf;
+
+    /// PR-2. The decision is backlog first, thermal second, nothing when the
+    /// queue is short and the board cool.
+    #[test]
+    fn shed_is_backlog_first_then_thermal_and_nothing_when_cool() {
+        let cool = ShedPolicy::new(DEFAULT_SHED_BACKLOG_ABOVE);
+        assert_eq!(cool.decide(0), None);
+        assert_eq!(
+            cool.decide(DEFAULT_SHED_BACKLOG_ABOVE),
+            None,
+            "at, not above"
+        );
+        assert_eq!(
+            cool.decide(DEFAULT_SHED_BACKLOG_ABOVE + 1),
+            Some(ShedReason::Backlog)
+        );
+        let hot = ShedPolicy::new(DEFAULT_SHED_BACKLOG_ABOVE).with_thermal(|| true);
+        assert_eq!(hot.decide(0), Some(ShedReason::Thermal));
+        assert_eq!(
+            hot.decide(DEFAULT_SHED_BACKLOG_ABOVE + 1),
+            Some(ShedReason::Backlog),
+            "the measurable reason is named when both hold"
+        );
+        let cooled = ShedPolicy::new(DEFAULT_SHED_BACKLOG_ABOVE).with_thermal(|| false);
+        assert_eq!(cooled.decide(3), None);
+    }
+
+    /// Every second segment in capture order, whatever order the sweep
+    /// yielded them in.
+    #[test]
+    fn shed_split_analyses_every_second_segment_in_capture_order() {
+        let names = ["06:00:45", "06:00:00", "06:00:30", "06:00:15", "06:01:00"];
+        let ready: Vec<PathBuf> = names
+            .iter()
+            .map(|t| PathBuf::from(format!("/s/2026-03-14-birdnet-{t}.wav")))
+            .collect();
+        let (analyse, shed) = shed_split(ready);
+        let stem = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
+        assert_eq!(
+            analyse.iter().map(stem).collect::<Vec<_>>(),
+            vec![
+                "2026-03-14-birdnet-06:00:00.wav",
+                "2026-03-14-birdnet-06:00:30.wav",
+                "2026-03-14-birdnet-06:01:00.wav"
+            ]
+        );
+        assert_eq!(
+            shed.iter().map(stem).collect::<Vec<_>>(),
+            vec![
+                "2026-03-14-birdnet-06:00:15.wav",
+                "2026-03-14-birdnet-06:00:45.wav"
+            ]
+        );
+        assert_eq!(shed_split(Vec::new()), (Vec::new(), Vec::new()));
+    }
+}
 
 impl std::fmt::Debug for ThroughputObserver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -158,6 +335,42 @@ impl ThroughputObserver {
         Self {
             analysed: std::sync::Arc::new(f),
             dropped: None,
+            queue_depth: None,
+            shed: None,
+        }
+    }
+
+    /// Also report the analysis queue's depth once per sweep (PR-2).
+    #[must_use]
+    pub fn with_queue_depth<F>(mut self, f: F) -> Self
+    where
+        F: Fn(usize) + Send + Sync + 'static,
+    {
+        self.queue_depth = Some(std::sync::Arc::new(f));
+        self
+    }
+
+    /// Also report segments the shed policy skipped (PR-2).
+    #[must_use]
+    pub fn with_shed<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&std::path::Path, ShedReason) + Send + Sync + 'static,
+    {
+        self.shed = Some(std::sync::Arc::new(f));
+        self
+    }
+
+    /// Report how many segments are waiting after this sweep.
+    pub fn queue_depth(&self, depth: usize) {
+        if let Some(f) = &self.queue_depth {
+            f(depth);
+        }
+    }
+
+    /// Report a segment the shed policy skipped.
+    pub fn shed(&self, path: &std::path::Path, reason: ShedReason) {
+        if let Some(f) = &self.shed {
+            f(path, reason);
         }
     }
 
@@ -392,6 +605,9 @@ pub struct DaemonConfig {
     /// a segment is claimed here while the pipeline reads it. `None` claims
     /// nothing.
     pub in_flight: Option<InFlight>,
+    /// When to analyse one segment in two rather than fall further behind
+    /// (PR-2); `None` never sheds.
+    pub shed: Option<ShedPolicy>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
     /// Confidence at or above which a watched non-bird noise class suppresses
@@ -540,6 +756,7 @@ mod tests {
             on_species_filter_state: None,
             on_file_analysed: None,
             in_flight: None,
+            shed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

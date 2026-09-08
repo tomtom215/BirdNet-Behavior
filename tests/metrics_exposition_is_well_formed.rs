@@ -350,3 +350,47 @@ async fn dropped_segments_are_exported_per_source() {
         "{body}"
     );
 }
+
+/// PR-2: the queue's depth is a gauge (absent until the daemon reports) and
+/// the shed policy's skips are a counter by reason.
+#[tokio::test]
+async fn queue_depth_and_shed_are_exported() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = station(dir.path());
+    let before = metrics_body(&state).await;
+    assert!(
+        !type_declarations(&before).contains_key("birdnet_analysis_queue_depth"),
+        "unreported must be absent, not zero: {before}"
+    );
+    state.metrics().set_analysis_queue_depth(57);
+    state.metrics().inc_segment_shed("backlog");
+    state.metrics().inc_segment_shed("backlog");
+    state.metrics().inc_segment_shed("thermal");
+    let body = metrics_body(&state).await;
+    let types = type_declarations(&body);
+    assert_eq!(
+        types
+            .get("birdnet_analysis_queue_depth")
+            .map(|t| t.join(","))
+            .as_deref(),
+        Some("gauge"),
+        "{body}"
+    );
+    assert!(body.contains("birdnet_analysis_queue_depth 57"), "{body}");
+    assert_eq!(
+        types
+            .get("birdnet_segments_shed_total")
+            .map(|t| t.join(","))
+            .as_deref(),
+        Some("counter"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_shed_total{reason=\"backlog\"} 2"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_shed_total{reason=\"thermal\"} 1"),
+        "{body}"
+    );
+}

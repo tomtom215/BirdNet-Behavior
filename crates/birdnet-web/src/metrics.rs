@@ -206,6 +206,11 @@ pub struct MetricsRegistry {
     /// Segments the watcher announced that were gone before the pipeline
     /// read them, per source (PR-1 / S-3): recorded audio never analysed.
     segments_dropped: RwLock<HashMap<String, AtomicU64>>,
+    /// Segments the shed policy skipped, by reason (PR-2).
+    segments_shed: RwLock<HashMap<String, AtomicU64>>,
+    /// Segments waiting for analysis after the last sweep (PR-2);
+    /// `u64::MAX` = the daemon has not reported yet.
+    analysis_queue_depth: AtomicU64,
     /// Notifications that never left the station, by why.
     ///
     /// Both guards on the outbound path — the per-destination circuit breaker
@@ -278,6 +283,8 @@ impl MetricsRegistry {
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
             segments_dropped: RwLock::new(HashMap::new()),
+            segments_shed: RwLock::new(HashMap::new()),
+            analysis_queue_depth: AtomicU64::new(u64::MAX),
             notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
@@ -347,6 +354,29 @@ impl MetricsRegistry {
     /// (PR-1 / S-3).
     pub fn inc_segment_dropped(&self, source: &str) {
         Self::bump(&self.segments_dropped, source);
+    }
+
+    /// Record a segment the shed policy skipped, by reason (PR-2).
+    pub fn inc_segment_shed(&self, reason: &str) {
+        Self::bump(&self.segments_shed, reason);
+    }
+
+    /// Publish how many segments are waiting for analysis (PR-2).
+    pub fn set_analysis_queue_depth(&self, depth: usize) {
+        self.analysis_queue_depth.store(
+            u64::try_from(depth).unwrap_or(u64::MAX - 1),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Segments waiting for analysis after the last sweep; `None` before the
+    /// daemon has reported.
+    #[must_use]
+    pub fn analysis_queue_depth(&self) -> Option<u64> {
+        match self.analysis_queue_depth.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v),
+        }
     }
 
     /// Record a notification that never left the station.
@@ -708,6 +738,8 @@ impl MetricsRegistry {
             detections_dropped: Self::read_map(&self.detections_dropped),
             files_analysed: Self::read_map(&self.files_analysed),
             segments_dropped: Self::read_map(&self.segments_dropped),
+            segments_shed: Self::read_map(&self.segments_shed),
+            analysis_queue_depth: self.analysis_queue_depth(),
             notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
@@ -782,6 +814,10 @@ pub struct MetricsSnapshot {
     pub files_analysed: Vec<(String, u64)>,
     /// Segments gone before the pipeline read them, per source.
     pub segments_dropped: Vec<(String, u64)>,
+    /// Segments the shed policy skipped, by reason.
+    pub segments_shed: Vec<(String, u64)>,
+    /// Segments waiting for analysis, when the daemon has reported.
+    pub analysis_queue_depth: Option<u64>,
     /// Notifications that never left the station, by reason.
     pub notifications_dropped: Vec<(String, u64)>,
     /// Capture restarts per source.
@@ -807,6 +843,83 @@ pub struct MetricsSnapshot {
 
 /// Render the runtime metrics as Prometheus text 0.0.4.
 ///
+/// The pipeline's own throughput series: files analysed, segments dropped
+/// before analysis, segments shed, and the queue's depth.
+fn push_pipeline_series(out: &mut String, snap: &MetricsSnapshot) {
+    use std::fmt::Write as _;
+    out.push_str("# HELP birdnet_files_analysed_total Audio files the detection pipeline finished analysing, per source. Flat while birdnet_audio_source_up is 1 means capture is writing files nothing analyses; rising with no detections means the model is answering nothing.\n");
+    out.push_str("# TYPE birdnet_files_analysed_total counter\n");
+    for (source, count) in &snap.files_analysed {
+        let _ = writeln!(
+            out,
+            "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_segments_dropped_total Raw segments the watcher announced that were gone before the pipeline read them, per source: recorded audio never analysed. Rising means the stream directory is being drained faster than inference keeps up.\n");
+    out.push_str("# TYPE birdnet_segments_dropped_total counter\n");
+    for (source, count) in &snap.segments_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_segments_dropped_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_segments_shed_total Raw segments the shed policy chose not to analyse, by reason: backlog (more segments waiting than the threshold) or thermal (the board at its limit). One in two is skipped while either holds.\n");
+    out.push_str("# TYPE birdnet_segments_shed_total counter\n");
+    for (reason, count) in &snap.segments_shed {
+        let _ = writeln!(
+            out,
+            "birdnet_segments_shed_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
+        );
+    }
+
+    if let Some(depth) = snap.analysis_queue_depth {
+        out.push_str("# HELP birdnet_analysis_queue_depth Raw segments waiting for analysis after the daemon's last sweep. Climbing means inference is slower than real time; above the shed threshold the daemon analyses one segment in two.\n");
+        out.push_str("# TYPE birdnet_analysis_queue_depth gauge\n");
+        let _ = writeln!(out, "birdnet_analysis_queue_depth {depth}");
+    }
+
+    out.push_str("# HELP birdnet_notifications_dropped_total Notifications that never left the station, by reason: circuit_open (the destination is considered down), rate_limited (over the configured per-minute budget), send_failed (the destination refused or was unreachable), no_destination (nothing configured to send to).\n");
+    out.push_str("# TYPE birdnet_notifications_dropped_total counter\n");
+    for (reason, count) in &snap.notifications_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_notifications_dropped_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
+        );
+    }
+
+    if let Some(n) = snap.orphaned_clips {
+        out.push_str("# HELP birdnet_orphaned_clips Detections whose clip the disk no longer had, found and stamped by the last reconciliation pass.\n");
+        out.push_str("# TYPE birdnet_orphaned_clips gauge\n");
+        let _ = writeln!(out, "birdnet_orphaned_clips {n}");
+    }
+
+    out.push_str("# HELP birdnet_capture_restarts_total Capture processes restarted by the supervisor, per source.\n");
+    out.push_str("# TYPE birdnet_capture_restarts_total counter\n");
+    for (source, count) in &snap.capture_restarts {
+        let _ = writeln!(
+            out,
+            "birdnet_capture_restarts_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_capture_stalls_total Capture processes found alive but producing no segments, per source.\n");
+    out.push_str("# TYPE birdnet_capture_stalls_total counter\n");
+    for (source, count) in &snap.capture_stalls {
+        let _ = writeln!(
+            out,
+            "birdnet_capture_stalls_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+}
+
 /// Pure function; safe to test by feeding in a hand-built snapshot.
 #[must_use]
 pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
@@ -854,61 +967,7 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         );
     }
 
-    out.push_str("# HELP birdnet_files_analysed_total Audio files the detection pipeline finished analysing, per source. Flat while birdnet_audio_source_up is 1 means capture is writing files nothing analyses; rising with no detections means the model is answering nothing.\n");
-    out.push_str("# TYPE birdnet_files_analysed_total counter\n");
-    for (source, count) in &snap.files_analysed {
-        let _ = writeln!(
-            out,
-            "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
-            escape_label(source)
-        );
-    }
-
-    out.push_str("# HELP birdnet_segments_dropped_total Raw segments the watcher announced that were gone before the pipeline read them, per source: recorded audio never analysed. Rising means the stream directory is being drained faster than inference keeps up.\n");
-    out.push_str("# TYPE birdnet_segments_dropped_total counter\n");
-    for (source, count) in &snap.segments_dropped {
-        let _ = writeln!(
-            out,
-            "birdnet_segments_dropped_total{{source=\"{}\"}} {count}",
-            escape_label(source)
-        );
-    }
-
-    out.push_str("# HELP birdnet_notifications_dropped_total Notifications that never left the station, by reason: circuit_open (the destination is considered down), rate_limited (over the configured per-minute budget), send_failed (the destination refused or was unreachable), no_destination (nothing configured to send to).\n");
-    out.push_str("# TYPE birdnet_notifications_dropped_total counter\n");
-    for (reason, count) in &snap.notifications_dropped {
-        let _ = writeln!(
-            out,
-            "birdnet_notifications_dropped_total{{reason=\"{}\"}} {count}",
-            escape_label(reason)
-        );
-    }
-
-    if let Some(n) = snap.orphaned_clips {
-        out.push_str("# HELP birdnet_orphaned_clips Detections whose clip the disk no longer had, found and stamped by the last reconciliation pass.\n");
-        out.push_str("# TYPE birdnet_orphaned_clips gauge\n");
-        let _ = writeln!(out, "birdnet_orphaned_clips {n}");
-    }
-
-    out.push_str("# HELP birdnet_capture_restarts_total Capture processes restarted by the supervisor, per source.\n");
-    out.push_str("# TYPE birdnet_capture_restarts_total counter\n");
-    for (source, count) in &snap.capture_restarts {
-        let _ = writeln!(
-            out,
-            "birdnet_capture_restarts_total{{source=\"{}\"}} {count}",
-            escape_label(source)
-        );
-    }
-
-    out.push_str("# HELP birdnet_capture_stalls_total Capture processes found alive but producing no segments, per source.\n");
-    out.push_str("# TYPE birdnet_capture_stalls_total counter\n");
-    for (source, count) in &snap.capture_stalls {
-        let _ = writeln!(
-            out,
-            "birdnet_capture_stalls_total{{source=\"{}\"}} {count}",
-            escape_label(source)
-        );
-    }
+    push_pipeline_series(&mut out, snap);
 
     out.push_str("# HELP birdnet_occurrence_filter_active Whether species occurrence filtering is running (1) or every species the classifier knows is admitted (0).\n");
     out.push_str("# TYPE birdnet_occurrence_filter_active gauge\n");

@@ -287,6 +287,10 @@ async fn health(
             "detection_daemon": if daemon_running { "running" } else { "stopped" },
             "detection_writes": if ingest_halted { "halted" } else { "accepted" },
             "detection_silence_secs": detection_silence_secs,
+            // How far behind the pipeline is (PR-2); null before the daemon
+            // reports. Above the shed threshold the daemon analyses one
+            // segment in two and the `backlog` condition is raised.
+            "analysis_queue_depth": state.metrics().analysis_queue_depth(),
             "detection_deadman": match deadman {
                 None => "off",
                 Some(false) => "ok",

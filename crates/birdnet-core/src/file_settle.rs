@@ -48,6 +48,14 @@ impl PendingFiles {
         Self::default()
     }
 
+    /// How many files are waiting to settle: the analysis queue's depth, since
+    /// a segment sits here from its first watcher event until the sweep that
+    /// yields it (PR-2).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.seen.len()
+    }
+
     /// Record watcher activity on `path`. Repeated calls for a path already
     /// tracked are no-ops: the size poll in [`Self::drain_settled`] drives the
     /// settle timer, not the (bursty, backend-specific) event rate.

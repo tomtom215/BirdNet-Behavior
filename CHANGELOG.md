@@ -38,6 +38,17 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the analysis queue is measured, and a station that falls behind sheds instead of losing audio quietly
+
+**A queue-depth gauge and a stated shed policy** (`PR-2`). "Inference slower
+than real time for an hour" resolved to the stream drain deleting the oldest
+unanalysed audio and saying nothing. The daemon now publishes
+`birdnet_analysis_queue_depth` (and `analysis_queue_depth` on the health
+body); while more than 40 segments wait, or while the board is at its
+thermal limit or throttling, it analyses one segment in two, counts the rest
+in `birdnet_segments_shed_total` by reason, and raises the `backlog`
+station-health condition.
+
 ### Added — raw audio can be kept at a duty cycle
 
 **`RAW_AUDIO_KEEP_EVERY` keeps one raw capture segment in N** (`R-4`). The

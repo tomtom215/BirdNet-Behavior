@@ -25,6 +25,7 @@ curl http://localhost:8502/api/v2/health
   "detection_daemon": "running",
   "detection_writes": "accepted",
   "detection_silence_secs": 142,
+  "analysis_queue_depth": 2,
   "detection_deadman": "ok",
   "data_volume": {
     "writable": true,
@@ -53,6 +54,12 @@ never a separate filesystem, or `unknown`), and the `df` verdict (`disk` is
 is degraded on every reading: the station is running and keeping nothing.
 `disk: critical` or `unknown`, and `admin_bootstrap: failed`, are reported as
 degraded only under `?strict=1`.
+
+`analysis_queue_depth` is how many raw segments were waiting for analysis
+after the daemon's last sweep (`null` before it reports). Above 40 the daemon
+analyses one segment in two rather than fall further behind, counts the rest
+in `birdnet_segments_shed_total`, and raises the `backlog` station-health
+condition; see the deployment chapter for the policy.
 
 `detection_deadman` is the detection deadman's own verdict: `tripped` while it
 has an open quiet episode (no detections for longer than its threshold, or

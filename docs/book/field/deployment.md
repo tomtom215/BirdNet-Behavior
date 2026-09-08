@@ -116,6 +116,19 @@ the retention each one needs:
   per source and `10` about 0.8 GB — and know that the disk-full purge takes
   kept raw audio before it takes any clip.
 
+**When inference falls behind.** The daemon measures its own queue — the raw
+segments waiting for analysis — and publishes it as `birdnet_analysis_queue_depth`
+and on `/api/v2/health` as `analysis_queue_depth`. While more than 40 are
+waiting (ten minutes of 15 s segments from one source), or while the board is
+at or above 80 °C or reports throttling, it analyses one segment in two, in
+capture order, and counts the rest in `birdnet_segments_shed_total` by reason.
+The queue then drains at twice the rate, the skipped audio is counted rather
+than lost, and the `backlog` station-health condition tells you it happened.
+Before this, the same situation resolved to the stream drain deleting the
+oldest unanalysed audio with nothing to show for it. If the condition keeps
+returning, the board cannot keep up with what it is asked: fewer sources, a
+longer segment, or a faster board.
+
 Two further limits are enforced from the database on the daily maintenance
 tick, and both leave the detection rows intact — only the audio is reclaimed,
 so your counts, species lists and analytics are unaffected:
