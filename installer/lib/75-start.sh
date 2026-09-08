@@ -71,7 +71,7 @@ maybe_start_service() {
             success "Service started."
         else
             success "Service started — finish setup in the dashboard."
-            info  "No audio source yet: pick a microphone in the dashboard's setup wizard"
+            info  "No audio source yet: add one under Settings → Capture (/admin/audio) in the dashboard"
             info  "(or set ALSA_CARD / RTSP_URL in ${CONFIG_FILE}); detection begins once one is set."
         fi
     else

@@ -43,7 +43,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 2. Checks disk space and that port 8502 is free.
 3. Creates `~/birdnet-behavior/` for your `.env` and compose files.
 4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL.
-5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipapi.co).
+5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ip-api.com).
 6. (DuckDB behavioral analytics is built into every image and on by default — nothing to choose.)
 7. Writes a short `.env` with only your chosen values.
 8. Starts the container with the matching compose overlay.

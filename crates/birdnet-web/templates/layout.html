@@ -144,6 +144,63 @@
     <!-- Live detection stream: keeps a reconnecting WebSocket to surface a
          live/offline indicator and dispatch birdnet:detection events. -->
     <script src="/static/live-detections.js" defer></script>
+    <!-- A region that fails to load must say so. htmx leaves the target as it
+         was on a 4xx/5xx and on a transport error, so a failed partial — or a
+         station that died under an open dashboard — used to leave its
+         skeleton or "Loading…" in place indefinitely (UX-4). GET loads only:
+         a form that failed to POST keeps itself so the operator can retry.
+         Focus: an outerHTML swap of the element that had focus (a "Show more"
+         button) dropped keyboard users onto <body> (UX-3); the first
+         focusable thing in the new content takes it instead. -->
+    <script>
+    (function () {
+      function isGet(evt) {
+        var cfg = evt.detail && evt.detail.requestConfig;
+        return !!cfg && cfg.verb === 'get';
+      }
+      function failed(evt, why) {
+        if (!isGet(evt)) return;
+        var target = evt.detail.target || evt.target;
+        if (!target || !target.isConnected) return;
+        var note = document.createElement('div');
+        note.className = 'bnb-load-error';
+        note.setAttribute('role', 'alert');
+        note.textContent = 'This section could not load' + why + '. ';
+        var a = document.createElement('a');
+        a.href = location.href;
+        a.textContent = 'Reload the page';
+        note.appendChild(a);
+        target.replaceChildren(note);
+      }
+      document.body.addEventListener('htmx:responseError', function (evt) {
+        var xhr = evt.detail && evt.detail.xhr;
+        failed(evt, xhr && xhr.status ? ' (HTTP ' + xhr.status + ')' : '');
+      });
+      document.body.addEventListener('htmx:sendError', function (evt) {
+        failed(evt, ' — the station did not answer');
+      });
+      document.body.addEventListener('htmx:timeout', function (evt) {
+        failed(evt, ' — the station took too long to answer');
+      });
+
+      var FOCUSABLE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+      var focused = null, parent = null, className = '';
+      document.body.addEventListener('htmx:beforeSwap', function () {
+        focused = document.activeElement;
+        parent = focused ? focused.parentElement : null;
+        className = focused && focused.classList.length ? '.' + focused.classList[focused.classList.length - 1] : '';
+      });
+      document.body.addEventListener('htmx:afterSettle', function () {
+        if (!focused || focused === document.body || focused.isConnected || !parent || !parent.isConnected) return;
+        // Prefer the element that took the old one's place (a fresh "Show
+        // more" button), else the last focusable thing now in its container.
+        var next = className ? parent.querySelector(className + ':is(' + FOCUSABLE + ')') : null;
+        if (!next) { var all = parent.querySelectorAll(FOCUSABLE); next = all.length ? all[all.length - 1] : null; }
+        if (next) next.focus();
+        focused = null; parent = null; className = '';
+      });
+    })();
+    </script>
     {{toast_region}}
     {{confirm_modal}}
     {{cmdk_partial}}

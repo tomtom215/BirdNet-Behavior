@@ -4316,3 +4316,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
   .sr-item    { flex-wrap: wrap; }
   .sr-name    { flex: 1 1 100%; }
 }
+
+/* A region whose partial failed to load (layout.html handler; UX-4). */
+.bnb-load-error { color: var(--fg-2); font-size: 0.85rem; padding: 12px 14px; border: 1px dashed var(--border-2); border-radius: 8px; }
+.bnb-load-error a { color: var(--accent); text-decoration: underline; }

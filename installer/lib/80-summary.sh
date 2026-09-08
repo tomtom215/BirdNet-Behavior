@@ -142,7 +142,7 @@ print_summary() {
         if ! config_has_audio_source; then
             echo
             echo "  No audio source yet, so no birds will be detected. Open the dashboard"
-            echo "  to pick a microphone in the setup wizard — or set ALSA_CARD / RTSP_URL"
+            echo "  and add one under Settings → Capture (/admin/audio) — or set ALSA_CARD / RTSP_URL"
             echo "  in ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
         fi
         # Live and listening, but with no coordinates the species filter cannot
