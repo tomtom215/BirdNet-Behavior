@@ -32,7 +32,7 @@
 //! does nothing unless the station is in private mode; then every path that
 //! [`crate::private_mode::is_open`] does not name needs the same session the
 //! admin panel needs. It shares the cookie validation with the admin gate
-//! ([`session_user`]) and differs in two places: it never open-bypasses (a
+//! (`session_user`) and differs in two places: it never open-bypasses (a
 //! private station with no password answers `503` rather than serving the
 //! garden to the internet), and it refuses API and WebSocket paths with a
 //! `401` rather than a redirect, since nothing that calls them can follow

@@ -58,7 +58,7 @@ impl From<crate::migration::MigrationError> for DbError {
 /// the writer is the one connection whose wait is worth more than the wait
 /// itself. Fifteen seconds covers a WAL checkpoint, a backup step and a
 /// reclaim step with room to spare; the readers keep the five seconds a page
-/// load can afford, in [`READ_PRAGMAS`].
+/// load can afford, in `READ_PRAGMAS`.
 pub const WRITER_BUSY_TIMEOUT_MS: u32 = 15_000;
 
 /// Recommended PRAGMAs applied to every writer connection.

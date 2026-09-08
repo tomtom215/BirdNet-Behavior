@@ -83,7 +83,11 @@ the end of the fourth stretch the same day, same method, the section bounded
 by its headings rather than by line numbers (the earlier fixed bounds had
 drifted as lines were added above §3): 288 single-id rows, 141 marked, **0
 P0**, **15 P1**, **101 P2**, **29 P3**; with the partial markers counted as
-open, **20 P1** and **103 P2**.)
+open, **20 P1** and **103 P2**. Re-taken at the end of the fifth stretch,
+same method: 288 single-id rows, 145 marked, **0 P0**, **11 P1**, **101
+P2**, **29 P3** — `PR-2`, `O-4`, `PS-3` and `FR-1` closed; `ARM-1` is built
+and marked so, not fixed, until its job has run — and with the partials
+counted as open, **16 P1** and **103 P2**.)
 `R-DwC` matches that pattern; the digits-only pattern the 2026-09-04 count
 used does not see it, which is where "255" and "R 11" came from.) At
 `8e6806f`, **61** of the rows carry a `**[FIXED…]**` marker, 21 more than at
@@ -1321,8 +1325,8 @@ figure, at `3b8942e`, was 3 730 passed in 120 suites; this session's commits
 are listed under "What to do first" below with their gates.
 
 **Lines.** `find crates src -name '*.rs' | xargs cat | wc -l` gives
-**198 683** lines of Rust in **487** files under `crates/` and `src/`, and
-**215 637** with `tests/` (re-taken 2026-09-08, end of the second session). The last
+**204 797** lines of Rust in **498** files under `crates/` and `src/`, and
+**222 038** with `tests/` (re-taken 2026-09-08, end of the fifth stretch). The last
 `Migration { version: N` is **45** (`grep -oE "version: [0-9]+"
 crates/birdnet-db/src/migration.rs | sort -n | tail -1`).
 
@@ -1382,32 +1386,39 @@ and `LC-4`'s `arecord` half (`3047214`), `PR-7` (`21ff82b`), `UX-1`
 (`b520003`), `AD-3` (`3735f1f`), `ON-7`+`NT-6` (`2bfb24a`), `AD-4` and the
 last half of `LC-2` (`a83c8a6`); the fourth stretch: `OP-5`+`OB-15`+`PS-19`
 (`a2284d0`), `DD-9` (`d9f53b4`), `DD-30` (`3a6ace8`), `DD-29`+`UX-16`+`UX-17`
-(`71097d8`), `PR-1`+`S-3` (`e402d54`), `R-4` (`1517fee`). The full workspace
-run at `09b8fad`, before `R-4`: 3 885 passed, 0 failed, 9 ignored, 131
-suites; `cargo doc` with warnings denied exits 0 there. What follows is the
-queue as it stands, ordered by what a station in a field gains per hour of
-work.*
+(`71097d8`), `PR-1`+`S-3` (`e402d54`), `R-4` (`1517fee`); the fifth
+stretch, the first four of the large rows: `PR-2` (`7def5b3`), `O-4`
+(`7fae544`), `PS-3` (`78bbbae`), `FR-1` (`0fe491a`), and `ARM-1` built
+(`fc79220`). The full workspace run at `1c86cfe`, the tree after `ARM-1`:
+**3 925 passed, 0 failed, 9 ignored, 135 suites**, exit 0, `~/.duckdb`
+moved aside; `cargo doc` with warnings denied exits 0 at the commit after
+it, which fixes two private-item links in doc comments and this document.
+What follows is the queue as it stands, ordered by what a station in a
+field gains per hour of work.*
 
-**The medium rows are done.** `ON-6`'s remainder was looked for and not
-found — its row is closed in full at `60ead63` and nothing else names a
-remainder, so that entry was stale. Every P1 row still open is on the large
-list below; the fifteen are `PS-3`, `PS-4`, `PR-2`, `PR-3`, `PR-4`, `LC-3`,
-`LC-5`, `S-1`, `O-4`, `ARM-1`, `R-5`, `R-DwC`, `FR-1`, `FR-2`, `FR-3`. Two
-notes for whoever takes them: `R-5`/`FR-2` is now unblocked — `R-4` keeps the
-raw audio under `<recordings>/raw` with its capture time and source in the
-name, and `analysis_runs` (`R-1`) is the row a re-analysis keys to; and
-`PR-2`'s queue-depth gauge has a natural home in the same `PendingFiles`
-sweep that now reports vanished segments (`PR-1`), since the pending set *is*
-the queue.
+**The medium rows are done, and four of the large ones.** `O-4` (private
+mode), `PS-3` (the weekly reclaim), `FR-1` (Raven and Audacity) and `PR-2`
+(the shed policy) are closed with their gates observed red; `ARM-1`'s job
+is written and unverified, because `pull_request`-triggered gates never see
+an un-PR'd branch and none exists for this one — open a draft PR, or push
+the branch as a PR base, and its first run sizes the timeout and the
+`# observed` annotation. The P1 rows still open are `PS-4`, `PR-3`, `PR-4`,
+`LC-3`, `LC-5`, `S-1`, `R-5`, `R-DwC`, `FR-2`, `FR-3`, and `ARM-1` until it
+has run. Two notes for whoever takes them: `R-5`/`FR-2` is unblocked —
+`R-4` keeps the raw audio under `<recordings>/raw` with its capture time
+and source in the name, and `analysis_runs` (`R-1`) is the row a
+re-analysis keys to; and `R-DwC` can now fill `eventTime` from
+`detected_at_utc` and place `associatedMedia` at the clip, but still has no
+`occurrenceID`, coordinates on the row (`UP-1`), or a deployment record
+(`FR-3`), so `FR-3` first.
 
-**Then the large ones, each its own session:** `R-5`/`FR-2` (re-analysis over
-retained audio keyed to `analysis_runs`), `FR-1`/`R-DwC` (Raven selection
-tables, Audacity labels, Darwin Core), `FR-3` (a deployment record), `O-4`
-(a private mode), `S-1` (the 15 s seam), `PS-3`/`PS-4` (VACUUM and write
-amplification), `PR-3`/`PR-4` (the memory budget, measured), `LC-3` (a
-remote upgrade path on bare metal), `LC-5` (installer coverage on a systemd
-host), `ARM-1` (an aarch64 `cargo test` that has actually run). §4's tables
-still hold the older queue; nothing there outranks this list.
+**Then the large ones, each its own session:** `R-5`/`FR-2` (re-analysis
+over retained audio keyed to `analysis_runs`), `FR-3` (a deployment
+record) then `R-DwC` (Darwin Core), `S-1` (the 15 s seam), `PS-4` (write
+amplification: batched inserts and `wal_autocheckpoint`), `PR-3`/`PR-4`
+(the memory budget, measured), `LC-3` (a remote upgrade path on bare
+metal), `LC-5` (installer coverage on a systemd host). §4's tables still
+hold the older queue; nothing there outranks this list.
 
 Found this session and not fixed, each recorded in its row: the metric
 vocabulary's `privacy` reason has no caller, so privacy suppressions are
