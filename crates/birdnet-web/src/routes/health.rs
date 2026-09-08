@@ -128,6 +128,32 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     out.push_str("# TYPE birdnet_cpu_count gauge\n");
     writeln!(out, "birdnet_cpu_count {cpu_count}").unwrap_or_default();
 
+    push_host_gauges(&mut out, &state);
+
+    let maintenance = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            state.with_db(|conn| {
+                [
+                    birdnet_db::sqlite::JOB_BACKUP_VACUUM,
+                    birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
+                    birdnet_db::sqlite::JOB_OFFSITE_BACKUP,
+                ]
+                .into_iter()
+                .filter_map(|job| {
+                    birdnet_db::sqlite::last_run_result(conn, job)
+                        .ok()
+                        .flatten()
+                        .map(|(when, ok)| (job, when, ok))
+                })
+                .collect::<Vec<_>>()
+            })
+        }
+    })
+    .await
+    .unwrap_or_default();
+    push_maintenance_gauges(&mut out, &maintenance);
+
     let has_analytics: u8 = u8::from(state.has_analytics());
     out.push_str("# HELP birdnet_analytics_enabled Whether DuckDB analytics is enabled.\n");
     out.push_str("# TYPE birdnet_analytics_enabled gauge\n");
@@ -222,6 +248,94 @@ fn process_metrics() -> (u64, u32) {
         }
 
         (rss_bytes, cpu_count)
+    }
+}
+
+/// OP-3: disk, scratch, CPU temperature and the Pi's power mask were all
+/// measured and none exported. `data` is the database's volume; `scratch`
+/// the temporary directory when it is a different filesystem.
+fn push_host_gauges(out: &mut String, state: &AppState) {
+    let data_dir = state.db_path().parent().map_or_else(
+        || std::path::PathBuf::from("."),
+        std::path::Path::to_path_buf,
+    );
+    let data_disk = birdnet_core::audio::capture::disk_usage(&data_dir).ok();
+    let scratch_disk = birdnet_core::audio::capture::disk_usage(&std::env::temp_dir())
+        .ok()
+        .filter(|s| {
+            data_disk
+                .as_ref()
+                .is_none_or(|d| d.total_bytes != s.total_bytes)
+        });
+    if data_disk.is_some() || scratch_disk.is_some() {
+        out.push_str("# HELP birdnet_disk_used_percent Space used on the volume, per cent of what this user can reach (used / (used + available)).\n");
+        out.push_str("# TYPE birdnet_disk_used_percent gauge\n");
+        for (volume, usage) in [("data", &data_disk), ("scratch", &scratch_disk)] {
+            if let Some(u) = usage {
+                writeln!(
+                    out,
+                    "birdnet_disk_used_percent{{volume=\"{volume}\"}} {:.2}",
+                    u.used_percent()
+                )
+                .unwrap_or_default();
+            }
+        }
+        out.push_str(
+            "# HELP birdnet_disk_available_bytes Bytes this user can still write on the volume.\n",
+        );
+        out.push_str("# TYPE birdnet_disk_available_bytes gauge\n");
+        for (volume, usage) in [("data", &data_disk), ("scratch", &scratch_disk)] {
+            if let Some(u) = usage {
+                writeln!(
+                    out,
+                    "birdnet_disk_available_bytes{{volume=\"{volume}\"}} {}",
+                    u.available_bytes
+                )
+                .unwrap_or_default();
+            }
+        }
+    }
+    if let Some(temp) = crate::system_info::cpu_temperature() {
+        out.push_str(
+            "# HELP birdnet_cpu_temperature_celsius CPU temperature from the board's sensor.\n",
+        );
+        out.push_str("# TYPE birdnet_cpu_temperature_celsius gauge\n");
+        writeln!(out, "birdnet_cpu_temperature_celsius {temp:.1}").unwrap_or_default();
+    }
+    if let Some(t) = crate::system_info::pi_throttled() {
+        out.push_str("# HELP birdnet_pi_throttled_bits The Raspberry Pi firmware's get_throttled mask: bits 0-3 now (under-voltage, frequency capped, throttled, soft temperature limit), bits 16-19 since boot.\n");
+        out.push_str("# TYPE birdnet_pi_throttled_bits gauge\n");
+        writeln!(out, "birdnet_pi_throttled_bits {}", t.bits).unwrap_or_default();
+    }
+}
+
+/// OP-3: when each scheduled job last completed and whether it succeeded,
+/// for the jobs that stand between a corrupt database and a lost season.
+fn push_maintenance_gauges(out: &mut String, maintenance: &[(&str, i64, Option<bool>)]) {
+    if !maintenance.is_empty() {
+        out.push_str("# HELP birdnet_maintenance_last_run_seconds When the scheduled job last completed, seconds since the Unix epoch.\n");
+        out.push_str("# TYPE birdnet_maintenance_last_run_seconds gauge\n");
+        for (job, when, _) in maintenance {
+            writeln!(
+                out,
+                "birdnet_maintenance_last_run_seconds{{job=\"{job}\"}} {when}"
+            )
+            .unwrap_or_default();
+        }
+        if maintenance.iter().any(|(_, _, ok)| ok.is_some()) {
+            out.push_str("# HELP birdnet_maintenance_last_ok Whether the scheduled job's last run succeeded (1) or failed (0); absent for a job that records no verdict.\n");
+            out.push_str("# TYPE birdnet_maintenance_last_ok gauge\n");
+            for (job, _, ok) in maintenance {
+                if let Some(ok) = ok {
+                    writeln!(
+                        out,
+                        "birdnet_maintenance_last_ok{{job=\"{job}\"}} {}",
+                        u8::from(*ok)
+                    )
+                    .unwrap_or_default();
+                }
+            }
+        }
     }
 }
 

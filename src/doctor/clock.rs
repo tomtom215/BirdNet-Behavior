@@ -210,7 +210,31 @@ fn solar_window_verdict(
 /// A warning, never an error: the station works, its timestamps are just
 /// shifted, and only the operator can say which is right.
 fn timezone_mismatch_check(system: Option<String>, detected: Option<String>) -> Option<Check> {
-    let (system, detected) = (system?, detected?);
+    let system = system?;
+    // The wizard's row is operator-writable and used to be trusted as it was
+    // (ON-8): `timezone=Mars/Olympus` made the doctor say "set-timezone
+    // Mars/Olympus". A row that is not a zone is reported as that, and never
+    // compared against.
+    let Some(detected) = detected else {
+        return Some(Check::pass(
+            "Timezone",
+            format!(
+                "{system} (this machine's clock); the setup wizard has not recorded the \
+                 station's zone, so there is nothing to compare it against"
+            ),
+        ));
+    };
+    if !birdnet_web::routes::pages::onboarding::plausible_timezone(&detected) {
+        return Some(Check::warn(
+            "Timezone",
+            format!(
+                "the station's recorded zone, {detected}, is not a known zone, so this \
+                 machine's {system} cannot be checked against it"
+            ),
+            "re-run Detect on the setup wizard's location step, or set the timezone \
+             setting to an IANA zone name such as Europe/London",
+        ));
+    }
     if system == detected {
         return Some(Check::pass(
             "Timezone",
@@ -583,8 +607,13 @@ mod tests {
         // Nothing to compare: never guess, and never nag a station that simply
         // has not been through the wizard.
         assert!(timezone_mismatch_check(None, Some("Europe/Berlin".into())).is_none());
-        assert!(timezone_mismatch_check(Some("UTC".into()), None).is_none());
         assert!(timezone_mismatch_check(None, None).is_none());
+        // A known host zone with no recorded station zone is reported as a
+        // pass naming the zone (ON-8), which is information, not a nag.
+        assert!(
+            timezone_mismatch_check(Some("UTC".into()), None)
+                .is_some_and(|c| c.status == crate::doctor::Status::Pass)
+        );
     }
 
     #[test]
@@ -595,5 +624,30 @@ mod tests {
             assert!(!tz.trim().is_empty(), "a blank timezone is not an answer");
             assert!(!tz.contains("/zoneinfo/"), "path not stripped: {tz}");
         }
+    }
+
+    /// ON-8: a stored zone that is not a zone is named as such and never
+    /// becomes a `set-timezone` instruction; a missing one is reported, not
+    /// silently skipped.
+    #[test]
+    fn a_bogus_stored_zone_is_reported_not_compared_against() {
+        let check =
+            timezone_mismatch_check(Some("Europe/Berlin".into()), Some("Mars/Olympus".into()))
+                .expect("a check");
+        assert_eq!(check.status, crate::doctor::Status::Warn, "{check:?}");
+        assert!(check.message.contains("not a known zone"), "{check:?}");
+        assert!(
+            !check
+                .remediation
+                .as_deref()
+                .unwrap_or_default()
+                .contains("set-timezone Mars/Olympus"),
+            "the bogus zone must not become the fix: {check:?}"
+        );
+
+        let check = timezone_mismatch_check(Some("Europe/Berlin".into()), None).expect("a check");
+        assert_eq!(check.status, crate::doctor::Status::Pass, "{check:?}");
+        assert!(check.message.contains("Europe/Berlin"), "{check:?}");
+        assert!(check.message.contains("not recorded"), "{check:?}");
     }
 }

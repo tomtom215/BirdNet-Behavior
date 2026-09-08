@@ -117,6 +117,14 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_capture_stalls_total` | counter | Capture processes found alive but producing no segments, labeled by `source`. |
 | `birdnet_occurrence_filter_active` | gauge | `1` when species occurrence filtering is running, `0` when every species the classifier knows is admitted. |
 | `birdnet_occurrence_candidates` | gauge | Species the occurrence filter currently admits. |
+| `birdnet_orphaned_clips` | gauge | Detections whose clip the disk no longer had, found and stamped by the last daily reconciliation pass; absent until one has run. |
+| `birdnet_analytics_mirror_failures_total` | counter | Detections the database accepted and the DuckDB analytics copy refused since process start. |
+| `birdnet_disk_used_percent` | gauge | Space used on the volume, labeled `volume="data"` (the database's directory) and, when it is a different filesystem, `volume="scratch"` (the temporary directory). |
+| `birdnet_disk_available_bytes` | gauge | Bytes this user can still write on the volume, same labels. |
+| `birdnet_cpu_temperature_celsius` | gauge | CPU temperature from the board's sensor; absent where none is exposed. |
+| `birdnet_pi_throttled_bits` | gauge | A Raspberry Pi firmware's `get_throttled` mask: bits 0–3 now (under-voltage, frequency capped, throttled, soft temperature limit), bits 16–19 since boot. Absent off a Pi. |
+| `birdnet_maintenance_last_run_seconds` | gauge | When the scheduled job last completed, seconds since the Unix epoch, labeled by `job` (`backup_vacuum`, `integrity_check`, `offsite_backup`). |
+| `birdnet_maintenance_last_ok` | gauge | Whether the job's last run succeeded (`1`) or failed (`0`); absent for a job that records no verdict. |
 | `birdnet_http_responses_total` | counter | Web responses served, labeled by status `class`. |
 | `birdnet_http_request_duration_seconds` | histogram | Web request handling latency in seconds. |
 

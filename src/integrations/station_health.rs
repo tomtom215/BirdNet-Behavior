@@ -39,7 +39,10 @@
 //!   first run;
 //! * the analytics copy refusing detections the database accepted, so every
 //!   behavioural dashboard is quietly behind while `/api/v2/health` goes on
-//!   saying `"analytics": true`.
+//!   saying `"analytics": true`;
+//! * a Raspberry Pi's firmware reporting under-voltage or throttling — the
+//!   commonest field failure on a Pi, the one that corrupts cards, and one
+//!   that presents as random instability with no other signal.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -238,7 +241,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 10] = [
+const CHECKS: [(&str, Check); 11] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -249,6 +252,7 @@ const CHECKS: [(&str, Check); 10] = [
     ("clock", check_clock),
     ("boot-anomaly", check_boot_anomalies),
     ("analytics-mirror", check_analytics_mirror),
+    ("power", |_state, out| check_power(out)),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -511,6 +515,47 @@ fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
         return;
     };
     out.extend(data_volume_condition(&volume));
+}
+
+/// The Pi's own account of its power (NP-5).
+fn check_power(out: &mut Vec<Condition>) {
+    out.extend(power_condition(birdnet_web::system_info::pi_throttled()));
+}
+
+/// The power policy, separated from `vcgencmd` so it can be tested.
+///
+/// `None` in — not a Pi, or the firmware did not answer — is no condition.
+/// The "now" bits make a condition; the "since boot" bits alone do not, so an
+/// episode ends when the supply recovers rather than lasting until the next
+/// reboot, while the doctor and the metric still carry the history.
+fn power_condition(throttle: Option<birdnet_web::system_info::PiThrottle>) -> Option<Condition> {
+    let t = throttle?;
+    if t.undervoltage_now() {
+        return Some(Condition {
+            key: "power".to_owned(),
+            title: "Power supply is under-voltage — the card is at risk".to_owned(),
+            body: format!(
+                "The Pi's firmware reports under-voltage now (get_throttled=0x{:x}). A supply \
+                 or cable that cannot hold 5 V under load is the commonest cause of corrupted \
+                 SD cards and random restarts in the field. Use the official supply or a \
+                 thicker, shorter cable, and check any solar or battery budget.",
+                t.bits
+            ),
+        });
+    }
+    if t.throttled_now() {
+        return Some(Condition {
+            key: "power".to_owned(),
+            title: "Board is being throttled by its firmware".to_owned(),
+            body: format!(
+                "The Pi's firmware is capping the CPU now (get_throttled=0x{:x}): power or \
+                 temperature. Inference is slower and detections may be missed. Check the \
+                 supply and the enclosure.",
+                t.bits
+            ),
+        });
+    }
+    None
 }
 
 /// How recently a mirror write must have failed for the copy to count as
@@ -1051,6 +1096,7 @@ mod tests {
             "clock",
             "boot-anomaly",
             "analytics-mirror",
+            "power",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -1059,8 +1105,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            10,
-            "an eleventh check needs a line in the module doc and in this gate"
+            11,
+            "a twelfth check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1671,5 +1717,23 @@ mod tests {
         assert_eq!(snap.conditions.len(), 1);
         assert_eq!(snap.conditions[0].key, "disk");
         assert_eq!(snap.conditions[0].title, "Disk nearly full");
+    }
+
+    /// NP-5: under-voltage now is a condition; only "has occurred" is not;
+    /// no reading is not.
+    #[test]
+    fn undervoltage_now_is_a_condition_and_history_alone_is_not() {
+        use birdnet_web::system_info::PiThrottle;
+        assert!(power_condition(None).is_none());
+        let now = power_condition(Some(PiThrottle { bits: 0x50005 })).expect("a condition");
+        assert_eq!(now.key, "power");
+        assert!(now.title.contains("under-voltage"), "{}", now.title);
+        assert!(now.body.contains("0x50005"), "{}", now.body);
+        let capped = power_condition(Some(PiThrottle { bits: 0x2 })).expect("a condition");
+        assert!(capped.title.contains("throttled"), "{}", capped.title);
+        assert!(
+            power_condition(Some(PiThrottle { bits: 0x50000 })).is_none(),
+            "history alone: the supply has recovered, the episode ends"
+        );
     }
 }

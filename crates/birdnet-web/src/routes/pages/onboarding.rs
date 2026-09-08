@@ -399,7 +399,7 @@ const ZONEINFO_DIR: &str = "/usr/share/zoneinfo";
 /// tzdata still needs it stored. `Mars/Olympus` used to be accepted, and the
 /// doctor then told the operator to run `timedatectl set-timezone
 /// Mars/Olympus`.
-fn plausible_timezone(raw: &str) -> bool {
+pub fn plausible_timezone(raw: &str) -> bool {
     let name = raw.trim();
     if name.is_empty() || name.len() > 64 {
         return false;

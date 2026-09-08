@@ -161,12 +161,24 @@ fn effective_alsa_devices(config: Option<&Config>) -> Option<Vec<String>> {
     )
 }
 
+/// An ALSA source with no `arecord` to read it (LC-4).
+///
+/// This used to be a `skip`, so an OS update that removed `alsa-utils` left a
+/// green station recording nothing; the RTSP path already fails on a missing
+/// `ffmpeg`. A configured device that nothing can open is a failure.
+fn arecord_missing(device: &str) -> Check {
+    Check::fail(
+        "ALSA device probe",
+        format!(
+            "arecord is not installed, and --alsa-device is set to {device}: the station cannot record"
+        ),
+        "install alsa-utils (`sudo apt install alsa-utils`) and restart",
+    )
+}
+
 fn probe_alsa_device(device: &str) -> Check {
     if !tool_exists("arecord") {
-        return Check::skip(
-            "ALSA device probe",
-            "arecord not installed; cannot verify --alsa-device exists",
-        );
+        return arecord_missing(device);
     }
     match run_with_timeout(Command::new("arecord").arg("-l"), LISTING_TIMEOUT) {
         Ok(out) if out.status.success() => {
@@ -740,6 +752,22 @@ card 3: PRO [Comica_Traxshot PRO], device 0: USB Audio [USB Audio]
         assert_eq!(
             first_card(nonzero),
             Some(("2".into(), "Scarlett".into(), "2".into()))
+        );
+    }
+
+    /// LC-4: a configured ALSA device with no `arecord` is a failure, not a
+    /// skip.
+    #[test]
+    fn a_missing_arecord_with_an_alsa_device_configured_fails() {
+        let check = super::arecord_missing("plughw:1,0");
+        assert_eq!(check.status, crate::doctor::Status::Fail, "{check:?}");
+        assert!(check.message.contains("plughw:1,0"), "{check:?}");
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("alsa-utils")),
+            "{check:?}"
         );
     }
 }

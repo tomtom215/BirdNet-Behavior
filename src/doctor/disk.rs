@@ -8,21 +8,46 @@ use super::Check;
 use crate::cli::Cli;
 
 pub(super) fn check_disk_space(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
-    // Best-effort disk space check: use the recordings dir if known, else /.
-    let dir = cli
+    // The data partition first (PS-8): this used to read `--watch-dir`, which
+    // the shipped unit always sets to the RAM-backed stream directory, so the
+    // preflight graded a tmpfs while the card filled. The database's directory
+    // is where the detections, the clips and the backups live.
+    let data_dir = crate::helpers::db_path_from_config(config)
+        .parent()
+        .map_or_else(|| PathBuf::from("/"), std::path::Path::to_path_buf);
+    let mut out = vec![disk_free_bytes(&data_dir).map_or_else(
+        || Check::skip("Disk space", "could not query filesystem usage"),
+        |bytes| grade_free_space(bytes, &data_dir),
+    )];
+    // The stream directory too, when it is a different filesystem — a full
+    // tmpfs stalls capture just as surely — reported under its own name so the
+    // two cannot be mistaken for each other.
+    let scratch = cli
         .watch_dir
         .clone()
-        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("/"));
-    disk_free_bytes(&dir).map_or_else(
-        || {
-            vec![Check::skip(
-                "Disk space",
-                "could not query filesystem usage",
-            )]
-        },
-        |bytes| vec![grade_free_space(bytes, &dir)],
-    )
+        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from));
+    if let Some(scratch) = scratch
+        && scratch.exists()
+        && !same_filesystem(&scratch, &data_dir)
+        && let Some(bytes) = disk_free_bytes(&scratch)
+    {
+        let mut check = grade_free_space(bytes, &scratch);
+        "Disk space (stream directory)".clone_into(&mut check.name);
+        out.push(check);
+    }
+    out
+}
+
+/// Whether two directories are on the same filesystem, by `df` totals — the
+/// same test the station page uses to decide whether to show a scratch tile.
+fn same_filesystem(a: &Path, b: &Path) -> bool {
+    match (
+        birdnet_core::audio::capture::disk_usage(a),
+        birdnet_core::audio::capture::disk_usage(b),
+    ) {
+        (Ok(x), Ok(y)) => x.total_bytes == y.total_bytes,
+        _ => true,
+    }
 }
 
 /// Grade free space into a check.
@@ -168,15 +193,46 @@ mod tests {
     }
 
     #[test]
-    fn check_disk_space_returns_one_named_check() {
+    fn check_disk_space_grades_the_data_partition_first() {
         use crate::cli::Cli;
         use clap::Parser as _;
-        // Shells out to `df` on the default volume; the exact verdict depends on
-        // the host's free space, so we assert structure rather than the branch.
+        // Shells out to `df`; the exact verdict depends on the host's free
+        // space, so this asserts structure rather than the branch.
         let cli = Cli::parse_from(["birdnet-behavior"]);
         let checks = check_disk_space(&cli, None);
-        assert_eq!(checks.len(), 1);
+        assert!(!checks.is_empty());
         assert_eq!(checks[0].name, "Disk space");
+    }
+
+    /// The gate for PS-8: with `--watch-dir` on the tmpfs, as the unit sets
+    /// it, the first verdict is about the data partition, and the message
+    /// names the data directory, not the stream directory.
+    #[test]
+    fn the_data_partition_is_graded_not_the_stream_directory() {
+        use crate::cli::Cli;
+        use clap::Parser as _;
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let cfg =
+            birdnet_core::config::Config::parse(&format!("DB_PATH={}/birds.db", data.display()))
+                .unwrap();
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.watch_dir = Some(std::env::temp_dir());
+        let checks = check_disk_space(&cli, Some(&cfg));
+        let first = &checks[0];
+        assert_eq!(first.name, "Disk space");
+        assert!(
+            first.message.contains(&data.display().to_string()),
+            "the verdict must be about the data directory: {first:?}"
+        );
+        assert!(
+            !first
+                .message
+                .contains(&std::env::temp_dir().display().to_string())
+                || data.starts_with(std::env::temp_dir()),
+            "the stream directory was graded as the data partition: {first:?}"
+        );
     }
 
     /// The preflight and the purge must be looking at the same filesystem.

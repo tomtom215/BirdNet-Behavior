@@ -38,6 +38,22 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — six smaller gaps a station in a field would find
+
+**The doctor grades the card, not the RAM disk** (`PS-8`): its disk check
+read `--watch-dir`, which the unit always sets to the tmpfs; it now grades
+the database's directory and, separately, the stream directory when that is
+a different filesystem. **A missing `arecord` on an ALSA station fails the
+doctor** (`LC-4`) instead of being skipped. **The timezone check no longer
+trusts the wizard's row** (`ON-8`): a stored zone that is not a zone is
+named as such rather than turned into a `set-timezone` instruction, and with
+no row the host's zone is reported. **The Access tab's help trigger is a
+button** (`UX-2`). **A Raspberry Pi's under-voltage and throttling are
+read** (`NP-5`): a `power` condition while it is happening, a doctor check
+that also remembers since boot, and `birdnet_pi_throttled_bits`. **Disk,
+scratch, CPU temperature and the maintenance record are exported as
+metrics** (`OP-3`).
+
 ### Fixed — what is wrong can be asked, the doctor reads the maintenance record, and a lagging analytics copy is a condition
 
 **`GET /api/v2/health/conditions`** (`OP-4`) answers "what is wrong right

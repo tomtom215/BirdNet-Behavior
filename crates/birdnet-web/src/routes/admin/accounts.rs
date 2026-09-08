@@ -1027,4 +1027,18 @@ mod tests {
         };
         assert!(form.password.len() < 10);
     }
+
+    /// UX-2: the help trigger is a button, so a keyboard reaches it.
+    #[test]
+    fn the_help_drawer_trigger_is_a_button() {
+        assert!(
+            ACCOUNTS_TEMPLATE
+                .contains(r#"<button type="button" class="bnb-help-link" data-help-drawer="#),
+            "the help trigger must be focusable"
+        );
+        assert!(
+            !ACCOUNTS_TEMPLATE.contains(r#"<span class="bnb-help-link" data-help-drawer="#),
+            "a span with a click handler is not reachable from a keyboard"
+        );
+    }
 }

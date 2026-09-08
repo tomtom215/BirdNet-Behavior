@@ -34,6 +34,38 @@ pub(super) fn check_environment_variables() -> Vec<Check> {
         .collect()
 }
 
+/// What a Raspberry Pi's firmware says about its power, now and since boot
+/// (NP-5). Not a Pi, or no `vcgencmd`: nothing to say.
+pub(super) fn check_power() -> Vec<Check> {
+    birdnet_web::system_info::pi_throttled().map_or_else(Vec::new, |t| vec![power_check(t)])
+}
+
+/// The verdict for a mask, separated from `vcgencmd` so it can be tested.
+fn power_check(t: birdnet_web::system_info::PiThrottle) -> Check {
+    const NAME: &str = "Power supply";
+    if t.undervoltage_now() {
+        Check::fail(
+            NAME,
+            format!("under-voltage right now (get_throttled=0x{:x})", t.bits),
+            "the supply or cable cannot hold 5 V under load; this corrupts SD cards. Use the \
+             official supply or a shorter, thicker cable",
+        )
+    } else if t.undervoltage_occurred() || t.throttled_occurred() {
+        Check::warn(
+            NAME,
+            format!(
+                "under-voltage or throttling has occurred since boot (get_throttled=0x{:x}), \
+                 though not right now",
+                t.bits
+            ),
+            "a marginal supply, cable or solar budget; watch the `power` condition on \
+             /api/v2/health/conditions and the birdnet_pi_throttled_bits metric",
+        )
+    } else {
+        Check::pass(NAME, "no under-voltage or throttling since boot")
+    }
+}
+
 pub(super) fn check_runtime_environment() -> Vec<Check> {
     let mut out = Vec::new();
 
@@ -304,5 +336,22 @@ mod tests {
         let checks = check_egress(&cli);
         assert!(!checks[0].message.contains("api.github.com"));
         assert!(checks[0].message.contains("wikipedia.org"));
+    }
+
+    /// NP-5: the doctor grades the mask: now fails, history warns, clean
+    /// passes.
+    #[test]
+    fn the_power_mask_is_graded() {
+        use crate::doctor::Status;
+        use birdnet_web::system_info::PiThrottle;
+        assert_eq!(
+            power_check(PiThrottle { bits: 0x50005 }).status,
+            Status::Fail
+        );
+        assert_eq!(
+            power_check(PiThrottle { bits: 0x50000 }).status,
+            Status::Warn
+        );
+        assert_eq!(power_check(PiThrottle { bits: 0 }).status, Status::Pass);
     }
 }
