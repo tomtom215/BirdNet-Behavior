@@ -82,6 +82,12 @@ internet-reachable, keep it set (and add TLS off-LAN).
   from `birdnet.conf` — the systemd unit sets no `EnvironmentFile`, so on a
   bare-metal install the sign-in name stays `admin`.
 
+  A signed-in session survives a restart of the station: the signing secret
+  is generated once and kept beside the database as `session.secret` (mode
+  0600), unless `BNB_SESSION_SECRET` is set, which takes precedence. Rotating
+  `CADDY_PWD` in the config signs every session out at the next start;
+  rotating on the accounts page signs every *other* session out.
+
   The form is throttled per client address: five failed attempts inside
   fifteen minutes and that address is answered `429 Too Many Requests` (with a
   `Retry-After`) until its oldest failure is a quarter-hour old — the password

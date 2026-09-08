@@ -107,6 +107,32 @@ detection without it, as every post was before. The post's timestamp was the
 local wall clock labelled `Z`, an hour or more wrong on every station outside
 UTC; it is now the local time with its offset.
 
+**The setup wizard asks for the admin password first, and the browser that
+sets it owns the station** (`DD-14`). With no password set, every `/admin/*`
+page was open to anyone who could reach the port for as long as the operator
+did not act, the six-step wizard never asked, and the only browser route to a
+first password was a form labelled "Reset password" that then signed the
+operator out without saying so. The Welcome step now carries a password block
+on a passwordless station; finishing setup hashes it onto the admin account
+and hands that browser a session, so the next click is not a login prompt. A
+mismatched or short password saves nothing and says why; blank means "not
+now", and the dashboard's first-run checklist then says in its first row that
+the station is open. The accounts form reads "Set password" on such a
+station and signs the browser in the same way; a rotation signs the account's
+other sessions out and says how many.
+
+**Login sessions survive a restart** (`DD-15`). The signing secret was read
+from `BNB_SESSION_SECRET` or `CADDY_PWD` in the environment only; the
+installer writes `CADDY_PWD` to the config file, nothing exports it, and the
+unit sets neither, so every bare-metal install ran on a per-process random
+secret and every session died on restart while the accounts page promised
+fourteen days. The station now generates a secret once and keeps it beside
+its database (`session.secret`, mode 0600), ahead of the password derivation.
+Because the secret no longer rotates with the password, rotating `CADDY_PWD`
+signs the old sessions out at the next start, and rotating on the accounts
+page signs the other sessions out — the promise the page always made, now by
+the mechanism that can keep the operator's own session.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

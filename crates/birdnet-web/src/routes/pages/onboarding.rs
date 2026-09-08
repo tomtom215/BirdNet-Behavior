@@ -34,8 +34,11 @@
 
 use std::fmt::Write as _;
 
+use crate::client_ip::ClientIp;
 use axum::extract::State;
+use axum::extract::{Extension, Request};
 use axum::response::{Html, Redirect};
+use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use axum::{Form, Router};
 
@@ -45,6 +48,7 @@ use birdnet_db::settings::{self, SettingsCategory};
 use crate::routes::admin::audio::{detail_for, kind_label};
 use crate::routes::pages::escape_html;
 use crate::state::AppState;
+use birdnet_db::accounts::{self, UserStore as _};
 
 /// Every settings key `POST /onboarding/save` can persist.
 ///
@@ -138,7 +142,7 @@ impl Prefill {
 /// has none set.
 const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
 
-async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
+async fn onboarding_page(State(state): State<AppState>, req: Request) -> Html<String> {
     // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
     let (sources, prefill) = state
         .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
@@ -146,12 +150,59 @@ async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
             tracing::error!(error = %err, "onboarding: audio_sources list failed");
             (Vec::new(), Prefill::default())
         });
+    let needs_password = !crate::auth_middleware::admin_password_configured(&state);
+    let password_error = req
+        .uri()
+        .query()
+        .is_some_and(|q| q.split('&').any(|p| p == "error=password"));
 
     Html(render_page(
         &render_mic_body(&sources),
         &escape_html(&mic_summary(&sources)),
         &prefill,
+        PasswordStep {
+            needed: needs_password,
+            error: password_error,
+        },
     ))
+}
+
+/// Whether the Welcome step asks for the admin password, and whether the
+/// last attempt was refused.
+#[derive(Clone, Copy, Default)]
+struct PasswordStep {
+    needed: bool,
+    error: bool,
+}
+
+/// The shortest password the accounts page accepts; the wizard holds the
+/// same line so the two cannot disagree about what a password is.
+const MIN_PASSWORD_LEN: usize = 10;
+
+/// The Welcome step's password block (DD-14): rendered only while the
+/// station has no admin password, because that is the station every
+/// `/admin/*` page is open on until somebody sets one. The first browser to
+/// finish setup owns the station; the same POST that saves the settings
+/// creates the password and hands that browser the session.
+fn render_password_step(step: PasswordStep) -> String {
+    if !step.needed {
+        return String::new();
+    }
+    let error = if step.error {
+        r#"<p class="ob-password-error" role="alert">The two passwords did not match, or the password was shorter than 10 characters. Nothing was saved.</p>"#
+    } else {
+        ""
+    };
+    format!(
+        r#"<div class="bnb-card pad ob-mt-16" id="ob-password">
+            <div class="ob-eyebrow">First, the admin password</div>
+            <p class="ob-p">Right now anyone who can reach this station can change its settings. Choose the password for <code>admin</code>; this browser is signed in with it when you finish.</p>
+            {error}
+            <div class="ob-field"><label for="ob-password-1">Password (at least {MIN_PASSWORD_LEN} characters)</label><input id="ob-password-1" name="password" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
+            <div class="ob-field"><label for="ob-password-2">Password again</label><input id="ob-password-2" name="password_confirm" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
+            <p class="bnb-meta" id="ob-password-hint">Change it any time under Settings → Accounts.</p>
+          </div>"#
+    )
 }
 
 /// Substitute the two server-filled placeholders into the wizard template.
@@ -166,7 +217,12 @@ async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
 /// Each placeholder appears exactly once. If one is ever removed from the
 /// template this degrades to dropping that value rather than panicking in a
 /// request handler; the rendering tests pin the output either way.
-fn render_page(mic_body: &str, mic_summary: &str, prefill: &Prefill) -> String {
+fn render_page(
+    mic_body: &str,
+    mic_summary: &str,
+    prefill: &Prefill,
+    password: PasswordStep,
+) -> String {
     // Substituted in one pass each. `mic_body` is already-rendered markup and
     // `mic_summary` is pre-escaped by the caller; the `prefill` values come
     // from the database and land inside HTML attributes, so they are escaped
@@ -178,6 +234,7 @@ fn render_page(mic_body: &str, mic_summary: &str, prefill: &Prefill) -> String {
         .replace("{{longitude}}", &escape_html(&prefill.longitude))
         .replace("{{confidence}}", &escape_html(&prefill.confidence))
         .replace("{{notify_trigger}}", &escape_html(&prefill.notify_trigger))
+        .replace("{{password_step}}", &render_password_step(password))
         // Versioned stylesheet URL — see `pages::with_asset_version`.
         .replace("{{version}}", env!("CARGO_PKG_VERSION"))
 }
@@ -283,6 +340,11 @@ struct OnboardingForm {
     notification_mode: String,
     #[serde(default)]
     confidence_threshold: String,
+    /// The admin password, on a station that has none (DD-14).
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    password_confirm: String,
 }
 
 /// Whether `raw` is a confidence threshold the daemon will accept.
@@ -371,8 +433,35 @@ fn plausible_timezone(raw: &str) -> bool {
 /// latitude/longitude and the confidence threshold on the next start.
 async fn onboarding_save(
     State(state): State<AppState>,
+    client: Option<Extension<ClientIp>>,
+    headers: axum::http::HeaderMap,
     Form(form): Form<OnboardingForm>,
-) -> Redirect {
+) -> Response {
+    // The password first (DD-14), and only on a station that has none: with
+    // one set, the operator signed in to reach this page and the fields are
+    // not rendered. A refused password saves nothing else either — the
+    // operator is sent back to the step that failed rather than left with a
+    // configured, still-open station and no idea why.
+    let mut set_cookie = None;
+    if !crate::auth_middleware::admin_password_configured(&state) && !form.password.is_empty() {
+        if form.password.len() < MIN_PASSWORD_LEN || form.password != form.password_confirm {
+            return Redirect::to("/onboarding?error=password").into_response();
+        }
+        match set_first_admin_password(&state, &form.password) {
+            Ok(admin_id) => {
+                set_cookie = super::super::auth_pages::mint_session_cookie(
+                    &state,
+                    admin_id,
+                    client.as_deref(),
+                    &headers,
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "onboarding: could not set the admin password");
+                return Redirect::to("/onboarding?error=password").into_response();
+            }
+        }
+    }
     state.with_db(|conn| {
         // Idempotent safety net; the table is also created by migration 14.
         settings::ensure_settings_table(conn).ok();
@@ -448,7 +537,38 @@ async fn onboarding_save(
             SettingsCategory::System,
         );
     });
-    Redirect::to("/")
+    let mut resp = Redirect::to("/").into_response();
+    if let Some(cookie) = set_cookie
+        && let Ok(value) = axum::http::HeaderValue::from_str(&cookie)
+    {
+        resp.headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+    resp
+}
+
+/// Hash `password` onto the seed admin row and record it. Returns the
+/// admin's id, for the session the wizard mints next.
+fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, String> {
+    let hash = accounts::hash_password(password).map_err(|e| e.to_string())?;
+    let admin_id = state
+        .with_db(|conn| {
+            let admin = conn.find_user_by_name("admin")?;
+            conn.set_password(admin.id, &hash)?;
+            Ok::<i64, accounts::AccountsError>(admin.id)
+        })
+        .map_err(|e| e.to_string())?;
+    // No actor: there is no account yet that could be one. The target is the
+    // row that just acquired a password.
+    crate::audit::audit_user_id(
+        state,
+        None,
+        "account.password.set",
+        Some(&format!("user:{admin_id}")),
+        None,
+    );
+    tracing::info!("admin password set from the setup wizard; /admin is now gated");
+    Ok(admin_id)
 }
 
 const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
@@ -570,10 +690,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <h1 class="ob-h">Let's teach the yard<br>to <em>listen</em>.</h1>
           <p class="ob-p">Ninety seconds, six steps. Your Raspberry Pi will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
           <ul class="ob-bullets">
-            <li><span class="tick">✓</span> No accounts — runs entirely on your Pi</li>
+            <li><span class="tick">✓</span> No cloud accounts — runs entirely on your Pi</li>
             <li><span class="tick">✓</span> Set once — sensible defaults the whole way</li>
             <li><span class="tick">✓</span> Always tweakable — change anything later in Settings</li>
           </ul>
+          {{password_step}}
         </div>
         <div class="ob-center">
           <svg class="sonar" width="240" height="240" viewBox="0 0 240 240" aria-hidden="true">
@@ -724,11 +845,28 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   function finish() { form.requestSubmit(); }
 
   back.addEventListener('click', function () { if (step > 1) { step--; render(); } });
+  // The password block is rendered only on a station that has none. Both
+  // fields blank means "not now" (the station stays open and the dashboard
+  // keeps saying so); anything typed must be long enough and typed twice.
+  function passwordOk() {
+    var a = document.getElementById('ob-password-1');
+    var b = document.getElementById('ob-password-2');
+    if (!a || !b) { return true; }
+    if (!a.value && !b.value) { return true; }
+    if (a.value.length < 10 || a.value !== b.value) {
+      var hint = document.getElementById('ob-password-hint');
+      if (hint) { hint.textContent = a.value.length < 10 ? 'At least 10 characters.' : 'The two passwords do not match.'; }
+      (a.value.length < 10 ? a : b).focus();
+      return false;
+    }
+    return true;
+  }
   next.addEventListener('click', function (e) {
     e.preventDefault();
+    if (step === 1 && !passwordOk()) { return; }
     if (step < total) { step++; render(); } else { finish(); }
   });
-  skip.addEventListener('click', function (e) { e.preventDefault(); finish(); });
+  skip.addEventListener('click', function (e) { e.preventDefault(); if (passwordOk()) { finish(); } });
 
   // Single-select radio cards; mirror the chosen value into the form's hidden
   // input for that group. Keyed by data-radio so a new group only needs an

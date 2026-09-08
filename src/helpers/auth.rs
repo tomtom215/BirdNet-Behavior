@@ -37,7 +37,7 @@
 //! keeps the station reachable.
 
 use birdnet_core::config::Config;
-use birdnet_db::accounts::{self, AccountsError, UserStore};
+use birdnet_db::accounts::{self, AccountsError, SessionStore as _, UserStore};
 use birdnet_web::state::AppState;
 
 /// Resolve the configured admin password: file config first, then the
@@ -140,7 +140,12 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
         if !verifies {
             let hash = accounts::hash_password(&env_pwd)?;
             conn.set_password(admin.id, &hash)?;
-            return Ok(BootstrapOutcome::RotatedAfterEnvChange);
+            // The signing secret no longer rotates with the password (it is
+            // persisted beside the database, DD-15), so a rotated `CADDY_PWD`
+            // signs the old sessions out here instead — every one of them:
+            // nobody is signed in on a process that is still starting.
+            let revoked = conn.revoke_others(admin.id, "")?;
+            return Ok(BootstrapOutcome::RotatedAfterEnvChange { revoked });
         }
         Ok(BootstrapOutcome::AlreadyConsistent)
     });
@@ -149,8 +154,11 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
         Ok(BootstrapOutcome::RotatedLegacy) => {
             tracing::info!("admin password hash initialised from CADDY_PWD");
         }
-        Ok(BootstrapOutcome::RotatedAfterEnvChange) => {
-            tracing::info!("admin password hash rotated to match updated CADDY_PWD");
+        Ok(BootstrapOutcome::RotatedAfterEnvChange { revoked }) => {
+            tracing::info!(
+                revoked,
+                "admin password hash rotated to match updated CADDY_PWD; existing sessions signed out"
+            );
         }
         Ok(BootstrapOutcome::AlreadyConsistent) => {
             tracing::debug!("admin password hash already up-to-date");
@@ -208,7 +216,10 @@ enum BootstrapOutcome {
     RotatedLegacy,
     /// Stored hash was real argon2id but didn't verify `CADDY_PWD`
     /// (operator rotated the env) — refreshed to match.
-    RotatedAfterEnvChange,
+    RotatedAfterEnvChange {
+        /// Sessions signed out by the rotation.
+        revoked: usize,
+    },
     /// Stored hash already verifies cleanly — no write needed.
     AlreadyConsistent,
 }

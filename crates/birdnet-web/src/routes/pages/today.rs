@@ -98,7 +98,8 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
         .and_then(|s| state.metrics().source_up(&s.id));
 
     let hero_aside = if firstrun {
-        firstrun_checklist(&enabled, disk_pct, capturing)
+        let password_set = crate::auth_middleware::admin_password_configured(&state);
+        firstrun_checklist(&enabled, disk_pct, capturing, password_set)
     } else {
         signal_card(&super::listen::source_options(&sources), enabled.first())
     };
@@ -198,7 +199,17 @@ fn firstrun_checklist(
     enabled: &[&birdnet_db::audio_sources::AudioSource],
     disk_pct: Option<f64>,
     capturing: Option<bool>,
+    password_set: bool,
 ) -> String {
+    // The one row that is about who can change the station rather than
+    // whether it hears anything (DD-14). Until a password exists every
+    // `/admin/*` page is open to anyone on the network, and nothing on the
+    // first screen said so.
+    let password_row = if password_set {
+        r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Admin password</div><div class="d">settings are yours to change</div></div><span class="v">set</span></div>"#.to_string()
+    } else {
+        r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">No admin password</div><div class="d">anyone on the network can change settings — set one in the <a href="/onboarding">setup wizard</a> or <a href="/admin/accounts">Settings → Accounts</a></div></div><span class="v">open</span></div>"#.to_string()
+    };
     let (mic_mark, mic_title, mic_detail, mic_value) = enabled.first().map_or_else(
         || {
             (
@@ -287,6 +298,7 @@ fn firstrun_checklist(
         r#"<div class="bnb-card pad">
       <div class="bnb-eyebrow td-check-eb">Getting ready</div>
       <div class="x-check">
+        {password_row}
         <div class="x-check-row">{mic_mark_html}<div class="c"><div class="t">{mic_title}</div><div class="d">{mic_detail}</div></div><span class="v">{mic_value}</span></div>
         <div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Model bundled</div><div class="d">BirdNET V3.0 — ships with the app</div></div><span class="v">included</span></div>
         <div class="x-check-row">{disk_mark_html}<div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>
@@ -1150,9 +1162,24 @@ mod tests {
         assert!(d.split_whitespace().count() >= 3, "too short: {d}");
     }
 
+    /// DD-14: the first screen says when the station is open to anyone.
+    #[test]
+    fn firstrun_checklist_says_when_there_is_no_admin_password() {
+        let open = firstrun_checklist(&[], Some(12.0), None, false);
+        assert!(open.contains("No admin password"), "{open}");
+        assert!(open.contains(r#"href="/onboarding""#), "{open}");
+        assert!(
+            open.contains("mk down"),
+            "an open station is a fault mark, not a tick"
+        );
+        let owned = firstrun_checklist(&[], Some(12.0), None, true);
+        assert!(owned.contains("Admin password"), "{owned}");
+        assert!(!owned.contains("No admin password"), "{owned}");
+    }
+
     #[test]
     fn firstrun_checklist_reflects_missing_microphone() {
-        let html = firstrun_checklist(&[], Some(38.0), None);
+        let html = firstrun_checklist(&[], Some(38.0), None, true);
         assert!(html.contains("Waiting for a microphone"));
         assert!(html.contains("38% used"));
         // Honest waiting mark, not a fake checkmark.
@@ -1185,7 +1212,7 @@ mod tests {
     #[test]
     fn firstrun_checklist_flags_a_configured_but_silent_microphone() {
         let s = src("src_1");
-        let html = firstrun_checklist(&[&s], Some(38.0), Some(false));
+        let html = firstrun_checklist(&[&s], Some(38.0), Some(false), true);
         assert!(html.contains("Microphone not recording"), "{html}");
         assert!(html.contains("mk down"), "must not show a pass mark");
         assert!(
@@ -1197,7 +1224,7 @@ mod tests {
     #[test]
     fn firstrun_checklist_ticks_a_microphone_that_is_actually_recording() {
         let s = src("src_1");
-        let html = firstrun_checklist(&[&s], Some(38.0), Some(true));
+        let html = firstrun_checklist(&[&s], Some(38.0), Some(true), true);
         assert!(html.contains("Microphone recording"));
         assert!(html.contains("mk done"));
     }
@@ -1207,7 +1234,7 @@ mod tests {
         // No gauge published is "not known", not "broken" — the supervisor may
         // simply not have reconciled the source yet.
         let s = src("src_1");
-        let html = firstrun_checklist(&[&s], Some(38.0), None);
+        let html = firstrun_checklist(&[&s], Some(38.0), None, true);
         assert!(html.contains("Microphone starting…"), "{html}");
         assert!(!html.contains("mk down"));
     }
@@ -1216,7 +1243,7 @@ mod tests {
     /// "Room to record ✓ — nearly full". A green mark reads as "fine".
     #[test]
     fn firstrun_checklist_does_not_tick_a_nearly_full_disk() {
-        let html = firstrun_checklist(&[], Some(97.0), None);
+        let html = firstrun_checklist(&[], Some(97.0), None, true);
         assert!(html.contains("97% used"));
         assert!(html.contains("nearly full"), "{html}");
         let disk_row = html
@@ -1234,7 +1261,7 @@ mod tests {
 
     #[test]
     fn firstrun_checklist_ticks_a_healthy_disk() {
-        let html = firstrun_checklist(&[], Some(12.0), None);
+        let html = firstrun_checklist(&[], Some(12.0), None, true);
         assert!(html.contains("plenty of space"));
         assert!(html.contains("12% used"));
     }
@@ -1243,7 +1270,7 @@ mod tests {
     /// has no signal for. It now states only what is true: the model ships.
     #[test]
     fn firstrun_checklist_does_not_claim_the_model_loaded() {
-        let html = firstrun_checklist(&[], Some(12.0), None);
+        let html = firstrun_checklist(&[], Some(12.0), None, true);
         assert!(!html.contains("Model loaded"), "{html}");
         assert!(html.contains("Model bundled"));
     }

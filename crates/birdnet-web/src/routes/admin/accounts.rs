@@ -174,11 +174,18 @@ fn render_session_rows(sessions: &[Session], current_session_id: &str) -> String
 /// because the handler answers with an out-of-band toast, not a row fragment;
 /// the 10-char minimum mirrors the server-side check so the browser blocks the
 /// obvious case before the round-trip.
-fn password_reset_form(id: i64) -> String {
+fn password_reset_form(id: i64, has_password: bool) -> String {
+    // On a station with no password the form is the first one, not a reset:
+    // it says so, and the handler signs this browser in with it (DD-14).
+    let (label, placeholder) = if has_password {
+        ("Reset password", "New password (min 10)")
+    } else {
+        ("Set password", "Choose a password (min 10)")
+    };
     format!(
         r#"<form class="user-reset acct-reset" hx-post="/admin/accounts/users/{id}" hx-swap="none" autocomplete="off">
-  <input type="password" name="password" minlength="10" required placeholder="New password (min 10)" autocomplete="new-password">
-  <button type="submit" class="bnb-btn ghost">Reset password</button>
+  <input type="password" name="password" minlength="10" required placeholder="{placeholder}" autocomplete="new-password">
+  <button type="submit" class="bnb-btn ghost">{label}</button>
 </form>"#
     )
 }
@@ -201,7 +208,7 @@ fn render_user_rows(users: &[User]) -> String {
         };
         let display = u.label.clone().unwrap_or_else(|| u.username.clone());
         let id = u.id;
-        let reset = password_reset_form(id);
+        let reset = password_reset_form(id, !accounts::is_legacy_password_hash(&u.pwd_argon2));
         let actions = if u.username == "admin" {
             // Seed admin can rotate its password but not be removed/disabled.
             reset
@@ -416,6 +423,8 @@ struct PasswordForm {
 async fn set_password(
     State(state): State<AppState>,
     request_user: RequestUser,
+    client: Option<axum::extract::Extension<crate::client_ip::ClientIp>>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<i64>,
     Form(form): Form<PasswordForm>,
 ) -> Response {
@@ -433,6 +442,11 @@ async fn set_password(
             .into_response();
         }
     };
+    // Whether this is the station's first password: the request came in on
+    // the open bypass (no session of its own) and the row is the seed admin.
+    let first_password = request_user.session_id == "open-bypass"
+        && request_user.user.id == id
+        && accounts::is_legacy_password_hash(&request_user.user.pwd_argon2);
     let result = state.with_db(|conn| conn.set_password(id, &pwd_argon2));
     match result {
         Ok(()) => {
@@ -446,7 +460,39 @@ async fn set_password(
                 Some(&format!("user:{id}")),
                 None,
             );
-            toast::oob_only(Toast::success("Password rotated.")).into_response()
+            if first_password {
+                // The station just became gated; this browser must leave
+                // owning it, or its next click is a login prompt (DD-14).
+                let mut resp = toast::oob_only(Toast::success(
+                    "Password set. You're signed in, and the admin panel is now yours.",
+                ))
+                .into_response();
+                if let Some(cookie) = crate::routes::auth_pages::mint_session_cookie(
+                    &state,
+                    id,
+                    client.as_deref(),
+                    &headers,
+                ) && let Ok(value) = axum::http::HeaderValue::from_str(&cookie)
+                {
+                    resp.headers_mut()
+                        .append(axum::http::header::SET_COOKIE, value);
+                }
+                return resp;
+            }
+            // A rotation signs every *other* session of that account out —
+            // the accounts page has always promised as much, and with the
+            // signing secret now persisted (DD-15) this is the mechanism that
+            // keeps the promise. The rotating session stays, so an operator
+            // changing their own password is not logged out by it.
+            let revoked = state
+                .with_db(|conn| conn.revoke_others(id, &request_user.session_id))
+                .unwrap_or(0);
+            let message = if revoked == 0 {
+                "Password rotated.".to_string()
+            } else {
+                format!("Password rotated; {revoked} other session(s) signed out.")
+            };
+            toast::oob_only(Toast::success(message)).into_response()
         }
         Err(AccountsError::NotFound(_)) => {
             toast::oob_only(Toast::warn("User no longer exists.")).into_response()
@@ -825,11 +871,24 @@ mod tests {
         let (_d, state) = fixture();
         let users = state.with_db(UserStore::list_users).unwrap();
         assert!(!users.is_empty());
+        // The fixture's seed admin has the legacy placeholder hash: the
+        // station has no password, so the form is the first one (DD-14).
         let html = render_user_rows(&users);
         assert!(html.contains("ADMIN"));
-        assert!(html.contains("Reset password"));
+        assert!(html.contains("Set password"), "{html}");
+        assert!(!html.contains("Reset password"), "{html}");
         // Seed admin cannot be removed: no Remove button on its row.
         assert!(!html.contains(">Remove<"));
+
+        // With a real hash on the row it is a reset again.
+        let hash = accounts::hash_password("a-real-password-here").unwrap();
+        state
+            .with_db(|conn| conn.set_password(users[0].id, &hash))
+            .unwrap();
+        let users = state.with_db(UserStore::list_users).unwrap();
+        let html = render_user_rows(&users);
+        assert!(html.contains("Reset password"), "{html}");
+        assert!(!html.contains("Set password"), "{html}");
     }
 
     #[test]

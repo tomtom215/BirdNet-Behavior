@@ -221,7 +221,12 @@ fn is_excluded(path: &str) -> bool {
     matches!(path, "/api/v2/health" | "/api/v2/ws/detections") || path.starts_with("/api/v2/ws/")
 }
 
-fn admin_password_configured(state: &AppState) -> bool {
+/// Whether this station has an admin password at all.
+///
+/// `CADDY_PWD` in the environment, or a real Argon2 hash on the seed admin
+/// row. `false` is the open station the middleware waves everyone through —
+/// and the one the wizard must offer a password step to (DD-14).
+pub fn admin_password_configured(state: &AppState) -> bool {
     // Either CADDY_PWD env is set OR the seed admin row carries a real
     // password hash. The bootstrap in `helpers::auth` keeps these in sync.
     let env_set = std::env::var("CADDY_PWD").is_ok_and(|v| !v.is_empty());

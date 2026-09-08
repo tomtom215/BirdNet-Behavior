@@ -249,6 +249,47 @@ impl DeviceFingerprint {
     }
 }
 
+/// Mint a session for `user_id` from the request that just proved the user,
+/// and return the `Set-Cookie` value that hands it to the browser.
+///
+/// The wizard's password step and the accounts page's first "Set password"
+/// use this: both turn an open station into an owned one, and the browser
+/// that did it must leave with the session that owns it, or the next click
+/// is a login prompt for a password the operator has typed once and has no
+/// reason to remember was the one that took.
+///
+/// `None` if the session row could not be written; the caller then falls
+/// back to a plain redirect (the login page still works).
+pub(crate) fn mint_session_cookie(
+    state: &AppState,
+    user_id: i64,
+    client: Option<&ClientIp>,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    let device = DeviceFingerprint::from_request(client, headers);
+    let ttl_ms = session::default_ttl_ms();
+    let session_id = session::generate_session_id();
+    let expires_at = expires_at_for_ttl(ttl_ms);
+    state
+        .with_db(|conn| {
+            conn.create_session(
+                &session_id,
+                user_id,
+                &expires_at,
+                device.user_agent.as_deref(),
+                device.ip_hash.as_deref(),
+            )
+        })
+        .ok()?;
+    let token = session::issue_token(&session_id, ttl_ms);
+    let public_url = std::env::var("BNB_PUBLIC_URL").ok();
+    Some(session::build_set_cookie(
+        &token,
+        ttl_ms,
+        public_url.as_deref(),
+    ))
+}
+
 /// "Anyone can sign in" bypass — issued only when neither `CADDY_PWD` nor
 /// a DB-stored admin password is configured. Mirrors the basic-auth
 /// shape from #89: the surface is reachable on a freshly provisioned

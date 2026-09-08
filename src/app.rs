@@ -204,6 +204,19 @@ async fn serve(
     for warning in &tls_plan.warnings {
         tracing::warn!("{warning}");
     }
+    // The station's own session-signing secret, beside the database (DD-15):
+    // without it every bare-metal install ran on a per-process secret and
+    // every login died on restart. A data directory that cannot take the
+    // file degrades to the old derivation, and says so.
+    if let Some(data_dir) = db_path.parent()
+        && let Err(e) = birdnet_web::session::install_persisted_secret(data_dir)
+    {
+        tracing::warn!(
+            error = %e,
+            dir = %data_dir.display(),
+            "could not persist a session secret; login sessions will not survive a restart"
+        );
+    }
     let server_config = birdnet_web::server::ServerConfig {
         addr,
         db_path: db_path.clone(),
