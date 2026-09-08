@@ -342,6 +342,19 @@ impl MetricsRegistry {
             .store(candidates.unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
+    /// The occurrence filter's live state: whether it is running, and how
+    /// many species it admits (`None` until it has run). The same pair
+    /// `set_occurrence_filter` stores, for the surfaces a person reads.
+    pub fn occurrence_filter(&self) -> OccurrenceFilterState {
+        OccurrenceFilterState {
+            active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
+            candidates: match self.occurrence_candidates.load(Ordering::Relaxed) {
+                u64::MAX => None,
+                n => Some(n),
+            },
+        }
+    }
+
     /// Record one served HTTP response.
     pub fn observe_http(&self, status: u16, seconds: f64) {
         let class = match status {
@@ -582,16 +595,37 @@ impl MetricsRegistry {
             notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
-            occurrence_filter_active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
-            occurrence_candidates: match self.occurrence_candidates.load(Ordering::Relaxed) {
-                u64::MAX => None,
-                n => Some(n),
-            },
+            occurrence_filter_active: self.occurrence_filter().active,
+            occurrence_candidates: self.occurrence_filter().candidates,
             http_responses: Self::read_map(&self.http_responses),
             http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
             detection_write_failures: self.detection_write_failures_total.load(Ordering::Relaxed),
         }
+    }
+}
+
+/// What the species occurrence filter is doing right now (ON-12).
+///
+/// Published to Prometheus since the inert-filter defect, and now to the
+/// station page: a filter that admits zero species is a station that records
+/// nothing, and an operator without a metrics stack had no way to see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OccurrenceFilterState {
+    /// Whether the metadata model is loaded and filtering. `false` means every
+    /// species the classifier knows is a candidate, wherever the station is.
+    pub active: bool,
+    /// How many species the filter admitted the last time it ran; `None`
+    /// until it has.
+    pub candidates: Option<u64>,
+}
+
+impl OccurrenceFilterState {
+    /// A filter that is running and admits no species at all: nothing the
+    /// station hears can be recorded until it is fixed.
+    #[must_use]
+    pub const fn admits_nothing(self) -> bool {
+        self.active && matches!(self.candidates, Some(0))
     }
 }
 

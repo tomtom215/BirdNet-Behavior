@@ -38,6 +38,15 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the species filter's state is on the station page
+
+**`/station` says what the occurrence filter is doing** (`ON-12`). Whether
+the metadata model is filtering, and how many species it currently admits,
+reached Prometheus and nothing a person reads; a filter admitting zero species
+is a station that records nothing, and an operator without a metrics stack
+could not see it. The Pipeline row now carries it, and the status banner names
+a filter admitting nothing as something to fix.
+
 ### Fixed — no child process can hang the station
 
 **Every tool the station shells out to has a deadline** (`PR-8`). `ffmpeg`,

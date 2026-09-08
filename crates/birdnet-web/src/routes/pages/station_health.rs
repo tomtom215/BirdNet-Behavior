@@ -22,6 +22,7 @@ use birdnet_db::audio_sources::AudioSourceStore;
 use birdnet_db::sqlite::SourceActivity;
 
 use super::escape_html;
+use crate::metrics::OccurrenceFilterState;
 use crate::state::AppState;
 use crate::system_info::{self, format_bytes, format_uptime};
 
@@ -63,6 +64,8 @@ struct Snapshot {
     service_uptime: Option<u64>,
     /// Per-source acoustic health. Empty until the sampler has run.
     acoustic: Vec<birdnet_db::audio_levels::SourceDrift>,
+    /// What the species occurrence filter is doing (ON-12).
+    occurrence: OccurrenceFilterState,
 }
 
 /// Render the operator Health surface for the public Station Health tab.
@@ -146,6 +149,7 @@ async fn gather(state: &AppState) -> Snapshot {
             acoustic: state.with_db(|conn| {
                 birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
             }),
+            occurrence: state.metrics().occurrence_filter(),
         }
     })
     .await
@@ -164,6 +168,10 @@ async fn gather(state: &AppState) -> Snapshot {
         scratch_critical: false,
         service_uptime: None,
         acoustic: Vec::new(),
+        occurrence: OccurrenceFilterState {
+            active: false,
+            candidates: None,
+        },
     })
 }
 
@@ -300,6 +308,9 @@ fn status_banner(s: &Snapshot) -> String {
     }
     if s.capture.iter().any(|c| c.state.is_fault()) {
         issues.push("an audio source is down");
+    }
+    if s.occurrence.admits_nothing() {
+        issues.push("the species filter admits no species, so nothing can be recorded");
     }
 
     let last = s
@@ -522,9 +533,24 @@ fn pipeline_row(s: &Snapshot) -> String {
          <div><div class=\"lab\">Queued uploads</div><div class=\"v\">{queued}</div></div>\
          <div><div class=\"lab\">Service uptime</div><div class=\"v\"><span class=\"mono\">{uptime}</span></div></div>\
          <div><div class=\"lab\">Total detections</div><div class=\"v\"><span class=\"mono\">{total}</span></div></div>\
+         <div><div class=\"lab\">Species filter</div><div class=\"v\">{filter}</div></div>\
          </div>",
         total = s.total_detections,
+        filter = occurrence_cell(s.occurrence),
     )
+}
+
+/// The species-filter cell of the pipeline row: the one number that shows a
+/// filter admitting nothing, which used to reach only Prometheus.
+fn occurrence_cell(f: OccurrenceFilterState) -> String {
+    match (f.active, f.candidates) {
+        (false, _) => "off · every species the model knows is a candidate".to_string(),
+        (true, None) => "on · has not run yet".to_string(),
+        (true, Some(0)) => {
+            "<span class=\"mono\">0</span> species admitted · nothing can be recorded".to_string()
+        }
+        (true, Some(n)) => format!("on · admitting <span class=\"mono\">{n}</span> species"),
+    }
 }
 
 /// What the microphones themselves sound like, and whether that has moved.
@@ -670,7 +696,50 @@ mod tests {
             scratch_critical: false,
             service_uptime: Some(3_600),
             acoustic: Vec::new(),
+            occurrence: OccurrenceFilterState {
+                active: false,
+                candidates: None,
+            },
         }
+    }
+
+    /// The gate for ON-12: the occurrence filter's state is on the station
+    /// page, and a filter admitting nothing is flagged as a problem.
+    #[test]
+    fn the_species_filter_state_is_on_the_page_and_zero_admitted_is_a_problem() {
+        let mut s = snap(false, true, 2, 0);
+        assert!(
+            pipeline_row(&s).contains("every species the model knows is a candidate"),
+            "an inactive filter must say so: {}",
+            pipeline_row(&s)
+        );
+        assert!(status_banner(&s).contains("All systems healthy"));
+
+        s.occurrence = OccurrenceFilterState {
+            active: true,
+            candidates: Some(287),
+        };
+        assert!(
+            pipeline_row(&s).contains("admitting <span class=\"mono\">287</span> species"),
+            "{}",
+            pipeline_row(&s)
+        );
+        assert!(status_banner(&s).contains("All systems healthy"));
+
+        s.occurrence = OccurrenceFilterState {
+            active: true,
+            candidates: Some(0),
+        };
+        assert!(
+            pipeline_row(&s).contains("nothing can be recorded"),
+            "{}",
+            pipeline_row(&s)
+        );
+        assert!(
+            status_banner(&s).contains("admits no species"),
+            "a filter admitting nothing is a problem the banner must name: {}",
+            status_banner(&s)
+        );
     }
 
     fn cap_source(
