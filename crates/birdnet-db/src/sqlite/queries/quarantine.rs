@@ -266,9 +266,9 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     let inserted = tx.execute(
         "INSERT INTO detections
             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
-             Week, Sens, Overlap, File_Name, is_locked)
+             Week, Sens, Overlap, File_Name, is_locked, review_verdict)
          SELECT date, time, sci_name, com_name, confidence,
-                lat, lon, NULL, week, NULL, NULL, file_name, 0
+                lat, lon, NULL, week, NULL, NULL, file_name, 0, 'confirmed'
          FROM quarantine WHERE id = ?1
          ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
         params![id],
@@ -531,6 +531,26 @@ mod tests {
         insert_quarantine(&conn, &rec).unwrap(); // duplicate
         let rows = list_quarantine(&conn, QuarantineFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 1, "duplicate should be ignored");
+    }
+
+    /// A human approving a quarantined detection is a review with a verdict.
+    /// The admitted row used to carry `review_verdict = NULL`, so a
+    /// hand-approved rare-species record was indistinguishable from an
+    /// unreviewed auto-accept in every export and every reviewer queue.
+    #[test]
+    fn an_approved_quarantine_becomes_a_confirmed_detection() {
+        let conn = open();
+        insert_quarantine(&conn, &sample(QuarantineReason::LowConfidence)).unwrap();
+        let id = list_quarantine(&conn, QuarantineFilter::Pending, 1, 0).unwrap()[0].id;
+        assert!(approve_quarantine(&conn, id).unwrap());
+        let verdict: Option<String> = conn
+            .query_row(
+                "SELECT review_verdict FROM detections WHERE Sci_Name = 'Upupa epops'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(verdict.as_deref(), Some("confirmed"));
     }
 
     #[test]

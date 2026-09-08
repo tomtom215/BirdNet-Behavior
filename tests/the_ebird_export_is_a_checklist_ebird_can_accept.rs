@@ -96,6 +96,29 @@ fn records(body: &str) -> Vec<Vec<String>> {
 /// A checklist that is not placed anywhere must say so with blanks, not with
 /// the coordinates of Null Island; and a station that knows where it is must
 /// put that on every record without being asked.
+/// The installer writes `SITENAME=` into the config, which the settings
+/// overlay stores as `site_name`; the export read only `station_name`, so a
+/// station named at install time exported the generic fallback.
+#[tokio::test]
+async fn the_location_name_falls_back_to_the_installers_site_name() {
+    let rows: Vec<Row> = vec![(
+        "2026-03-12",
+        "06:30:00",
+        BLACKBIRD.0,
+        BLACKBIRD.1,
+        0.9,
+        None,
+    )];
+    let state = station(&rows, true);
+    state.with_db(|conn| {
+        settings::set(conn, "site_name", "Back Garden", SettingsCategory::System).unwrap();
+    });
+    let (status, body) = export(state, "").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rec = &records(&body)[0];
+    assert_eq!(rec[5], "Back Garden", "location name column: {rec:?}");
+}
+
 #[tokio::test]
 async fn coordinates_come_from_the_station_and_are_never_null_island() {
     let rows: Vec<Row> = vec![(

@@ -48,7 +48,7 @@ use crate::state::AppState;
 pub(super) const DEFAULT_MIN_CONFIDENCE: f64 = 0.75;
 
 /// Location name written when the station has neither a `station_name`
-/// setting nor a caller-supplied name.
+/// nor a `site_name` setting, and the caller supplied none.
 const DEFAULT_LOCATION_NAME: &str = "BirdNet-Behavior Station";
 
 #[derive(Deserialize)]
@@ -59,7 +59,7 @@ pub(super) struct EbirdQuery {
     lat: Option<f64>,
     /// Longitude override; must be paired with `lat`.
     lon: Option<f64>,
-    /// Location name; defaults to the `station_name` setting.
+    /// Location name; defaults to the `station_name` setting, then `site_name`.
     location: Option<String>,
     /// Lowest confidence a detection may have to be claimed (0–1).
     min_confidence: Option<f64>,
@@ -158,8 +158,16 @@ pub(super) async fn export_ebird(
                 setting_f64(conn, "latitude"),
                 setting_f64(conn, "longitude"),
             );
-            let station_name =
+            // `station_name` is the settings page's field; `site_name` is what
+            // the installer's `SITENAME=` becomes through the settings overlay.
+            // Reading only the first exported the generic fallback for every
+            // station named at install time.
+            let mut station_name =
                 birdnet_db::settings::get_or(conn, "station_name", "").unwrap_or_default();
+            if station_name.trim().is_empty() {
+                station_name =
+                    birdnet_db::settings::get_or(conn, "site_name", "").unwrap_or_default();
+            }
             let rows = birdnet_db::sqlite::analytic_detections_above(
                 conn,
                 date.as_deref(),
