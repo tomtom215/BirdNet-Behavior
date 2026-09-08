@@ -168,14 +168,7 @@
             }
           },
           "503": {
-            "description": "Disk is critically full.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DiskUsage"
-                }
-              }
-            }
+            "description": "The disk is critically full (`status: critical`), or `df` could not answer for the data directory (`status: unknown`, with `error`)."
           }
         }
       }
@@ -2650,6 +2643,75 @@
           "strict": {
             "type": "boolean",
             "description": "Which mode this response answered in."
+          },
+          "detection_writes": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "halted"
+            ],
+            "description": "Whether per-detection writes are currently accepted; `halted` once the daily integrity check has found the database corrupt."
+          },
+          "data_volume": {
+            "description": "The data volume's last probe (once a minute): whether a test write succeeded, whether the directory is still its own mount, and the `df` verdict. The string `unchecked` before the first probe. `writable: false` or `mount: vanished` is degraded on every reading; `disk: critical` or `unknown` only under `?strict=1`.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "unchecked"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "writable": {
+                    "type": "boolean"
+                  },
+                  "write_error": {
+                    "type": "string"
+                  },
+                  "mount": {
+                    "type": "string",
+                    "enum": [
+                      "intact",
+                      "vanished",
+                      "not-a-mount",
+                      "unknown"
+                    ]
+                  },
+                  "disk": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "low",
+                      "critical",
+                      "unknown"
+                    ]
+                  },
+                  "used_percent": {
+                    "type": "number"
+                  },
+                  "checked_at": {
+                    "type": "integer",
+                    "description": "Seconds since the Unix epoch."
+                  }
+                },
+                "required": [
+                  "writable",
+                  "mount",
+                  "disk",
+                  "checked_at"
+                ]
+              }
+            ]
+          },
+          "admin_bootstrap": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "failed"
+            ],
+            "description": "Whether the admin-password bootstrap at start succeeded; `failed` is a strict fault."
           }
         }
       },

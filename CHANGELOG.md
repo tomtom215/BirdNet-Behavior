@@ -133,6 +133,24 @@ signs the old sessions out at the next start, and rotating on the accounts
 page signs the other sessions out — the promise the page always made, now by
 the mechanism that can keep the operator's own session.
 
+**The health verdict sees a full card, a read-only remount and a vanished
+data volume** (`DD-19`, `DD-20`, the writability half of `PS-9`/`AD-4`). On a
+100 % full volume `/api/v2/health` answered `200 "healthy"` while
+`/api/v2/system/disk` said `critical`, DuckDB had been quarantined on `ENOSPC`
+and the admin bootstrap had failed; after the data mount was detached the
+station kept writing into the directory underneath it and reported the parent
+filesystem as fine; and nothing probed writability at all, so a read-only
+remount left every detection classified and discarded behind a green probe.
+A watch now probes the data directory once a minute — a create/sync/remove
+write, the directory's device id against its parent's, and the `df` verdict —
+and the health endpoint reads it: unwritable or vanished is degraded on every
+reading, like a halted ingest; a critically full or unanswerable disk and a
+failed admin bootstrap are `?strict=1` faults. The body carries `data_volume`
+and `admin_bootstrap`; the station-health alerts gained a `data-volume`
+condition; the disk endpoint answers a failed `df` with `503 unknown` instead
+of `500`; and the journal gets one line on a transition instead of one a
+minute.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

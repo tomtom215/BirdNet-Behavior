@@ -464,6 +464,10 @@ async fn serve(
     }
 
     // Start background subsystems.
+    // The data volume's own watch (PS-9, DD-19, DD-20): writable, still
+    // mounted, how full — measured now and every minute, read by the health
+    // verdict. Nothing else in the process finds out about a read-only remount.
+    let _data_volume_watch = birdnet_web::data_volume::spawn_watch(state.clone());
     let _disk_manager_threads = helpers::start_disk_manager(&cli, config.as_ref(), &state);
     let _live_spectrogram_thread = helpers::start_live_spectrogram(&cli, config.as_ref(), &state);
     let _capture_handle = capture::start_capture_manager(

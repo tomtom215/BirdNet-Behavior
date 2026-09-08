@@ -16,6 +16,10 @@
 //!   channels for a month;
 //! * the disk purger deleting recordings every day to stay under its threshold,
 //!   quietly discarding the audio a researcher would want to re-examine;
+//! * the data volume not taking writes at all — a read-only remount after I/O
+//!   errors, a card full to the byte, or a mount that has gone away with the
+//!   station writing into the directory underneath it — while every detection
+//!   is classified and then discarded;
 //! * a failing integrity check or a backup that has not completed in weeks —
 //!   the two things standing between a corrupt database and a lost season;
 //! * either database quarantined and started over — the analytics store
@@ -219,9 +223,10 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 6] = [
+const CHECKS: [(&str, Check); 7] = [
     ("sources", check_sources),
     ("disk", check_disk),
+    ("data-volume", check_data_volume),
     ("thermal", |_state, out| check_thermal(out)),
     ("maintenance", check_maintenance),
     ("quarantined-stores", check_quarantined_stores),
@@ -410,6 +415,47 @@ fn check_disk(state: &AppState, out: &mut Vec<Condition>) {
         return;
     };
     out.extend(disk_condition(usage.used_percent()));
+}
+
+/// A data volume that is not taking writes: read-only, full to the byte, or
+/// a mount that has gone away with the station writing into the directory
+/// underneath it (DD-19, DD-20). Reads the watch's last probe rather than
+/// probing again, so this and `/api/v2/health` cannot disagree.
+fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
+    let Some(volume) = state.data_volume() else {
+        return;
+    };
+    out.extend(data_volume_condition(&volume));
+}
+
+/// The data-volume policy, separated from the probe so it can be tested.
+fn data_volume_condition(volume: &birdnet_web::data_volume::DataVolumeStatus) -> Option<Condition> {
+    use birdnet_web::data_volume::MountState;
+    if matches!(volume.mount, MountState::Vanished) {
+        return Some(Condition {
+            key: "data-volume".to_owned(),
+            title: "Data volume has gone away — detections are being lost".to_owned(),
+            body: "The filesystem the data directory was on is no longer mounted there. The \
+                   station is writing into the directory underneath it, on the boot disk, \
+                   and everything written since will not be on the card when it comes back. \
+                   Check the card, the cable and `dmesg`, then remount it and restart."
+                .to_owned(),
+        });
+    }
+    if !volume.writable {
+        return Some(Condition {
+            key: "data-volume".to_owned(),
+            title: "Data volume is not writable — detections are being lost".to_owned(),
+            body: format!(
+                "A test write to the data directory failed ({}). A read-only remount after \
+                 I/O errors, or a volume full to the byte, both look like this; detections \
+                 are classified and then discarded until it is fixed. Check `dmesg` and \
+                 `df`, then remount or free space and restart.",
+                volume.write_error.as_deref().unwrap_or("no detail")
+            ),
+        });
+    }
+    None
 }
 
 /// The disk policy, separated from `statvfs` so it can be tested.
@@ -823,6 +869,7 @@ mod tests {
         for name in [
             "sources",
             "disk",
+            "data-volume",
             "thermal",
             "maintenance",
             "quarantined-stores",
@@ -835,9 +882,36 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            6,
-            "a seventh check needs a line in the module doc and in this gate"
+            7,
+            "an eighth check needs a line in the module doc and in this gate"
         );
+    }
+
+    /// The data-volume policy: a vanished mount or a failed write is a
+    /// condition; a healthy volume is not.
+    #[test]
+    fn a_vanished_mount_or_a_failed_write_is_a_condition() {
+        use birdnet_web::data_volume::{DataVolumeStatus, DiskVerdict, MountState};
+        let ok = DataVolumeStatus {
+            writable: true,
+            write_error: None,
+            mount: MountState::Intact,
+            disk: DiskVerdict::Ok,
+            used_percent: Some(30.0),
+            checked_at: 0,
+        };
+        assert!(data_volume_condition(&ok).is_none());
+        let vanished = DataVolumeStatus {
+            mount: MountState::Vanished,
+            ..ok.clone()
+        };
+        assert!(data_volume_condition(&vanished).is_some_and(|c| c.title.contains("gone away")));
+        let read_only = DataVolumeStatus {
+            writable: false,
+            write_error: Some("Read-only file system (os error 30)".into()),
+            ..ok
+        };
+        assert!(data_volume_condition(&read_only).is_some_and(|c| c.body.contains("os error 30")));
     }
 
     // ── the clock ───────────────────────────────────────────────────────

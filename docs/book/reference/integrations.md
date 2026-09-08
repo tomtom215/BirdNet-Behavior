@@ -136,9 +136,13 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 for the container health check — Docker restarts an unhealthy container, and a
 station whose detection daemon is down is exactly the one that must stay up to
 be diagnosed. The strict form additionally returns `503` when the detection
-daemon is not running, so a monitor that should wake a human can get a red out
-of the same endpoint. Both report `detection_daemon` and
-`detection_silence_secs` in the body either way.
+daemon is not running, when the data disk is critically full or `df` cannot
+read it, or when the admin-password bootstrap failed at start, so a monitor
+that should wake a human can get a red out of the same endpoint. A data volume
+that is not taking writes at all — a read-only remount, a card full to the
+byte, a mount that has gone away — is `503` on both forms. Both report
+`detection_daemon`, `detection_silence_secs` and `data_volume` in the body
+either way.
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:

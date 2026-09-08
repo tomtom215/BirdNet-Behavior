@@ -159,6 +159,12 @@ struct AppStateInner {
     /// runs. Process-lifetime state: a restart forgives, which is the
     /// reference project's behaviour too.
     login_throttle: LoginThrottle,
+    /// The data volume's last probe (`crate::data_volume`): writable, still
+    /// mounted, how full. `None` until the watch has run once.
+    data_volume: std::sync::RwLock<Option<crate::data_volume::DataVolumeStatus>>,
+    /// Whether the admin-password bootstrap at start failed (DD-19): a
+    /// station that could not write its own admin credential.
+    admin_bootstrap_failed: AtomicBool,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -239,6 +245,8 @@ impl AppState {
                 api_token: None,
                 supervised_by_systemd: false,
                 login_throttle: LoginThrottle::default(),
+                data_volume: std::sync::RwLock::new(None),
+                admin_bootstrap_failed: AtomicBool::new(false),
             }),
         })
     }
@@ -434,6 +442,8 @@ impl AppState {
                 api_token: None,
                 supervised_by_systemd: false,
                 login_throttle: LoginThrottle::default(),
+                data_volume: std::sync::RwLock::new(None),
+                admin_bootstrap_failed: AtomicBool::new(false),
             }),
         })
     }
@@ -473,6 +483,8 @@ impl AppState {
                 api_token: None,
                 supervised_by_systemd: false,
                 login_throttle: LoginThrottle::default(),
+                data_volume: std::sync::RwLock::new(None),
+                admin_bootstrap_failed: AtomicBool::new(false),
             }),
         }
     }
@@ -1115,6 +1127,36 @@ impl AppState {
     #[must_use]
     pub fn login_throttle(&self) -> &LoginThrottle {
         &self.inner.login_throttle
+    }
+
+    /// The data volume's last probe, if the watch has run.
+    #[must_use]
+    pub fn data_volume(&self) -> Option<crate::data_volume::DataVolumeStatus> {
+        self.inner
+            .data_volume
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// Publish a data-volume probe (the watch, and tests standing in for it).
+    pub fn set_data_volume(&self, status: crate::data_volume::DataVolumeStatus) {
+        if let Ok(mut guard) = self.inner.data_volume.write() {
+            *guard = Some(status);
+        }
+    }
+
+    /// Record that the admin-password bootstrap failed at start.
+    pub fn set_admin_bootstrap_failed(&self, failed: bool) {
+        self.inner
+            .admin_bootstrap_failed
+            .store(failed, Ordering::Relaxed);
+    }
+
+    /// Whether the admin-password bootstrap failed at start.
+    #[must_use]
+    pub fn admin_bootstrap_failed(&self) -> bool {
+        self.inner.admin_bootstrap_failed.load(Ordering::Relaxed)
     }
 
     /// Whether the per-detection writes are currently refused.

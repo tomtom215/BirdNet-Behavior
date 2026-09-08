@@ -163,10 +163,16 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
         Ok(BootstrapOutcome::AlreadyConsistent) => {
             tracing::debug!("admin password hash already up-to-date");
         }
-        Err(e) => tracing::warn!(
-            error = %e,
-            "admin password bootstrap failed; basic-auth path stays usable"
-        ),
+        Err(e) => {
+            // Reported by `?strict=1` too (DD-19): a station that could not
+            // write its own admin credential is one whose database refused a
+            // write, and that was only ever a warning in the journal.
+            state.set_admin_bootstrap_failed(true);
+            tracing::warn!(
+                error = %e,
+                "admin password bootstrap failed; basic-auth path stays usable"
+            );
+        }
     }
 }
 

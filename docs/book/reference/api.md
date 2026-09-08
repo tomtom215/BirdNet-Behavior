@@ -24,13 +24,33 @@ curl http://localhost:8502/api/v2/health
   "analytics": true,
   "detection_daemon": "running",
   "detection_writes": "accepted",
-  "detection_silence_secs": 142
+  "detection_silence_secs": 142,
+  "data_volume": {
+    "writable": true,
+    "mount": "intact",
+    "disk": "ok",
+    "used_percent": 35.2,
+    "checked_at": 1788973200
+  },
+  "admin_bootstrap": "ok",
+  "strict": false
 }
 ```
 
 `status` is `"healthy"` (HTTP `200`) or `"degraded"` (HTTP `503` — the database
-is unreachable, or the last recorded integrity check failed), so monitoring can
-alert on the status code alone.
+is unreachable, the last recorded integrity check failed, or the data volume is
+not taking writes), so monitoring can alert on the status code alone.
+
+`data_volume` is the last of a once-a-minute probe of the data directory
+(`"unchecked"` before the first): whether a test write succeeded (`writable`,
+with `write_error` when it did not — a read-only remount after I/O errors and
+a card full to the byte both fail it), whether the directory is still its own
+mount (`mount` is `intact`, `vanished`, `not-a-mount` for a directory that was
+never a separate filesystem, or `unknown`), and the `df` verdict (`disk` is
+`ok`, `low`, `critical` or `unknown`). `writable: false` or `mount: vanished`
+is degraded on every reading: the station is running and keeping nothing.
+`disk: critical` or `unknown`, and `admin_bootstrap: failed`, are reported as
+degraded only under `?strict=1`.
 
 `database` is `"ok"`, `"unchecked"` or `"error"`. It reports the verdict of the
 **daily maintenance integrity check**, not a check run at request time: that

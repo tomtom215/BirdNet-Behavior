@@ -220,7 +220,23 @@ async fn health(
     // this does not change the status code today. It is or-ed in anyway so the
     // two cannot drift apart if the halt ever acquires another cause.
     let ingest_halted = state.ingest_halted();
-    let degraded = !db_ok || ingest_halted || (strict && !daemon_running);
+    // The data volume (DD-19, DD-20). Unwritable, or a mount that has gone
+    // away, is degraded on every reading — the station is keeping nothing,
+    // like a halted ingest. A critically full disk, a `df` that cannot
+    // answer, and an admin bootstrap that failed are strict faults: the
+    // pager's business, not the container supervisor's.
+    let volume = state.data_volume();
+    let loses_writes = volume
+        .as_ref()
+        .is_some_and(crate::data_volume::DataVolumeStatus::loses_writes);
+    let volume_fault = volume
+        .as_ref()
+        .is_some_and(crate::data_volume::DataVolumeStatus::is_strict_fault);
+    let bootstrap_failed = state.admin_bootstrap_failed();
+    let degraded = !db_ok
+        || ingest_halted
+        || loses_writes
+        || (strict && (!daemon_running || volume_fault || bootstrap_failed));
 
     let status = if degraded {
         StatusCode::SERVICE_UNAVAILABLE
@@ -238,6 +254,8 @@ async fn health(
             "detection_daemon": if daemon_running { "running" } else { "stopped" },
             "detection_writes": if ingest_halted { "halted" } else { "accepted" },
             "detection_silence_secs": detection_silence_secs,
+            "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
+            "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
             "strict": strict,
         })),
     )
@@ -281,9 +299,12 @@ async fn disk_info(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
                 })),
             )
         }
+        // `df` could not answer — the path is gone, or the tool is. That is a
+        // verdict about the disk ("unknown", and a 503 for the monitor), not
+        // a bug in this handler (DD-20).
         Ok(Err(e)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "status": "unknown", "error": e.to_string() })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
