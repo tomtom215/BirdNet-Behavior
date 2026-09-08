@@ -38,6 +38,18 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a restore no longer unpacks over the live database
+
+**Restore from file checks, stops, swaps, restarts** (`UP-2`). It used to
+run `tar` straight into the data directory over the open database with no
+free-space check and no pause in recording, then ask the operator to restart.
+It now lists the archive with sizes and refuses one the disk cannot hold with
+headroom, refuses one whose database is not named as this station's, halts
+detection writes, unpacks beside the database and integrity-checks the copy
+there, and only then swaps the files in — the database by rename, so the
+running process is never left reading a half-written file; recordings merged
+clip by clip. Under systemd the station then restarts itself.
+
 ### Fixed — the analytics copy notices drift that nets to zero
 
 **Net-zero drift between the database and its analytics copy is found and

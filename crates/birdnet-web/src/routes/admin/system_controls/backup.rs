@@ -415,72 +415,323 @@ pub(super) async fn restore_backup(
     }
 
     let db_path = state.db_path().to_path_buf();
-    let target_dir = db_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .to_path_buf();
+    let halt = state.ingest_halt_flag();
 
     let result = tokio::task::spawn_blocking(move || {
         // Keep the NamedTempFile alive for the duration of the tar operations;
         // it unlinks the archive automatically when this closure returns.
         let _archive = tmp;
-        let tmp_str = tmp_path.to_string_lossy().to_string();
-
-        let list_output = run_with_timeout(
-            std::process::Command::new("tar").args(["tzf", &tmp_str]),
-            LISTING_TIMEOUT,
-        )
-        .map_err(|e| format!("failed to list archive: {e}"))?;
-
-        if !list_output.status.success() {
-            return Err("invalid archive (tar returned error)".to_string());
-        }
-
-        let listing = String::from_utf8_lossy(&list_output.stdout);
-        check_archive_members(&listing)?;
-
-        let extract = run_with_timeout(
-            std::process::Command::new("tar").args([
-                "xzf",
-                &tmp_str,
-                "-C",
-                &target_dir.to_string_lossy(),
-            ]),
-            ARCHIVE_TIMEOUT,
-        )
-        .map_err(|e| format!("failed to extract: {e}"))?;
-
-        if !extract.status.success() {
-            return Err(format!(
-                "tar extract failed with status {}: {}",
-                extract.status,
-                String::from_utf8_lossy(&extract.stderr).trim()
-            ));
-        }
-
-        finalize_restore(&db_path)?;
-
-        Ok(
-            "Backup restored successfully. Restart the server to load the restored data."
-                .to_string(),
-        )
+        let data_dir = db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
+        let available = birdnet_core::audio::capture::disk_usage(&data_dir)
+            .map(|d| d.available_bytes)
+            .map_err(|e| {
+                format!(
+                    "could not measure free space in {}: {e}",
+                    data_dir.display()
+                )
+            })?;
+        restore_archive_into(&tmp_path, &db_path, available, &halt)
     })
     .await;
 
     match result {
-        Ok(Ok(msg)) => Html(format!(r#"<p class="ctl-ok">{msg}</p>"#)),
+        Ok(Ok(report)) => {
+            // The restored files are in place and the process holds handles to
+            // the old ones. Under systemd the station restarts itself now, which
+            // is what "stop, restore, start" means for a self-supervised unit;
+            // elsewhere the operator is told, as before.
+            let restarted = super::service::request_restart(state.supervised_by_systemd())
+                == super::service::RestartOutcome::Signalled;
+            Html(format!(
+                r#"<p class="ctl-ok">{}</p>"#,
+                report.message(restarted)
+            ))
+        }
         Ok(Err(e)) => Html(format!(r#"<p class="ctl-err">Restore failed: {e}</p>"#)),
         Err(e) => Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
     }
+}
+
+/// What a finished restore placed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoreReport {
+    /// Bytes the archive's members unpack to, from its listing.
+    pub bytes: u64,
+    /// Top-level members placed.
+    pub members: Vec<String>,
+}
+
+impl RestoreReport {
+    /// The line the operator reads.
+    fn message(&self, restarted: bool) -> String {
+        let placed = self.members.join(", ");
+        if restarted {
+            format!(
+                "Backup restored ({placed}); the station is restarting to load it. \
+                 Detections were paused for the restore and resume with the restart."
+            )
+        } else {
+            format!(
+                "Backup restored ({placed}). Restart the server to load the restored data; \
+                 detections are paused until then."
+            )
+        }
+    }
+}
+
+/// Free space a restore leaves untouched beyond the archive's own size: room
+/// for the WAL the restored database will grow, and for the restart.
+const RESTORE_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Whether `available` bytes can hold a restore of `needed` bytes.
+///
+/// The check BirdNET-Pi makes before it touches anything
+/// (`backup_data.sh:95-111`) and this path did not: an archive larger than
+/// the free space used to unpack until the disk filled, and stop with the
+/// database half-written under its live name.
+fn space_verdict(needed: u64, available: u64) -> Result<(), String> {
+    let required = needed
+        .saturating_add(needed / 10)
+        .saturating_add(RESTORE_HEADROOM_BYTES);
+    if available >= required {
+        Ok(())
+    } else {
+        Err(format!(
+            "the archive unpacks to {} and the data directory has {} free ({} is needed, \
+             with headroom); free space or restore to a larger disk",
+            crate::system_info::format_bytes(needed),
+            crate::system_info::format_bytes(available),
+            crate::system_info::format_bytes(required),
+        ))
+    }
+}
+
+/// Members and sizes from a `tar -tzvf` listing.
+///
+/// Both GNU and busybox tar print `mode owner size date time name`; the name
+/// is everything after the sixth field, so a name with spaces survives.
+fn parse_verbose_listing(listing: &str) -> Result<Vec<(String, u64)>, String> {
+    let mut out = Vec::new();
+    for line in listing.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 6 {
+            return Err(format!("unreadable archive listing line: {line}"));
+        }
+        let size: u64 = fields[2]
+            .parse()
+            .map_err(|_| format!("unreadable member size in listing line: {line}"))?;
+        let name = fields[5..].join(" ");
+        out.push((name, size));
+    }
+    Ok(out)
+}
+
+/// Removes the restore staging directory however the restore leaves.
+struct RestoreStaging(std::path::PathBuf);
+
+impl Drop for RestoreStaging {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_dir_all(&self.0)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.0.display(), error = %e, "could not remove restore staging directory");
+        }
+    }
+}
+
+/// Restore `archive` into the data directory that holds `db_path` (UP-2).
+///
+/// In order, and each step before anything the station runs on is touched:
+///
+/// 1. The archive is listed with sizes; members are vetted
+///    ([`check_archive_members`]) and the archive must hold a database named
+///    as this station's is, or it is the wrong backup for this station.
+/// 2. `available` bytes must hold the unpacked size with headroom
+///    ([`space_verdict`]).
+/// 3. Detection writes are halted through `halt`, the same one-way latch
+///    `PS-5` uses when the database is found corrupt; the restart that follows
+///    a restore clears it. Nothing recorded during the swap can land in a file
+///    that is about to be replaced.
+/// 4. The archive is unpacked into a staging directory beside the database,
+///    and the staged database must pass a full integrity check *there*.
+/// 5. Only then are the members moved into place: files by `rename`, which
+///    replaces the directory entry and leaves the process's open handles on
+///    the old inode (the old database is never truncated under a reader, which
+///    is what `tar xzf -C <data dir>` did); directories by merging file by
+///    file, so clips the archive lacks are kept, as before. The database's
+///    stale `-wal`/`-shm` are removed and the result checked once more
+///    ([`finalize_restore`]).
+///
+/// # Errors
+///
+/// The reason the restore was refused or failed. Every refusal before step 5
+/// leaves the live files untouched; a failure inside step 5 names the member.
+pub fn restore_archive_into(
+    archive: &std::path::Path,
+    db_path: &std::path::Path,
+    available: u64,
+    halt: &std::sync::atomic::AtomicBool,
+) -> Result<RestoreReport, String> {
+    let data_dir = db_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
+    let db_name = db_path
+        .file_name()
+        .ok_or_else(|| "database path has no file name".to_string())?
+        .to_string_lossy()
+        .into_owned();
+    let archive_str = archive.to_string_lossy().to_string();
+
+    // 1. List, vet, and require this station's database by name.
+    let list_output = run_with_timeout(
+        std::process::Command::new("tar").args(["tzvf", &archive_str]),
+        LISTING_TIMEOUT,
+    )
+    .map_err(|e| format!("failed to list archive: {e}"))?;
+    if !list_output.status.success() {
+        return Err("invalid archive (tar returned error)".to_string());
+    }
+    let members = parse_verbose_listing(&String::from_utf8_lossy(&list_output.stdout))?;
+    let names = members
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    check_archive_members(&names)?;
+    if !members.iter().any(|(n, _)| n == &db_name) {
+        let dbs: Vec<&str> = members
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|n| {
+                std::path::Path::new(n)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("db"))
+            })
+            .collect();
+        return Err(format!(
+            "the archive holds {} and this station's database is {db_name}; it is a backup of \
+             a different station",
+            dbs.join(", ")
+        ));
+    }
+    let bytes: u64 = members.iter().map(|(_, s)| *s).sum();
+
+    // 2. Room for it.
+    space_verdict(bytes, available)?;
+
+    // 3. No detection may be recorded into a file about to be replaced.
+    halt.store(true, std::sync::atomic::Ordering::SeqCst);
+    tracing::warn!("detection writes halted for a restore; the restart that follows resumes them");
+
+    // 4. Unpack beside the database and check the staged copy there.
+    let staging = data_dir.join(format!(
+        ".bnb-restore-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    ));
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| format!("could not create {}: {e}", staging.display()))?;
+    let _cleanup = RestoreStaging(staging.clone());
+    let extract = run_with_timeout(
+        std::process::Command::new("tar").args([
+            "xzf",
+            &archive_str,
+            "-C",
+            &staging.to_string_lossy(),
+        ]),
+        ARCHIVE_TIMEOUT,
+    )
+    .map_err(|e| format!("failed to extract: {e}"))?;
+    if !extract.status.success() {
+        return Err(format!(
+            "tar extract failed with status {}: {}",
+            extract.status,
+            String::from_utf8_lossy(&extract.stderr).trim()
+        ));
+    }
+    let staged_db = staging.join(&db_name);
+    match birdnet_db::resilience::full_integrity_check(&staged_db) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(format!(
+                "the archive's {db_name} fails an integrity check; nothing was replaced"
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "the archive's {db_name} could not be opened ({e}); nothing was replaced"
+            ));
+        }
+    }
+
+    // 5. Into place.
+    let mut placed = Vec::new();
+    let entries = std::fs::read_dir(&staging)
+        .map_err(|e| format!("could not read {}: {e}", staging.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("could not read staging entry: {e}"))?;
+        let name = entry.file_name();
+        let from = entry.path();
+        let to = data_dir.join(&name);
+        let is_dir = entry
+            .file_type()
+            .map_err(|e| format!("could not stat {}: {e}", from.display()))?
+            .is_dir();
+        if is_dir {
+            merge_dir(&from, &to)?;
+        } else {
+            std::fs::rename(&from, &to)
+                .map_err(|e| format!("could not place {}: {e}", to.display()))?;
+        }
+        placed.push(name.to_string_lossy().into_owned());
+    }
+    placed.sort();
+
+    finalize_restore(db_path)?;
+    Ok(RestoreReport {
+        bytes,
+        members: placed,
+    })
+}
+
+/// Move every file under `from` into `to`, creating directories as needed and
+/// replacing files of the same name; files only `to` has are kept.
+fn merge_dir(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(to).map_err(|e| format!("could not create {}: {e}", to.display()))?;
+    let entries =
+        std::fs::read_dir(from).map_err(|e| format!("could not read {}: {e}", from.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("could not read {}: {e}", from.display()))?;
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        let is_dir = entry
+            .file_type()
+            .map_err(|e| format!("could not stat {}: {e}", src.display()))?
+            .is_dir();
+        if is_dir {
+            merge_dir(&src, &dst)?;
+        } else {
+            std::fs::rename(&src, &dst)
+                .map_err(|e| format!("could not place {}: {e}", dst.display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         RESTORE_IN_PROGRESS, RestoreGuard, check_archive_members, finalize_restore,
-        stage_backup_snapshot,
+        parse_verbose_listing, restore_archive_into, space_verdict, stage_backup_snapshot,
     };
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// A WAL-mode database with `n` rows committed and **not** checkpointed, so
     /// the newest rows exist only in `birds.db-wal`.
@@ -680,5 +931,201 @@ mod tests {
         drop(guard);
         assert!(claim(), "the slot is released when the handler returns");
         RESTORE_IN_PROGRESS.store(false, Ordering::SeqCst);
+    }
+
+    // ─── UP-2: the restore stages, checks, halts, swaps ─────────────────────
+
+    /// A backup archive holding `birds.db` with three rows and one clip.
+    fn archive_with(dir: &std::path::Path, db_rows: &[&str], clip: &str) -> std::path::PathBuf {
+        let src = dir.join("src");
+        std::fs::create_dir_all(src.join("recordings")).unwrap();
+        {
+            let conn = rusqlite::Connection::open(src.join("birds.db")).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode=DELETE;
+                 CREATE TABLE detections(id INTEGER PRIMARY KEY, name TEXT);",
+            )
+            .unwrap();
+            for r in db_rows {
+                conn.execute("INSERT INTO detections(name) VALUES(?1)", [r])
+                    .unwrap();
+            }
+        }
+        std::fs::write(src.join("recordings").join(clip), b"RIFF....").unwrap();
+        let archive = dir.join("backup.tar.gz");
+        let out = std::process::Command::new("tar")
+            .args(["czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .args(["birds.db", "recordings"])
+            .output()
+            .expect("tar");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        archive
+    }
+
+    /// The gate for UP-2. A handle to the live database file is held open for
+    /// the whole restore, as the daemon's connections hold theirs. Afterwards
+    /// a fresh open at the path sees the archive's rows; the held handle still
+    /// names the old inode with its old bytes — the file was replaced by
+    /// rename, never truncated and rewritten under a reader, which is what
+    /// `tar xzf -C <data dir>` did; detection writes are halted; the archive's
+    /// clip is in place beside a clip the archive did not have; and nothing of
+    /// the staging is left.
+    #[test]
+    fn a_restore_replaces_the_database_by_rename_and_halts_detections_first() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(data.join("recordings")).unwrap();
+        std::fs::write(data.join("recordings").join("old-clip.wav"), b"RIFF old").unwrap();
+        let live = wal_dirty_db(&data, 9);
+        assert_eq!(row_count(&live), 9, "fixture");
+        let held = std::fs::File::open(&live).unwrap();
+        let old_inode = held.metadata().unwrap().ino();
+        let old_len = held.metadata().unwrap().len();
+
+        let archive = archive_with(dir.path(), &["x", "y", "z"], "new-clip.wav");
+        let halt = AtomicBool::new(false);
+        let report =
+            restore_archive_into(&archive, &live, u64::MAX, &halt).expect("restore succeeds");
+
+        assert_eq!(
+            row_count(&live),
+            3,
+            "a fresh open sees the archive's database"
+        );
+        let new_inode = std::fs::metadata(&live).unwrap().ino();
+        assert_ne!(
+            new_inode, old_inode,
+            "the live database was overwritten in place rather than replaced by rename"
+        );
+        let held_meta = held.metadata().unwrap();
+        assert_eq!(
+            (held_meta.ino(), held_meta.len()),
+            (old_inode, old_len),
+            "the old inode was written to under the open handle"
+        );
+        assert!(
+            halt.load(Ordering::SeqCst),
+            "detection writes were not halted"
+        );
+        assert!(
+            data.join("recordings").join("new-clip.wav").exists(),
+            "the archive's clip was not placed"
+        );
+        assert!(
+            data.join("recordings").join("old-clip.wav").exists(),
+            "a clip the archive lacks must be kept, as before"
+        );
+        assert!(
+            !data.join("birds.db-wal").exists() && !data.join("birds.db-shm").exists(),
+            "stale sidecars survived"
+        );
+        assert!(
+            std::fs::read_dir(&data).unwrap().all(|e| !e
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".bnb-restore")),
+            "staging directory left behind"
+        );
+        assert_eq!(
+            report.members,
+            vec!["birds.db".to_string(), "recordings".to_string()]
+        );
+        assert!(report.bytes > 0);
+    }
+
+    /// An archive whose database is not one leaves the live files untouched
+    /// and detections running: it is refused where it is checked, in staging.
+    #[test]
+    fn a_corrupt_archive_replaces_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let live = wal_dirty_db(&data, 9);
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("birds.db"), b"this is not a database").unwrap();
+        let archive = dir.path().join("bad.tar.gz");
+        let out = std::process::Command::new("tar")
+            .args(["czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg("birds.db")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+
+        let halt = AtomicBool::new(false);
+        let err = restore_archive_into(&archive, &live, u64::MAX, &halt).unwrap_err();
+        assert!(err.contains("nothing was replaced"), "{err}");
+        assert_eq!(
+            row_count(&live),
+            9,
+            "the live database was touched by a refused restore"
+        );
+    }
+
+    /// The free-space check refuses before anything is halted or unpacked.
+    #[test]
+    fn a_restore_the_disk_cannot_hold_is_refused_before_it_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let live = wal_dirty_db(&data, 2);
+        let archive = archive_with(dir.path(), &["x"], "clip.wav");
+        let halt = AtomicBool::new(false);
+        let err = restore_archive_into(&archive, &live, 1024, &halt).unwrap_err();
+        assert!(err.contains("free space"), "{err}");
+        assert!(
+            !halt.load(Ordering::SeqCst),
+            "a refused restore must not halt detections"
+        );
+        assert_eq!(row_count(&live), 2);
+
+        assert!(space_verdict(1_000, 1_000).is_err(), "headroom is required");
+        assert!(space_verdict(1_000, 1_000 + 100 + 64 * 1024 * 1024).is_ok());
+    }
+
+    /// A backup of another station is the wrong file, and is named as such.
+    #[test]
+    fn a_backup_of_a_differently_named_database_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let live = wal_dirty_db(&data, 2);
+        let other = data.join("station-b.db");
+        std::fs::rename(&live, &other).unwrap();
+        std::fs::rename(data.join("birds.db-wal"), data.join("station-b.db-wal")).unwrap();
+        let archive = archive_with(dir.path(), &["x"], "clip.wav");
+        let halt = AtomicBool::new(false);
+        let err = restore_archive_into(&archive, &other, u64::MAX, &halt).unwrap_err();
+        assert!(err.contains("different station"), "{err}");
+    }
+
+    #[test]
+    fn the_verbose_listing_parses_sizes_and_names_with_spaces() {
+        let listing = "-rw-r--r-- birdnet/birdnet 4096 2026-09-08 10:00 birds.db\n\
+                       drwxr-xr-x birdnet/birdnet    0 2026-09-08 10:00 recordings/\n\
+                       -rw-r--r-- birdnet/birdnet  512 2026-09-08 10:01 recordings/a b.wav\n";
+        let parsed = parse_verbose_listing(listing).unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                ("birds.db".to_string(), 4096),
+                ("recordings/".to_string(), 0),
+                ("recordings/a b.wav".to_string(), 512),
+            ]
+        );
+        assert!(parse_verbose_listing("garbage").is_err());
     }
 }

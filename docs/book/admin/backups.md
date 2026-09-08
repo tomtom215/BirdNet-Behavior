@@ -16,9 +16,9 @@ The automatic schedule runs on **elapsed wall-clock time, not uptime**, so a sta
 
 ## Restoring
 
-**Restore from file** takes a full backup archive and unpacks it over the current database and recordings.
+**Restore from file** takes a full backup archive and puts its database and recordings in place of the current ones. The station first checks that the disk can hold the archive's contents with headroom, refuses an archive whose database is not named as this station's, stops recording detections, unpacks the archive beside the database and integrity-checks the copy there, and only then swaps the files in (the database by rename, so the running process is never left reading a half-written file; recordings merged clip by clip, so clips the archive lacks are kept). Under systemd the station restarts itself to load the result; elsewhere it tells you to.
 
-> **Restoring is destructive and cannot be undone.** It overwrites what is on the station now, and the station does **not** snapshot the current state first. Download a full backup before you restore, then restart the service when it finishes.
+> **Restoring is destructive and cannot be undone.** It replaces what is on the station now, and the station does **not** snapshot the current state first. Download a full backup before you restore. Detections stay paused until the restart that follows.
 >
 > The archive's contents are not signed or verified — only restore an archive you produced yourself and trust.
 
