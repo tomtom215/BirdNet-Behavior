@@ -257,6 +257,9 @@ pub(super) struct RunProvenance {
     /// bytes, labels and settings every row of this run was made with. Not
     /// optional — the processor is not started without one.
     pub run_id: i64,
+    /// `BirdWeather`'s name for the run's classifier, when it has one
+    /// (`birdweather::algorithm_for_model`); sent on every detection post.
+    pub algorithm: Option<&'static str>,
     /// Station latitude, decimal degrees.
     pub lat: Option<f64>,
     /// Station longitude, decimal degrees.
@@ -265,6 +268,91 @@ pub(super) struct RunProvenance {
     pub sensitivity: f64,
     /// Analysis-window overlap in seconds.
     pub overlap: f64,
+}
+
+/// What the soundscape upload needs, gathered on the processor thread while
+/// the clip is known to be there: the bytes are read in the upload task.
+struct SoundscapeUpload {
+    path: std::path::PathBuf,
+    timestamp: String,
+    extension: String,
+    content_type: String,
+    start_secs: f32,
+    end_secs: f32,
+}
+
+fn birdweather_soundscape_upload(
+    clip: &birdnet_core::audio::extraction::ExtractedClip,
+    timestamp: &str,
+    start_secs: f32,
+    end_secs: f32,
+) -> SoundscapeUpload {
+    SoundscapeUpload {
+        path: clip.path.clone(),
+        timestamp: timestamp.to_owned(),
+        extension: clip.format.extension().to_owned(),
+        content_type: clip.format.mime_type().to_owned(),
+        start_secs,
+        end_secs,
+    }
+}
+
+/// Upload the clip as a soundscape, record its id on the detection's row,
+/// and return the reference the detection post carries.
+///
+/// `None` when the clip could not be read or the upload was refused: the
+/// detection is posted without it, as every detection was before DD-32,
+/// rather than not at all — a detection with no audio is worth less than one
+/// with it, and worth more than one that never arrives.
+async fn post_soundscape_for_row(
+    client: &birdnet_integrations::birdweather::Client,
+    state: &birdnet_web::state::AppState,
+    rowid: Option<i64>,
+    upload: SoundscapeUpload,
+) -> Option<birdnet_integrations::birdweather::SoundscapeRef> {
+    let path = upload.path.clone();
+    let audio = match tokio::task::spawn_blocking(move || std::fs::read(&path)).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, path = %upload.path.display(), "BirdWeather: clip unreadable; posting without soundscape");
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "BirdWeather: clip read task failed; posting without soundscape");
+            return None;
+        }
+    };
+    let posted = client
+        .post_soundscape(birdnet_integrations::birdweather::SoundscapePost {
+            timestamp: upload.timestamp,
+            audio,
+            extension: upload.extension,
+            content_type: upload.content_type,
+        })
+        .await;
+    let id = match posted {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = %e, "BirdWeather soundscape upload failed; posting detection without it");
+            return None;
+        }
+    };
+    if let Some(rowid) = rowid {
+        let state = state.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            state.with_ingest_db(|conn| {
+                if let Err(e) = birdnet_db::sqlite::set_birdweather_soundscape(conn, rowid, id) {
+                    tracing::warn!(error = %e, rowid, "could not record the BirdWeather soundscape id");
+                }
+            })
+        })
+        .await;
+    }
+    Some(birdnet_integrations::birdweather::SoundscapeRef {
+        id,
+        start_secs: upload.start_secs,
+        end_secs: upload.end_secs,
+    })
 }
 
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
@@ -531,11 +619,11 @@ pub(super) fn event_processor(
         // rather than the transient source segment, which lives on the RAM tmpfs
         // and is drained after processing. On failure, fall back to the source
         // name so the detection is still recorded (just without a playable clip).
-        let extracted = extractor.extract_detection(&event.source_file, detection);
+        let extracted = extractor.extract_detection_clip(&event.source_file, detection);
         match &extracted {
-            Ok(path) => tracing::debug!(
+            Ok(clip) => tracing::debug!(
                 species = %detection.common_name,
-                path = %path.display(),
+                path = %clip.path.display(),
                 "audio clip extracted"
             ),
             Err(e) => tracing::warn!(
@@ -549,12 +637,12 @@ pub(super) fn event_processor(
         // source segment's. Read cheaply from the file header; `None` leaves the
         // column NULL (never faked).
         let (file_str, source_duration_secs) = match &extracted {
-            Ok(clip_path) => (
-                clip_path.file_name().map_or_else(
+            Ok(clip) => (
+                clip.path.file_name().map_or_else(
                     || event.source_file.to_string_lossy().into_owned(),
                     |n| n.to_string_lossy().into_owned(),
                 ),
-                birdnet_core::audio::decode::probe_duration_secs(clip_path),
+                birdnet_core::audio::decode::probe_duration_secs(&clip.path),
             ),
             Err(_) => (
                 event.source_file.to_string_lossy().into_owned(),
@@ -648,6 +736,9 @@ pub(super) fn event_processor(
             continue;
         };
         metrics.observe_db_write_seconds(db_start.elapsed().as_secs_f64());
+        // The row's id, for the one write that happens after the insert: the
+        // BirdWeather soundscape id, known only once the upload is answered.
+        let inserted_rowid = insert_result.as_ref().ok().copied();
         if let Err(e) = insert_result {
             // Counted, not just logged. This is the only place a classified
             // detection can be lost after the model has agreed it is real, and
@@ -929,21 +1020,45 @@ pub(super) fn event_processor(
             // it. The log records delivery *attempts*.
         }
 
-        // BirdWeather upload.
+        // BirdWeather upload: the clip first, as a soundscape, then the
+        // detection stamped with the soundscape's id and its place in it
+        // (DD-32). Both reference projects do it in this order; without the
+        // soundscape nothing posted there can be listened to, so nothing
+        // there can be verified.
         if let Some(ref bw) = birdweather {
-            let post = birdnet_integrations::birdweather::DetectionPost {
-                timestamp: format!("{}T{}Z", detection.date, detection.time),
+            // The station's local wall clock with the offset in force — what
+            // both references send. `Date`/`Time` labelled `Z` was a lie by
+            // one offset on every station outside UTC.
+            let timestamp = birdnet_core::civil::rfc3339_local(
+                &detection.date,
+                &detection.time,
+                record.detected_at_utc,
+            )
+            .unwrap_or_else(|| format!("{}T{}Z", detection.date, detection.time));
+            let soundscape = extracted.as_ref().ok().map(|clip| {
+                let (start_secs, end_secs) = clip.detection_span();
+                birdweather_soundscape_upload(clip, &timestamp, start_secs, end_secs)
+            });
+            let mut post = birdnet_integrations::birdweather::DetectionPost {
+                timestamp,
                 common_name: detection.common_name.clone(),
                 scientific_name: detection.scientific_name.clone(),
                 confidence: detection.confidence,
                 lat: bw.coordinates().0,
                 lon: bw.coordinates().1,
+                soundscape: None,
+                algorithm: provenance.algorithm.map(str::to_owned),
             };
             let client = bw.clone();
             let queue_state = state.clone();
             let log_state = state.clone();
+            let row_state = state.clone();
             let log_subject = subject.clone();
             rt_handle.spawn(async move {
+                if let Some(upload) = soundscape {
+                    post.soundscape =
+                        post_soundscape_for_row(&client, &row_state, inserted_rowid, upload).await;
+                }
                 let Err(e) = client.post_detection(&post).await else {
                     record_notification(
                         &log_state,
@@ -2091,11 +2206,210 @@ mod tests {
     ) -> super::RunProvenance {
         super::RunProvenance {
             run_id: register_test_run(state, model_sha256),
+            algorithm: None,
             lat: Some(51.48),
             lon: Some(-0.13),
             sensitivity: 1.25,
             overlap: 1.5,
         }
+    }
+
+    /// A silent 48 kHz mono WAV of `seconds`, the shape the capture tee
+    /// writes.
+    fn silent_wav(path: &std::path::Path, seconds: u32) {
+        use hound::{SampleFormat, WavSpec, WavWriter};
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut w = WavWriter::create(path, spec).unwrap();
+        for _ in 0..(48_000 * seconds) {
+            w.write_sample(0_i16).unwrap();
+        }
+        w.finalize().unwrap();
+    }
+
+    /// One request the stub `BirdWeather` saw: path with query, content type,
+    /// and the body's bytes.
+    type BwCaptured = std::sync::Arc<std::sync::Mutex<Vec<(String, String, Vec<u8>)>>>;
+
+    /// A hand-rolled `app.birdweather.com` on loopback: a soundscape upload is
+    /// answered with an id, a detection post with success, and every request
+    /// is recorded. `std::net` rather than an HTTP framework, like the
+    /// store-and-forward end-to-end test's stub.
+    fn spawn_stub_birdweather(soundscape_id: u64) -> (u16, BwCaptured) {
+        use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub");
+        let port = listener.local_addr().expect("stub addr").port();
+        let captured: BwCaptured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&captured);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+                let mut reader = BufReader::new(stream);
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    continue;
+                }
+                let path = request_line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                let mut content_length = 0_usize;
+                let mut content_type = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(v) = lower.strip_prefix("content-length:") {
+                        content_length = v.trim().parse().unwrap_or(0);
+                    }
+                    if let Some(v) = lower.strip_prefix("content-type:") {
+                        content_type = v.trim().to_owned();
+                    }
+                }
+                let mut body = vec![0_u8; content_length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let json = if path.contains("/soundscapes") {
+                    format!(r#"{{"success":true,"soundscape":{{"id":{soundscape_id}}}}}"#)
+                } else {
+                    r#"{"success":true}"#.to_owned()
+                };
+                if let Ok(mut log) = sink.lock() {
+                    log.push((path, content_type, body));
+                }
+                let response = format!(
+                    "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                    json.len()
+                );
+                let _ = reader.into_inner().write_all(response.as_bytes());
+            }
+        });
+        (port, captured)
+    }
+
+    /// DD-32: a detection sent to `BirdWeather` is preceded by its clip as a
+    /// soundscape, carries that soundscape's id and the detection's place in
+    /// it, is stamped with the station's local time and offset rather than a
+    /// wall clock labelled `Z`, and the row keeps the id. Before this, every
+    /// post was the six bare fields and nothing there could be listened to.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_birdweather_post_carries_the_soundscape_it_was_heard_in() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        silent_wav(&source, 15);
+        let (port, captured) = spawn_stub_birdweather(4242);
+        let client = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13)
+            .unwrap()
+            .with_base_url(&format!("http://127.0.0.1:{port}"));
+        let clips = tmp.path().join("clips");
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: clips.clone(),
+            ..ExtractionConfig::default()
+        });
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut ev = make_event("Pica pica", "Eurasian Magpie", 0.95, source, "bw-1");
+        // Six seconds in: the default 6 s clip then has its full 1.5 s
+        // lead-in, so the detection sits at 1.5–4.5 s of the soundscape.
+        ev.detection.start = 6.0;
+        ev.detection.stop = 9.0;
+        run_processor_integrated(
+            &state,
+            vec![ev],
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            test_provenance(&state),
+            Some(client),
+            extractor,
+        )
+        .await;
+
+        // The posts happen on a spawned task after the processor returns.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while captured.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let requests = captured.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            2,
+            "a soundscape upload then a detection post; got {:?}",
+            requests.iter().map(|r| &r.0).collect::<Vec<_>>()
+        );
+
+        let expected_timestamp = birdnet_core::civil::rfc3339_local(
+            "2026-05-19",
+            "09:00:00",
+            birdnet_core::civil::unix_secs_from_local(
+                "2026-05-19",
+                "09:00:00",
+                birdnet_db::clock::local_utc_offset_secs(),
+            ),
+        )
+        .unwrap();
+
+        let (path, content_type, body) = &requests[0];
+        assert!(
+            path.starts_with("/stations/tok/soundscapes?timestamp="),
+            "soundscape first: {path}"
+        );
+        assert!(path.ends_with("&type=wav"), "{path}");
+        assert!(
+            path.contains(&expected_timestamp.replace(':', "%3A").replace('+', "%2B")),
+            "the soundscape is stamped with the local time and offset: {path}"
+        );
+        assert_eq!(content_type, "audio/wav");
+        let clip = std::fs::read_dir(&clips)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|e| e == "wav"))
+            .expect("the clip was written");
+        assert_eq!(
+            body,
+            &std::fs::read(&clip).unwrap(),
+            "the body is the clip's bytes, whole"
+        );
+
+        let (path, content_type, body) = &requests[1];
+        assert_eq!(path, "/stations/tok/detections");
+        assert!(
+            content_type.starts_with("application/json"),
+            "{content_type}"
+        );
+        let json: serde_json::Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(json["soundscapeId"], 4242, "{json}");
+        assert_eq!(json["soundscapeStartTime"], 1.5, "{json}");
+        assert_eq!(json["soundscapeEndTime"], 4.5, "{json}");
+        assert_eq!(json["timestamp"], expected_timestamp, "{json}");
+        assert_eq!(json["scientificName"], "Pica pica");
+        assert!(
+            json.get("algorithm").is_none(),
+            "no name for a test model: {json}"
+        );
+
+        let stored: Option<i64> = state.with_db(|conn| {
+            conn.query_row(
+                "SELECT birdweather_soundscape_id FROM detections WHERE Sci_Name = 'Pica pica'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert_eq!(stored, Some(4242), "the row keeps the soundscape id");
     }
 
     fn make_event(
@@ -2224,6 +2538,37 @@ mod tests {
         dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
         provenance: super::RunProvenance,
     ) {
+        run_processor_integrated(
+            state,
+            events,
+            species_thresholds,
+            global_confidence,
+            duplicate_interval_secs,
+            daylight,
+            dynamic,
+            provenance,
+            None,
+            Extractor::new(ExtractionConfig::default()),
+        )
+        .await;
+    }
+
+    /// As [`run_processor_dynamic`], with a `BirdWeather` client and the
+    /// extractor under the test's control — the DD-32 gate needs a clip it
+    /// can find and a stub it can read.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_processor_integrated(
+        state: &birdnet_web::state::AppState,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        species_thresholds: HashMap<String, f64>,
+        global_confidence: f32,
+        duplicate_interval_secs: i64,
+        daylight: crate::daemon::daylight::DaylightFilter,
+        dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
+        provenance: super::RunProvenance,
+        birdweather: Option<birdnet_integrations::birdweather::Client>,
+        extractor: Extractor,
+    ) {
         let broadcast = state.detection_broadcast();
         let (event_tx, event_rx) = mpsc::channel();
         for ev in events {
@@ -2236,7 +2581,6 @@ mod tests {
             species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
         };
         let template = birdnet_integrations::notification::NotificationTemplate::default();
-        let extractor = Extractor::new(ExtractionConfig::default());
         let rt_handle = tokio::runtime::Handle::current();
         let state_for_processor = state.clone();
 
@@ -2246,7 +2590,7 @@ mod tests {
                 state_for_processor,
                 broadcast,
                 None,
-                None,
+                birdweather,
                 None,
                 None,
                 filter,

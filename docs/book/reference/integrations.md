@@ -190,6 +190,16 @@ Share detections with the [BirdWeather](https://www.birdweather.com/) network us
 BIRDNET_BIRDWEATHER_TOKEN=your-station-token
 ```
 
+Each detection goes up with its audio: the saved clip is uploaded first as a
+soundscape, and the detection post carries that soundscape's id and the
+detection's start and end inside it, so what BirdWeather shows for this
+station can be listened to. The id is kept on the detection row
+(`birdweather_soundscape_id`). If the clip cannot be uploaded the detection
+still goes, without it. Posts are stamped with the station's local time and
+its UTC offset. `algorithm` is sent only for a model BirdWeather has a name
+for (`2p4`, the V2.4 classifier); the shipped V3.0 model is left unnamed rather
+than mislabelled.
+
 Uploads are **resilient to a flaky uplink**: a post that fails after its
 in-flight retries is parked in the local database and replayed **oldest-first**
 when the network returns (bounded so a months-long outage can't fill the disk).

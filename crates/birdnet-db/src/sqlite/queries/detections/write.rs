@@ -5,12 +5,16 @@ use rusqlite::{Connection, params};
 use crate::sqlite::connection::DbError;
 use crate::sqlite::types::DetectionRecord;
 
-/// Insert a detection record into the database.
+/// Insert a detection record into the database, returning its rowid.
+///
+/// The rowid is what a follow-up write that happens after the insert — the
+/// `BirdWeather` soundscape id, known only once the upload has been answered
+/// — keys on; the natural key is five columns of local wall clock and a path.
 ///
 /// # Errors
 ///
 /// Returns `DbError` on insert failure.
-pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Result<(), DbError> {
+pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Result<i64, DbError> {
     // Explicit column list — `VALUES (?1, …, ?12)` without one was a
     // schema-vs-insert drift waiting to happen and broke in production
     // when migration 7 added `is_locked` as a 13th column. Naming the
@@ -46,7 +50,26 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.run_id,
         ],
     )?;
-    Ok(())
+    Ok(conn.last_insert_rowid())
+}
+
+/// Record the `BirdWeather` soundscape id a detection was posted with
+/// (migration 45). Returns `false` if no row has that rowid.
+///
+/// # Errors
+///
+/// Returns `DbError` on update failure.
+pub fn set_birdweather_soundscape(
+    conn: &Connection,
+    rowid: i64,
+    soundscape_id: u64,
+) -> Result<bool, DbError> {
+    let id = i64::try_from(soundscape_id).unwrap_or(i64::MAX);
+    let changed = conn.execute(
+        "UPDATE detections SET birdweather_soundscape_id = ?2 WHERE rowid = ?1",
+        params![rowid, id],
+    )?;
+    Ok(changed > 0)
 }
 
 /// Delete a detection by date, time, and scientific name.
@@ -101,6 +124,53 @@ mod tests {
     use crate::sqlite::queries::detections::{
         detection_count, detections_by_species, recent_detections,
     };
+
+    /// DD-32: the id lands on the row the rowid names, and only there.
+    #[test]
+    fn the_soundscape_id_is_written_by_rowid() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let record = DetectionRecord {
+            date: "2026-03-11",
+            time: "08:30:00",
+            sci_name: "Turdus merula",
+            com_name: "Eurasian Blackbird",
+            confidence: 0.87,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name: "a.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: None,
+            duration_secs: None,
+            detected_at_utc: None,
+            run_id: None,
+        };
+        let first = insert_detection(&conn, &record).unwrap();
+        let second = insert_detection(
+            &conn,
+            &DetectionRecord {
+                time: "08:31:00",
+                ..record.clone()
+            },
+        )
+        .unwrap();
+        assert_ne!(first, second);
+        assert!(set_birdweather_soundscape(&conn, second, 4242).unwrap());
+        assert!(!set_birdweather_soundscape(&conn, second + 100, 1).unwrap());
+        let ids: Vec<Option<i64>> = conn
+            .prepare("SELECT birdweather_soundscape_id FROM detections ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, vec![None, Some(4242)]);
+    }
 
     #[test]
     fn insert_and_count() {

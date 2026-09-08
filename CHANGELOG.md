@@ -93,6 +93,20 @@ successful sign-in clears the address; a restart forgives everything; another
 address is never affected, because a blanket lock is a denial of service any
 stranger can trigger against the operator.
 
+**Every detection sent to BirdWeather now carries its soundscape** (`DD-32`).
+`Client::post_soundscape` was written, tested and never called; the daemon
+posted six bare fields, so nothing on BirdWeather from this station could be
+listened to and nothing there could be verified. The daemon now uploads the
+clip as a soundscape first — the bytes as the body, `?timestamp=&type=` on the
+URL, the id from the answer, the shape both reference projects use — and posts
+the detection with `soundscapeId`, the detection's start and end inside the
+clip, and `algorithm` where BirdWeather has a name for the model (`2p4` for
+V2.4; omitted otherwise rather than mislabelled). The row keeps the id
+(`birdweather_soundscape_id`, migration 45). A failed upload posts the
+detection without it, as every post was before. The post's timestamp was the
+local wall clock labelled `Z`, an hour or more wrong on every station outside
+UTC; it is now the local time with its offset.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

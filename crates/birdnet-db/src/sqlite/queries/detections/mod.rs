@@ -35,4 +35,6 @@ pub use read::{
     unstamped_detection_count,
 };
 pub use search::{SearchTerm, parse_search_term};
-pub use write::{delete_detection, insert_detection, relabel_detection};
+pub use write::{
+    delete_detection, insert_detection, relabel_detection, set_birdweather_soundscape,
+};

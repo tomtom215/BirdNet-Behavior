@@ -45,6 +45,32 @@ impl Extractor {
         source_file: &Path,
         detection: &Detection,
     ) -> Result<PathBuf, ExtractionError> {
+        self.extract_detection_clip(source_file, detection)
+            .map(|clip| clip.path)
+    }
+
+    /// As [`Self::extract_detection`], returning where the detection sits
+    /// inside the clip as well as the clip's path.
+    ///
+    /// A consumer that hands the clip to someone else — the `BirdWeather`
+    /// soundscape upload — has to say which seconds of it are the detection,
+    /// and the lead-in is not the configured one: a window that reached past
+    /// the start of the source segment and found no earlier segment to draw
+    /// on is shorter at the front than it asked to be (`super::span`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::extract_detection`].
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    pub fn extract_detection_clip(
+        &self,
+        source_file: &Path,
+        detection: &Detection,
+    ) -> Result<ExtractedClip, ExtractionError> {
         // 1. Decode first so we know the actual audio length. Without this,
         //    safe_stop was clamped to the configured `recording_length`
         //    (default 15 s), and any detection beyond that window produced
@@ -193,7 +219,45 @@ impl Extractor {
             "extracted detection clip"
         );
 
-        Ok(output_path)
+        // Where the clip begins on the source segment's timeline: the wanted
+        // start when it lay inside the segment; otherwise as far before the
+        // segment as the neighbour could supply (`window.lead_in_secs`), which
+        // is zero when there was no neighbour to draw on.
+        let clip_start_secs = if want_start < 0.0 {
+            -window.lead_in_secs
+        } else {
+            want_start
+        };
+        Ok(ExtractedClip {
+            path: output_path,
+            pre_detection_secs: (detection.start - clip_start_secs).max(0.0),
+            detection_secs: (detection.stop - detection.start).max(0.0),
+            format: self.config.target_format,
+        })
+    }
+}
+
+/// A clip on disk, and where the detection is inside it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedClip {
+    /// The clip file.
+    pub path: PathBuf,
+    /// Seconds of audio before the detection's start, as actually written —
+    /// the configured lead-in when the source segment (or its neighbour) had
+    /// the audio to supply it, less when it did not.
+    pub pre_detection_secs: f32,
+    /// The detection's own length in seconds (`stop - start`).
+    pub detection_secs: f32,
+    /// The format the clip was written in.
+    pub format: super::format::AudioFormat,
+}
+
+impl ExtractedClip {
+    /// The detection's start and end inside the clip, in seconds.
+    #[must_use]
+    pub fn detection_span(&self) -> (f32, f32) {
+        let start = self.pre_detection_secs.max(0.0);
+        (start, start + self.detection_secs)
     }
 }
 

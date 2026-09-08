@@ -1957,6 +1957,25 @@ pub const MIGRATIONS: &[Migration] = &[
              WHERE rowid = NEW.rowid;
         END;",
     },
+    Migration {
+        version: 45,
+        description: "Record the BirdWeather soundscape a detection was posted with",
+        // ## Why (DD-32)
+        //
+        // Every detection this station sent to BirdWeather carried no
+        // soundscape: `Client::post_soundscape` had no production caller, and
+        // the six-field post had no `soundscapeId`. Nothing there could be
+        // listened to, so nothing there could be verified. The daemon now
+        // uploads the clip first and stamps its id on the detection post, as
+        // both reference projects do; this column is where the station keeps
+        // that id, so a row can be followed to what BirdWeather holds for it.
+        //
+        // NULL is "not posted with a soundscape": BirdWeather off, the upload
+        // failed and the detection went without it, or a row older than this
+        // migration. Written after the row exists, by rowid, from the upload
+        // task — which is why `insert_detection` now returns the rowid.
+        up_sql: "ALTER TABLE detections ADD COLUMN birdweather_soundscape_id INTEGER;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

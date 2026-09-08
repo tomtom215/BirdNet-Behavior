@@ -144,6 +144,9 @@ pub(super) fn provenance_for(
     match register_run(state, manifest) {
         Ok(run) => Some(super::processor::RunProvenance {
             run_id: run.id,
+            algorithm: birdnet_integrations::birdweather::algorithm_for_model(
+                &run.identity.model_name,
+            ),
             lat: manifest.lat,
             lon: manifest.lon,
             sensitivity: manifest.sensitivity,
