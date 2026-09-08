@@ -37,6 +37,11 @@ const VERDICT_COL: &str = "review_verdict";
 /// Detected for the same reason as [`PROVENANCE_COL`].
 const INSTANT_COL: &str = "detected_at_utc";
 
+/// Analysis-run column (migration 43): which daemon start, and so which model
+/// bytes, produced the row. Detected for the same reason as
+/// [`PROVENANCE_COL`].
+const RUN_COL: &str = "run_id";
+
 /// Whether `detections` in this `SQLite` database carries `column`.
 fn has_column(conn: &rusqlite::Connection, column: &str) -> bool {
     conn.prepare("SELECT 1 FROM pragma_table_info('detections') WHERE name = ?1")
@@ -113,6 +118,9 @@ pub struct LiveDetection<'a> {
     ///
     /// `None` only for a row whose local wall clock names no point in time.
     pub detected_at_utc: Option<i64>,
+    /// The `analysis_runs` row of the daemon start that produced it (migration
+    /// 43). The live path always has one; `None` is a row no run made.
+    pub run_id: Option<i64>,
 }
 
 impl AnalyticsDb {
@@ -273,7 +281,7 @@ impl AnalyticsDb {
         // read indices below are derived rather than hand-counted; the previous
         // shape (`row.get(if provenance { 13 } else { 12 })`) had one more term
         // to get wrong with every column added.
-        let optional: Vec<&str> = [PROVENANCE_COL, VERDICT_COL, INSTANT_COL]
+        let optional: Vec<&str> = [PROVENANCE_COL, VERDICT_COL, INSTANT_COL, RUN_COL]
             .into_iter()
             .filter(|c| has_column(sqlite_conn, c))
             .collect();
@@ -283,10 +291,11 @@ impl AnalyticsDb {
                 .position(|c| *c == col)
                 .map(|i| SYNC_COL_COUNT + i)
         };
-        let (provenance, verdict, instant) = (
+        let (provenance, verdict, instant, run) = (
             index_of(PROVENANCE_COL),
             index_of(VERDICT_COL),
             index_of(INSTANT_COL),
+            index_of(RUN_COL),
         );
         let mut cols = SYNC_COLS.to_owned();
         for col in &optional {
@@ -350,6 +359,12 @@ impl AnalyticsDb {
                 Some(i) => row.get(i).map_err(read_err)?,
                 None => None,
             };
+            // The run (migration 43). NULL for a source predating it and for
+            // rows this station did not analyse.
+            let run_id: Option<i64> = match run {
+                Some(i) => row.get(i).map_err(read_err)?,
+                None => None,
+            };
 
             appender.append_row(params![
                 date,
@@ -367,6 +382,7 @@ impl AnalyticsDb {
                 import_batch_id,
                 review_verdict,
                 detected_at_utc,
+                run_id,
             ])?;
 
             total += 1;
@@ -399,8 +415,8 @@ impl AnalyticsDb {
         self.conn.execute(
             "INSERT INTO detections
                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
-                 Cutoff, Week, Sens, Overlap, File_Name, detected_at_utc)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 Cutoff, Week, Sens, Overlap, File_Name, detected_at_utc, run_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 d.date,
                 d.time,
@@ -414,7 +430,8 @@ impl AnalyticsDb {
                 d.sens,
                 d.overlap,
                 d.file_name,
-                d.detected_at_utc
+                d.detected_at_utc,
+                d.run_id
             ],
         )?;
         Ok(())

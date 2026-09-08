@@ -564,6 +564,7 @@ dependencies = [
  "realfft",
  "rubato",
  "serde",
+ "sha2",
  "symphonia",
  "tempfile",
  "tracing",

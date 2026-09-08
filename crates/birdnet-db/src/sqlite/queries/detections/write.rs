@@ -18,8 +18,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc, run_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             record.date,
             record.time,
@@ -43,6 +43,7 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             // passes `Some` because it knows the offset that was in force —
             // see `birdnet_core::civil::unix_secs_from_local`.
             record.detected_at_utc,
+            record.run_id,
         ],
     )?;
     Ok(())
@@ -123,6 +124,7 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -153,6 +155,7 @@ mod tests {
             source: Some("cam1"),
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
         };
         // A second row at a different second with no source = the historical
         // shape (e.g. an imported BirdNET-Pi row).
@@ -257,6 +260,7 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
         };
 
         insert_detection(&conn, &record).unwrap();
@@ -310,6 +314,7 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
@@ -348,6 +353,7 @@ mod tests {
             source: Some("local"),
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();
@@ -399,6 +405,7 @@ mod tests {
                 source: None,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
             };
             insert_detection(&conn, &r).unwrap();
         }
@@ -439,6 +446,7 @@ mod tests {
             source: None,
             duration_secs: Some(15.0),
             detected_at_utc: None,
+            run_id: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();

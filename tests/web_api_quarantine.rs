@@ -40,6 +40,7 @@ fn state_with_quarantine(reason: QuarantineReason) -> AppState {
         lat: Some(51.5),
         lon: Some(-0.12),
         week: Some(13),
+        run_id: None,
     };
     insert_quarantine(&conn, &record).unwrap();
 

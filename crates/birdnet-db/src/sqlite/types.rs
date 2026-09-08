@@ -81,6 +81,14 @@ pub struct DetectionRecord<'a> {
     /// prose rather than linked because this crate does not depend on
     /// `birdnet-core`, and adding an edge for a doc link is not worth it.
     pub detected_at_utc: Option<i64>,
+    /// The `analysis_runs` row of the daemon run that produced this detection
+    /// (migration 43, R-1): which model bytes, which labels, which settings.
+    ///
+    /// `None` is a row this station did not analyse — imported history, a
+    /// BirdNET-Pi database brought across, rows written before migration 43.
+    /// The live daemon always writes `Some`; it registers its run before it
+    /// consumes its first event and refuses to start without one.
+    pub run_id: Option<i64>,
 }
 
 /// A detection row read from the database.
@@ -143,6 +151,11 @@ pub struct DetectionRow {
     /// log does both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_verdict: Option<String>,
+    /// The daemon run that produced this row — a key into `analysis_runs`,
+    /// which names the model bytes it was made with. `None` for a row this
+    /// station did not analyse (imported, or older than migration 43).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<i64>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -257,6 +270,7 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         source: row.get(13)?,
         duration_secs: row.get(14)?,
         review_verdict: row.get(15)?,
+        run_id: row.get(16)?,
     })
 }
 
@@ -291,13 +305,14 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "Source",
     "Duration_Secs",
     "review_verdict",
+    "run_id",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id";
 
 #[cfg(test)]
 mod drift_gate_tests {
@@ -367,6 +382,14 @@ mod drift_gate_tests {
         // covered by DETECTION_COL_NAMES, the assertion below fires.
         let conn = Connection::open_in_memory().unwrap();
         crate::migration::migrate(&conn).unwrap();
+        let run = crate::sqlite::queries::analysis_runs::insert_analysis_run(
+            &conn,
+            &crate::sqlite::queries::analysis_runs::fixture_run(
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "fixture",
+            ),
+        )
+        .unwrap();
         let record = super::DetectionRecord {
             date: "2026-05-19",
             time: "09:00:00",
@@ -385,6 +408,7 @@ mod drift_gate_tests {
             source: Some("cam1"),
             duration_secs: None,
             detected_at_utc: None,
+            run_id: Some(run),
         };
         crate::sqlite::queries::detections::insert_detection(&conn, &record).unwrap();
 
@@ -408,5 +432,6 @@ mod drift_gate_tests {
         assert_eq!(row.file_name.as_deref(), Some("/tmp/x.wav"));
         assert_eq!(row.correlation_id.as_deref(), Some("abc123"));
         assert_eq!(row.source.as_deref(), Some("cam1"));
+        assert_eq!(row.run_id, Some(run));
     }
 }

@@ -127,6 +127,9 @@ pub struct QuarantineRecord<'a> {
     pub lon: Option<f64>,
     /// ISO week number (may be absent).
     pub week: Option<i32>,
+    /// The daemon run that heard it (migration 43); carried into `detections`
+    /// on approval. `None` only for a row no live run wrote.
+    pub run_id: Option<i64>,
 }
 
 /// A quarantine row read from the database.
@@ -162,6 +165,9 @@ pub struct QuarantineRow {
     pub week: Option<i32>,
     /// When the entry was created (UTC, RFC3339-ish).
     pub created_at: String,
+    /// The daemon run that heard it (migration 43), `None` for a row no live
+    /// run wrote.
+    pub run_id: Option<i64>,
 }
 
 /// Aggregate counts for the quarantine queue.
@@ -203,8 +209,8 @@ pub enum QuarantineFilter {
 /// executes.
 pub(crate) const INSERT_QUARANTINE_SQL: &str = "INSERT INTO quarantine
             (date, time, sci_name, com_name, confidence, sf_probability,
-             reason, file_name, lat, lon, week)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             reason, file_name, lat, lon, week, run_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(date, time, sci_name) DO NOTHING";
 
 /// Insert a new quarantine entry.
@@ -237,6 +243,7 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
             record.lat,
             record.lon,
             record.week,
+            record.run_id,
         ],
     )?;
     Ok(())
@@ -266,9 +273,9 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     let inserted = tx.execute(
         "INSERT INTO detections
             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
-             Week, Sens, Overlap, File_Name, is_locked, review_verdict)
+             Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id)
          SELECT date, time, sci_name, com_name, confidence,
-                lat, lon, NULL, week, NULL, NULL, file_name, 0, 'confirmed'
+                lat, lon, NULL, week, NULL, NULL, file_name, 0, 'confirmed', run_id
          FROM quarantine WHERE id = ?1
          ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
         params![id],
@@ -336,7 +343,7 @@ pub fn prune_quarantine(conn: &Connection, days: u32) -> Result<u64, DbError> {
 pub fn get_quarantine(conn: &Connection, id: i64) -> Result<Option<QuarantineRow>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
-                reason, reviewed, approved, file_name, lat, lon, week, created_at
+                reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id
          FROM quarantine WHERE id = ?1",
     )?;
 
@@ -369,7 +376,7 @@ pub fn list_quarantine(
 
     let sql = format!(
         "SELECT id, date, time, sci_name, com_name, confidence, sf_probability,
-                reason, reviewed, approved, file_name, lat, lon, week, created_at
+                reason, reviewed, approved, file_name, lat, lon, week, created_at, run_id
          FROM quarantine
          {where_clause}
          ORDER BY created_at DESC
@@ -472,6 +479,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<QuarantineRow> {
         lon: row.get(12)?,
         week: row.get(13)?,
         created_at: row.get(14)?,
+        run_id: row.get(15)?,
     })
 }
 
@@ -505,6 +513,7 @@ mod tests {
             lat: Some(51.5),
             lon: Some(-0.12),
             week: Some(13),
+            run_id: None,
         }
     }
 
@@ -724,6 +733,7 @@ mod tests {
             None::<f64>,
             None::<f64>,
             Some(3_i32),
+            None::<i64>,
         ];
         assert_eq!(conn.execute(super::INSERT_QUARANTINE_SQL, args).unwrap(), 1);
         assert_eq!(
@@ -755,6 +765,7 @@ mod tests {
                     None::<f64>,
                     None::<f64>,
                     Some(3_i32),
+                    None::<i64>,
                 ],
             )
             .expect_err("an unknown reason must not be silently discarded");
@@ -784,6 +795,7 @@ mod tests {
                     None::<f64>,
                     None::<f64>,
                     Some(3_i32),
+                    None::<i64>,
                 ],
             )
             .expect_err("a NULL in a NOT NULL column must not be silently discarded");

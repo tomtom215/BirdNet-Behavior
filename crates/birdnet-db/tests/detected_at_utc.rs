@@ -271,6 +271,7 @@ fn the_write_path_carries_an_explicit_instant_through_to_the_row() {
         source: None,
         duration_secs: None,
         detected_at_utc: Some(CEST_READING),
+        run_id: None,
     };
     birdnet_db::sqlite::insert_detection(&conn, &record).expect("insert");
 

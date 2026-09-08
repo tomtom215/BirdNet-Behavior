@@ -253,6 +253,10 @@ fn record_notification(
 /// threshold `decide_disposition` admitted the detection at.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct RunProvenance {
+    /// The `analysis_runs` row this daemon start registered (R-1): the model
+    /// bytes, labels and settings every row of this run was made with. Not
+    /// optional — the processor is not started without one.
+    pub run_id: i64,
     /// Station latitude, decimal degrees.
     pub lat: Option<f64>,
     /// Station longitude, decimal degrees.
@@ -359,6 +363,7 @@ pub(super) fn event_processor(
                 lat: None,
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
+                run_id: Some(provenance.run_id),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -406,6 +411,7 @@ pub(super) fn event_processor(
                 lat: None,
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
+                run_id: Some(provenance.run_id),
             };
             if let Some(Err(e)) =
                 state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -459,6 +465,7 @@ pub(super) fn event_processor(
                     lat: provenance.lat,
                     lon: provenance.lon,
                     week: week_str.parse::<i32>().ok(),
+                    run_id: Some(provenance.run_id),
                 };
                 if let Some(Err(e)) = state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
@@ -605,6 +612,9 @@ pub(super) fn event_processor(
                 &detection.time,
                 birdnet_db::clock::local_utc_offset_secs(),
             ),
+            // Which model made it (R-1): the run registered before this
+            // processor consumed its first event.
+            run_id: Some(provenance.run_id),
         };
 
         let metrics = state.metrics();
@@ -706,6 +716,7 @@ pub(super) fn event_processor(
                 // agree. Recomputing it here would let the two drift across a
                 // daylight-saving boundary that fell between the writes.
                 detected_at_utc: record.detected_at_utc,
+                run_id: record.run_id,
             };
             let insert_result = state.with_analytics(|adb| adb.insert_detection(&live));
             if let Some(Err(e)) = insert_result {
@@ -1456,6 +1467,7 @@ mod tests {
             species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
         };
         let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
         let state_for_processor = state.clone();
         tokio::task::spawn_blocking(move || {
             super::event_processor(
@@ -1477,7 +1489,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
-                TEST_PROVENANCE,
+                provenance,
             );
         })
         .await
@@ -1554,6 +1566,7 @@ mod tests {
         let extractor = Extractor::new(ExtractionConfig::default());
         let rt_handle = tokio::runtime::Handle::current();
 
+        let provenance = test_provenance(&state);
         let state_for_processor = state.clone();
         tokio::task::spawn_blocking(move || {
             super::event_processor(
@@ -1575,7 +1588,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
-                TEST_PROVENANCE,
+                provenance,
             );
         })
         .await
@@ -1632,6 +1645,7 @@ mod tests {
             trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
             species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
         };
+        let provenance = test_provenance(&state);
         let state_for_processor = state.clone();
         let rt_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
@@ -1654,7 +1668,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
-                TEST_PROVENANCE,
+                provenance,
             );
         })
         .await
@@ -1731,6 +1745,7 @@ mod tests {
             trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
             species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
         };
+        let provenance = test_provenance(&state);
         let state_for_processor = state.clone();
         let rt_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
@@ -1753,7 +1768,7 @@ mod tests {
                 birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
-                TEST_PROVENANCE,
+                provenance,
             );
         })
         .await
@@ -1969,14 +1984,119 @@ mod tests {
         }
     }
 
+    /// R-1: a row names the model that made it. Two runs, two model
+    /// checksums, one row each; each row's `run_id` resolves to its own
+    /// model's sha, so a season that spans a model swap splits by run.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_row_names_the_model_that_made_it() {
+        const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let under_a = test_provenance_under(&state, SHA_A);
+        run_processor_under(
+            &state,
+            vec![make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "c1",
+            )],
+            under_a,
+        )
+        .await;
+        let under_b = test_provenance_under(&state, SHA_B);
+        run_processor_under(
+            &state,
+            vec![make_event(
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.90,
+                tmp.path().join("b.wav"),
+                "c2",
+            )],
+            under_b,
+        )
+        .await;
+
+        let rows: Vec<(String, Option<i64>, Option<String>)> = state.with_db(|conn| {
+            conn.prepare(
+                "SELECT d.Sci_Name, d.run_id, r.model_sha256 \
+                   FROM detections d LEFT JOIN analysis_runs r ON r.id = d.run_id \
+                  ORDER BY d.Sci_Name",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+        });
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "Pica pica".to_owned(),
+                    Some(under_a.run_id),
+                    Some(SHA_A.to_owned())
+                ),
+                (
+                    "Turdus merula".to_owned(),
+                    Some(under_b.run_id),
+                    Some(SHA_B.to_owned())
+                ),
+            ]
+        );
+    }
+
+    /// A registered run for `state`, with `model_sha256` as its identity, so
+    /// a test can hold two runs apart by what they analysed with.
+    fn register_test_run(state: &birdnet_web::state::AppState, model_sha256: &str) -> i64 {
+        let new = birdnet_db::sqlite::NewAnalysisRun {
+            app_version: "0.0.0-test",
+            model_name: "test-model",
+            model_path: "/models/test.onnx",
+            model_sha256,
+            model_bytes: 4096,
+            labels_path: "/models/labels.csv",
+            labels_sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+            label_count: 3,
+            geomodel_sha256: None,
+            confidence: 0.25,
+            sensitivity: 1.25,
+            overlap: 1.5,
+            sf_thresh: 0.03,
+            lat: Some(51.48),
+            lon: Some(-0.13),
+        };
+        state
+            .with_db(|conn| birdnet_db::sqlite::insert_analysis_run(conn, &new))
+            .unwrap()
+    }
+
     /// The station every processor test runs as, so a row's provenance
-    /// columns have known values to assert against.
-    const TEST_PROVENANCE: super::RunProvenance = super::RunProvenance {
-        lat: Some(51.48),
-        lon: Some(-0.13),
-        sensitivity: 1.25,
-        overlap: 1.5,
-    };
+    /// columns have known values to assert against — under a run registered
+    /// for `state`, because a row cannot reference a run that does not exist.
+    fn test_provenance(state: &birdnet_web::state::AppState) -> super::RunProvenance {
+        test_provenance_under(
+            state,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
+    }
+
+    fn test_provenance_under(
+        state: &birdnet_web::state::AppState,
+        model_sha256: &str,
+    ) -> super::RunProvenance {
+        super::RunProvenance {
+            run_id: register_test_run(state, model_sha256),
+            lat: Some(51.48),
+            lon: Some(-0.13),
+            sensitivity: 1.25,
+            overlap: 1.5,
+        }
+    }
 
     fn make_event(
         sci: &str,
@@ -2066,6 +2186,28 @@ mod tests {
             birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
                 birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
             ),
+            test_provenance(state),
+        )
+        .await;
+    }
+
+    /// Drive the processor as a given run — the R-1 gate registers two.
+    async fn run_processor_under(
+        state: &birdnet_web::state::AppState,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        provenance: super::RunProvenance,
+    ) {
+        run_processor_dynamic(
+            state,
+            events,
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            provenance,
         )
         .await;
     }
@@ -2080,6 +2222,7 @@ mod tests {
         duplicate_interval_secs: i64,
         daylight: crate::daemon::daylight::DaylightFilter,
         dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
+        provenance: super::RunProvenance,
     ) {
         let broadcast = state.detection_broadcast();
         let (event_tx, event_rx) = mpsc::channel();
@@ -2115,7 +2258,7 @@ mod tests {
                 duplicate_interval_secs,
                 daylight,
                 dynamic,
-                TEST_PROVENANCE,
+                provenance,
             );
         })
         .await
@@ -2456,6 +2599,7 @@ mod tests {
             0,
             crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
             dynamic_on(),
+            test_provenance(&state),
         )
         .await;
 
@@ -2498,6 +2642,7 @@ mod tests {
             0,
             crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
             dynamic_on(),
+            test_provenance(&state),
         )
         .await;
 
@@ -2530,6 +2675,7 @@ mod tests {
             0,
             greenwich_night(),
             dynamic_on(),
+            test_provenance(&state),
         )
         .await;
 

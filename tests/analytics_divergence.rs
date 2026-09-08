@@ -178,6 +178,7 @@ fn approving_a_quarantined_detection_admits_it_to_the_olap_copy() {
                     lat: None,
                     lon: None,
                     week: None,
+                    run_id: None,
                 },
             )
         })
@@ -651,6 +652,7 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
                 overlap: Some(0.0),
                 file_name: "rec.wav",
                 detected_at_utc: instant,
+                run_id: None,
             })
             .expect("live insert");
         })

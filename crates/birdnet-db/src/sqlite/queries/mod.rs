@@ -1,5 +1,6 @@
 //! `SQLite` query modules grouped by concern.
 
+pub mod analysis_runs;
 pub mod analytics;
 pub mod correlation;
 pub mod detection_reviews;
@@ -12,6 +13,10 @@ pub mod maintenance;
 pub mod quarantine;
 pub mod species;
 
+pub use analysis_runs::{
+    AnalysisRun, NewAnalysisRun, RunModel, analysis_run, detection_counts_by_run,
+    insert_analysis_run, latest_analysis_run, list_analysis_runs, run_models,
+};
 pub use analytics::{
     ModelVsReviewRow, QualitySummary, ReviewVerdictDay, confidence_distribution, confidence_trend,
     daily_counts, detection_quality_by_hour, distinct_detection_dates, hourly_activity,

@@ -1837,6 +1837,74 @@ pub const MIGRATIONS: &[Migration] = &[
                 confidence_sum = species_summary.confidence_sum + NEW.Confidence;
         END;",
     },
+    Migration {
+        version: 43,
+        description: "Record which model produced each detection: analysis_runs, and run_id on every row",
+        // ## What was missing (R-1)
+        //
+        // A detection row said where it was heard, when, at what threshold,
+        // with what sensitivity and overlap (`Lat`, `Lon`, `Cutoff`, `Sens`,
+        // `Overlap`, per row since the R-2 fix) — and nothing about the model
+        // that produced it. `install.sh` pins the release checksum of the
+        // classifier and that checksum never reached the database. The
+        // shipped model is a pre-release; the day an operator swaps it, the
+        // rows of two classifiers with different label sets and different
+        // calibrations share one table indistinguishably, and a season that
+        // spans the swap cannot be split by which model heard what. For a
+        // researcher that is a silent wrong answer.
+        //
+        // ## What this does
+        //
+        // `analysis_runs` is one row per detection-daemon start: the SHA-256
+        // and length of the model file, the SHA-256 and label count of the
+        // labels file, the geomodel's SHA-256 when an occurrence filter is
+        // configured (it decides which species are candidates at all), the
+        // binary version, and the run-wide settings — global confidence
+        // floor, sensitivity, overlap, species-frequency threshold, station
+        // coordinates. The checksum is the identity; `model_name` (the file's
+        // stem) is its label.
+        //
+        // `detections.run_id` and `quarantine.run_id` reference it. The daemon
+        // registers its run before it consumes its first event and writes the
+        // id on every row it inserts; a quarantined detection that is later
+        // approved carries its run into `detections`. NULL is a row this
+        // station did not analyse — imported history, rows written before
+        // this migration, a BirdNET-Pi database brought across — and is never
+        // written by the live path.
+        //
+        // The foreign key is enforced (`PRAGMA foreign_keys=ON` on every
+        // connection), so a row cannot claim a run that does not exist. SQLite
+        // allows `ADD COLUMN … REFERENCES` only with a NULL default, which is
+        // what the historical rows need anyway.
+        //
+        // `detections_analytic` is `SELECT * FROM detections` and picks the
+        // column up; the mirror in DuckDB gains the same column
+        // (`birdnet_behavioral::connection`).
+        up_sql: "CREATE TABLE IF NOT EXISTS analysis_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL DEFAULT (datetime('now')),
+            app_version TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            model_path TEXT NOT NULL,
+            model_sha256 TEXT NOT NULL,
+            model_bytes INTEGER NOT NULL,
+            labels_path TEXT NOT NULL,
+            labels_sha256 TEXT NOT NULL,
+            label_count INTEGER NOT NULL,
+            geomodel_sha256 TEXT,
+            confidence REAL NOT NULL,
+            sensitivity REAL NOT NULL,
+            overlap REAL NOT NULL,
+            sf_thresh REAL NOT NULL,
+            lat REAL,
+            lon REAL
+        );
+
+        ALTER TABLE detections ADD COLUMN run_id INTEGER REFERENCES analysis_runs(id);
+        CREATE INDEX IF NOT EXISTS idx_detections_run_id ON detections(run_id);
+
+        ALTER TABLE quarantine ADD COLUMN run_id INTEGER REFERENCES analysis_runs(id);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -3133,6 +3201,7 @@ mod tests {
                 lat: None,
                 lon: None,
                 week: Some(3),
+                run_id: None,
             };
             crate::sqlite::insert_quarantine(&conn, &record).unwrap();
 

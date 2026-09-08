@@ -768,6 +768,86 @@
         }
       }
     },
+    "/analysis-runs": {
+      "get": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "List analysis runs",
+        "description": "One row per detection-daemon start, newest first: the SHA-256 of the model and labels it analysed with, the settings in force, and how many detection rows carry it. This is how a season that spans a model swap is split by which model heard what.",
+        "operationId": "listAnalysisRuns",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Newest `limit` runs; default 50, at most 500.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "runs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AnalysisRun"
+                      }
+                    }
+                  },
+                  "required": [
+                    "runs"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analysis-runs/{id}": {
+      "get": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "One analysis run",
+        "operationId": "getAnalysisRun",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisRun"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such run."
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "tags": [
@@ -2043,7 +2123,7 @@
           "export"
         ],
         "summary": "Export detections",
-        "description": "The full detection history as CSV (default) or JSON. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported.",
+        "description": "The full detection history as CSV (default) or JSON. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported. Every row carries the run that made it: `run_id`, and in the CSV three trailing columns `Run_Id,Model_Name,Model_SHA256`, or in JSON `model_name` and `model_sha256` beside the row — the model file's name and the SHA-256 of its bytes, resolved through `/analysis-runs`. Empty on a row no run of this station produced.",
         "operationId": "exportDetections",
         "parameters": [
           {
@@ -2710,6 +2790,10 @@
           "duration_secs": {
             "type": "number",
             "description": "Length of the saved clip in seconds."
+          },
+          "run_id": {
+            "type": "integer",
+            "description": "The analysis run (`/analysis-runs/{id}`) that produced this row: which model bytes, labels and settings. Absent on a row this station did not analyse — imported history, or rows older than the run table."
           }
         },
         "required": [
@@ -2923,6 +3007,112 @@
         },
         "required": [
           "error"
+        ]
+      },
+      "AnalysisRun": {
+        "type": "object",
+        "description": "One detection-daemon start: the model it analysed with, as the SHA-256 of its files, and the run-wide settings. A detection row's `run_id` points here.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "What `DetectionRow.run_id` holds."
+          },
+          "started_at": {
+            "type": "string",
+            "description": "UTC, `YYYY-MM-DD HH:MM:SS`.",
+            "examples": [
+              "2026-09-08 05:12:40"
+            ]
+          },
+          "app_version": {
+            "type": "string",
+            "examples": [
+              "0.15.0"
+            ]
+          },
+          "model_name": {
+            "type": "string",
+            "description": "The model file's stem: its operator-facing name, not its identity.",
+            "examples": [
+              "BirdNET+_V3.0-preview3_Global_11K_FP32"
+            ]
+          },
+          "model_path": {
+            "type": "string"
+          },
+          "model_sha256": {
+            "type": "string",
+            "description": "Lowercase hex SHA-256 of the model file's bytes — the identity.",
+            "examples": [
+              "2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
+            ]
+          },
+          "model_bytes": {
+            "type": "integer"
+          },
+          "labels_path": {
+            "type": "string"
+          },
+          "labels_sha256": {
+            "type": "string"
+          },
+          "label_count": {
+            "type": "integer",
+            "description": "How many labels the file parsed to — the model's output width."
+          },
+          "geomodel_sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the occurrence-filter model when one was configured; it decides which species are candidates at all."
+          },
+          "confidence": {
+            "type": "number",
+            "description": "Global confidence floor."
+          },
+          "sensitivity": {
+            "type": "number"
+          },
+          "overlap": {
+            "type": "number"
+          },
+          "sf_thresh": {
+            "type": "number"
+          },
+          "lat": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "lon": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "detections": {
+            "type": "integer",
+            "description": "Detection rows that carry this run."
+          }
+        },
+        "required": [
+          "id",
+          "started_at",
+          "app_version",
+          "model_name",
+          "model_path",
+          "model_sha256",
+          "model_bytes",
+          "labels_path",
+          "labels_sha256",
+          "label_count",
+          "confidence",
+          "sensitivity",
+          "overlap",
+          "sf_thresh",
+          "detections"
         ]
       }
     }

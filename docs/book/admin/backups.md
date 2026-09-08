@@ -28,10 +28,10 @@ Individual snapshots can be downloaded and deleted from the snapshot list, so yo
 
 Your detection data is yours, in formats other tools read:
 
-- **Detections (CSV or JSON)** — every detection the station stands behind, with date, species and confidence. Rows a reviewer rejected, and imported rows on a station that excludes imports from its analytics, are left out; the same rule the charts use.
+- **Detections (CSV or JSON)** — every detection the station stands behind, with date, species and confidence. Rows a reviewer rejected, and imported rows on a station that excludes imports from its analytics, are left out; the same rule the charts use. Every row also says which model made it: the CSV ends in `Run_Id,Model_Name,Model_SHA256` and the JSON carries `run_id`, `model_name` and `model_sha256` per row — the model file's name and the SHA-256 of its bytes, so a season that spans a model upgrade can be split by which model heard what. The runs themselves (when each started, the labels checksum, the settings in force) are at `/api/v2/analysis-runs`. The three columns are empty on a row this station did not analyse: imported history, or rows older than the run table.
 - **Species summary (CSV)** — per-species totals and first-seen dates.
 - **eBird checklist** — eBird Record Format, one record per species per hour with `Number` written as `X` (present, not counted) and the detection tally in the comment. Only detections at or above a confidence floor (0.75 by default, `?min_confidence=`) that a reviewer has not rejected are included, and the coordinates are the station's configured location — blank, never `0,0`, if none is set. Protocol, observer count, region and completeness are query parameters (`?protocol=Stationary&observers=1&state=&country=&complete=false`), because they are facts about the submitter rather than the station.
-- **BirdNET-Pi `BirdDB.txt`** — tab-separated, for tools expecting the original format. Same rows as the CSV.
+- **BirdNET-Pi `BirdDB.txt`** — semicolon-separated, the twelve BirdNET-Pi columns and nothing more, for tools expecting the original format. Same rows as the CSV, without the three model columns: the format has no room for them and its consumers count fields.
 
 ## Storage & retention
 

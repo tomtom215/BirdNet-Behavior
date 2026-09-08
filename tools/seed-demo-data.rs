@@ -168,6 +168,29 @@ fn run(args: &Args) -> Result<usize, String> {
     )
     .map_err(|e| format!("write station_name: {e}"))?;
 
+    // The run the demo rows were "made" by (R-1): the identity is the
+    // checksum of the word `demo`, so it cannot be mistaken for a release
+    // model, and the label count is the species table's real length.
+    let demo_run = birdnet_db::sqlite::NewAnalysisRun {
+        app_version: env!("CARGO_PKG_VERSION"),
+        model_name: "demo-model",
+        model_path: "/demo/demo-model.onnx",
+        model_sha256: "2a97516c354b68848cdbd8f54a226a0a55b21ed138e207ad6c5cbb9c00aa5aea",
+        model_bytes: 4,
+        labels_path: "/demo/demo-labels.csv",
+        labels_sha256: "09d513637eeffed4e86eae9c3cf4a3dedcc299d61acaba19ea681a3fd61792da",
+        label_count: i64::try_from(SPECIES.len()).unwrap_or(i64::MAX),
+        geomodel_sha256: None,
+        confidence: 0.70,
+        sensitivity: 1.0,
+        overlap: 0.5,
+        sf_thresh: 0.03,
+        lat: Some(42.3601),
+        lon: Some(-71.0589),
+    };
+    let run_id = birdnet_db::sqlite::insert_analysis_run(&conn, &demo_run)
+        .map_err(|e| format!("register demo run: {e}"))?;
+
     let mut inserted = 0_usize;
     for i in 0..ROWS_TARGET {
         let (sci, com, _, peak_hour) = pick_species(&mut rng, weights_total);
@@ -226,6 +249,7 @@ fn run(args: &Args) -> Result<usize, String> {
             // The demo data is placed in the station's own local time, so the
             // trigger's tz conversion is exactly right for it.
             detected_at_utc: None,
+            run_id: Some(run_id),
         };
         // Each row carries a unique correlation_id and a unique file_name,
         // so the schema's UNIQUE key never trips. Failures here are real.

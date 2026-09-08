@@ -43,23 +43,31 @@ pub(super) async fn export_detections(
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            birdnet_db::sqlite::analytic_detections(
+            let rows = birdnet_db::sqlite::analytic_detections(
                 conn,
                 from.as_deref(),
                 to.as_deref(),
                 MAX_EXPORT_ROWS,
-            )
+            )?;
+            // The model each row was made with (R-1): joined in memory over
+            // the run table, which is one row per daemon start.
+            let runs = birdnet_db::sqlite::run_models(conn)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, runs))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, truncated))) => {
+        Ok(Ok(((detections, truncated), runs))) => {
             if truncated {
                 return export_too_large();
             }
             if format == "json" {
                 let total = detections.len();
+                let detections: Vec<ExportedDetection<'_>> = detections
+                    .iter()
+                    .map(|row| ExportedDetection::new(row, &runs))
+                    .collect();
                 (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "application/json")],
@@ -71,7 +79,7 @@ pub(super) async fn export_detections(
                 )
                     .into_response()
             } else {
-                let csv = detections_to_csv(&detections);
+                let csv = detections_to_csv(&detections, &runs);
                 (
                     StatusCode::OK,
                     [
@@ -166,17 +174,54 @@ pub(super) async fn export_species(
     }
 }
 
+/// A detection row with the model that made it attached (R-1): the row's
+/// `run_id` resolved through `analysis_runs` to the model's name and the
+/// SHA-256 of its bytes. Both are absent on a row no run of this station
+/// produced — imported history, rows older than migration 43.
+#[derive(serde::Serialize)]
+struct ExportedDetection<'a> {
+    #[serde(flatten)]
+    row: &'a birdnet_db::sqlite::DetectionRow,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_sha256: Option<&'a str>,
+}
+
+impl<'a> ExportedDetection<'a> {
+    fn new(
+        row: &'a birdnet_db::sqlite::DetectionRow,
+        runs: &'a std::collections::HashMap<i64, birdnet_db::sqlite::RunModel>,
+    ) -> Self {
+        let model = row.run_id.and_then(|id| runs.get(&id));
+        Self {
+            row,
+            model_name: model.map(|m| m.model_name.as_str()),
+            model_sha256: model.map(|m| m.model_sha256.as_str()),
+        }
+    }
+}
+
 /// Convert detection rows to CSV format.
-fn detections_to_csv(rows: &[birdnet_db::sqlite::DetectionRow]) -> String {
-    let mut csv = String::with_capacity(rows.len() * 120);
+///
+/// The twelve BirdNET-Pi columns first, in BirdNET-Pi's order, then the
+/// run's identity: `Run_Id`, `Model_Name`, `Model_SHA256`. Empty on a row no
+/// run of this station produced.
+fn detections_to_csv(
+    rows: &[birdnet_db::sqlite::DetectionRow],
+    runs: &std::collections::HashMap<i64, birdnet_db::sqlite::RunModel>,
+) -> String {
+    let mut csv = String::with_capacity(rows.len() * 200);
     csv.push_str(
-        "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name\n",
+        "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
+         Run_Id,Model_Name,Model_SHA256\n",
     );
 
     for row in rows {
+        let model = row.run_id.and_then(|id| runs.get(&id));
         let _ = writeln!(
             csv,
-            "{},{},{},{},{:.4},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&row.date),
             escape_csv(&row.time),
             escape_csv(&row.sci_name),
@@ -189,6 +234,9 @@ fn detections_to_csv(rows: &[birdnet_db::sqlite::DetectionRow]) -> String {
             row.sens.map_or(String::new(), |v| v.to_string()),
             row.overlap.map_or(String::new(), |v| v.to_string()),
             row.file_name.as_deref().map_or(String::new(), escape_csv),
+            row.run_id.map_or(String::new(), |v| v.to_string()),
+            model.map_or(String::new(), |m| escape_csv(&m.model_name)),
+            model.map_or(String::new(), |m| escape_csv(&m.model_sha256)),
         );
     }
 
@@ -220,8 +268,82 @@ mod tests {
 
     #[test]
     fn detections_csv_header() {
-        let csv = detections_to_csv(&[]);
+        let csv = detections_to_csv(&[], &std::collections::HashMap::new());
         assert!(csv.starts_with("Date,Time,Sci_Name,Com_Name,Confidence"));
+        assert_eq!(
+            csv.trim_end(),
+            "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
+             Run_Id,Model_Name,Model_SHA256"
+        );
+    }
+
+    /// R-1: the CSV names the model that made each row, and leaves the three
+    /// columns empty on a row no run produced rather than inventing one.
+    #[test]
+    fn detections_csv_carries_the_model_of_each_rows_run() {
+        let mut runs = std::collections::HashMap::new();
+        runs.insert(
+            7,
+            birdnet_db::sqlite::RunModel {
+                model_name: "BirdNET+_V3.0-preview3_Global_11K_FP32".into(),
+                model_sha256: "2a0f9efb".into(),
+            },
+        );
+        let made_by_run = birdnet_db::sqlite::DetectionRow {
+            date: "2026-03-12".into(),
+            time: "06:30:00".into(),
+            sci_name: "Turdus merula".into(),
+            com_name: "Eurasian Blackbird".into(),
+            confidence: 0.87,
+            run_id: Some(7),
+            ..Default::default()
+        };
+        let imported = birdnet_db::sqlite::DetectionRow {
+            date: "2024-03-12".into(),
+            time: "06:30:00".into(),
+            sci_name: "Pica pica".into(),
+            com_name: "Eurasian Magpie".into(),
+            confidence: 0.80,
+            run_id: None,
+            ..Default::default()
+        };
+        let csv = detections_to_csv(&[made_by_run, imported], &runs);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert!(
+            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb"),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[2].ends_with(",,,"), "{}", lines[2]);
+        assert_eq!(lines[2].matches(',').count(), lines[1].matches(',').count());
+    }
+
+    /// The JSON export attaches the same two fields per row, and omits them
+    /// on a row no run produced.
+    #[test]
+    fn exported_json_carries_the_model_of_each_rows_run() {
+        let mut runs = std::collections::HashMap::new();
+        runs.insert(
+            3,
+            birdnet_db::sqlite::RunModel {
+                model_name: "m".into(),
+                model_sha256: "abc".into(),
+            },
+        );
+        let row = birdnet_db::sqlite::DetectionRow {
+            sci_name: "Pica pica".into(),
+            run_id: Some(3),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(ExportedDetection::new(&row, &runs)).unwrap();
+        assert_eq!(v["sci_name"], "Pica pica");
+        assert_eq!(v["run_id"], 3);
+        assert_eq!(v["model_name"], "m");
+        assert_eq!(v["model_sha256"], "abc");
+        let orphan = birdnet_db::sqlite::DetectionRow::default();
+        let v = serde_json::to_value(ExportedDetection::new(&orphan, &runs)).unwrap();
+        assert!(v.get("model_name").is_none(), "{v}");
+        assert!(v.get("run_id").is_none(), "{v}");
     }
 
     #[test]
@@ -243,7 +365,7 @@ mod tests {
             source: None,
             ..Default::default()
         };
-        let csv = detections_to_csv(&[row]);
+        let csv = detections_to_csv(&[row], &std::collections::HashMap::new());
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("Turdus merula"));

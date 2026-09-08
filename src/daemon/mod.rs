@@ -49,6 +49,7 @@ mod daylight;
 pub mod disposition;
 mod duplicate;
 mod processor;
+mod run;
 
 #[cfg(test)]
 mod test_support;
@@ -292,15 +293,24 @@ pub fn start_detection_daemon(
 
     let thresholds_for_processor = daemon_config.species_thresholds.clone();
     let global_confidence = confidence;
-    // What every row this run writes will say about the station and the
-    // settings that produced it (R-2 / UP-1). Taken from the same resolved
-    // values the model and the daylight filter use, so the row and the run
-    // cannot disagree.
-    let provenance = processor::RunProvenance {
-        lat: latitude,
-        lon: longitude,
+    // What every row this run writes will say about the station, the settings
+    // (R-2 / UP-1) and the model (R-1) that produced it. The settings are the
+    // same resolved values the model and the daylight filter use, so the row
+    // and the run cannot disagree; the model is hashed and written to
+    // `analysis_runs` on the processor thread before it consumes an event —
+    // paths only here, because the hashing reads 541 MB and does not belong
+    // on the async runtime.
+    let manifest = run::RunManifest {
+        model_path: daemon_config.model_path.clone(),
+        labels_path: daemon_config.labels_path.clone(),
+        geomodel_path: daemon_config.metadata_model_path.clone(),
+        app_version: env!("CARGO_PKG_VERSION"),
+        confidence: f64::from(confidence),
         sensitivity: f64::from(sensitivity),
         overlap: f64::from(overlap),
+        sf_thresh: f64::from(sf_thresh),
+        lat: latitude,
+        lon: longitude,
     };
 
     // Extract clips into the SAME dir the web serves recordings from
@@ -316,6 +326,11 @@ pub fn start_detection_daemon(
             tracing::info!("detection daemon started");
             let rt_handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
+                // No run, no rows: returning here drops the receiver, the
+                // daemon stops on its next send, and `?strict=1` says so.
+                let Some(provenance) = run::provenance_for(&state, &manifest) else {
+                    return;
+                };
                 event_processor(
                     event_rx,
                     state,

@@ -941,6 +941,7 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: utc,
+            run_id: None,
         };
         insert_detection(conn, &record).unwrap();
     }
@@ -1084,6 +1085,7 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
         };
         insert_detection(&conn, &record).unwrap();
 
@@ -1264,6 +1266,7 @@ mod tests {
                 source: src,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
             };
             insert_detection(&conn, &r).unwrap();
         };
@@ -1595,6 +1598,7 @@ mod tests {
                 source: None,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1706,6 +1710,7 @@ mod tests {
                 source: None,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1846,6 +1851,7 @@ mod tests {
                 source,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
             };
             insert_detection(&conn, &record).unwrap();
         };

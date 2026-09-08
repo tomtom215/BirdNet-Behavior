@@ -4,6 +4,7 @@
 //! and adding HTMX page routes for the web dashboard.
 
 pub mod admin;
+pub mod analysis_runs;
 pub mod analytics;
 pub mod api_write;
 pub mod auth_pages;
@@ -68,6 +69,7 @@ pub(crate) fn log_internal<E: std::fmt::Display>(context: &str, err: &E) -> &'st
 pub fn public_routes() -> Router<AppState> {
     Router::new()
         .nest("/api/v2", detections::router())
+        .nest("/api/v2", analysis_runs::router())
         .nest("/api/v2", species::router())
         .nest("/api/v2", analytics::router())
         .nest("/api/v2", timeseries::router())

@@ -907,6 +907,7 @@ impl AppState {
                     // conversion migration 32's trigger just made on the SQLite
                     // side — rather than from the offset in force now.
                     detected_at_utc: instant,
+                    run_id: row.run_id,
                 })
             })
         {

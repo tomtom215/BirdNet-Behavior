@@ -38,6 +38,34 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — every detection row now says which model made it
+
+**A detection row records the model that produced it** (`R-1`, the register's
+only open P0). A row carried where it was heard, when, at what threshold, with
+what sensitivity and overlap — and nothing about the classifier. `install.sh`
+pins the release checksum of the model and it never reached the database; the
+shipped model is a pre-release, and the day an operator swapped it the rows of
+two classifiers with different label sets and different calibrations shared one
+table indistinguishably. Migration 43 adds `analysis_runs` — one row per
+detection-daemon start: the SHA-256 and length of the model file, the SHA-256
+and label count of the labels file, the geomodel's SHA-256 when an occurrence
+filter is configured, the binary version and the run-wide settings — and a
+`run_id` on `detections` and `quarantine` that references it, foreign key
+enforced. The daemon hashes the files and registers its run on the processor
+thread before it consumes its first event, and refuses to start without one:
+a station that cannot say what model it is running does not record detections,
+it stops and `?strict=1` says so. Every row the run inserts or quarantines
+carries the id; an approved quarantine row carries it into `detections`; the
+DuckDB mirror carries the same column. The CSV export ends in
+`Run_Id,Model_Name,Model_SHA256`, the JSON export carries the same three per
+row, and `/api/v2/detections` carries `run_id`; `BirdDB.txt` is left at
+BirdNET-Pi's twelve fields because its consumers count them.
+`GET /api/v2/analysis-runs` lists the runs with their row counts. The doctor
+hashes the model on disk and warns when it is not the model of the last run.
+Imported history and rows older than the migration are NULL, never a guess.
+The demo seeder registers a run whose identity is the checksum of the word
+`demo`, so it cannot be mistaken for a release model.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in
