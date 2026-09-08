@@ -2043,7 +2043,7 @@
           "export"
         ],
         "summary": "Export detections",
-        "description": "The full detection history as CSV (default) or JSON.",
+        "description": "The full detection history as CSV (default) or JSON. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported.",
         "operationId": "exportDetections",
         "parameters": [
           {
@@ -2248,7 +2248,7 @@
           "export"
         ],
         "summary": "Export detections (BirdNET-Pi BirdDB.txt)",
-        "description": "The BirdNET-Pi legacy `BirdDB.txt` tab-separated format, for tooling that expects it.",
+        "description": "The BirdNET-Pi legacy `BirdDB.txt` tab-separated format, for tooling that expects it. Rows come from the analytic view: a detection a reviewer rejected, or an imported one on a station that excludes imports from its analytics, is not exported.",
         "operationId": "exportBirddb",
         "parameters": [
           {

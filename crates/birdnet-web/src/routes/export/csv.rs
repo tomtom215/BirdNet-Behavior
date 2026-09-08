@@ -43,7 +43,7 @@ pub(super) async fn export_detections(
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            birdnet_db::sqlite::all_detections(
+            birdnet_db::sqlite::analytic_detections(
                 conn,
                 from.as_deref(),
                 to.as_deref(),

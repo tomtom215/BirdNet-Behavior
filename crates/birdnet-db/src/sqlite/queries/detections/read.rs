@@ -301,14 +301,21 @@ pub fn recent_detections_page(
     Ok(rows)
 }
 
-/// Query all detections, optionally filtered by an inclusive date range.
+/// Every detection the station stands behind, optionally filtered by an
+/// inclusive date range.
+///
+/// Reads `detections_analytic`, so a detection a reviewer rejected, or an
+/// imported one on a station that excludes imports, is not returned. This is
+/// the reader behind the CSV, JSON and `BirdDB.txt` exports — the surfaces
+/// where a dataset leaves the station — and it used to read the raw table,
+/// which undid the verdict at exactly that point (`R-17`).
 ///
 /// Returns rows ordered by date/time descending.
 ///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
-pub fn all_detections(
+pub fn analytic_detections(
     conn: &Connection,
     from: Option<&str>,
     to: Option<&str>,
@@ -332,7 +339,7 @@ pub fn all_detections(
         (None, None) => ("", vec![]),
     };
     let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections {where_sql} \
+        "SELECT {DETECTION_COLS} FROM detections_analytic {where_sql} \
          ORDER BY Date DESC, Time DESC LIMIT {fetch}"
     );
 
@@ -1309,39 +1316,39 @@ mod tests {
     }
 
     #[test]
-    fn all_detections_no_filter() {
+    fn analytic_detections_no_filter() {
         let (_tmp, conn) = temp_db_with_data();
-        let (rows, truncated) = all_detections(&conn, None, None, 10_000).unwrap();
+        let (rows, truncated) = analytic_detections(&conn, None, None, 10_000).unwrap();
         assert_eq!(rows.len(), 4);
         assert!(!truncated);
     }
 
     #[test]
-    fn all_detections_date_range() {
+    fn analytic_detections_date_range() {
         let (_tmp, conn) = temp_db_with_data();
         let (rows, _) =
-            all_detections(&conn, Some("2026-03-11"), Some("2026-03-11"), 10_000).unwrap();
+            analytic_detections(&conn, Some("2026-03-11"), Some("2026-03-11"), 10_000).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
-    fn all_detections_from_only() {
+    fn analytic_detections_from_only() {
         let (_tmp, conn) = temp_db_with_data();
-        let (rows, _) = all_detections(&conn, Some("2026-03-11"), None, 10_000).unwrap();
+        let (rows, _) = analytic_detections(&conn, Some("2026-03-11"), None, 10_000).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
-    fn all_detections_to_only() {
+    fn analytic_detections_to_only() {
         let (_tmp, conn) = temp_db_with_data();
-        let (rows, _) = all_detections(&conn, None, Some("2026-03-10"), 10_000).unwrap();
+        let (rows, _) = analytic_detections(&conn, None, Some("2026-03-10"), 10_000).unwrap();
         assert_eq!(rows.len(), 1);
     }
 
     #[test]
     fn analytic_detections_above_reads_the_view_and_holds_the_floor() {
         let (_tmp, conn) = temp_db_with_data();
-        let (all, _) = all_detections(&conn, None, None, 10_000).unwrap();
+        let (all, _) = analytic_detections(&conn, None, None, 10_000).unwrap();
         assert_eq!(all.len(), 4);
 
         // Reject one row: the table still has four, the analytic read has three.
@@ -1363,7 +1370,7 @@ mod tests {
                 .unwrap();
         assert!(rows.iter().all(|r| r.date == "2026-03-11"));
 
-        // Truncation reports the same way `all_detections` does: one past the
+        // Truncation reports the same way `analytic_detections` does: one past the
         // cap is truncated, exactly the cap is not. The second half is the
         // discrimination — `>=` in place of `>` survived every assertion above.
         let (rows, truncated) = analytic_detections_above(&conn, None, None, 0.0, 2).unwrap();
@@ -1378,16 +1385,43 @@ mod tests {
     }
 
     #[test]
-    fn all_detections_truncates_at_max_rows() {
+    fn analytic_detections_truncates_at_max_rows() {
         let (_tmp, conn) = temp_db_with_data();
         // 4 rows exist; cap at 2 → truncated, exactly 2 returned.
-        let (rows, truncated) = all_detections(&conn, None, None, 2).unwrap();
+        let (rows, truncated) = analytic_detections(&conn, None, None, 2).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(truncated);
         // Cap exactly at the row count → not truncated.
-        let (rows, truncated) = all_detections(&conn, None, None, 4).unwrap();
+        let (rows, truncated) = analytic_detections(&conn, None, None, 4).unwrap();
         assert_eq!(rows.len(), 4);
         assert!(!truncated);
+    }
+
+    /// The export reader hides a rejected row and shows an unreviewed or
+    /// confirmed one; the raw table still has all four. A reader that read
+    /// the table would pass the count tests above and fail this one.
+    #[test]
+    fn analytic_detections_hides_a_rejected_row_and_keeps_the_rest() {
+        let (_tmp, conn) = temp_db_with_data();
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Com_Name = 'European Robin'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'confirmed' WHERE Com_Name = 'Great Tit'",
+            [],
+        )
+        .unwrap();
+        let raw: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(raw, 4);
+        let (rows, truncated) = analytic_detections(&conn, None, None, 10_000).unwrap();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(!truncated);
+        assert!(rows.iter().all(|r| r.com_name != "European Robin"));
+        assert!(rows.iter().any(|r| r.com_name == "Great Tit"));
     }
 
     #[test]

@@ -28,10 +28,10 @@ Individual snapshots can be downloaded and deleted from the snapshot list, so yo
 
 Your detection data is yours, in formats other tools read:
 
-- **Detections (CSV)** — every detection with date, species and confidence.
+- **Detections (CSV or JSON)** — every detection the station stands behind, with date, species and confidence. Rows a reviewer rejected, and imported rows on a station that excludes imports from its analytics, are left out; the same rule the charts use.
 - **Species summary (CSV)** — per-species totals and first-seen dates.
 - **eBird checklist** — eBird Record Format, one record per species per hour with `Number` written as `X` (present, not counted) and the detection tally in the comment. Only detections at or above a confidence floor (0.75 by default, `?min_confidence=`) that a reviewer has not rejected are included, and the coordinates are the station's configured location — blank, never `0,0`, if none is set. Protocol, observer count, region and completeness are query parameters (`?protocol=Stationary&observers=1&state=&country=&complete=false`), because they are facts about the submitter rather than the station.
-- **BirdNET-Pi `BirdDB.txt`** — tab-separated, for tools expecting the original format.
+- **BirdNET-Pi `BirdDB.txt`** — tab-separated, for tools expecting the original format. Same rows as the CSV.
 
 ## Storage & retention
 
