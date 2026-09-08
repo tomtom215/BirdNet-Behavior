@@ -38,6 +38,21 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a bad configuration edit no longer takes the station down
+
+**A file with an error is run around, not on** (`LC-6`). The daemon
+validated its file at start and refused to run on an invalid setting; since
+that ran in the new process after systemd had stopped the old one, a typo in
+`LATITUDE` made over SSH became a restart loop with no web UI and no way
+back. Every successful start now keeps `birdnet.conf.last-good`; a start
+whose file has errors runs on that copy and reports `config_reverted`; one
+with errors and no copy runs web-only on the file as it is and reports
+`config_rejected`, so the diagnostics are reachable. `--apply-config <file>`
+is the one-step safe change: it validates the candidate, refuses one with
+errors, installs a good one behind a backup and restarts the service. The
+doctor reports a configuration error as a warning naming what the start will
+do, so the unit's preflight gate lets the start happen.
+
 ### Fixed — the doctor loads the model instead of weighing it
 
 **`--doctor` checks the model as a model** (`ON-9`, `OP-13`). It used to

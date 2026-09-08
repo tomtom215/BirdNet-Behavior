@@ -157,20 +157,31 @@ The station listens to a live microphone, so audio handling is privacy-relevant.
 
 ---
 
-## 5. Fail-fast configuration
+## 5. A bad configuration edit cannot take the station down
 
-The daemon validates its configuration at startup and **refuses to start** on an
-invalid setting (e.g. a latitude outside ±90, a malformed `RECORDING_SCHEDULE`,
-or an unsupported `AUDIO_FORMAT`) rather than running in a silently-degraded
-state. Run the bundled diagnostic before deploying a config change:
+The daemon validates its configuration at startup. An invalid setting (a
+latitude outside ±90, a malformed `RECORDING_SCHEDULE`, an unsupported
+`AUDIO_FORMAT`) used to make it refuse to start, and since validation ran in
+the new process after systemd had stopped the old one, a typo made over SSH
+became a restart loop with no web UI and no way back. Now every successful
+start keeps a copy of the file it ran on as `birdnet.conf.last-good`; a start
+whose file has errors runs on that copy and reports `config_reverted` on
+`/api/v2/health` and the station page; a start with errors and no copy runs
+web-only on the file as it is and reports `config_rejected`, so the diagnostics
+are reachable and show the errors.
+
+Change the file the safe way, which validates before anything is installed:
 
 ```bash
-birdnet-behavior --doctor          # human-readable preflight
-birdnet-behavior --doctor-json     # machine-readable (exit code: 0 ok, 1 warn, 2 error)
+sudo cp /etc/birdnet/birdnet.conf /tmp/birdnet.conf && sudo nano /tmp/birdnet.conf
+sudo birdnet-behavior --apply-config /tmp/birdnet.conf   # refuses a file with errors
+birdnet-behavior --doctor                                # the same checks, on demand
+birdnet-behavior --doctor-json                           # exit code: 0 ok, 1 warn, 2 error
 ```
 
-The systemd unit runs `--doctor` as an `ExecStartPre` gate, so a broken config
-fails fast with an actionable journal entry instead of a restart loop.
+The systemd unit still runs `--doctor` as an `ExecStartPre` gate for the
+journal's sake; a configuration error is reported there as a warning naming
+what the start will do, so the gate lets it happen.
 
 ---
 

@@ -321,7 +321,7 @@ pub(super) fn check_config_file(cli: &Cli, config: Option<&Config>) -> Check {
     }
 }
 
-pub(super) fn check_config_values(config: &Config) -> Vec<Check> {
+pub(super) fn check_config_values(cli: &Cli, config: &Config) -> Vec<Check> {
     let findings = cfg_validate::validate(config);
     if findings.is_empty() {
         return vec![Check::pass(
@@ -329,16 +329,57 @@ pub(super) fn check_config_values(config: &Config) -> Vec<Check> {
             "all settings are within valid ranges",
         )];
     }
-    findings
+    // An error used to be a Fail, which through ExecStartPre's exit-2 gate
+    // kept the service from starting at all: a typo over SSH became a restart
+    // loop with no web UI (LC-6). The start now recovers on its own — it runs
+    // on the last-good copy when one exists, web-only on the file otherwise —
+    // so the doctor reports the same decision the start will make, as a
+    // warning, and the gate lets the start happen.
+    let recovery = crate::helpers::startup_config::recovery_for(&cli.config);
+    let has_errors = findings.iter().any(|f| f.severity == ConfigSeverity::Error);
+    let mut out: Vec<Check> = findings
         .into_iter()
         .map(|f| {
             let name = format!("Config: {}", f.key);
             match f.severity {
-                ConfigSeverity::Error => Check::fail(name, f.message, f.remediation),
+                ConfigSeverity::Error => Check::warn(
+                    name,
+                    format!(
+                        "{} — an error: the station will not run on this value",
+                        f.message
+                    ),
+                    f.remediation,
+                ),
                 ConfigSeverity::Warning => Check::warn(name, f.message, f.remediation),
             }
         })
-        .collect()
+        .collect();
+    if has_errors {
+        out.push(recovery.map_or_else(
+            || {
+                Check::warn(
+                    "Config: fallback",
+                    "the file has errors and there is no last good copy; the station will start \
+                     web-only, recording nothing, so that this report is reachable at /station",
+                    "fix the file and restart, or `--apply-config <corrected file>`; the boot \
+                     journal reports `config_rejected` until then",
+                )
+            },
+            |last_good| {
+                Check::warn(
+                    "Config: fallback",
+                    format!(
+                        "the file has errors; the station will start on the last good \
+                         configuration, {}",
+                        last_good.display()
+                    ),
+                    "fix the file and restart, or `--apply-config <corrected file>`; the boot \
+                     journal reports `config_reverted` until then",
+                )
+            },
+        ));
+    }
+    out
 }
 
 pub(super) fn check_listen_address(cli: &Cli) -> Check {
@@ -702,27 +743,32 @@ mod tests {
     fn config_values_pass_when_all_valid() {
         // ALSA_CARD set so the audio-source check stays quiet; no invalid values.
         let cfg = config_from(&[("ALSA_CARD", "hw:1")]);
-        let checks = check_config_values(&cfg);
+        let checks = check_config_values(&Cli::parse_from(["birdnet-behavior"]), &cfg);
         assert!(!checks.is_empty());
         assert!(checks.iter().all(|c| c.status == Status::Pass));
     }
 
     #[test]
     fn config_values_flags_out_of_range_error() {
+        // An out-of-range value is an error the station will not run on. It
+        // is reported as a warning that says so (LC-6: a Fail through the
+        // ExecStartPre gate was a restart loop), alongside the fallback line.
         let cfg = config_from(&[("ALSA_CARD", "hw:1"), ("CONFIDENCE", "5.0")]);
-        let checks = check_config_values(&cfg);
-        assert!(
-            checks
-                .iter()
-                .any(|c| c.status == Status::Fail && c.name.contains("CONFIDENCE"))
-        );
+        let checks = check_config_values(&Cli::parse_from(["birdnet-behavior"]), &cfg);
+        assert!(checks.iter().any(|c| {
+            c.status == Status::Warn
+                && c.name.contains("CONFIDENCE")
+                && c.message.contains("an error")
+        }));
+        assert!(checks.iter().any(|c| c.name == "Config: fallback"));
+        assert!(checks.iter().all(|c| c.status != Status::Fail));
     }
 
     #[test]
     fn config_values_flags_warning() {
         // LATITUDE set without LONGITUDE → a warning keyed to one of the pair.
         let cfg = config_from(&[("ALSA_CARD", "hw:1"), ("LATITUDE", "10.0")]);
-        let checks = check_config_values(&cfg);
+        let checks = check_config_values(&Cli::parse_from(["birdnet-behavior"]), &cfg);
         assert!(checks.iter().any(|c| {
             c.status == Status::Warn
                 && (c.name.contains("LATITUDE") || c.name.contains("LONGITUDE"))
@@ -879,6 +925,51 @@ mod occurrence_filter_gates {
         assert_eq!(
             check_occurrence_filter(&cli_from(&[]), Some(&cfg)).status,
             Status::Fail
+        );
+    }
+
+    /// LC-6: a configuration error is reported as a warning naming what the
+    /// start will do, so `ExecStartPre`'s exit-2 gate lets the start happen and
+    /// the station recovers on its own instead of looping.
+    #[test]
+    fn a_config_error_is_a_warning_that_names_the_fallback_not_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("birdnet.conf");
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.config = path.clone();
+        let bad = Config::parse("LATITUDE=abc\nLONGITUDE=1\n").unwrap();
+
+        let checks = check_config_values(&cli, &bad);
+        assert!(
+            checks
+                .iter()
+                .all(|c| c.status != crate::doctor::Status::Fail),
+            "no Fail: the exit-2 gate must let the start happen: {checks:?}"
+        );
+        let fallback = checks
+            .iter()
+            .find(|c| c.name == "Config: fallback")
+            .expect("the decision the start will make is reported");
+        assert!(fallback.message.contains("web-only"), "{fallback:?}");
+
+        std::fs::write(&path, "LATITUDE=1\nLONGITUDE=1\n").unwrap();
+        crate::helpers::startup_config::record_last_good(&path).unwrap();
+        let checks = check_config_values(&cli, &bad);
+        let fallback = checks
+            .iter()
+            .find(|c| c.name == "Config: fallback")
+            .expect("reported");
+        assert!(
+            fallback.message.contains("last good configuration"),
+            "{fallback:?}"
+        );
+
+        let good = Config::parse("LATITUDE=1\nLONGITUDE=1\n").unwrap();
+        assert!(
+            check_config_values(&cli, &good)
+                .iter()
+                .all(|c| c.name != "Config: fallback"),
+            "a good file needs no fallback line"
         );
     }
 }

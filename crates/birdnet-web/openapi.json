@@ -2721,7 +2721,9 @@
                 "db_lost",
                 "db_path_changed",
                 "mount_lost",
-                "version_rollback"
+                "version_rollback",
+                "config_reverted",
+                "config_rejected"
               ]
             },
             "description": "What the boot journal found changed since the last start; non-empty is a strict fault."

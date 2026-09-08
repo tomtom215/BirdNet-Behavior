@@ -102,35 +102,48 @@ async fn serve(
     log_broadcaster: birdnet_web::routes::admin::logs::LogBroadcaster,
     started: tokio::sync::oneshot::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Fail fast on a misconfigured station: validate the loaded config and
-    // refuse to start if any setting is outright invalid (e.g. a latitude
-    // outside ±90 or a malformed recording schedule) rather than limping along
-    // with a silently-degraded pipeline. Warnings are logged but non-fatal.
-    // `--doctor` runs the same checks for an explicit preflight.
-    if let Some(ref cfg) = config {
-        use birdnet_core::config::validate::{Severity, is_usable, validate};
-        let findings = validate(cfg);
-        for f in &findings {
-            match f.severity {
-                Severity::Error => {
-                    tracing::error!(key = %f.key, remediation = %f.remediation, "{}", f.message);
-                }
-                Severity::Warning => {
-                    tracing::warn!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+    // A misconfigured station used to refuse to start here — validation ran
+    // inside the new process, after systemd had killed the old one, so a typo
+    // made over SSH became a restart loop with no web UI and no way back
+    // (LC-6). Now: warnings are logged; errors are logged and the station
+    // runs on the last configuration a start succeeded on when there is one,
+    // else web-only on the file as it is, and the boot journal says which.
+    let mut cli = cli;
+    let (config, config_decision) = {
+        if let Some(ref cfg) = config {
+            use birdnet_core::config::validate::{Severity, validate};
+            for f in validate(cfg) {
+                match f.severity {
+                    Severity::Error => {
+                        tracing::error!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+                    }
+                    Severity::Warning => {
+                        tracing::warn!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+                    }
                 }
             }
         }
-        if !is_usable(&findings) {
-            let errors = findings
-                .iter()
-                .filter(|f| f.severity == Severity::Error)
-                .count();
-            return Err(format!(
-                "configuration has {errors} error(s); fix the setting(s) logged above and restart \
-                 (run with --doctor to re-check)"
-            )
-            .into());
+        helpers::startup_config::choose(config, &cli.config)
+    };
+    match &config_decision {
+        helpers::startup_config::ConfigDecision::Loaded => {}
+        helpers::startup_config::ConfigDecision::Reverted { errors, last_good } => {
+            tracing::error!(
+                errors = errors.len(),
+                last_good = %last_good.display(),
+                "configuration has errors; running on the last good configuration instead"
+            );
         }
+        helpers::startup_config::ConfigDecision::Rejected { errors } => {
+            tracing::error!(
+                errors = errors.len(),
+                "configuration has errors and there is no last good copy; running web-only so \
+                 the diagnostics are reachable"
+            );
+        }
+    }
+    if config_decision.forces_web_only() {
+        cli.web_only = true;
     }
 
     // Startup database resilience check.
@@ -284,12 +297,10 @@ async fn serve(
     // The boot journal (UP-3): this start against the last one, kept outside
     // the database so a volume that did not mount cannot take the memory of
     // it with it. Read by the health verdict and the station-health notifier.
-    state.set_boot_anomalies(helpers::boot_journal::record_boot(
-        &cli.config,
-        &db_path,
-        db_present_at_start,
-        &state,
-    ));
+    let mut boot_anomalies =
+        helpers::boot_journal::record_boot(&cli.config, &db_path, db_present_at_start, &state);
+    boot_anomalies.extend(config_decision.anomaly());
+    state.set_boot_anomalies(boot_anomalies);
 
     let state = match helpers::build_api_token(config.as_ref()) {
         Some(token) => state.with_api_token(token),
@@ -510,6 +521,20 @@ async fn serve(
         capture_status,
         Some(&live_audio),
     );
+
+    // The file this start ran on becomes the one a bad edit falls back to.
+    // Only a start that validated writes it: a reverted or rejected start
+    // must not make its file the "last good" one.
+    if config_decision == helpers::startup_config::ConfigDecision::Loaded
+        && cli.config.exists()
+        && let Err(e) = helpers::startup_config::record_last_good(&cli.config)
+    {
+        tracing::warn!(
+            error = %e,
+            path = %helpers::startup_config::last_good_path(&cli.config).display(),
+            "could not keep a last-good copy of the configuration; a bad edit will not have one to fall back to"
+        );
+    }
 
     let daemon_handle = if cli.web_only {
         tracing::info!("running in web-only mode (no detection daemon)");

@@ -165,6 +165,17 @@ pub struct Cli {
     #[arg(long)]
     pub check_db: bool,
 
+    /// Validate FILE, install it as the configuration, restart the service,
+    /// and exit.
+    ///
+    /// The safe way to change the configuration on a running station: a file
+    /// with errors is refused and nothing changes; a good one is installed
+    /// behind a timestamped backup of the previous file and the service is
+    /// restarted. Should the station fail to start on it anyway, it runs on
+    /// the last configuration a start succeeded on and says so at /station.
+    #[arg(long, value_name = "FILE")]
+    pub apply_config: Option<PathBuf>,
+
     /// Create database backup and exit.
     #[arg(long)]
     pub backup_db: bool,

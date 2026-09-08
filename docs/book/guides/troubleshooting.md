@@ -47,8 +47,8 @@ No row from `ss` means the daemon never finished starting — see [Service won't
 arecord -l                                                       # list capture devices
 # Use the card *id* — the word after "card N:" — not the index:
 arecord -D plughw:CARD=PRO,DEV=0 -d 3 /tmp/test.wav && aplay /tmp/test.wav
-sudo nano /etc/birdnet/birdnet.conf                              # ALSA_CARD=plughw:CARD=<id>,DEV=0
-sudo systemctl restart birdnet-behavior
+sudo cp /etc/birdnet/birdnet.conf /tmp/birdnet.conf && sudo nano /tmp/birdnet.conf   # ALSA_CARD=plughw:CARD=<id>,DEV=0
+sudo birdnet-behavior --apply-config /tmp/birdnet.conf   # validates, backs up, installs, restarts
 ```
 
 ## No detections appearing (Docker)

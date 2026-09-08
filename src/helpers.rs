@@ -28,6 +28,7 @@ pub mod instance_lock;
 pub mod offsite;
 pub mod resolve;
 mod settings_overlay;
+pub mod startup_config;
 mod state;
 mod system;
 pub mod tls;

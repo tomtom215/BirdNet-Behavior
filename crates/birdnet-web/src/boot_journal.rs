@@ -62,6 +62,20 @@ pub enum Anomaly {
         /// This start's version.
         to: String,
     },
+    /// The configuration file has errors and the station is running on the
+    /// last configuration a start succeeded on (LC-6).
+    ConfigReverted {
+        /// The errors, as `key: message`.
+        errors: Vec<String>,
+        /// The copy the station is running on.
+        last_good: String,
+    },
+    /// The configuration file has errors and there is no last-good copy, so
+    /// the station is running web-only on the file as it is (LC-6).
+    ConfigRejected {
+        /// The errors, as `key: message`.
+        errors: Vec<String>,
+    },
 }
 
 impl Anomaly {
@@ -73,6 +87,8 @@ impl Anomaly {
             Self::DbPathChanged { .. } => "db_path_changed",
             Self::MountLost => "mount_lost",
             Self::VersionRollback { .. } => "version_rollback",
+            Self::ConfigReverted { .. } => "config_reverted",
+            Self::ConfigRejected { .. } => "config_rejected",
         }
     }
 
@@ -95,6 +111,18 @@ impl Anomaly {
             Self::VersionRollback { from, to } => format!(
                 "the binary is {to}, older than the {from} that last started; a downgrade \
                  does not know the newer schema"
+            ),
+            Self::ConfigReverted { errors, last_good } => format!(
+                "the configuration file has errors ({}) and the station is running on the last \
+                 good one, {last_good}; fix the file and restart, or apply a corrected file \
+                 with --apply-config",
+                errors.join("; ")
+            ),
+            Self::ConfigRejected { errors } => format!(
+                "the configuration file has errors ({}) and there is no last good copy to fall \
+                 back to, so the station is running web-only and recording nothing; fix the \
+                 file and restart, or apply a corrected file with --apply-config",
+                errors.join("; ")
             ),
         }
     }
