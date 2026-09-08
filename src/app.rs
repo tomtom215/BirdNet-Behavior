@@ -228,6 +228,9 @@ async fn serve(
     // `main` is already writing to — without this the state holds the empty
     // one its constructor made, and `GET /admin/system/logs` streams
     // keep-alives for ever.
+    // The bundle hook wants the same ring the state streams, so the support
+    // bundle an operator downloads carries the process's recent log.
+    let logs_for_bundle = log_broadcaster.clone();
     let state = state
         .with_config_path(cli.config.clone())
         .with_log_broadcaster(log_broadcaster)
@@ -241,7 +244,11 @@ async fn serve(
         // OP-1: `--doctor` and `--support-bundle` from the browser. The hooks
         // are read-only clones of the command line and the configuration, so
         // a GET runs the checks and never the repairs.
-        .with_diagnostics(helpers::diagnostics::hooks(&cli, config.as_ref()));
+        .with_diagnostics(helpers::diagnostics::hooks(
+            &cli,
+            config.as_ref(),
+            logs_for_bundle,
+        ));
 
     // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
     // token. Absent one — the default — those routes answer 404 and this

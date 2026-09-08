@@ -602,19 +602,20 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
 
     enforce_wal_mode(db_path)?;
 
-    match kept {
-        Some(kept) => tracing::warn!(
+    if let Some(kept) = kept {
+        tracing::warn!(
             backup = %backup_path.display(),
             target = %db_path.display(),
             kept = %kept.display(),
             "database restored from backup; the damaged original is kept beside it and holds \
              everything recorded after the backup was taken — recover it before deleting it"
-        ),
-        None => tracing::warn!(
+        );
+    } else {
+        tracing::warn!(
             backup = %backup_path.display(),
             target = %db_path.display(),
             "database restored from backup"
-        ),
+        );
     }
 
     Ok(())

@@ -142,6 +142,31 @@ pub struct Bundle {
 /// The staging directory could not be created, or `tar` could not produce the
 /// archive. The diagnostic itself failing is *not* an error.
 pub fn build(cli: &Cli, config: Option<&Config>, dest: &Path) -> Result<Bundle, String> {
+    build_with_recent_log(cli, config, dest, None)
+}
+
+/// The name of the member carrying the running process's in-memory log ring.
+pub const RECENT_LOG_NAME: &str = "recent.log";
+
+/// [`build`], plus the last lines the running process logged.
+///
+/// `journal.log` is empty on a default Raspberry Pi OS, whose journal is
+/// volatile, and on any install not under systemd — both bundles a probe
+/// pulled from a container held "No journal files were found" and nothing
+/// else — while `/admin/system/logs` was replaying a 200-line in-process ring
+/// the bundle never staged. The web hook passes that ring here as
+/// `recent_log`; the command line, a separate process, has none and passes
+/// `None`, and the member is then absent rather than empty.
+///
+/// # Errors
+///
+/// As [`build`].
+pub fn build_with_recent_log(
+    cli: &Cli,
+    config: Option<&Config>,
+    dest: &Path,
+    recent_log: Option<&str>,
+) -> Result<Bundle, String> {
     // Staged beside the destination rather than in a temp dir: same
     // filesystem, so `tar` writes the archive without crossing a device, and
     // an operator who ran out of space sees it at the path they chose rather
@@ -207,6 +232,10 @@ pub fn build(cli: &Cli, config: Option<&Config>, dest: &Path) -> Result<Bundle, 
         crate::log_capture::ERROR_LOG_NAME,
         &read_error_log(config),
     ));
+
+    if let Some(recent) = recent_log {
+        push(stage(&dir, RECENT_LOG_NAME, recent));
+    }
 
     push(stage(&dir, "uname.txt", &capture("uname", &["-a"])));
     push(stage(&dir, "disk.txt", &capture("df", &["-h"])));
