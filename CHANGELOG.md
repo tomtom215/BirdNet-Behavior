@@ -38,6 +38,17 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a flapping audio source is reported
+
+**A source that keeps dying and coming back is called flapping** (`AD-3`).
+Every signal was built on consecutive failure, so a source restarting every
+minute and back in two seconds read as healthy everywhere: live at each
+poll, attempt 0, backoff at its base, uptime strip green, and never down
+long enough for the "still down" warning. Restarts are now counted over the
+last hour; five or more put the count on the Station Health card, an issue
+in the banner, a warning in the log, and the `flapping` station-health
+condition on the notifier.
+
 ### Fixed — a microphone addressed by card index is watched for moving
 
 **A resolving ALSA card index is an advisory, and a moved card is a boot

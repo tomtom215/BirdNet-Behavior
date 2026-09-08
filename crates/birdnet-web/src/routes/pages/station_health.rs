@@ -309,6 +309,9 @@ fn status_banner(s: &Snapshot) -> String {
     if s.capture.iter().any(|c| c.state.is_fault()) {
         issues.push("an audio source is down");
     }
+    if s.capture.iter().any(|c| c.flapping) {
+        issues.push("an audio source is flapping: it keeps dying and coming back");
+    }
     if s.occurrence.admits_nothing() {
         issues.push("the species filter admits no species, so nothing can be recorded");
     }
@@ -410,11 +413,31 @@ fn source_card(src: &SourceStatus, today: i64) -> String {
          <div><div class=\"st-source-name\">{name}</div>\
          <div class=\"st-source-type\">audio source</div></div>{chip}</div>\
          {strip}<div class=\"st-source-foot\"><span><b>{last_audio}</b> · last audio</span>\
-         <span><b>{today}</b> · detections today</span></div>{retry}</div>",
+         <span><b>{today}</b> · detections today</span></div>{retry}{flap}</div>",
         name = escape_html(&src.label),
         chip = source_chip(src.state),
         strip = uptime_strip(&src.uptime_24h),
         retry = retry_line(src),
+        flap = restarts_line(src),
+    )
+}
+
+/// The restart-count line (AD-3): shown whenever the source restarted in the
+/// last hour, whatever it reads now. A source that dies every few minutes and
+/// comes back in seconds is `Live` with `restart_attempts` 0 at every glance
+/// and paints its strip green; this line is where that shows.
+fn restarts_line(src: &SourceStatus) -> String {
+    if src.restarts_last_hour == 0 {
+        return String::new();
+    }
+    let verdict = if src.flapping {
+        " — flapping: check the cable, hub power or stream"
+    } else {
+        ""
+    };
+    format!(
+        "<div class=\"st-source-retry\">\u{21bb} restarted {}× in the last hour{verdict}</div>",
+        src.restarts_last_hour
     )
 }
 
@@ -754,9 +777,42 @@ mod tests {
             uptime_secs: None,
             last_audio_age_secs: Some(5),
             restart_attempts: attempts,
+            restarts_last_hour: 0,
+            flapping: false,
             next_retry_in_secs: next,
             uptime_24h: vec![UptimeSegment::Up, UptimeSegment::Down, UptimeSegment::Out],
         }
+    }
+
+    /// AD-3. A source that dies and comes back within seconds reads Live,
+    /// attempt 0, strip green; the restart count over the last hour is the
+    /// only number that shows it, so the card carries it and the banner calls
+    /// it out.
+    #[test]
+    fn a_flapping_source_is_an_issue_though_it_reads_live() {
+        let mut src = cap_source("local", SourceState::Connected, 0, None);
+        src.restarts_last_hour = 7;
+        src.flapping = true;
+        let card = source_card(&src, 3);
+        assert!(card.contains("restarted 7× in the last hour"), "{card}");
+        assert!(card.contains("flapping"), "{card}");
+        let mut s = snap(false, true, 2, 0);
+        s.capture = vec![src];
+        let banner = status_banner(&s);
+        assert!(banner.contains("st-status warn"), "{banner}");
+        assert!(banner.contains("flapping"), "{banner}");
+
+        // Counterpart: one restart is a line, not an issue.
+        let mut once = cap_source("local", SourceState::Connected, 0, None);
+        once.restarts_last_hour = 1;
+        let card = source_card(&once, 3);
+        assert!(
+            card.contains("restarted 1× in the last hour") && !card.contains("flapping"),
+            "{card}"
+        );
+        let mut s = snap(false, true, 2, 0);
+        s.capture = vec![once];
+        assert!(!status_banner(&s).contains("flapping"));
     }
 
     #[test]

@@ -46,7 +46,12 @@
 //! * a disk-full purge that deleted recordings and freed nothing, because the
 //!   card is full of something else — the database, the analytics store, the
 //!   backup ring, a log — and would otherwise have gone on deleting until every
-//!   clip was gone with the disk still full.
+//!   clip was gone with the disk still full;
+//! * a source that dies every few minutes and comes back in seconds — a
+//!   marginal USB connection, an under-powered hub, a stream that keeps
+//!   dropping — which every signal built on *consecutive* failure reads as
+//!   healthy: the liveness gauge is up at every poll, the backoff never grows,
+//!   the "still down" warning never elapses, and the uptime strip is green.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -245,7 +250,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 12] = [
+const CHECKS: [(&str, Check); 13] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -258,6 +263,7 @@ const CHECKS: [(&str, Check); 12] = [
     ("analytics-mirror", check_analytics_mirror),
     ("power", |_state, out| check_power(out)),
     ("purge", check_purge),
+    ("flapping", check_flapping),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -539,6 +545,44 @@ fn purge_condition(ineffective: bool) -> Option<Condition> {
                grade each; free or move it and the purge resumes on its own."
             .to_owned(),
     })
+}
+
+/// A source restarting repeatedly while never reading as down (AD-3).
+fn check_flapping(state: &AppState, out: &mut Vec<Condition>) {
+    let sources: Vec<(String, u32, bool)> = state
+        .capture_status()
+        .map(|h| birdnet_core::audio::capture::read_capture_status(&h))
+        .map(|status| {
+            status
+                .sources
+                .into_iter()
+                .map(|s| (s.label, s.restarts_last_hour, s.flapping))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.extend(flapping_conditions(&sources));
+}
+
+/// The flapping policy, separated from the snapshot so it can be tested.
+/// `sources` is every supervised source as (label, restarts in the last hour,
+/// flapping).
+fn flapping_conditions(sources: &[(String, u32, bool)]) -> Vec<Condition> {
+    sources
+        .iter()
+        .filter(|(_, _, flapping)| *flapping)
+        .map(|(label, restarts, _)| Condition {
+            key: format!("flapping:{label}"),
+            title: format!("Audio source flapping: {label}"),
+            body: format!(
+                "The audio source '{label}' has restarted {restarts} times in the last hour. \
+                 It comes back within seconds each time, so it never counts as down and \
+                 nothing else reports it — but every restart loses the audio around it. \
+                 This is what a marginal USB connection, an under-powered hub or a camera \
+                 stream that keeps dropping looks like. Check the cable and the power, \
+                 then Admin → Audio."
+            ),
+        })
+        .collect()
 }
 
 /// The Pi's own account of its power (NP-5).
@@ -1122,6 +1166,7 @@ mod tests {
             "analytics-mirror",
             "power",
             "purge",
+            "flapping",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -1130,8 +1175,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            12,
-            "a thirteenth check needs a line in the module doc and in this gate"
+            13,
+            "a fourteenth check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1763,6 +1808,23 @@ mod tests {
     }
 
     /// PR-7: the flag is a condition naming what to look at; clear is nothing.
+    /// AD-3: the flapping verdict from the snapshot becomes a condition per
+    /// source; a source below the threshold, however many restarts, does not.
+    #[test]
+    fn a_flapping_source_is_a_condition() {
+        assert!(flapping_conditions(&[]).is_empty());
+        assert!(flapping_conditions(&[("local".into(), 3, false)]).is_empty());
+        let c = flapping_conditions(&[("local".into(), 2, false), ("RTSP_1".into(), 9, true)]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].key, "flapping:RTSP_1");
+        assert!(
+            c[0].body.contains("9 times in the last hour"),
+            "{}",
+            c[0].body
+        );
+        assert!(c[0].body.contains("never counts as down"), "{}", c[0].body);
+    }
+
     #[test]
     fn an_ineffective_purge_is_a_condition() {
         assert!(purge_condition(false).is_none());

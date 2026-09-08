@@ -307,6 +307,8 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
             uptime_secs: Some(6 * 3600 + 12 * 60),
             last_audio_age_secs: Some(2),
             restart_attempts: 0,
+            restarts_last_hour: 0,
+            flapping: false,
             next_retry_in_secs: None,
             uptime_24h: strip(|_| UptimeSegment::Up),
         },
@@ -316,6 +318,8 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
             uptime_secs: None,
             last_audio_age_secs: Some(137),
             restart_attempts: 3,
+            restarts_last_hour: 0,
+            flapping: false,
             next_retry_in_secs: Some(12),
             // Solid all day, then a recent outage over the last ~90 minutes.
             uptime_24h: strip(|i| {
@@ -332,6 +336,8 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
             uptime_secs: None,
             last_audio_age_secs: Some(308),
             restart_attempts: 1,
+            restarts_last_hour: 0,
+            flapping: false,
             next_retry_in_secs: None,
             // Intermittent dropouts through the day, stalled right now.
             uptime_24h: strip(|i| {

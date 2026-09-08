@@ -38,11 +38,12 @@
 //! exercise death → backoff → recovery and the schedule gate without ever
 //! spawning a real subprocess.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use birdnet_core::audio::capture::{
-    CaptureError, CaptureSource, CaptureStatus, CaptureStatusHandle, SourceState, SourceStatus,
-    publish_capture_status,
+    CaptureError, CaptureSource, CaptureStatus, CaptureStatusHandle, FLAP_THRESHOLD, FLAP_WINDOW,
+    SourceState, SourceStatus, publish_capture_status,
 };
 use birdnet_web::metrics::SharedMetrics;
 
@@ -303,6 +304,13 @@ struct SupervisedSource<S: Source> {
     last_state: SourceState,
     /// Rolling 24-hour up/down history for the uptime strip.
     uptime_ring: UptimeRing,
+    /// When each (re)start attempt in the last [`FLAP_WINDOW`] was issued,
+    /// oldest first (AD-3). Unlike `attempts_since_healthy`, this is not
+    /// refunded when the process is seen running: a source that dies every
+    /// minute and comes back in two seconds is exactly what it counts.
+    restarts: VecDeque<Instant>,
+    /// Last instant a "flapping" warning was emitted, to rate-limit it.
+    last_flap_warn: Option<Instant>,
 }
 
 impl<S: Source> SupervisedSource<S> {
@@ -325,6 +333,44 @@ impl<S: Source> SupervisedSource<S> {
             last_fresh_output: None,
             last_state: SourceState::BackingOff,
             uptime_ring: UptimeRing::new(),
+            restarts: VecDeque::new(),
+            last_flap_warn: None,
+        }
+    }
+
+    /// (Re)start attempts within the last [`FLAP_WINDOW`], dropping older ones.
+    fn restarts_in_window(&mut self, now: Instant) -> u32 {
+        while self
+            .restarts
+            .front()
+            .is_some_and(|t| now.saturating_duration_since(*t) > FLAP_WINDOW)
+        {
+            self.restarts.pop_front();
+        }
+        u32::try_from(self.restarts.len()).unwrap_or(u32::MAX)
+    }
+
+    /// Warn, at most once per [`DOWN_WARN_EVERY`], while the source is
+    /// flapping: the "still down" warning cannot fire for a source that is
+    /// never down for long, so this is the log line such a source gets.
+    fn maybe_warn_flapping(&mut self, now: Instant) {
+        let restarts = self.restarts_in_window(now);
+        if restarts < FLAP_THRESHOLD {
+            return;
+        }
+        if self
+            .last_flap_warn
+            .is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
+        {
+            tracing::warn!(
+                source = %self.label,
+                restarts_last_hour = restarts,
+                "audio source FLAPPING — restarted repeatedly in the last hour; it comes back \
+                 each time, so it never reads as down, but every restart loses the audio \
+                 around it (a marginal USB connection or hub power, a stream that keeps \
+                 dropping)"
+            );
+            self.last_flap_warn = Some(now);
         }
     }
 
@@ -486,6 +532,7 @@ impl<S: Source> SupervisedSource<S> {
         // loop. The attempt counter is only refunded once the process is
         // actually observed running (the healthy branch above).
         self.attempts_since_healthy = self.attempts_since_healthy.saturating_add(1);
+        self.restarts.push_back(now);
         let delay = backoff_delay(self.attempts_since_healthy);
         self.next_attempt_at = Some(now + delay);
         // The stall clock measures from the newest of {fresh output, this
@@ -508,6 +555,7 @@ impl<S: Source> SupervisedSource<S> {
             ),
         }
         self.maybe_warn_down(now);
+        self.maybe_warn_flapping(now);
     }
 
     /// Record this tick into the 24-hour ring and build the published snapshot.
@@ -517,6 +565,7 @@ impl<S: Source> SupervisedSource<S> {
     /// [`Self::reconcile`] has set `last_state`.
     fn snapshot(&mut self, now: Instant, now_unix: u64) -> SourceStatus {
         self.uptime_ring.record(now_unix, self.last_state);
+        let restarts_last_hour = self.restarts_in_window(now);
         let uptime_secs = match self.last_state {
             SourceState::Connected => self
                 .started_at
@@ -531,6 +580,8 @@ impl<S: Source> SupervisedSource<S> {
                 .last_fresh_output
                 .map(|t| now.saturating_duration_since(t).as_secs()),
             restart_attempts: self.attempts_since_healthy,
+            restarts_last_hour,
+            flapping: restarts_last_hour >= FLAP_THRESHOLD,
             next_retry_in_secs: self
                 .next_attempt_at
                 .and_then(|at| at.checked_duration_since(now))
@@ -1048,6 +1099,47 @@ mod tests {
         assert_eq!(sup.sources[0].attempts_since_healthy, 0);
         assert!(sup.sources[0].next_attempt_at.is_none());
         assert_eq!(gauge(&m, "local"), Some(1));
+    }
+
+    /// AD-3. A source that dies every minute and comes back in two seconds:
+    /// `attempts_since_healthy` is refunded on every healthy tick, so the
+    /// backoff stays at its base and `restart_attempts` reads 0 or 1; the
+    /// source is never down for `DOWN_WARN_AFTER`; the strip is green. The
+    /// restart count over the last hour is what reports it, and it ages out.
+    #[test]
+    fn a_flapping_source_is_reported_by_its_restarts_over_the_hour() {
+        let m = metrics();
+        let mut sup = one(FakeSource::healthy());
+        let t0 = Instant::now();
+        let mut t = t0;
+        for round in 0..FLAP_THRESHOLD {
+            // Healthy tick, then the process dies, then the restart tick, then
+            // it is seen running again: the consecutive counter never exceeds 1.
+            sup.tick(t, true, None, SolarMinutes::default(), &m);
+            assert_eq!(sup.sources[0].attempts_since_healthy, 0);
+            sup.sources[0].source.running = false;
+            t += Duration::from_secs(60);
+            sup.tick(t, true, None, SolarMinutes::default(), &m);
+            assert_eq!(sup.sources[0].attempts_since_healthy, 1, "round {round}");
+            t += Duration::from_secs(2);
+        }
+        sup.tick(t, true, None, SolarMinutes::default(), &m);
+        let snap = sup.sources[0].snapshot(t, 1_700_000_000);
+        assert_eq!(snap.state, SourceState::Connected, "it reads Live");
+        assert_eq!(
+            snap.restart_attempts, 0,
+            "the consecutive counter has nothing to say"
+        );
+        assert_eq!(snap.restarts_last_hour, FLAP_THRESHOLD);
+        assert!(snap.flapping, "{snap:?}");
+
+        // Counterpart: the count is over a window, so a source that has been
+        // stable for an hour is clear again.
+        let later = t + FLAP_WINDOW + Duration::from_secs(1);
+        sup.tick(later, true, None, SolarMinutes::default(), &m);
+        let snap = sup.sources[0].snapshot(later, 1_700_003_601);
+        assert_eq!(snap.restarts_last_hour, 0);
+        assert!(!snap.flapping);
     }
 
     // ---- multiple sources are independent ---------------------------------

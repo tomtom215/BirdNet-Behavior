@@ -21,6 +21,19 @@ use serde::Serialize;
 /// (48 × 30 min = 24 h).
 pub const UPTIME_SEGMENTS: usize = 48;
 
+/// The window over which restarts are counted for the flapping verdict
+/// (AD-3).
+pub const FLAP_WINDOW: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Restarts within [`FLAP_WINDOW`] at which a source is called flapping.
+///
+/// A source that dies and comes back within seconds never accumulates
+/// consecutive failed attempts, never stays down long enough for the
+/// "still down" warning, and paints its uptime strip green: every signal
+/// built on *consecutive* failure reads it as healthy. Counting restarts over
+/// a window is what sees it.
+pub const FLAP_THRESHOLD: u32 = 5;
+
 /// A shared handle to the capture supervisor's latest published status.
 ///
 /// Cloned into both the web `AppState` (reader) and the supervisor thread
@@ -75,6 +88,12 @@ pub struct SourceStatus {
     pub last_audio_age_secs: Option<u64>,
     /// Consecutive (re)start attempts not yet healthy (`0` when connected).
     pub restart_attempts: u32,
+    /// (Re)start attempts in the last [`FLAP_WINDOW`], whatever the state now
+    /// (AD-3). A source that keeps coming back reads `Connected` with a
+    /// `restart_attempts` of `0`; this is the number that shows it.
+    pub restarts_last_hour: u32,
+    /// Whether `restarts_last_hour` has reached [`FLAP_THRESHOLD`].
+    pub flapping: bool,
     /// Seconds until the next restart attempt, while backing off.
     pub next_retry_in_secs: Option<u64>,
     /// Rolling 24-hour uptime, oldest → newest, one entry per half hour.
@@ -132,6 +151,8 @@ mod tests {
                 uptime_secs: Some(120),
                 last_audio_age_secs: Some(1),
                 restart_attempts: 0,
+                restarts_last_hour: 0,
+                flapping: false,
                 next_retry_in_secs: None,
                 uptime_24h: vec![UptimeSegment::Up; UPTIME_SEGMENTS],
             }],
