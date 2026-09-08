@@ -150,6 +150,53 @@ species where one is set, after the dynamic adjustment, so `Cutoff` is the bar
 each row actually cleared. A station with no coordinates keeps NULL, never
 0, 0.
 
+**Then the station was run, and what running it found was fixed the same
+day.** Six probes drove the branch with the server up — the interface, the
+first run, adversity, research credibility, operability without a shell, and
+both upstreams' source at their current tips — and their findings are
+`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.14. Thirteen were closed on the spot:
+
+* **Rejected detections left the station through every bulk export but eBird**
+  (`441188a`). The CSV, JSON and `BirdDB.txt` exports read the raw table, so a
+  reviewer's rejection was undone at the one surface where a dataset is about
+  to be cited; all three now read the analytic view. `R-17`, finished.
+* **The first-run wizard could not be finished on the station the installer
+  actually produces** (`60ead63`). Its page was public and its save was behind
+  the admin gate; on a headless install with a generated password the first
+  page load was the wizard, Finish answered a bare 401, and following that
+  answer after signing in landed on a 405 with every answer gone. The page
+  now sits behind the same gate as its save, and an open station still shows
+  it to anyone. The same save persisted `latitude=999`, `longitude=abc`,
+  `timezone=Mars/Olympus` — the overlay then dropped them silently and the
+  doctor recommended `timedatectl set-timezone Mars/Olympus` — and wrote half
+  a coordinate pair, so two runs could leave a station at a point nobody
+  typed. A location is now a real pair or nothing, and a zone must exist.
+* **The health badge went green for a source that had never captured**
+  (`bb087fa`). A source added while the daemon was down read as "not known
+  yet" and graded "Healthy" while `?strict=1` said the daemon was stopped.
+* **A restore deleted the database it replaced** (`2eeadfb`). A backup is
+  older than the file it replaces, so everything recorded after the backup
+  was in that file and nowhere else; the restore now sets it aside under the
+  quarantine name the doctor scans for, and the log says what it holds.
+* **The doctor called a quarantined detection database lossless**
+  (`2eeadfb`): "Analytics was rebuilt automatically from SQLite, so no
+  detections were lost" was printed for a `birds.db.corrupt.*` holding the
+  whole history. The check now tells the two stores apart.
+* **A page region that failed to load stayed a skeleton for ever**
+  (`9b7e81c`), including when the station died under an open dashboard; the
+  shell now replaces it with a notice that names the failure. And Enter on
+  "Show more" no longer drops keyboard focus to `<body>`.
+* **An approved quarantine is a confirmed detection** (`dfdac5e`); it used to
+  be indistinguishable from an unreviewed auto-accept.
+* **The support bundle downloaded from the browser carries the process's
+  recent log** (`8aba101`); on any install without a persistent journal it
+  had carried no ordinary log line at all.
+* Smaller: the eBird location name falls back to the installer's site name;
+  the species admin page's empty-state text uses a text token rather than a
+  border token; the installer no longer sends operators to a microphone
+  picker the wizard does not have; the installation guide names the
+  geolocation provider the code calls.
+
 **The documents were reconciled a second time** (`480d56f`, `200e768`,
 `849a2e2`, `1334320`, `bd0994b`, `8e6806f`, `290009b`, `df5fa7a`). Eleven
 planning and audit documents, the architecture set, the mdBook, the design
@@ -267,28 +314,50 @@ full card would not have let it record anyway.
 ### Found and not fixed
 
 Recorded so nothing discovered goes untraced. The full register is
-`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.12 and §3.13 — 123 rows with
-severity, evidence and a remedy each (counted 2026-09-08 by first id per row;
-three of the original entries here were fixed on this branch and moved up).
-The ones an operator should know about:
+`docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §3.12 to §3.14 — 158 rows with severity,
+evidence and a remedy each (counted 2026-09-08 by first id per row: 36 + 87 +
+35). After this branch it holds one open P0 and 57 open P1s. The ones an
+operator or a researcher should know about, worst first:
 
-* **The onboarding wizard's answers do not reach the running station** until a
-  restart, and the wizard's final step says detections will start arriving in a
-  minute or two (`ON-4`).
-* **A restore replaces the live database under the running daemon**, with no
-  quiesce and no free-space check (`UP-2`).
+* **No detection row records which model produced it** (`R-1`, raised to P0).
+  There is no model column, no `analysis_runs` table, and nothing in the tree
+  that writes a model version or checksum to the database. A station whose
+  model is swapped mixes two classifiers' verdicts in one table with nothing to
+  tell them apart, which for anyone analysing the data is a silent wrong
+  answer. The per-row provenance this branch added (coordinates, threshold,
+  sensitivity, overlap) makes the gap sharper, not smaller.
+* **Every detection sent to BirdWeather is unverifiable there** (`DD-32`).
+  The soundscape upload is written and never called; the daemon posts a
+  six-field detection with no soundscape id. Both reference projects post the
+  clip first and stamp its id on the detection.
+* **Login has no working throttle** (`O-6`). The "Too many attempts" branch
+  exists and the flag that reaches it is set only inside a test.
+* **With no password set, every admin page is open to anyone who can reach
+  the port until the operator acts, and the wizard never asks for one**
+  (`DD-14`).
+* **On a full card the station says it is healthy** (`DD-19`): `/api/v2/health`
+  200 while the disk endpoint is 503, the analytics store has been
+  quarantined on ENOSPC and the admin bootstrap has failed.
+* **Exports carry local time with no offset**, and the import path's local-to-UTC
+  conversion invents an instant for the non-existent spring-forward hour and
+  picks the second autumn hour silently (`R-8`).
+* **Every login session dies on restart on bare metal** while the access
+  page promises fourteen days: the signing secret is read from the
+  environment only, and the installer never puts it there (`DD-15`).
+* **A second instance on the same data directory quarantined the first's
+  live analytics store** during an overlapping restart, treating a lock as
+  corruption (`DD-25`).
+* **The analytics drift repair counts rows**, so a delete and a back-dated
+  insert that net to zero leave the two stores permanently disagreeing
+  (`DD-23`).
 * **Recording effort never reaches an export**, in this project or either
-  reference — so an exported zero cannot be told from a dead recorder. We are
-  the only one of the three that records effort at all, which makes this the
-  cheapest thing on the list to put right (`FR-5`).
-* **Darwin Core cannot be emitted**: the schema cannot supply `occurrenceID`,
-  coordinates, coordinate uncertainty, an offset-bearing `eventDate`, or any of
-  the dataset and attribution terms. Three changes get most of the way there and
-  are written down (`R-DwC`).
-* **Seven onboarding preference cards cannot be reached from a keyboard**, and
-  28 page partials render a permanent loading skeleton instead of an error when
-  they fail. The accessibility gate passes both, because it does not press Tab
-  and its fixture is never empty (`UX-1`, `UX-4`).
+  reference — so an exported zero cannot be told from a dead recorder
+  (`FR-5`), and **Darwin Core cannot be emitted** (`R-DwC`).
+* **Seven onboarding preference cards cannot be reached from a keyboard**
+  (`UX-1`); the species avatar chips, the failure-state pills and the white
+  text on accent fills fail contrast by measurement (`DD-29`); and
+  `/station/data` scrolls sideways on a phone once there is one backup
+  (`DD-30`).
 
 ### Added — a station can now be changed over its API, by something that is not a browser
 

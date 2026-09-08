@@ -22,6 +22,16 @@ it rather than annotated. Every count in this header is from a command run
 that day, and two of them — the row total, and "three of the accessibility
 rows" — were wrong again.
 
+**Deepened 2026-09-08** at `9b7e81c`: six probes ran against the *running*
+station — interface, first run, adversity, research credibility, operability
+without a shell, and both upstreams' source at their current tips — and their
+findings are §3.14 (`DD-*`), 35 rows, thirteen of them fixed the same day
+(`441188a`, `60ead63`, `bb087fa`, `2eeadfb`, `dfdac5e`, `8aba101`, `9b7e81c`)
+with the eBird-only `R-17` finished for the other three exports. Sixteen
+existing rows were confirmed, upgraded or closed in place by what the probes
+found, and **R-1** (no model identity on any row) is now the register's one
+open P0.
+
 Three questions were asked of this project at once:
 
 1. What is it missing against [`Nachtzuster/BirdNET-Pi`](https://github.com/Nachtzuster/BirdNET-Pi),
@@ -47,15 +57,17 @@ section: PS 19, PR 17, NT 18, LC 16, OB+NL 17, NP 13, S 16, O 16, ARM+AU 2.)
 The reconciliation pass adds **35** rows in §3.12 (`RC-*`) and **87** in §3.13
 (`ON-*` onboarding, `R-*` research credibility, `AD-*` adversity, `OP-*`
 operability, `UX-*` interface and accessibility, `FR-*`/`UP-*`/`WE-*` against the
-two references), for **257** rows in the register — counted by first id per row,
+two references), and the deep-dive pass of 2026-09-08 adds **35** in §3.14
+(`DD-*`), for **292** rows in the register — counted by first id per row,
 which is the right measure because a few rows deliberately group several ids
 (`WE-1 … WE-5`, and four of the accessibility rows). Per prefix: PS 19, PR 17,
 NT 18, LC 16, OB 16, NL 1, NP 13, S 16, O 16, ARM 1, AU 1, RC 36, ON 20, R 12,
-AD 9, OP 16, UX 15, FR 6, UP 8, WE 1. (Counted 2026-09-07:
-`grep -cE '^\| \*\*[A-Z]+-[0-9A-Za-z]+\*\* \|'` over §3 gives 252 single-id
-rows — 253 over the whole file, the extra one being §2.1's `NP-13` correction
-row — and the five grouped rows make 257; §3.1–3.11 134, §3.12 36 (RC-36 added
-2026-09-07 for a defect found by this session), §3.13 87.
+AD 9, OP 16, UX 15, FR 6, UP 8, WE 1, DD 35. (Counted 2026-09-08:
+`grep -cE '^\| \*\*[A-Z]+-[0-9A-Za-z]+\*\* \|'` over §3 gives 287 single-id
+rows and the five grouped rows make 292; §3.1–3.11 134, §3.12 36 (RC-36 added
+2026-09-07 for a defect found by this session), §3.13 87, §3.14 35. Open at
+P0 or P1 after this pass, by the same grep with `FIXED` rows excluded: **1 P0**
+(**R-1**, upgraded on 2026-09-08) and **57 P1**.)
 `R-DwC` matches that pattern; the digits-only pattern the 2026-09-04 count
 used does not see it, which is where "255" and "R 11" came from.) At
 `8e6806f`, **61** of the rows carry a `**[FIXED…]**` marker, 21 more than at
@@ -380,7 +392,7 @@ Findings marked **[FIXED]** landed on this branch; the commit is named.
 | **PS-3** | P1 | VERIFIED | Weekly `VACUUM` writes **3.0× the file size** (274.7 MB measured for 91.3 MB), stages a full copy in the `PrivateTmp` tmpfs inside `MemoryMax=1G`, and holds the write lock; a detection blocked past `busy_timeout=5000` returns `database is locked` and is logged "it is lost". | `PRAGMA incremental_vacuum` with `auto_vacuum=INCREMENTAL`, or `VACUUM INTO` on the data partition; raise `busy_timeout` for the writer. |
 | **PS-4** | P1 | VERIFIED | **82.6 KB written to the block layer per detection** against 577 B of row — measured at 12 k/52 k/202 k/502 k rows. ~1.05 GB/day at 1 000 detections/day, ~3.05 GB/day on a mature busy station. 55 % is database machinery. | Batch inserts inside one transaction; `PRAGMA wal_autocheckpoint` tuning; document the real card-wear budget. |
 | **PS-5** | P1 | READ | The daily integrity check detects corruption, logs one `error!`, and the daemon **keeps writing to the corrupt file** until someone reboots it. The "never write to a corrupt database" policy exists only at startup. **[FIXED — the second option, narrowed]** The remedy's second branch, with one deliberate narrowing: **not** `PRAGMA query_only`. Login sessions are rows in this database, so a read-only writer would lock the operator out of the admin UI that exists to tell them what is wrong, and would stop the notification log recording the alerts about the corruption — self-defeating on exactly the station this audit is about. The line is drawn at the writes that *record a detection event* (`insert_detection`, `insert_quarantine`, `outbound_queue::enqueue`), through `AppState::with_ingest_db`; settings, sessions, the audit log, the notification log and the maintenance-run record that makes the health endpoint go red all keep working. `/api/v2/health` reports `"detection_writes": "halted"` and answers 503. The latch is one-way — a file does not heal itself, and a flapping check would flap the station — so recovery is a restart, where the startup path restores from backup or quarantines. One thing the finding did not reach: `backup_database` refuses to snapshot a corrupt source, so during all of that the backup ring had *also* stopped producing restore points, which is why every hour of it made recovery worse rather than better. | Done; see Stages 0 and 1 landed. The first branch of the remedy — quarantine and restore *in place*, at runtime — is not done and is now unblocked by this: stopping the ingest writer is its prerequisite. |
-| **PS-6** | P1 | READ | A quarantined `birds.db.corrupt.<ts>` — total history loss — is matched by **no** doctor scan (`doctor/analytics.rs:142` — then matching `.duckdb.corrupt.` only, and its test asserts the SQLite name is *not* matched), no `station_health` condition, and no prune. It sits on the card for ever. **[FIXED IN PART — "Alert on a backup that fails, not only on one that stops"]** The doctor scan now matches `.db.corrupt.` as well as `.duckdb.corrupt.` (excluding `-wal`/`-shm` sidecars), and `check_quarantined_stores` raises a condition whose title distinguishes a lost detection history from a rebuilt analytics store. **The prune is still not done**: a quarantined file still sits on the card for ever, which on a 32 GB card is the difference between one bad week and a full disk. That half is item 2.11. | Remaining: prune quarantined stores on a retention schedule. |
+| **PS-6** | P1 | READ | A quarantined `birds.db.corrupt.<ts>` — total history loss — is matched by **no** doctor scan (`doctor/analytics.rs:142` — then matching `.duckdb.corrupt.` only, and its test asserts the SQLite name is *not* matched), no `station_health` condition, and no prune. It sits on the card for ever. **[FIXED IN PART — "Alert on a backup that fails, not only on one that stops"]** The doctor scan now matches `.db.corrupt.` as well as `.duckdb.corrupt.` (excluding `-wal`/`-shm` sidecars), and `check_quarantined_stores` raises a condition whose title distinguishes a lost detection history from a rebuilt analytics store. **The prune is still not done**: a quarantined file still sits on the card for ever, which on a 32 GB card is the difference between one bad week and a full disk. That half is item 2.11. | Remaining: prune quarantined stores on a retention schedule. **Reopened at P1 on 2026-09-08 and closed the same day** (`2eeadfb`): the widened scan found the file, but described it with the analytics store's sentence — `[ WARN ] … Analytics was rebuilt automatically from SQLite, so no detections were lost` for a `birds.db.corrupt.*` holding the whole 3 000-row history (`adversity-3`). The check now tells the stores apart and, for a detection database, says the file *is* history not in the live database, gives the `.recover` command and says not to delete it. Gate `a_quarantined_detection_database_is_never_described_as_lossless`. |
 | **PS-7** | P1 | READ | `sync_all` appears at **one production site in the whole workspace** (`auto_update/mod.rs:374`; the other three hits are in tests), none in the audio path. Clips and segments are written non-atomically under their final names (`extraction/wav.rs:28` `WavWriter::create`, `capture/segment.rs:189` `File::create`), so a power cut leaves truncated files the database points at for ever; and because both retention passes are database-driven, a clip whose row was lost is never deleted except by the 95 %-full purge. | Write to `.part` + `rename` + `sync_all`, and add an orphan-clip reconciliation pass (**S-14**). Note the exemplar this row used to cite: `docker/entrypoint.sh:251` is `mv "${tmpfile}" "${dest}"`, a rename with no sync. Copied verbatim it buys atomicity of the *name* and not of the bytes, which is the half that matters after a power cut. |
 | **PS-8** | P1 | READ | `--doctor`'s only disk check and its "Recordings directory" check both read `--watch-dir` first, which the shipped unit **always** sets to the tmpfs — so the preflight measures a RAM disk while `/api/v2/system/disk` correctly measures the card. | Check the data partition explicitly, and report both. |
 | **PS-9** | P1 | READ/VERIFIED | Nothing probes writability at runtime. On a read-only remount — what the kernel does after repeated I/O errors — `/api/v2/health` still answers `healthy` (a read-only `SELECT 1` succeeds; the integrity verdict freezes because *recording* it is a write) while every detection is classified and discarded. | A periodic write probe on the data partition, feeding a health condition and a metric. |
@@ -554,7 +566,7 @@ action that settles a wind/water/gain question.
 | **NP-3** | P2 | READ | Spectrogram labels use a 5×7 ASCII bitmap font, so `Mésange` and every CJK/Cyrillic/Thai common name burns into the image as boxes. Plus a byte-vs-char background-bar bug at `font.rs:18` (`text.len()` on a `&str`). | A small embedded Unicode font, or render labels as SVG/HTML overlay rather than into the PNG. |
 | **NP-4** | P2 | READ | No preview of which species the geomodel admits at a candidate `SF_THRESH` (upstream `species.py --threshold`). `/admin/species/test` answers a different question. | A preview endpoint running the geomodel at the candidate threshold and diffing against the current one. |
 | **NP-5** | P1 | VERIFIED | **No Raspberry Pi power or throttling telemetry.** `grep -rniE "get_throttled\|vcgencmd\|under.?voltage"` returns nothing. Upstream reads `vcgencmd get_throttled` (`extra_info.sh:7-16`). Undervoltage on a long mains run or a marginal solar budget is *the* commonest field failure on a Pi, it corrupts SD cards, and it presents as random instability with no other signal. | Read `vcgencmd get_throttled` (or `/sys/devices/platform/soc/soc:firmware/get_throttled`); export `birdnet_pi_throttled` and the sticky under-voltage bit; a station-health condition. |
-| **NP-6** | P2 | READ | The support bundle stages only `uname`, `df` and `journalctl` — no `arecord -l`/`-L`, no `--dump-hw-params`, though `probe.rs:156` already runs the last of those. The bundle is the artefact designed to answer "what does the OS see", and it does not carry it. | Add the audio-device inventory to the bundle. |
+| **NP-6** | P2 | READ | The support bundle stages only `uname`, `df` and `journalctl` — no `arecord -l`/`-L`, no `--dump-hw-params`, though `probe.rs:156` already runs the last of those. The bundle is the artefact designed to answer "what does the OS see", and it does not carry it. | Add the audio-device inventory to the bundle. **Partly done** (`8aba101`): the bundle downloaded from the browser now stages the process's in-memory log ring as `recent.log` — on a container both bundles a probe pulled had held only `journal.log` = "No journal files were found" and a 174-byte `errors.jsonl` (`ops-1`). The audio-probe members this row asks for are still absent. |
 | **NP-7** | P2 | READ | 36 languages are "supported", **zero label packs ship**, and `src/cli.rs:755` documents `labels_de.txt` while `i18n.rs:80` looks for `de_labels.txt` — so the documented filename cannot work. | Ship the packs, or say plainly that the operator must supply one; fix the filename in one place. |
 | **NP-8** | P2 | READ | Relabelling updates database rows only; the clip keeps the old species in its filename and `recordings.rs:299` filters by that filename, so a relabelled detection's audio becomes unfindable under its new name. | Rename the clip alongside the row, or index by detection id rather than filename. |
 | **NP-9** | P3 | READ | No station banner image, and the `custom_image_dir` hint wrongly cross-references upstream's `CUSTOM_IMAGE`. | Implement, or correct the hint. |
@@ -592,7 +604,7 @@ action that settles a wind/water/gain question.
 | **O-2** | P1 | VERIFIED | **The audit log is never written.** Table, store, admin page and pruner all exist; `AuditLog::record` has **zero production callers** — every call site is inside its own `#[cfg(test)]` block. `/admin/audit` is permanently empty, which on a shared station reads as "nothing happened". The repo already caught half of this: the *pruner* was wired after being found to have no caller; the writer never was. **[FIXED — "Record who changed what"]** The helper as prescribed, called from every surface listed plus two the finding did not name: species filters and audio sources, which are what decide whether a season's gap is a real absence. 24 actions in all. One change to the prescription: settings values are not "redacted through the existing secret list", they are **never recorded at all** — only the names of the changed keys. `rtsp_url` is the reason a key-name allow-list would not have been enough: an RTSP URL carries `user:pass@` in its authority while its key name says nothing about a secret, which is the same trap `redact_url_credentials` exists for. A save that changed nothing writes no row, because the form posts every field every time. Destructive actions are recorded *before* the work, since a process that does not survive a restore has no "after" to write from. | Done; see Stage 2 landed. |
 | **O-3** | P1 | VERIFIED | **The admin log viewer streams a channel nothing publishes to.** `src/main.rs` installed exactly two layers (now three, `:161-164`) and no `tracing_subscriber::Layer` implementation exists anywhere in the crate; `LogBroadcaster::new()` is called **three separate times** in `state.rs`, so they are three distinct channels anyway. `GET /admin/system/logs` replays an empty backlog and then emits keep-alives for ever. On Docker, where `journalctl` is unavailable to the user, this page is the whole story. **[FIXED — "Show the operator what the station logged"]** Taken as prescribed, with one correction to this row: **"three separate times ... so they are three distinct channels anyway" is wrong.** The three `LogBroadcaster::new()` calls are in three *alternative* constructors — `AppState::new`, `new_with_analytics`, `from_connection` — and a run builds exactly one `AppState` (`src/app.rs:222`). There was one channel, and nothing published to it; the count was never the defect. `LogCapture` now implements `Layer`, is installed as a third `.with(...)`, and the broadcaster is built in `main` *before* the subscriber and handed to the state, because the layer has to exist at `init()` time and the state does not exist yet. `errors.jsonl` sits beside the database, takes ERROR and WARN only, is capped at 1 MB, and is a bundle member. URL credentials are stripped in the layer rather than per call site, because that file travels in the support bundle. | Done; see Stage 2 landed. |
 | **O-4** | P1 | VERIFIED | **No private mode.** `grep` for `private_mode`/`public_access` returns zero hits. The dashboard, the whole API, the live audio stream and both WebSockets are unauthenticated with no configuration that changes it. On a station reachable through a tunnel or a port forward, anyone with the URL sees the full detection history and can **open a live microphone feed of somebody's garden**. `--listen 127.0.0.1` is not a substitute; that is what the tunnel connects to. The privacy argument used to decline Sentry applies here with more force, and this is on by default. | `BIRDNET_PRIVATE_MODE` plus `BIRDNET_PUBLIC_ACCESS=live_audio,share`, applied by moving `public_routes()` inside `auth_middleware::apply` with an exempt set. Gate both directions, including that an operator-minted share link keeps working. |
-| **O-6** | P1 | READ | Login has **no dedicated throttle and no lockout**; the global limiter permits ~30 Argon2id guesses/second per IP. On a Pi that is a self-inflicted CPU denial of service on the box that is supposed to be running inference, and the passwords in play are installer-generated or hand-typed. Upstream allows 5 attempts per 15 minutes. | A second limiter on the `/login` POST keyed on the existing `ClientIp` extension, plus a per-username counter. Gate the discrimination: a sixth attempt from a *different* IP still gets through. |
+| **O-6** | P1 | READ | Login has **no dedicated throttle and no lockout**; the global limiter permits ~30 Argon2id guesses/second per IP. On a Pi that is a self-inflicted CPU denial of service on the box that is supposed to be running inference, and the passwords in play are installer-generated or hand-typed. Upstream allows 5 attempts per 15 minutes. | A second limiter on the `/login` POST keyed on the existing `ClientIp` extension, plus a per-username counter. Gate the discrimination: a sixth attempt from a *different* IP still gets through. **Upgraded 2026-09-08**: the "Too many attempts" branch exists (`routes/auth_pages.rs:354-364`) but `rate_limited: true` is set only inside a test (`:427`); `login_submit` never sets it, so the branch is dead code and the row's remedy is not even half-built (`upstream-5`). birdnet-go's equivalent is 5 logins per 15 minutes per IP (`api/v2/auth/auth.go:133-139`). |
 | **O-16** | P2 | VERIFIED | **No per-source capture restart and no jobs endpoint.** A two-source station that loses its RTSP camera must restart the whole daemon, dropping the working microphone's in-flight audio and analysis buffers — remotely, the difference between a five-second recovery and losing the dawn chorus. The supervisor already has the per-source machinery; the seam is unexposed. | `POST /api/v2/control/restart-source/{id}` signalling the existing supervisor; `GET /api/v2/system/jobs` over `maintenance_runs` (a ten-line handler that answers "did the backup run?"). |
 | **O-5** | P2 | READ | `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` are hard-coded, so **our own `/kiosk` page cannot be embedded in Home Assistant** — the commonest second screen for a home station. The failure is a blank iframe and reads as a bug in the embedder. | `BIRDNET_FRAME_ANCESTORS`, with the `X-Frame-Options` insert made conditional (it has no allow-list form, so a non-default value means omitting it). |
 | **O-7** | P2 | VERIFIED | `.env.example` and the code disagreed about **33 keys** when this was audited: 9 consumed but undocumented — including `BIRDNET_TRUSTED_PROXIES`, `BIRDNET_BASE_PATH`, `BIRDNET_CORS_ALLOWED_ORIGINS` and `BNB_SESSION_SECRET`, exactly the ones an operator behind a proxy needs — and two documented but consumed by nothing, one shipped **uncommented**. Re-checked 2026-09-07: those four keys are now documented (`grep -c` in `.env.example`: 4, 1, 1, 1), the full 33-key reconciliation was not repeated, and there is still **no drift gate** — the only test that mentions the file, `crates/birdnet-core/tests/config_validator.rs:18`, mirrors a hand-copied block and compares nothing. Same evidence as **LC-7**. | The drift gate in **LC-7**. |
@@ -704,7 +716,7 @@ larger than one reviewable change; the reason is in the row.
 | **RC-12** | P2 | VERIFIED | **`.env.example:99` still called the admin gate "HTTP Basic".** *"Web UI authentication (HTTP Basic)."* It is a session cookie (`routes/auth_pages.rs:38-42`), and `docs/book/admin/remote-access.md:189` warns in as many words that `curl -u user:pass` will not work. The reconciliation pass fixed the same mislabel in five documents; this one was in the file every Docker operator copies. | **[FIXED]** (`480d56f`) — the line now reads "Web UI authentication (a session-cookie login at /login)". The drift gate **O-7** asks for is still item 3.9. |
 | **RC-13** | P3 | VERIFIED | **`.env.example` is offered to bare-metal operators as the (near-)complete list, and holds a Docker-only variable.** `docs/book/getting-started/configuration.md:18` says "The full list lives in `birdnet-behavior --help`; `.env.example` documents all of them except" two named keys; `BIRDNET_PORT` (`:94`) is read by `docker-compose.yml:114` and by nothing in the binary (`grep -rn BIRDNET_PORT crates/ src/ --include=*.rs` → 0). Its own comment says "Host port", so this is a discoverability defect rather than a false statement. | A Docker-only block, or a marker the drift gate of **O-7** can read. |
 | **RC-14** | P2 | VERIFIED | **`O-7` is half done and its drift is already back.** The four keys that row named are now in `.env.example`, but the remedy *was* the drift gate and no drift gate exists: `tests/documented_samples_match_the_build.rs` compares the health sample, the confirmation table, the offsite keys and the README test count, and never the env-key set. Consumed and undocumented today: `BNB_HELP_DIR` (`crates/birdnet-web/src/routes/pages/help.rs:63`) and `BIRDNET_REQUIRE_LIVE_EXTENSION` (`crates/birdnet-behavioral/src/gating.rs:37`); `.env.example` names neither. | Item 3.9 already plans the gate. This row exists so nobody reads O-7's "the four keys are there" as O-7 being closed. |
-| **RC-15** | P2 | VERIFIED | **`O-8` landed in the direction the audit called the worse one.** `crates/birdnet-web/src/routes/openapi.rs:160 every_documented_path_is_routed` closes documented→routed. Routed→documented is ungated and the omission is live: diffing the `.route("…")` literals of the fourteen modules nested under `/api/v2` (`routes/mod.rs:70-83`) against `openapi.json` `paths` at `bd0994b` gives **eight** routed and undocumented — `/` (the index), `/analytics/abundance`, `/analytics/phenology`, `/soundlevel`, `/species/tracking`, `/stream`, `/ws/detections` and `/ws/spectrogram` (52 routed, 51 documented; the seven documented-not-routed are `api_write.rs`'s bearer routes, which the gate merges in). The first draft of this row counted six; the two `analytics/*` omissions predate `ee795ed`. There is no `const ROUTES` both sides read — the same shape as `api_write.rs`'s two route tables, which is the pattern that works. | Item 5.16 asks for path-set *equality*; it is not satisfied by the half that shipped. |
+| **RC-15** | P2 | VERIFIED | **`O-8` landed in the direction the audit called the worse one.** `crates/birdnet-web/src/routes/openapi.rs:160 every_documented_path_is_routed` closes documented→routed. Routed→documented is ungated and the omission is live: diffing the `.route("…")` literals of the fourteen modules nested under `/api/v2` (`routes/mod.rs:70-83`) against `openapi.json` `paths` at `bd0994b` gives **eight** routed and undocumented — `/` (the index), `/analytics/abundance`, `/analytics/phenology`, `/soundlevel`, `/species/tracking`, `/stream`, `/ws/detections` and `/ws/spectrogram` (52 routed, 51 documented; the seven documented-not-routed are `api_write.rs`'s bearer routes, which the gate merges in). The first draft of this row counted six; the two `analytics/*` omissions predate `ee795ed`. There is no `const ROUTES` both sides read — the same shape as `api_write.rs`'s two route tables, which is the pattern that works. | Item 5.16 asks for path-set *equality*; it is not satisfied by the half that shipped. Re-measured 2026-09-08 against `openapi.json`: **nine** live paths undocumented — `/species/tracking`, `/analytics/abundance`, `/analytics/phenology`, three feeds, two share-link paths, `/soundlevel` (`upstream-4`). |
 | **RC-16** | P2 | VERIFIED | **`NT-11`'s outermost guard has no test.** `src/maintenance.rs:1048 const OFFSITE_BUDGET: … = from_secs(2 * 60 * 60);`, applied in `run_offsite` at `:1088-1095`. Grep finds the constant, its two uses and its doc comment — nothing else. This is the guard that stops a wedged socket being the last thing the maintenance loop ever does; the two *inner* transport timeouts both have gates. | One test that holds the loop past the budget and asserts it moves on. Small, and it belongs to whoever next touches the offsite path. |
 | **RC-17** | P2 | VERIFIED | **Two date-relative purges ran outside the clock floor `NT-4` installed.** `clock_is_safe_for_retention` (`src/maintenance.rs:450`) gated exactly two jobs, both inside the maintenance loop (`:180`, `:193`). `crates/birdnet-db/src/audio_levels.rs:234 prune` — the 400-day acoustic baseline **NT-4 names by name** — ran from `src/integrations/acoustic_health.rs`, a different loop with no clock check at all, and the weather pruner (`src/integrations/weather.rs`) was in the same position. Honest qualification, because the first draft of this row overstated it: the floor only catches a clock that is too *early*, and for `older-than` predicates an early clock deletes nothing. The direction that actually destroys data is forward, and nothing caught that anywhere — **NT-4**'s remaining half, item 1.11. | **[FIXED]** (`e88a60d`) — both pruners now consult `clock_is_safe_for_retention` (`acoustic_health.rs:583`, `weather.rs:97`), and that predicate now also refuses a *forward* step: `clock_looks_plausible` is a range (`CLOCK_PLAUSIBLE_CEILING_SECS`, `civil.rs:443`) and `ForwardStepWatch` (`civil.rs:530`, 400-day `MAX_FORWARD_STEP_SECS`) compares wall against monotonic, so item 1.11 is done with it — see **AD-1**. Gates: `civil.rs` `clock_floor_tests` (`:1378`) and `forward_step_tests` (`:1482`). |
 | **RC-18** | P2 | READ | **A whole-database read is back in a request path.** `crates/birdnet-web/src/routes/pages/station_health.rs:113` runs `PRAGMA quick_check` on every `/station` render — the read `FIELD_READINESS_AUDIT.md`'s F-7 removed from the badge — while `recorded_db_health` (`routes/pages/health.rs:152`), which the health badge already reads at `health.rs:105`, is not consulted by `/station`. On a 209 MB database that is the page's whole cost. | Read the recorded verdict, which the maintenance run already stores; that is what it is for. |
@@ -752,11 +764,11 @@ before it costs a season.
 | **ON-3** | **P0** | READ | The same presence-only guard on bare metal, for the geomodel: `installer/lib/55-model.sh` `download_geomodel` set `GEOMODEL_INSTALLED=1` on `[ -f "${model_dest}" ] && [ -f "${labels_dest}" ]`, so a half-present pair skipped verification entirely. The classifier half was fixed by LC-2; the geomodel half was not. **[FIXED]** (`c31da32`) — `download_geomodel` (`55-model.sh:233`) now verifies both files by checksum through `model_file_is_verified` (`:244-245`); gate `installer/test/geomodel-resume.sh` (five cases, run from `installer/test/run-ci.sh:35`), observed failing first. | Done. This was the third instance of one shape and is why **RC-7**'s "write the set down once" applies to checksums too. |
 | **ON-4** | P1 | READ | **The wizard's answers do not reach the running station, and the wizard says the opposite.** `overlay_db_settings` runs once, at `src/app.rs:280`; `latitude` and `confidence_threshold` are bridged and take effect only on restart. The Done step says "Within a minute or two you'll see the first detections roll in" (`onboarding.rs:577`) — true, with the occurrence filter still off. `/admin/settings` does carry the restart notice (`admin/settings/handler.rs:112`); onboarding does not. | Either apply the settings live or say what the settings page says. The single biggest gap in the first-run path. |
 | **ON-5** | P1 | VERIFIED | **No upper bound on `CONFIDENCE` or `SF_THRESH`.** `crates/birdnet-core/src/config/validate.rs:75,77` range-check 0–1; only a *low* threshold warns (`CONFIDENCE_FLOOR = 0.1`, `:166`). `CONFIDENCE=0.99` draws no finding, records nothing, and — before OB-2 — nobody was ever told. | Warn above a plausible ceiling, as the floor already does. |
-| **ON-6** | P1 | READ | `POST /onboarding/save` is merged into the admin router and carries admin auth (`server.rs:143-144`), so a plain form POST on a station with a password gets a 401 dead end mid-wizard. | Exempt the onboarding save, or run the wizard behind the same session it creates. |
+| **ON-6** | P1 | READ | `POST /onboarding/save` is merged into the admin router and carries admin auth (`server.rs:143-144`), so a plain form POST on a station with a password gets a 401 dead end mid-wizard. | Exempt the onboarding save, or run the wizard behind the same session it creates. **[FIXED]** (`60ead63`), upgraded READ→VERIFIED on the way: Finish answered `401 Sign in required.` with `Location: /login?next=/onboarding/save`, and signing in there landed on `405 GET /onboarding/save`, blank; auto-detect failed silently for the same reason. The wizard page now lives in the gated router with its save (the middleware bypasses when no password exists, so a fresh station still shows it), and `GET /onboarding/save` redirects to the wizard. Gate: `the_setup_wizard_is_gated_and_keeps_only_a_real_location.rs`. |
 | **ON-7** | P1 | VERIFIED | **The Docker path has no timezone handling at all.** Occurrences of `timezone`, `localtime` or `TZ=` in `docker-compose*.yml`, `Dockerfile`, `docker/entrypoint.sh` and `.env.example`: zero, against a control grep that matched. Every container station files detections under UTC hours while its operator reads local ones. Same root as **NT-6**, in the path most new operators take. | `tzdata` in the image and `TZ` documented — item 5.7, which should be read as covering Docker specifically. |
-| **ON-8** | P1 | READ | The doctor's timezone-mismatch check runs only if the operator used the wizard's auto-detect button: `doctor/clock.rs:59` guards on `detected_timezone(config)`, which reads a settings row only that button writes. | Compare against the host zone unconditionally. |
+| **ON-8** | P1 | READ | The doctor's timezone-mismatch check runs only if the operator used the wizard's auto-detect button: `doctor/clock.rs:59` guards on `detected_timezone(config)`, which reads a settings row only that button writes. | Compare against the host zone unconditionally. **Upgraded and half-fixed 2026-09-08**: the check's *input* was unvalidated — the wizard stored `timezone=Mars/Olympus` and the doctor then printed `Fix with: sudo timedatectl set-timezone Mars/Olympus` (`onboarding-8`). The wizard now rejects a zone that is not IANA-shaped or, on a host with `/usr/share/zoneinfo`, not in it (`60ead63`); the settings form and the check itself still trust the row. |
 | **ON-9** | P1 | VERIFIED | `--doctor` checks model **size**, not integrity (`doctor/model.rs:24`, `> 1_000_000`), and the geomodel not even that (`doctor/config.rs:102` is an `exists()`). A 3 MB stand-in for a 541 MB model passes. This is **LC-2**'s remaining half, item 1.12, and ON-1 has now removed the other route to the same state. | Hash it, or load it and assert `outputs.len() == labels.len()`. |
-| **ON-10** | P1 | READ | The first-run checklist ships a hard-coded green tick for the model: `pages/today.rs:291` renders `✓ Model bundled … included` unconditionally. On a station whose model never downloaded, the first screen says it is there. | Read the same predicate the doctor reads. |
+| **ON-10** | P1 | READ | The first-run checklist ships a hard-coded green tick for the model: `pages/today.rs:291` renders `✓ Model bundled … included` unconditionally. On a station whose model never downloaded, the first screen says it is there. | Read the same predicate the doctor reads. Confirmed still open at `1c1be04`: `today.rs:291` renders `✓ Model bundled … included` on a `--web-only` process with no model (`onboarding-11`). |
 | **ON-11** | P1 | READ | The compose `HEALTHCHECK` polls `/api/v2/health` without `?strict=1` (`docker-compose.yml:152-153`), so it cannot see a dead detection daemon — the endpoint answers 200 while its own body says `"detection_daemon":"stopped"`. Reproduced live during this pass against the real binary. | Use `?strict=1` there, or state in the file why not — `routes/system.rs:203-214` explains the deliberate default 200 in a code comment, and the compose file does not. Ties to **RC-11**. |
 | **ON-12** | P1 | READ | The occurrence filter's live state reaches Prometheus (`src/daemon/mod.rs:257-264`) and no HTML surface, so the one number that would show a filter admitting zero species is invisible to an operator without a metrics stack. | Put it on `/station`. |
 | **ON-13** | P2 | READ | Nothing asks what filesystem the recordings directory is on. `doctor/paths.rs:18-34` checks existence and writability; `is_tmpfs_mounted` exists (`audio/capture/tmpfs.rs:65`) with zero callers outside its own module. A `RECS_DIR` on tmpfs loses every clip at reboot. | Call it. |
@@ -776,19 +788,18 @@ and no previous document asked.
 
 | ID | Sev | How | Finding | Remedy |
 |---|---|---|---|---|
-| **R-1** | P1 | READ | **No model identity on any detection row.** `install.sh:149` pins `MODEL_SHA256` and it never reaches the database. The shipped model is a pre-release (`V3.0-preview3`). A season spanning a model upgrade cannot be split by which model produced what. | An `analysis_runs` table, below. |
+| **R-1** | **P0** | READ | **No model identity on any detection row.** `install.sh:149` pins `MODEL_SHA256` and it never reaches the database. The shipped model is a pre-release (`V3.0-preview3`). A season spanning a model upgrade cannot be split by which model produced what. | An `analysis_runs` table, below. **Upgraded to P0 on 2026-09-08** (`research-2`): `grep` for `model_version\|model_name\|model_sha\|labels_sha` over `src` and `crates` hits only doctor test names; no `analysis_runs` table; `pragma table_info(detections)` has no model column. `e3f9b80` added lat/lon/cutoff/sensitivity/overlap per row, and nothing distinguishes rows from two models. For a researcher that is a silent wrong answer the day the model is swapped, which is the P0 definition this register uses. |
 | **R-2** | P1 | READ | **The threshold in force was never stored** — `src/daemon/processor.rs` wrote `cutoff: None` — while `dynamic_thresholds` (migration 38) moves it per species mid-season. A species' apparent rise was indistinguishable from its threshold falling. | **[FIXED]** (`e3f9b80`): `DispositionDecision::Accept { threshold }` carries the effective threshold that admitted the row — the per-species one when set, else the global floor, either after the dynamic adjustment (`src/daemon/disposition.rs` `decide_disposition`) — and the insert writes it as `Cutoff`, per row. Gate `an_accepted_row_records_the_station_and_the_threshold_it_cleared` writes one row admitted at 0.80 and one at 0.25 and asserts each. The per-run model identity (**R-1**) is still not stored; the same table remains the remedy for that. |
 | **R-3** | P2 | READ | No stable primary key; `crates/birdnet-db/src/migration.rs:595-597` disclaims the rowid. An `occurrenceID` cannot be minted, so a corrected record cannot be matched to the one it replaces. | `id INTEGER PRIMARY KEY`. |
 | **R-4** | P1 | READ | **The soundscape is drained after 600 s** (`src/helpers/system.rs:13,34`, "nothing in it is worth keeping"). Only audio that already triggered survives, so the archive is selection-biased by the very process under test and no re-scoring is possible. | A retention option that keeps raw audio, even at a duty cycle. |
 | **R-5** | P1 | READ | **No re-analysis path exists.** Grep over `src/`, `crates/` and `docs/` finds no facility. When BirdNET ships a new version the old season cannot be brought onto it. | Re-analysis over retained audio, keyed to an `analysis_runs` row. |
-| **R-8** | P2 | READ | **The UTC offset is discarded.** A station that changes timezone silently reinterprets its own history; `eventDate` cannot be made offset-bearing from `Date`/`Time` alone. Partly: since migration 32 (`migration.rs:1071`) every new row carries `detected_at_utc` (written at `src/daemon/processor.rs:578`), so the offset in force is recoverable per row as the difference; it is not itself stored, backfilled rows depend on the host's zone database, and no export emits `detected_at_utc` (0 hits under `routes/export/`). | Store the offset per detection, and emit `detected_at_utc` in the exports. |
+| **R-8** | P2 | READ | **The UTC offset is discarded.** A station that changes timezone silently reinterprets its own history; `eventDate` cannot be made offset-bearing from `Date`/`Time` alone. Partly: since migration 32 (`migration.rs:1071`) every new row carries `detected_at_utc` (written at `src/daemon/processor.rs:578`), so the offset in force is recoverable per row as the difference; it is not itself stored, backfilled rows depend on the host's zone database, and no export emits `detected_at_utc` (0 hits under `routes/export/`). | Store the offset per detection, and emit `detected_at_utc` in the exports. **Upgraded 2026-09-08** (`research-4`): every export is local `Date`/`Time` with no offset, and `detected_at_utc` is in the database but in no `DetectionRow` field, export or route. DST probe under `TZ=Europe/London` on the migration-32 trigger path (imports and backfill): `2026-10-25 01:30` → `01:30Z` (the second pass, chosen silently); `2026-03-29 01:30`, which does not exist, → `00:30Z` (invented); `2026-07-01 12:00` → `11:00Z` (correct). The daemon path is exact by construction. |
 | **R-10** | P2 | READ | `inference/model.rs:507` asserts the outputs are "calibrated probabilities". Nothing validates it, and V2.4's `sigmoid(sensitivity × logit)` is not one. The UI presents the number as a confidence percentage. | Either validate the claim or stop making it in the UI. |
 | **R-15** | P2 | READ | Effort-corrected abundance SUMs effort across sources: `recording_effort` is keyed `(date, source)` (migration 27, `migration.rs:801`), but `effort_corrected_abundance_sql` (`crates/birdnet-behavioral/src/phenology/abundance.rs:294-297`) takes `SUM(seconds) / 3600.0` over the table per ISO week with no per-source grouping, so two co-located microphones halve the apparent rate. Migration 27 does not flag this; the first draft of this row said it did. | Per-source, or documented as an upper bound. |
-| **R-17** | P1 | READ | **All four exports read `FROM detections`**, not `detections_analytic` (`read.rs:311 all_detections`). Rejected detections were re-exported, and none of the four carried a verdict column — undoing migration 26 at the one surface where the data leaves the station. **[FIXED — eBird only]** (`dad46d1`): the eBird export reads `analytic_detections_above` (`export/ebird.rs:163`, `read.rs:365`) over `detections_analytic`. Still open for the rest: the detections CSV (`export/csv.rs:46`) and BirdDB (`export/birddb.rs:45`) still read `all_detections` (`FROM detections`) with no verdict column (`csv.rs:173`); the species CSV (`csv.rs:120`) reads `top_species`, which since **RC-3** goes through the rollup and so drops rejected rows, but is an aggregate with no verdict column. | Read the view in the other three. This is the same class as **RC-3** and **RC-4**: more places the provenance/verdict rule is re-implemented and gets it wrong. |
+| **R-17** | P1 | READ | **All four exports read `FROM detections`**, not `detections_analytic` (`read.rs:311 all_detections`). Rejected detections were re-exported, and none of the four carried a verdict column — undoing migration 26 at the one surface where the data leaves the station. **[FIXED — eBird only]** (`dad46d1`): the eBird export reads `analytic_detections_above` (`export/ebird.rs:163`, `read.rs:365`) over `detections_analytic`. Still open for the rest: the detections CSV (`export/csv.rs:46`) and BirdDB (`export/birddb.rs:45`) still read `all_detections` (`FROM detections`) with no verdict column (`csv.rs:173`); the species CSV (`csv.rs:120`) reads `top_species`, which since **RC-3** goes through the rollup and so drops rejected rows, but is an aggregate with no verdict column. | Read the view in the other three. This is the same class as **RC-3** and **RC-4**: more places the provenance/verdict rule is re-implemented and gets it wrong. **[FIXED — all four]** (`441188a`, 2026-09-08): `all_detections` is now `analytic_detections` over `detections_analytic`, and the CSV, JSON and BirdDB exports read it; `the_bulk_exports_honour_the_verdict.rs` seeds a rejected row and holds all three. Observed on the shipped binary first: a reviewer-rejected `Turdus merula` row exported verbatim in CSV and BirdDB beside the confirmed one (`research-3`). The species CSV is an aggregate and still carries no verdict column. |
 | **R-18** | P1 | READ | **The eBird export wrote Null Island.** `export/ebird.rs` did `let lat = query.lat.unwrap_or(0.0);` while `LATITUDE`/`LONGITUDE` sat configured in settings. **[FIXED]** (`dad46d1`) — coordinates come from the station's settings (`ebird.rs:158`), a caller-supplied `?lat=&lon=` overrides them, and an unlocated station emits blank coordinates rather than 0,0; gates `coordinates_come_from_the_station_and_are_never_null_island` and `a_caller_supplied_coordinate_overrides_the_configured_one` in `tests/the_ebird_export_is_a_checklist_ebird_can_accept.rs`. | Done. |
 | **R-19** | P1 | READ | **The eBird export was a regression against BirdNET-Pi, at the surface that publishes to a public database.** No confidence floor, no one-per-hour dedup, raw detection tallies written into `Number` (one blackbird detected 200 times became "200 birds"), `Protocol=S` and `Observers=1` hard-coded. BirdNET-Pi does all of this correctly (`scripts/history.php:43,127`). **[FIXED]** (`dad46d1`) — a 0.75 floor by default (`DEFAULT_MIN_CONFIDENCE`, `ebird.rs:48`, movable by `?min_confidence=`), one record per species per hour keyed `(date, hour, common name, scientific name)` with `Number=X`, protocol/observers/state/country/complete supplied by the caller, no header row, rows from `detections_analytic`; six gates in `tests/the_ebird_export_is_a_checklist_ebird_can_accept.rs`. | Done. Of everything in this section this was the one that damaged someone other than the operator. |
-| **R-DwC** | P1 | READ | **Darwin Core cannot be emitted.** The schema can fill `scientificName`, `vernacularName`, a date-only `eventDate`, `identificationVerificationStatus`, `associatedMedia`, `organismQuantity` (as detections, not individuals), `samplingEffort`, and the constants. It cannot fill `occurrenceID`, `decimalLatitude`, `decimalLongitude`, `coordinateUncertaintyInMeters`, an offset-bearing `eventDate`/`eventTime`, `datasetID`, `datasetName`, `institutionCode`, `collectionCode`, `recordedBy`, `identifiedBy`, `dateIdentified`, `taxonID`, `scientificNameID`, `taxonRank`, `country`, `countryCode`, `stateProvince`, `locality`, `minimumElevationInMeters`, `license`, `rightsHolder`, `accessRights` or `modified`. `individualCount` must be *omitted*, not guessed. Confidence has no Occurrence term at all. Since this row was written `dad46d1` gave the *eBird export* coordinates from settings, but detection rows still carry `Lat`/`Lon` NULL (**UP-1**), and `detected_at_utc` (**R-8**) makes an offset-bearing `eventDate` constructible for post-migration-32 rows; nothing else has moved. | Three changes get most of it: an `analysis_runs` table (model name/version/sha256, label sha256, threshold, sensitivity, UTC offset) with an FK from `detections`, closing R-1/R-2/R-8 together; an integer primary key plus lat/lon/uncertainty/dataset id written at insert, unblocking six of the seven blocking terms; then a `/export/dwc` route over `detections_analytic` joined to `analysis_runs` and `recording_effort`. |
-
+| **R-DwC** | P1 | READ | **Darwin Core cannot be emitted.** The schema can fill `scientificName`, `vernacularName`, a date-only `eventDate`, `identificationVerificationStatus`, `associatedMedia`, `organismQuantity` (as detections, not individuals), `samplingEffort`, and the constants. It cannot fill `occurrenceID`, `decimalLatitude`, `decimalLongitude`, `coordinateUncertaintyInMeters`, an offset-bearing `eventDate`/`eventTime`, `datasetID`, `datasetName`, `institutionCode`, `collectionCode`, `recordedBy`, `identifiedBy`, `dateIdentified`, `taxonID`, `scientificNameID`, `taxonRank`, `country`, `countryCode`, `stateProvince`, `locality`, `minimumElevationInMeters`, `license`, `rightsHolder`, `accessRights` or `modified`. `individualCount` must be *omitted*, not guessed. Confidence has no Occurrence term at all. Since this row was written `dad46d1` gave the *eBird export* coordinates from settings, but detection rows still carry `Lat`/`Lon` NULL (**UP-1**), and `detected_at_utc` (**R-8**) makes an offset-bearing `eventDate` constructible for post-migration-32 rows; nothing else has moved. | Three changes get most of it: an `analysis_runs` table (model name/version/sha256, label sha256, threshold, sensitivity, UTC offset) with an FK from `detections`, closing R-1/R-2/R-8 together; an integer primary key plus lat/lon/uncertainty/dataset id written at insert, unblocking six of the seven blocking terms; then a `/export/dwc` route over `detections_analytic` joined to `analysis_runs` and `recording_effort`. Confirmed 2026-09-08 (`research-1`): `/api/v2/detections/export/dwc` is 404; `export/mod.rs` registers four routes; no stable `id`, so no `occurrenceID`. |
 #### 3.13.3 Stability under adversity (`AD-*`)
 
 | ID | Sev | How | Finding | Remedy |
@@ -801,8 +812,7 @@ and no previous document asked.
 | **AD-6** | P2 | READ | The purger sees only the recordings directory (`disk/manager.rs:41`). Nothing measures or bounds `birds.db-wal`, the five-copy backup ring, `birds.duckdb` (no retention job at all), or `birds.db.corrupt.*`. | **PS-12** and **PS-6**'s prune half. |
 | **AD-7** | P2 | READ | Binary swap and schema migration are both strong. The gap is downgrade: a downgraded DuckDB is quarantined and rebuilt synchronously on the boot path. | Bound it, or do it behind the listener — ties to **PS-17**. |
 | **AD-8** | P2 | READ | Nothing sets journald `Storage=` or `SystemMaxUse=`, so a default Pi has a volatile journal; the `errors.jsonl` mitigation is on the same partition as the database and truncates rather than rotates. | Item 2.18. |
-| **AD-9** | **P0** | VERIFIED | **The worst pair: partial corruption on a full card.** **[FIXED]** The mechanism turned out to be worse than this row stated, and simpler: `restore_from_backup` deleted the destination *before* it knew it could write the replacement, so any failure after that line — a full disk, another I/O error from the card that caused the corruption, a power cut — left neither. `app.rs` then read every error out of recovery as "no good backup exists", quarantined, and started fresh, and the weekly ring rotated the good backup away within five weeks. Reproduced on a 12 MB tmpfs with a 2 711 552-byte backup and 1 355 776 bytes free: `Err(DiskFull)`, live database left at **0 bytes**, zero rows readable, backup intact beside it. The restore now builds the replacement beside the destination, verifies it with the deep check, and swaps it in by `rename`; `ResilienceError::RestoreFailed { backup, detail }` is distinct from `NoBackup`, and `src/app.rs` decides through a named `recovery_fallback` — no good backup still starts fresh, a good backup that could not be written refuses to start. Re-run on the same tmpfs: the live database is byte-for-byte unchanged, the backup intact, no temporary left behind. | Done. The remaining piece is a **free-space precheck** so the attempt is refused before a partial write rather than after: it needs `statvfs`, which means a dependency in `birdnet-db` or `unsafe`, and was not worth pulling in for a message improvement when the data is already safe. |
-
+| **AD-9** | **P0** | VERIFIED | **The worst pair: partial corruption on a full card.** **[FIXED]** The mechanism turned out to be worse than this row stated, and simpler: `restore_from_backup` deleted the destination *before* it knew it could write the replacement, so any failure after that line — a full disk, another I/O error from the card that caused the corruption, a power cut — left neither. `app.rs` then read every error out of recovery as "no good backup exists", quarantined, and started fresh, and the weekly ring rotated the good backup away within five weeks. Reproduced on a 12 MB tmpfs with a 2 711 552-byte backup and 1 355 776 bytes free: `Err(DiskFull)`, live database left at **0 bytes**, zero rows readable, backup intact beside it. The restore now builds the replacement beside the destination, verifies it with the deep check, and swaps it in by `rename`; `ResilienceError::RestoreFailed { backup, detail }` is distinct from `NoBackup`, and `src/app.rs` decides through a named `recovery_fallback` — no good backup still starts fresh, a good backup that could not be written refuses to start. Re-run on the same tmpfs: the live database is byte-for-byte unchanged, the backup intact, no temporary left behind. | Done. The remaining piece is a **free-space precheck** so the attempt is refused before a partial write rather than after: it needs `statvfs`, which means a dependency in `birdnet-db` or `unsafe`, and was not worth pulling in for a message improvement when the data is already safe. **Refined 2026-09-08** (`adversity-2`, `2eeadfb`): the restore that no longer deletes first still *deleted the file it replaced* once the copy verified, so a backup restore silently discarded everything recorded after the backup (3 100 rows → 3 000, no `.corrupt.` copy, log "database recovered", health "healthy"). The replaced file is now set aside as `.corrupt.<ts>` where the doctor's scan reports it, and the log names it. |
 #### 3.13.4 Operability without SSH (`OP-*`)
 
 Of the 33 failure modes enumerated, **8 surface only in the journal** and 2
@@ -814,7 +824,7 @@ reach only an operator who is already looking.
 | ID | Sev | How | Finding | Remedy |
 |---|---|---|---|---|
 | **OP-1** | **P0** | VERIFIED | **The entire diagnostic apparatus was reachable only by someone who could already SSH in.** `src/support.rs run()` was called from `src/main.rs` and nowhere else; `support_bundle` had zero hits in `birdnet-web`. `doctor::collect_json` was written, tested, and already a bundle member, with no HTTP caller. **[FIXED]** (`9f42652`, item 2.19) — `GET /admin/doctor` renders the full `--doctor` report, `GET /admin/doctor.json` and `GET /admin/support-bundle` sit beside it (`routes/admin/doctor.rs:40-42`), through `birdnet_web::diagnostics::Diagnostics` hooks that `src/app.rs:244` installs from `helpers::diagnostics::hooks`; read-only — a GET never implies `--fix` — and `support::run` is split into `support::build` (`src/support.rs:144`). Gates: `crates/birdnet-web/tests/the_diagnostics_are_reachable_from_the_browser.rs`, `tests/the_station_can_diagnose_itself_from_a_browser.rs`, `helpers::diagnostics` unit tests. | Done. The single highest-value change in this section, and it was the route alone. |
-| **OP-2** | P1 | VERIFIED | `?strict=1` reported a daemon that died as running — `src/app.rs` was the only writer of the flag and ran once at startup. **PR-5**'s surviving clause. **[FIXED]** (`d0df731`) — the boot store is still at `src/app.rs:479`, but `daemon::mirror_liveness` (`src/app.rs:487`, `src/daemon/mod.rs:355`) now mirrors `DaemonHandle::running_flag()` into it every 5 s, and that flag is cleared by the loop thread's `RunningGuard` on exit (`crates/birdnet-core/src/detection/daemon/mod.rs:307`), so a daemon that dies after boot reads `stopped`. Gates: unit gates in the `birdnet-core` daemon tests and `src/daemon/mod.rs`. | Done. |
+| **OP-2** | P1 | VERIFIED | `?strict=1` reported a daemon that died as running — `src/app.rs` was the only writer of the flag and ran once at startup. **PR-5**'s surviving clause. **[FIXED]** (`d0df731`) — the boot store is still at `src/app.rs:479`, but `daemon::mirror_liveness` (`src/app.rs:487`, `src/daemon/mod.rs:355`) now mirrors `DaemonHandle::running_flag()` into it every 5 s, and that flag is cleared by the loop thread's `RunningGuard` on exit (`crates/birdnet-core/src/detection/daemon/mod.rs:307`), so a daemon that dies after boot reads `stopped`. Gates: unit gates in the `birdnet-core` daemon tests and `src/daemon/mod.rs`. | Done. Confirmed 2026-09-08: the flag reaches `?strict=1`. It did **not** reach the badge — see **DD-4** (`ops-4`), fixed in `bb087fa` — and does not reach MQTT (**DD-28**). |
 | **OP-3** | P1 | VERIFIED | Disk, CPU temperature, maintenance outcome and scratch usage are all measured and none is exported as a metric (29 families: 19 `# TYPE` lines in `metrics.rs`, 10 in `routes/health.rs`; zero `birdnet_disk*` / `birdnet_cpu_temp*` / `birdnet_maintenance*` / `birdnet_scratch*`). | Export the four. |
 | **OP-4** | P1 | VERIFIED | The station-health conditions are push-only: `evaluate` is private, its sole caller the notifier. No endpoint answers "what is wrong right now?", so an operator who missed a push cannot ask. | An endpoint over the same `CHECKS` table. |
 | **OP-5** | P1 | VERIFIED | No `Storage=persistent` / `SystemMaxUse=` drop-in anywhere in `installer/`, `packaging/` or `docker/`. | Item 2.18. |
@@ -863,8 +873,8 @@ clickable `<div>` is not an axe rule; and nothing presses Tab.
 |---|---|---|---|---|
 | **UX-1** | P1 | 2.1.1 A, 4.1.2 A | **Seven onboarding preference cards are bare `<div>`s with a delegated click handler** (`onboarding.rs:548-551,563-565,665-666`) — no role, no `tabindex`, no `aria-checked`. A keyboard-only operator cannot set the confidence threshold or the notification mode during first-run setup. The a11y gate loads this route and passes it clean. | Real radio inputs, or `role="radio"` with keyboard handling. |
 | **UX-2** | P1 | 2.1.1 A | The Access tab's help trigger is a `<span data-help-drawer>` (`admin_accounts.html:61`), not focusable. | A `<button>`. |
-| **UX-3** | P1 | 2.4.3 A | "Show more" replaces **itself** (`recordings.rs:303`, `hx-target="this" hx-swap="outerHTML"`), dropping focus to `<body>`; the keyboard user must tab through every new row to reach it again. | Move focus deliberately after the swap. |
-| **UX-4** | P1 | 3.3.1 A | **28 page partials return 500, and htmx does not swap a non-2xx response**, so the `aria-busy` skeleton stays forever. A failing station shows a permanent loading state instead of an error — in 28 places (28 `INTERNAL_SERVER_ERROR` sites across eleven files under `routes/pages/`). `behavioral.rs:629` documents this exact hazard and the next arm does it anyway. | Return a rendered error fragment with 200, or configure htmx to swap errors. |
+| **UX-3** | P1 | 2.4.3 A | "Show more" replaces **itself** (`recordings.rs:303`, `hx-target="this" hx-swap="outerHTML"`), dropping focus to `<body>`; the keyboard user must tab through every new row to reach it again. | Move focus deliberately after the swap. **[FIXED]** (`9b7e81c`): on `htmx:afterSettle`, when the focused element is gone, focus moves to the element that took its place in the same container, else the last focusable there. Validated in Chromium: after Enter on "Show more (9 867)" `activeElement` is `BUTTON.rc-more` where it had been `BODY` (`ui-8`). |
+| **UX-4** | P1 | 3.3.1 A | **28 page partials return 500, and htmx does not swap a non-2xx response**, so the `aria-busy` skeleton stays forever. A failing station shows a permanent loading state instead of an error — in 28 places (28 `INTERNAL_SERVER_ERROR` sites across eleven files under `routes/pages/`). `behavioral.rs:629` documents this exact hazard and the next arm does it anyway. | Return a rendered error fragment with 200, or configure htmx to swap errors. **[FIXED]** (`9b7e81c`), and wider than this row: the transport case (a station that dies under an open dashboard, `htmx:sendError`) left the same permanent skeleton (`ui-1`). The shell now handles `htmx:responseError`, `htmx:sendError` and `htmx:timeout` for GET loads with a `role="alert"` notice naming the failure; POSTs keep their form. Gate `a_partial_that_fails_to_load_says_so.rs`; validated in Chromium for a 500 and a refused connection. |
 | **UX-5** | P2 | 2.2.2 AA | `#detections-table` carries `aria-live="polite"` **and** `hx-trigger="every 15s" hx-swap="innerHTML"`, so a screen reader re-speaks the whole feed every fifteen seconds. | Announce the delta, not the list. |
 | **UX-8** | P2 | 1.3.1 A | **Zero `scope=` and zero `<caption>` across 36 tables and 127 `<th>`** (157 if `<thead>` tokens are counted, as the first draft did). | Add both. |
 | **UX-9** | P2 | 1.3.1 A | `table { display: block }` at ≤980 px strips the table role from the accessibility tree, so on any phone every data table stops being a table. | `overflow` on a wrapper, not on the table. |
@@ -895,7 +905,7 @@ reconstructed and whose zeros cannot be told apart from a dead recorder.
 | **FR-1** | P1 | **No output any verification or archiving tool reads.** No Raven selection table, no Audacity label track, no Darwin Core — verified absent by grep in all three trees. The ecologist's next step is always Raven; the tool that produces the detections cannot hand them over. |
 | **FR-2** | P1 | **The soundscape is destroyed in all three**, so a season can never be re-analysed under a new model. Ours is **R-4**. |
 | **FR-3** | P1 | **No deployment record anywhere**: microphone model, height, orientation, habitat, deploy and retrieve dates exist in none of the three. Ours (`migration.rs:362-387`) is the richest of the three and is purely signal-chain. Without it a methods section cannot be reconstructed from the station. |
-| **FR-5** | P2 | **Effort never reaches an export, in any of the three** — so a zero cannot be told from a dead recorder. We are the only one that *has* the effort data (**WE-2**), which makes this the cheapest differentiator on the list. |
+| **FR-5** | P2 | **Effort never reaches an export, in any of the three** — so a zero cannot be told from a dead recorder. We are the only one that *has* the effort data (**WE-2**), which makes this the cheapest differentiator on the list. Confirmed 2026-09-08 (`research-6`): `recording_effort` is credited by a 300 s poll and reaches no export or route; `/api/v2/analytics/abundance` answered `503 analytics database not configured` on the seeded server; the eBird `Duration` is the hour, 60, by construction. |
 | **FR-6** | P2 | Level is reported referenced to the ADC, not to a sound pressure, in all three, so two stations cannot be compared. Ours is the only one with a calibration offset at all. |
 | **FR-7** | P3 | No sampling design beyond "always on" in any of the three. A duty cycle is standard practice: it bounds compute, equalises effort across sites and reduces temporal autocorrelation. |
 | **UP-1** | P1 | **Both references stamp provenance on every detection row and we wrote NULL.** `src/daemon/processor.rs` inserted `lat`, `lon`, `cutoff`, `sensitivity` and `overlap` as `None` — only `week` was filled — and mirrored the same record into DuckDB, so both stores carried the NULLs. BirdNET-Pi writes all five (`scripts/utils/reporting.py:97-100`); birdnet-go persists four (`internal/detection/factory.go:51-54`). We inherited the schema *and* export its header (`export/csv.rs:173`), so every "BirdNET-Pi-compatible" CSV we emitted had five permanently empty columns. **[FIXED]** (`e3f9b80`): `processor::RunProvenance { lat, lon, sensitivity, overlap }` is built once in `src/daemon/mod.rs` from the values the model and daylight filter already resolve and written on every row (a station with no coordinates keeps NULL, never 0,0); `Cutoff` is the admitting threshold per row (**R-2**); quarantine rows get the coordinates too; the DuckDB mirror copies the same record. Gate: `an_accepted_row_records_the_station_and_the_threshold_it_cleared`, observed failing with `left: (None, None, None, None, None)`. Rows written before this commit keep their NULLs. |
@@ -916,6 +926,62 @@ does not exist there either — their comments are stored and read-only; and
 
 
 ---
+
+### 3.14 Found by the deep-dive pass (2026-09-08)
+
+Six probes ran against the branch at `1c1be04` with the station running — the
+seeded demo server and fresh `--web-only` instances started by each probe —
+one per dimension: interface and accessibility (`ui-*`), first run
+(`onboarding-*`), adversity (`adversity-*`), research credibility
+(`research-*`), operability without a shell (`ops-*`), and the two upstreams
+at their current tips, `Nachtzuster/BirdNET-Pi` `88985a3` and
+`tphakala/birdnet-go` `e648f34d` (`upstream-*`). Their reports are the source
+for every row here; the probe id is quoted so the evidence can be found. A
+first run of all six was killed by an API session limit before any report was
+written and everything it had found was lost; the second run wrote as it went.
+
+Where a probe confirmed, upgraded or refuted a row above, that row was edited
+in place (`R-1`, `R-8`, `R-17`, `ON-6`, `ON-8`, `ON-10`, `UX-3`, `UX-4`,
+`PS-6`, `NP-6`, `RC-15`, `O-6`, `AD-9`, `FR-5`, `OP-2`, `R-DwC`). The rows
+below are what was new. Same severity scale; `VERIFIED` means it was run.
+
+| ID | Sev | Status | Finding | Remedy |
+|---|---|---|---|---|
+| **DD-1** | **P0** | VERIFIED | **Rejected detections left the station through every bulk export but eBird.** On a copy of a probed station a reviewer-rejected row was in the CSV and `BirdDB.txt` verbatim; a fresh `POST /api/v2/detections/review` rejection was written to both `detection_reviews` and `review_verdict` and the CSV still carried the row while eBird dropped it (`research-3`; `R-17`'s remainder). | **[FIXED]** (`441188a`): the three exports read `detections_analytic`. |
+| **DD-2** | P1 | VERIFIED | **The wizard persisted any location.** `POST /onboarding/save` with `latitude=999&longitude=abc&timezone=Mars/Olympus` → `303` and all three rows written; on restart the overlay dropped the pair silently (`applied … count=3`, no warning), `--doctor` said `Station location — no latitude/longitude set` while `/onboarding` still prefilled 999; and half a pair was written, so two runs from two browsers left the station at `51.48, 151.21`, a point neither typed, while the summary card said "Not set" (`onboarding-1`, `-1b`, `-4`). | **[FIXED]** (`60ead63`): both coordinates or neither, in range, after decimal normalisation; the zone must be IANA-shaped and, where `/usr/share/zoneinfo` exists, in it; a rejected value is logged at WARN with the value. |
+| **DD-3** | P1 | VERIFIED | **On the installer's default station the wizard could not be finished** — see `ON-6`, upgraded and fixed (`onboarding-2`, `-6`, `-7`, `-14`). Recorded here because the chain is the point: headless install → no location → first page load is the wizard → `401` → login → `405`. | **[FIXED]** (`60ead63`). |
+| **DD-4** | P1 | VERIFIED | **The health badge went green for a source that had never captured.** `POST /admin/audio/sources` with `rtsp://127.0.0.1:1/dead` on a `--web-only` instance: badge `data-health="ok" … Healthy`, `/station` "Audio sources 1 configured · OK", the dead source not listed, and `/api/v2/health?strict=1` 503 at the same instant. `today.rs:440 live_capture_state` yielded `Unknown` with no gauge and `health.rs grade` had `Up \| Unknown => {}` (`ops-4`). | **[FIXED]** (`bb087fa`, refined the same day): with sources configured, no gauge ever published and no running daemon, the state is `Down`; `Unknown` keeps its boot-time meaning; a gauge that says up is believed even with the flag clear, because capture and detection are different threads. Gate `a_configured_source_without_a_running_daemon_reads_as_down`. Still open, and this pill's sibling: a detector that died under a live microphone keeps the badge green — `?strict=1` reports it, the badge does not; fold the daemon flag into `grade` as its own worst-first row. |
+| **DD-5** | P1 | VERIFIED | **A restore deleted the database it replaced** — `AD-9` refined (`adversity-2`). | **[FIXED]** (`2eeadfb`). |
+| **DD-6** | P1 | VERIFIED | **The doctor called a quarantined detection database lossless** — `PS-6` reopened (`adversity-3`). | **[FIXED]** (`2eeadfb`). |
+| **DD-7** | P1 | VERIFIED | **A partial that failed to load stayed a skeleton for ever, including when the station died** — `UX-4` widened (`ui-1`). | **[FIXED]** (`9b7e81c`). |
+| **DD-8** | P1 | VERIFIED | **Enter on "Show more" dropped focus to `<body>`** — `UX-3` confirmed at HEAD (`ui-8`). | **[FIXED]** (`9b7e81c`). |
+| **DD-9** | P1 | READ | **A human-approved quarantine row had the least provenance of any row.** `approve_quarantine` (`crates/birdnet-db/src/sqlite/queries/quarantine.rs:258`) inserted `Cutoff`, `Sens`, `Overlap` NULL, no source or chunk offset, and `review_verdict` NULL, so a hand-approved rare-species record looked like an unreviewed auto-accept in every export and queue (`research-8`). | **Verdict [FIXED]** (`dfdac5e`): the admitted row is `'confirmed'`. Still open: the quarantine table never recorded cutoff, sensitivity or overlap, so they stay NULL; record them at quarantine time (migration) and copy them across. |
+| **DD-10** | P2 | VERIFIED | **The support bundle carried no ordinary log lines on any install without a persistent journal** (`ops-1`; see `NP-6`). | **[FIXED]** for the browser bundle (`8aba101`): `recent.log` from the in-process ring. The CLI bundle is a separate process and cannot carry it. |
+| **DD-11** | P3 | VERIFIED | The eBird location name read `station_name` only; the installer's `SITENAME=` arrives as `site_name`, so `SITENAME=Probe` exported "BirdNet-Behavior Station" (`research-7`). | **[FIXED]** (`dfdac5e`). |
+| **DD-12** | P2 | VERIFIED | `/admin/species` "No species in this list" was rendered in `--border-2`, a border token, measured at 1.74:1 (`ui-7`). | **[FIXED]** (`9b7e81c`) by moving it to the secondary text token `--fg-2`; the new ratio was not re-measured. |
+| **DD-13** | P2 | VERIFIED | The installer told the operator to "pick a microphone in the dashboard's setup wizard" (`install.sh:2215`, and the summary) and the wizard has no picker, by design (`onboarding-13`); `installation.md` named `ipapi.co` where the code calls `ip-api.com` (`onboarding-15`). | **[FIXED]** (`9b7e81c`): both sentences point at Settings → Capture; the provider name is corrected. |
+| **DD-14** | P1 | VERIFIED | **With no password set, every `/admin/*` page is open to anyone who can reach the port, for as long as the operator does not act**, and the six-step wizard never asks for one. `GET /admin/doctor` 200, `/admin/settings` 200 without a session; `--doctor` warns; the only browser route to a first password is a form labelled "Reset password" whose toast says "Password rotated." and then signs the operator out without saying so (`onboarding-3`, `-10`). | Make "create the admin password" the wizard's first step when no password and no account exist, so the first browser to complete setup owns the station; relabel the accounts form on a passwordless station; add a GETTING READY row for it. |
+| **DD-15** | P2 | VERIFIED | **Every login session dies on restart on bare metal**, on both the `CADDY_PWD` and the accounts path, while `/station/access` promises "Sessions last up to 14 days". `session.rs:126-140 secret()` reads `BNB_SESSION_SECRET` and `CADDY_PWD` from the **environment only**; nothing exports the config file's `CADDY_PWD` (`helpers/auth.rs:8-15` says so; zero `set_var` hits) and the unit sets only `Environment=BNB_HELP_DIR` (`65-service.sh:89`), so every install the installer produces runs on a per-process random secret (`onboarding-9`). Docker, where `CADDY_PWD` is a real variable, is the only case the module doc describes. | Persist a generated secret beside the database (a settings row, redacted by key, or a mode-0600 file), generated once at first start, ahead of the `CADDY_PWD` derivation; or have the installer write `BNB_SESSION_SECRET` into the unit. Gate: boot the real binary twice on one config with no environment and assert a cookie from the first boot still verifies. |
+| **DD-16** | P2 | VERIFIED | After the wizard, with no audio source, the home page says "not recording · no microphone configured" and, on the same page, "Listening for the first call…", "LIVE FEED … Listening", "The station is listening — nothing has flown by yet" and a footer "listening · 2m" (`onboarding-11`, `ops-5`; extends `ON-15`). | Gate every "listening" string on the predicate that produced "no microphone configured" (`today.rs`, `_partial_footer.html:28-31`). |
+| **DD-17** | P2 | VERIFIED | `/admin/doctor` warnings carry no in-page action: every "Fix:" is a CLI flag or config key, even where a page exists — audio source (`/admin/audio` is in the same nav), offsite backup (`/admin/backups`), location. A browser-only operator is told to edit files (`onboarding-12`). | Give `Check` an optional `ui_href` and render it as a button; populate for audio, backups, location and authentication. |
+| **DD-18** | P2 | VERIFIED | The wizard has no client-side validation (`#ob-lat` is `type=text` with no `min`/`max`/`pattern`; Continue with `999`/`abc` advanced to step 3) and a reload or browser Back throws every answer away — steps are not in history, `history.length` stays 2 (`onboarding-5`). | `type=number step=any min max required` on the coordinate inputs; `pushState` per step; keep the draft in `sessionStorage`. |
+| **DD-19** | P2 | VERIFIED | **On a 100 % full volume the station said it was healthy.** `/api/v2/health` 200 `healthy`, `detection_writes:"accepted"`, while `/api/v2/system/disk` was 503 critical, DuckDB had been *quarantined* on ENOSPC, the admin bootstrap had failed, and `/` redirected to `/onboarding` (`adversity-4`; `PS-9`, `AD-4` confirmed and widened; `system.rs:147-165, 221-228`). | Fold the disk verdict and a failed bootstrap into the health verdict (strict at least); make an ENOSPC quarantine of the analytics store a condition, not a log line. |
+| **DD-20** | P2 | VERIFIED | **A vanished data volume is invisible.** After `umount -l` of the data mount the station kept writing to the detached filesystem, `/api/v2/system/disk` reported the *parent* filesystem as `ok`, and the only signal was a per-minute `df failed` ERROR; when `df` fails the public endpoint is an HTTP 500 (`adversity-5`). | Compare the data directory's device id with its parent's at start and on each disk poll; a change is a condition. Answer a `df` failure as a degraded verdict, not 500. |
+| **DD-21** | P2 | VERIFIED | Memory pressure ends in a silent crash: `ulimit -v 150000` → SIGSEGV with an empty log; `600000` → `memory allocation of 19922944 bytes failed` abort; `300000` and `1200000` run — non-monotonic. No allocation or panic hook writes a diagnostic (`adversity-6`). | Install a panic hook that writes one line to `errors.jsonl` before dying; document the working floor; consider `--max-memory` guidance in the unit. |
+| **DD-22** | P2 | READ | A silent MQTT broker is handled soundly (timeouts, backoff, no leak) and then reported nowhere: steady-state failure is a `debug!` (`mqtt_presence.rs:218`); health, `/station/alerts` and `/admin/overview` show nothing (`adversity-7`). | Raise the steady-state failure to a station-health condition keyed on the broker, with the last error. |
+| **DD-23** | P2 | VERIFIED | **Drift repair is count-based and blind to net-zero drift.** A delete plus a back-dated insert netting to zero leaves DuckDB permanently wrong; verified with direct counts (owl: sqlite 1 / duckdb 0; deleted row: sqlite 0 / duckdb 1; totals 500 / 500) (`adversity-8`; `state.rs:340-357`). | Compare a checksum of `(Date, Time, Sci_Name, chunk)` per day, not the count; repair the days that differ. |
+| **DD-24** | P2 | VERIFIED | `POST /admin/notifications/test` answered "All configured channels passed" in 10 ms with MQTT dead: `test_all` (`notification_test.rs:391-430`) tests only Push and BirdWeather and passes when everything is skipped (`adversity-9`). | Report "nothing was tested" when every channel is skipped; add MQTT and email to the set. |
+| **DD-25** | P2 | VERIFIED | **A second instance on the same data directory quarantined the first's live DuckDB.** `server.log 01:12:03`: `ERROR analytics database is unusable; quarantining it and rebuilding from SQLite` from a *new* process that then died with `AddrInUse` because the first, SIGTERM'd a second earlier, was still up. A lock held by a live sibling was treated as corruption; a `systemctl restart` that overlaps a slow shutdown can do the same (mechanism CONJECTURED from the log; the sequence is VERIFIED). | Distinguish "locked" from "corrupt" when opening the analytics store — retry on a lock error for the shutdown grace period before quarantining; take a lock file on the data directory at start. |
+| **DD-26** | P2 | READ | MQTT / Home Assistant presence is process presence only: `mqtt_presence.rs:18-22` states are `online`/`offline`/will; no integration reads the daemon flag; discovery registers one station entity. "Daemon died" and `detection_silence_secs` are never published (`ops-6`; `OB-8` half-covered). | Publish the daemon flag and the silence age as entities; set the will from the same predicate `?strict=1` uses. |
+| **DD-27** | P2 | VERIFIED | Shell-bound operations, confirmed: restart is refused honestly outside systemd; `POST /admin/update/apply` has zero UI callers and `/admin/system` says run `sudo install.sh` (`LC-3`, `NP-11` open); there is no reboot route; `systemctl edit` hardening has no equivalent; the journal is a 200-line ring (`ops-8`). | As `LC-3`/`NP-11`; add a reboot control behind the same confirm as restart. |
+| **DD-28** | P3 | VERIFIED | Four smaller operability gaps: `/admin/system/logs?level=ERROR` still streams `level-info` lines (the filter is client-side) and `errors.jsonl` has no page (`ops-2`); `/admin/system/backups` is a bare card fragment linked as a page from `/admin/system` and `/admin/overview` (`ops-3`); `/admin/doctor.json` rows are keyed by display `name` only with no family id, and the six push-only `station_health.rs:222 CHECKS` have no endpoint — `OP-4` stays open (`ops-7`). | Filter server-side; route the backups link to `/station/data`; add `family` to each doctor row; expose `evaluate`. |
+| **DD-29** | P2 | VERIFIED | **Colour contrast, measured** (axe with `color-contrast` enabled, which CI disables): the four-letter species avatar chips (`app.css:312-320`, `--sp: oklch(62% 0.13 h)`) fail in light on every list, worst 2.56:1, 128 nodes over 6 routes (`ui-4`); the `--rare`/`--rare-soft` pair (`#c74c41` on `#ffdfd9`) is 3.7:1 at 11–12 px and drives every failure-state pill, amber badges 2.44:1 (`ui-5`); `#fff` on `--accent`/`--success` in dark is 1.87:1 (`.wk-badge`, `.qz-btn.approve`, `.img-add-btn`) (`ui-6`; `UX-16`, `UX-17` with numbers). | Darken `--sp` to ~48 % lightness in light; give the failure pill a 4.5:1 pair; use a dark foreground on the accent and success fills in dark. Then enable `color-contrast` in `tools/visual-qa/axe.mjs` so it stays. |
+| **DD-30** | P2 | VERIFIED | `/station/data` scrolls horizontally at 390 px once the station has one backup snapshot: the mobile rule `.bkr-main { grid-template-columns: 1fr }` (`app.css:2556-2562`) lets `.bkr-snap-row`'s min-content (386 px) widen the track to 423.6 px. The seeded database has no snapshots, so CI's overflow gate cannot see it (`ui-12`). | `min-width: 0` on the grid children and `minmax(0, 1fr)` in `.bkr-snap-row`; seed one snapshot in `tools/visual-qa/seed.py` so the gate covers it. |
+| **DD-31** | P3 | VERIFIED | Four accessibility details: the ⌘K input lacks combobox semantics (`ui-2`; the first run's "Tab escapes the dialog" was retracted — it uses `showModal()`); the admin chrome has no skip link or theme toggle (`ui-3`; theme *is* honoured); prose links are colour-only (`a { text-decoration: none }`, `app.css:221`) (`ui-9`); 12-hour strings in `heatmap.rs:95` and the dawn polar axis against 24-hour everywhere else, and zero `<time datetime>` on 43 routes (`ui-11`). | `role=combobox` + `aria-expanded`/`aria-controls`; share the skip link across shells; underline links in prose; one clock convention and `<time>` elements. |
+| **DD-32** | P1 | READ | **Every detection sent to BirdWeather is unverifiable there.** `Client::post_soundscape` (`crates/birdnet-integrations/src/birdweather.rs:186`) has no production caller; the daemon posts a 6-field `DetectionPost` (`src/daemon/processor.rs:923,936`, `store_forward.rs:82`) with no `soundscapeId`, start, end or `algorithm`. Both upstreams post the soundscape first and stamp its id on every detection (`BirdNET-Pi scripts/utils/reporting.py:205-210`; `birdnet-go internal/birdweather/birdweather_client.go:704-713`) (`upstream-2`). | Post the clip as a soundscape, carry its id on the detection post, and store it on the row; gate on a stub server. |
+| **DD-33** | P2 | READ | **`SENSITIVITY` is inert on the shipped model and the settings form says otherwise.** `compute_confidence` passes V3.0-preview3 probabilities through (`model.rs:584-590`; installer `10-config.sh:84`) while `admin/settings/form.rs:121-123` offers it as "Higher values increase recall". On a V2.4 model ours applies `sigmoid(1.25·x)` where BirdNET-Pi applies `1−(1.25−1)=0.75` (`models.py:95,98`) — same default number, opposite steepness; birdnet-go matches our direction (`analyze.go:128`). `birdnet-migrate` does not import `SENSITIVITY`, so it bites by-hand copies (`upstream-1`). | Hide or annotate the field when the loaded model ignores it; document the V2.4 direction against BirdNET-Pi's. |
+| **DD-34** | P2 | READ | `Week` is BirdNET's 48-week meta-week here (`civil.rs birdnet_week`, via `process.rs:44`) and an ISO week in BirdNET-Pi (`classes.py:16,48`); the importer copies the value verbatim (`importer.rs:507,556`). For 7 September 2026 that is 33 versus 37, in one column, and no export says which (`research-5`). | Convert on import; name the convention in the export header or the DwC `measurementRemarks`. |
+| **DD-35** | P3 | READ | `upstream-3` confirms the export picture: ours has four HTTP formats including eBird with effort fields; BirdNET-Pi is file-only (`api.php` serves only images); birdnet-go has no detection export route among 221 v2 routes. No Raven/Audacity/DwC in any tree (`WE-*`, `FR-1` confirmed). | None; recorded for the comparison. |
 
 ## 4. The plan
 
@@ -1083,7 +1149,7 @@ person 40 km away learns that it stopped.
 | 5.18 | An SSRF guard that still allows RFC1918 | **O-11** |
 | 5.19 | Hot-reloadable proxy and rate-limit settings | **O-12** |
 | 5.20 | Metrics off the public port | **O-15** |
-| 5.21 | Support-bundle audio inventory | **NP-6** |
+| 5.21 | Support-bundle audio inventory — the log half is done (`8aba101`: the browser bundle stages the in-process ring as `recent.log`); the audio-probe members are not | **NP-6** |
 | 5.22 | Weekly report and alert-rule schedules on one clock | **NT-10** |
 | 5.23 | Verified install, pinned by release | **LC-16** |
 
@@ -1207,203 +1273,149 @@ plan.
 
 ### Where the numbers come from
 
-`cargo test --workspace` on x86_64 in a container, re-run at `ee795ed` by the
-reconciliation pass and matching what this block already said: **3 640 passed,
-0 failed, 7 ignored, 111 suites**. `cargo fmt --check --all` exits 0 at that
-commit. The same command at the branch point `f33eb9e` reports 3 570 in 106
-suites, so the difference is the deployment pass's own gates and nothing else.
-(This block read "3 567, 106 suites" and then "3 618" as that pass went on;
-re-take it rather than carrying a figure forward — the count moves with every
-commit here. Extract it with `grep "^test result:"` and sum the fields; a
-`| tail -N` will report exit 0 over a run with failures inside it.)
+*Re-taken 2026-09-08 on the branch at its final commit; every figure below is
+from a command run that day, and the commands are given so the next session
+re-takes them rather than carrying them. The previous versions of this block
+recorded 3 640, 3 653, 3 661, 3 667 and 3 674 tests in turn, each correct for
+its commit and none for the next one — which is the whole reason this
+paragraph exists.*
 
-The reconciliation branch takes the suite to **3 674 passed, 0 failed,
-7 ignored** in **114** suites — thirty-four gates across nine files, and three
-new suites, all in `crates/birdnet-db/tests/`:
-`the_species_list_honours_the_provenance_rule.rs`,
-`a_corrupt_index_must_not_reach_the_backup_ring.rs` and
-`a_failed_restore_keeps_what_it_was_replacing.rs`.
-`--workspace --all-features` gives the same set as `--workspace` here, because
-`analytics` is the only feature and it is on by default. (This block has now
-read "3 653", "3 661" and "3 667" in turn; re-take it rather than carrying it,
-which is what the paragraph above says and what this sentence keeps being
-evidence for.)
+**Tests.** The workspace suite is re-run at the end of every session and the
+count belongs in the final message and here, extracted with
+`grep "^test result:" | awk '{p+=$4; f+=$6; i+=$8} END {print p, f, i, NR}'`
+over the full log — never `| tail -N`, which reports exit 0 over a run with
+failures inside it; and with `--no-fail-fast`, without which a single red
+binary stops the run at the suites before it (this pass first read "1 104
+passed, 45 suites" from exactly that truncation). The figure for this branch's
+final commit is in the paragraph that follows this block's date line; the
+session's final message quotes the same run.
 
-Not in that count, because it is not a cargo test:
-`installer/test/container-model-cache.sh`, run by
-`installer/test/run-ci.sh` — whose accounting step fails if a file in that
-directory is neither run nor excluded with a reason — and by CI's
-`installer unit tests` job. `shellcheck 0.10.0 --severity=warning -x` is clean
-over `docker/entrypoint.sh`, `installer/test/*.sh`, `quickstart.sh`,
-`install.sh` and `scripts/*.sh`, and `installer/build.sh --check` reports
-`install.sh` in sync with `installer/lib/*.sh`.
+**Lines.** `find crates src -name '*.rs' | xargs cat | wc -l` gives
+**189 133** lines of Rust in **468** files under `crates/` and `src/`, and
+**204 900** with `tests/`. `grep -cE '^\s+version: [0-9]+,'
+crates/birdnet-db/src/migration.rs` over-counts by one (a version line that is
+not a `Migration`); the last `Migration { version: N` is **42**.
 
-Line counts at `ee795ed`, one method
-(`find crates src -name '*.rs' | xargs cat | wc -l`): **184 379** lines of Rust
-under `crates/` and `src/` across 458 files, **199 417** with `tests/`. The
-figures in §0 — 172 482 and 186 040 — were taken at `35acd9e` and are correct
-for that commit; growth, not error. Upstream at the tips this pass measured:
-`Nachtzuster/BirdNET-Pi` is still at `88985a3` and has not moved since §0 read
-it; `tphakala/birdnet-go` has moved from `265b6455` to `b184f689`.
+**Upstream tips** by `git ls-remote … HEAD` on 2026-09-08:
+`Nachtzuster/BirdNET-Pi` `88985a3` (unchanged since §0 first read it; its tip
+is dated 2026-02-28 and it has no commits since 2026-08-01), `tphakala/birdnet-go`
+`e648f34d` (162 commits since 2026-08-01 — a model-gallery programme, Silero
+VAD, per-model and per-species dynamic thresholds, a CSRF advisory fix and an
+SSRF guard; see `docs/FEATURE_GAP_ANALYSIS.md` and §3.14 `DD-32`/`DD-33`).
 
-Two gates in the template's list are **not** verified here, and should not be
-claimed as local results:
+**Gates that are not cargo tests**, all run at the end of this pass and all
+green: `installer/test/run-ci.sh` (the accounting step fails if a file in
+`installer/test/` is neither run nor excluded; 14 files, 12 in `CI_TESTS`);
+`shellcheck 0.10.0 --severity=warning -x` over the 25 files the glob
+`docker/entrypoint.sh docker/strip-blank-env.sh installer/test/*.sh
+quickstart.sh install.sh scripts/*.sh` names; `typos-cli 1.50.1` against
+`./.typos.toml`; `installer/build.sh --check` (`install.sh` in sync with
+`installer/lib/*.sh`); `scripts/check-book-links.py docs/book/_generated/html`
+over the tree `build.rs` renders on every build. `cargo clippy --workspace
+--all-targets --all-features -- -D warnings` and `RUSTDOCFLAGS="-D warnings"
+cargo doc --workspace --no-deps --document-private-items --all-features`
+exit 0. Toolchain: rustc 1.98.1 (`channel = "stable"`; MSRV 1.95 is checked
+by CI, not here).
 
-* `cargo deny check` — `cargo-deny` is still not installed in this
-  environment, and neither are `cargo-audit`, `cargo-machete`,
-  `cargo-llvm-cov` or `cross`. The supply-chain question is nevertheless
-  **answered, by CI rather than here**: the `Supply chain` workflow run on the
-  merge commit `f33eb9e`
-  ([33778570446](https://github.com/tomtom215/BirdNet-Behavior/actions/runs/33778570446))
-  reports all six jobs green — `cargo-deny`, `cargo-audit`, `cargo-machete`,
-  `Spelling (typos)`, `shellcheck (bootstrap scripts)` and `installer unit
-  tests`. Read that from the run, not from this sentence, before relying on
-  it; and note it is a statement about `f33eb9e`, not about whatever is in
-  your working tree.
+**Not verified here, still.** `cargo-deny`, `cargo-audit`, `cargo-machete`,
+`cargo-llvm-cov` and `cross` are not in the container; the supply-chain
+question is answered by the `Supply chain` workflow on the PR's head, and the
+one red `cargo-audit` run this pass saw (on `480d56f`) was rustup failing to
+download the stable manifest — it died before the audit ran and passed on
+re-run. `typos`, `shellcheck` and Playwright with `@axe-core/playwright` were
+installed by hand again (`cargo install typos-cli`, the 0.10.0 tarball, `npm
+install` in `tools/visual-qa`); none survives a new container. `--doctor`
+still exits **1** here, every warning an unconfigured-environment one; the
+counts move with the container and are not carried.
 
-  A container fact worth carrying: `typos`, `shellcheck` and `cargo-mutants`
-  are **not** in the base image either. They were installed by hand in this
-  session (`cargo install typos-cli`, `cargo install cargo-mutants`, and the
-  0.10.0 release tarball for `shellcheck`) and all three gates then pass
-  locally — `typos` 1.50.1 against `./.typos.toml`, `shellcheck` 0.10.0 at
-  `--severity=warning -x` over the 26 files CI checks, `cargo-mutants` 27.1.0.
-  A previous handoff recorded them as "installed here"; they are not, and the
-  next session will have to install them again before it can claim them.
-* `birdnet-behavior --doctor` exits **1**, not 0, in a container. Exit 1 means
-  "worst severity is Warn" (`doctor/render.rs::summarise`), and every warning
-  is an unconfigured-environment one. **Still true**, and still not to be
-  ticked off without a configured station.
-
-  The *counts* move with the container **and** with the checks themselves, so
-  do not carry them forward. This block has recorded, in order: "8 passed, 9
-  warnings"; then 9 passed, 8 warnings; then — after 5.14 added an `API write
-  surface` check — 10 passed, 8 warnings; and now **9 passed, 9 warnings, 0
-  errors, 5 skipped**, because `Disk space` flipped back to WARN when the
-  container dropped to 4 GiB free during a build. It warned under 1 GiB on the
-  first container, passed at 13 GiB, and warns again at 4 GiB — the same check,
-  the same binary, three answers. The nine warnings now are: configuration
-  file, station location, species occurrence filter, admin authentication,
-  HTTPS, database directory, offsite backup, audio source, disk space. Re-run
-  it rather than quoting this list; that is the point of the paragraph.
+**The probes' evidence** — screenshots, saved HTML, the two clones, the seeded
+databases — lived under the session scratchpad and is gone with the
+container; every figure that mattered was copied into its §3.14 row, and the
+probe ids in those rows are the names of the reports it came from.
 
 ### What to do first
 
-*Rewritten by the reconciliation pass, 2026-09-04. The paragraphs after this
-one are the previous handoff and are still accurate; this is what changed.*
+*Rewritten 2026-09-08 after the deep-dive pass. The previous head of this
+list — `R-19`, then `OP-1`, then item 3.22, then `RC-5`–`RC-8` — is done in
+full: `dad46d1`, `9f42652`, `dd10fe7`, `95a8272`, each with its row and gate.
+So is everything the previous paragraphs named as cheaper than it looked:
+1.11 (`e88a60d`), 2.17 (`373ceb2`), 2.19 (`9f42652`), and the remaining half of
+`PR-5` (`d0df731`). What follows is the queue as it stands.*
 
-**`AD-2` is done** — it was the head of this list and is now fixed, for the two
-decisions that overwrite data. Read its row before touching this area: the
-mechanism recorded in the first draft was wrong, the corrected reproduction is
-in `crates/birdnet-db/tests/a_corrupt_index_must_not_reach_the_backup_ring.rs`,
-and `check_and_recover`'s verdict on the *live* database deliberately still uses
-`quick_check` for a cost reason stated at the call site.
+**`R-1` is the head, and it is the register's only open P0.** No detection
+row records which model produced it: no model column, no `analysis_runs`
+table, nothing in the tree that writes a model version or checksum to the
+database. `e3f9b80` made every row carry its coordinates, threshold,
+sensitivity and overlap, which makes this sharper — a row now says everything
+about how it was made except *what made it*. The shape is small: an
+`analysis_runs` table (model file sha, labels sha, declared version, the
+resolved threshold configuration, started-at), one row per daemon start, a
+`run_id` on `detections` written at insert (the same place `e3f9b80` writes
+`Cutoff`), and the run's model fields in every export. The gate is the one
+`e3f9b80` wrote, extended: two inserts under two run ids must carry two
+different model shas. Do this before anyone swaps the model on a station with
+history.
 
-**`AD-9` is done too**, and its row records a correction: the mechanism was not
-"the restore path needs room for a second database" but "the restore path
-deleted the first one before it knew it could write the second". `PS-10`'s
-"separate the two verdicts" is now applied at both levels — inside recovery, and
-in `src/app.rs`'s `recovery_fallback`, which is a named decision with its own
-tests rather than one branch.
+**Then `R-8`, because it is cheap and it is what a researcher hits first.**
+`detected_at_utc` is on every row and reaches no `DetectionRow` field, export
+or route; every export is local `Date`/`Time` with no offset. Add the column
+to `DetectionRow`, an `eventDate` with offset to CSV/JSON, and say in the
+header which clock the other two columns are. Separately, the import path's
+local-to-UTC conversion invents an instant for the spring-forward hour and
+picks the second autumn hour silently — the probe's exact inputs are in the
+row; a gate is three `INSERT`s under `TZ=Europe/London`.
 
-**So `R-19` is now the head of this list**, because it is the only finding here that damages someone else.**
-The eBird export applies no confidence floor, no one-per-hour deduplication,
-writes raw detection tallies into `Number` — one blackbird detected two hundred
-times becomes "200 birds" — and hard-codes `Protocol=S, Observers=1`. It also
-writes latitude 0, longitude 0 while the real coordinates sit in settings.
-BirdNET-Pi does all of this correctly, so this is a regression against upstream
-at the one surface whose output leaves the station and enters a public database.
-Fix it or withdraw it; shipping it is worse than not having it.
+**Then `O-6`.** The login throttle's "Too many attempts" branch is dead code:
+the flag that reaches it is set only inside a test. The counter is a
+`Mutex<HashMap<IpAddr, VecDeque<Instant>>>` on the state, five failures per
+fifteen minutes per address to match the reference, consulted before Argon2
+runs. The gate posts six bad passwords and expects the sixth to be refused
+without hashing.
 
-**Then `OP-1`, which is the cheapest large win in the document.** The support
-bundle and `--doctor` are reachable only over SSH. `doctor::collect_json` is
-written, tested, and already embedded in the bundle; `support::run` likewise.
-Item 2.19 is therefore two routes, not a feature — and it converts a large
-fraction of §3.13.4 from "the operator must drive out" to "the operator can look".
+**Then `DD-32`**, the one item where the data leaving the station is
+*silently worthless* rather than wrong: every BirdWeather post has no
+soundscape, so nothing there can be listened to. `post_soundscape` is written
+and tested; call it, carry the id on the detection post, store it on the row.
 
-**Then `RC-3`'s remaining half — item 3.22, the provenance dimension in
-`species_summary`'s key.** It is the only thing on this list where the shipped
-fix is deliberately the second-best one. The reader-side substitution that
-landed makes the numbers correct, and it does so by putting exactly the stations
-that merged another site's history — which are the large ones — back onto the
-unbounded scan migration 30 existed to remove. The lasting fix is to add an
-`is_import` dimension to the rollup's primary key, so both answers come from the
-rollup and nobody pays: at 200 species that is 9 600 rows rather than 4 800, and
-the triggers stay exactly as reversible as they are now. It is a schema
-migration plus a rewrite of three triggers, and the ordering note in migration
-30's own comment about dropping the summary triggers before a bulk rewrite is
-the thing to read before starting. The gates are already written: the four in
-`the_species_list_honours_the_provenance_rule.rs` must stay green through it,
-and `a_station_with_nothing_to_exclude_still_reads_the_rollup` is the one that
-will tell you whether you have actually kept the fast path.
+**Then the first-run pair, `DD-14` and `DD-15`.** A password step at the head
+of the wizard when no password and no account exist, so the first browser to
+finish setup owns the station; and a session secret that survives a restart on
+bare metal — a generated secret persisted beside the database, ahead of the
+`CADDY_PWD` derivation — so the access page's "fourteen days" is true. The
+gate for the second boots the real binary twice on one config with no
+environment and presents a cookie from the first boot to the second.
 
-**Then `RC-5`, `RC-6`, `RC-7` and `RC-8` together**, because they are one
-change with two halves. `security.rs`'s module doc argues that CSRF needs no
-synchroniser token *because there is no session to bind to*, and there has been
-a session cookie for some time; the actual defence is `SameSite=Lax` plus the
-same-origin check, and nothing asserts either. Write the two assertions first,
-then the doc, then the doctor's `CHECKS` table — which is the same lesson §6
-closes with, applied to the one place in the tree that still has the hole
-`station_health` had.
+**Then the two adversity conditions that lie**, `DD-19` and `DD-20`: a full
+card and a vanished data volume both leave `/api/v2/health` at 200 "healthy".
+Fold the disk verdict and a failed admin bootstrap into the strict verdict;
+compare the data directory's device id with its parent's on each disk poll.
 
-Three things about this queue that were not true when the previous handoff was
-written, and one that never was:
+After those, in no particular order: `DD-25` (a lock on the analytics store
+read as corruption during an overlapping restart — retry for the shutdown
+grace before quarantining), `DD-23` (checksum drift repair), `DD-24` (a
+notification test that says "passed" when it tested nothing), the contrast
+numbers in `DD-29` with `color-contrast` then enabled in the axe sweep, and
+`DD-30` with a seeded snapshot so the overflow gate can see it. §4's tables
+still hold the older queue; nothing there outranks this list.
 
-* **`OB-4` and `OB-12` are done** and were still written as open. Their rows say
-  so now. What is left of `OB-4` is `PR-5`'s second clause — the daemon
-  `AtomicBool` at `src/app.rs:439` that no exit path clears — so `?strict=1`
-  still reports a daemon that died as running. That is a smaller job than the
-  row makes it look.
-* **`PS-16` is two-thirds done**: `evaluate` runs six conditions from a named
-  table with a gate holding the module doc to it. Only "nothing reads
-  `detection_write_failed`" survives.
-* **`O-7` and `O-8` shipped the visible half and not the gate**, which was the
-  remedy in both cases. `O-7`'s drift is already back (`BNB_HELP_DIR`,
-  `BIRDNET_REQUIRE_LIVE_EXTENSION`); `O-8` closed documented→routed and left
-  routed→documented open with six live endpoints undocumented. Neither should
-  be read as closed. See **RC-14** and **RC-15**.
-* **`PS-18` was wrong about its own mechanism**, in the direction that makes
-  **PR-3** worse. Anyone sizing the tmpfs should read the corrected PS-18 row
-  before trusting PR-3's numbers.
+Four things about method, from this pass, that the next one should not
+relearn:
 
-A note on method, because it cost this pass real time. Nine independent
-investigations produced ~470 verdicts, and the two that were wrong were both
-wrong in the *fluent* direction — a claim that reads well and inverts a fact.
-One said the supply-chain, coverage, install-smoke and mutation workflows "never
-run on a `claude/**` PR"; `pull_request.branches` filters the PR's **base**, and
-every one of them ran on this branch's own PR. The other said **NP-13** was
-stale; it is not, and it is now VERIFIED rather than READ. Both were caught by
-going to the artifact — the workflow's check-run list, and the two players'
-source. Neither would have been caught by reading the claim again.
-
-The two items this section used to name — **2.16 (`OB-9`)** and **2.8
-(`OB-16`)** — are both done, so the head of the queue is open. Nothing left in
-Stage 2 orders itself the way those two did, and nothing in it blocks anything
-else, so any of them can be taken next; §4's **Stage 2 — still to do** table is
-the list, and it is not repeated here because two copies of a work queue is how
-one of them goes stale.
-
-Two of those items are now cheaper than the table suggests, for the same
-reason. **2.17** (redact by shape in the support bundle) is a one-place fix
-since 5.14 moved the rules into `birdnet_core::config::redact`, and the
-mangling it names is measured rather than suspected — see that row. **2.20** (a
-test path for email and MQTT) is the one item still holding `OB-9` open.
-
-Stage 1 still has 1.10 (`PS-7`/`S-4`), 1.11 (`NT-4` remaining half) and 1.12
-(`LC-2` remaining half) outstanding. Those are about *keeping the data*, which
-outranks everything in Stage 2 on a station that is already failing — take them
-first if you have no other reason to choose. 1.9 (`PS-5`) is done, in its
-narrowed form; the runtime quarantine-and-restore branch of that remedy is not,
-and stopping the ingest writer was its prerequisite.
-
-**5.14 (`O-1`)** is done — all eight endpoints the remedy named. Anyone adding
-a ninth should read `crates/birdnet-web/src/routes/api_write.rs` first: the two
-route tables at the top are what the CSRF guard, the router-mount gate and the
-two `openapi.json` gates all read, so an endpoint added without an entry there
-is invisible to every one of them. They are also the reason a gate named
-`the_route_table_is_the_router` had to be renamed: it did not check the router,
-and passed with a route unmounted. The second thing to read is
-`tests/analytics_divergence.rs`, which is why the batch endpoint loops over the
-paired `AppState` writes instead of taking one transaction.
+* **The first run of all six probes was lost to an API session limit** before
+  any wrote a report, and everything they had found went with them. The
+  second run created its report in its first tool calls and appended each
+  finding as it got the evidence. Do that from the start.
+* **`pkill -f <pattern>` kills the shell that runs it** when the pattern is in
+  that shell's own command line. A character class on the first letter,
+  `pgrep -f '[b]irdnet-behavior --web-only'`, does not match itself.
+* **ESM `import` ignores `NODE_PATH`.** A Playwright script outside
+  `tools/visual-qa` needs a `node_modules` symlink beside it, not an
+  environment variable.
+* **A test can encode the defect.** `public_router_is_read_only.rs` asserted
+  the wizard was public and `web_api_pages.rs` asserted a capturing station
+  was healthy without a daemon flag; the first was the old design and the
+  second was right and caught an over-reach in a fix. Both had to be read,
+  not just made green.
 
 ### A gap in the mutation matrix — a proposal, not a change
 
