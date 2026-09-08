@@ -31,8 +31,8 @@ mod tee;
 
 // Re-export the public API so callers keep the same import path.
 pub use disk::{
-    DiskManager, DiskManagerConfig, DiskUsage, FullDiskAction, LockedFilesProvider,
-    cleanup_old_recordings, disk_usage, recording_stats,
+    DEFAULT_PURGE_SPECIES_FLOOR, DiskManager, DiskManagerConfig, DiskUsage, FullDiskAction,
+    LockedFilesProvider, PurgePolicy, cleanup_old_recordings, disk_usage, recording_stats,
 };
 pub use live::{
     LiveAudioHub, LiveAudioHubHandle, LiveSubscription, LiveTap, PcmSpec, new_live_audio_hub,

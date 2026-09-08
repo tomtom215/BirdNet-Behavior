@@ -38,6 +38,17 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — the disk-full purge keeps every species
+
+**A full disk no longer costs the rarest bird its only clip** (`S-2`). The
+purge deleted the oldest tenth of the recordings, whatever they were, so
+the single clip of the year's rarest bird went before the thousandth of
+the commonest. It now takes from the most-recorded species first, the
+lowest-confidence and then oldest clip within it, and never takes a species
+below `--purge-species-floor` clips (5 unless set; `0` removes the floor).
+The raw capture segments, which carry no species, are still drained
+oldest-first.
+
 ### Fixed — "View on eBird" reaches a page
 
 **The species page's eBird link is built from the eBird species code**

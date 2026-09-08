@@ -11,8 +11,29 @@ use crate::audio::capture::types::CaptureError;
 use super::disk_usage;
 use super::purge::{
     cleanup_empty_dirs, is_protected, purge_flat_older_than, purge_flat_over_size,
-    purge_oldest_files, purge_oldest_flat_files,
+    purge_oldest_files, purge_oldest_flat_files, purge_recordings,
 };
+
+/// How the disk-full purge chooses what goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurgePolicy {
+    /// Oldest files first, regardless of what they are. Right for the
+    /// transient raw-capture segments, which carry no species and are worth
+    /// nothing once read.
+    OldestFirst,
+    /// Keep every species (S-2): the most-recorded species gives up clips
+    /// first, lowest confidence then oldest within it, and no species is ever
+    /// taken below `floor` clips. Right for the extracted clips, where
+    /// oldest-first deleted the single clip of the year's rarest bird before
+    /// the thousandth clip of the commonest.
+    KeepEverySpecies {
+        /// Clips a species always keeps, however full the disk is.
+        floor: u32,
+    },
+}
+
+/// The per-species floor the recordings purge keeps when nothing sets one.
+pub const DEFAULT_PURGE_SPECIES_FLOOR: u32 = 5;
 
 /// What to do when the disk reaches the purge threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +94,8 @@ pub struct DiskManagerConfig {
     /// Where to publish that the purge has stopped achieving anything (PR-7),
     /// for the health surfaces; `None` publishes nowhere.
     pub ineffective_flag: Option<Arc<AtomicBool>>,
+    /// What the disk-full purge takes first (S-2).
+    pub purge_policy: PurgePolicy,
 }
 
 impl Default for DiskManagerConfig {
@@ -89,6 +112,9 @@ impl Default for DiskManagerConfig {
             stream_retention_secs: 0,
             stream_max_bytes: 0,
             ineffective_flag: None,
+            purge_policy: PurgePolicy::KeepEverySpecies {
+                floor: DEFAULT_PURGE_SPECIES_FLOOR,
+            },
         }
     }
 }
@@ -157,6 +183,7 @@ impl std::fmt::Debug for DiskManagerConfig {
             .field("stream_retention_secs", &self.stream_retention_secs)
             .field("stream_max_bytes", &self.stream_max_bytes)
             .field("ineffective_flag", &self.ineffective_flag.is_some())
+            .field("purge_policy", &self.purge_policy)
             .finish()
     }
 }
@@ -253,22 +280,34 @@ impl DiskManager {
                     );
                     return Ok(0);
                 }
-                let mut removed = purge_oldest_files(
-                    &self.config.monitored_dir,
-                    &self.config.exclude_paths,
-                    &self.config.locked_file_names,
-                );
-                // The raw capture segments sit FLAT in the watch/stream dir (no
-                // `By_Date/` subtree), so `purge_oldest_files` above reclaims
-                // none of them. Purge the oldest flat segments too — without
-                // this the disk-full safety net frees nothing on the RAM-backed
-                // stream dir and the tmpfs runs to 100 % (breaking capture and
-                // even `apt` on a Pi).
-                removed += purge_oldest_flat_files(
-                    &self.config.monitored_dir,
-                    &self.config.exclude_paths,
-                    &self.config.locked_file_names,
-                );
+                let removed = match self.config.purge_policy {
+                    PurgePolicy::KeepEverySpecies { floor } => purge_recordings(
+                        &self.config.monitored_dir,
+                        floor,
+                        &self.config.exclude_paths,
+                        &self.config.locked_file_names,
+                    ),
+                    PurgePolicy::OldestFirst => {
+                        let by_date = purge_oldest_files(
+                            &self.config.monitored_dir,
+                            &self.config.exclude_paths,
+                            &self.config.locked_file_names,
+                        );
+                        // The raw capture segments sit FLAT in the watch/stream
+                        // dir (no `By_Date/` subtree), so `purge_oldest_files`
+                        // above reclaims none of them. Purge the oldest flat
+                        // segments too — without this the disk-full safety net
+                        // frees nothing on the RAM-backed stream dir and the
+                        // tmpfs runs to 100 % (breaking capture and even `apt`
+                        // on a Pi).
+                        by_date
+                            + purge_oldest_flat_files(
+                                &self.config.monitored_dir,
+                                &self.config.exclude_paths,
+                                &self.config.locked_file_names,
+                            )
+                    }
+                };
                 cleanup_empty_dirs(&self.config.monitored_dir);
                 let after =
                     disk_usage(&self.config.monitored_dir).map_or(percent, |u| u.used_percent());

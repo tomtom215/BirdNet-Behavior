@@ -68,6 +68,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
 | `BIRDNET_CLIP_RETENTION_DAYS` | `--clip-retention-days` | `CLIP_RETENTION_DAYS` | `0` (keep forever) |
 | `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` |
+| `BIRDNET_PURGE_SPECIES_FLOOR` | `--purge-species-floor` | `PURGE_SPECIES_FLOOR` | `5` (`0` = no floor) |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
 | `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | `CADDY_PWD` auto-set on bare-metal install; sign in as `admin` (`CADDY_USER` is environment-only — see [Remote access](../admin/remote-access.md)) |

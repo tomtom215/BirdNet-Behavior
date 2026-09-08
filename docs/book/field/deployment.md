@@ -97,7 +97,11 @@ the retention each one needs:
 - the **recordings directory**, holding your extracted clips beside
   `birds.db`. These are your data, so they are never removed by age. Only the
   disk-full backstop touches them: once usage exceeds `DISK_PURGE_THRESHOLD`
-  it removes the oldest clips first, skipping any file the database has marked
+  it removes a tenth of them, taken from the most-recorded species first
+  (lowest confidence, then oldest, within a species) and never taking a
+  species below `PURGE_SPECIES_FLOOR` clips (5 unless you set it; `0` removes
+  the floor), so the one clip of a rare bird outlives the thousandth of a
+  common one. It skips any file the database has marked
   locked (the 🔒 **Lock** action on **Recordings**, or on a Today row). The locked set is re-read every cycle,
   so locking a clip takes effect immediately — no restart needed.
 - the **raw capture directory** (`--watch-dir`, typically the RAM-backed

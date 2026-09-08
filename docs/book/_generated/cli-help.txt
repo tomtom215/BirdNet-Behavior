@@ -576,14 +576,21 @@ Options:
           [default: 0]
 
       --disk-purge-threshold <DISK_PURGE_THRESHOLD>
-          Disk-usage percentage at which the oldest recordings start being purged.
+          Disk-usage percentage at which recordings start being purged.
 
-          The safety net that keeps a 24/7 station from filling its card: once the data disk crosses this, the oldest clips are deleted first, and locked clips are never touched. `BirdNET-Pi` equivalent: `DISK_PURGE_THRESHOLD`.
+          The safety net that keeps a 24/7 station from filling its card: once the data disk crosses this, clips are deleted from the most-recorded species first (lowest confidence, then oldest, within it), no species is taken below `--purge-species-floor`, and locked clips are never touched. `BirdNET-Pi` equivalent: `DISK_PURGE_THRESHOLD`.
 
           `0` leaves the resolution to the config file / admin settings, then the 95 % default — the flag is only "set" when given, so it never silently overrides a value chosen in the UI.
 
           [env: BIRDNET_DISK_PURGE_THRESHOLD=]
           [default: 0]
+
+      --purge-species-floor <PURGE_SPECIES_FLOOR>
+          Clips every species keeps when the disk-full purge runs.
+
+          The purge takes from the most-recorded species first, so the single clip of the year's rarest bird is the last thing to go; this floor makes it never go: a species with this many clips or fewer is not touched, however full the disk is. `0` removes the floor. Config file: `PURGE_SPECIES_FLOOR`; unset, 5.
+
+          [env: BIRDNET_PURGE_SPECIES_FLOOR=]
 
       --stream-retention-secs <STREAM_RETENTION_SECS>
           Seconds a raw capture segment is kept in the transient stream directory.

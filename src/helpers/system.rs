@@ -52,7 +52,10 @@ pub fn start_disk_manager(
     config: Option<&birdnet_core::config::Config>,
     state: &birdnet_web::state::AppState,
 ) -> Vec<std::thread::JoinHandle<()>> {
-    use birdnet_core::audio::capture::{DiskManagerConfig, FullDiskAction, LockedFilesProvider};
+    use birdnet_core::audio::capture::{
+        DEFAULT_PURGE_SPECIES_FLOOR, DiskManagerConfig, FullDiskAction, LockedFilesProvider,
+        PurgePolicy,
+    };
 
     let max_files_per_species = if cli.max_files_per_species > 0 {
         cli.max_files_per_species
@@ -80,6 +83,14 @@ pub fn start_disk_manager(
             .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
             .unwrap_or(DEFAULT_PURGE_THRESHOLD)
     };
+
+    // The clips a species always keeps when the disk-full purge runs (S-2).
+    // `None` from clap is "not given", so 0 stays a real answer: no floor.
+    let species_floor = cli.purge_species_floor.unwrap_or_else(|| {
+        config
+            .and_then(|c| c.get_parsed::<u32>("PURGE_SPECIES_FLOOR").ok())
+            .unwrap_or(DEFAULT_PURGE_SPECIES_FLOOR)
+    });
 
     // Re-read once per purge cycle rather than snapshotted here: `/admin/recordings`
     // → "lock" writes `is_locked` at runtime, so a set captured at startup
@@ -127,6 +138,8 @@ pub fn start_disk_manager(
                 ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                 stream_retention_secs: retention,
                 stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
+                // Raw segments carry no species; oldest-first is right here.
+                purge_policy: PurgePolicy::OldestFirst,
             },
             "stream",
         ));
@@ -166,8 +179,12 @@ pub fn start_disk_manager(
                     ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                     // Never age- or size-drain the operator's clips: they are
                     // only ever removed by the disk-full backstop above, and
-                    // then oldest-first and never if locked.
+                    // then most-recorded species first, never below the floor,
+                    // and never if locked.
                     stream_retention_secs: 0,
+                    purge_policy: PurgePolicy::KeepEverySpecies {
+                        floor: species_floor,
+                    },
                     stream_max_bytes: 0,
                 },
                 "recordings",
