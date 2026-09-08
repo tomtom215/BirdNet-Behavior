@@ -811,6 +811,10 @@ pub(super) fn event_processor(
             };
             let insert_result = state.with_analytics(|adb| adb.insert_detection(&live));
             if let Some(Err(e)) = insert_result {
+                // Counted and conditioned (OP-7), not only logged: this row
+                // is absent from every behavioural dashboard until the
+                // startup drift check rebuilds the copy.
+                state.metrics().inc_analytics_mirror_failed(&e.to_string());
                 tracing::warn!(error = %e, "failed to insert detection into DuckDB");
             }
         }

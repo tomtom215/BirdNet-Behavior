@@ -227,6 +227,14 @@ pub struct MetricsRegistry {
     /// stamped by the last reconciliation pass (S-14). `u64::MAX` until a
     /// pass has run.
     orphaned_clips: AtomicU64,
+    /// Detections the SQLite store accepted and the DuckDB copy refused
+    /// (OP-7): each one is a row the behavioural dashboards will not show
+    /// until the startup drift check rebuilds the copy.
+    analytics_mirror_failures_total: AtomicU64,
+    /// Seconds since the Unix epoch of the last such failure; `0` for none.
+    analytics_mirror_last_failure: AtomicU64,
+    /// The last mirror error's text, for the condition.
+    analytics_mirror_last_error: RwLock<Option<String>>,
     /// HTTP responses served, by status class (`2xx`, `4xx`, …).
     http_responses: RwLock<HashMap<String, AtomicU64>>,
     /// Web request latency.
@@ -264,6 +272,9 @@ impl MetricsRegistry {
             occurrence_filter_active: AtomicU64::new(0),
             occurrence_candidates: AtomicU64::new(u64::MAX),
             orphaned_clips: AtomicU64::new(u64::MAX),
+            analytics_mirror_failures_total: AtomicU64::new(0),
+            analytics_mirror_last_failure: AtomicU64::new(0),
+            analytics_mirror_last_error: RwLock::new(None),
             http_responses: RwLock::new(HashMap::new()),
             http_duration: Histogram::new(),
         }
@@ -345,6 +356,40 @@ impl MetricsRegistry {
             .store(u64::from(active), Ordering::Relaxed);
         self.occurrence_candidates
             .store(candidates.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Record a detection the DuckDB copy refused (OP-7).
+    pub fn inc_analytics_mirror_failed(&self, error: &str) {
+        self.analytics_mirror_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.analytics_mirror_last_failure
+            .store(unix_now_secs(), Ordering::Relaxed);
+        if let Ok(mut e) = self.analytics_mirror_last_error.write() {
+            *e = Some(error.to_owned());
+        }
+    }
+
+    /// Detections the DuckDB copy refused since process start.
+    #[must_use]
+    pub fn analytics_mirror_failures(&self) -> u64 {
+        self.analytics_mirror_failures_total.load(Ordering::Relaxed)
+    }
+
+    /// When the last mirror write failed, as seconds since the Unix epoch,
+    /// with the error; `None` when none has.
+    #[must_use]
+    pub fn analytics_mirror_last_failure(&self) -> Option<(u64, String)> {
+        match self.analytics_mirror_last_failure.load(Ordering::Relaxed) {
+            0 => None,
+            at => Some((
+                at,
+                self.analytics_mirror_last_error
+                    .read()
+                    .ok()
+                    .and_then(|e| e.clone())
+                    .unwrap_or_default(),
+            )),
+        }
     }
 
     /// Record what the last clip-reconciliation pass found: rows whose clip
@@ -619,6 +664,7 @@ impl MetricsRegistry {
             occurrence_filter_active: self.occurrence_filter().active,
             occurrence_candidates: self.occurrence_filter().candidates,
             orphaned_clips: self.orphaned_clips(),
+            analytics_mirror_failures: self.analytics_mirror_failures(),
             http_responses: Self::read_map(&self.http_responses),
             http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
@@ -696,6 +742,8 @@ pub struct MetricsSnapshot {
     /// Orphaned clips found by the last reconciliation pass; `None` until one
     /// has run.
     pub orphaned_clips: Option<u64>,
+    /// Detections the DuckDB copy refused since process start.
+    pub analytics_mirror_failures: u64,
     /// HTTP responses by status class.
     pub http_responses: Vec<(String, u64)>,
     /// Web request latency.
@@ -887,6 +935,14 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     out.push_str("# HELP birdnet_watchdog_pings_total Total successful WATCHDOG=1 notifications sent to systemd since process start.\n");
     out.push_str("# TYPE birdnet_watchdog_pings_total counter\n");
     let _ = writeln!(out, "birdnet_watchdog_pings_total {}", snap.watchdog_pings);
+
+    out.push_str("# HELP birdnet_analytics_mirror_failures_total Detections the database accepted and the DuckDB analytics copy refused since process start.\n");
+    out.push_str("# TYPE birdnet_analytics_mirror_failures_total counter\n");
+    let _ = writeln!(
+        out,
+        "birdnet_analytics_mirror_failures_total {}",
+        snap.analytics_mirror_failures
+    );
 
     out.push_str("# HELP birdnet_detection_write_failures_total Detections classified by the model and refused by the database since process start.\n");
     out.push_str("# TYPE birdnet_detection_write_failures_total counter\n");
@@ -1377,6 +1433,25 @@ mod operational_metrics_tests {
         assert!(
             out.contains(r#"source="weird\"source""#),
             "label values must be escaped: {out}"
+        );
+    }
+
+    /// OP-7: a refused mirror write is counted, timed and exposed.
+    #[test]
+    fn a_refused_mirror_write_is_counted_and_exposed() {
+        let r = MetricsRegistry::new();
+        assert_eq!(r.analytics_mirror_failures(), 0);
+        assert_eq!(r.analytics_mirror_last_failure(), None);
+        r.inc_analytics_mirror_failed("Constraint Error: NOT NULL");
+        r.inc_analytics_mirror_failed("IO Error");
+        assert_eq!(r.analytics_mirror_failures(), 2);
+        let (at, error) = r.analytics_mirror_last_failure().expect("timed");
+        assert!(at > 0);
+        assert_eq!(error, "IO Error");
+        let out = render_runtime_metrics(&r.snapshot());
+        assert!(
+            out.contains("birdnet_analytics_mirror_failures_total 2"),
+            "{out}"
         );
     }
 }

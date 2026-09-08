@@ -126,6 +126,28 @@
         ]
       }
     },
+    "/health/conditions": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "What is wrong right now",
+        "description": "The station-health conditions as last evaluated by the notifier — a dead microphone, a full disk, a failing backup, a lost data volume, a boot that lost something — and when it looked. These were push-only; this is the pull. Always 200: `/health` carries the verdict, this carries the reasons. `evaluated_at` is null until the first evaluation.",
+        "operationId": "healthConditions",
+        "responses": {
+          "200": {
+            "description": "The last evaluation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conditions"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/stats": {
       "get": {
         "tags": [
@@ -2729,6 +2751,50 @@
             "description": "What the boot journal found changed since the last start; non-empty is a strict fault."
           }
         }
+      },
+      "Conditions": {
+        "type": "object",
+        "properties": {
+          "evaluated_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the Unix epoch at which the conditions were evaluated; null before the first evaluation."
+          },
+          "count": {
+            "type": "integer"
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Stable identity, e.g. `disk`, `source:cam1`, `maintenance-failed:backup_vacuum`."
+                },
+                "title": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string",
+                  "description": "What is wrong and what to do about it."
+                }
+              },
+              "required": [
+                "key",
+                "title",
+                "body"
+              ]
+            }
+          }
+        },
+        "required": [
+          "evaluated_at",
+          "count",
+          "conditions"
+        ]
       },
       "Stats": {
         "type": "object",

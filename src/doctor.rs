@@ -197,7 +197,7 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 22] = [
+const CHECK_FAMILIES: [(&str, Family); 23] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
     }),
@@ -232,6 +232,10 @@ const CHECK_FAMILIES: [(&str, Family); 22] = [
     ("tls::check_tls", tls::check_tls),
     ("clock::check_clock", clock::check_clock),
     ("database::check_database", database::check_database),
+    (
+        "database::check_maintenance_verdicts",
+        database::check_maintenance_verdicts,
+    ),
     ("offsite::check_offsite", offsite::check_offsite),
     ("paths::check_paths", paths::check_paths),
     ("audio::check_audio_source", audio::check_audio_source),

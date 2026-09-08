@@ -171,6 +171,9 @@ struct AppStateInner {
     /// What the boot journal found changed since the last start (UP-3):
     /// empty on a first or ordinary start.
     boot_anomalies: std::sync::RwLock<Vec<crate::boot_journal::Anomaly>>,
+    /// The station-health conditions as last evaluated (OP-4), published by
+    /// the notifier on every poll so they can be asked for.
+    station_conditions: std::sync::RwLock<crate::station_conditions::ConditionsSnapshot>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -257,6 +260,9 @@ impl AppState {
                     crate::notification_probes::NotificationProbes::default(),
                 ),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
+                station_conditions: std::sync::RwLock::new(
+                    crate::station_conditions::ConditionsSnapshot::default(),
+                ),
             }),
         })
     }
@@ -489,6 +495,9 @@ impl AppState {
                     crate::notification_probes::NotificationProbes::default(),
                 ),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
+                station_conditions: std::sync::RwLock::new(
+                    crate::station_conditions::ConditionsSnapshot::default(),
+                ),
             }),
         })
     }
@@ -534,6 +543,9 @@ impl AppState {
                     crate::notification_probes::NotificationProbes::default(),
                 ),
                 boot_anomalies: std::sync::RwLock::new(Vec::new()),
+                station_conditions: std::sync::RwLock::new(
+                    crate::station_conditions::ConditionsSnapshot::default(),
+                ),
             }),
         }
     }
@@ -1207,6 +1219,24 @@ impl AppState {
     pub fn notification_probes(&self) -> crate::notification_probes::NotificationProbes {
         self.inner
             .notification_probes
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    /// Publish what the station-health evaluation just found.
+    pub fn set_station_conditions(&self, snapshot: crate::station_conditions::ConditionsSnapshot) {
+        if let Ok(mut guard) = self.inner.station_conditions.write() {
+            *guard = snapshot;
+        }
+    }
+
+    /// The station-health conditions as last evaluated; `evaluated_at` is
+    /// `None` until the first evaluation.
+    #[must_use]
+    pub fn station_conditions(&self) -> crate::station_conditions::ConditionsSnapshot {
+        self.inner
+            .station_conditions
             .read()
             .map(|g| g.clone())
             .unwrap_or_default()

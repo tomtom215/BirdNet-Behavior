@@ -36,7 +36,10 @@
 //! * a start that the boot journal says lost something — a database that held
 //!   a season and holds nothing, a data volume that did not mount, a binary
 //!   older than the one that last ran — which otherwise looks exactly like a
-//!   first run.
+//!   first run;
+//! * the analytics copy refusing detections the database accepted, so every
+//!   behavioural dashboard is quietly behind while `/api/v2/health` goes on
+//!   saying `"analytics": true`.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -123,7 +126,7 @@ const MAINTENANCE_STALE_SECS: i64 = 21 * 24 * 3600;
 /// episode, which is what stops a per-source alert from re-firing under a
 /// different name each time.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Condition {
+pub struct Condition {
     /// Stable identity for episode tracking (e.g. `source:cam1`).
     pub key: String,
     /// Short alert title.
@@ -235,7 +238,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 9] = [
+const CHECKS: [(&str, Check); 10] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -245,6 +248,7 @@ const CHECKS: [(&str, Check); 9] = [
     ("quarantined-stores", check_quarantined_stores),
     ("clock", check_clock),
     ("boot-anomaly", check_boot_anomalies),
+    ("analytics-mirror", check_analytics_mirror),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -257,6 +261,22 @@ fn evaluate(state: &AppState) -> Vec<Condition> {
         check(state, &mut out);
     }
     out
+}
+
+/// Make what was just evaluated askable (OP-4): the same conditions the
+/// notifier pushes, on the state, for `/api/v2/health/conditions`.
+fn publish(state: &AppState, current: &[Condition]) {
+    let conditions = current
+        .iter()
+        .map(|c| birdnet_web::station_conditions::Condition {
+            key: c.key.clone(),
+            title: c.title.clone(),
+            body: c.body.clone(),
+        })
+        .collect();
+    state.set_station_conditions(birdnet_web::station_conditions::ConditionsSnapshot::now(
+        conditions,
+    ));
 }
 
 /// What the system will say about its own clock synchronisation.
@@ -493,6 +513,50 @@ fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
     out.extend(data_volume_condition(&volume));
 }
 
+/// How recently a mirror write must have failed for the copy to count as
+/// falling behind now, rather than once.
+const MIRROR_FAILURE_RECENT_SECS: u64 = 60 * 60;
+
+/// Detections the DuckDB copy refused (OP-7).
+fn check_analytics_mirror(state: &AppState, out: &mut Vec<Condition>) {
+    let metrics = state.metrics();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    out.extend(analytics_mirror_condition(
+        metrics.analytics_mirror_failures(),
+        metrics.analytics_mirror_last_failure(),
+        now,
+    ));
+}
+
+/// The mirror policy, separated from the metrics so it can be tested: a
+/// condition while the last failure is recent, none once it is an hour old
+/// (the next start's drift check repairs the copy; the counter stays).
+fn analytics_mirror_condition(
+    failures: u64,
+    last: Option<(u64, String)>,
+    now: u64,
+) -> Option<Condition> {
+    let (at, error) = last?;
+    if failures == 0 || now.saturating_sub(at) > MIRROR_FAILURE_RECENT_SECS {
+        return None;
+    }
+    let minutes = now.saturating_sub(at) / 60;
+    Some(Condition {
+        key: "analytics-mirror".to_owned(),
+        title: "Analytics copy is falling behind — detections are not reaching the dashboards"
+            .to_owned(),
+        body: format!(
+            "{failures} detection(s) the database accepted were refused by the DuckDB analytics \
+             copy since the station started, the last {minutes} minute(s) ago ({error}). The \
+             behavioural and time-series dashboards read that copy, so they are behind; the \
+             drift check at the next start rebuilds it. journalctl -u birdnet-behavior | \
+             grep -i duckdb"
+        ),
+    })
+}
+
 /// What the boot journal found at this start (UP-3). A fact of the run: the
 /// condition holds until the next start, and fires its episode once.
 fn check_boot_anomalies(state: &AppState, out: &mut Vec<Condition>) {
@@ -695,7 +759,7 @@ fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
 /// A recorded **failure** produces a condition immediately, without waiting for
 /// staleness. That is the whole point: a job that fails on schedule is never
 /// stale, so the staleness rule alone could not see it.
-fn maintenance_condition(
+pub fn maintenance_condition(
     job: &str,
     label: &str,
     recorded: Option<(i64, Option<bool>)>,
@@ -739,7 +803,25 @@ fn maintenance_condition(
 /// not want them.
 pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, enabled: bool) {
     if !enabled {
-        tracing::info!("station-health alerts disabled");
+        // Alerts off is not evaluation off (OP-4): the conditions are still
+        // evaluated on the same schedule and published for anyone who asks
+        // at /api/v2/health/conditions; nothing is pushed.
+        tracing::info!(
+            "station-health alerts disabled; conditions are still evaluated for /api/v2/health/conditions"
+        );
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(POLL_EVERY);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let probe_state = state.clone();
+                if let Ok(current) =
+                    tokio::task::spawn_blocking(move || evaluate(&probe_state)).await
+                {
+                    publish(&state, &current);
+                }
+            }
+        });
         return;
     }
     tokio::spawn(async move {
@@ -771,6 +853,7 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
             else {
                 continue;
             };
+            publish(&state, &current);
 
             let now = std::time::Instant::now();
             let (broken, recovered) = transitions(&alerted, &mut streak, &current);
@@ -967,6 +1050,7 @@ mod tests {
             "quarantined-stores",
             "clock",
             "boot-anomaly",
+            "analytics-mirror",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -975,8 +1059,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            9,
-            "a tenth check needs a line in the module doc and in this gate"
+            10,
+            "an eleventh check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1545,5 +1629,47 @@ mod tests {
             c.body
         );
         assert!(c.body.contains("mount_lost:"), "{}", c.body);
+    }
+
+    /// OP-7: a recent mirror failure is a condition; an old one is not; none
+    /// is not.
+    #[test]
+    fn a_recent_mirror_failure_is_a_condition_and_an_old_one_is_not() {
+        assert!(analytics_mirror_condition(0, None, 1_000_000).is_none());
+        let recent = analytics_mirror_condition(
+            3,
+            Some((1_000_000 - 120, "Constraint Error: NOT NULL".to_owned())),
+            1_000_000,
+        )
+        .expect("a condition");
+        assert_eq!(recent.key, "analytics-mirror");
+        assert!(recent.body.contains("3 detection(s)"), "{}", recent.body);
+        assert!(recent.body.contains("2 minute(s) ago"), "{}", recent.body);
+        assert!(recent.body.contains("NOT NULL"), "{}", recent.body);
+        assert!(
+            analytics_mirror_condition(3, Some((1_000_000 - 7_200, String::new())), 1_000_000)
+                .is_none(),
+            "two hours old: the copy is repaired at the next start, and the counter stays"
+        );
+    }
+
+    /// OP-4: what `evaluate` finds is published where a request can read it.
+    #[test]
+    fn what_is_evaluated_is_published_for_the_conditions_endpoint() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        assert_eq!(state.station_conditions().evaluated_at, None, "nothing yet");
+        let found = vec![Condition {
+            key: "disk".to_owned(),
+            title: "Disk nearly full".to_owned(),
+            body: "…".to_owned(),
+        }];
+        publish(&state, &found);
+        let snap = state.station_conditions();
+        assert!(snap.evaluated_at.is_some());
+        assert_eq!(snap.conditions.len(), 1);
+        assert_eq!(snap.conditions[0].key, "disk");
+        assert_eq!(snap.conditions[0].title, "Disk nearly full");
     }
 }

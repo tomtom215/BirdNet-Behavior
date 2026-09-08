@@ -38,6 +38,24 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — what is wrong can be asked, the doctor reads the maintenance record, and a lagging analytics copy is a condition
+
+**`GET /api/v2/health/conditions`** (`OP-4`) answers "what is wrong right
+now?" with the station-health conditions as the notifier last evaluated them
+and when it looked; they were push-only, so an operator who missed a push
+could not ask. Alerts disabled no longer means evaluation disabled.
+
+**`--doctor` reads the maintenance verdicts** (`OP-6`): the backup, the
+integrity check and the offsite backup, through the notifier's own policy,
+so "your backup has failed for a year" is something the diagnostic an
+operator runs can now say.
+
+**A detection the DuckDB copy refused is counted and conditioned** (`OP-7`):
+`birdnet_analytics_mirror_failures_total`, `analytics_mirror_failures` on
+`/api/v2/health`, and the `analytics-mirror` condition while the failures
+are recent. It was a `warn!` line while health went on asserting
+`"analytics": true`.
+
 ### Fixed — a bad configuration edit no longer takes the station down
 
 **A file with an error is run around, not on** (`LC-6`). The daemon

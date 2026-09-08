@@ -75,7 +75,11 @@ means no verdict is on record yet — normal for the first few minutes after a
 fresh install, and reported `healthy`/`200`, because "not yet verified" is not
 "broken". A failure stays reported until it is fixed, rather than depending on
 which request happened to catch it.
-`detection_daemon` is `"running"` or `"stopped"` — `"stopped"` means web-only
+`analytics_mirror_failures` counts detections the database accepted and the
+DuckDB analytics copy refused since the process started; a non-zero value
+means the behavioural dashboards are behind until the startup drift check
+rebuilds the copy, and raises the `analytics-mirror` station-health condition
+while the failures are recent. `detection_daemon` is `"running"` or `"stopped"` — `"stopped"` means web-only
 mode or an unconfigured model/labels/watch-dir, i.e. the UI is up but nothing is
 being analysed. `analytics` reports whether the DuckDB engine is active.
 `detection_silence_secs` is the end-to-end freshness signal: seconds since the
@@ -88,6 +92,7 @@ looks healthy.
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/v2/health` | JSON liveness/health check (use for monitoring). |
+| `GET /api/v2/health/conditions` | What is wrong right now: the station-health conditions (a dead microphone, a full disk, a failing backup, a lost data volume, a boot that lost something) as the notifier last evaluated them, with `evaluated_at`. These used to be push-only. Always 200; `/health` carries the verdict. |
 | `GET /api/v2/metrics` | Prometheus metrics (text format) — see [Integrations](./integrations.md#prometheus-metrics). |
 | `GET /api/v2/stats` | Summary counts (detections, species, today). |
 | `GET /api/v2/system/disk` | Disk usage for the data directory. Answers 503 when the disk is critical (95 % used) and 200 otherwise. Fullness is measured against the space this user can actually reach — `used / (used + available)`, the same figure `df`'s `Use%` column reports — not against the raw device size, which on any ext4 with its default 5 % root reserve, or inside a container quota, is larger than anything the station can use. |

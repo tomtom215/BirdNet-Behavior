@@ -22,6 +22,7 @@ pub mod security;
 pub mod server;
 pub mod session;
 pub mod state;
+pub mod station_conditions;
 pub mod system_info;
 pub mod tls;
 pub mod tracking;

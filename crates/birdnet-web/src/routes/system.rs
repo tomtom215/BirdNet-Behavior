@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(root))
         .route("/health", get(health))
+        .route("/health/conditions", get(conditions))
         .route("/stats", get(stats))
         .route("/system/disk", get(disk_info))
         .route("/soundlevel", get(sound_level))
@@ -163,6 +164,21 @@ pub(crate) fn db_health(state: &AppState) -> DbHealth {
     }
 }
 
+/// `GET /api/v2/health/conditions`: what the station-health evaluation last
+/// found wrong, and when it looked (OP-4).
+///
+/// The conditions the notifier pushes were push-only; an operator who
+/// missed a push could not ask. Always 200: this is the answer, not a
+/// verdict — `/health` carries the status code.
+async fn conditions(State(state): State<AppState>) -> Json<Value> {
+    let snapshot = state.station_conditions();
+    Json(json!({
+        "evaluated_at": snapshot.evaluated_at,
+        "count": snapshot.conditions.len(),
+        "conditions": snapshot.conditions,
+    }))
+}
+
 /// Query parameters for the `health` handler below.
 #[derive(Debug, Default, Deserialize)]
 pub struct HealthQuery {
@@ -268,6 +284,9 @@ async fn health(
                 .collect::<Vec<_>>(),
             // The presence session's state (DD-22): a dead broker was on one
             // Prometheus gauge and nowhere an operator without a scrape looks.
+            // A DuckDB mirror write that failed used to be a warn! line while
+            // this body went on asserting "analytics": true (OP-7).
+            "analytics_mirror_failures": state.metrics().analytics_mirror_failures(),
             "mqtt": match state.metrics().mqtt_connected() {
                 None => "off",
                 Some(true) => "connected",
