@@ -1290,6 +1290,18 @@ passed, 45 suites" from exactly that truncation). The figure for this branch's
 final commit is in the paragraph that follows this block's date line; the
 session's final message quotes the same run.
 
+**The count for this branch**, `cargo test --workspace --all-features
+--no-fail-fast` at the tree of `3b8942e` plus the documentation commits, summed
+by the command above: **3 730 passed, 0 failed, 7 ignored** in **120** suites,
+exit 0. The branch point `be8886c` reported 3 674 in 114 suites, so this pass
+added 56 gates and six suites (`the_bulk_exports_honour_the_verdict`,
+`the_setup_wizard_is_gated_and_keeps_only_a_real_location`,
+`a_partial_that_fails_to_load_says_so`, `the_ebird_export_is_a_checklist_ebird_can_accept`,
+`the_diagnostics_are_reachable_from_the_browser`,
+`the_station_can_diagnose_itself_from_a_browser`). The one commit after that
+run renames a test for spelling and re-ran its own binary's suite green; the
+count is unchanged by a rename, but re-take it anyway.
+
 **Lines.** `find crates src -name '*.rs' | xargs cat | wc -l` gives
 **189 133** lines of Rust in **468** files under `crates/` and `src/`, and
 **204 900** with `tests/`. `grep -cE '^\s+version: [0-9]+,'

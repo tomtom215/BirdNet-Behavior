@@ -143,7 +143,7 @@ mod tests {
     /// logged — the only ordinary log available on a station whose journal is
     /// volatile or absent, and the same lines `/admin/system/logs` replays.
     #[test]
-    fn the_browser_bundle_carries_the_processs_recent_log() {
+    fn the_browser_bundle_carries_the_process_log() {
         use birdnet_web::routes::admin::logs::LogLine;
         let dir = tempfile::tempdir().expect("tempdir");
         let cli = Cli::parse_from(["birdnet-behavior"]);
