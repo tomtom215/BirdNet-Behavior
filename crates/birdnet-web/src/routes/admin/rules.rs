@@ -635,7 +635,7 @@ pub(crate) fn rules_body() -> String {
       .btn { padding:.5rem 1.25rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:.875rem; }
       .btn-primary { background:var(--moss); color:var(--on-moss); }
       .btn-primary:hover { background:var(--moss-ink); }
-      .btn-danger { background:var(--rare); color:#fff; }
+      .btn-danger { background:var(--rare); color:var(--on-fill); }
       .btn-danger:hover { background:var(--rare); }
       .btn-sm { padding:.25rem .75rem; font-size:.8rem; }
       table { width:100%; border-collapse:collapse; font-size:.875rem; }
@@ -648,7 +648,7 @@ pub(crate) fn rules_body() -> String {
       .badge-gray  { background:var(--surface); color:var(--fg-4); border:1px solid var(--border); }
       .badge-blue  { background:var(--surface); color:var(--moss-ink); }
       .badge-red   { background:var(--rare-soft); color:var(--rare); }
-      .badge-yellow{ background:var(--dawn-soft); color:var(--dawn); }
+      .badge-yellow{ background:var(--dawn-soft); color:var(--dawn-ink); }
       #webhook-fields { display:none; }
       .hint { color:var(--fg-4); font-size:.75rem; margin-top:.25rem; }
       /* O-25 sweep — faithful extraction of this page's inline styles. */

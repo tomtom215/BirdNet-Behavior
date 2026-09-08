@@ -38,6 +38,17 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — every text reads at WCAG AA contrast, and the gate now checks
+
+**Colour contrast is enforced in the accessibility gate** (`DD-29`, `UX-16`,
+`UX-17`). Measured across every page in both themes, 285 text nodes fell
+below AA: the species chip's identity hue on its own tint, the muted text
+tokens on tinted surfaces, white on the bright dark-theme fills, the
+failure pill, the amber badges. The species hue is kept as identity and
+mixed towards an ink token wherever it is text; `--moss`, `--rare` and the
+muted greys sit at AA on every surface; fills carry `--on-fill`. The axe
+gate runs `color-contrast` by default and reports 0 violations.
+
 ### Fixed — the backup page no longer scrolls sideways on a phone
 
 **A snapshot row fits a 390 px viewport** (`DD-30`). Once a station had one

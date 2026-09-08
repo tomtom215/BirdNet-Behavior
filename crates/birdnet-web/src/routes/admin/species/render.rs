@@ -30,7 +30,7 @@ pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> Stri
       input:focus {{ outline:none; border-color:var(--moss-ink); }}
       .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.85rem; }}
       .btn-primary {{ background:var(--moss); color:var(--on-moss); }}
-      .btn-danger {{ background:var(--rare); color:#fff; }}
+      .btn-danger {{ background:var(--rare); color:var(--on-fill); }}
       .pill {{ display:inline-flex; align-items:center; gap:0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.2rem 0.7rem; font-size:0.8rem; margin:0.2rem; }}
       .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; margin-bottom:1rem; }}
       .pills {{ margin-bottom:1rem; min-height:2rem; }}

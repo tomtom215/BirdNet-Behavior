@@ -33,7 +33,7 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
   /* Quiet escape hatch: a wall display is a dead end without one. Dimmed so
      it never competes with the display content; brightens on hover/focus
      for the operator standing at the screen. ESC works too (script below). */
-  .kiosk-exit { position:fixed; top:14px; right:18px; color:var(--fg-3); opacity:0.35;
+  .kiosk-exit { position:fixed; top:14px; right:18px; color:var(--fg-3);
                 font-size:13px; text-decoration:none; transition:opacity .2s; }
   .kiosk-exit:hover, .kiosk-exit:focus-visible { opacity:1; }
 </style>

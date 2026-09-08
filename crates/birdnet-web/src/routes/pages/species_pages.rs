@@ -221,7 +221,7 @@ fn photos_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
         let enc_sci = simple_url_encode(&s.sci_name);
         let _ = write!(
             cards,
-            r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="color:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
+            r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
             name = escape_html(&s.com_name),
             count = format_count(s.count),
         );

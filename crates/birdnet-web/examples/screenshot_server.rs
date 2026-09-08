@@ -453,9 +453,10 @@ fn seed_backup_snapshot(db_path: &std::path::Path) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let db_name = db_path
-        .file_name()
-        .map_or_else(|| "birds.db".to_owned(), |n| n.to_string_lossy().into_owned());
+    let db_name = db_path.file_name().map_or_else(
+        || "birds.db".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())

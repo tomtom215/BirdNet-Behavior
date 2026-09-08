@@ -126,7 +126,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
               font-size:0.75rem; font-weight:600; }}
     .badge-sent {{ background:var(--moss-soft); color:var(--moss-ink); }}
     .badge-failed {{ background:var(--rare-soft); color:var(--rare); }}
-    .badge-skipped {{ background:var(--dawn-soft); color:var(--dawn); }}
+    .badge-skipped {{ background:var(--dawn-soft); color:var(--dawn-ink); }}
     .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none;
             cursor:pointer; font-weight:600; font-size:0.8rem; }}
     .btn-danger {{ background:var(--rare-soft); color:var(--rare); }}
@@ -137,7 +137,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
     .stat-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem; }}
     .value.moss {{ color:var(--moss); }}
     .value.rare {{ color:var(--rare); }}
-    .value.dawn {{ color:var(--dawn); }}
+    .value.dawn {{ color:var(--dawn-ink); }}
     .card.flush {{ padding:0; overflow:hidden; }}
     .table-head {{ padding:1rem 1.5rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }}
     .th-title {{ font-weight:600; color:var(--fg); }}

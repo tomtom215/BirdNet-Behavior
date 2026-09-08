@@ -128,7 +128,7 @@ fn overview_body(stats_html: &str) -> String {
       .stat-card .value {{ font-size:1.5rem; font-weight:700; }}
       .stat-card .value.moss-ink {{ color:var(--moss-ink); }}
       .stat-card .value.moss {{ color:var(--moss); }}
-      .stat-card .value.dawn {{ color:var(--dawn); }}
+      .stat-card .value.dawn {{ color:var(--dawn-ink); }}
       .stat-card .value.rare {{ color:var(--rare); }}
       .stat-card .label {{ font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }}
     </style>
