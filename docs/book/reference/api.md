@@ -4,7 +4,7 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
-> **Auth:** the built-in session sign-in gates the `/admin*` UI routes, the `/station/<tab>` management pages and the page actions that change something — none of which live under `/api/v2`. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+> **Auth:** the built-in session sign-in gates the `/admin*` UI routes, the `/station/<tab>` management pages and the page actions that change something — none of which live under `/api/v2`. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters, or turn on [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in), after which every read endpoint and both WebSockets answer `401` without a session (the health check, and `/api/v2/metrics` when `metrics` is carved out, stay open).
 >
 > The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 

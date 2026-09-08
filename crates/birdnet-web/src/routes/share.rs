@@ -2,8 +2,14 @@
 //!
 //! Routes:
 //!   GET /r/{token}                  full HTML share page
-//!   GET /r/{token}/audio.wav        302 -> `/api/v2/recordings/<filename>`
-//!   GET /r/{token}/spectrogram.png  302 -> `/api/v2/spectrogram/<filename>`
+//!   GET /r/{token}/audio.wav        the clip, served as `/api/v2/recordings/<filename>` would
+//!   GET /r/{token}/spectrogram.png  the image, served as `/api/v2/spectrogram/<filename>` would
+//!
+//! The media routes used to `302` to the `/api/v2` paths. They now call the
+//! same handlers directly, because on a private station (O-4) those paths are
+//! behind the sign-in and the share link is the one thing that must keep
+//! working without it: the token vouches for exactly this clip, and the
+//! redirect target would have vouched for nothing.
 //!
 //! A detection has no integer id in this schema — it is identified by the
 //! `(Date, Time, Com_Name)` triple (the `UNIQUE(Date, Time, Sci_Name)` index
@@ -27,8 +33,8 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::{Router, routing::get};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, KeyInit, Mac};
@@ -48,11 +54,8 @@ type HmacSha256 = Hmac<Sha256>;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/r/{token}", get(share_page))
-        .route("/r/{token}/audio.wav", get(share_audio_redirect))
-        .route(
-            "/r/{token}/spectrogram.png",
-            get(share_spectrogram_redirect),
-        )
+        .route("/r/{token}/audio.wav", get(share_audio))
+        .route("/r/{token}/spectrogram.png", get(share_spectrogram))
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -277,40 +280,35 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
     html_ok(body)
 }
 
-/// 302 to the existing recordings route. The token vouches for access; the
-/// actual byte streaming is the existing handler. Uses the looked-up filename
-/// (there is no integer id to key the media route on).
-async fn share_audio_redirect(
+/// The clip itself, through the recordings handler. The token vouches for
+/// access; the byte streaming (and the `Range` handling the player's seek
+/// bar needs) is the existing handler. Keyed by the looked-up filename, as
+/// there is no integer id to key the media route on.
+async fn share_audio(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
     let Some((date, time, com)) = decode_share_token(&token) else {
         return gone_page();
     };
-    match lookup_basename(state, &date, &time, &com).await {
+    match lookup_basename(state.clone(), &date, &time, &com).await {
         Some(name) => {
-            Redirect::temporary(&format!("/api/v2/recordings/{}", simple_url_encode(&name)))
-                .into_response()
+            crate::routes::recordings::serve_recording(State(state), Path(name), headers).await
         }
         None => gone_page(),
     }
 }
 
-/// 302 to the existing spectrogram route, which is keyed by **filename** (not
-/// an id) — this is the fix for the original bundle, which redirected to
+/// The spectrogram, through the spectrogram handler, which is keyed by
+/// **filename** (not an id) — the original bundle redirected to
 /// `/api/v2/spectrogram/<id>` and always 404'd.
-async fn share_spectrogram_redirect(
-    State(state): State<AppState>,
-    Path(token): Path<String>,
-) -> Response {
+async fn share_spectrogram(State(state): State<AppState>, Path(token): Path<String>) -> Response {
     let Some((date, time, com)) = decode_share_token(&token) else {
         return gone_page();
     };
-    match lookup_basename(state, &date, &time, &com).await {
-        Some(name) => {
-            Redirect::temporary(&format!("/api/v2/spectrogram/{}", simple_url_encode(&name)))
-                .into_response()
-        }
+    match lookup_basename(state.clone(), &date, &time, &com).await {
+        Some(name) => crate::routes::spectrogram::serve_shared(State(state), Path(name)).await,
         None => gone_page(),
     }
 }

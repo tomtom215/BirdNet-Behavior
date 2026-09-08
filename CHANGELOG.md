@@ -38,6 +38,24 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a private mode puts the whole station behind the sign-in
+
+**`BIRDNET_PRIVATE_MODE` and `BIRDNET_PUBLIC_ACCESS`** (`O-4`). The default
+contract — viewing is open, only changing things needs a password — was the
+right one for a Pi on a home LAN and the wrong one for the same Pi behind a
+tunnel or a port forward, where the open dashboard is the detection history
+and a live microphone feed for anyone with the URL. Private mode moves the
+public router behind the cookie gate the admin panel uses; what stays open
+is the sign-in form, its assets, the health probe and the carve-outs the
+operator names: `live_audio` (the stream and the live spectrogram), `share`
+(operator-minted `/r/<token>` links, whose audio and spectrogram are now
+served directly rather than redirected to the gated media routes) and
+`metrics`. Pages are sent to `/login`; the API and the WebSockets get a
+`401`. A private station with no admin password fails closed with a `503`
+and a message, at startup, on the page and in `--doctor`, rather than
+falling back to the open station it was asked not to be. Config file:
+`PRIVATE_MODE`, `PUBLIC_ACCESS`.
+
 ### Added — the analysis queue is measured, and a station that falls behind sheds instead of losing audio quietly
 
 **A queue-depth gauge and a stated shed policy** (`PR-2`). "Inference slower

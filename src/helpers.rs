@@ -26,6 +26,7 @@ pub mod egress;
 pub mod env_keys;
 pub mod instance_lock;
 pub mod offsite;
+pub mod private_mode;
 pub mod resolve;
 mod settings_overlay;
 pub mod startup_config;
@@ -45,6 +46,7 @@ pub use db::{
     db_path_from_config, ensure_db_dir, run_backup, run_integrity_check, run_migration_report,
     run_rebuild_species_summary,
 };
+pub use private_mode::{PrivateModeSetting, init_private_mode, resolve_private_mode};
 pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
 pub use state::{
     init_i18n, init_image_cache, init_site_name, init_species_codes, run_refresh_extension,

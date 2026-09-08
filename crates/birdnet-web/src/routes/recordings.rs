@@ -44,7 +44,7 @@ pub fn router() -> Router<AppState> {
 /// handler advertised `Accept-Ranges: bytes` but ignored the header and always
 /// returned the whole file with `200`, so every seek re-downloaded from byte 0
 /// (and Safari playback could break).
-async fn serve_recording(
+pub(crate) async fn serve_recording(
     State(state): State<AppState>,
     Path(filename): Path<String>,
     headers: HeaderMap,

@@ -388,6 +388,28 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_OFFLINE")]
     pub offline: bool,
 
+    /// Put the whole station behind the sign-in, not only the admin panel.
+    ///
+    /// By default viewing is open: the dashboard, the read API, the live
+    /// audio stream and both `WebSockets` are served to anyone who can reach
+    /// the port. Behind a tunnel or a port forward that is the internet.
+    /// With this set, everything needs a session except the sign-in form,
+    /// its assets, the health probe and what `--public-access` names. A
+    /// private station with no admin password (`CADDY_PWD`) answers 503 to
+    /// everything else rather than falling open. Config file:
+    /// `PRIVATE_MODE`.
+    #[arg(long, env = "BIRDNET_PRIVATE_MODE")]
+    pub private_mode: bool,
+
+    /// What stays open on a private station: a comma-separated list of
+    /// `live_audio` (the stream and the live spectrogram), `share`
+    /// (operator-minted `/r/<token>` links) and `metrics` (`/api/v2/metrics`).
+    ///
+    /// No effect without `--private-mode`. An unknown name is reported and
+    /// skipped. Config file: `PUBLIC_ACCESS`.
+    #[arg(long, env = "BIRDNET_PUBLIC_ACCESS")]
+    pub public_access: Option<String>,
+
     /// Skip the daily check for a new release.
     ///
     /// The station otherwise contacts `api.github.com` 60 seconds after start

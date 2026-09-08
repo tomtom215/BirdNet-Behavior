@@ -151,11 +151,13 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
     // bypass. On a station with no `BNB_API_TOKEN` every one of them is 404.
     let api_write = crate::api_token::require_bearer(routes::api_write::router(), state.clone());
 
+    // O-4: on a private station the public router sits behind the same
+    // session gate, with the carve-outs `private_mode::is_open` names. On an
+    // open station the layer passes everything through untouched.
+    let public = crate::auth_middleware::apply_public(routes::public_routes(), state.clone());
+
     let request_metrics = state.metrics();
-    let router = routes::public_routes()
-        .merge(admin)
-        .merge(api_write)
-        .with_state(state);
+    let router = public.merge(admin).merge(api_write).with_state(state);
 
     // Layer order is outermost-last. The CSRF guard runs after rate limiting
     // (so request floods are still throttled) and before auth, rejecting

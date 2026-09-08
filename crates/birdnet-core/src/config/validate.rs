@@ -87,6 +87,8 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_audio_format(config, &mut out);
     check_info_site(config, &mut out);
     check_lang(config, &mut out);
+    check_private_mode(config, &mut out);
+    check_public_access(config, &mut out);
     check_unknown_keys(config, &mut out);
     out
 }
@@ -390,6 +392,54 @@ fn check_info_site(config: &Config, out: &mut Vec<Finding>) {
             format!("INFO_SITE={raw:?} is not recognised"),
             r#"use "ebird", "allaboutbirds", or "none""#.to_string(),
         ));
+    }
+}
+
+/// The names `PUBLIC_ACCESS` may carry.
+///
+/// The web crate owns the routes each one opens; its `private_mode` module
+/// holds a gate that its list and this one agree, so a carve-out added there
+/// is validated here.
+pub const PUBLIC_ACCESS_NAMES: [&str; 3] = ["live_audio", "share", "metrics"];
+
+/// The boolean spellings the config file and the settings form produce.
+const BOOL_SPELLINGS: [&str; 8] = ["true", "false", "1", "0", "yes", "no", "on", "off"];
+
+fn check_private_mode(config: &Config, out: &mut Vec<Finding>) {
+    let Some(raw) = config.get("PRIVATE_MODE") else {
+        return;
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return;
+    }
+    if !BOOL_SPELLINGS.contains(&raw.to_ascii_lowercase().as_str()) {
+        out.push(Finding::error(
+            "PRIVATE_MODE",
+            format!("PRIVATE_MODE={raw:?} is not a boolean; the station treats it as off"),
+            "use true or false".to_string(),
+        ));
+    }
+}
+
+fn check_public_access(config: &Config, out: &mut Vec<Finding>) {
+    let Some(raw) = config.get("PUBLIC_ACCESS") else {
+        return;
+    };
+    for name in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let normalised = name.to_ascii_lowercase().replace('-', "_");
+        if !PUBLIC_ACCESS_NAMES.contains(&normalised.as_str()) {
+            out.push(Finding::error(
+                "PUBLIC_ACCESS",
+                format!(
+                    "PUBLIC_ACCESS names {name:?}, which is not a carve-out; the station skips it"
+                ),
+                format!(
+                    "use a comma-separated list of {}",
+                    PUBLIC_ACCESS_NAMES.join(", ")
+                ),
+            ));
+        }
     }
 }
 

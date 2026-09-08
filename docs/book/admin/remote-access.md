@@ -1,6 +1,6 @@
 # Remote Access & Security
 
-By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); signing in is required for the `/admin*` panel, the Station management tabs and every action that changes something** — with a password a fresh install sets for you. This page covers reaching the station from your network and from elsewhere, safely.
+By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); signing in is required for the `/admin*` panel, the Station management tabs and every action that changes something** — with a password a fresh install sets for you. For a station reachable from beyond the LAN, [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in) puts the dashboard itself behind that sign-in. This page covers reaching the station from your network and from elsewhere, safely.
 
 ## On your local network
 

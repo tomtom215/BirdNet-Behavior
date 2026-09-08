@@ -510,6 +510,51 @@ pub(super) fn check_admin_exposure(cli: &Cli, config: Option<&Config>) -> Check 
     admin_exposure(&cli.listen, password_configured)
 }
 
+/// Private mode (`O-4`): on, off, or on with nothing to sign in with.
+///
+/// The third is the one that matters. A private station with no admin
+/// password answers `503` to everything but the sign-in and the probe — the
+/// gate fails closed rather than falling back to the open station the
+/// operator asked not to have — and the only other sign of it is an `error!`
+/// at startup. The password resolves through the same rule the auth
+/// bootstrap uses, for the reason [`check_admin_exposure`] gives.
+pub(super) fn check_private_mode(cli: &Cli, config: Option<&Config>) -> Check {
+    let setting = crate::helpers::resolve_private_mode(cli, config);
+    let password_configured =
+        crate::helpers::resolve_admin_password(config, std::env::var("CADDY_PWD").ok()).is_some();
+    private_mode(&setting, password_configured)
+}
+
+fn private_mode(setting: &crate::helpers::PrivateModeSetting, password_configured: bool) -> Check {
+    const NAME: &str = "Private mode";
+    let public = birdnet_web::private_mode::PublicAccess::describe(&setting.public);
+    if !setting.rejected.is_empty() {
+        return Check::fail(
+            NAME,
+            format!(
+                "PUBLIC_ACCESS names {} — not a carve-out; the station skips it",
+                setting.rejected.join(", ")
+            ),
+            "use a comma-separated list of live_audio, share and metrics",
+        );
+    }
+    if !setting.enabled {
+        return Check::pass(
+            NAME,
+            "off — viewing is open, the admin panel and every change need a sign-in",
+        );
+    }
+    if !password_configured {
+        return Check::fail(
+            NAME,
+            "on, but no admin password is set — the station answers 503 to everything but \
+             the sign-in and the health probe, and nobody can sign in",
+            "set CADDY_PWD in the config or the environment, or unset PRIVATE_MODE",
+        );
+    }
+    Check::pass(NAME, format!("on — public access: {public}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,6 +563,57 @@ mod tests {
 
     fn cli() -> Cli {
         Cli::parse_from(["birdnet-behavior"])
+    }
+
+    // ── private mode (O-4) ─────────────────────────────────────────────
+
+    fn private_setting(enabled: bool, rejected: &[&str]) -> crate::helpers::PrivateModeSetting {
+        crate::helpers::PrivateModeSetting {
+            enabled,
+            public: std::iter::once(birdnet_web::private_mode::PublicAccess::Share).collect(),
+            rejected: rejected.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn private_mode_without_a_password_is_a_failure_naming_the_503() {
+        let check = private_mode(&private_setting(true, &[]), false);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.message.contains("503"), "{}", check.message);
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("CADDY_PWD")),
+            "{:?}",
+            check.remediation
+        );
+    }
+
+    #[test]
+    fn private_mode_with_a_password_passes_and_names_the_carve_outs() {
+        let check = private_mode(&private_setting(true, &[]), true);
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.message.contains("share"), "{}", check.message);
+    }
+
+    #[test]
+    fn private_mode_off_passes_whatever_the_password() {
+        assert_eq!(
+            private_mode(&private_setting(false, &[]), false).status,
+            Status::Pass
+        );
+        assert_eq!(
+            private_mode(&private_setting(false, &[]), true).status,
+            Status::Pass
+        );
+    }
+
+    #[test]
+    fn a_rejected_carve_out_is_a_failure_even_with_private_mode_off() {
+        let check = private_mode(&private_setting(false, &["live_audo"]), true);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.message.contains("live_audo"), "{}", check.message);
     }
 
     // ── admin exposure ─────────────────────────────────────────────────

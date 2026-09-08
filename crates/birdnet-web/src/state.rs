@@ -14,9 +14,10 @@ use crate::db_pool::ReaderPool;
 use crate::diagnostics::Diagnostics;
 use crate::login_throttle::LoginThrottle;
 use crate::notifier::Notifier;
+use crate::private_mode::PublicAccess;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -100,6 +101,10 @@ struct AppStateInner {
     /// case the species page says so instead of linking to a page that does
     /// not exist.
     species_codes: HashMap<String, String>,
+    /// Whether the whole public surface sits behind the sign-in (O-4).
+    private_mode: bool,
+    /// The surfaces left open on a private station; empty otherwise.
+    public_access: BTreeSet<PublicAccess>,
     /// Custom species image directory (checked before Wikipedia cache).
     custom_image_dir: Option<PathBuf>,
     /// Path to the active configuration file, threaded from the CLI so the
@@ -248,6 +253,8 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
+                private_mode: false,
+                public_access: BTreeSet::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -484,6 +491,8 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
+                private_mode: false,
+                public_access: BTreeSet::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -533,6 +542,8 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
+                private_mode: false,
+                public_access: BTreeSet::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -625,6 +636,19 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_species_codes");
         Self {
             inner: rebuild_inner(inner, |s| s.species_codes = map),
+        }
+    }
+
+    /// Put the whole public surface behind the sign-in (O-4), leaving only
+    /// `public` open. See [`crate::private_mode`].
+    #[must_use]
+    pub fn with_private_mode(self, public: BTreeSet<PublicAccess>) -> Self {
+        let inner = unwrap_inner(self.inner, "with_private_mode");
+        Self {
+            inner: rebuild_inner(inner, |s| {
+                s.private_mode = true;
+                s.public_access = public;
+            }),
         }
     }
 
@@ -1424,6 +1448,19 @@ impl AppState {
     /// Get the species info link site ("ebird", "allaboutbirds", or "none").
     pub fn info_site(&self) -> &str {
         &self.inner.info_site
+    }
+
+    /// Whether the public surface is behind the sign-in (O-4).
+    #[must_use]
+    pub fn private_mode(&self) -> bool {
+        self.inner.private_mode
+    }
+
+    /// The surfaces left open on a private station (O-4). Empty unless
+    /// [`Self::private_mode`] is set.
+    #[must_use]
+    pub fn public_access(&self) -> &BTreeSet<PublicAccess> {
+        &self.inner.public_access
     }
 
     /// The eBird species code for a scientific name, if the station's label

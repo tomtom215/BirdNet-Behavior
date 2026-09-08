@@ -74,6 +74,8 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
 | `BIRDNET_RAW_AUDIO_KEEP_EVERY` | `--raw-audio-keep-every` | `RAW_AUDIO_KEEP_EVERY` | `0` (keep no raw audio; `1` keeps every segment, `N` one in N) |
 | `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | `CADDY_PWD` auto-set on bare-metal install; sign in as `admin` (`CADDY_USER` is environment-only — see [Remote access](../admin/remote-access.md)) |
+| `BIRDNET_PRIVATE_MODE` | `--private-mode` | `PRIVATE_MODE` | off (viewing is open). `true` puts the whole station behind the sign-in; needs `CADDY_PWD`, or everything but the sign-in answers `503`. See [Hardening](../field/hardening.md#private-mode-everything-behind-the-sign-in) |
+| `BIRDNET_PUBLIC_ACCESS` | `--public-access` | `PUBLIC_ACCESS` | — (nothing carved out). Comma-separated `live_audio`, `share`, `metrics`; no effect without private mode |
 | `BIRDNET_CORS_ALLOWED_ORIGINS` | — | — | — (same-origin only) |
 
 > **Invalid settings fail fast.** On startup the daemon validates the

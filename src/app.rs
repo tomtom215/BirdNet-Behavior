@@ -369,6 +369,7 @@ async fn serve(
     };
     let state = helpers::init_species_codes(state, &cli, config.as_ref());
     let state = helpers::init_i18n(state, &cli, config.as_ref());
+    let state = helpers::init_private_mode(state, &cli, config.as_ref());
 
     // The capture supervisor publishes per-source health into this shared
     // handle; the web layer reads it for Station Health. One clone goes into
@@ -596,6 +597,16 @@ async fn serve(
         .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
         .or_else(|| std::env::var("CADDY_PWD").ok())
         .is_some_and(|pwd| !pwd.is_empty());
+    // O-4: a private station with no password fails closed — every request
+    // outside the sign-in and the probe gets a 503 — so say so where the
+    // operator will look first. `--doctor` reports the same.
+    if !admin_password_configured && state.private_mode() {
+        tracing::error!(
+            "private mode is on but NO admin password is set: the station will answer 503 to \
+             everything except the sign-in and the health probe, and nobody can sign in. Set \
+             CADDY_PWD in the config or the environment, or unset BIRDNET_PRIVATE_MODE."
+        );
+    }
     if !admin_password_configured && !addr.ip().is_loopback() {
         tracing::warn!(
             addr = %addr,

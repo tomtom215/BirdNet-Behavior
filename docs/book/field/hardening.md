@@ -23,7 +23,10 @@ To report a vulnerability, see
 The single most important decision is *what can reach the web UI*. **Viewing the
 dashboard requires no login; the `/admin` panel** — which can change settings,
 trigger database backups, and update the software — **is gated by a
-session-cookie sign-in enforced by the binary itself.** Treat reachability as the primary control.
+session-cookie sign-in enforced by the binary itself.** Treat reachability as
+the primary control — and when the station is reachable from beyond the LAN,
+turn on [private mode](#private-mode-everything-behind-the-sign-in), which
+puts the dashboard itself behind that sign-in.
 
 - **Default: all interfaces.** A bare-metal binary defaults to
   `--listen 0.0.0.0:8502`, so the dashboard is reachable from other devices on
@@ -47,6 +50,13 @@ session-cookie sign-in enforced by the binary itself.** Treat reachability as th
   and generates a local CA to import once; `--tls-mode manual` serves your own
   certificate and reloads it when your ACME client renews it. Off by default.
   `--doctor` verifies the whole setup before startup does.
+- **Private mode for anything reachable from outside.** A tunnel, a mesh VPN
+  shared with other people, or a port forward makes "anyone who can reach the
+  port" a much larger set than your LAN, and `--listen 127.0.0.1` does not
+  help: the tunnel is what connects to it. Set `BIRDNET_PRIVATE_MODE=true`
+  (config file: `PRIVATE_MODE=true`) and the whole station — dashboard, read
+  API, live audio, both WebSockets — needs the sign-in. See
+  [Private mode](#private-mode-everything-behind-the-sign-in) below.
 - **Never port-forward `8502`/`8503` to the internet.** Built-in HTTPS encrypts
   the traffic; it does not add a login lockout or a WAF, and a self-signed
   certificate carries no publicly-trusted name. Put it behind a reverse proxy
@@ -62,7 +72,8 @@ Authentication gates **the `/admin*` panel, the Station management tabs
 (`/station/capture|alerts|data|settings|access`) and every page action that
 changes something** — viewing the dashboard, the read-only `/api/v2/*`
 endpoints, the WebSockets, and the health check are open to anyone who can
-reach the port. A fresh install auto-generates a strong admin
+reach the port, unless [private mode](#private-mode-everything-behind-the-sign-in)
+is on. A fresh install auto-generates a strong admin
 password, so `/admin` is protected by default; for anything LAN- or
 internet-reachable, keep it set (and add TLS off-LAN).
 
@@ -115,6 +126,47 @@ internet-reachable, keep it set (and add TLS off-LAN).
   case.) The live detection stream is therefore readable by anyone who can reach
   the port. If that matters, gate access at the network layer (VPN / proxy
   allow-list) rather than relying on app-level auth.
+
+### Private mode: everything behind the sign-in
+
+```dotenv
+BIRDNET_PRIVATE_MODE=true
+BIRDNET_PUBLIC_ACCESS=share,metrics   # optional carve-outs
+```
+
+(`PRIVATE_MODE=true` and `PUBLIC_ACCESS=…` in `birdnet.conf`; `--private-mode`
+and `--public-access` on the command line.)
+
+With private mode on, a visitor with no session gets nothing but the sign-in
+form: pages answer a `303` to `/login`, the API and the WebSockets a `401`.
+What stays open without a session is exactly:
+
+| Always open | Why |
+|---|---|
+| `/login`, `/logout`, `/static/*`, `/favicon.ico` | a browser has to be able to render the sign-in form |
+| `/api/v2/health` | the systemd watchdog and the container healthcheck read it |
+
+plus whatever `BIRDNET_PUBLIC_ACCESS` names, comma-separated:
+
+| Carve-out | Opens |
+|---|---|
+| `live_audio` | `/stream` and the live spectrogram WebSocket — for a station whose feed is meant to be listened to |
+| `share` | the signed `/r/<token>` links the **Share clip** button mints, with their audio and spectrogram; *not* the recordings route behind them |
+| `metrics` | `/api/v2/metrics`, for a Prometheus scraper that has no cookie |
+
+Anything else — the detection history, the recordings, the feeds, the
+detection WebSocket — is behind the sign-in with no way to open it. Viewer
+accounts (the `/station/access` tab) can see everything a signed-in admin
+can, and change nothing, so a private station can still be shared with the
+household.
+
+**Private mode needs a password.** A private station with no `CADDY_PWD`
+answers `503` to everything but the sign-in and the health probe — it does
+*not* fall back to the open station, because that is the one thing it was
+asked not to be. The startup log says so at `ERROR`, the page says so, and
+`--doctor` reports it under **Private mode**. An unknown name in
+`BIRDNET_PUBLIC_ACCESS` is reported and skipped (the station starts, with
+that surface closed); `--doctor` reports it too.
 
 ---
 
@@ -300,6 +352,7 @@ only opens the ports you actually use.
 - [ ] Restrict the bind to `127.0.0.1` (+ SSH/VPN) if you don't need LAN access; for off-LAN access, put a TLS reverse proxy in front.
 - [ ] Turn on `--tls-mode self-signed` if the dashboard is reachable by anyone else on the network.
 - [ ] Keep `CADDY_PWD` set (a fresh install generates one) — or use proxy/VPN auth. Don't clear it on a non-loopback bind.
+- [ ] Turn on `BIRDNET_PRIVATE_MODE` if the station is reachable from beyond your own LAN (a tunnel, a port forward, a VPN other people are on), and carve out only what you mean to publish with `BIRDNET_PUBLIC_ACCESS`.
 - [ ] Set `OFFSITE_BACKUP` (with `OFFSITE_PASSPHRASE`) so a dead SD card is not the end of the records — and store the passphrase somewhere other than the station.
 - [ ] Leave CORS at its same-origin default unless you genuinely need a second origin.
 - [ ] Set `BIRDNET_PRIVACY_THRESHOLD` if voices may be captured.
