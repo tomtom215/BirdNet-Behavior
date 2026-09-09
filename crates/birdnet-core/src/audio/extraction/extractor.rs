@@ -45,6 +45,32 @@ impl Extractor {
         source_file: &Path,
         detection: &Detection,
     ) -> Result<PathBuf, ExtractionError> {
+        self.extract_detection_clip(source_file, detection)
+            .map(|clip| clip.path)
+    }
+
+    /// As [`Self::extract_detection`], returning where the detection sits
+    /// inside the clip as well as the clip's path.
+    ///
+    /// A consumer that hands the clip to someone else — the `BirdWeather`
+    /// soundscape upload — has to say which seconds of it are the detection,
+    /// and the lead-in is not the configured one: a window that reached past
+    /// the start of the source segment and found no earlier segment to draw
+    /// on is shorter at the front than it asked to be (`super::span`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::extract_detection`].
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    pub fn extract_detection_clip(
+        &self,
+        source_file: &Path,
+        detection: &Detection,
+    ) -> Result<ExtractedClip, ExtractionError> {
         // 1. Decode first so we know the actual audio length. Without this,
         //    safe_stop was clamped to the configured `recording_length`
         //    (default 15 s), and any detection beyond that window produced
@@ -120,6 +146,12 @@ impl Extractor {
         let output_path = claim_unused_path(output_dir, &filename);
 
         // 6. Write the WAV file using hound (with optional frequency shifting).
+        //
+        // What ends up on disk is what the row records: a conversion that
+        // fails keeps the WAV under its own name, and the path and format
+        // returned say so (DD-36).
+        let mut written_path = output_path.clone();
+        let mut written_format = self.config.target_format;
         if self.config.freq_shift_hz != 0 || self.config.target_format.needs_conversion() {
             // Write to a temporary WAV first, then apply shift and/or convert.
             let wav_path = output_path.with_extension("wav");
@@ -140,7 +172,7 @@ impl Extractor {
                 if shift_ok {
                     let _ = std::fs::remove_file(&wav_path);
                     if self.config.target_format.needs_conversion() {
-                        convert_audio_format(
+                        written_path = convert_audio_format(
                             &shifted_path,
                             &output_path,
                             self.config.target_format,
@@ -156,20 +188,29 @@ impl Extractor {
                     );
                     let _ = std::fs::remove_file(&shifted_path);
                     if self.config.target_format.needs_conversion() {
-                        convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+                        written_path = convert_audio_format(
+                            &wav_path,
+                            &output_path,
+                            self.config.target_format,
+                        )?;
                     } else {
                         std::fs::rename(&wav_path, &output_path)?;
                     }
                 }
             } else {
-                convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+                written_path =
+                    convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+            }
+            if written_path != output_path {
+                written_format = super::format::AudioFormat::Wav;
             }
         } else {
             write_wav_clip(clip_samples, audio.sample_rate, &output_path)?;
         }
+        let output_path = written_path;
 
         // Embed RIFF INFO metadata into WAV files (best-effort, non-fatal).
-        if self.config.target_format == super::format::AudioFormat::Wav {
+        if written_format == super::format::AudioFormat::Wav {
             let meta = DetectionMeta {
                 common_name: detection.common_name.clone(),
                 scientific_name: detection.scientific_name.clone(),
@@ -193,7 +234,45 @@ impl Extractor {
             "extracted detection clip"
         );
 
-        Ok(output_path)
+        // Where the clip begins on the source segment's timeline: the wanted
+        // start when it lay inside the segment; otherwise as far before the
+        // segment as the neighbour could supply (`window.lead_in_secs`), which
+        // is zero when there was no neighbour to draw on. One expression
+        // rather than a branch on the sign: a wanted start at or after zero
+        // has no lead-in, so both arms agree there, and the branch carried an
+        // equivalent mutant (`<` for `<=`) that no test could tell apart.
+        let clip_start_secs = want_start.max(-window.lead_in_secs);
+        Ok(ExtractedClip {
+            path: output_path,
+            pre_detection_secs: (detection.start - clip_start_secs).max(0.0),
+            detection_secs: (detection.stop - detection.start).max(0.0),
+            format: written_format,
+        })
+    }
+}
+
+/// A clip on disk, and where the detection is inside it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedClip {
+    /// The clip file.
+    pub path: PathBuf,
+    /// Seconds of audio before the detection's start, as actually written —
+    /// the configured lead-in when the source segment (or its neighbour) had
+    /// the audio to supply it, less when it did not.
+    pub pre_detection_secs: f32,
+    /// The detection's own length in seconds (`stop - start`).
+    pub detection_secs: f32,
+    /// The format the clip was written in — the target format, or WAV when
+    /// every converter failed and the WAV was kept (DD-36).
+    pub format: super::format::AudioFormat,
+}
+
+impl ExtractedClip {
+    /// The detection's start and end inside the clip, in seconds.
+    #[must_use]
+    pub fn detection_span(&self) -> (f32, f32) {
+        let start = self.pre_detection_secs.max(0.0);
+        (start, start + self.detection_secs)
     }
 }
 
@@ -842,6 +921,117 @@ mod tests {
     // `shift_ok != ` flip in the fallback path, and the
     // `target_format == AudioFormat::Wav` flip on the metadata-embed
     // guard.
+
+    /// The clip says where the detection sits inside it: `pre_detection_secs`
+    /// is the audio written before the detection's start, `detection_secs` its
+    /// length, and `detection_span` the two as a start and an end. The Raven
+    /// table and the Audacity labels (FR-1) are placed from these, so a wrong
+    /// sign or a swapped operand puts the selection on silence — and until
+    /// this test nothing in this crate read them back (cargo-mutants: 20
+    /// survivors on these lines). A detection well inside the segment: the
+    /// clip begins `spacer` before it.
+    #[test]
+    fn the_clip_records_where_the_detection_sits_inside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0, // spacer = 1.5
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
+        });
+
+        let clip = extractor
+            .extract_detection_clip(&src, &det(10.0, 12.0))
+            .expect("extraction succeeds");
+
+        assert!((clip.pre_detection_secs - 1.5).abs() < 1e-4, "{clip:?}");
+        assert!((clip.detection_secs - 2.0).abs() < 1e-4, "{clip:?}");
+        let (start, end) = clip.detection_span();
+        assert!(
+            (start - 1.5).abs() < 1e-4 && (end - 3.5).abs() < 1e-4,
+            "span {start}..{end}"
+        );
+        assert_eq!(clip.format, AudioFormat::Wav, "{clip:?}");
+    }
+
+    /// A detection at the start of a segment draws its lead-in from the
+    /// predecessor (`super::span`), and the clip's account must include that
+    /// audio: the clip begins `lead_in_secs` before the segment — not at the
+    /// wanted start, which lies further back than the neighbour supplied, and
+    /// not at zero. Without the predecessor the same detection's clip begins
+    /// at the segment, and the account says so.
+    #[test]
+    fn a_lead_in_drawn_from_the_predecessor_counts_as_pre_detection_audio() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&prev, 15.0, 48_000);
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:15.wav");
+        write_silent_wav(&src, 15.0, 48_000);
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 15.0,
+            extraction_length: 6.0, // spacer = 1.5
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
+        });
+
+        // want_start = 0.5 - 1.5 = -1.0: one second comes from the predecessor.
+        let clip = extractor
+            .extract_detection_clip(&src, &det(0.5, 3.0))
+            .expect("extraction succeeds");
+        assert!((clip.pre_detection_secs - 1.5).abs() < 1e-4, "{clip:?}");
+        assert!((clip.detection_secs - 2.5).abs() < 1e-4, "{clip:?}");
+        let (start, end) = clip.detection_span();
+        assert!(
+            (start - 1.5).abs() < 1e-4 && (end - 4.0).abs() < 1e-4,
+            "span {start}..{end}"
+        );
+
+        std::fs::remove_file(&prev).unwrap();
+        let clip = extractor
+            .extract_detection_clip(&src, &det(0.5, 3.0))
+            .expect("extraction succeeds without a predecessor");
+        assert!((clip.pre_detection_secs - 0.5).abs() < 1e-4, "{clip:?}");
+    }
+
+    /// `format` is the format on disk. With a converter on PATH a FLAC target
+    /// yields a FLAC and the clip says so; without one the WAV is kept under
+    /// its own name (DD-36) and the clip says *that*. Either way a check that
+    /// inverts the comparison of the written path with the target path names
+    /// the wrong format, so this runs with or without ffmpeg and sox.
+    #[test]
+    fn the_format_recorded_is_the_format_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "flac".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Flac,
+            freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
+        });
+
+        let clip = extractor
+            .extract_detection_clip(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds, converted or kept");
+
+        let ext = clip.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        match ext {
+            "flac" => assert_eq!(clip.format, AudioFormat::Flac, "{clip:?}"),
+            "wav" => assert_eq!(clip.format, AudioFormat::Wav, "{clip:?}"),
+            other => panic!("unexpected extension {other:?}: {clip:?}"),
+        }
+    }
 
     fn has_ffmpeg_or_sox() -> bool {
         let Ok(path) = std::env::var("PATH") else {

@@ -16,6 +16,7 @@ Every source is supervised on its own, which is what makes a multi-camera statio
 
 - **One source failing never disturbs the others.** A dead capture process — a camera that rebooted, a mic that was unplugged, a network blip — is restarted on its own with capped exponential backoff (2 s → 4 s → … → 60 s, then every 60 s **forever**; a source down for an hour is still recording when it comes back on hour two). The other sources keep recording and detection never pauses.
 - **Silent stalls are caught too.** A source whose process is still *alive* but has stopped delivering audio — a wedged RTSP session, a mic hung after a USB re-enumeration — is detected by watching its segment output: no fresh recording for several segment-durations and it is restarted exactly like a crash. A plain "is the process running?" check can't see this; it's the failure mode that quietly loses a whole night otherwise. (It fails open while the system clock is unsynced, so a wrong boot-time clock never triggers a false restart.)
+- **A source that keeps dying and coming back is caught as well.** A marginal USB connection or an under-powered hub gives a source that dies every few minutes and restarts in seconds: it is live at every glance, its backoff never grows, and its uptime strip stays green, but every restart loses the audio around it. Restarts are counted over the last hour, and five or more make the source *flapping*: a line on its Station Health card, an issue in the banner, a warning in the log, and the `flapping` station-health condition for the notifier.
 - **You can see it.** The per-source `birdnet_audio_source_up{source="…"}` Prometheus gauge reflects real liveness, and a source that has been down a couple of minutes logs a loud, rate-limited warning to the journal.
 
 ## Tuning a source
@@ -198,6 +199,16 @@ falls back to the index only when the id would be ambiguous — two identical
 microphones report the same id, and then only the index can tell them apart.
 
 After editing the config, apply it with `sudo bash install.sh repair`.
+
+A station still addressing its card by index is told so twice. `--doctor`
+grades a resolving index as an advisory naming the exact `CARD=` form for the
+card it resolved to (an absent index was already a warning). And at every
+start the station writes the id it finds behind each index-form device into its
+boot journal and compares it with the last start: if `plughw:1,0` was `PRO`
+then and is something else now, that is the `audio_card_moved` boot anomaly,
+which reaches `/api/v2/health`, the station-health notification, and the log
+as an error, because the station is recording from a different device than
+it was set up with.
 
 ### Pinning your own names (recommended for multi-mic stations)
 

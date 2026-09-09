@@ -282,3 +282,115 @@ async fn a_measured_gauge_renders_and_declares_its_type() {
         );
     }
 }
+
+/// OP-3: disk usage and the maintenance record were measured and never
+/// exported. The data volume always answers on the host this runs on; the
+/// maintenance families need a recorded run, which the fixture seeds.
+#[tokio::test]
+async fn disk_and_maintenance_are_exported() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = station(dir.path());
+    state.with_db(|conn| {
+        birdnet_db::sqlite::record_run_result(
+            conn,
+            birdnet_db::sqlite::JOB_BACKUP_VACUUM,
+            1_788_973_200,
+            Some(false),
+        )
+        .unwrap();
+    });
+    let body = metrics_body(&state).await;
+    let types = type_declarations(&body);
+    for family in [
+        "birdnet_disk_used_percent",
+        "birdnet_disk_available_bytes",
+        "birdnet_maintenance_last_run_seconds",
+        "birdnet_maintenance_last_ok",
+    ] {
+        assert!(
+            types.contains_key(family),
+            "{family} is measured on this station and not exported:\n{body}"
+        );
+    }
+    assert!(
+        body.contains("birdnet_disk_used_percent{volume=\"data\"}"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_maintenance_last_ok{job=\"backup_vacuum\"} 0"),
+        "a failed backup must export as 0: {body}"
+    );
+}
+
+/// PR-1 / S-3: a segment gone before the pipeline read it is a counter, not a
+/// log line identical to the healthy case.
+#[tokio::test]
+async fn dropped_segments_are_exported_per_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = station(dir.path());
+    state.metrics().inc_segment_dropped("local");
+    state.metrics().inc_segment_dropped("local");
+    state.metrics().inc_segment_dropped("RTSP_1");
+    let body = metrics_body(&state).await;
+    let types = type_declarations(&body);
+    assert_eq!(
+        types
+            .get("birdnet_segments_dropped_total")
+            .map(|t| t.join(","))
+            .as_deref(),
+        Some("counter"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_dropped_total{source=\"local\"} 2"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_dropped_total{source=\"RTSP_1\"} 1"),
+        "{body}"
+    );
+}
+
+/// PR-2: the queue's depth is a gauge (absent until the daemon reports) and
+/// the shed policy's skips are a counter by reason.
+#[tokio::test]
+async fn queue_depth_and_shed_are_exported() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = station(dir.path());
+    let before = metrics_body(&state).await;
+    assert!(
+        !type_declarations(&before).contains_key("birdnet_analysis_queue_depth"),
+        "unreported must be absent, not zero: {before}"
+    );
+    state.metrics().set_analysis_queue_depth(57);
+    state.metrics().inc_segment_shed("backlog");
+    state.metrics().inc_segment_shed("backlog");
+    state.metrics().inc_segment_shed("thermal");
+    let body = metrics_body(&state).await;
+    let types = type_declarations(&body);
+    assert_eq!(
+        types
+            .get("birdnet_analysis_queue_depth")
+            .map(|t| t.join(","))
+            .as_deref(),
+        Some("gauge"),
+        "{body}"
+    );
+    assert!(body.contains("birdnet_analysis_queue_depth 57"), "{body}");
+    assert_eq!(
+        types
+            .get("birdnet_segments_shed_total")
+            .map(|t| t.join(","))
+            .as_deref(),
+        Some("counter"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_shed_total{reason=\"backlog\"} 2"),
+        "{body}"
+    );
+    assert!(
+        body.contains("birdnet_segments_shed_total{reason=\"thermal\"} 1"),
+        "{body}"
+    );
+}

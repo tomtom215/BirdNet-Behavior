@@ -202,6 +202,52 @@ pub fn init_site_name(
     }
 }
 
+/// Load the eBird species codes for the species page's "View on eBird" link
+/// (NP-1), from the metadata model's label file when one is configured.
+///
+/// The path is resolved exactly as the daemon resolves it
+/// (`--metadata-labels`, else `METADATA_LABELS_PATH`). A file that does not
+/// parse is reported and skipped here: the daemon refuses to start on it with
+/// its own message, and the web layer's only stake is the link.
+pub fn init_species_codes(
+    state: birdnet_web::state::AppState,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_web::state::AppState {
+    let path = cli
+        .metadata_labels
+        .clone()
+        .or_else(|| config?.get("METADATA_LABELS_PATH").map(PathBuf::from));
+    let Some(path) = path else {
+        tracing::info!(
+            "no metadata label file configured: species pages will not link to eBird (the geomodel's label file supplies the species codes)"
+        );
+        return state;
+    };
+    match birdnet_core::inference::labels::LabelSet::load(&path) {
+        Ok(labels) => {
+            let codes: Vec<(String, String)> = labels
+                .species_codes()
+                .map(|(sci, code)| (sci.to_string(), code.to_string()))
+                .collect();
+            tracing::info!(
+                path = %path.display(),
+                species_with_code = codes.len(),
+                "eBird species codes loaded for the species page link"
+            );
+            state.with_species_codes(codes)
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "metadata label file could not be read: species pages will not link to eBird"
+            );
+            state
+        }
+    }
+}
+
 /// Reinstall the behavioral `DuckDB` extension and exit (`--refresh-extension`).
 ///
 /// Resolves the analytics database path the same way
@@ -372,8 +418,52 @@ pub fn run_refresh_extension(
 
 #[cfg(test)]
 mod tests {
-    use super::{init_i18n, init_image_cache, init_site_name};
+    use super::{init_i18n, init_image_cache, init_site_name, init_species_codes};
     use crate::helpers::test_support::{config_with, default_cli, test_state};
+
+    // ── init_species_codes (NP-1) ─────────────────────────────────────
+
+    #[test]
+    fn species_codes_come_from_the_metadata_label_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let labels = dir.path().join("geomodel_labels.txt");
+        std::fs::write(
+            &labels,
+            "1032549\tPetaurista albiventer\tWhite-bellied Giant Flying Squirrel\nzothaw\tButeo albonotatus\tZone-tailed Hawk\n",
+        )
+        .unwrap();
+
+        // From the CLI flag.
+        let mut cli = default_cli();
+        cli.metadata_labels = Some(labels.clone());
+        let state = init_species_codes(test_state(), &cli, None);
+        assert_eq!(
+            state.ebird_species_code("Buteo albonotatus"),
+            Some("zothaw")
+        );
+        assert_eq!(
+            state.ebird_species_code("buteo ALBONOTATUS"),
+            Some("zothaw"),
+            "the lookup is case-insensitive, like the label set's own"
+        );
+        assert_eq!(state.ebird_species_code("Parus major"), None);
+
+        // From the config key, as the daemon resolves it.
+        let cfg = config_with(&[("METADATA_LABELS_PATH", labels.to_str().unwrap())]);
+        let state = init_species_codes(test_state(), &default_cli(), Some(&cfg));
+        assert_eq!(
+            state.ebird_species_code("Buteo albonotatus"),
+            Some("zothaw")
+        );
+
+        // Nothing configured, or a file that is not there: no codes, no panic.
+        let state = init_species_codes(test_state(), &default_cli(), None);
+        assert_eq!(state.ebird_species_code("Buteo albonotatus"), None);
+        let mut cli = default_cli();
+        cli.metadata_labels = Some(dir.path().join("missing.txt"));
+        let state = init_species_codes(test_state(), &cli, None);
+        assert_eq!(state.ebird_species_code("Buteo albonotatus"), None);
+    }
 
     // ── init_site_name ─────────────────────────────────────────────────
 

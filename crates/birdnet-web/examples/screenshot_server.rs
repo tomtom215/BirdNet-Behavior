@@ -307,6 +307,8 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
             uptime_secs: Some(6 * 3600 + 12 * 60),
             last_audio_age_secs: Some(2),
             restart_attempts: 0,
+            restarts_last_hour: 0,
+            flapping: false,
             next_retry_in_secs: None,
             uptime_24h: strip(|_| UptimeSegment::Up),
         },
@@ -316,6 +318,8 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
             uptime_secs: None,
             last_audio_age_secs: Some(137),
             restart_attempts: 3,
+            restarts_last_hour: 0,
+            flapping: false,
             next_retry_in_secs: Some(12),
             // Solid all day, then a recent outage over the last ~90 minutes.
             uptime_24h: strip(|i| {
@@ -332,6 +336,8 @@ fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
             uptime_secs: None,
             last_audio_age_secs: Some(308),
             restart_attempts: 1,
+            restarts_last_hour: 0,
+            flapping: false,
             next_retry_in_secs: None,
             // Intermittent dropouts through the day, stalled right now.
             uptime_24h: strip(|i| {
@@ -437,6 +443,29 @@ fn seed(conn: &Connection, today_days: i64) {
 
 /// A few configured audio sources so the Station Capture tab's source list and
 /// the Health per-source panel show a realistic multi-stream deployment.
+/// Write one snapshot into the backup ring beside the database, named the way
+/// `backup_database` names them (`birds.db.backup.<unix_secs>`), an hour old.
+fn seed_backup_snapshot(db_path: &std::path::Path) {
+    let dir = db_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("backups");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let db_name = db_path.file_name().map_or_else(
+        || "birds.db".to_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+        .saturating_sub(3600);
+    let path = dir.join(format!("{db_name}.backup.{stamp}"));
+    // A recognisable size in the listing; the content is not read.
+    let _ = std::fs::write(&path, vec![0_u8; 6 * 1024 * 1024]);
+}
+
 fn seed_audio_sources(conn: &Connection) {
     for (id, kind, device, label) in [
         ("local", "usb-alsa", "hw:1,0", "Backyard mic"),
@@ -745,6 +774,12 @@ async fn main() {
     // Recordings grid shows real spectrogram thumbnails (the route renders from
     // these and caches the PNGs under the data dir's `spectrograms/`).
     seed_demo_audio(&state.recording_dir(), &demo_clips);
+
+    // One snapshot in the backup ring, so /station/data renders a snapshot
+    // row. The seeded database had none, and the row's grid overflowed the
+    // 390 px viewport only once one existed (DD-30) — a state the overflow
+    // gate could not see until the fixture had it.
+    seed_backup_snapshot(state.db_path());
 
     // This fixture exists to be hammered: the visual-QA sweep captures 152
     // pages back to back and the interaction gate drives controls as fast as

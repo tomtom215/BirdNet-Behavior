@@ -119,6 +119,9 @@ async fn detection_persists_and_surfaces_on_web_api() {
             "06:30:00",
             birdnet_db::clock::local_utc_offset_secs(),
         ),
+        run_id: None,
+        clip_offset_secs: None,
+        detection_secs: None,
     };
     state
         .with_db(|conn| insert_detection(conn, &record))
@@ -226,6 +229,9 @@ async fn full_pipeline_audio_to_web_model_gated() {
                     &d.time,
                     birdnet_db::clock::local_utc_offset_secs(),
                 ),
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             state
                 .with_db(|conn| insert_detection(conn, &record))

@@ -5,12 +5,16 @@ use rusqlite::{Connection, params};
 use crate::sqlite::connection::DbError;
 use crate::sqlite::types::DetectionRecord;
 
-/// Insert a detection record into the database.
+/// Insert a detection record into the database, returning its rowid.
+///
+/// The rowid is what a follow-up write that happens after the insert — the
+/// `BirdWeather` soundscape id, known only once the upload has been answered
+/// — keys on; the natural key is five columns of local wall clock and a path.
 ///
 /// # Errors
 ///
 /// Returns `DbError` on insert failure.
-pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Result<(), DbError> {
+pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Result<i64, DbError> {
     // Explicit column list — `VALUES (?1, …, ?12)` without one was a
     // schema-vs-insert drift waiting to happen and broke in production
     // when migration 7 added `is_locked` as a 13th column. Naming the
@@ -18,8 +22,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc, run_id, clip_offset_secs, detection_secs) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
             record.date,
             record.time,
@@ -43,9 +47,31 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             // passes `Some` because it knows the offset that was in force —
             // see `birdnet_core::civil::unix_secs_from_local`.
             record.detected_at_utc,
+            record.run_id,
+            record.clip_offset_secs,
+            record.detection_secs,
         ],
     )?;
-    Ok(())
+    Ok(conn.last_insert_rowid())
+}
+
+/// Record the `BirdWeather` soundscape id a detection was posted with
+/// (migration 45). Returns `false` if no row has that rowid.
+///
+/// # Errors
+///
+/// Returns `DbError` on update failure.
+pub fn set_birdweather_soundscape(
+    conn: &Connection,
+    rowid: i64,
+    soundscape_id: u64,
+) -> Result<bool, DbError> {
+    let id = i64::try_from(soundscape_id).unwrap_or(i64::MAX);
+    let changed = conn.execute(
+        "UPDATE detections SET birdweather_soundscape_id = ?2 WHERE rowid = ?1",
+        params![rowid, id],
+    )?;
+    Ok(changed > 0)
 }
 
 /// Delete a detection by date, time, and scientific name.
@@ -101,6 +127,55 @@ mod tests {
         detection_count, detections_by_species, recent_detections,
     };
 
+    /// DD-32: the id lands on the row the rowid names, and only there.
+    #[test]
+    fn the_soundscape_id_is_written_by_rowid() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let record = DetectionRecord {
+            date: "2026-03-11",
+            time: "08:30:00",
+            sci_name: "Turdus merula",
+            com_name: "Eurasian Blackbird",
+            confidence: 0.87,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name: "a.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: None,
+            duration_secs: None,
+            detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
+        };
+        let first = insert_detection(&conn, &record).unwrap();
+        let second = insert_detection(
+            &conn,
+            &DetectionRecord {
+                time: "08:31:00",
+                ..record.clone()
+            },
+        )
+        .unwrap();
+        assert_ne!(first, second);
+        assert!(set_birdweather_soundscape(&conn, second, 4242).unwrap());
+        assert!(!set_birdweather_soundscape(&conn, second + 100, 1).unwrap());
+        let ids: Vec<Option<i64>> = conn
+            .prepare("SELECT birdweather_soundscape_id FROM detections ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, vec![None, Some(4242)]);
+    }
+
     #[test]
     fn insert_and_count() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -123,6 +198,9 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -153,6 +231,9 @@ mod tests {
             source: Some("cam1"),
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         // A second row at a different second with no source = the historical
         // shape (e.g. an imported BirdNET-Pi row).
@@ -257,6 +338,9 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
 
         insert_detection(&conn, &record).unwrap();
@@ -310,6 +394,9 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
@@ -348,6 +435,9 @@ mod tests {
             source: Some("local"),
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();
@@ -399,6 +489,9 @@ mod tests {
                 source: None,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &r).unwrap();
         }
@@ -439,6 +532,9 @@ mod tests {
             source: None,
             duration_secs: Some(15.0),
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();

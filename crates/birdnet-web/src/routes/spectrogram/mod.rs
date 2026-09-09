@@ -188,6 +188,18 @@ struct SpectrogramQuery {
     thumb: Option<u32>,
 }
 
+/// The full-size, unlabelled spectrogram for `filename`, for the share link
+/// (O-4): the same handler as `/spectrogram/{filename}` with no query.
+pub(crate) async fn serve_shared(state: State<AppState>, filename: Path<String>) -> Response {
+    let query = SpectrogramQuery {
+        species: None,
+        confidence: None,
+        time: None,
+        thumb: None,
+    };
+    serve_spectrogram(state, filename, axum::extract::Query(query)).await
+}
+
 async fn serve_spectrogram(
     State(state): State<AppState>,
     Path(filename): Path<String>,

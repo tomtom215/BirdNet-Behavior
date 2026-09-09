@@ -22,13 +22,16 @@
 //! ## Secret derivation
 //!
 //! Operators can set `BNB_SESSION_SECRET` to lock the secret across restarts
-//! and process moves. Otherwise the secret is derived deterministically from
-//! the configured admin password (env `CADDY_PWD`, the same source
-//! `helpers::auth::bootstrap_admin_password` seeds the admin account from) via
-//! `HMAC-SHA256(CADDY_PWD, b"bnb-session-v1")`. Rotating the password
-//! rotates the secret, which signs out every existing session — that is
-//! the intended semantics. If neither is set, a fail-secure per-process
-//! random secret is used so outstanding cookies invalidate on restart.
+//! and process moves. Otherwise the station uses a secret it generated once
+//! and keeps beside its database (`session.secret`, mode 0600 — see
+//! [`install_persisted_secret`]), so sessions survive a restart on every
+//! install, not only the ones that happen to export a variable. A process
+//! that did not install one falls back to a derivation from the configured
+//! admin password, `HMAC-SHA256(CADDY_PWD, b"bnb-session-v1")`, and finally
+//! to a fail-secure per-process random secret so outstanding cookies
+//! invalidate on restart. Signing other sessions out on a password rotation
+//! is the sessions table's job (`SessionStore::revoke_others`), not the
+//! secret's.
 //!
 //! The DIFF for O-14 originally specified `BLAKE3(hashed_password || …)`;
 //! `blake3` is not in the dep tree and the project rule forbids adding
@@ -112,11 +115,124 @@ fn process_random_secret() -> &'static [u8] {
     })
 }
 
+/// The secret [`install_persisted_secret`] loaded, if it ran.
+static PERSISTED_SECRET: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// The file beside the database that holds the station's own signing secret:
+/// 64 lowercase hex characters, mode 0600.
+pub const SECRET_FILE_NAME: &str = "session.secret";
+
+/// Load the station's signing secret from `dir`, creating it on first use.
+///
+/// Every bare-metal install ran on a per-process random secret (DD-15): the
+/// installer writes `CADDY_PWD` to the config file, nothing exports it to the
+/// environment, and `BNB_SESSION_SECRET` is set by nobody — so every login
+/// session died on restart while the accounts page promised fourteen days.
+/// A secret the station generates once and keeps beside its database is what
+/// makes that promise true without asking the operator for anything.
+///
+/// Written atomically (temp file, then rename) with mode 0600, so a crash
+/// mid-write cannot leave a half-secret that a later start reads as the
+/// whole one. Unreadable or malformed content is an error rather than a
+/// regenerated secret: regenerating silently would sign everyone out and
+/// hide the reason.
+///
+/// # Errors
+///
+/// The file cannot be read or created, or holds something other than 64 hex
+/// characters.
+pub fn load_or_create_secret(dir: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::{Error, ErrorKind, Write as _};
+    let path = dir.join(SECRET_FILE_NAME);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let hex = text.trim();
+            return decode_hex_secret(hex).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    format!("{} is not a 64-character hex secret", path.display()),
+                )
+            });
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let mut bytes = [0_u8; 32];
+    {
+        use password_hash::rand_core::{OsRng, RngCore};
+        OsRng
+            .try_fill_bytes(&mut bytes)
+            .map_err(|e| Error::other(format!("CSPRNG unavailable for the session secret: {e}")))?;
+    }
+    let hex = bytes.iter().fold(String::with_capacity(64), |mut out, b| {
+        use std::fmt::Write as _;
+        // Infallible: writing to a String never errors.
+        let _ = write!(out, "{b:02x}");
+        out
+    });
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{SECRET_FILE_NAME}.{}.tmp", std::process::id()));
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&tmp)?;
+        file.write_all(hex.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(bytes.to_vec())
+}
+
+fn decode_hex_secret(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// Load (or create) the persisted secret in `dir` and make it the signing
+/// secret for this process, ahead of the `CADDY_PWD` derivation.
+///
+/// Called once at start-up by the binary, after the database path is known.
+/// Idempotent: a second call keeps the first secret.
+///
+/// # Errors
+///
+/// As [`load_or_create_secret`]; the caller logs and continues on the
+/// previous derivation, so a read-only data directory degrades to the old
+/// behaviour rather than refusing to start.
+pub fn install_persisted_secret(dir: &std::path::Path) -> std::io::Result<()> {
+    if PERSISTED_SECRET.get().is_some() {
+        return Ok(());
+    }
+    let secret = load_or_create_secret(dir)?;
+    let _ = PERSISTED_SECRET.set(secret);
+    Ok(())
+}
+
 /// Resolve the signing secret in priority order:
 /// 1. `BNB_SESSION_SECRET` (operator-supplied, survives restarts).
-/// 2. `HMAC-SHA256(CADDY_PWD, "bnb-session-v1")` (deterministic from the
-///    admin password, rotates with it).
-/// 3. A fail-secure per-process random secret.
+/// 2. The station's own secret, persisted beside the database by
+///    [`install_persisted_secret`] (survives restarts; DD-15).
+/// 3. `HMAC-SHA256(CADDY_PWD, "bnb-session-v1")` (deterministic from the
+///    admin password, rotates with it) — reached only by a process that
+///    did not install a persisted secret.
+/// 4. A fail-secure per-process random secret.
+///
+/// Rotating the password no longer rotates the secret on the paths that
+/// have a persisted one; the sessions table is where a rotation signs the
+/// other sessions out (`SessionStore::revoke_others`), which is the same
+/// outcome by the mechanism that can also tell the operator's own session
+/// apart.
 ///
 /// # Panics
 ///
@@ -128,6 +244,9 @@ pub fn secret() -> Vec<u8> {
         && !s.is_empty()
     {
         return s.into_bytes();
+    }
+    if let Some(persisted) = PERSISTED_SECRET.get() {
+        return persisted.clone();
     }
     if let Ok(pwd) = std::env::var("CADDY_PWD")
         && !pwd.is_empty()
@@ -416,6 +535,43 @@ mod tests {
     // in `routes::share` tests — `unsafe_code = "deny"` workspace-wide
     // forbids the `std::env::set_var` route.
     use super::*;
+
+    /// DD-15: the secret is created once, read back identical, and protected.
+    #[test]
+    fn the_persisted_secret_is_created_once_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = load_or_create_secret(dir.path()).unwrap();
+        let second = load_or_create_secret(dir.path()).unwrap();
+        assert_eq!(first.len(), 32);
+        assert_eq!(
+            first, second,
+            "a second start reads the first start's secret"
+        );
+        let path = dir.path().join(SECRET_FILE_NAME);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.trim().len(), 64);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "mode {mode:o}");
+        }
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().count() == 1,
+            "no temp file is left behind"
+        );
+        // Two stations do not share a secret.
+        let other = tempfile::tempdir().unwrap();
+        assert_ne!(load_or_create_secret(other.path()).unwrap(), first);
+    }
+
+    #[test]
+    fn a_corrupt_secret_file_is_an_error_not_a_new_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(SECRET_FILE_NAME), "not-hex\n").unwrap();
+        let err = load_or_create_secret(dir.path()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    }
 
     #[test]
     fn looks_signed_in_true_for_fresh_token() {

@@ -51,8 +51,12 @@ pub fn start_disk_manager(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     state: &birdnet_web::state::AppState,
+    in_flight: &birdnet_core::detection::daemon::InFlight,
 ) -> Vec<std::thread::JoinHandle<()>> {
-    use birdnet_core::audio::capture::{DiskManagerConfig, FullDiskAction, LockedFilesProvider};
+    use birdnet_core::audio::capture::{
+        DEFAULT_PURGE_SPECIES_FLOOR, DiskManagerConfig, FullDiskAction, LockedFilesProvider,
+        PurgePolicy, RAW_KEEP_SUBDIR, RawKeep,
+    };
 
     let max_files_per_species = if cli.max_files_per_species > 0 {
         cli.max_files_per_species
@@ -80,6 +84,33 @@ pub fn start_disk_manager(
             .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
             .unwrap_or(DEFAULT_PURGE_THRESHOLD)
     };
+
+    // The clips a species always keeps when the disk-full purge runs (S-2).
+    // `None` from clap is "not given", so 0 stays a real answer: no floor.
+    let species_floor = cli.purge_species_floor.unwrap_or_else(|| {
+        config
+            .and_then(|c| c.get_parsed::<u32>("PURGE_SPECIES_FLOOR").ok())
+            .unwrap_or(DEFAULT_PURGE_SPECIES_FLOOR)
+    });
+
+    // Raw audio kept at a duty cycle (R-4): one aged segment in N is copied
+    // to `<recordings>/raw` before the stream drain removes it. 0 keeps none.
+    let raw_keep_every = cli.raw_audio_keep_every.unwrap_or_else(|| {
+        config
+            .and_then(|c| c.get_parsed::<u32>("RAW_AUDIO_KEEP_EVERY").ok())
+            .unwrap_or(0)
+    });
+    let raw_keep = (raw_keep_every > 0).then(|| RawKeep {
+        dir: state.recording_dir().join(RAW_KEEP_SUBDIR),
+        every: raw_keep_every,
+    });
+    if let Some(policy) = &raw_keep {
+        tracing::info!(
+            every = policy.every,
+            dir = %policy.dir.display(),
+            "keeping one raw segment in N on the data disk; the disk-full purge takes it first"
+        );
+    }
 
     // Re-read once per purge cycle rather than snapshotted here: `/admin/recordings`
     // → "lock" writes `is_locked` at runtime, so a set captured at startup
@@ -123,9 +154,21 @@ pub fn start_disk_manager(
                 check_interval_secs: 60,
                 exclude_paths: cli.disk_exclude.clone(),
                 locked_file_names: Vec::new(),
-                locked_provider: Some(std::sync::Arc::clone(&locked_provider)),
+                // The segments the pipeline is reading right now (PR-1 / S-3):
+                // the drain, the size cap and the disk-full purge all skip
+                // them. The database's locked clips live in the recordings
+                // dir and never name a raw segment, so they are not consulted
+                // here.
+                locked_provider: Some({
+                    let in_flight = in_flight.clone();
+                    std::sync::Arc::new(move || in_flight.names())
+                }),
+                ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                 stream_retention_secs: retention,
                 stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
+                // Raw segments carry no species; oldest-first is right here.
+                purge_policy: PurgePolicy::OldestFirst,
+                raw_keep,
             },
             "stream",
         ));
@@ -162,10 +205,18 @@ pub fn start_disk_manager(
                     exclude_paths: cli.disk_exclude.clone(),
                     locked_file_names: Vec::new(),
                     locked_provider: Some(locked_provider),
+                    ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                     // Never age- or size-drain the operator's clips: they are
                     // only ever removed by the disk-full backstop above, and
-                    // then oldest-first and never if locked.
+                    // then most-recorded species first, never below the floor,
+                    // and never if locked.
                     stream_retention_secs: 0,
+                    purge_policy: PurgePolicy::KeepEverySpecies {
+                        floor: species_floor,
+                    },
+                    // The kept raw audio lives under this directory and the
+                    // species-aware purge walks it; nothing is kept from here.
+                    raw_keep: None,
                     stream_max_bytes: 0,
                 },
                 "recordings",
@@ -363,7 +414,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cli = default_cli();
         let state = test_state_in(tmp.path());
-        let handles = start_disk_manager(&cli, None, &state);
+        let handles = start_disk_manager(
+            &cli,
+            None,
+            &state,
+            &birdnet_core::detection::daemon::InFlight::new(),
+        );
         assert_eq!(handles.len(), 1, "the recordings dir must be supervised");
         assert!(
             state.recording_dir().is_dir(),
@@ -382,7 +438,12 @@ mod tests {
         let mut cli = default_cli();
         cli.watch_dir = Some(stream);
         let state = test_state_in(tmp.path());
-        let handles = start_disk_manager(&cli, None, &state);
+        let handles = start_disk_manager(
+            &cli,
+            None,
+            &state,
+            &birdnet_core::detection::daemon::InFlight::new(),
+        );
         assert_eq!(
             handles.len(),
             2,
@@ -505,7 +566,12 @@ mod tests {
         let state = test_state_in(tmp.path());
         let mut cli = default_cli();
         cli.watch_dir = Some(state.recording_dir());
-        let handles = start_disk_manager(&cli, None, &state);
+        let handles = start_disk_manager(
+            &cli,
+            None,
+            &state,
+            &birdnet_core::detection::daemon::InFlight::new(),
+        );
         assert_eq!(handles.len(), 1, "the same directory is supervised once");
     }
 }

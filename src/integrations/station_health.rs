@@ -16,6 +16,13 @@
 //!   channels for a month;
 //! * the disk purger deleting recordings every day to stay under its threshold,
 //!   quietly discarding the audio a researcher would want to re-examine;
+//! * the data volume not taking writes at all — a read-only remount after I/O
+//!   errors, a card full to the byte, or a mount that has gone away with the
+//!   station writing into the directory underneath it — while every detection
+//!   is classified and then discarded;
+//! * an MQTT broker the station has not been able to reach for ten minutes,
+//!   so Home Assistant shows it offline and nothing built on its presence can
+//!   tell that from a station that has died;
 //! * a failing integrity check or a backup that has not completed in weeks —
 //!   the two things standing between a corrupt database and a lost season;
 //! * either database quarantined and started over — the analytics store
@@ -25,7 +32,29 @@
 //! * a Pi sitting at thermal-throttle temperature in a sealed enclosure in
 //!   July, losing inference throughput and shortening the SD card's life;
 //! * a clock that has drifted off its time source, which files a whole season
-//!   under the wrong hour and looks, in every count and chart, like a good one.
+//!   under the wrong hour and looks, in every count and chart, like a good one;
+//! * a start that the boot journal says lost something — a database that held
+//!   a season and holds nothing, a data volume that did not mount, a binary
+//!   older than the one that last ran — which otherwise looks exactly like a
+//!   first run;
+//! * the analytics copy refusing detections the database accepted, so every
+//!   behavioural dashboard is quietly behind while `/api/v2/health` goes on
+//!   saying `"analytics": true`;
+//! * a Raspberry Pi's firmware reporting under-voltage or throttling — the
+//!   commonest field failure on a Pi, the one that corrupts cards, and one
+//!   that presents as random instability with no other signal;
+//! * a disk-full purge that deleted recordings and freed nothing, because the
+//!   card is full of something else — the database, the analytics store, the
+//!   backup ring, a log — and would otherwise have gone on deleting until every
+//!   clip was gone with the disk still full;
+//! * a source that dies every few minutes and comes back in seconds — a
+//!   marginal USB connection, an under-powered hub, a stream that keeps
+//!   dropping — which every signal built on *consecutive* failure reads as
+//!   healthy: the liveness gauge is up at every poll, the backoff never grows,
+//!   the "still down" warning never elapses, and the uptime strip is green;
+//! * inference falling behind real time — a model too big for the board, a
+//!   board that is throttling, too many sources — which resolved to "delete
+//!   the oldest audio and say nothing" while every series stayed green.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -44,6 +73,11 @@
 
 use std::collections::BTreeMap;
 use std::time::Duration;
+
+/// How long `timedatectl` may take to answer. It asks systemd over the bus;
+/// a bus that does not answer used to hold the health probe, and every check
+/// after it, for ever.
+const TIMEDATECTL_TIMEOUT: Duration = Duration::from_secs(10);
 
 use birdnet_web::state::AppState;
 
@@ -91,7 +125,9 @@ const DISK_ALERT_PERCENT: f64 = birdnet_core::audio::capture::DiskUsage::LOW_PER
 /// The soft limit is 80 °C on Pi 4/5 (hard limit 85 °C). Alerting at the soft
 /// limit gives an operator the chance to add a fan or vent before throughput
 /// starts dropping.
-const THERMAL_ALERT_C: f32 = 80.0;
+/// Also the shed policy's thermal line (PR-2): the daemon analyses one
+/// segment in two while the board is at or above it.
+pub const THERMAL_ALERT_C: f32 = 80.0;
 
 /// How long since a scheduled maintenance job last completed before it is
 /// treated as failing.
@@ -107,7 +143,7 @@ const MAINTENANCE_STALE_SECS: i64 = 21 * 24 * 3600;
 /// episode, which is what stops a per-source alert from re-firing under a
 /// different name each time.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Condition {
+pub struct Condition {
     /// Stable identity for episode tracking (e.g. `source:cam1`).
     pub key: String,
     /// Short alert title.
@@ -219,13 +255,21 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 6] = [
+const CHECKS: [(&str, Check); 14] = [
     ("sources", check_sources),
     ("disk", check_disk),
+    ("data-volume", check_data_volume),
+    ("mqtt", check_mqtt),
     ("thermal", |_state, out| check_thermal(out)),
     ("maintenance", check_maintenance),
     ("quarantined-stores", check_quarantined_stores),
     ("clock", check_clock),
+    ("boot-anomaly", check_boot_anomalies),
+    ("analytics-mirror", check_analytics_mirror),
+    ("power", |_state, out| check_power(out)),
+    ("purge", check_purge),
+    ("flapping", check_flapping),
+    ("backlog", check_backlog),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -238,6 +282,22 @@ fn evaluate(state: &AppState) -> Vec<Condition> {
         check(state, &mut out);
     }
     out
+}
+
+/// Make what was just evaluated askable (OP-4): the same conditions the
+/// notifier pushes, on the state, for `/api/v2/health/conditions`.
+fn publish(state: &AppState, current: &[Condition]) {
+    let conditions = current
+        .iter()
+        .map(|c| birdnet_web::station_conditions::Condition {
+            key: c.key.clone(),
+            title: c.title.clone(),
+            body: c.body.clone(),
+        })
+        .collect();
+    state.set_station_conditions(birdnet_web::station_conditions::ConditionsSnapshot::now(
+        conditions,
+    ));
 }
 
 /// What the system will say about its own clock synchronisation.
@@ -272,10 +332,15 @@ pub(super) enum NtpState {
 /// One subprocess per five-minute poll. On a Pi that is a few seconds of CPU a
 /// day, which is not worth caching state to avoid.
 fn probe_ntp_state() -> NtpState {
-    match std::process::Command::new("timedatectl")
-        .args(["show", "-p", "NTPSynchronized", "--value"])
-        .output()
-    {
+    match birdnet_core::process::run_with_timeout(
+        std::process::Command::new("timedatectl").args([
+            "show",
+            "-p",
+            "NTPSynchronized",
+            "--value",
+        ]),
+        TIMEDATECTL_TIMEOUT,
+    ) {
         Ok(out) if out.status.success() => {
             return match String::from_utf8_lossy(&out.stdout).trim() {
                 "yes" => NtpState::Synced,
@@ -410,6 +475,287 @@ fn check_disk(state: &AppState, out: &mut Vec<Condition>) {
         return;
     };
     out.extend(disk_condition(usage.used_percent()));
+}
+
+/// How long the MQTT presence session must have been down before it is a
+/// condition. The presence loop reconnects with backoff up to a few minutes;
+/// a broker that is still unreachable after ten is gone, not restarting.
+const MQTT_ALERT_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// An MQTT broker the station cannot reach (DD-22).
+///
+/// The presence loop handled a silent broker soundly — timeouts, backoff, no
+/// leak — and reported it at `debug!` and on one Prometheus gauge; the
+/// health page, the alerts and the overview showed nothing. Home Assistant
+/// then shows the station offline, which is the one state an operator
+/// cannot tell from a dead station.
+fn check_mqtt(state: &AppState, out: &mut Vec<Condition>) {
+    let metrics = state.metrics();
+    let since = metrics.mqtt_disconnected_since();
+    let now = super::unix_now_secs();
+    out.extend(mqtt_condition(
+        since,
+        now,
+        metrics.mqtt_last_error().as_deref(),
+    ));
+}
+
+/// The MQTT policy, separated from the gauges so it can be tested.
+fn mqtt_condition(
+    disconnected_since: Option<u64>,
+    now: u64,
+    last_error: Option<&str>,
+) -> Option<Condition> {
+    let since = disconnected_since?;
+    let down_for = Duration::from_secs(now.saturating_sub(since));
+    (down_for >= MQTT_ALERT_AFTER).then(|| Condition {
+        key: "mqtt".to_owned(),
+        title: "MQTT broker unreachable — Home Assistant shows the station offline".to_owned(),
+        body: format!(
+            "The station has not been able to keep a session with the MQTT broker for \
+             {} minutes ({}). Detections are still recorded here; nothing is reaching the \
+             broker, and anything built on the station's MQTT presence sees it as offline. \
+             Check the broker, its address and credentials in Admin → Settings → MQTT, and \
+             the network between them.",
+            down_for.as_secs() / 60,
+            last_error.unwrap_or("no error detail recorded")
+        ),
+    })
+}
+
+/// A data volume that is not taking writes: read-only, full to the byte, or
+/// a mount that has gone away with the station writing into the directory
+/// underneath it (DD-19, DD-20). Reads the watch's last probe rather than
+/// probing again, so this and `/api/v2/health` cannot disagree.
+fn check_data_volume(state: &AppState, out: &mut Vec<Condition>) {
+    let Some(volume) = state.data_volume() else {
+        return;
+    };
+    out.extend(data_volume_condition(&volume));
+}
+
+/// A purge that stopped achieving anything (PR-7).
+fn check_purge(state: &AppState, out: &mut Vec<Condition>) {
+    out.extend(purge_condition(state.metrics().purge_ineffective()));
+}
+
+/// The purge policy, separated from the flag so it can be tested.
+fn purge_condition(ineffective: bool) -> Option<Condition> {
+    ineffective.then(|| Condition {
+        key: "purge".to_owned(),
+        title: "Disk is full of something the purge cannot reclaim".to_owned(),
+        body: "The disk manager deleted recordings in its last pass and usage did not fall, \
+               so the space is not in recordings: the database, the analytics store, the \
+               backup ring or a log. It has stopped deleting recordings until usage falls. \
+               Run `du -sh <data dir>/*` to see what is filling the card, and `--doctor` to \
+               grade each; free or move it and the purge resumes on its own."
+            .to_owned(),
+    })
+}
+
+/// A source restarting repeatedly while never reading as down (AD-3).
+fn check_flapping(state: &AppState, out: &mut Vec<Condition>) {
+    let sources: Vec<(String, u32, bool)> = state
+        .capture_status()
+        .map(|h| birdnet_core::audio::capture::read_capture_status(&h))
+        .map(|status| {
+            status
+                .sources
+                .into_iter()
+                .map(|s| (s.label, s.restarts_last_hour, s.flapping))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.extend(flapping_conditions(&sources));
+}
+
+/// The flapping policy, separated from the snapshot so it can be tested.
+/// `sources` is every supervised source as (label, restarts in the last hour,
+/// flapping).
+fn flapping_conditions(sources: &[(String, u32, bool)]) -> Vec<Condition> {
+    sources
+        .iter()
+        .filter(|(_, _, flapping)| *flapping)
+        .map(|(label, restarts, _)| Condition {
+            key: format!("flapping:{label}"),
+            title: format!("Audio source flapping: {label}"),
+            body: format!(
+                "The audio source '{label}' has restarted {restarts} times in the last hour. \
+                 It comes back within seconds each time, so it never counts as down and \
+                 nothing else reports it — but every restart loses the audio around it. \
+                 This is what a marginal USB connection, an under-powered hub or a camera \
+                 stream that keeps dropping looks like. Check the cable and the power, \
+                 then Admin → Audio."
+            ),
+        })
+        .collect()
+}
+
+/// Inference falling behind real time (PR-2).
+fn check_backlog(state: &AppState, out: &mut Vec<Condition>) {
+    out.extend(backlog_condition(state.metrics().analysis_queue_depth()));
+}
+
+/// The backlog policy, separated from the gauge so it can be tested. `None`
+/// means the daemon has not reported a depth, which is no condition.
+fn backlog_condition(queue_depth: Option<u64>) -> Option<Condition> {
+    let depth = queue_depth?;
+    let threshold = u64::try_from(birdnet_core::detection::daemon::DEFAULT_SHED_BACKLOG_ABOVE)
+        .unwrap_or(u64::MAX);
+    (depth > threshold).then(|| Condition {
+        key: "backlog".to_owned(),
+        title: format!("Analysis is falling behind: {depth} segments waiting"),
+        body: format!(
+            "{depth} raw segments are waiting for analysis, more than the {threshold} at which \
+             the daemon starts analysing one segment in two (the rest are counted in \
+             birdnet_segments_shed_total, not lost quietly). Inference is slower than real \
+             time on this board: the model may be too big for it, it may be throttling for \
+             heat or power (see those conditions), or it may have more sources than it can \
+             keep up with. The queue drains at twice the rate while shedding; if it never \
+             does, reduce the sources or the segment rate, or move to a faster board."
+        ),
+    })
+}
+
+/// The Pi's own account of its power (NP-5).
+fn check_power(out: &mut Vec<Condition>) {
+    out.extend(power_condition(birdnet_web::system_info::pi_throttled()));
+}
+
+/// The power policy, separated from `vcgencmd` so it can be tested.
+///
+/// `None` in — not a Pi, or the firmware did not answer — is no condition.
+/// The "now" bits make a condition; the "since boot" bits alone do not, so an
+/// episode ends when the supply recovers rather than lasting until the next
+/// reboot, while the doctor and the metric still carry the history.
+fn power_condition(throttle: Option<birdnet_web::system_info::PiThrottle>) -> Option<Condition> {
+    let t = throttle?;
+    if t.undervoltage_now() {
+        return Some(Condition {
+            key: "power".to_owned(),
+            title: "Power supply is under-voltage — the card is at risk".to_owned(),
+            body: format!(
+                "The Pi's firmware reports under-voltage now (get_throttled=0x{:x}). A supply \
+                 or cable that cannot hold 5 V under load is the commonest cause of corrupted \
+                 SD cards and random restarts in the field. Use the official supply or a \
+                 thicker, shorter cable, and check any solar or battery budget.",
+                t.bits
+            ),
+        });
+    }
+    if t.throttled_now() {
+        return Some(Condition {
+            key: "power".to_owned(),
+            title: "Board is being throttled by its firmware".to_owned(),
+            body: format!(
+                "The Pi's firmware is capping the CPU now (get_throttled=0x{:x}): power or \
+                 temperature. Inference is slower and detections may be missed. Check the \
+                 supply and the enclosure.",
+                t.bits
+            ),
+        });
+    }
+    None
+}
+
+/// How recently a mirror write must have failed for the copy to count as
+/// falling behind now, rather than once.
+const MIRROR_FAILURE_RECENT_SECS: u64 = 60 * 60;
+
+/// Detections the DuckDB copy refused (OP-7).
+fn check_analytics_mirror(state: &AppState, out: &mut Vec<Condition>) {
+    let metrics = state.metrics();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    out.extend(analytics_mirror_condition(
+        metrics.analytics_mirror_failures(),
+        metrics.analytics_mirror_last_failure(),
+        now,
+    ));
+}
+
+/// The mirror policy, separated from the metrics so it can be tested: a
+/// condition while the last failure is recent, none once it is an hour old
+/// (the next start's drift check repairs the copy; the counter stays).
+fn analytics_mirror_condition(
+    failures: u64,
+    last: Option<(u64, String)>,
+    now: u64,
+) -> Option<Condition> {
+    let (at, error) = last?;
+    if failures == 0 || now.saturating_sub(at) > MIRROR_FAILURE_RECENT_SECS {
+        return None;
+    }
+    let minutes = now.saturating_sub(at) / 60;
+    Some(Condition {
+        key: "analytics-mirror".to_owned(),
+        title: "Analytics copy is falling behind — detections are not reaching the dashboards"
+            .to_owned(),
+        body: format!(
+            "{failures} detection(s) the database accepted were refused by the DuckDB analytics \
+             copy since the station started, the last {minutes} minute(s) ago ({error}). The \
+             behavioural and time-series dashboards read that copy, so they are behind; the \
+             drift check at the next start rebuilds it. journalctl -u birdnet-behavior | \
+             grep -i duckdb"
+        ),
+    })
+}
+
+/// What the boot journal found at this start (UP-3). A fact of the run: the
+/// condition holds until the next start, and fires its episode once.
+fn check_boot_anomalies(state: &AppState, out: &mut Vec<Condition>) {
+    out.extend(boot_anomaly_condition(&state.boot_anomalies()));
+}
+
+/// The boot-journal policy, separated from the state so it can be tested.
+fn boot_anomaly_condition(anomalies: &[birdnet_web::boot_journal::Anomaly]) -> Option<Condition> {
+    if anomalies.is_empty() {
+        return None;
+    }
+    let body = anomalies
+        .iter()
+        .map(|a| format!("{}: {}", a.key(), a.describe()))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    Some(Condition {
+        key: "boot-anomaly".to_owned(),
+        title: "This start does not match the last one — data may be missing".to_owned(),
+        body: format!(
+            "{body}. Check the data volume and the database before trusting anything \
+             recorded since this start."
+        ),
+    })
+}
+
+/// The data-volume policy, separated from the probe so it can be tested.
+fn data_volume_condition(volume: &birdnet_web::data_volume::DataVolumeStatus) -> Option<Condition> {
+    use birdnet_web::data_volume::MountState;
+    if matches!(volume.mount, MountState::Vanished) {
+        return Some(Condition {
+            key: "data-volume".to_owned(),
+            title: "Data volume has gone away — detections are being lost".to_owned(),
+            body: "The filesystem the data directory was on is no longer mounted there. The \
+                   station is writing into the directory underneath it, on the boot disk, \
+                   and everything written since will not be on the card when it comes back. \
+                   Check the card, the cable and `dmesg`, then remount it and restart."
+                .to_owned(),
+        });
+    }
+    if !volume.writable {
+        return Some(Condition {
+            key: "data-volume".to_owned(),
+            title: "Data volume is not writable — detections are being lost".to_owned(),
+            body: format!(
+                "A test write to the data directory failed ({}). A read-only remount after \
+                 I/O errors, or a volume full to the byte, both look like this; detections \
+                 are classified and then discarded until it is fixed. Check `dmesg` and \
+                 `df`, then remount or free space and restart.",
+                volume.write_error.as_deref().unwrap_or("no detail")
+            ),
+        });
+    }
+    None
 }
 
 /// The disk policy, separated from `statvfs` so it can be tested.
@@ -558,7 +904,7 @@ fn check_maintenance(state: &AppState, out: &mut Vec<Condition>) {
 /// A recorded **failure** produces a condition immediately, without waiting for
 /// staleness. That is the whole point: a job that fails on schedule is never
 /// stale, so the staleness rule alone could not see it.
-fn maintenance_condition(
+pub fn maintenance_condition(
     job: &str,
     label: &str,
     recorded: Option<(i64, Option<bool>)>,
@@ -602,7 +948,25 @@ fn maintenance_condition(
 /// not want them.
 pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, enabled: bool) {
     if !enabled {
-        tracing::info!("station-health alerts disabled");
+        // Alerts off is not evaluation off (OP-4): the conditions are still
+        // evaluated on the same schedule and published for anyone who asks
+        // at /api/v2/health/conditions; nothing is pushed.
+        tracing::info!(
+            "station-health alerts disabled; conditions are still evaluated for /api/v2/health/conditions"
+        );
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(POLL_EVERY);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let probe_state = state.clone();
+                if let Ok(current) =
+                    tokio::task::spawn_blocking(move || evaluate(&probe_state)).await
+                {
+                    publish(&state, &current);
+                }
+            }
+        });
         return;
     }
     tokio::spawn(async move {
@@ -634,6 +998,7 @@ pub fn spawn_station_health(state: AppState, apprise: Option<AppriseHandle>, ena
             else {
                 continue;
             };
+            publish(&state, &current);
 
             let now = std::time::Instant::now();
             let (broken, recovered) = transitions(&alerted, &mut streak, &current);
@@ -823,10 +1188,18 @@ mod tests {
         for name in [
             "sources",
             "disk",
+            "data-volume",
+            "mqtt",
             "thermal",
             "maintenance",
             "quarantined-stores",
             "clock",
+            "boot-anomaly",
+            "analytics-mirror",
+            "power",
+            "purge",
+            "flapping",
+            "backlog",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -835,9 +1208,61 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            6,
-            "a seventh check needs a line in the module doc and in this gate"
+            14,
+            "a fifteenth check needs a line in the module doc and in this gate"
         );
+    }
+
+    /// The MQTT policy (DD-22): down for ten minutes is a condition carrying
+    /// the last error; a shorter outage, or no MQTT at all, is not.
+    #[test]
+    fn a_broker_down_for_ten_minutes_is_a_condition() {
+        assert!(
+            mqtt_condition(None, 10_000, None).is_none(),
+            "MQTT off or up"
+        );
+        assert!(
+            mqtt_condition(Some(9_500), 10_000, Some("timed out")).is_none(),
+            "500 s: still reconnecting"
+        );
+        let c = mqtt_condition(
+            Some(9_000),
+            10_000,
+            Some("connection refused (os error 111)"),
+        )
+        .expect("1000 s is an outage");
+        assert_eq!(c.key, "mqtt");
+        assert!(c.body.contains("16 minutes"), "{}", c.body);
+        assert!(c.body.contains("os error 111"), "{}", c.body);
+        let c = mqtt_condition(Some(1), 100_000, None).unwrap();
+        assert!(c.body.contains("no error detail"), "{}", c.body);
+    }
+
+    /// The data-volume policy: a vanished mount or a failed write is a
+    /// condition; a healthy volume is not.
+    #[test]
+    fn a_vanished_mount_or_a_failed_write_is_a_condition() {
+        use birdnet_web::data_volume::{DataVolumeStatus, DiskVerdict, MountState};
+        let ok = DataVolumeStatus {
+            writable: true,
+            write_error: None,
+            mount: MountState::Intact,
+            disk: DiskVerdict::Ok,
+            used_percent: Some(30.0),
+            checked_at: 0,
+        };
+        assert!(data_volume_condition(&ok).is_none());
+        let vanished = DataVolumeStatus {
+            mount: MountState::Vanished,
+            ..ok.clone()
+        };
+        assert!(data_volume_condition(&vanished).is_some_and(|c| c.title.contains("gone away")));
+        let read_only = DataVolumeStatus {
+            writable: false,
+            write_error: Some("Read-only file system (os error 30)".into()),
+            ..ok
+        };
+        assert!(data_volume_condition(&read_only).is_some_and(|c| c.body.contains("os error 30")));
     }
 
     // ── the clock ───────────────────────────────────────────────────────
@@ -1337,5 +1762,128 @@ mod tests {
             (POLL_EVERY.as_secs() * u64::from(REQUIRED_CONSECUTIVE_POLLS)) / 60
         );
         assert_eq!(DEBOUNCE_MINUTES, 15);
+    }
+
+    #[test]
+    fn a_boot_anomaly_is_a_condition_and_a_normal_start_is_not() {
+        use birdnet_web::boot_journal::Anomaly;
+        assert!(boot_anomaly_condition(&[]).is_none());
+        let c = boot_anomaly_condition(&[Anomaly::DbLost { before: 40_000 }, Anomaly::MountLost])
+            .expect("a condition");
+        assert_eq!(c.key, "boot-anomaly");
+        assert!(
+            c.body
+                .contains("db_lost: the database held 40000 detections"),
+            "{}",
+            c.body
+        );
+        assert!(c.body.contains("mount_lost:"), "{}", c.body);
+    }
+
+    /// OP-7: a recent mirror failure is a condition; an old one is not; none
+    /// is not.
+    #[test]
+    fn a_recent_mirror_failure_is_a_condition_and_an_old_one_is_not() {
+        assert!(analytics_mirror_condition(0, None, 1_000_000).is_none());
+        let recent = analytics_mirror_condition(
+            3,
+            Some((1_000_000 - 120, "Constraint Error: NOT NULL".to_owned())),
+            1_000_000,
+        )
+        .expect("a condition");
+        assert_eq!(recent.key, "analytics-mirror");
+        assert!(recent.body.contains("3 detection(s)"), "{}", recent.body);
+        assert!(recent.body.contains("2 minute(s) ago"), "{}", recent.body);
+        assert!(recent.body.contains("NOT NULL"), "{}", recent.body);
+        assert!(
+            analytics_mirror_condition(3, Some((1_000_000 - 7_200, String::new())), 1_000_000)
+                .is_none(),
+            "two hours old: the copy is repaired at the next start, and the counter stays"
+        );
+    }
+
+    /// OP-4: what `evaluate` finds is published where a request can read it.
+    #[test]
+    fn what_is_evaluated_is_published_for_the_conditions_endpoint() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        assert_eq!(state.station_conditions().evaluated_at, None, "nothing yet");
+        let found = vec![Condition {
+            key: "disk".to_owned(),
+            title: "Disk nearly full".to_owned(),
+            body: "…".to_owned(),
+        }];
+        publish(&state, &found);
+        let snap = state.station_conditions();
+        assert!(snap.evaluated_at.is_some());
+        assert_eq!(snap.conditions.len(), 1);
+        assert_eq!(snap.conditions[0].key, "disk");
+        assert_eq!(snap.conditions[0].title, "Disk nearly full");
+    }
+
+    /// NP-5: under-voltage now is a condition; only "has occurred" is not;
+    /// no reading is not.
+    #[test]
+    fn undervoltage_now_is_a_condition_and_history_alone_is_not() {
+        use birdnet_web::system_info::PiThrottle;
+        assert!(power_condition(None).is_none());
+        let now = power_condition(Some(PiThrottle { bits: 0x50005 })).expect("a condition");
+        assert_eq!(now.key, "power");
+        assert!(now.title.contains("under-voltage"), "{}", now.title);
+        assert!(now.body.contains("0x50005"), "{}", now.body);
+        let capped = power_condition(Some(PiThrottle { bits: 0x2 })).expect("a condition");
+        assert!(capped.title.contains("throttled"), "{}", capped.title);
+        assert!(
+            power_condition(Some(PiThrottle { bits: 0x50000 })).is_none(),
+            "history alone: the supply has recovered, the episode ends"
+        );
+    }
+
+    /// PR-7: the flag is a condition naming what to look at; clear is nothing.
+    /// AD-3: the flapping verdict from the snapshot becomes a condition per
+    /// source; a source below the threshold, however many restarts, does not.
+    /// PR-2: a queue deeper than the shed threshold is a condition; at it,
+    /// below it, or unreported, nothing.
+    #[test]
+    fn a_deep_analysis_queue_is_a_condition() {
+        let t = u64::try_from(birdnet_core::detection::daemon::DEFAULT_SHED_BACKLOG_ABOVE).unwrap();
+        assert!(
+            backlog_condition(None).is_none(),
+            "unreported is not a backlog"
+        );
+        assert!(backlog_condition(Some(0)).is_none());
+        assert!(
+            backlog_condition(Some(t)).is_none(),
+            "at the threshold: not yet"
+        );
+        let c = backlog_condition(Some(t + 1)).expect("a condition");
+        assert_eq!(c.key, "backlog");
+        assert!(c.body.contains("one segment in two"), "{}", c.body);
+        assert!(c.body.contains("birdnet_segments_shed_total"), "{}", c.body);
+    }
+
+    #[test]
+    fn a_flapping_source_is_a_condition() {
+        assert!(flapping_conditions(&[]).is_empty());
+        assert!(flapping_conditions(&[("local".into(), 3, false)]).is_empty());
+        let c = flapping_conditions(&[("local".into(), 2, false), ("RTSP_1".into(), 9, true)]);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].key, "flapping:RTSP_1");
+        assert!(
+            c[0].body.contains("9 times in the last hour"),
+            "{}",
+            c[0].body
+        );
+        assert!(c[0].body.contains("never counts as down"), "{}", c[0].body);
+    }
+
+    #[test]
+    fn an_ineffective_purge_is_a_condition() {
+        assert!(purge_condition(false).is_none());
+        let c = purge_condition(true).expect("a condition");
+        assert_eq!(c.key, "purge");
+        assert!(c.body.contains("du -sh"), "{}", c.body);
+        assert!(c.body.contains("stopped deleting"), "{}", c.body);
     }
 }

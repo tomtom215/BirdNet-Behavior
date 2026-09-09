@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::detection::ChunkFilters;
 use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
-use crate::detection::types::Detection;
+use crate::detection::types::ChunkPrediction;
 use crate::inference::model::BirdNetModel;
 use crate::inference::species_filter::SpeciesFilter;
 
@@ -120,7 +120,9 @@ pub fn process_and_infer(
     }
 
     let total = start.elapsed();
-    tracing::info!(
+    // DEBUG, not INFO: one of the two per-file lines OB-15 measured at 92 % of
+    // the journal's volume; the counter carries the count.
+    tracing::debug!(
         correlation_id,
         file = %path.display(),
         detections = events.len(),
@@ -178,10 +180,10 @@ pub fn process_and_infer_filtered(
         .map_or(1, |c| geomodel_week(&c.recording.date, path));
 
     // Run inference on all chunks first to collect raw predictions
-    let mut all_predictions: Vec<Vec<Detection>> = Vec::with_capacity(chunks.len());
+    let mut all_predictions: Vec<ChunkPrediction> = Vec::with_capacity(chunks.len());
 
     for chunk in &chunks {
-        let detections = model.predict(
+        let prediction = model.predict_chunk(
             &chunk.spectrogram.data,
             &chunk.recording.date,
             &chunk.recording.time,
@@ -189,7 +191,7 @@ pub fn process_and_infer_filtered(
             chunk.end_secs,
             week,
         )?;
-        all_predictions.push(detections);
+        all_predictions.push(prediction);
     }
 
     // Apply the whole-chunk filters: human speech, then non-bird noise, then
@@ -245,7 +247,9 @@ pub fn process_and_infer_filtered(
     }
 
     let total = start.elapsed();
-    tracing::info!(
+    // DEBUG, not INFO: one of the two per-file lines OB-15 measured at 92 % of
+    // the journal's volume; the counter carries the count.
+    tracing::debug!(
         correlation_id,
         file = %path.display(),
         detections = events.len(),

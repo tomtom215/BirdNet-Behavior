@@ -1837,6 +1837,181 @@ pub const MIGRATIONS: &[Migration] = &[
                 confidence_sum = species_summary.confidence_sum + NEW.Confidence;
         END;",
     },
+    Migration {
+        version: 43,
+        description: "Record which model produced each detection: analysis_runs, and run_id on every row",
+        // ## What was missing (R-1)
+        //
+        // A detection row said where it was heard, when, at what threshold,
+        // with what sensitivity and overlap (`Lat`, `Lon`, `Cutoff`, `Sens`,
+        // `Overlap`, per row since the R-2 fix) — and nothing about the model
+        // that produced it. `install.sh` pins the release checksum of the
+        // classifier and that checksum never reached the database. The
+        // shipped model is a pre-release; the day an operator swaps it, the
+        // rows of two classifiers with different label sets and different
+        // calibrations share one table indistinguishably, and a season that
+        // spans the swap cannot be split by which model heard what. For a
+        // researcher that is a silent wrong answer.
+        //
+        // ## What this does
+        //
+        // `analysis_runs` is one row per detection-daemon start: the SHA-256
+        // and length of the model file, the SHA-256 and label count of the
+        // labels file, the geomodel's SHA-256 when an occurrence filter is
+        // configured (it decides which species are candidates at all), the
+        // binary version, and the run-wide settings — global confidence
+        // floor, sensitivity, overlap, species-frequency threshold, station
+        // coordinates. The checksum is the identity; `model_name` (the file's
+        // stem) is its label.
+        //
+        // `detections.run_id` and `quarantine.run_id` reference it. The daemon
+        // registers its run before it consumes its first event and writes the
+        // id on every row it inserts; a quarantined detection that is later
+        // approved carries its run into `detections`. NULL is a row this
+        // station did not analyse — imported history, rows written before
+        // this migration, a BirdNET-Pi database brought across — and is never
+        // written by the live path.
+        //
+        // The foreign key is enforced (`PRAGMA foreign_keys=ON` on every
+        // connection), so a row cannot claim a run that does not exist. SQLite
+        // allows `ADD COLUMN … REFERENCES` only with a NULL default, which is
+        // what the historical rows need anyway.
+        //
+        // `detections_analytic` is `SELECT * FROM detections` and picks the
+        // column up; the mirror in DuckDB gains the same column
+        // (`birdnet_behavioral::connection`).
+        up_sql: "CREATE TABLE IF NOT EXISTS analysis_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL DEFAULT (datetime('now')),
+            app_version TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            model_path TEXT NOT NULL,
+            model_sha256 TEXT NOT NULL,
+            model_bytes INTEGER NOT NULL,
+            labels_path TEXT NOT NULL,
+            labels_sha256 TEXT NOT NULL,
+            label_count INTEGER NOT NULL,
+            geomodel_sha256 TEXT,
+            confidence REAL NOT NULL,
+            sensitivity REAL NOT NULL,
+            overlap REAL NOT NULL,
+            sf_thresh REAL NOT NULL,
+            lat REAL,
+            lon REAL
+        );
+
+        ALTER TABLE detections ADD COLUMN run_id INTEGER REFERENCES analysis_runs(id);
+        CREATE INDEX IF NOT EXISTS idx_detections_run_id ON detections(run_id);
+
+        ALTER TABLE quarantine ADD COLUMN run_id INTEGER REFERENCES analysis_runs(id);",
+    },
+    Migration {
+        version: 44,
+        description: "Stop the instant trigger inventing a time for the hour that never happened",
+        // ## What migration 32's trigger got wrong (R-8)
+        //
+        // Its own comment records it: local 02:30 on a Berlin spring-forward
+        // day does not exist, and SQLite's `'utc'` modifier collapses it onto
+        // 00:30Z — the same instant as local 01:30 — rather than returning
+        // NULL. So an imported history that contains such a time (BirdNET-Pi
+        // wrote whatever the wall clock said, and a Pi whose clock stepped
+        // across the transition writes it) acquired a plausible-looking
+        // instant an hour before the one the next real row carries. Probed
+        // under `TZ=Europe/London` on 2026-09-08: `2026-03-29 01:30` → `00:30Z`.
+        //
+        // ## What this does
+        //
+        // The trigger now converts and converts back. A local time that
+        // exists renders, through the host's zone rules for that date, to the
+        // same `Date`/`Time` it came from; a time that never happened renders
+        // to a different one, and the row keeps a NULL instant — unplaceable,
+        // which is what it is. That is the same standard the migration-32
+        // comment set for rows that name no point in time at all.
+        //
+        // The repeated autumn hour is not touched: both of its readings are
+        // real instants, SQLite chooses the standard-time one, and the choice
+        // is visible rather than silent from now on — the exports carry the
+        // offset per row, so a reader sees `+00:00` against `+01:00`. A row
+        // an explicit writer stamps (the live daemon, which knows the offset
+        // in force) is still never overwritten.
+        //
+        // ## What this deliberately does not do
+        //
+        // It does not re-examine rows already stamped. A round-trip check over
+        // history would also fire on every row of a station whose operator
+        // has since changed its time zone — an exact instant recorded under
+        // one zone does not render to its own wall clock under another — and
+        // would erase a season's ordering to correct two hours a year. The
+        // information to tell those apart is not in the row.
+        up_sql: "DROP TRIGGER IF EXISTS detections_stamp_utc;
+        CREATE TRIGGER detections_stamp_utc AFTER INSERT ON detections
+        WHEN NEW.detected_at_utc IS NULL
+        BEGIN
+            UPDATE detections
+               SET detected_at_utc = (
+                     SELECT CASE
+                              WHEN datetime(u, 'unixepoch', 'localtime') = NEW.Date || ' ' || NEW.Time
+                              THEN u
+                            END
+                       FROM (SELECT CAST(strftime('%s', NEW.Date || ' ' || NEW.Time, 'utc') AS INTEGER) AS u))
+             WHERE rowid = NEW.rowid;
+        END;",
+    },
+    Migration {
+        version: 45,
+        description: "Record the BirdWeather soundscape a detection was posted with",
+        // ## Why (DD-32)
+        //
+        // Every detection this station sent to BirdWeather carried no
+        // soundscape: `Client::post_soundscape` had no production caller, and
+        // the six-field post had no `soundscapeId`. Nothing there could be
+        // listened to, so nothing there could be verified. The daemon now
+        // uploads the clip first and stamps its id on the detection post, as
+        // both reference projects do; this column is where the station keeps
+        // that id, so a row can be followed to what BirdWeather holds for it.
+        //
+        // NULL is "not posted with a soundscape": BirdWeather off, the upload
+        // failed and the detection went without it, or a row older than this
+        // migration. Written after the row exists, by rowid, from the upload
+        // task — which is why `insert_detection` now returns the rowid.
+        up_sql: "ALTER TABLE detections ADD COLUMN birdweather_soundscape_id INTEGER;",
+    },
+    Migration {
+        version: 46,
+        description: "Record the threshold and inference settings a quarantined detection was heard under",
+        // ## Why (DD-9)
+        //
+        // A detection admitted straight away carries the bar it cleared and
+        // the run's sensitivity and overlap (`Cutoff`, `Sens`, `Overlap`,
+        // migration 43's provenance). A quarantined one carried none of them,
+        // so on approval `approve_quarantine` wrote NULLs: the rows an operator
+        // had looked at hardest were the ones with the least provenance. The
+        // three are recorded at quarantine time now and copied across on
+        // approval. NULL is "quarantined before this migration".
+        up_sql: "ALTER TABLE quarantine ADD COLUMN cutoff REAL;
+        ALTER TABLE quarantine ADD COLUMN sens REAL;
+        ALTER TABLE quarantine ADD COLUMN overlap REAL;",
+    },
+    Migration {
+        version: 47,
+        description: "Record where a detection sits inside its clip, so a selection table can point at it",
+        // ## Why (FR-1)
+        //
+        // A Raven selection table or an Audacity label track is a begin and
+        // an end in seconds *within an audio file*. The clip written for a
+        // detection is the detection plus a lead-in and a tail, and the
+        // lead-in is not the configured one: a window that reached past the
+        // start of the source segment and found no earlier segment is shorter
+        // at the front (`extraction::span`). Only the extractor knows what it
+        // wrote, and until now it told nobody — `chunk_offset_secs` is the
+        // start in the *source segment*, which is drained minutes later.
+        //
+        // `clip_offset_secs` is the detection's start inside the saved clip;
+        // `detection_secs` its length. NULL is "written before this
+        // migration", and the exports then fall back to the whole clip.
+        up_sql: "ALTER TABLE detections ADD COLUMN clip_offset_secs REAL;
+        ALTER TABLE detections ADD COLUMN detection_secs REAL;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2094,6 +2269,22 @@ fn backup_before_rewrite(
 }
 
 /// Ensure the `schema_version` tracking table exists.
+/// Put an empty database into `auto_vacuum=INCREMENTAL` before its first
+/// table exists (PS-3).
+///
+/// The mode is a property of the file: on an empty one the pragma takes
+/// effect at once and costs nothing; on a populated one it needs a full
+/// `VACUUM`, which is `resilience::ensure_incremental_vacuum`'s job at
+/// startup. Setting it here is what makes every database this binary creates
+/// reclaim its free pages a step at a time rather than by a weekly rewrite.
+fn set_incremental_vacuum_on_empty(conn: &Connection) -> Result<(), MigrationError> {
+    let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
+    if tables == 0 {
+        conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
+    }
+    Ok(())
+}
+
 fn ensure_version_table(conn: &Connection) -> Result<(), MigrationError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_version (
@@ -2161,6 +2352,7 @@ const fn any_migrations_applied(applied: u32) -> bool {
 /// re-run the migration and hard-fail any non-idempotent step such as
 /// `ALTER TABLE ADD COLUMN`).
 pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
+    set_incremental_vacuum_on_empty(conn)?;
     ensure_version_table(conn)?;
     let current = current_version(conn)?;
     let mut applied = 0;
@@ -2250,6 +2442,35 @@ mod tests {
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .unwrap();
         conn
+    }
+
+    /// PS-3: a database this binary creates is in incremental auto-vacuum
+    /// from before its first table, so its free pages are reclaimed a step at
+    /// a time; one that already has tables is left as it is, because the
+    /// pragma does nothing there and the conversion is `resilience`'s job.
+    /// The end-to-end gate lives in `tests/`; nothing in this crate's unit
+    /// tests read the mode back, and cargo-mutants emptied the function and
+    /// inverted its test without a failure.
+    #[test]
+    fn an_empty_file_is_put_into_incremental_auto_vacuum_and_a_populated_one_is_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = |conn: &Connection| -> i64 {
+            conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        let fresh = Connection::open(dir.path().join("fresh.db")).unwrap();
+        set_incremental_vacuum_on_empty(&fresh).unwrap();
+        assert_eq!(mode(&fresh), 2, "INCREMENTAL is mode 2");
+
+        let populated = Connection::open(dir.path().join("populated.db")).unwrap();
+        populated.execute_batch("CREATE TABLE t(x);").unwrap();
+        set_incremental_vacuum_on_empty(&populated).unwrap();
+        assert_eq!(
+            mode(&populated),
+            0,
+            "a populated file keeps its mode; converting it is resilience's job"
+        );
     }
 
     #[test]
@@ -3133,6 +3354,10 @@ mod tests {
                 lat: None,
                 lon: None,
                 week: Some(3),
+                run_id: None,
+                cutoff: None,
+                sensitivity: None,
+                overlap: None,
             };
             crate::sqlite::insert_quarantine(&conn, &record).unwrap();
 

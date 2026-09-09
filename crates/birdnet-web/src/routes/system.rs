@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(root))
         .route("/health", get(health))
+        .route("/health/conditions", get(conditions))
         .route("/stats", get(stats))
         .route("/system/disk", get(disk_info))
         .route("/soundlevel", get(sound_level))
@@ -163,6 +164,21 @@ pub(crate) fn db_health(state: &AppState) -> DbHealth {
     }
 }
 
+/// `GET /api/v2/health/conditions`: what the station-health evaluation last
+/// found wrong, and when it looked (OP-4).
+///
+/// The conditions the notifier pushes were push-only; an operator who
+/// missed a push could not ask. Always 200: this is the answer, not a
+/// verdict — `/health` carries the status code.
+async fn conditions(State(state): State<AppState>) -> Json<Value> {
+    let snapshot = state.station_conditions();
+    Json(json!({
+        "evaluated_at": snapshot.evaluated_at,
+        "count": snapshot.conditions.len(),
+        "conditions": snapshot.conditions,
+    }))
+}
+
 /// Query parameters for the `health` handler below.
 #[derive(Debug, Default, Deserialize)]
 pub struct HealthQuery {
@@ -220,7 +236,40 @@ async fn health(
     // this does not change the status code today. It is or-ed in anyway so the
     // two cannot drift apart if the halt ever acquires another cause.
     let ingest_halted = state.ingest_halted();
-    let degraded = !db_ok || ingest_halted || (strict && !daemon_running);
+    // The data volume (DD-19, DD-20). Unwritable, or a mount that has gone
+    // away, is degraded on every reading — the station is keeping nothing,
+    // like a halted ingest. A critically full disk, a `df` that cannot
+    // answer, and an admin bootstrap that failed are strict faults: the
+    // pager's business, not the container supervisor's.
+    let volume = state.data_volume();
+    let loses_writes = volume
+        .as_ref()
+        .is_some_and(crate::data_volume::DataVolumeStatus::loses_writes);
+    let volume_fault = volume
+        .as_ref()
+        .is_some_and(crate::data_volume::DataVolumeStatus::is_strict_fault);
+    let bootstrap_failed = state.admin_bootstrap_failed();
+    // The boot journal (UP-3): a database that held a season and holds
+    // nothing, a data volume that did not mount, a downgraded binary. Each is
+    // a fact about this start that a pager should hear and a container
+    // supervisor should not restart over.
+    let boot_anomalies = state.boot_anomalies();
+    // The deadman's verdict (AD-4). `detection_silence_secs` was on the body
+    // and in no status code, so a week of silence left even the strict
+    // endpoint green. The verdict is the deadman's own — one threshold, one
+    // moment the pager and the notifier agree on — rather than a second
+    // reading of the silence here.
+    let deadman = state.metrics().detection_deadman();
+    let deadman_tripped = deadman == Some(true);
+    let degraded = !db_ok
+        || ingest_halted
+        || loses_writes
+        || (strict
+            && (!daemon_running
+                || volume_fault
+                || bootstrap_failed
+                || !boot_anomalies.is_empty()
+                || deadman_tripped));
 
     let status = if degraded {
         StatusCode::SERVICE_UNAVAILABLE
@@ -238,6 +287,31 @@ async fn health(
             "detection_daemon": if daemon_running { "running" } else { "stopped" },
             "detection_writes": if ingest_halted { "halted" } else { "accepted" },
             "detection_silence_secs": detection_silence_secs,
+            // How far behind the pipeline is (PR-2); null before the daemon
+            // reports. Above the shed threshold the daemon analyses one
+            // segment in two and the `backlog` condition is raised.
+            "analysis_queue_depth": state.metrics().analysis_queue_depth(),
+            "detection_deadman": match deadman {
+                None => "off",
+                Some(false) => "ok",
+                Some(true) => "tripped",
+            },
+            "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
+            "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
+            "boot_anomalies": boot_anomalies
+                .iter()
+                .map(crate::boot_journal::Anomaly::key)
+                .collect::<Vec<_>>(),
+            // The presence session's state (DD-22): a dead broker was on one
+            // Prometheus gauge and nowhere an operator without a scrape looks.
+            // A DuckDB mirror write that failed used to be a warn! line while
+            // this body went on asserting "analytics": true (OP-7).
+            "analytics_mirror_failures": state.metrics().analytics_mirror_failures(),
+            "mqtt": match state.metrics().mqtt_connected() {
+                None => "off",
+                Some(true) => "connected",
+                Some(false) => "disconnected",
+            },
             "strict": strict,
         })),
     )
@@ -281,9 +355,12 @@ async fn disk_info(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
                 })),
             )
         }
+        // `df` could not answer — the path is gone, or the tool is. That is a
+        // verdict about the disk ("unknown", and a 503 for the monitor), not
+        // a bug in this handler (DD-20).
         Ok(Err(e)) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "status": "unknown", "error": e.to_string() })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

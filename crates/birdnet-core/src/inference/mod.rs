@@ -4,6 +4,7 @@
 //! inference on audio chunks. Designed for the `BirdNET` model family and
 //! compatible architectures.
 
+pub mod identity;
 pub mod labels;
 pub mod model;
 pub mod species_filter;

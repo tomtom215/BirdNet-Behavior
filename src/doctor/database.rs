@@ -6,6 +6,60 @@ use super::{Check, writable};
 use crate::cli::Cli;
 use crate::helpers::db_path_from_config;
 
+/// What the scheduled maintenance last recorded, job by job (OP-6): the
+/// doctor an operator runs could not say "your backup has failed for a
+/// year", though the notifier had been able to for months.
+pub(super) fn check_maintenance_verdicts(_cli: &Cli, config: Option<&Config>) -> Vec<Check> {
+    const JOBS: [(&str, &str); 3] = [
+        (birdnet_db::sqlite::JOB_BACKUP_VACUUM, "backup"),
+        (birdnet_db::sqlite::JOB_INTEGRITY_CHECK, "integrity check"),
+        (birdnet_db::sqlite::JOB_OFFSITE_BACKUP, "offsite backup"),
+    ];
+    let db_path = db_path_from_config(config);
+    if !db_path.exists() {
+        return Vec::new();
+    }
+    let Ok(conn) = birdnet_db::sqlite::open_readonly(&db_path) else {
+        return vec![Check::warn(
+            "Maintenance verdicts",
+            format!(
+                "{} could not be opened to read the maintenance record",
+                db_path.display()
+            ),
+            "see the Database integrity check above",
+        )];
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    JOBS.iter()
+        .map(|(job, label)| {
+            let name = format!("Maintenance: {label}");
+            let recorded = birdnet_db::sqlite::last_run_result(&conn, job)
+                .ok()
+                .flatten();
+            match crate::integrations::maintenance_condition(job, label, recorded, now) {
+                Some(condition) => Check::warn(name, condition.title, condition.body),
+                None => match recorded {
+                    None => Check::pass(
+                        name,
+                        format!("{label} has not run yet (normal on a fresh install)"),
+                    ),
+                    Some((when, verdict)) => {
+                        let days = now.saturating_sub(when) / 86_400;
+                        let outcome = match verdict {
+                            Some(true) => "succeeded",
+                            Some(false) => "failed",
+                            None => "ran",
+                        };
+                        Check::pass(name, format!("{label} last {outcome} {days} day(s) ago"))
+                    }
+                },
+            }
+        })
+        .collect()
+}
+
 pub(super) fn check_database(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     let db_path = db_path_from_config(config);
     let mut out = Vec::new();
@@ -340,5 +394,61 @@ mod tests {
             .unwrap();
         drop(conn);
         assert_eq!(species_summary_check(&db_path).status, Status::Skip);
+    }
+
+    /// The gate for OP-6: a backup that failed on schedule is reported by
+    /// the doctor, and a backup that succeeded is not.
+    #[test]
+    fn a_failing_backup_reaches_the_doctor() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("birds.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap();
+        birdnet_db::sqlite::record_run_result(
+            &conn,
+            birdnet_db::sqlite::JOB_BACKUP_VACUUM,
+            now - 3_600,
+            Some(false),
+        )
+        .unwrap();
+        birdnet_db::sqlite::record_run_result(
+            &conn,
+            birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
+            now - 3_600,
+            Some(true),
+        )
+        .unwrap();
+        drop(conn);
+        let cfg = Config::parse(&format!("DB_PATH={}", db.display())).unwrap();
+
+        let checks = check_maintenance_verdicts(&Cli::parse_from(["birdnet-behavior"]), Some(&cfg));
+        let backup = checks
+            .iter()
+            .find(|c| c.name == "Maintenance: backup")
+            .expect("the backup verdict is reported");
+        assert_eq!(backup.status, Status::Warn, "{backup:?}");
+        assert!(backup.message.contains("failing"), "{backup:?}");
+        let integrity = checks
+            .iter()
+            .find(|c| c.name == "Maintenance: integrity check")
+            .expect("reported");
+        assert_eq!(integrity.status, Status::Pass, "{integrity:?}");
+        assert!(
+            integrity.message.contains("succeeded 0 day(s) ago"),
+            "{integrity:?}"
+        );
+        let offsite = checks
+            .iter()
+            .find(|c| c.name == "Maintenance: offsite backup")
+            .expect("reported");
+        assert_eq!(offsite.status, Status::Pass);
+        assert!(offsite.message.contains("not run yet"), "{offsite:?}");
     }
 }

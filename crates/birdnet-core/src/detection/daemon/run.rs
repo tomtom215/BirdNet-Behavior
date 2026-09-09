@@ -16,7 +16,10 @@ use crate::inference::model::BirdNetModel;
 use crate::inference::species_filter::SpeciesFilter;
 
 use super::process::process_and_infer_filtered;
-use super::{DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, new_event_correlation_id};
+use super::{
+    DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, ShedReason, new_event_correlation_id,
+    shed_split,
+};
 
 /// How stale the operator's species include/exclude lists may get before the
 /// next file re-reads them.
@@ -158,6 +161,10 @@ pub fn run_daemon(
 
     let filter_observer = config.on_species_filter_state.clone();
     let throughput = config.on_file_analysed.clone();
+    let in_flight = config.in_flight.clone();
+    let shed_policy = config.shed.clone();
+    // The shed decision is logged on change, not on every 500 ms sweep.
+    let mut shedding: Option<ShedReason> = None;
     if let Some(observer) = filter_observer.as_ref() {
         observer.report(species_filter.has_model(), None);
     }
@@ -174,6 +181,12 @@ pub fn run_daemon(
             threshold = config.privacy_threshold,
             "privacy filter enabled"
         );
+        if !model.has_human_labels() {
+            tracing::warn!(
+                "privacy filter enabled but no label in the loaded model names a human class; \
+                 the filter can never fire with this model"
+            );
+        }
     }
     if chunk_filters.noise.is_enabled() {
         tracing::info!(
@@ -320,9 +333,63 @@ pub fn run_daemon(
             // Process whichever files have finished being written. Polling the
             // size each sweep means a clip settles even after its last watcher
             // event, so the final segment is never stranded.
-            for path in pending.drain_settled(Instant::now(), FILE_SETTLE, |p| {
+            let settled = pending.drain_settled_reporting(Instant::now(), FILE_SETTLE, |p| {
                 std::fs::metadata(p).map(|m| m.len()).ok()
-            }) {
+            });
+            // A segment the watcher announced that is gone before the pipeline
+            // could open it is audio that was recorded and never analysed
+            // (PR-1 / S-3): a purge running ahead of a backlogged pipeline.
+            // It used to fall out of the pending set without a word.
+            for path in &settled.vanished {
+                tracing::warn!(
+                    file = %path.display(),
+                    "segment vanished before analysis — recorded audio the pipeline never \
+                     read is gone; if this repeats, the stream directory is being drained \
+                     faster than inference keeps up"
+                );
+                if let Some(observer) = throughput.as_ref() {
+                    observer.dropped(path);
+                }
+            }
+            // The queue is what is still settling plus what this sweep will
+            // analyse (PR-2). Published once per sweep; the shed policy
+            // decides on it.
+            let queue_depth = pending.len() + settled.ready.len();
+            if let Some(observer) = throughput.as_ref() {
+                observer.queue_depth(queue_depth);
+            }
+            let decision = shed_policy.as_ref().and_then(|p| p.decide(queue_depth));
+            if decision != shedding {
+                if let Some(reason) = decision {
+                    tracing::warn!(
+                        queue_depth,
+                        reason = reason.as_str(),
+                        "analysing one segment in two until this clears — inference is \
+                         behind real time here; the skipped segments are counted in \
+                         birdnet_segments_shed_total, not lost quietly"
+                    );
+                } else {
+                    tracing::info!(
+                        queue_depth,
+                        "shedding stopped; every segment is analysed again"
+                    );
+                }
+                shedding = decision;
+            }
+            let ready = match decision {
+                Some(reason) => {
+                    let (analyse, shed) = shed_split(settled.ready);
+                    for path in &shed {
+                        tracing::debug!(file = %path.display(), reason = reason.as_str(), "segment shed");
+                        if let Some(observer) = throughput.as_ref() {
+                            observer.shed(path, reason);
+                        }
+                    }
+                    analyse
+                }
+                None => settled.ready,
+            };
+            for path in ready {
                 // Keep the watchdog fed if a single sweep processes several files.
                 heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
@@ -343,12 +410,20 @@ pub fn run_daemon(
                 // file so the operator can trace one file through the entire
                 // pipeline by grepping a single string.
                 let correlation_id = new_event_correlation_id();
-                tracing::info!(
+                // DEBUG, not INFO (OB-15): with "file processing complete"
+                // this was two lines per 15 s segment, 92 % of the journal's
+                // volume and 1.6-2.8 GB a year, carrying nothing the
+                // `birdnet_files_analysed_total` counter does not. The
+                // per-detection line keeps the correlation id at INFO.
+                tracing::debug!(
                     correlation_id = %correlation_id,
                     file = %path.display(),
                     "begin processing file"
                 );
 
+                // Claimed for as long as the pipeline reads it (PR-1 / S-3):
+                // the stream directory's purge skips a claimed name.
+                let _lease = in_flight.as_ref().map(|table| table.claim(&path));
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
@@ -380,12 +455,26 @@ pub fn run_daemon(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            correlation_id = %correlation_id,
-                            file = %path.display(),
-                            error = %e,
-                            "failed to process file"
-                        );
+                        // Gone between settling and opening: the same loss as
+                        // a vanished pending file, counted the same way.
+                        if path.exists() {
+                            tracing::warn!(
+                                correlation_id = %correlation_id,
+                                file = %path.display(),
+                                error = %e,
+                                "failed to process file"
+                            );
+                        } else {
+                            tracing::warn!(
+                                correlation_id = %correlation_id,
+                                file = %path.display(),
+                                "segment vanished while being analysed — recorded audio the \
+                                 pipeline never finished reading is gone"
+                            );
+                            if let Some(observer) = throughput.as_ref() {
+                                observer.dropped(&path);
+                            }
+                        }
                     }
                 }
             }
@@ -520,6 +609,8 @@ mod tests {
             metadata_labels_path: None,
             on_species_filter_state: None,
             on_file_analysed: None,
+            in_flight: None,
+            shed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

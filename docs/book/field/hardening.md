@@ -23,7 +23,10 @@ To report a vulnerability, see
 The single most important decision is *what can reach the web UI*. **Viewing the
 dashboard requires no login; the `/admin` panel** — which can change settings,
 trigger database backups, and update the software — **is gated by a
-session-cookie sign-in enforced by the binary itself.** Treat reachability as the primary control.
+session-cookie sign-in enforced by the binary itself.** Treat reachability as
+the primary control — and when the station is reachable from beyond the LAN,
+turn on [private mode](#private-mode-everything-behind-the-sign-in), which
+puts the dashboard itself behind that sign-in.
 
 - **Default: all interfaces.** A bare-metal binary defaults to
   `--listen 0.0.0.0:8502`, so the dashboard is reachable from other devices on
@@ -47,6 +50,13 @@ session-cookie sign-in enforced by the binary itself.** Treat reachability as th
   and generates a local CA to import once; `--tls-mode manual` serves your own
   certificate and reloads it when your ACME client renews it. Off by default.
   `--doctor` verifies the whole setup before startup does.
+- **Private mode for anything reachable from outside.** A tunnel, a mesh VPN
+  shared with other people, or a port forward makes "anyone who can reach the
+  port" a much larger set than your LAN, and `--listen 127.0.0.1` does not
+  help: the tunnel is what connects to it. Set `BIRDNET_PRIVATE_MODE=true`
+  (config file: `PRIVATE_MODE=true`) and the whole station — dashboard, read
+  API, live audio, both WebSockets — needs the sign-in. See
+  [Private mode](#private-mode-everything-behind-the-sign-in) below.
 - **Never port-forward `8502`/`8503` to the internet.** Built-in HTTPS encrypts
   the traffic; it does not add a login lockout or a WAF, and a self-signed
   certificate carries no publicly-trusted name. Put it behind a reverse proxy
@@ -62,7 +72,8 @@ Authentication gates **the `/admin*` panel, the Station management tabs
 (`/station/capture|alerts|data|settings|access`) and every page action that
 changes something** — viewing the dashboard, the read-only `/api/v2/*`
 endpoints, the WebSockets, and the health check are open to anyone who can
-reach the port. A fresh install auto-generates a strong admin
+reach the port, unless [private mode](#private-mode-everything-behind-the-sign-in)
+is on. A fresh install auto-generates a strong admin
 password, so `/admin` is protected by default; for anything LAN- or
 internet-reachable, keep it set (and add TLS off-LAN).
 
@@ -82,6 +93,22 @@ internet-reachable, keep it set (and add TLS off-LAN).
   from `birdnet.conf` — the systemd unit sets no `EnvironmentFile`, so on a
   bare-metal install the sign-in name stays `admin`.
 
+  A signed-in session survives a restart of the station: the signing secret
+  is generated once and kept beside the database as `session.secret` (mode
+  0600), unless `BNB_SESSION_SECRET` is set, which takes precedence. Rotating
+  `CADDY_PWD` in the config signs every session out at the next start;
+  rotating on the accounts page signs every *other* session out.
+
+  The form is throttled per client address: five failed attempts inside
+  fifteen minutes and that address is answered `429 Too Many Requests` (with a
+  `Retry-After`) until its oldest failure is a quarter-hour old — the password
+  is not even checked, so a guessing script costs the Pi a map lookup rather
+  than an Argon2 hash per guess. Each refused attempt is in the audit log as
+  `auth.login.throttled`; a successful sign-in clears the address, and a
+  restart forgives everything. Behind a reverse proxy the address is the
+  visitor's only if the proxy is trusted (`--trusted-proxies`); otherwise every
+  visitor shares the proxy's bucket, which is the conservative failure.
+
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. The password
   crosses the wire in clear text unless TLS is on — turn on `--tls-mode`, put a
   proxy in front, or keep the station on a trusted LAN. **Clearing `CADDY_PWD`
@@ -99,6 +126,47 @@ internet-reachable, keep it set (and add TLS off-LAN).
   case.) The live detection stream is therefore readable by anyone who can reach
   the port. If that matters, gate access at the network layer (VPN / proxy
   allow-list) rather than relying on app-level auth.
+
+### Private mode: everything behind the sign-in
+
+```dotenv
+BIRDNET_PRIVATE_MODE=true
+BIRDNET_PUBLIC_ACCESS=share,metrics   # optional carve-outs
+```
+
+(`PRIVATE_MODE=true` and `PUBLIC_ACCESS=…` in `birdnet.conf`; `--private-mode`
+and `--public-access` on the command line.)
+
+With private mode on, a visitor with no session gets nothing but the sign-in
+form: pages answer a `303` to `/login`, the API and the WebSockets a `401`.
+What stays open without a session is exactly:
+
+| Always open | Why |
+|---|---|
+| `/login`, `/logout`, `/static/*`, `/favicon.ico` | a browser has to be able to render the sign-in form |
+| `/api/v2/health` | the systemd watchdog and the container healthcheck read it |
+
+plus whatever `BIRDNET_PUBLIC_ACCESS` names, comma-separated:
+
+| Carve-out | Opens |
+|---|---|
+| `live_audio` | `/stream` and the live spectrogram WebSocket — for a station whose feed is meant to be listened to |
+| `share` | the signed `/r/<token>` links the **Share clip** button mints, with their audio and spectrogram; *not* the recordings route behind them |
+| `metrics` | `/api/v2/metrics`, for a Prometheus scraper that has no cookie |
+
+Anything else — the detection history, the recordings, the feeds, the
+detection WebSocket — is behind the sign-in with no way to open it. Viewer
+accounts (the `/station/access` tab) can see everything a signed-in admin
+can, and change nothing, so a private station can still be shared with the
+household.
+
+**Private mode needs a password.** A private station with no `CADDY_PWD`
+answers `503` to everything but the sign-in and the health probe — it does
+*not* fall back to the open station, because that is the one thing it was
+asked not to be. The startup log says so at `ERROR`, the page says so, and
+`--doctor` reports it under **Private mode**. An unknown name in
+`BIRDNET_PUBLIC_ACCESS` is reported and skipped (the station starts, with
+that surface closed); `--doctor` reports it too.
 
 ---
 
@@ -127,8 +195,10 @@ regardless of this setting.
 The station listens to a live microphone, so audio handling is privacy-relevant.
 
 - **Human-voice filter.** Set `BIRDNET_PRIVACY_THRESHOLD` (0.0–1.0; `0.02` is a
-  good start) to suppress analysis windows that contain human speech. `0.0`
-  disables it.
+  usual start, and lower suppresses more) to suppress analysis windows in which
+  the model's confidence for a human class reaches the value, and their
+  neighbours. `0.0` disables it. It binds independently of the detection
+  threshold.
 - **Recording retention.** Extracted detection clips accumulate on disk; cap
   them with `BIRDNET_MAX_FILES_PER_SPECIES` and rely on the disk manager's
   purge threshold. Audio you never want persisted should be filtered at the
@@ -139,20 +209,31 @@ The station listens to a live microphone, so audio handling is privacy-relevant.
 
 ---
 
-## 5. Fail-fast configuration
+## 5. A bad configuration edit cannot take the station down
 
-The daemon validates its configuration at startup and **refuses to start** on an
-invalid setting (e.g. a latitude outside ±90, a malformed `RECORDING_SCHEDULE`,
-or an unsupported `AUDIO_FORMAT`) rather than running in a silently-degraded
-state. Run the bundled diagnostic before deploying a config change:
+The daemon validates its configuration at startup. An invalid setting (a
+latitude outside ±90, a malformed `RECORDING_SCHEDULE`, an unsupported
+`AUDIO_FORMAT`) used to make it refuse to start, and since validation ran in
+the new process after systemd had stopped the old one, a typo made over SSH
+became a restart loop with no web UI and no way back. Now every successful
+start keeps a copy of the file it ran on as `birdnet.conf.last-good`; a start
+whose file has errors runs on that copy and reports `config_reverted` on
+`/api/v2/health` and the station page; a start with errors and no copy runs
+web-only on the file as it is and reports `config_rejected`, so the diagnostics
+are reachable and show the errors.
+
+Change the file the safe way, which validates before anything is installed:
 
 ```bash
-birdnet-behavior --doctor          # human-readable preflight
-birdnet-behavior --doctor-json     # machine-readable (exit code: 0 ok, 1 warn, 2 error)
+sudo cp /etc/birdnet/birdnet.conf /tmp/birdnet.conf && sudo nano /tmp/birdnet.conf
+sudo birdnet-behavior --apply-config /tmp/birdnet.conf   # refuses a file with errors
+birdnet-behavior --doctor                                # the same checks, on demand
+birdnet-behavior --doctor-json                           # exit code: 0 ok, 1 warn, 2 error
 ```
 
-The systemd unit runs `--doctor` as an `ExecStartPre` gate, so a broken config
-fails fast with an actionable journal entry instead of a restart loop.
+The systemd unit still runs `--doctor` as an `ExecStartPre` gate for the
+journal's sake; a configuration error is reported there as a warning naming
+what the start will do, so the gate lets it happen.
 
 ---
 
@@ -213,6 +294,16 @@ pin a specific version tag in production rather than `latest`.
 
 ## 8. Host hardening (what the unit already ships)
 
+The installer also writes a journald drop-in,
+`/etc/systemd/journald.conf.d/birdnet-behavior.conf`, with
+`Storage=persistent` and `SystemMaxUse=200M`. On a default Raspberry Pi OS
+the journal is volatile, so a power cut or a watchdog restart erased the
+evidence of what caused it; persistent and bounded, it keeps more than a
+year of the station's logging in 200 MB (the two per-file INFO lines that
+were most of the volume are DEBUG now) and cannot fill the card. The setting
+is host-wide, as journald's configuration is; `install.sh uninstall` removes
+the drop-in and leaves the journal itself.
+
 The installed systemd unit runs as a non-root user, gates startup on the
 doctor, and already carries the hardening a drop-in would usually add. From
 `install.sh`'s unit template:
@@ -261,6 +352,7 @@ only opens the ports you actually use.
 - [ ] Restrict the bind to `127.0.0.1` (+ SSH/VPN) if you don't need LAN access; for off-LAN access, put a TLS reverse proxy in front.
 - [ ] Turn on `--tls-mode self-signed` if the dashboard is reachable by anyone else on the network.
 - [ ] Keep `CADDY_PWD` set (a fresh install generates one) — or use proxy/VPN auth. Don't clear it on a non-loopback bind.
+- [ ] Turn on `BIRDNET_PRIVATE_MODE` if the station is reachable from beyond your own LAN (a tunnel, a port forward, a VPN other people are on), and carve out only what you mean to publish with `BIRDNET_PUBLIC_ACCESS`.
 - [ ] Set `OFFSITE_BACKUP` (with `OFFSITE_PASSPHRASE`) so a dead SD card is not the end of the records — and store the passphrase somewhere other than the station.
 - [ ] Leave CORS at its same-origin default unless you genuinely need a second origin.
 - [ ] Set `BIRDNET_PRIVACY_THRESHOLD` if voices may be captured.

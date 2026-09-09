@@ -595,3 +595,63 @@ async fn save_with_no_fields_still_completes_without_writing_blanks() {
         "an empty submit must not persist a blank latitude"
     );
 }
+
+/// UX-1. The seven preference cards were bare `<div>`s with a delegated click
+/// handler: no role, no `tabindex`, nothing a keyboard could reach, so an
+/// operator without a mouse could set neither the threshold nor the alert
+/// mode during first-run setup, and the axe gate — which grades what is
+/// there, not what is missing — passed the route clean. Each card is now a
+/// `<label>` around a real radio input, so Tab reaches the group and the
+/// arrow keys move within it; `tools/visual-qa/interactions.mjs` drives that
+/// in a browser. This is the cheap structural half: every card carries the
+/// input, and no bare-`<div>` card remains.
+#[tokio::test]
+async fn every_preference_card_is_a_real_radio_input() {
+    let html = fetch_wizard(fresh_state()).await;
+    // The page's script also spells `[data-radio="conf"]` in selectors; only
+    // the markup pairs it with `data-value`.
+    let mut starts: Vec<usize> = ["conf", "notify"]
+        .iter()
+        .flat_map(|g| {
+            html.match_indices(&format!(r#"data-radio="{g}" data-value=""#))
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    starts.sort_unstable();
+    let cards: Vec<&str> = starts
+        .into_iter()
+        .map(|i| {
+            let start = html[..i].rfind('<').expect("a tag opens the card");
+            let end = i + html[i..]
+                .find("</label>")
+                .map_or(html.len() - i, |e| e + "</label>".len());
+            &html[start..end]
+        })
+        .collect();
+    assert_eq!(cards.len(), 7, "four threshold cards and three alert cards");
+    for card in &cards {
+        let head = &card[..card.find('>').unwrap_or(card.len())];
+        assert!(
+            head.starts_with("<label "),
+            "a card must be a <label> so a click still reaches its input: {head}"
+        );
+        assert!(
+            card.contains(r#"type="radio""#) && card.contains(r#"name=""#),
+            "a card must wrap a named radio input, so Tab reaches it and the \
+             arrow keys move between cards: {card}"
+        );
+    }
+    assert!(
+        !html.contains(r#"<div class="ob-card" data-radio="#),
+        "a bare <div> card is unreachable from the keyboard"
+    );
+    for group in ["conf", "notify"] {
+        assert!(
+            html.contains(&format!(
+                r#"role="radiogroup" aria-labelledby="ob-{group}-h""#
+            )),
+            "the {group} cards must be announced as one group under the step's heading"
+        );
+    }
+}

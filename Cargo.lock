@@ -564,6 +564,7 @@ dependencies = [
  "realfft",
  "rubato",
  "serde",
+ "sha2",
  "symphonia",
  "tempfile",
  "tracing",
@@ -588,6 +589,7 @@ name = "birdnet-integrations"
 version = "0.15.0"
 dependencies = [
  "argon2",
+ "birdnet-core",
  "birdnet-db",
  "hmac",
  "lettre",

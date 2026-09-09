@@ -24,6 +24,10 @@ Pick **one** audio variable and leave the others blank.
 BIRDNET_LATITUDE=42.3601
 BIRDNET_LONGITUDE=-71.0589
 
+# Timezone — detections are filed under the container's local hours, which
+# come from this. Unset, the container runs on UTC and says so at start.
+TZ=America/New_York
+
 # Audio source — set exactly ONE
 BIRDNET_ALSA_DEVICE=plughw:CARD=PRO,DEV=0   # USB/ALSA mic — see the note below
 # BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream

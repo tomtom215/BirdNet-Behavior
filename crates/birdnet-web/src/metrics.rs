@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Fixed exponential histogram buckets (seconds).
 ///
@@ -153,6 +153,9 @@ pub struct MetricsRegistry {
     /// Seconds since the most recent stored detection, refreshed by the
     /// deadman task. `u64::MAX` = not yet measured / no detections ever.
     detection_silence_secs: AtomicU64,
+    /// The deadman's own verdict (AD-4): `0` quiet within its threshold, `1`
+    /// tripped (an episode is open), `u64::MAX` = the deadman is off.
+    detection_deadman: AtomicU64,
     /// Whether the system reports its clock as synchronised: `0` no, `1` yes,
     /// `u64::MAX` = nothing here can answer, so the series is absent rather
     /// than reporting a container's host clock as broken.
@@ -161,6 +164,13 @@ pub struct MetricsRegistry {
     /// `u64::MAX` = MQTT is not configured, so the series is absent rather
     /// than reporting a broker that was never asked for as broken.
     mqtt_connected: AtomicU64,
+    /// When the presence session was last seen to be down, Unix seconds; `0`
+    /// while it is up or MQTT is not configured. What the station-health
+    /// condition measures a broker outage from (DD-22).
+    mqtt_disconnected_since: AtomicU64,
+    /// The last MQTT connect or keepalive error, for the operator-facing
+    /// condition; cleared on reconnect.
+    mqtt_last_error: RwLock<Option<String>>,
     /// Classifications the pipeline produced and then discarded, by reason.
     ///
     /// A station that is "detecting nothing" is either hearing nothing or
@@ -193,6 +203,14 @@ pub struct MetricsRegistry {
     /// inference never started. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
     /// (OB-12).
     files_analysed: RwLock<HashMap<String, AtomicU64>>,
+    /// Segments the watcher announced that were gone before the pipeline
+    /// read them, per source (PR-1 / S-3): recorded audio never analysed.
+    segments_dropped: RwLock<HashMap<String, AtomicU64>>,
+    /// Segments the shed policy skipped, by reason (PR-2).
+    segments_shed: RwLock<HashMap<String, AtomicU64>>,
+    /// Segments waiting for analysis after the last sweep (PR-2);
+    /// `u64::MAX` = the daemon has not reported yet.
+    analysis_queue_depth: AtomicU64,
     /// Notifications that never left the station, by why.
     ///
     /// Both guards on the outbound path — the per-destination circuit breaker
@@ -216,6 +234,22 @@ pub struct MetricsRegistry {
     /// How many species the occurrence filter currently admits. `u64::MAX`
     /// until the filter has run once.
     occurrence_candidates: AtomicU64,
+    /// Clips the database referenced and the disk did not have, found and
+    /// stamped by the last reconciliation pass (S-14). `u64::MAX` until a
+    /// pass has run.
+    orphaned_clips: AtomicU64,
+    /// Detections the SQLite store accepted and the DuckDB copy refused
+    /// (OP-7): each one is a row the behavioural dashboards will not show
+    /// until the startup drift check rebuilds the copy.
+    analytics_mirror_failures_total: AtomicU64,
+    /// Seconds since the Unix epoch of the last such failure; `0` for none.
+    analytics_mirror_last_failure: AtomicU64,
+    /// The last mirror error's text, for the condition.
+    analytics_mirror_last_error: RwLock<Option<String>>,
+    /// Set by a disk manager whose last purge removed recordings and lowered
+    /// usage by nothing (PR-7): the card is full of something the purge
+    /// cannot reach, and it has stopped deleting. Shared with the manager.
+    purge_ineffective: Arc<AtomicBool>,
     /// HTTP responses served, by status class (`2xx`, `4xx`, …).
     http_responses: RwLock<HashMap<String, AtomicU64>>,
     /// Web request latency.
@@ -241,15 +275,26 @@ impl MetricsRegistry {
             detection_write_failures_total: AtomicU64::new(0),
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
+            detection_deadman: AtomicU64::new(u64::MAX),
             clock_synced: AtomicU64::new(u64::MAX),
             mqtt_connected: AtomicU64::new(u64::MAX),
+            mqtt_disconnected_since: AtomicU64::new(0),
+            mqtt_last_error: RwLock::new(None),
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
+            segments_dropped: RwLock::new(HashMap::new()),
+            segments_shed: RwLock::new(HashMap::new()),
+            analysis_queue_depth: AtomicU64::new(u64::MAX),
             notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
             occurrence_filter_active: AtomicU64::new(0),
             occurrence_candidates: AtomicU64::new(u64::MAX),
+            orphaned_clips: AtomicU64::new(u64::MAX),
+            analytics_mirror_failures_total: AtomicU64::new(0),
+            analytics_mirror_last_failure: AtomicU64::new(0),
+            analytics_mirror_last_error: RwLock::new(None),
+            purge_ineffective: Arc::new(AtomicBool::new(false)),
             http_responses: RwLock::new(HashMap::new()),
             http_duration: Histogram::new(),
         }
@@ -305,6 +350,35 @@ impl MetricsRegistry {
         Self::bump(&self.files_analysed, source);
     }
 
+    /// Record a segment that vanished before the pipeline analysed it
+    /// (PR-1 / S-3).
+    pub fn inc_segment_dropped(&self, source: &str) {
+        Self::bump(&self.segments_dropped, source);
+    }
+
+    /// Record a segment the shed policy skipped, by reason (PR-2).
+    pub fn inc_segment_shed(&self, reason: &str) {
+        Self::bump(&self.segments_shed, reason);
+    }
+
+    /// Publish how many segments are waiting for analysis (PR-2).
+    pub fn set_analysis_queue_depth(&self, depth: usize) {
+        self.analysis_queue_depth.store(
+            u64::try_from(depth).unwrap_or(u64::MAX - 1),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Segments waiting for analysis after the last sweep; `None` before the
+    /// daemon has reported.
+    #[must_use]
+    pub fn analysis_queue_depth(&self) -> Option<u64> {
+        match self.analysis_queue_depth.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v),
+        }
+    }
+
     /// Record a notification that never left the station.
     ///
     /// `reason` is a small closed vocabulary — `circuit_open`, `rate_limited`,
@@ -331,6 +405,82 @@ impl MetricsRegistry {
             .store(u64::from(active), Ordering::Relaxed);
         self.occurrence_candidates
             .store(candidates.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// The flag a disk manager sets when its purge stopped achieving
+    /// anything (PR-7), for the manager to hold.
+    #[must_use]
+    pub fn purge_ineffective_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.purge_ineffective)
+    }
+
+    /// Whether the last purge removed recordings without lowering usage.
+    #[must_use]
+    pub fn purge_ineffective(&self) -> bool {
+        self.purge_ineffective.load(Ordering::Relaxed)
+    }
+
+    /// Record a detection the DuckDB copy refused (OP-7).
+    pub fn inc_analytics_mirror_failed(&self, error: &str) {
+        self.analytics_mirror_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.analytics_mirror_last_failure
+            .store(unix_now_secs(), Ordering::Relaxed);
+        if let Ok(mut e) = self.analytics_mirror_last_error.write() {
+            *e = Some(error.to_owned());
+        }
+    }
+
+    /// Detections the DuckDB copy refused since process start.
+    #[must_use]
+    pub fn analytics_mirror_failures(&self) -> u64 {
+        self.analytics_mirror_failures_total.load(Ordering::Relaxed)
+    }
+
+    /// When the last mirror write failed, as seconds since the Unix epoch,
+    /// with the error; `None` when none has.
+    #[must_use]
+    pub fn analytics_mirror_last_failure(&self) -> Option<(u64, String)> {
+        match self.analytics_mirror_last_failure.load(Ordering::Relaxed) {
+            0 => None,
+            at => Some((
+                at,
+                self.analytics_mirror_last_error
+                    .read()
+                    .ok()
+                    .and_then(|e| e.clone())
+                    .unwrap_or_default(),
+            )),
+        }
+    }
+
+    /// Record what the last clip-reconciliation pass found: rows whose clip
+    /// the disk no longer had.
+    pub fn set_orphaned_clips(&self, found: u64) {
+        self.orphaned_clips.store(found, Ordering::Relaxed);
+    }
+
+    /// Orphaned clips found by the last reconciliation pass; `None` until one
+    /// has run.
+    #[must_use]
+    pub fn orphaned_clips(&self) -> Option<u64> {
+        match self.orphaned_clips.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            n => Some(n),
+        }
+    }
+
+    /// The occurrence filter's live state: whether it is running, and how
+    /// many species it admits (`None` until it has run). The same pair
+    /// `set_occurrence_filter` stores, for the surfaces a person reads.
+    pub fn occurrence_filter(&self) -> OccurrenceFilterState {
+        OccurrenceFilterState {
+            active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
+            candidates: match self.occurrence_candidates.load(Ordering::Relaxed) {
+                u64::MAX => None,
+                n => Some(n),
+            },
+        }
     }
 
     /// Record one served HTTP response.
@@ -447,6 +597,23 @@ impl MetricsRegistry {
         }
     }
 
+    /// Publish the deadman's verdict (AD-4): `None` when it is off,
+    /// `Some(true)` while an episode is open.
+    pub fn set_detection_deadman(&self, tripped: Option<bool>) {
+        self.detection_deadman
+            .store(tripped.map_or(u64::MAX, u64::from), Ordering::Relaxed);
+    }
+
+    /// The deadman's verdict: `None` off, `Some(false)` quiet within its
+    /// threshold, `Some(true)` tripped.
+    #[must_use]
+    pub fn detection_deadman(&self) -> Option<bool> {
+        match self.detection_deadman.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v == 1),
+        }
+    }
+
     /// Record whether the system reports its clock as synchronised.
     ///
     /// `None` means the question could not be answered — no systemd to ask,
@@ -473,6 +640,40 @@ impl MetricsRegistry {
     /// reachability is a real question.
     pub fn set_mqtt_connected(&self, up: bool) {
         self.mqtt_connected.store(u64::from(up), Ordering::Relaxed);
+        if up {
+            self.mqtt_disconnected_since.store(0, Ordering::Relaxed);
+            if let Ok(mut e) = self.mqtt_last_error.write() {
+                *e = None;
+            }
+        } else if self.mqtt_disconnected_since.load(Ordering::Relaxed) == 0 {
+            // The first observation of the outage, not the latest: the
+            // condition measures how long the broker has been gone.
+            self.mqtt_disconnected_since
+                .store(unix_now_secs().max(1), Ordering::Relaxed);
+        }
+    }
+
+    /// Record why the last MQTT connect or keepalive failed.
+    pub fn set_mqtt_error(&self, error: &str) {
+        if let Ok(mut e) = self.mqtt_last_error.write() {
+            *e = Some(error.chars().take(300).collect());
+        }
+    }
+
+    /// When the MQTT presence session was first seen down, or `None` while
+    /// it is up or MQTT is not configured.
+    #[must_use]
+    pub fn mqtt_disconnected_since(&self) -> Option<u64> {
+        match self.mqtt_disconnected_since.load(Ordering::Relaxed) {
+            0 => None,
+            t => Some(t),
+        }
+    }
+
+    /// The last MQTT error, if the session is down.
+    #[must_use]
+    pub fn mqtt_last_error(&self) -> Option<String> {
+        self.mqtt_last_error.read().ok().and_then(|e| e.clone())
     }
 
     /// MQTT presence connection state, or `None` when MQTT is not configured.
@@ -536,19 +737,46 @@ impl MetricsRegistry {
             mqtt_connected: self.mqtt_connected(),
             detections_dropped: Self::read_map(&self.detections_dropped),
             files_analysed: Self::read_map(&self.files_analysed),
+            segments_dropped: Self::read_map(&self.segments_dropped),
+            segments_shed: Self::read_map(&self.segments_shed),
+            analysis_queue_depth: self.analysis_queue_depth(),
             notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
-            occurrence_filter_active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
-            occurrence_candidates: match self.occurrence_candidates.load(Ordering::Relaxed) {
-                u64::MAX => None,
-                n => Some(n),
-            },
+            occurrence_filter_active: self.occurrence_filter().active,
+            occurrence_candidates: self.occurrence_filter().candidates,
+            orphaned_clips: self.orphaned_clips(),
+            analytics_mirror_failures: self.analytics_mirror_failures(),
+            purge_ineffective: self.purge_ineffective(),
             http_responses: Self::read_map(&self.http_responses),
             http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
             detection_write_failures: self.detection_write_failures_total.load(Ordering::Relaxed),
         }
+    }
+}
+
+/// What the species occurrence filter is doing right now (ON-12).
+///
+/// Published to Prometheus since the inert-filter defect, and now to the
+/// station page: a filter that admits zero species is a station that records
+/// nothing, and an operator without a metrics stack had no way to see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OccurrenceFilterState {
+    /// Whether the metadata model is loaded and filtering. `false` means every
+    /// species the classifier knows is a candidate, wherever the station is.
+    pub active: bool,
+    /// How many species the filter admitted the last time it ran; `None`
+    /// until it has.
+    pub candidates: Option<u64>,
+}
+
+impl OccurrenceFilterState {
+    /// A filter that is running and admits no species at all: nothing the
+    /// station hears can be recorded until it is fixed.
+    #[must_use]
+    pub const fn admits_nothing(self) -> bool {
+        self.active && matches!(self.candidates, Some(0))
     }
 }
 
@@ -584,6 +812,12 @@ pub struct MetricsSnapshot {
     pub detections_dropped: Vec<(String, u64)>,
     /// Audio files the pipeline finished analysing, per source.
     pub files_analysed: Vec<(String, u64)>,
+    /// Segments gone before the pipeline read them, per source.
+    pub segments_dropped: Vec<(String, u64)>,
+    /// Segments the shed policy skipped, by reason.
+    pub segments_shed: Vec<(String, u64)>,
+    /// Segments waiting for analysis, when the daemon has reported.
+    pub analysis_queue_depth: Option<u64>,
     /// Notifications that never left the station, by reason.
     pub notifications_dropped: Vec<(String, u64)>,
     /// Capture restarts per source.
@@ -594,6 +828,13 @@ pub struct MetricsSnapshot {
     pub occurrence_filter_active: bool,
     /// Species the occurrence filter admits (`None` = not yet run).
     pub occurrence_candidates: Option<u64>,
+    /// Orphaned clips found by the last reconciliation pass; `None` until one
+    /// has run.
+    pub orphaned_clips: Option<u64>,
+    /// Detections the DuckDB copy refused since process start.
+    pub analytics_mirror_failures: u64,
+    /// Whether the last disk purge removed recordings without lowering usage.
+    pub purge_ineffective: bool,
     /// HTTP responses by status class.
     pub http_responses: Vec<(String, u64)>,
     /// Web request latency.
@@ -602,6 +843,83 @@ pub struct MetricsSnapshot {
 
 /// Render the runtime metrics as Prometheus text 0.0.4.
 ///
+/// The pipeline's own throughput series: files analysed, segments dropped
+/// before analysis, segments shed, and the queue's depth.
+fn push_pipeline_series(out: &mut String, snap: &MetricsSnapshot) {
+    use std::fmt::Write as _;
+    out.push_str("# HELP birdnet_files_analysed_total Audio files the detection pipeline finished analysing, per source. Flat while birdnet_audio_source_up is 1 means capture is writing files nothing analyses; rising with no detections means the model is answering nothing.\n");
+    out.push_str("# TYPE birdnet_files_analysed_total counter\n");
+    for (source, count) in &snap.files_analysed {
+        let _ = writeln!(
+            out,
+            "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_segments_dropped_total Raw segments the watcher announced that were gone before the pipeline read them, per source: recorded audio never analysed. Rising means the stream directory is being drained faster than inference keeps up.\n");
+    out.push_str("# TYPE birdnet_segments_dropped_total counter\n");
+    for (source, count) in &snap.segments_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_segments_dropped_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_segments_shed_total Raw segments the shed policy chose not to analyse, by reason: backlog (more segments waiting than the threshold) or thermal (the board at its limit). One in two is skipped while either holds.\n");
+    out.push_str("# TYPE birdnet_segments_shed_total counter\n");
+    for (reason, count) in &snap.segments_shed {
+        let _ = writeln!(
+            out,
+            "birdnet_segments_shed_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
+        );
+    }
+
+    if let Some(depth) = snap.analysis_queue_depth {
+        out.push_str("# HELP birdnet_analysis_queue_depth Raw segments waiting for analysis after the daemon's last sweep. Climbing means inference is slower than real time; above the shed threshold the daemon analyses one segment in two.\n");
+        out.push_str("# TYPE birdnet_analysis_queue_depth gauge\n");
+        let _ = writeln!(out, "birdnet_analysis_queue_depth {depth}");
+    }
+
+    out.push_str("# HELP birdnet_notifications_dropped_total Notifications that never left the station, by reason: circuit_open (the destination is considered down), rate_limited (over the configured per-minute budget), send_failed (the destination refused or was unreachable), no_destination (nothing configured to send to).\n");
+    out.push_str("# TYPE birdnet_notifications_dropped_total counter\n");
+    for (reason, count) in &snap.notifications_dropped {
+        let _ = writeln!(
+            out,
+            "birdnet_notifications_dropped_total{{reason=\"{}\"}} {count}",
+            escape_label(reason)
+        );
+    }
+
+    if let Some(n) = snap.orphaned_clips {
+        out.push_str("# HELP birdnet_orphaned_clips Detections whose clip the disk no longer had, found and stamped by the last reconciliation pass.\n");
+        out.push_str("# TYPE birdnet_orphaned_clips gauge\n");
+        let _ = writeln!(out, "birdnet_orphaned_clips {n}");
+    }
+
+    out.push_str("# HELP birdnet_capture_restarts_total Capture processes restarted by the supervisor, per source.\n");
+    out.push_str("# TYPE birdnet_capture_restarts_total counter\n");
+    for (source, count) in &snap.capture_restarts {
+        let _ = writeln!(
+            out,
+            "birdnet_capture_restarts_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_capture_stalls_total Capture processes found alive but producing no segments, per source.\n");
+    out.push_str("# TYPE birdnet_capture_stalls_total counter\n");
+    for (source, count) in &snap.capture_stalls {
+        let _ = writeln!(
+            out,
+            "birdnet_capture_stalls_total{{source=\"{}\"}} {count}",
+            escape_label(source)
+        );
+    }
+}
+
 /// Pure function; safe to test by feeding in a hand-built snapshot.
 #[must_use]
 pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
@@ -649,45 +967,7 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         );
     }
 
-    out.push_str("# HELP birdnet_files_analysed_total Audio files the detection pipeline finished analysing, per source. Flat while birdnet_audio_source_up is 1 means capture is writing files nothing analyses; rising with no detections means the model is answering nothing.\n");
-    out.push_str("# TYPE birdnet_files_analysed_total counter\n");
-    for (source, count) in &snap.files_analysed {
-        let _ = writeln!(
-            out,
-            "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
-            escape_label(source)
-        );
-    }
-
-    out.push_str("# HELP birdnet_notifications_dropped_total Notifications that never left the station, by reason: circuit_open (the destination is considered down), rate_limited (over the configured per-minute budget), send_failed (the destination refused or was unreachable), no_destination (nothing configured to send to).\n");
-    out.push_str("# TYPE birdnet_notifications_dropped_total counter\n");
-    for (reason, count) in &snap.notifications_dropped {
-        let _ = writeln!(
-            out,
-            "birdnet_notifications_dropped_total{{reason=\"{}\"}} {count}",
-            escape_label(reason)
-        );
-    }
-
-    out.push_str("# HELP birdnet_capture_restarts_total Capture processes restarted by the supervisor, per source.\n");
-    out.push_str("# TYPE birdnet_capture_restarts_total counter\n");
-    for (source, count) in &snap.capture_restarts {
-        let _ = writeln!(
-            out,
-            "birdnet_capture_restarts_total{{source=\"{}\"}} {count}",
-            escape_label(source)
-        );
-    }
-
-    out.push_str("# HELP birdnet_capture_stalls_total Capture processes found alive but producing no segments, per source.\n");
-    out.push_str("# TYPE birdnet_capture_stalls_total counter\n");
-    for (source, count) in &snap.capture_stalls {
-        let _ = writeln!(
-            out,
-            "birdnet_capture_stalls_total{{source=\"{}\"}} {count}",
-            escape_label(source)
-        );
-    }
+    push_pipeline_series(&mut out, snap);
 
     out.push_str("# HELP birdnet_occurrence_filter_active Whether species occurrence filtering is running (1) or every species the classifier knows is admitted (0).\n");
     out.push_str("# TYPE birdnet_occurrence_filter_active gauge\n");
@@ -780,6 +1060,22 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     out.push_str("# TYPE birdnet_watchdog_pings_total counter\n");
     let _ = writeln!(out, "birdnet_watchdog_pings_total {}", snap.watchdog_pings);
 
+    out.push_str("# HELP birdnet_purge_ineffective 1 when the last disk-full purge removed recordings without lowering usage — the card is full of something the purge cannot reach, and it has stopped deleting.\n");
+    out.push_str("# TYPE birdnet_purge_ineffective gauge\n");
+    let _ = writeln!(
+        out,
+        "birdnet_purge_ineffective {}",
+        u8::from(snap.purge_ineffective)
+    );
+
+    out.push_str("# HELP birdnet_analytics_mirror_failures_total Detections the database accepted and the DuckDB analytics copy refused since process start.\n");
+    out.push_str("# TYPE birdnet_analytics_mirror_failures_total counter\n");
+    let _ = writeln!(
+        out,
+        "birdnet_analytics_mirror_failures_total {}",
+        snap.analytics_mirror_failures
+    );
+
     out.push_str("# HELP birdnet_detection_write_failures_total Detections classified by the model and refused by the database since process start.\n");
     out.push_str("# TYPE birdnet_detection_write_failures_total counter\n");
     let _ = writeln!(
@@ -813,6 +1109,13 @@ pub(crate) fn escape_label(s: &str) -> String {
         }
     }
     out
+}
+
+/// Seconds since the Unix epoch, `0` before it.
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Wrap the registry in `Arc` so it can live in `AppState`.
@@ -1262,6 +1565,25 @@ mod operational_metrics_tests {
         assert!(
             out.contains(r#"source="weird\"source""#),
             "label values must be escaped: {out}"
+        );
+    }
+
+    /// OP-7: a refused mirror write is counted, timed and exposed.
+    #[test]
+    fn a_refused_mirror_write_is_counted_and_exposed() {
+        let r = MetricsRegistry::new();
+        assert_eq!(r.analytics_mirror_failures(), 0);
+        assert_eq!(r.analytics_mirror_last_failure(), None);
+        r.inc_analytics_mirror_failed("Constraint Error: NOT NULL");
+        r.inc_analytics_mirror_failed("IO Error");
+        assert_eq!(r.analytics_mirror_failures(), 2);
+        let (at, error) = r.analytics_mirror_last_failure().expect("timed");
+        assert!(at > 0);
+        assert_eq!(error, "IO Error");
+        let out = render_runtime_metrics(&r.snapshot());
+        assert!(
+            out.contains("birdnet_analytics_mirror_failures_total 2"),
+            "{out}"
         );
     }
 }

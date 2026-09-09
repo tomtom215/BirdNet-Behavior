@@ -52,10 +52,19 @@ impl From<crate::migration::MigrationError> for DbError {
     }
 }
 
-/// Recommended PRAGMAs applied to every connection.
+/// How long the live writer waits for a lock before an insert fails.
+///
+/// A detection refused with `database is locked` is logged lost (PS-3), and
+/// the writer is the one connection whose wait is worth more than the wait
+/// itself. Fifteen seconds covers a WAL checkpoint, a backup step and a
+/// reclaim step with room to spare; the readers keep the five seconds a page
+/// load can afford, in `READ_PRAGMAS`.
+pub const WRITER_BUSY_TIMEOUT_MS: u32 = 15_000;
+
+/// Recommended PRAGMAs applied to every writer connection.
 const PRAGMAS: &str = "PRAGMA journal_mode=WAL;
  PRAGMA synchronous=NORMAL;
- PRAGMA busy_timeout=5000;
+ PRAGMA busy_timeout=15000;
  PRAGMA cache_size=-2000;
  PRAGMA foreign_keys=ON;";
 

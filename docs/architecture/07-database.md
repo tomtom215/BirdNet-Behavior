@@ -64,6 +64,33 @@ CREATE TABLE IF NOT EXISTS detections (
 -- displayed in (migration v32). See "Two clocks" below.
 ALTER TABLE detections ADD COLUMN detected_at_utc INTEGER;
 
+-- Which model made the row (migration v43). One analysis_runs row per
+-- detection-daemon start: the SHA-256 and length of the model file, the
+-- SHA-256 and label count of the labels file, the geomodel's SHA-256 when
+-- an occurrence filter is configured, the binary version and the run-wide
+-- settings. The daemon registers its run before it consumes its first
+-- event and refuses to start without one; every row it inserts, and every
+-- row it quarantines, carries the id. NULL is a row this station did not
+-- analyse: imported history, or rows older than the migration.
+CREATE TABLE analysis_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    app_version   TEXT NOT NULL,
+    model_name    TEXT NOT NULL,   -- the file's stem: a label, not the identity
+    model_path    TEXT NOT NULL,
+    model_sha256  TEXT NOT NULL,   -- the identity
+    model_bytes   INTEGER NOT NULL,
+    labels_path   TEXT NOT NULL,
+    labels_sha256 TEXT NOT NULL,
+    label_count   INTEGER NOT NULL,
+    geomodel_sha256 TEXT,
+    confidence REAL NOT NULL, sensitivity REAL NOT NULL,
+    overlap REAL NOT NULL, sf_thresh REAL NOT NULL,
+    lat REAL, lon REAL
+);
+ALTER TABLE detections ADD COLUMN run_id INTEGER REFERENCES analysis_runs(id);
+ALTER TABLE quarantine ADD COLUMN run_id INTEGER REFERENCES analysis_runs(id);
+
 -- Settings key-value store. Created lazily at runtime by
 -- `settings::ensure_settings_table`, and materialised idempotently in
 -- migration v15 so the seed there parses on a fresh install.
@@ -81,6 +108,7 @@ CREATE INDEX idx_detections_sci_name    ON detections(Sci_Name);
 CREATE INDEX idx_detections_confidence  ON detections(Confidence);
 CREATE INDEX idx_detections_datetime    ON detections(Date, Time);
 CREATE INDEX idx_detections_utc         ON detections(detected_at_utc DESC);
+CREATE INDEX idx_detections_run_id      ON detections(run_id);
 ```
 
 ### Species rollup

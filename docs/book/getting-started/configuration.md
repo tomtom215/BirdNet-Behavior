@@ -15,7 +15,9 @@ On top of that, a **SQLite settings table** managed through the web UI at **`/ad
 
 ## Environment variables & CLI flags
 
-The full list lives in `birdnet-behavior --help`; `.env.example` documents all of them except the multi-microphone `BIRDNET_ALSA_DEVICES` (`--alsa-devices`) and `BIRDNET_CONFIG` itself. Each row shows the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
+The full list lives in `birdnet-behavior --help`, and `.env.example` documents every variable the binary reads; a test keeps the two and the code from drifting apart. Each row shows the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
+
+A key the station does not read is reported rather than ignored: a `birdnet.conf` line such as `CONFIDENC=0.90`, or an environment variable such as `BIRDNET_LATITUD`, is named at startup in the journal and by `--doctor`, with the nearest real name when one is close (*"did you mean CONFIDENCE?"*). Before this, a misspelt key was parsed, stored and silently left at its default.
 
 | Env var | CLI flag | `birdnet.conf` key | Default |
 |---|---|---|---|
@@ -24,6 +26,7 @@ The full list lives in `birdnet-behavior --help`; `.env.example` documents all o
 | `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
 | `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` / `RTSP_URLS` | — |
 | `BIRDNET_LISTEN` | `--listen` | — | `0.0.0.0:8502` |
+| `TZ` | — | — | UTC in the container. An IANA zone name (`Europe/Berlin`); the container files detections under this zone's local hours, and warns at start when it is unset or not a zone the image knows. On a host, the zone comes from the system (`timedatectl set-timezone`). |
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | `RECORDING_SCHEDULE` | `all-day` |
 | `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
@@ -66,9 +69,13 @@ The full list lives in `birdnet-behavior --help`; `.env.example` documents all o
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
 | `BIRDNET_CLIP_RETENTION_DAYS` | `--clip-retention-days` | `CLIP_RETENTION_DAYS` | `0` (keep forever) |
 | `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` |
+| `BIRDNET_PURGE_SPECIES_FLOOR` | `--purge-species-floor` | `PURGE_SPECIES_FLOOR` | `5` (`0` = no floor) |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
+| `BIRDNET_RAW_AUDIO_KEEP_EVERY` | `--raw-audio-keep-every` | `RAW_AUDIO_KEEP_EVERY` | `0` (keep no raw audio; `1` keeps every segment, `N` one in N) |
 | `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | `CADDY_PWD` auto-set on bare-metal install; sign in as `admin` (`CADDY_USER` is environment-only — see [Remote access](../admin/remote-access.md)) |
+| `BIRDNET_PRIVATE_MODE` | `--private-mode` | `PRIVATE_MODE` | off (viewing is open). `true` puts the whole station behind the sign-in; needs `CADDY_PWD`, or everything but the sign-in answers `503`. See [Hardening](../field/hardening.md#private-mode-everything-behind-the-sign-in) |
+| `BIRDNET_PUBLIC_ACCESS` | `--public-access` | `PUBLIC_ACCESS` | — (nothing carved out). Comma-separated `live_audio`, `share`, `metrics`; no effect without private mode |
 | `BIRDNET_CORS_ALLOWED_ORIGINS` | — | — | — (same-origin only) |
 
 > **Invalid settings fail fast.** On startup the daemon validates the

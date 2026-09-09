@@ -9,6 +9,15 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
+
+use birdnet_core::process::run_with_timeout;
+
+/// How long extracting a release archive may take.
+const EXTRACT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// How long the staged binary's `--version` may take. clap answers before
+/// anything else runs, so a minute is a binary that cannot execute here.
+const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 mod version;
 
@@ -381,21 +390,23 @@ pub fn apply_update(
         let _ = fs::remove_dir_all(&extract_dir);
         fs::create_dir_all(&extract_dir)?;
 
-        let status = Command::new("tar")
-            .arg("-xzf")
-            .arg(&download_path)
-            .arg("-C")
-            .arg(&extract_dir)
-            .status()
-            .map_err(|e| {
-                UpdateError::Network(format!("failed to invoke `tar` for extraction: {e}"))
-            })?;
+        let extract = run_with_timeout(
+            Command::new("tar")
+                .arg("-xzf")
+                .arg(&download_path)
+                .arg("-C")
+                .arg(&extract_dir),
+            EXTRACT_TIMEOUT,
+        )
+        .map_err(|e| UpdateError::Network(format!("failed to invoke `tar` for extraction: {e}")))?;
 
-        if !status.success() {
+        if !extract.status.success() {
             let _ = fs::remove_dir_all(&extract_dir);
             let _ = fs::remove_file(&download_path);
             return Err(UpdateError::Network(format!(
-                "`tar -xzf` failed with exit status {status}"
+                "`tar -xzf` failed with exit status {}: {}",
+                extract.status,
+                String::from_utf8_lossy(&extract.stderr).trim()
             )));
         }
 
@@ -721,7 +732,7 @@ fn smoke_test_binary(path: &Path) -> Result<(), UpdateError> {
     let mut attempt: u32 = 0;
     loop {
         attempt += 1;
-        match Command::new(path).arg("--version").output() {
+        match run_with_timeout(Command::new(path).arg("--version"), SMOKE_TEST_TIMEOUT) {
             Ok(output) if output.status.success() => return Ok(()),
             Ok(output) => {
                 return Err(UpdateError::SmokeTest(format!(

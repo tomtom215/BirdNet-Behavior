@@ -613,3 +613,84 @@ mod tests {
         assert!(summary.contains("50%"));
     }
 }
+
+/// What a Raspberry Pi's firmware says about its power and throttling (NP-5).
+///
+/// `vcgencmd get_throttled` answers a bit mask: bits 0–3 are the state now
+/// (under-voltage, ARM frequency capped, throttled, soft temperature limit)
+/// and bits 16–19 the same four having occurred since boot. Under-voltage on
+/// a long mains run or a marginal solar budget is the commonest field failure
+/// on a Pi, it corrupts SD cards, and it presents as random instability with
+/// no other signal — nothing in the station read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct PiThrottle {
+    /// The raw mask, as `vcgencmd` reported it.
+    pub bits: u32,
+}
+
+impl PiThrottle {
+    /// Under-voltage right now.
+    #[must_use]
+    pub const fn undervoltage_now(self) -> bool {
+        self.bits & 0x1 != 0
+    }
+    /// Throttled or frequency-capped right now.
+    #[must_use]
+    pub const fn throttled_now(self) -> bool {
+        self.bits & 0x6 != 0
+    }
+    /// Under-voltage has occurred since boot.
+    #[must_use]
+    pub const fn undervoltage_occurred(self) -> bool {
+        self.bits & 0x1_0000 != 0
+    }
+    /// Throttling or a frequency cap has occurred since boot.
+    #[must_use]
+    pub const fn throttled_occurred(self) -> bool {
+        self.bits & 0x6_0000 != 0
+    }
+
+    /// Parse `vcgencmd get_throttled` output, `throttled=0x50005`.
+    #[must_use]
+    pub fn parse(output: &str) -> Option<Self> {
+        let value = output.trim().strip_prefix("throttled=")?.trim();
+        let hex = value.strip_prefix("0x").unwrap_or(value);
+        u32::from_str_radix(hex, 16).ok().map(|bits| Self { bits })
+    }
+}
+
+/// Ask the firmware, on a Raspberry Pi; `None` where `vcgencmd` is absent or
+/// does not answer (every other machine). Bounded at two seconds.
+#[must_use]
+pub fn pi_throttled() -> Option<PiThrottle> {
+    let out = birdnet_core::process::run_with_timeout(
+        std::process::Command::new("vcgencmd").arg("get_throttled"),
+        std::time::Duration::from_secs(2),
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    PiThrottle::parse(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(test)]
+mod pi_throttle_tests {
+    use super::PiThrottle;
+
+    /// NP-5: the mask is read the way the firmware documents it.
+    #[test]
+    fn the_throttle_mask_is_parsed_and_read_by_bit() {
+        let t = PiThrottle::parse("throttled=0x50005\n").expect("parses");
+        assert_eq!(t.bits, 0x50005);
+        assert!(t.undervoltage_now());
+        assert!(t.throttled_now());
+        assert!(t.undervoltage_occurred());
+        assert!(t.throttled_occurred());
+        let clean = PiThrottle::parse("throttled=0x0").expect("parses");
+        assert!(!clean.undervoltage_now() && !clean.undervoltage_occurred());
+        let past = PiThrottle::parse("throttled=0x10000").expect("parses");
+        assert!(!past.undervoltage_now() && past.undervoltage_occurred());
+        assert_eq!(PiThrottle::parse("VCHI initialization failed"), None);
+    }
+}

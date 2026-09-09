@@ -1,17 +1,25 @@
 //! Human voice privacy filter.
 //!
-//! Detects human voice/speech in the inference results and masks those chunks
-//! (and adjacent chunks) to protect privacy. When enabled, any chunk whose
-//! top-N predictions include a "Human" label above the configured cutoff rank
-//! is suppressed, along with its neighboring chunks.
+//! Suppresses every chunk in which the model heard a human (speech, whistling,
+//! other human sounds) and the chunks either side of it, so a conversation
+//! near the microphone is not kept in the recordings a station retains.
+//!
+//! The judgement is made on the chunk's *human score* — the highest confidence
+//! the model gave any human class, read from its output before the detection
+//! threshold and top-N cut ([`ChunkPrediction::human_score`]). It is not made
+//! on the detection list. A list only carries a human label when speech scored
+//! above the *detection* threshold, so a filter that scanned the list was tuned
+//! by that threshold, and its own setting never bound: the BirdNET-Pi rule this
+//! port inherited, `human_cutoff = max(10, 6000 × threshold / 100)`, looked at
+//! the top ten of a list that was at most ten long.
 
-use crate::detection::types::Detection;
+use crate::detection::types::{ChunkPrediction, Detection};
 
 /// Privacy filter that suppresses detections when human voice is detected.
 #[derive(Debug, Clone)]
 pub struct PrivacyFilter {
-    /// Privacy threshold: 0.0 = disabled, 0.01-0.03 typical.
-    /// Used to compute the human cutoff rank.
+    /// The human score at or above which a chunk is suppressed.
+    /// `0.0` disables the filter.
     threshold: f32,
 }
 
@@ -33,73 +41,52 @@ impl PrivacyFilter {
         self.threshold
     }
 
-    /// Compute the human cutoff rank.
-    ///
-    /// If a "Human" label appears within the top `cutoff` predictions
-    /// for a chunk, that chunk is flagged for suppression.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
-    fn human_cutoff(&self) -> usize {
-        // Match BirdNET-Pi: human_cutoff = max(10, (6000 * threshold / 100.0) as usize)
-        let computed = (6000.0 * f64::from(self.threshold) / 100.0) as usize;
-        computed.max(10)
+    /// Whether one chunk, on its own evidence, is to be suppressed.
+    fn flags(&self, chunk: &ChunkPrediction) -> bool {
+        chunk.human_score >= self.threshold
     }
 
-    /// Filter predictions by suppressing chunks containing human voice.
+    /// Suppress every chunk whose human score reaches the threshold, and the
+    /// chunks adjacent to it.
     ///
-    /// Takes a slice of chunks (each chunk is a `Vec<Detection>` sorted by
-    /// confidence descending). For each chunk, if any detection within the
-    /// top `human_cutoff` results contains "Human" in the scientific or
-    /// common name, that chunk and its immediate neighbors are masked
-    /// (replaced with empty vectors).
-    ///
-    /// Returns a new vector of chunks with flagged chunks emptied.
-    pub fn filter_predictions(&self, predictions: &[Vec<Detection>]) -> Vec<Vec<Detection>> {
-        if !self.is_enabled() || predictions.is_empty() {
-            return predictions.to_vec();
+    /// Returns one detection list per input chunk, in order, with suppressed
+    /// chunks emptied. Only the human score is consulted; the detection lists
+    /// pass through untouched or emptied whole.
+    pub fn filter_predictions(&self, chunks: &[ChunkPrediction]) -> Vec<Vec<Detection>> {
+        let detections = || chunks.iter().map(|chunk| chunk.detections.clone());
+        if !self.is_enabled() || chunks.is_empty() {
+            return detections().collect();
         }
 
-        let cutoff = self.human_cutoff();
+        // First pass: which chunks contain a human. Second: their neighbours.
+        let flagged: Vec<bool> = chunks.iter().map(|chunk| self.flags(chunk)).collect();
+        let flagged = expand_adjacent(&flagged);
 
-        // First pass: identify which chunks contain human voice
-        let mut human_flags: Vec<bool> = predictions
-            .iter()
-            .map(|chunk| chunk_contains_human(chunk, cutoff))
-            .collect();
-
-        // Second pass: expand flags to adjacent chunks
-        let expanded = expand_adjacent(&human_flags);
-        human_flags = expanded;
-
-        // Third pass: mask flagged chunks
-        predictions
-            .iter()
-            .zip(human_flags.iter())
-            .map(|(chunk, &flagged)| {
+        detections()
+            .zip(flagged)
+            .map(|(chunk, flagged)| {
                 if flagged {
                     tracing::debug!("privacy filter: suppressing chunk with human voice");
                     Vec::new()
                 } else {
-                    chunk.clone()
+                    chunk
                 }
             })
             .collect()
     }
 }
 
-/// Check if a chunk's top-N predictions contain a human label.
-fn chunk_contains_human(detections: &[Detection], cutoff: usize) -> bool {
-    let check_count = detections.len().min(cutoff);
-    detections[..check_count].iter().any(is_human_label)
-}
-
-/// Check if a detection is a human voice label.
-fn is_human_label(detection: &Detection) -> bool {
-    let sci = detection.scientific_name.to_lowercase();
-    let com = detection.common_name.to_lowercase();
+/// Whether a label names a human class.
+///
+/// A substring match on either name, case-insensitively: the V2.4 label set
+/// spells its three human classes `Human_Human vocal`, `Human non-vocal_Human
+/// non-vocal` and `Human whistling_Human whistling`, and the V3 CSV keeps the
+/// same words. The rule is deliberately not one an operator can extend — see
+/// the noise filter for why a substring rule cannot be handed out.
+#[must_use]
+pub fn names_a_human(scientific_name: &str, common_name: &str) -> bool {
+    let sci = scientific_name.to_lowercase();
+    let com = common_name.to_lowercase();
     sci.contains("human") || com.contains("human")
 }
 
@@ -137,75 +124,93 @@ mod tests {
         }
     }
 
+    /// A chunk with one blackbird detection and the given human score.
+    fn chunk(human_score: f32) -> ChunkPrediction {
+        ChunkPrediction {
+            detections: vec![make_detection("Turdus merula", "Eurasian Blackbird", 0.9)],
+            human_score,
+        }
+    }
+
     #[test]
     fn disabled_filter_passes_everything() {
         let filter = PrivacyFilter::new(0.0);
         assert!(!filter.is_enabled());
-        let chunks = vec![vec![make_detection("Homo sapiens", "Human", 0.9)]];
-        let result = filter.filter_predictions(&chunks);
+        let result = filter.filter_predictions(&[chunk(0.9)]);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].len(), 1);
     }
 
     #[test]
-    fn enabled_filter_suppresses_human_chunks() {
+    fn enabled_filter_suppresses_human_chunks_and_their_neighbours() {
         let filter = PrivacyFilter::new(0.03);
         assert!(filter.is_enabled());
 
-        let chunks = vec![
-            vec![make_detection("Turdus merula", "Eurasian Blackbird", 0.9)],
-            vec![
-                make_detection("Homo sapiens", "Human", 0.8),
-                make_detection("Turdus merula", "Eurasian Blackbird", 0.3),
-            ],
-            vec![make_detection("Parus major", "Great Tit", 0.7)],
-        ];
-
-        let result = filter.filter_predictions(&chunks);
+        let result = filter.filter_predictions(&[chunk(0.0), chunk(0.8), chunk(0.0)]);
         assert_eq!(result.len(), 3);
-        // Chunk 0 is adjacent to chunk 1 (human), so it should be suppressed
-        assert!(result[0].is_empty());
-        // Chunk 1 contains human, should be suppressed
-        assert!(result[1].is_empty());
-        // Chunk 2 is adjacent to chunk 1, should be suppressed
-        assert!(result[2].is_empty());
+        assert!(result[0].is_empty(), "the chunk before the voice");
+        assert!(result[1].is_empty(), "the voice itself");
+        assert!(result[2].is_empty(), "the chunk after the voice");
     }
 
     #[test]
     fn non_adjacent_chunks_not_affected() {
         let filter = PrivacyFilter::new(0.03);
-
-        let chunks = vec![
-            vec![make_detection("Turdus merula", "Eurasian Blackbird", 0.9)],
-            vec![make_detection("Parus major", "Great Tit", 0.7)],
-            vec![make_detection("Homo sapiens", "Human", 0.8)],
-            vec![make_detection("Erithacus rubecula", "European Robin", 0.6)],
-            vec![make_detection("Cyanistes caeruleus", "Blue Tit", 0.5)],
-        ];
-
-        let result = filter.filter_predictions(&chunks);
+        let result = filter.filter_predictions(&[
+            chunk(0.0),
+            chunk(0.0),
+            chunk(0.8),
+            chunk(0.0),
+            chunk(0.0),
+        ]);
         assert_eq!(result.len(), 5);
-        // Chunk 0: not adjacent to human (chunk 2), should pass
         assert!(!result[0].is_empty());
-        // Chunk 1: adjacent to chunk 2 (human), should be suppressed
         assert!(result[1].is_empty());
-        // Chunk 2: human, suppressed
         assert!(result[2].is_empty());
-        // Chunk 3: adjacent to chunk 2, suppressed
         assert!(result[3].is_empty());
-        // Chunk 4: not adjacent to human, should pass
         assert!(!result[4].is_empty());
     }
 
+    /// The row this filter answers to (S-5): the threshold must bind.
+    ///
+    /// The same chunk, whose detection list carries no human label at all —
+    /// speech scored 0.02, below any detection threshold — is suppressed at a
+    /// privacy threshold of 0.01 and kept at 0.05. Under the inherited rule the
+    /// verdict was a scan of that list, so both settings kept it.
     #[test]
-    fn human_cutoff_calculation() {
-        let filter = PrivacyFilter::new(0.03);
-        // 6000 * 0.03 / 100.0 = 1.8 -> 1, but max(10, 1) = 10
-        assert_eq!(filter.human_cutoff(), 10);
+    fn the_privacy_threshold_decides_and_nothing_in_the_detection_list_does() {
+        let quiet_speech = || vec![chunk(0.02)];
 
-        let filter2 = PrivacyFilter::new(1.0);
-        // 6000 * 1.0 / 100.0 = 60
-        assert_eq!(filter2.human_cutoff(), 60);
+        assert!(
+            PrivacyFilter::new(0.01).filter_predictions(&quiet_speech())[0].is_empty(),
+            "speech at 0.02 must be suppressed by a threshold of 0.01"
+        );
+        assert!(
+            !PrivacyFilter::new(0.05).filter_predictions(&quiet_speech())[0].is_empty(),
+            "speech at 0.02 must be kept by a threshold of 0.05"
+        );
+
+        // The counterpart: what the detection list holds is not evidence. A
+        // human *detection* in the list with a score below the threshold is
+        // the detection threshold's business, not this filter's — otherwise
+        // lowering the detection threshold would tighten privacy, which is
+        // the coupling the row is about.
+        let human_in_list = vec![ChunkPrediction {
+            detections: vec![make_detection("Homo sapiens", "Human", 0.02)],
+            human_score: 0.02,
+        }];
+        assert!(
+            !PrivacyFilter::new(0.05).filter_predictions(&human_in_list)[0].is_empty(),
+            "a human label in the detection list must not override the threshold"
+        );
+    }
+
+    #[test]
+    fn the_threshold_is_inclusive() {
+        let at = vec![chunk(0.03)];
+        assert!(PrivacyFilter::new(0.03).filter_predictions(&at)[0].is_empty());
+        let below = vec![chunk(0.029_999)];
+        assert!(!PrivacyFilter::new(0.03).filter_predictions(&below)[0].is_empty());
     }
 
     #[test]
@@ -216,22 +221,13 @@ mod tests {
     }
 
     #[test]
-    fn is_human_label_case_insensitive() {
-        assert!(is_human_label(&make_detection(
-            "Homo sapiens",
-            "Human",
-            0.9
-        )));
-        assert!(is_human_label(&make_detection(
-            "homo sapiens",
-            "human voice",
-            0.9
-        )));
-        assert!(!is_human_label(&make_detection(
-            "Turdus merula",
-            "Eurasian Blackbird",
-            0.9
-        )));
+    fn names_a_human_is_case_insensitive_and_matches_every_human_class() {
+        assert!(names_a_human("Homo sapiens", "Human"));
+        assert!(names_a_human("homo sapiens", "human voice"));
+        assert!(names_a_human("Human", "Human vocal"));
+        assert!(names_a_human("Human non-vocal", "Human non-vocal"));
+        assert!(names_a_human("Human whistling", "Human whistling"));
+        assert!(!names_a_human("Turdus merula", "Eurasian Blackbird"));
     }
 
     #[test]

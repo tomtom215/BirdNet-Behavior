@@ -356,6 +356,31 @@ pub fn analytic_detections(
     Ok((rows, truncated))
 }
 
+/// Every detection the station stands behind that was cut from one clip,
+/// in the order they occur in it (FR-1).
+///
+/// Read through `detections_analytic`, so a rejected detection is not handed
+/// to Raven either. The clip is named by its bare file name, as
+/// `File_Name` stores it.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_for_clip(
+    conn: &Connection,
+    file_name: &str,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections_analytic WHERE File_Name = ?1 \
+         ORDER BY clip_offset_secs, Time"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![file_name], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// `all_detections`, read through `detections_analytic` and held to a floor.
 ///
 /// This is the surface an export that *publishes* should read, because the
@@ -920,6 +945,56 @@ mod tests {
     /// a plausible-looking placeholder.
     const INSTANT: i64 = 1_792_888_200;
 
+    /// FR-1: a clip's detections come back in the order they sit in the clip,
+    /// and only that clip's. The end-to-end gate is in `tests/`; nothing in
+    /// this crate's unit tests called the query, and cargo-mutants replaced
+    /// its body with an empty list and with one default row unnoticed.
+    #[test]
+    fn detections_for_clip_returns_that_clips_rows_in_clip_order() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let row = |file_name: &'static str, time: &'static str, offset: f64| DetectionRecord {
+            date: "2026-05-19",
+            time,
+            sci_name: "Turdus merula",
+            com_name: "Eurasian Blackbird",
+            confidence: 0.9,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name,
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: None,
+            duration_secs: None,
+            detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: Some(offset),
+            detection_secs: Some(3.0),
+        };
+        // Inserted out of clip order, and with a second clip in the way.
+        insert_detection(&conn, &row("a.wav", "09:00:04", 4.5)).unwrap();
+        insert_detection(&conn, &row("b.wav", "09:00:01", 1.5)).unwrap();
+        insert_detection(&conn, &row("a.wav", "09:00:01", 1.5)).unwrap();
+
+        let rows = detections_for_clip(&conn, "a.wav").unwrap();
+        let got: Vec<(Option<String>, Option<f64>)> = rows
+            .iter()
+            .map(|r| (r.file_name.clone(), r.clip_offset_secs))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (Some("a.wav".to_owned()), Some(1.5)),
+                (Some("a.wav".to_owned()), Some(4.5))
+            ]
+        );
+        assert!(detections_for_clip(&conn, "c.wav").unwrap().is_empty());
+    }
+
     /// A helper row, distinguished only by what this file's tests need to
     /// vary: the wall clock, the species, and the instant.
     fn insert_at(conn: &Connection, date: &str, time: &str, sci: &str, utc: Option<i64>) {
@@ -941,6 +1016,9 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: utc,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(conn, &record).unwrap();
     }
@@ -1084,6 +1162,9 @@ mod tests {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
 
@@ -1264,6 +1345,9 @@ mod tests {
                 source: src,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &r).unwrap();
         };
@@ -1595,6 +1679,9 @@ mod tests {
                 source: None,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1706,6 +1793,9 @@ mod tests {
                 source: None,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1846,6 +1936,9 @@ mod tests {
                 source,
                 duration_secs: None,
                 detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };

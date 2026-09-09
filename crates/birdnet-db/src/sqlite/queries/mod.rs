@@ -1,5 +1,6 @@
 //! `SQLite` query modules grouped by concern.
 
+pub mod analysis_runs;
 pub mod analytics;
 pub mod correlation;
 pub mod detection_reviews;
@@ -12,6 +13,10 @@ pub mod maintenance;
 pub mod quarantine;
 pub mod species;
 
+pub use analysis_runs::{
+    AnalysisRun, NewAnalysisRun, RunModel, analysis_run, detection_counts_by_run,
+    insert_analysis_run, latest_analysis_run, list_analysis_runs, run_models,
+};
 pub use analytics::{
     ModelVsReviewRow, QualitySummary, ReviewVerdictDay, confidence_distribution, confidence_trend,
     daily_counts, detection_quality_by_hour, distinct_detection_dates, hourly_activity,
@@ -34,12 +39,12 @@ pub use detections::{
     analytic_species_count_for_date, best_detections_for_date, com_name_for,
     concurrent_detections_from_other_sources, delete_detection, detected_at_utc_for, detection_at,
     detection_count, detection_count_for_date, detection_count_for_species_date, detection_dates,
-    detections_by_date, detections_by_species, detections_per_day, insert_detection,
-    is_detection_locked, known_sources, lock_detection, locked_file_names, recent_clips,
-    recent_clips_count, recent_detections, recent_detections_page, relabel_detection,
-    search_detection_count, search_detections, seconds_since_last_detection, species_for_date,
-    todays_detection_count, todays_detections, todays_source_activity, unlock_detection,
-    unstamped_detection_count,
+    detections_by_date, detections_by_species, detections_for_clip, detections_per_day,
+    insert_detection, is_detection_locked, known_sources, lock_detection, locked_file_names,
+    recent_clips, recent_clips_count, recent_detections, recent_detections_page, relabel_detection,
+    search_detection_count, search_detections, seconds_since_last_detection,
+    set_birdweather_soundscape, species_for_date, todays_detection_count, todays_detections,
+    todays_source_activity, unlock_detection, unstamped_detection_count,
 };
 pub use effort::total_recording_seconds;
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};

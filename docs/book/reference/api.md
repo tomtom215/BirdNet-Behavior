@@ -4,7 +4,7 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
-> **Auth:** the built-in session sign-in gates the `/admin*` UI routes, the `/station/<tab>` management pages and the page actions that change something — none of which live under `/api/v2`. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+> **Auth:** the built-in session sign-in gates the `/admin*` UI routes, the `/station/<tab>` management pages and the page actions that change something — none of which live under `/api/v2`. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters, or turn on [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in), after which every read endpoint and both WebSockets answer `401` without a session (the health check, and `/api/v2/metrics` when `metrics` is carved out, stay open).
 >
 > The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
@@ -24,13 +24,65 @@ curl http://localhost:8502/api/v2/health
   "analytics": true,
   "detection_daemon": "running",
   "detection_writes": "accepted",
-  "detection_silence_secs": 142
+  "detection_silence_secs": 142,
+  "analysis_queue_depth": 2,
+  "detection_deadman": "ok",
+  "data_volume": {
+    "writable": true,
+    "mount": "intact",
+    "disk": "ok",
+    "used_percent": 35.2,
+    "checked_at": 1788973200
+  },
+  "admin_bootstrap": "ok",
+  "boot_anomalies": [],
+  "strict": false
 }
 ```
 
 `status` is `"healthy"` (HTTP `200`) or `"degraded"` (HTTP `503` — the database
-is unreachable, or the last recorded integrity check failed), so monitoring can
-alert on the status code alone.
+is unreachable, the last recorded integrity check failed, or the data volume is
+not taking writes), so monitoring can alert on the status code alone.
+
+`data_volume` is the last of a once-a-minute probe of the data directory
+(`"unchecked"` before the first): whether a test write succeeded (`writable`,
+with `write_error` when it did not — a read-only remount after I/O errors and
+a card full to the byte both fail it), whether the directory is still its own
+mount (`mount` is `intact`, `vanished`, `not-a-mount` for a directory that was
+never a separate filesystem, or `unknown`), and the `df` verdict (`disk` is
+`ok`, `low`, `critical` or `unknown`). `writable: false` or `mount: vanished`
+is degraded on every reading: the station is running and keeping nothing.
+`disk: critical` or `unknown`, and `admin_bootstrap: failed`, are reported as
+degraded only under `?strict=1`.
+
+`analysis_queue_depth` is how many raw segments were waiting for analysis
+after the daemon's last sweep (`null` before it reports). Above 40 the daemon
+analyses one segment in two rather than fall further behind, counts the rest
+in `birdnet_segments_shed_total`, and raises the `backlog` station-health
+condition; see the deployment chapter for the policy.
+
+`detection_deadman` is the detection deadman's own verdict: `tripped` while it
+has an open quiet episode (no detections for longer than its threshold, or
+never, once the station has listened that long), `ok` otherwise, `off` when
+its threshold is 0. `tripped` is degraded under `?strict=1`, so a monitor
+polling the strict endpoint goes red at the moment the notifier fires rather
+than reading `detection_silence_secs` against a threshold of its own.
+
+`boot_anomalies` is what the boot journal found this start changed since the
+last one: `db_lost` (the database held detections at the last start and holds
+none, or is absent, now), `db_path_changed`, `mount_lost` (the data directory
+was its own mount and is not now — the volume did not mount, and the station
+is writing to the disk beneath it), `version_rollback`, `config_reverted` (the
+configuration file has errors and the station is running on the last one a
+start succeeded on), `config_rejected` (errors and no last-good copy: the
+station is running web-only so this report is reachable) and `audio_card_moved`
+(an ALSA device addressed by card index, `plughw:1,0`, resolves to a different
+card than at the last start: the index moved on re-enumeration and the station
+is recording from another device; address the card by id). The journal is kept in
+the configuration directory, outside the data volume, so a volume that fails
+to mount cannot take the memory of the last start with it; before it, such a
+start was indistinguishable from a first run. A non-empty list is degraded
+under `?strict=1` and raises the `boot-anomaly` station-health condition.
 
 `database` is `"ok"`, `"unchecked"` or `"error"`. It reports the verdict of the
 **daily maintenance integrity check**, not a check run at request time: that
@@ -41,7 +93,11 @@ means no verdict is on record yet — normal for the first few minutes after a
 fresh install, and reported `healthy`/`200`, because "not yet verified" is not
 "broken". A failure stays reported until it is fixed, rather than depending on
 which request happened to catch it.
-`detection_daemon` is `"running"` or `"stopped"` — `"stopped"` means web-only
+`analytics_mirror_failures` counts detections the database accepted and the
+DuckDB analytics copy refused since the process started; a non-zero value
+means the behavioural dashboards are behind until the startup drift check
+rebuilds the copy, and raises the `analytics-mirror` station-health condition
+while the failures are recent. `detection_daemon` is `"running"` or `"stopped"` — `"stopped"` means web-only
 mode or an unconfigured model/labels/watch-dir, i.e. the UI is up but nothing is
 being analysed. `analytics` reports whether the DuckDB engine is active.
 `detection_silence_secs` is the end-to-end freshness signal: seconds since the
@@ -54,6 +110,7 @@ looks healthy.
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/v2/health` | JSON liveness/health check (use for monitoring). |
+| `GET /api/v2/health/conditions` | What is wrong right now: the station-health conditions (a dead microphone, a full disk, a failing backup, a lost data volume, a boot that lost something) as the notifier last evaluated them, with `evaluated_at`. These used to be push-only. Always 200; `/health` carries the verdict. |
 | `GET /api/v2/metrics` | Prometheus metrics (text format) — see [Integrations](./integrations.md#prometheus-metrics). |
 | `GET /api/v2/stats` | Summary counts (detections, species, today). |
 | `GET /api/v2/system/disk` | Disk usage for the data directory. Answers 503 when the disk is critical (95 % used) and 200 otherwise. Fullness is measured against the space this user can actually reach — `used / (used + available)`, the same figure `df`'s `Use%` column reports — not against the raw device size, which on any ext4 with its default 5 % root reserve, or inside a container quota, is larger than anything the station can use. |
@@ -185,6 +242,8 @@ page:
 ## Export
 
 CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
+
+For verification tools: `GET /api/v2/detections/export/raven?from=&to=` is a Raven selection table over every detection with a clip, in BirdNET-Analyzer's column layout with `Begin Path` naming the clip; `GET /api/v2/recordings/{clip}/raven.txt` is one clip's table and `GET /api/v2/recordings/{clip}/labels.txt` the same selections as an Audacity label track. All three read the reviewed set, so a rejected detection is in none of them; a clip no detection names is `404`. See [Export](../admin/backups.md#export) for how each selection is placed.
 
 ## Changing a station
 

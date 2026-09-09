@@ -12,6 +12,7 @@
 mod birddb;
 mod csv;
 mod ebird;
+mod raven;
 
 use axum::{Router, routing::get};
 
@@ -34,6 +35,9 @@ pub fn router() -> Router<AppState> {
         .route("/species/export", get(csv::export_species))
         .route("/detections/export/ebird", get(ebird::export_ebird))
         .route("/detections/export/birddb", get(birddb::export_birddb))
+        .route("/detections/export/raven", get(raven::export_raven))
+        .route("/recordings/{filename}/raven.txt", get(raven::clip_raven))
+        .route("/recordings/{filename}/labels.txt", get(raven::clip_labels))
 }
 
 /// Escape a value for CSV output (RFC 4180) and neutralize CSV formula

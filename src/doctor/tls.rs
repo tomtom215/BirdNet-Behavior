@@ -68,6 +68,14 @@ pub(super) fn check_tls(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
             describe_ready(&plan.settings, plan.https_addr),
         )),
         Ok(None) => out.push(Check::skip(NAME, "TLS is off")),
+        // The clock, not the configuration (NT-2): the station serves plain
+        // HTTP until NTP lands and then restarts itself to mint.
+        Err(e @ birdnet_web::tls::TlsError::ClockNotSet(_)) => out.push(Check::warn(
+            NAME,
+            format!("HTTPS will be deferred at start: {e}"),
+            "let NTP set the clock (check `timedatectl`), or set it by hand; no action is \
+             needed once it is set",
+        )),
         Err(e) => out.push(Check::fail(
             NAME,
             format!(
@@ -99,11 +107,33 @@ pub(super) fn check_tls(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
 fn describe_ready(settings: &TlsSettings, addr: Option<std::net::SocketAddr>) -> String {
     let where_ = addr.map_or_else(String::new, |a| format!(" on {a}"));
     match settings.mode {
-        TlsMode::SelfSigned => format!(
-            "self-signed{where_}, covering {} (valid {} days)",
-            settings.hostnames.join(", "),
-            settings.validity_days
-        ),
+        // The real `notAfter` from the sidecar, not the configured number of
+        // days (NT-2): a certificate minted on a bad clock read "valid 397
+        // days" here while expiring in 1971.
+        TlsMode::SelfSigned => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+            let expiry = birdnet_web::tls::self_signed_expiry(&settings.state_dir).map_or_else(
+                || {
+                    format!(
+                        "configured for {} days, no material on disk yet",
+                        settings.validity_days
+                    )
+                },
+                |e| {
+                    format!(
+                        "expires {} ({} days left; renewed daily while serving)",
+                        e.leaf_expires_on(),
+                        e.leaf_days_left(now)
+                    )
+                },
+            );
+            format!(
+                "self-signed{where_}, covering {} — {expiry}",
+                settings.hostnames.join(", ")
+            )
+        }
         TlsMode::Manual => format!(
             "manual{where_}, from {}",
             settings

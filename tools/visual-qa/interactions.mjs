@@ -207,6 +207,55 @@ async function destructiveControlDisables(page) {
   released();
 }
 
+/** UX-1: the wizard's preference cards must work without a mouse.
+ *
+ * They were bare <div>s with a click handler: no role, no tabindex, so Tab
+ * skipped them and a keyboard-only operator could set neither the threshold
+ * nor the alert mode during first-run setup. axe passed the route clean —
+ * it grades what is there, not what is missing — so the check is behavioural:
+ * walk to the threshold step with the page's own button, then, using nothing
+ * but the keyboard, reach a card and change the selection.
+ */
+async function wizardCardsByKeyboard(page) {
+  await page.goto(`${BASE}/onboarding`, { waitUntil: 'domcontentloaded' });
+  if (!(await page.locator('#ob-next').count())) {
+    check('wizard: page exists', false, 'no #ob-next on /onboarding');
+    return;
+  }
+  // The threshold cards are step 4; the password step accepts two blank
+  // fields as "not now".
+  for (let i = 0; i < 3; i++) await page.click('#ob-next');
+  const active = await page.$eval('.ob-step.active', (s) => s.dataset.step);
+  check('wizard: reached the threshold step', active === '4', `active step is ${active}`);
+  if (active !== '4') return;
+
+  const before = await page.inputValue('#ob-conf');
+  // Keyboard only from here. Tab forward until focus is inside a threshold
+  // card; the loop wraps through the page chrome, so it is generous.
+  let landed = false;
+  for (let i = 0; i < 80 && !landed; i++) {
+    await page.keyboard.press('Tab');
+    landed = await page.evaluate(() => {
+      const el = document.activeElement;
+      return Boolean(el && el.closest && el.closest('[data-radio="conf"]'));
+    });
+  }
+  check('wizard: Tab reaches a threshold card', landed, 'after 80 Tabs focus never entered a [data-radio="conf"] card');
+  if (!landed) return;
+
+  await page.keyboard.press('ArrowDown');
+  const after = await page.inputValue('#ob-conf');
+  check('wizard: ArrowDown changes the threshold', after !== '' && after !== before, `#ob-conf was "${before}", is "${after}"`);
+  const highlighted = await page.$eval('[data-radio="conf"].sel', (c) => c.dataset.value).catch(() => null);
+  check('wizard: the highlighted card is the chosen one', highlighted === after, `highlighted ${highlighted}, input ${after}`);
+
+  // Counterpart: the mouse path still works, and lands the same way.
+  await page.click('[data-radio="conf"][data-value="0.9"]');
+  const clicked = await page.inputValue('#ob-conf');
+  const clickedCard = await page.$eval('[data-radio="conf"].sel', (c) => c.dataset.value).catch(() => null);
+  check('wizard: clicking a card still selects it', clicked === '0.9' && clickedCard === '0.9', `input ${clicked}, highlighted ${clickedCard}`);
+}
+
 const page404 = [];
 
 async function main() {
@@ -224,6 +273,7 @@ async function main() {
     ['clip player', clipPlayer],
     ['bulk actions', bulkActions],
     ['destructive controls', destructiveControlDisables],
+    ['wizard cards by keyboard', wizardCardsByKeyboard],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();

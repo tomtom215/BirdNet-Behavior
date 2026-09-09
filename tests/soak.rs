@@ -129,6 +129,9 @@ async fn soak_insertions_stay_bounded() {
             // importer's path and the expensive one, so the throughput this
             // test prints is the trigger-firing case rather than the cheap one.
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         state
             .with_db(|conn| insert_detection(conn, &record))
@@ -210,6 +213,9 @@ fn insert_n(conn: &rusqlite::Connection, base: usize, count: usize) {
             source: None,
             duration_secs: None,
             detected_at_utc: None,
+            run_id: None,
+            clip_offset_secs: None,
+            detection_secs: None,
         };
         insert_detection(conn, &record).expect("insert failed");
     }

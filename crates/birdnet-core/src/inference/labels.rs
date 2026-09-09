@@ -16,6 +16,16 @@ pub struct SpeciesLabel {
     pub scientific_name: String,
     /// Common name (e.g., "Eurasian Blackbird").
     pub common_name: String,
+    /// The eBird species code (e.g. `"zothaw"` for *Buteo albonotatus*), when
+    /// the label file carries one: column 1 of the geomodel's tab-separated
+    /// file, or a `species_code` column in a V3.0 CSV. `None` for the V2.4
+    /// text format and for rows without one.
+    ///
+    /// eBird's species pages are keyed on this code, not on the scientific
+    /// name, so the "View on eBird" link needs it (NP-1). Non-bird taxa in
+    /// the geomodel file carry a numeric identifier here instead; it is kept
+    /// verbatim, and whether eBird has a page for it is eBird's to answer.
+    pub species_code: Option<String>,
     /// Taxonomic class from the V3 CSV's `class` column (e.g. `"Aves"`,
     /// `"Insecta"`), or `None` for the V2.4 text format, which has no such
     /// column.
@@ -149,8 +159,9 @@ impl LabelSet {
                 index: labels.len(),
                 scientific_name: sci.to_string(),
                 common_name: com.to_string(),
-                // The V2.4 text format carries no taxonomy.
+                // The V2.4 text format carries no taxonomy and no code.
                 class: None,
+                species_code: None,
             });
         }
 
@@ -166,8 +177,9 @@ impl LabelSet {
     /// The BirdNET geomodel ships its labels as
     /// `species_code<TAB>scientific_name<TAB>common_name`, one line per model
     /// output, line 1 being output index 0. The leading eBird species code is
-    /// dropped: nothing downstream keys on it, and the rest of the pipeline
-    /// compares scientific names.
+    /// kept as [`SpeciesLabel::species_code`]: the pipeline compares scientific
+    /// names, but eBird's species pages are keyed on the code, so the species
+    /// page's "View on eBird" link needs it (NP-1).
     ///
     /// A two-column row is read as `scientific<TAB>common` — there is no code
     /// to drop. Anything narrower names no species and is rejected rather than
@@ -192,9 +204,9 @@ impl LabelSet {
             // 3+ columns: code, scientific, common. Exactly 2: scientific,
             // common. Extra trailing columns are ignored rather than refused,
             // so a future column cannot break every station on upgrade.
-            let (sci, com) = match cols.as_slice() {
-                [_code, sci, com, ..] => (*sci, *com),
-                [sci, com] => (*sci, *com),
+            let (code, sci, com) = match cols.as_slice() {
+                [code, sci, com, ..] => (Some(*code).filter(|c| !c.is_empty()), *sci, *com),
+                [sci, com] => (None, *sci, *com),
                 _ => {
                     return Err(LabelError::Format(format!(
                         "expected tab-separated 'code<TAB>scientific<TAB>common' \
@@ -216,6 +228,7 @@ impl LabelSet {
                 // The geomodel's label file carries no taxonomic class column;
                 // the classifier's CSV is where that comes from.
                 class: None,
+                species_code: code.map(str::to_string),
             });
         }
 
@@ -264,6 +277,8 @@ impl LabelSet {
 
         // Optional — the V3.0 Zenodo export has it, other exports may not.
         let class_col = headers.iter().position(|h| *h == "class");
+        // Optional too: the eBird species code, where an export carries one.
+        let code_col = headers.iter().position(|h| *h == "species_code");
 
         let mut labels = Vec::new();
 
@@ -292,12 +307,18 @@ impl LabelSet {
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .map(ToString::to_string);
+            let species_code = code_col
+                .and_then(|c| fields.get(c))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
 
             labels.push(SpeciesLabel {
                 index: labels.len(),
                 scientific_name: sci.to_string(),
                 common_name: com.to_string(),
                 class,
+                species_code,
             });
         }
 
@@ -318,6 +339,7 @@ impl LabelSet {
                 scientific_name,
                 common_name,
                 class: None,
+                species_code: None,
             })
             .collect();
         Self { labels }
@@ -357,6 +379,15 @@ impl LabelSet {
         self.labels
             .iter()
             .find(|l| l.scientific_name.to_lowercase() == lower)
+    }
+
+    /// Every (scientific name, eBird species code) pair this set carries, for
+    /// the web layer's "View on eBird" link (NP-1). Empty for a label file
+    /// without codes.
+    pub fn species_codes(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.labels
+            .iter()
+            .filter_map(|l| Some((l.scientific_name.as_str(), l.species_code.as_deref()?)))
     }
 }
 
@@ -527,6 +558,42 @@ mod geomodel_label_format_tests {
     const UPSTREAM: &str = "1032549\tPetaurista albiventer\tWhite-bellied Giant Flying Squirrel\n\
                             1044390\tOrientopsaltria phaeophila\tOrientopsaltria phaeophila\n\
                             zothaw\tButeo albonotatus\tZone-tailed Hawk\n";
+
+    /// NP-1. eBird's species pages are keyed on the code in column 1, which
+    /// the parser used to drop with "nothing downstream keys on it". Kept
+    /// verbatim now: the bird's `zothaw` and the squirrel's numeric id alike,
+    /// and absent where the file has no column for it.
+    #[test]
+    fn the_species_code_is_kept_for_the_ebird_link() {
+        let set = LabelSet::load_from_str(UPSTREAM).expect("the geomodel's own label file");
+        assert_eq!(set.get(2).unwrap().species_code.as_deref(), Some("zothaw"));
+        assert_eq!(set.get(0).unwrap().species_code.as_deref(), Some("1032549"));
+        let pairs: Vec<(&str, &str)> = set.species_codes().collect();
+        assert_eq!(pairs.len(), 3, "every row carries a code");
+        assert!(pairs.contains(&("Buteo albonotatus", "zothaw")));
+
+        let two_col = LabelSet::load_from_str("Buteo albonotatus\tZone-tailed Hawk\n").unwrap();
+        assert_eq!(two_col.get(0).unwrap().species_code, None);
+        assert_eq!(two_col.species_codes().count(), 0);
+
+        let v24 = LabelSet::load_from_str("Buteo albonotatus_Zone-tailed Hawk\n").unwrap();
+        assert_eq!(
+            v24.get(0).unwrap().species_code,
+            None,
+            "the V2.4 format has no code"
+        );
+
+        let csv = LabelSet::load_from_str(
+            "species_code,sci_name,com_name\nzothaw,Buteo albonotatus,Zone-tailed Hawk\n,Parus major,Great Tit\n",
+        )
+        .unwrap();
+        assert_eq!(csv.get(0).unwrap().species_code.as_deref(), Some("zothaw"));
+        assert_eq!(
+            csv.get(1).unwrap().species_code,
+            None,
+            "an empty cell is no code"
+        );
+    }
 
     #[test]
     fn upstream_three_column_tsv_parses() {

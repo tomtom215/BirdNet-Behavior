@@ -3,9 +3,22 @@
 //! Handles conversion from WAV to MP3, FLAC, and OGG using ffmpeg or sox,
 //! and frequency shifting for accessibility.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
 
 use super::{AudioFormat, ExtractionError};
+use crate::process::run_with_timeout;
+
+/// The longest a converter may take on one clip before it is killed.
+///
+/// A detection clip is a few seconds of audio, and even an MP3 encode of one
+/// on a Pi Zero finishes in well under a minute; the frequency-shift path caps
+/// its output at [`MAX_FREQ_SHIFT_OUTPUT_SECS`]. The conversion runs on the
+/// event-processor thread, so a converter that hangs — on a device that
+/// stopped answering, on a codec bug — used to stop every detection after it
+/// until the watchdog restarted the station (PR-8).
+pub const CONVERTER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The ffmpeg `-codec:a` (and quality) arguments for a target format.
 ///
@@ -63,22 +76,36 @@ fn freq_shift_cents(sample_rate: u32, shift_hz: i32) -> i32 {
     (1200.0_f64 * (1.0 + f64::from(shift_hz) / f64::from(sample_rate)).log2()) as i32
 }
 
-/// Convert a WAV file to the target format using ffmpeg (preferred) or sox.
+/// Convert a WAV file to the target format using ffmpeg (preferred) or sox,
+/// and return the path that is on disk afterwards.
 ///
-/// On success the source WAV file is removed.
+/// On success that is `output_path` and the source WAV is removed. When both
+/// converters fail the WAV is kept — under its own `.wav` name, beside where
+/// the converted clip would have been (DD-36). It used to be renamed to the
+/// target name, so a `.mp3` on disk was a WAV under the wrong extension and
+/// the row's `File_Name` said the wrong format; the caller now records what
+/// the return value names.
 ///
 /// # Errors
 ///
-/// Returns [`ExtractionError::Conversion`] if neither ffmpeg nor sox is
-/// available or the conversion process fails.
+/// Returns [`ExtractionError::Write`] if the kept WAV cannot be committed
+/// under its name; a converter failure is not an error, it is the fallback.
 pub(super) fn convert_audio_format(
     wav_path: &Path,
     output_path: &Path,
     format: AudioFormat,
-) -> Result<(), ExtractionError> {
-    // Try ffmpeg first, fall back to sox.
-    let result = convert_with_ffmpeg(wav_path, output_path, format)
-        .or_else(|_| convert_with_sox(wav_path, output_path));
+) -> Result<PathBuf, ExtractionError> {
+    // The converters write a `.part` sibling (the extension stays last, so
+    // both infer the format from it), which is synced and renamed into place
+    // only once the tool has exited successfully (PS-7, S-4). Try ffmpeg
+    // first, fall back to sox.
+    let part = crate::atomic_file::part_path(output_path);
+    let result = convert_with_ffmpeg(wav_path, &part, format)
+        .or_else(|_| convert_with_sox(wav_path, &part))
+        .and_then(|()| {
+            crate::atomic_file::commit(&part, output_path)
+                .map_err(|e| ExtractionError::Write(e.to_string()))
+        });
 
     match result {
         Ok(()) => {
@@ -86,17 +113,21 @@ pub(super) fn convert_audio_format(
             if let Err(e) = std::fs::remove_file(wav_path) {
                 tracing::debug!(path = %wav_path.display(), error = %e, "failed to remove intermediate WAV");
             }
-            Ok(())
+            Ok(output_path.to_path_buf())
         }
         Err(e) => {
-            // Clean up the intermediate WAV (rename it to the target as fallback).
+            let _ = std::fs::remove_file(&part);
+            let kept = output_path.with_extension(AudioFormat::Wav.extension());
             tracing::warn!(
                 error = %e,
                 format = %format,
-                "format conversion failed, keeping WAV"
+                kept = %kept.display(),
+                "format conversion failed, keeping the WAV under its own name"
             );
-            std::fs::rename(wav_path, output_path)?;
-            Ok(())
+            if kept != wav_path {
+                crate::atomic_file::commit(wav_path, &kept)?;
+            }
+            Ok(kept)
         }
     }
 }
@@ -107,8 +138,6 @@ fn convert_with_ffmpeg(
     output_path: &Path,
     format: AudioFormat,
 ) -> Result<(), ExtractionError> {
-    use std::process::Command;
-
     // WAV needs no transcode — short-circuit before spawning ffmpeg.
     let Some(codec_args) = ffmpeg_codec_args(format) else {
         return Ok(());
@@ -123,8 +152,7 @@ fn convert_with_ffmpeg(
     cmd.args(codec_args);
     cmd.arg(output_path);
 
-    let output = cmd
-        .output()
+    let output = run_with_timeout(&mut cmd, CONVERTER_TIMEOUT)
         .map_err(|e| ExtractionError::Conversion(format!("ffmpeg: {e}")))?;
 
     if output.status.success() {
@@ -141,13 +169,11 @@ fn convert_with_ffmpeg(
 
 /// Convert WAV to target format using sox.
 fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), ExtractionError> {
-    use std::process::Command;
-
-    let output = Command::new("sox")
-        .arg(wav_path)
-        .arg(output_path)
-        .output()
-        .map_err(|e| ExtractionError::Conversion(format!("sox: {e}")))?;
+    let output = run_with_timeout(
+        Command::new("sox").arg(wav_path).arg(output_path),
+        CONVERTER_TIMEOUT,
+    )
+    .map_err(|e| ExtractionError::Conversion(format!("sox: {e}")))?;
 
     if output.status.success() {
         Ok(())
@@ -240,8 +266,6 @@ pub(super) fn apply_freq_shift(
     sample_rate: u32,
     shift_hz: i32,
 ) -> bool {
-    use std::process::Command;
-
     // ffmpeg approach: use asetrate to shift the sample rate, then resample back.
     // This is equivalent to speeding up/slowing down, shifting all frequencies.
     // shift_hz > 0 shifts up, < 0 shifts down; down is the accessibility
@@ -250,8 +274,8 @@ pub(super) fn apply_freq_shift(
     let filter = format!("asetrate={new_rate},aresample={sample_rate}");
     let max_secs = MAX_FREQ_SHIFT_OUTPUT_SECS.to_string();
 
-    let ffmpeg_ok = Command::new("ffmpeg")
-        .args([
+    let ffmpeg_ok = run_with_timeout(
+        Command::new("ffmpeg").args([
             "-y",
             "-i",
             &input_path.to_string_lossy(),
@@ -262,9 +286,10 @@ pub(super) fn apply_freq_shift(
             "-loglevel",
             "error",
             &output_path.to_string_lossy(),
-        ])
-        .status()
-        .is_ok_and(|s| s.success());
+        ]),
+        CONVERTER_TIMEOUT,
+    )
+    .is_ok_and(|out| out.status.success());
 
     if ffmpeg_ok {
         return true;
@@ -274,19 +299,21 @@ pub(super) fn apply_freq_shift(
     // 1 Hz shift ~ 100 * log2(1 + shift_hz / sample_rate) * 100 cents (approximation).
     let cents = freq_shift_cents(sample_rate, shift_hz);
 
-    Command::new("sox")
-        .arg(input_path)
-        .arg(output_path)
-        .args(["pitch", &cents.to_string()])
-        .status()
-        .is_ok_and(|s| s.success())
+    run_with_timeout(
+        Command::new("sox")
+            .arg(input_path)
+            .arg(output_path)
+            .args(["pitch", &cents.to_string()]),
+        CONVERTER_TIMEOUT,
+    )
+    .is_ok_and(|out| out.status.success())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioFormat, apply_freq_shift, convert_audio_format, ffmpeg_codec_args, freq_shift_cents,
-        freq_shift_resample_rate,
+        AudioFormat, ExtractionError, apply_freq_shift, convert_audio_format, convert_with_sox,
+        ffmpeg_codec_args, freq_shift_cents, freq_shift_resample_rate,
     };
     use hound::{SampleFormat, WavSpec, WavWriter};
     use std::path::Path;
@@ -411,29 +438,54 @@ mod tests {
         );
     }
 
+    /// The gate for DD-36. Garbage bytes cannot be decoded, so ffmpeg fails
+    /// and (with sox absent) sox fails too; this runs with or without the
+    /// tools. The WAV must survive under its *own* name and the return value
+    /// must name it: renamed to `notaudio.flac`, as it used to be, the file on
+    /// disk was a WAV under the wrong extension and the row said `flac`.
     #[test]
-    fn convert_audio_format_falls_back_to_rename_on_failure() {
-        // Garbage bytes can't be decoded, so ffmpeg fails and (with sox
-        // absent) sox fails too. The data must be preserved by renaming the
-        // source to the target path rather than silently lost. This runs
-        // unconditionally: with or without ffmpeg the conversion fails, so
-        // the rename fallback is the observable behaviour either way.
+    fn a_failed_conversion_keeps_the_wav_under_its_own_name_and_says_so() {
         let tmp = tempfile::tempdir().unwrap();
         let wav = tmp.path().join("notaudio.wav");
         let out = tmp.path().join("notaudio.flac");
         std::fs::write(&wav, b"this is not a WAV file").unwrap();
 
-        convert_audio_format(&wav, &out, AudioFormat::Flac).expect("rename fallback returns Ok");
+        let kept = convert_audio_format(&wav, &out, AudioFormat::Flac)
+            .expect("a failed conversion keeps the data");
 
-        assert!(
-            out.exists(),
-            "source must be renamed to the target on failure"
-        );
-        assert!(!wav.exists(), "source WAV must not survive the rename");
         assert_eq!(
-            std::fs::read(&out).unwrap(),
-            b"this is not a WAV file",
-            "renamed file must carry the original bytes"
+            kept, wav,
+            "the caller must be told the WAV is what is on disk"
+        );
+        assert!(wav.exists(), "the WAV must keep its .wav name");
+        assert!(
+            !out.exists(),
+            "nothing may sit under the target name that is not the target format"
+        );
+        assert_eq!(std::fs::read(&wav).unwrap(), b"this is not a WAV file");
+    }
+    /// A converter that ran nothing must not say it converted.
+    ///
+    /// `convert_with_sox` is the last fallback before the WAV is kept under
+    /// its own name (DD-36), and a version of it returning `Ok(())` without
+    /// producing a file left every test here green: the caller then commits a
+    /// `.part` that does not exist, which fails, which falls back, which is
+    /// what the DD-36 gate asserts. cargo-mutants reported exactly that
+    /// (`replace convert_with_sox -> Ok(())` missed). The input does not
+    /// exist, so this holds with sox installed (non-zero exit) and without
+    /// it (spawn failure); both are the conversion error the chain expects.
+    #[test]
+    fn a_converter_that_ran_nothing_does_not_report_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist.wav");
+        let out = tmp.path().join("out.flac.part");
+
+        let err = convert_with_sox(&missing, &out).expect_err("no input, no success");
+
+        assert!(matches!(err, ExtractionError::Conversion(_)), "{err:?}");
+        assert!(
+            !out.exists(),
+            "nothing may be written for an input that does not exist"
         );
     }
 

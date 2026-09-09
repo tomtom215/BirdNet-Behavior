@@ -415,17 +415,35 @@ async fn test_all(State(state): State<AppState>) -> (StatusCode, Html<String>) {
         lines.push("&#x26a0;&#xfe0f; BirdWeather: not configured (skipped)".to_owned());
     }
 
+    // MQTT and email are the binary's to build (CLI and config file), so it
+    // hands the web layer a probe for each it configured (DD-24). Before this
+    // the two were never tested, and a dead broker "passed".
+    let probes = state.notification_probes();
+    for (name, probe) in [("MQTT", probes.mqtt), ("Email", probes.email)] {
+        match probe {
+            Some(probe) => match probe().await {
+                Ok(msg) => lines.push(format!("&#x2705; {name}: {}", escape_html(&msg))),
+                Err(e) => lines.push(format!("&#x274c; {name}: {}", escape_html(&e))),
+            },
+            None => lines.push(format!("&#x26a0;&#xfe0f; {name}: not configured (skipped)")),
+        }
+    }
+
     let body = lines.join("<br>");
+    let tested = lines.iter().filter(|r| !r.contains("skipped")).count();
     let ok = lines.iter().all(|r| !r.contains("274c"));
-    // O-18: aggregate-test toast summarises the run.
-    let summary = if ok {
-        Toast::success("All configured channels passed.")
+    // O-18: aggregate-test toast summarises the run. A run that skipped every
+    // channel tested nothing, and says so rather than "passed" (DD-24).
+    let summary = if tested == 0 {
+        Toast::warn("Nothing was tested: no notification channel is configured.")
+    } else if ok {
+        Toast::success(format!("All {tested} configured channel(s) passed."))
     } else {
         Toast::error("One or more channels failed — see results.")
     };
     (
         StatusCode::OK,
-        toast::with(Html(result_html(ok, &body)), summary),
+        toast::with(Html(result_html(ok && tested > 0, &body)), summary),
     )
 }
 
@@ -464,6 +482,75 @@ fn result_html(ok: bool, msg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn station() -> AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+    }
+
+    async fn run_test_all(state: &AppState) -> String {
+        use tower::ServiceExt as _;
+        let resp = router()
+            .with_state(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/admin/notifications/test")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    /// DD-24: a run in which every channel was skipped tested nothing, and
+    /// says so — it used to say "All configured channels passed."
+    #[tokio::test]
+    async fn a_run_that_skips_every_channel_says_nothing_was_tested() {
+        let state = station();
+        let html = run_test_all(&state).await;
+        assert!(html.contains("Nothing was tested"), "{html}");
+        assert!(!html.contains("passed"), "{html}");
+        assert!(html.contains("MQTT: not configured (skipped)"), "{html}");
+        assert!(html.contains("Email: not configured (skipped)"), "{html}");
+    }
+
+    /// DD-24: MQTT and email are in the set, and a failing one fails the run.
+    #[tokio::test]
+    async fn mqtt_and_email_are_tested_and_a_dead_broker_fails_the_run() {
+        use crate::notification_probes::NotificationProbes;
+        let state = station();
+        state.set_notification_probes(NotificationProbes {
+            mqtt: Some(NotificationProbes::fixed(Err(
+                "connection refused (os error 111)".into(),
+            ))),
+            email: Some(NotificationProbes::fixed(Ok(
+                "sent to ops@example.org".into()
+            ))),
+        });
+        let html = run_test_all(&state).await;
+        assert!(html.contains("MQTT: connection refused"), "{html}");
+        assert!(html.contains("Email: sent to ops@example.org"), "{html}");
+        assert!(html.contains("One or more channels failed"), "{html}");
+
+        state.set_notification_probes(NotificationProbes {
+            mqtt: Some(NotificationProbes::fixed(Ok(
+                "published to birdnet/test".into()
+            ))),
+            email: None,
+        });
+        let html = run_test_all(&state).await;
+        assert!(
+            html.contains("All 1 configured channel(s) passed"),
+            "{html}"
+        );
+        assert!(html.contains("Email: not configured (skipped)"), "{html}");
+    }
 
     /// A station with one native route resolved and no Apprise server.
     fn native_only() -> PushChannel {

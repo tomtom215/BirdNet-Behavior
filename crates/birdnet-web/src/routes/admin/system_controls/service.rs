@@ -79,9 +79,10 @@ pub fn request_restart(under_systemd: bool) -> RestartOutcome {
     tracing::info!(%pid, "restart requested; SIGTERM self, systemd Restart=always brings us back");
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid])
-            .status();
+        let _ = birdnet_core::process::run_with_timeout(
+            std::process::Command::new("kill").args(["-TERM", &pid]),
+            std::time::Duration::from_secs(5),
+        );
     });
     outcome
 }
@@ -173,13 +174,14 @@ fn get_process_uptime_secs(_pid: u32) -> u64 {
             std::fs::read_to_string("/proc/self/stat"),
             std::fs::read_to_string("/proc/uptime"),
         ) {
-            let hz: u64 = std::process::Command::new("getconf")
-                .arg("CLK_TCK")
-                .output()
-                .ok()
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(100);
+            let hz: u64 = birdnet_core::process::run_with_timeout(
+                std::process::Command::new("getconf").arg("CLK_TCK"),
+                std::time::Duration::from_secs(5),
+            )
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(100);
 
             if let (Some(start_field), Some(uptime_field)) = (
                 stat.split_whitespace().nth(21),
@@ -230,10 +232,11 @@ fn get_process_memory_mb(pid: u32) -> f64 {
 }
 
 fn check_systemd_service_active(service: &str) -> bool {
-    std::process::Command::new("systemctl")
-        .args(["is-active", "--quiet", service])
-        .status()
-        .is_ok_and(|s| s.success())
+    birdnet_core::process::run_with_timeout(
+        std::process::Command::new("systemctl").args(["is-active", "--quiet", service]),
+        std::time::Duration::from_secs(10),
+    )
+    .is_ok_and(|out| out.status.success())
 }
 
 #[cfg(test)]

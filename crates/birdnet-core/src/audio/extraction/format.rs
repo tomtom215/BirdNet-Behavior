@@ -38,6 +38,17 @@ impl AudioFormat {
         }
     }
 
+    /// The MIME type a clip in this format is served and uploaded as.
+    #[must_use]
+    pub const fn mime_type(self) -> &'static str {
+        match self {
+            Self::Wav => "audio/wav",
+            Self::Mp3 => "audio/mpeg",
+            Self::Flac => "audio/flac",
+            Self::Ogg => "audio/ogg",
+        }
+    }
+
     /// Whether this format requires external conversion from WAV.
     pub const fn needs_conversion(self) -> bool {
         !matches!(self, Self::Wav)

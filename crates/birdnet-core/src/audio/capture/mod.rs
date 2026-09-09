@@ -17,6 +17,7 @@
 //! | `tmpfs` | `TmpfsConfig`, `TmpfsError`, tmpfs mount/unmount helpers |
 //! | `status` | `CaptureStatus` — the supervisor→web per-source health seam |
 
+pub mod alsa;
 pub mod disk;
 pub mod live;
 pub mod manager;
@@ -31,8 +32,9 @@ mod tee;
 
 // Re-export the public API so callers keep the same import path.
 pub use disk::{
-    DiskManager, DiskManagerConfig, DiskUsage, FullDiskAction, LockedFilesProvider,
-    cleanup_old_recordings, disk_usage, recording_stats,
+    DEFAULT_PURGE_SPECIES_FLOOR, DiskManager, DiskManagerConfig, DiskUsage, FullDiskAction,
+    LockedFilesProvider, PurgePolicy, RAW_KEEP_SUBDIR, RawKeep, cleanup_old_recordings, disk_usage,
+    recording_stats,
 };
 pub use live::{
     LiveAudioHub, LiveAudioHubHandle, LiveSubscription, LiveTap, PcmSpec, new_live_audio_hub,
@@ -40,8 +42,9 @@ pub use live::{
 pub use manager::CaptureManager;
 pub use process::{is_tool_available, start_microphone_capture, start_rtsp_capture};
 pub use status::{
-    CaptureStatus, CaptureStatusHandle, SourceState, SourceStatus, UPTIME_SEGMENTS, UptimeSegment,
-    new_capture_status, publish_capture_status, read_capture_status,
+    CaptureStatus, CaptureStatusHandle, FLAP_THRESHOLD, FLAP_WINDOW, SourceState, SourceStatus,
+    UPTIME_SEGMENTS, UptimeSegment, new_capture_status, publish_capture_status,
+    read_capture_status,
 };
 /// Which half of a stereo capture to keep; see [`tee::ChannelPick`].
 pub use tee::ChannelPick;

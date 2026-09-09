@@ -17,6 +17,8 @@
 //! Successful sign-in mints a cookie the admin middleware then honours on
 //! subsequent requests; signing out clears it.
 
+use std::net::IpAddr;
+
 use axum::Form;
 use axum::Router;
 use axum::extract::{Extension, Request, State};
@@ -53,7 +55,7 @@ async fn login_page(req: Request) -> Html<String> {
 
     Html(render_login(LoginContext {
         error,
-        rate_limited: false,
+        retry_after: None,
         next: &next,
     }))
 }
@@ -78,6 +80,28 @@ async fn login_submit(
 ) -> Response {
     let next = sanitize_next(form.next.as_deref()).to_string();
     let device = DeviceFingerprint::from_request(client.as_deref(), &headers);
+    // The throttle (O-6), before any hash is computed. A request with no
+    // resolved address is a direct call in a test; it shares one bucket, as
+    // it shares one bucket in the global limiter.
+    let ip = client
+        .as_ref()
+        .map_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), |c| c.0.0);
+    if let Err(retry_after) = state.login_throttle().check(ip) {
+        crate::audit::audit_user_id(
+            &state,
+            None,
+            "auth.login.throttled",
+            Some(&form.username),
+            None,
+        );
+        tracing::warn!(
+            ip = %ip,
+            username = %form.username,
+            retry_after_secs = retry_after.as_secs(),
+            "sign-in refused: too many failed attempts from this address"
+        );
+        return throttled_response(retry_after, &next);
+    }
     let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
         (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
         _ => None,
@@ -108,9 +132,11 @@ async fn login_submit(
         // that does. There is no actor id because there is no actor — that is
         // why `audit_log.user_id` is nullable.
         crate::audit::audit_user_id(&state, None, "auth.login.fail", Some(&form.username), None);
+        state.login_throttle().record_failure(ip);
         let query = format!("?error=1&next={}", urlencode_path(&next));
         return Redirect::to(&format!("/login{query}")).into_response();
     };
+    state.login_throttle().clear(ip);
 
     let ttl_ms = if form.remember.as_deref() == Some("1") {
         session::REMEMBER_ME_TTL_MS
@@ -221,6 +247,47 @@ impl DeviceFingerprint {
             ip_hash: client.map(|c| session::hash_client_ip(c.0)),
         }
     }
+}
+
+/// Mint a session for `user_id` from the request that just proved the user,
+/// and return the `Set-Cookie` value that hands it to the browser.
+///
+/// The wizard's password step and the accounts page's first "Set password"
+/// use this: both turn an open station into an owned one, and the browser
+/// that did it must leave with the session that owns it, or the next click
+/// is a login prompt for a password the operator has typed once and has no
+/// reason to remember was the one that took.
+///
+/// `None` if the session row could not be written; the caller then falls
+/// back to a plain redirect (the login page still works).
+pub(crate) fn mint_session_cookie(
+    state: &AppState,
+    user_id: i64,
+    client: Option<&ClientIp>,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    let device = DeviceFingerprint::from_request(client, headers);
+    let ttl_ms = session::default_ttl_ms();
+    let session_id = session::generate_session_id();
+    let expires_at = expires_at_for_ttl(ttl_ms);
+    state
+        .with_db(|conn| {
+            conn.create_session(
+                &session_id,
+                user_id,
+                &expires_at,
+                device.user_agent.as_deref(),
+                device.ip_hash.as_deref(),
+            )
+        })
+        .ok()?;
+    let token = session::issue_token(&session_id, ttl_ms);
+    let public_url = std::env::var("BNB_PUBLIC_URL").ok();
+    Some(session::build_set_cookie(
+        &token,
+        ttl_ms,
+        public_url.as_deref(),
+    ))
 }
 
 /// "Anyone can sign in" bypass — issued only when neither `CADDY_PWD` nor
@@ -341,27 +408,72 @@ struct LoginForm {
     next: Option<String>,
 }
 
+/// `429` with the sign-in page rendered locked, and a `Retry-After` the
+/// browser and any script can read.
+fn throttled_response(retry_after: std::time::Duration, next: &str) -> Response {
+    let secs = retry_after.as_secs().max(1);
+    let html = render_login(LoginContext {
+        error: false,
+        retry_after: Some(retry_after),
+        next,
+    });
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [
+            (header::RETRY_AFTER, secs.to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        Html(html),
+    )
+        .into_response()
+}
+
+/// "Try again in …" for the locked page: minutes above a minute, seconds
+/// below, rounded up so the page never promises earlier than the throttle.
+fn retry_phrase(retry_after: std::time::Duration) -> String {
+    let secs = retry_after.as_secs().max(1);
+    if secs >= 60 {
+        format!("{} min", secs.div_ceil(60))
+    } else {
+        format!("{secs} s")
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LoginContext<'a> {
     error: bool,
-    rate_limited: bool,
+    /// `Some` when the address is throttled: the form renders disabled with
+    /// the time until it may try again.
+    retry_after: Option<std::time::Duration>,
     next: &'a str,
 }
 
 fn render_login(ctx: LoginContext<'_>) -> String {
     let station = std::env::var("BIRDNET_SITENAME").unwrap_or_else(|_| "station".to_string());
     let version = env!("CARGO_PKG_VERSION");
-    let (error_class, error_body) = if ctx.rate_limited {
-        (
-            "is-visible",
-            "Too many attempts. Try again in 30 s.".to_string(),
-        )
-    } else if ctx.error {
-        ("is-visible", "Incorrect username or password.".to_string())
+    let (error_class, error_body) = ctx.retry_after.map_or_else(
+        || {
+            if ctx.error {
+                ("is-visible", "Incorrect username or password.".to_string())
+            } else {
+                ("", String::new())
+            }
+        },
+        |retry_after| {
+            (
+                "is-visible",
+                format!(
+                    "Too many attempts. Try again in {}.",
+                    retry_phrase(retry_after)
+                ),
+            )
+        },
+    );
+    let disabled = if ctx.retry_after.is_some() {
+        " disabled"
     } else {
-        ("", String::new())
+        ""
     };
-    let disabled = if ctx.rate_limited { " disabled" } else { "" };
 
     LOGIN_TEMPLATE
         .replace("{{title}}", "Sign in")
@@ -396,7 +508,7 @@ mod tests {
     fn render_login_substitutes_placeholders() {
         let html = render_login(LoginContext {
             error: true,
-            rate_limited: false,
+            retry_after: None,
             next: "/admin/overview",
         });
         assert!(html.contains("is-visible"));
@@ -424,18 +536,31 @@ mod tests {
     fn render_login_rate_limited_disables_submit() {
         let html = render_login(LoginContext {
             error: true,
-            rate_limited: true,
+            retry_after: Some(std::time::Duration::from_secs(14 * 60 + 1)),
             next: "/admin/overview",
         });
-        assert!(html.contains("Too many attempts"));
+        assert!(
+            html.contains("Too many attempts. Try again in 15 min."),
+            "{html}"
+        );
         assert!(html.contains("disabled"));
+    }
+
+    #[test]
+    fn the_retry_phrase_rounds_up_and_never_says_zero() {
+        use std::time::Duration;
+        assert_eq!(retry_phrase(Duration::from_secs(0)), "1 s");
+        assert_eq!(retry_phrase(Duration::from_secs(59)), "59 s");
+        assert_eq!(retry_phrase(Duration::from_secs(60)), "1 min");
+        assert_eq!(retry_phrase(Duration::from_secs(61)), "2 min");
+        assert_eq!(retry_phrase(Duration::from_secs(900)), "15 min");
     }
 
     #[test]
     fn render_login_clean_state_hides_alert() {
         let html = render_login(LoginContext {
             error: false,
-            rate_limited: false,
+            retry_after: None,
             next: "/admin/overview",
         });
         // The alert element is always rendered; the `is-visible` modifier

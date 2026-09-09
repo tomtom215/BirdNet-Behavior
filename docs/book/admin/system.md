@@ -8,7 +8,7 @@ The Station **Health** tab (`/station`) is the station's vital-signs monitor —
 - **Audio sources** — a per-source panel fed live by the capture supervisor: a state chip (Live · Stalled · Backing off · Paused), a rolling 24-hour uptime strip, how long since audio last arrived, today's detections for the source and the current retry/backoff line. When the web server runs without the capture supervisor (`--web-only`, or tooling) it falls back to an *activity* view — how many detections each source produced today and how recently — and never fakes a live/stalled chip.
 - **Vitals** — CPU, memory, temperature (with a graceful "no sensor" state where a probe isn't available) and disk, each with a meter. The disk figure follows `df`'s "used of reachable space", so reserved blocks or a container quota don't understate it.
 - **Microphone health** — the station's own background **noise floor** per source over the last 7 days, and how far it has moved against that source's own 30-day average. This is the one signal that separates *a season going quiet* from *a microphone going deaf*: a failing capsule keeps its process alive and its status green, and shows up only as fewer detections — exactly like autumn. Ambient background does not stop when the birds do, so a large, sustained **drop** here, with nothing else changed, points at the equipment. The panel is absent until the station has sampled something, and says "building a baseline" rather than reporting a change it has nothing to compare against. No threshold is applied and no alert is sent: a noise floor moves for weather, season, a road and leaf-out, and a number picked without a season of real recordings behind it would fire on all of them. Same figures are exported as `birdnet_noise_floor_dbfs` and `birdnet_noise_floor_drift_db` for anyone who wants to draw their own line.
-- **Pipeline** — the **last detection** (the plain-English answer to "is it actually working right now?" — every other gauge can read healthy while the station records silence, but a fresh detection proves the whole chain from microphone to database is alive), queued uploads (shown only when a network outage backs them up), the service uptime, and total detections.
+- **Pipeline** — the **last detection** (the plain-English answer to "is it actually working right now?" — every other gauge can read healthy while the station records silence, but a fresh detection proves the whole chain from microphone to database is alive), queued uploads (shown only when a network outage backs them up), the service uptime, total detections, and the **species filter**: whether the occurrence filter is running and how many species it currently admits. A filter admitting zero species means nothing the station hears can be recorded, and the status banner says so.
 - **Diagnostics** — a short checklist (audio sources · disk headroom · database integrity) with a link to the station's full `doctor` report at `/admin/doctor`: the same checks `birdnet-behavior --doctor` runs — audio device listing, model, clock, TLS, database, offsite, disk — run on request and read-only, with **Download as JSON** (`/admin/doctor.json`, what `--doctor-json` prints) and **Download a support bundle** (`/admin/support-bundle`, the same redacted archive `--support-bundle` writes) beside it. Both are behind the admin login, so a station in a field can be diagnosed from a phone without SSH.
 
 ## The detection deadman
@@ -65,7 +65,7 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 
 | Family | Actions |
 |---|---|
-| `auth.` | `login.ok`, `login.fail`, `logout` |
+| `auth.` | `login.ok`, `login.fail`, `login.throttled`, `logout` |
 | `account.` | `user.create`, `user.delete`, `password.set`, `session.revoke`, `session.revoke_others` |
 | `settings.` | `update` |
 | `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `threshold.set`, `threshold.delete` |
@@ -77,6 +77,11 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 A failed sign-in records the *submitted* username and no actor — "someone tried
 to sign in as `admin` sixty times last night" is the thing worth knowing, and a
 username that does not exist is as interesting as one that does.
+`login.throttled` is an attempt the station refused without checking the
+password: after five failures from one address inside fifteen minutes, that
+address is answered `429` until its oldest failure is a quarter-hour old, and
+each refused attempt is recorded here too. A successful sign-in clears the
+address; a restart forgives everything.
 
 **Values are never recorded.** A settings save lists the names of the keys that
 changed and nothing else. `rtsp_url` is why: an RTSP URL routinely carries

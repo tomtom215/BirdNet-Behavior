@@ -12,9 +12,12 @@ use crate::analytics_cache::AnalyticsCache;
 use crate::api_token::ApiToken;
 use crate::db_pool::ReaderPool;
 use crate::diagnostics::Diagnostics;
+use crate::login_throttle::LoginThrottle;
 use crate::notifier::Notifier;
+use crate::private_mode::PublicAccess;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -93,6 +96,15 @@ struct AppStateInner {
     site_name: Option<String>,
     /// Species info link site: "ebird", "allaboutbirds", or "none".
     info_site: String,
+    /// eBird species code by lower-cased scientific name, from the geomodel's
+    /// label file (NP-1). Empty when the station has no such file, in which
+    /// case the species page says so instead of linking to a page that does
+    /// not exist.
+    species_codes: HashMap<String, String>,
+    /// Whether the whole public surface sits behind the sign-in (O-4).
+    private_mode: bool,
+    /// The surfaces left open on a private station; empty otherwise.
+    public_access: BTreeSet<PublicAccess>,
     /// Custom species image directory (checked before Wikipedia cache).
     custom_image_dir: Option<PathBuf>,
     /// Path to the active configuration file, threaded from the CLI so the
@@ -154,6 +166,25 @@ struct AppStateInner {
     /// a GitHub Actions runner sets. See
     /// `routes::admin::system_controls::service::supervised_by_systemd`.
     supervised_by_systemd: bool,
+    /// Failed sign-ins per client address (O-6), consulted before Argon2
+    /// runs. Process-lifetime state: a restart forgives, which is the
+    /// reference project's behaviour too.
+    login_throttle: LoginThrottle,
+    /// The data volume's last probe (`crate::data_volume`): writable, still
+    /// mounted, how full. `None` until the watch has run once.
+    data_volume: std::sync::RwLock<Option<crate::data_volume::DataVolumeStatus>>,
+    /// Whether the admin-password bootstrap at start failed (DD-19): a
+    /// station that could not write its own admin credential.
+    admin_bootstrap_failed: AtomicBool,
+    /// The channel probes the binary configured (DD-24). Set after the
+    /// integrations exist, which is after the state does.
+    notification_probes: std::sync::RwLock<crate::notification_probes::NotificationProbes>,
+    /// What the boot journal found changed since the last start (UP-3):
+    /// empty on a first or ordinary start.
+    boot_anomalies: std::sync::RwLock<Vec<crate::boot_journal::Anomaly>>,
+    /// The station-health conditions as last evaluated (OP-4), published by
+    /// the notifier on every poll so they can be asked for.
+    station_conditions: std::sync::RwLock<crate::station_conditions::ConditionsSnapshot>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -221,6 +252,9 @@ impl AppState {
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                species_codes: HashMap::new(),
+                private_mode: false,
+                public_access: BTreeSet::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -233,6 +267,16 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                login_throttle: LoginThrottle::default(),
+                data_volume: std::sync::RwLock::new(None),
+                admin_bootstrap_failed: AtomicBool::new(false),
+                notification_probes: std::sync::RwLock::new(
+                    crate::notification_probes::NotificationProbes::default(),
+                ),
+                boot_anomalies: std::sync::RwLock::new(Vec::new()),
+                station_conditions: std::sync::RwLock::new(
+                    crate::station_conditions::ConditionsSnapshot::default(),
+                ),
             }),
         })
     }
@@ -364,6 +408,25 @@ impl AppState {
                     }
                 }
 
+                // The fourth signal, and the one the other three cannot be
+                // (DD-23): a delete paired with a back-dated insert leaves
+                // every count above exactly where it was and the copy
+                // permanently wrong. A per-day fingerprint of the rows both
+                // stores carry sees it, and only the days that differ are
+                // rebuilt.
+                match adb.repair_drift(&conn) {
+                    Ok(days) if days.is_empty() => {}
+                    Ok(days) => tracing::warn!(
+                        days = days.len(),
+                        first = %days[0],
+                        last = %days[days.len() - 1],
+                        "analytics copy held different rows from the database on some days; repaired"
+                    ),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "analytics day-fingerprint drift check failed (non-fatal)");
+                    }
+                }
+
                 // Recording effort: the denominator every effort-corrected
                 // analytic divides by. Small and mutable (today's row is
                 // incremented every five minutes), so it is replaced wholesale
@@ -394,6 +457,18 @@ impl AppState {
 
                 Some(Mutex::new(adb))
             }
+            Err(e @ birdnet_behavioral::connection::AnalyticsError::Locked(_)) => {
+                // Another process has the store (DD-25). It was left alone, and
+                // this start runs without analytics: a second instance on one
+                // data directory is stopped by the instance lock before it gets
+                // here, so this is a restart overlapping a very slow shutdown.
+                tracing::error!(
+                    error = %e,
+                    "DuckDB analytics database is held by another process; analytics are \
+                     off for this start and the file was not touched"
+                );
+                None
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "DuckDB analytics database not available (non-fatal)");
                 None
@@ -415,6 +490,9 @@ impl AppState {
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                species_codes: HashMap::new(),
+                private_mode: false,
+                public_access: BTreeSet::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -427,6 +505,16 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                login_throttle: LoginThrottle::default(),
+                data_volume: std::sync::RwLock::new(None),
+                admin_bootstrap_failed: AtomicBool::new(false),
+                notification_probes: std::sync::RwLock::new(
+                    crate::notification_probes::NotificationProbes::default(),
+                ),
+                boot_anomalies: std::sync::RwLock::new(Vec::new()),
+                station_conditions: std::sync::RwLock::new(
+                    crate::station_conditions::ConditionsSnapshot::default(),
+                ),
             }),
         })
     }
@@ -453,6 +541,9 @@ impl AppState {
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                species_codes: HashMap::new(),
+                private_mode: false,
+                public_access: BTreeSet::new(),
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
@@ -465,6 +556,16 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                login_throttle: LoginThrottle::default(),
+                data_volume: std::sync::RwLock::new(None),
+                admin_bootstrap_failed: AtomicBool::new(false),
+                notification_probes: std::sync::RwLock::new(
+                    crate::notification_probes::NotificationProbes::default(),
+                ),
+                boot_anomalies: std::sync::RwLock::new(Vec::new()),
+                station_conditions: std::sync::RwLock::new(
+                    crate::station_conditions::ConditionsSnapshot::default(),
+                ),
             }),
         }
     }
@@ -515,6 +616,39 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_info_site");
         Self {
             inner: rebuild_inner(inner, |s| s.info_site = site),
+        }
+    }
+
+    /// Install the eBird species codes the species page links with (NP-1),
+    /// as (scientific name, code) pairs; the lookup is case-insensitive on
+    /// the name.
+    #[must_use]
+    pub fn with_species_codes<I, S, C>(self, codes: I) -> Self
+    where
+        I: IntoIterator<Item = (S, C)>,
+        S: AsRef<str>,
+        C: Into<String>,
+    {
+        let map: HashMap<String, String> = codes
+            .into_iter()
+            .map(|(sci, code)| (sci.as_ref().to_lowercase(), code.into()))
+            .collect();
+        let inner = unwrap_inner(self.inner, "with_species_codes");
+        Self {
+            inner: rebuild_inner(inner, |s| s.species_codes = map),
+        }
+    }
+
+    /// Put the whole public surface behind the sign-in (O-4), leaving only
+    /// `public` open. See [`crate::private_mode`].
+    #[must_use]
+    pub fn with_private_mode(self, public: BTreeSet<PublicAccess>) -> Self {
+        let inner = unwrap_inner(self.inner, "with_private_mode");
+        Self {
+            inner: rebuild_inner(inner, |s| {
+                s.private_mode = true;
+                s.public_access = public;
+            }),
         }
     }
 
@@ -907,6 +1041,7 @@ impl AppState {
                     // conversion migration 32's trigger just made on the SQLite
                     // side — rather than from the offset in force now.
                     detected_at_utc: instant,
+                    run_id: row.run_id,
                 })
             })
         {
@@ -1102,6 +1237,94 @@ impl AppState {
         Arc::clone(&self.inner.ingest_halted)
     }
 
+    /// The sign-in throttle (O-6): failed attempts per client address.
+    #[must_use]
+    pub fn login_throttle(&self) -> &LoginThrottle {
+        &self.inner.login_throttle
+    }
+
+    /// The data volume's last probe, if the watch has run.
+    #[must_use]
+    pub fn data_volume(&self) -> Option<crate::data_volume::DataVolumeStatus> {
+        self.inner
+            .data_volume
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
+    /// Publish a data-volume probe (the watch, and tests standing in for it).
+    pub fn set_data_volume(&self, status: crate::data_volume::DataVolumeStatus) {
+        if let Ok(mut guard) = self.inner.data_volume.write() {
+            *guard = Some(status);
+        }
+    }
+
+    /// Install the channel probes the binary configured (DD-24).
+    pub fn set_notification_probes(&self, probes: crate::notification_probes::NotificationProbes) {
+        if let Ok(mut guard) = self.inner.notification_probes.write() {
+            *guard = probes;
+        }
+    }
+
+    /// The channel probes, absent ones included.
+    #[must_use]
+    pub fn notification_probes(&self) -> crate::notification_probes::NotificationProbes {
+        self.inner
+            .notification_probes
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    /// Publish what the station-health evaluation just found.
+    pub fn set_station_conditions(&self, snapshot: crate::station_conditions::ConditionsSnapshot) {
+        if let Ok(mut guard) = self.inner.station_conditions.write() {
+            *guard = snapshot;
+        }
+    }
+
+    /// The station-health conditions as last evaluated; `evaluated_at` is
+    /// `None` until the first evaluation.
+    #[must_use]
+    pub fn station_conditions(&self) -> crate::station_conditions::ConditionsSnapshot {
+        self.inner
+            .station_conditions
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    /// Record what the boot journal found at this start.
+    pub fn set_boot_anomalies(&self, anomalies: Vec<crate::boot_journal::Anomaly>) {
+        if let Ok(mut guard) = self.inner.boot_anomalies.write() {
+            *guard = anomalies;
+        }
+    }
+
+    /// What the boot journal found at this start; empty when nothing.
+    #[must_use]
+    pub fn boot_anomalies(&self) -> Vec<crate::boot_journal::Anomaly> {
+        self.inner
+            .boot_anomalies
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    /// Record that the admin-password bootstrap failed at start.
+    pub fn set_admin_bootstrap_failed(&self, failed: bool) {
+        self.inner
+            .admin_bootstrap_failed
+            .store(failed, Ordering::Relaxed);
+    }
+
+    /// Whether the admin-password bootstrap failed at start.
+    #[must_use]
+    pub fn admin_bootstrap_failed(&self) -> bool {
+        self.inner.admin_bootstrap_failed.load(Ordering::Relaxed)
+    }
+
     /// Whether the per-detection writes are currently refused.
     #[must_use]
     pub fn ingest_halted(&self) -> bool {
@@ -1225,6 +1448,29 @@ impl AppState {
     /// Get the species info link site ("ebird", "allaboutbirds", or "none").
     pub fn info_site(&self) -> &str {
         &self.inner.info_site
+    }
+
+    /// Whether the public surface is behind the sign-in (O-4).
+    #[must_use]
+    pub fn private_mode(&self) -> bool {
+        self.inner.private_mode
+    }
+
+    /// The surfaces left open on a private station (O-4). Empty unless
+    /// [`Self::private_mode`] is set.
+    #[must_use]
+    pub fn public_access(&self) -> &BTreeSet<PublicAccess> {
+        &self.inner.public_access
+    }
+
+    /// The eBird species code for a scientific name, if the station's label
+    /// file supplied one (NP-1).
+    #[must_use]
+    pub fn ebird_species_code(&self, scientific_name: &str) -> Option<&str> {
+        self.inner
+            .species_codes
+            .get(&scientific_name.to_lowercase())
+            .map(String::as_str)
     }
 
     /// Shared handle to the detection-daemon-running flag, for the orchestrator

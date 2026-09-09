@@ -15,7 +15,8 @@ use std::path::Path;
 use ort::session::Session;
 use ort::value::{Tensor, ValueType};
 
-use crate::detection::types::Detection;
+use crate::detection::privacy::names_a_human;
+use crate::detection::types::{ChunkPrediction, Detection};
 use crate::inference::labels::LabelSet;
 
 /// Errors during model loading or inference.
@@ -93,6 +94,9 @@ pub struct BirdNetModel {
     /// on every 3-second inference. `&mut self` in `predict`, so a plain bool
     /// suffices (no atomics).
     warned_label_count_mismatch: bool,
+    /// Output indices whose label names a human class, found once at load so
+    /// the per-chunk human score is a lookup rather than a scan of every label.
+    human_indices: Vec<usize>,
 }
 
 impl fmt::Debug for BirdNetModel {
@@ -193,6 +197,7 @@ impl BirdNetModel {
             "model loaded successfully"
         );
 
+        let human_indices = human_indices(&labels);
         Ok(Self {
             session,
             labels,
@@ -200,6 +205,7 @@ impl BirdNetModel {
             input_shape,
             is_probability_output,
             warned_label_count_mismatch: false,
+            human_indices,
         })
     }
 
@@ -221,6 +227,7 @@ impl BirdNetModel {
         let input_shape = extract_input_shape(&session)?;
         let is_probability_output = output_is_probability(&input_shape);
 
+        let human_indices = human_indices(&labels);
         Ok(Self {
             session,
             labels,
@@ -228,6 +235,7 @@ impl BirdNetModel {
             input_shape,
             is_probability_output,
             warned_label_count_mismatch: false,
+            human_indices,
         })
     }
 
@@ -255,11 +263,6 @@ impl BirdNetModel {
     /// # Errors
     ///
     /// Returns `InferenceError` if the input shape is wrong or inference fails.
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
     pub fn predict(
         &mut self,
         audio: &[f32],
@@ -269,6 +272,36 @@ impl BirdNetModel {
         end_secs: f32,
         week: u32,
     ) -> Result<Vec<Detection>, InferenceError> {
+        self.predict_chunk(audio, date, time, start_secs, end_secs, week)
+            .map(|chunk| chunk.detections)
+    }
+
+    /// Run inference on one chunk and report both its detections and its
+    /// human score.
+    ///
+    /// The detections are what [`Self::predict`] returns. The human score is
+    /// the highest confidence among the label set's human classes, read from
+    /// the model output before the confidence threshold and top-N cut, so the
+    /// privacy filter can judge a chunk on the model's own evidence rather
+    /// than on whether a human class happened to survive the detection cut.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InferenceError` if the input shape is wrong or inference fails.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    pub fn predict_chunk(
+        &mut self,
+        audio: &[f32],
+        date: &str,
+        time: &str,
+        start_secs: f32,
+        end_secs: f32,
+        week: u32,
+    ) -> Result<ChunkPrediction, InferenceError> {
         let input_tensor = self.build_input_tensor(audio)?;
 
         let outputs = self
@@ -386,7 +419,22 @@ impl BirdNetModel {
         // Take top-N
         detections.truncate(self.config.top_n);
 
-        Ok(detections)
+        // The human score comes from the same output, before either cut above:
+        // a human class that scored below the detection threshold is exactly
+        // the case the privacy filter's own threshold exists to decide.
+        let human_score = self
+            .human_indices
+            .iter()
+            .filter_map(|&i| flat_logits.get(i))
+            .map(|&raw| {
+                compute_confidence(raw, self.config.sensitivity, self.is_probability_output)
+            })
+            .fold(0.0_f32, f32::max);
+
+        Ok(ChunkPrediction {
+            detections,
+            human_score,
+        })
     }
 
     /// Build the input tensor from audio samples.
@@ -474,6 +522,38 @@ impl BirdNetModel {
     /// Get the label set.
     pub const fn labels(&self) -> &LabelSet {
         &self.labels
+    }
+
+    /// The width of the model's class output — how many classes it scores —
+    /// or `None` when the output's last dimension is dynamic.
+    ///
+    /// Read from the session's output metadata, from the same output
+    /// [`Self::predict_chunk`] scores (`predictions` on a two-output V3.0
+    /// model, the only output on V2.4). A model whose width is not the label
+    /// count is mispaired with its labels file or is not the model its name
+    /// says: species are assigned positionally, so every row it produces is
+    /// suspect. The doctor compares this with the label count before a
+    /// station runs on it (ON-9).
+    #[must_use]
+    pub fn output_dimension(&self) -> Option<usize> {
+        let outputs = self.session.outputs();
+        let output = outputs.get(usize::from(outputs.len() > 1))?;
+        match output.dtype() {
+            ValueType::Tensor { shape, .. } => shape
+                .last()
+                .copied()
+                .and_then(|d| usize::try_from(d).ok())
+                .filter(|d| *d >= 1),
+            _ => None,
+        }
+    }
+
+    /// Whether the label set names at least one human class.
+    ///
+    /// Without one the human score is always `0.0` and the privacy filter can
+    /// never fire, which an operator who enabled it needs to be told.
+    pub const fn has_human_labels(&self) -> bool {
+        !self.human_indices.is_empty()
     }
 
     /// Get the model configuration.
@@ -587,6 +667,15 @@ pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f
     } else {
         sigmoid(sensitivity * raw)
     }
+}
+
+/// Output indices of every label that names a human class.
+fn human_indices(labels: &LabelSet) -> Vec<usize> {
+    labels
+        .iter()
+        .filter(|label| names_a_human(&label.scientific_name, &label.common_name))
+        .map(|label| label.index)
+        .collect()
 }
 
 /// Apply sigmoid function: `1 / (1 + exp(-x))`.
@@ -1310,6 +1399,172 @@ mod tests {
         assert!(
             new_path > old_buggy_path + 0.2,
             "the fix must lift confidence by > 0.2 on this anchor"
+        );
+    }
+
+    // ─── the human score (S-5) ──────────────────────────────────────────
+
+    /// Eleven labels, with a human class at output index 3.
+    fn labels_with_a_human_at_3() -> LabelSet {
+        LabelSet::from_entries(
+            (0..11)
+                .map(|i| {
+                    if i == 3 {
+                        ("Homo sapiens".to_string(), "Human".to_string())
+                    } else {
+                        (format!("Species_{i}"), format!("Bird {i}"))
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    /// The tiny V3.0 model's `predictions` output is a slice of its input, so
+    /// output `i` is `audio[i]`: this puts every other class at 0.5 and the
+    /// human class at `human`.
+    fn audio_with_human_at(human: f32) -> Vec<f32> {
+        let mut audio = vec![0.5_f32; 96_000];
+        audio[3] = human;
+        audio
+    }
+
+    /// The human score is read before the detection threshold and the top-N
+    /// cut, so the privacy filter's threshold can bind on it.
+    ///
+    /// Speech at 0.02 never becomes a detection at a threshold of 0.1, and
+    /// under the inherited design that was the end of it: the privacy filter
+    /// scanned the detection list, found no human, and its own threshold never
+    /// mattered. Here the score is 0.02 whatever the detection threshold is.
+    #[test]
+    fn the_human_score_does_not_depend_on_the_detection_threshold_or_top_n() {
+        let audio = audio_with_human_at(0.02);
+        let chunk = |threshold: f32, top_n: usize| {
+            let mut m = BirdNetModel::load_from_bytes(
+                TINY_V30_MODEL,
+                labels_with_a_human_at_3(),
+                ModelConfig {
+                    confidence_threshold: threshold,
+                    top_n,
+                    ..ModelConfig::default()
+                },
+            )
+            .expect("tiny V3.0 model loads");
+            m.predict_chunk(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
+                .expect("predict")
+        };
+
+        let lenient = chunk(0.1, 10);
+        assert!(
+            lenient
+                .detections
+                .iter()
+                .all(|d| !names_a_human(&d.scientific_name, &d.common_name)),
+            "speech at 0.02 must not be a detection at a threshold of 0.1: {:?}",
+            lenient.detections
+        );
+        assert!(
+            (lenient.human_score - 0.02).abs() < 1e-6,
+            "the human score must be the model's own 0.02, got {}",
+            lenient.human_score
+        );
+
+        // Raising the detection threshold until nothing is detected, and
+        // cutting top-N to one, must leave the score exactly where it was.
+        let strict = chunk(0.9, 1);
+        assert!(strict.detections.is_empty(), "{:?}", strict.detections);
+        assert!(
+            (strict.human_score - lenient.human_score).abs() < 1e-6,
+            "the detection threshold changed the human score: {} vs {}",
+            strict.human_score,
+            lenient.human_score
+        );
+    }
+
+    /// Counterpart: a label set without a human class scores every chunk 0.0
+    /// and says so, however loud the audio is.
+    #[test]
+    fn a_model_without_a_human_class_never_scores_one() {
+        let mut m = load_tiny_v30();
+        assert!(!m.has_human_labels());
+        let chunk = m
+            .predict_chunk(
+                &audio_with_human_at(0.99),
+                "2026-05-19",
+                "09:00:00",
+                0.0,
+                3.0,
+                20,
+            )
+            .expect("predict");
+        assert!((chunk.human_score - 0.0).abs() < f32::EPSILON);
+
+        let m = BirdNetModel::load_from_bytes(
+            TINY_V30_MODEL,
+            labels_with_a_human_at_3(),
+            ModelConfig::default(),
+        )
+        .expect("tiny V3.0 model loads");
+        assert!(m.has_human_labels());
+    }
+
+    /// On the logit path the score goes through the same sensitivity-scaled
+    /// sigmoid as a detection's confidence, so the two are on one scale.
+    #[test]
+    fn the_human_score_is_on_the_confidence_scale() {
+        let mut m = BirdNetModel::load_from_bytes(
+            TINY_V24_MODEL,
+            labels_with_a_human_at_3(),
+            ModelConfig {
+                confidence_threshold: 0.0,
+                sensitivity: 1.25,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("tiny V2.4 model loads");
+        let mut audio = vec![0.5_f32; 144_000];
+        audio[3] = 0.9;
+        let chunk = m
+            .predict_chunk(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
+            .expect("predict");
+        let human = chunk
+            .detections
+            .iter()
+            .find(|d| d.common_name == "Human")
+            .expect("at threshold 0.0 the human class is a detection");
+        assert!(
+            (chunk.human_score - human.confidence).abs() < 1e-6,
+            "score {} vs detection confidence {}",
+            chunk.human_score,
+            human.confidence
+        );
+        assert!(
+            (chunk.human_score - compute_confidence(0.9, 1.25, false)).abs() < 1e-6,
+            "sensitivity must scale the score as it scales a detection"
+        );
+    }
+
+    /// ON-9: the class width is read from the model, not assumed, and a
+    /// labels file of the wrong length is detectable before any inference.
+    #[test]
+    fn the_output_dimension_is_the_class_width_of_the_scored_output() {
+        let v30 = load_tiny_v30();
+        assert_eq!(
+            v30.output_dimension(),
+            Some(11),
+            "the V3.0 predictions output"
+        );
+        let v24 = load_tiny_v24();
+        assert_eq!(v24.output_dimension(), Some(11), "the V2.4 single output");
+        let short = BirdNetModel::load_from_bytes(
+            TINY_V30_MODEL,
+            LabelSet::from_entries(vec![("A".into(), "a".into())]),
+            ModelConfig::default(),
+        )
+        .expect("loads with any labels");
+        assert_ne!(
+            short.output_dimension(),
+            Some(short.labels().len()),
+            "a one-label file does not match an eleven-class model"
         );
     }
 }

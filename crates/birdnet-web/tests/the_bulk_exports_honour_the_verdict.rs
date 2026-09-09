@@ -22,12 +22,12 @@ fn station_with_a_rejected_detection() -> AppState {
     conn.execute_batch(
         "INSERT INTO detections
              (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
-              File_Name, chunk_offset_secs, review_verdict)
+              File_Name, chunk_offset_secs, Duration_Secs, review_verdict)
          VALUES
              ('2026-09-07', '06:00:00', 'Turdus merula', 'Eurasian Blackbird',
-              0.91, 0.7, 36, 1.25, 0.0, 'kept.wav', 0, NULL),
+              0.91, 0.7, 36, 1.25, 0.0, 'kept.wav', 0, 6.0, NULL),
              ('2026-09-07', '06:10:00', 'Cuculus canorus', 'Common Cuckoo',
-              0.88, 0.7, 36, 1.25, 0.0, 'rejected.wav', 0, 'rejected');",
+              0.88, 0.7, 36, 1.25, 0.0, 'rejected.wav', 0, 6.0, 'rejected');",
     )
     .expect("seed");
     AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
@@ -52,6 +52,7 @@ async fn a_rejected_detection_is_in_none_of_the_bulk_exports() {
         "/api/v2/detections/export",
         "/api/v2/detections/export?format=json",
         "/api/v2/detections/export/birddb",
+        "/api/v2/detections/export/raven",
     ] {
         let (status, body) = get(&state, path).await;
         assert_eq!(status, StatusCode::OK, "{path}: {body}");

@@ -1,6 +1,6 @@
 # Remote Access & Security
 
-By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); signing in is required for the `/admin*` panel, the Station management tabs and every action that changes something** — with a password a fresh install sets for you. This page covers reaching the station from your network and from elsewhere, safely.
+By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); signing in is required for the `/admin*` panel, the Station management tabs and every action that changes something** — with a password a fresh install sets for you. For a station reachable from beyond the LAN, [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in) puts the dashboard itself behind that sign-in. This page covers reaching the station from your network and from elsewhere, safely.
 
 ## On your local network
 
@@ -43,7 +43,12 @@ and the server certificate is signed by it. Import the CA once — into your
 browser, your OS trust store, or `curl --cacert` — and the warning stops. It
 keeps working when the server certificate rotates (the CA is good for ten
 years; the certificate it signs for 397 days and is replaced a month before it
-expires), so you do this once per station, not once per year.
+expires — checked once a day while the station runs, and swapped in without a
+restart), so you do this once per station, not once per year. On a Pi whose
+clock has not been set yet (no battery-backed clock, NTP not yet reached) no
+certificate is minted: the station serves plain HTTP on the same address,
+says so in the journal and in `--doctor`, and restarts itself to mint one as
+soon as the clock is set.
 
 To serve **only** HTTPS on the usual port, point both at the same address:
 

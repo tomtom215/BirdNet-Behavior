@@ -178,6 +178,10 @@ fn approving_a_quarantined_detection_admits_it_to_the_olap_copy() {
                     lat: None,
                     lon: None,
                     week: None,
+                    run_id: None,
+                    cutoff: None,
+                    sensitivity: None,
+                    overlap: None,
                 },
             )
         })
@@ -291,6 +295,59 @@ fn a_station_that_already_diverged_repairs_itself_on_the_next_start() {
         2,
         "an already-diverged station stayed diverged across a restart"
     );
+}
+
+/// DD-23: drift that nets to zero — a delete and a back-dated insert on the
+/// same day — leaves every count the startup check compares unchanged and
+/// used to leave the copy wrong for ever. Verified as `adversity-8` with
+/// exactly these two writes: owl sqlite 1 / duckdb 0, robin sqlite 0 /
+/// duckdb 1, totals equal.
+#[test]
+fn a_station_whose_drift_nets_to_zero_repairs_itself_on_the_next_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    assert_eq!(olap_count(&state), 3, "fixture");
+
+    state.with_db(|conn| {
+        conn.execute(
+            "DELETE FROM detections WHERE Date = ?1 AND Sci_Name = 'Erithacus rubecula'",
+            rusqlite::params![&today],
+        )
+        .expect("delete in SQLite alone");
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+             VALUES (?1, '03:10:00', 'Strix aluco', 'Tawny Owl', 0.91)",
+            rusqlite::params![&today],
+        )
+        .expect("back-dated insert in SQLite alone");
+    });
+    // Vacuity guard: the totals agree, so the count-based check is blind.
+    let sqlite_total: i64 = state.with_db(|conn| {
+        conn.query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .expect("count")
+    });
+    assert_eq!(sqlite_total, 3);
+    assert_eq!(olap_count(&state), 3);
+    assert_eq!(olap_count_of(&state, "Strix aluco"), 0, "the copy is wrong");
+    drop(state);
+
+    let reopened = AppState::new_with_analytics(
+        dir.path().join("birds.db"),
+        &dir.path().join("analytics.duckdb"),
+    )
+    .expect("analytics state reopens");
+
+    assert_eq!(
+        olap_count_of(&reopened, "Strix aluco"),
+        1,
+        "the back-dated owl never reached the analytics copy"
+    );
+    assert_eq!(
+        olap_count_of(&reopened, "Erithacus rubecula"),
+        0,
+        "the deleted robin is still counted in the analytics copy"
+    );
+    assert_eq!(olap_count(&reopened), 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +708,7 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
                 overlap: Some(0.0),
                 file_name: "rec.wav",
                 detected_at_utc: instant,
+                run_id: None,
             })
             .expect("live insert");
         })

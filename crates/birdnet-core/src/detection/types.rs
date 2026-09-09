@@ -29,6 +29,25 @@ pub struct Detection {
     pub file_name_extr: Option<String>,
 }
 
+/// What one inference pass says about one chunk of audio.
+///
+/// The detections are the species that cleared the confidence threshold and
+/// the top-N cut. The human score is read from the same model output *before*
+/// either cut, so it is available whether or not any human class was confident
+/// enough to become a detection — a detection list contains a human label only
+/// when speech scored above the *detection* threshold, and a privacy filter
+/// that reads the list is therefore tuned by the detection threshold, whatever
+/// its own setting says.
+#[derive(Debug, Clone, Default)]
+pub struct ChunkPrediction {
+    /// Species detections, sorted by confidence descending, at most top-N.
+    pub detections: Vec<Detection>,
+    /// The highest confidence the model gave any human class (speech,
+    /// whistling, other human sounds) for this chunk, on the same scale as
+    /// [`Detection::confidence`]. `0.0` when the label set has no human class.
+    pub human_score: f32,
+}
+
 impl Detection {
     /// Confidence as integer percentage (0-100).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

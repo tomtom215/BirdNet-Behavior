@@ -177,6 +177,32 @@ pub(super) fn decide_disposition(
     DispositionDecision::Accept { threshold: floor }
 }
 
+/// The confidence bar in force for a detection, whatever else is decided
+/// about it: what [`decide_disposition`] would admit or quarantine it at.
+/// `None` when it is below the global floor with no per-species override,
+/// which is a drop and never a row (DD-9).
+pub(super) fn applicable_threshold(
+    confidence: f32,
+    sci_name: &str,
+    per_species_thresholds: &HashMap<String, f64>,
+    global_confidence: f32,
+    dynamic: Option<&DynamicThresholds>,
+    now_ms: i64,
+) -> Option<f64> {
+    match decide_disposition(
+        confidence,
+        sci_name,
+        per_species_thresholds,
+        global_confidence,
+        dynamic,
+        now_ms,
+    ) {
+        DispositionDecision::Accept { threshold }
+        | DispositionDecision::Quarantine { threshold } => Some(threshold),
+        DispositionDecision::DropBelowGlobal => None,
+    }
+}
+
 /// Wall-clock milliseconds since the Unix epoch.
 ///
 /// The dynamic-threshold tracker takes time as a parameter so its rules are
@@ -321,6 +347,37 @@ mod tests {
     /// judged against a different one would make the review queue unreadable:
     /// the operator sees "below 0.90" on a detection that was in fact measured
     /// against 0.675.
+    /// The bar a detection was judged against, for the row (DD-9): the
+    /// per-species figure when there is one, accepted or quarantined; the
+    /// global floor otherwise; and nothing at all for a detection under the
+    /// global floor, which is a drop and never a row.
+    #[test]
+    fn the_applicable_threshold_is_the_bar_the_detection_was_judged_against() {
+        let t = thresholds(&[("Strix aluco", 0.90)]);
+        let none = HashMap::new();
+
+        // The global floor arrives as `f32` and is widened, so the row
+        // carries the widened value, not the literal.
+        assert_eq!(
+            applicable_threshold(0.80, "Pica pica", &none, 0.70, None, 0),
+            Some(f64::from(0.70_f32))
+        );
+        assert_eq!(
+            applicable_threshold(0.60, "Pica pica", &none, 0.70, None, 0),
+            None
+        );
+        assert_eq!(
+            applicable_threshold(0.95, "Strix aluco", &t, 0.70, None, 0),
+            Some(0.90),
+            "accepted against the per-species bar"
+        );
+        assert_eq!(
+            applicable_threshold(0.60, "Strix aluco", &t, 0.70, None, 0),
+            Some(0.90),
+            "quarantined, and the row says what it missed"
+        );
+    }
+
     #[test]
     fn a_quarantine_reports_the_threshold_that_was_actually_applied() {
         let d = confirmed("Strix aluco");

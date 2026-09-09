@@ -41,6 +41,9 @@ use helpers::{run_backup, run_integrity_check};
 enum Action {
     /// `--check-db`: run a `SQLite` integrity check and exit.
     CheckDb,
+    /// `--apply-config`: validate and install a configuration file, restart,
+    /// and exit. The path is read from the CLI at dispatch.
+    ApplyConfig,
     /// `--backup-db`: take a hot backup and exit.
     BackupDb,
     /// `--refresh-extension`: reinstall the behavioral `DuckDB` extension and exit.
@@ -81,6 +84,8 @@ enum Action {
 const fn dispatch_subcommand(cli: &Cli) -> Action {
     if cli.check_db {
         Action::CheckDb
+    } else if cli.apply_config.is_some() {
+        Action::ApplyConfig
     } else if cli.backup_db {
         Action::BackupDb
     } else if cli.refresh_extension {
@@ -206,6 +211,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = match birdnet_core::config::Config::load_from(&cli.config) {
         Ok(c) => {
             tracing::info!(model = c.get_or("MODEL", "unknown"), "configuration loaded");
+            // A key nothing reads is a setting the operator believes is in
+            // force and is not: say so here, where the journal is read, as
+            // well as in the doctor.
+            for unknown in c.unknown_keys() {
+                tracing::warn!(
+                    key = %unknown.key,
+                    config = %cli.config.display(),
+                    "{unknown}"
+                );
+            }
             Some(c)
         }
         Err(e) => {
@@ -214,12 +229,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    for unknown in helpers::env_keys::unknown_env_vars() {
+        tracing::warn!(name = %unknown.name, "{unknown}");
+    }
+
     // Maintenance commands and the doctor preflight each run and exit before
     // any subsystem is constructed. The decision is a pure function so its
     // precedence is unit-tested; `main` only carries out the chosen action,
     // delegating the server orchestration to `app::run`.
     match dispatch_subcommand(&cli) {
         Action::CheckDb => return run_integrity_check(config.as_ref()),
+        Action::ApplyConfig => {
+            let candidate = cli.apply_config.clone().unwrap_or_default();
+            let code = helpers::startup_config::run_apply_config(&candidate, &cli.config);
+            std::process::exit(code);
+        }
         Action::BackupDb => return run_backup(config.as_ref()),
         Action::RefreshExtension => return helpers::run_refresh_extension(&cli, config.as_ref()),
         Action::VerifyExtension => return helpers::run_verify_extension(&cli, config.as_ref()),

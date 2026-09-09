@@ -66,6 +66,23 @@ impl MqttClient {
         Self { config }
     }
 
+    /// Publish a test message to `{prefix}/test` and return the topic.
+    ///
+    /// What "Test all channels" sends: a real publish through the same
+    /// connect-and-publish path a detection takes, so a broker that is dead,
+    /// refusing the credentials or on the wrong port fails here the way it
+    /// fails there. Never retained — a test must not become the last value
+    /// a subscriber sees.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MqttError`] if the connection or publish fails.
+    pub fn publish_test(&self, payload: &[u8]) -> Result<String, MqttError> {
+        let topic = format!("{}/test", self.config.topic_prefix.trim_end_matches('/'));
+        publisher::publish_with(&self.config, &topic, payload, false)?;
+        Ok(topic)
+    }
+
     /// Publish a bird detection event to the broker.
     ///
     /// Topic: `{prefix}/detection/{species_safe}` where `species_safe`

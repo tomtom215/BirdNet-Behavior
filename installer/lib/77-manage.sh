@@ -173,6 +173,9 @@ do_uninstall() {
     fi
 
     rm -f "${SERVICE_FILE}" '/etc/systemd/system/tmp-birdnet\x2dstream.mount'
+    # The journald drop-in goes too; the persisted journal itself stays,
+    # since it is the host's record and may hold what the operator came for.
+    rm -f "${JOURNALD_DROPIN}"
 
     if command -v systemctl >/dev/null 2>&1; then
         systemctl daemon-reload 2>/dev/null || true
@@ -239,6 +242,10 @@ verify_uninstall() {
     fi
     if [ -e "${SERVICE_FILE}" ]; then
         warn "service unit still present: ${SERVICE_FILE}"
+        problems=1
+    fi
+    if [ -e "${JOURNALD_DROPIN}" ]; then
+        warn "journald drop-in still present: ${JOURNALD_DROPIN}"
         problems=1
     fi
     # Captured, not piped into `grep -q`: `systemctl list-unit-files` prints

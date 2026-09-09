@@ -97,10 +97,10 @@
 
   --fg:          oklch(22% 0.008 70);
   --fg-2:        oklch(40% 0.008 70);
-  --fg-3:        oklch(53% 0.008 70);
+  --fg-3:        oklch(49% 0.008 70);   /* 53% read 4.2-4.4:1 on the tinted surfaces (DD-29) */
   --fg-4:        oklch(55% 0.012 70);
 
-  --moss:        oklch(55% 0.09 150);
+  --moss:        oklch(52% 0.09 150);   /* 55% was 4.47:1 against --bg, just under AA (DD-29) */
   --moss-soft:   oklch(92% 0.04 150);
   --moss-ink:    oklch(35% 0.09 150);
   --on-moss:     oklch(100% 0 0);
@@ -109,7 +109,7 @@
   --dawn-soft:   oklch(94% 0.05 65);
   --dawn-ink:    oklch(42% 0.12 55);
 
-  --rare:        oklch(58% 0.16 28);
+  --rare:        oklch(50% 0.16 28);    /* 58% was 3.7:1 on --rare-soft (DD-29) */
   --rare-soft:   oklch(94% 0.05 28);
 
   --paper:       oklch(96% 0.012 75);
@@ -137,6 +137,12 @@
   --text:         var(--fg);
   --text-muted:   var(--fg-3);
   --accent:       var(--moss);
+  /* Text on a --moss / --rare fill: white in light, near-black in dark, where
+     the fills are bright and white on them measured 1.87:1 (DD-29). */
+  --on-fill:      #fff;
+  /* What a species hue is mixed towards when it is text: the avatar chip's
+     62 % lightness hue read 2.6-3.0:1 on its own tint (DD-29). */
+  --sp-ink:       oklch(10% 0 0);
   --accent-dim:   var(--moss-ink);
   --accent-rgb:   60, 120, 80;
   --success:      var(--moss);
@@ -161,7 +167,7 @@
 
   --fg:          oklch(97% 0.004 240);
   --fg-2:        oklch(80% 0.008 240);
-  --fg-3:        oklch(60% 0.010 240);
+  --fg-3:        oklch(64% 0.010 240);  /* 60% read 4.4:1 on the dark cards (DD-29) */
   --fg-4:        oklch(62% 0.014 240);
 
   --moss:        oklch(78% 0.18 150);
@@ -184,6 +190,8 @@
   --shadow-lg:   0 24px 60px oklch(0% 0 0 / .65), 0 0 0 0.5px oklch(100% 0 0 / .07);
 
   --warning:     var(--dawn);
+  --on-fill:     oklch(15% 0.02 150);
+  --sp-ink:      oklch(98% 0 0);
   --accent-rgb:  120, 200, 150;
 }
 
@@ -314,7 +322,9 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   width: 28px; height: 28px; border-radius: 50%;
   font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; letter-spacing: .5px;
   background: color-mix(in oklch, var(--sp, var(--moss)) 22%, var(--surface));
-  color: var(--sp, var(--moss-ink)); flex: 0 0 auto;
+  /* The hue keeps the species' identity; the mix towards --sp-ink is what
+     makes it readable on the tint in both themes (DD-29). */
+  color: color-mix(in oklch, var(--sp, var(--moss)) 62%, var(--sp-ink)); flex: 0 0 auto;
 }
 .bnb-avatar.sm { width: 24px; height: 24px; font-size: 9px; }
 .bnb-avatar.lg { width: 36px; height: 36px; font-size: 11px; }
@@ -1700,7 +1710,7 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 .bnb-add-form__hint {
   margin-left: auto;
   font-size: 10.5px;
-  color: var(--fg-4);
+  color: var(--fg-3);   /* --fg-4 at 10.5 px read 4.41:1 on the surface (DD-29) */
   letter-spacing: 0.04em;
 }
 
@@ -2489,6 +2499,7 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .bkr-stat-label   { margin-top: 6px; }
 .bkr-split        { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .bkr-main         { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.bkr-main > *     { min-width: 0; }
 .bkr-h1           { font-size: 34px; margin: 6px 0 4px; }
 .bkr-lede         { margin-bottom: 20px; }
 .bkr-mt           { margin-top: 16px; }
@@ -2512,7 +2523,13 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .bkr-storage-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 8px; }
 
 /* Snapshot rows */
-.bkr-snap-row     { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; border-top: 0.5px solid var(--hairline); }
+/* `minmax(0, 1fr)` and `min-width: 0` on the children (DD-30): a `1fr` track
+   is `minmax(auto, 1fr)`, so the snapshot's unbreakable `birds.db.backup.<stamp>`
+   name widened the track to its min-content and the page scrolled sideways at
+   390 px once a station had a single snapshot. The name may wrap anywhere. */
+.bkr-snap-row     { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; border-top: 0.5px solid var(--hairline); min-width: 0; }
+.bkr-snap-row > * { min-width: 0; }
+.bkr-snap-row .mono { overflow-wrap: anywhere; }
 .bkr-snap-row.today { background: var(--moss-soft); }
 .bkr-dot.auto     { background: var(--moss); }
 .bkr-dot.manual   { background: var(--dawn); }
@@ -2587,7 +2604,7 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .q-empty.ok    { color: var(--moss); }
 .q-stat-value.moss-ink { color: var(--moss-ink); }
 .q-stat-value.moss     { color: var(--moss); }
-.q-stat-value.dawn     { color: var(--dawn); }
+.q-stat-value.dawn     { color: var(--dawn-ink); }
 .q-stat-value.sm       { font-size: 1rem; }
 .q-stat-value.sm.muted { color: var(--fg-4); }
 .q-trend-legend { display: flex; justify-content: space-between; font-size: .75rem; color: var(--fg-4); margin-top: .25rem; }
@@ -2683,10 +2700,10 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .wk-nav-btn    { padding: 0.3rem 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); }
 /* Disabled "Next" was a bare <span> (padding + muted colour + opacity, no
    border/background) — keep it that way, not a bordered .wk-nav-btn. */
-.wk-nav-next-off { padding: 0.3rem 0.75rem; color: var(--text-muted); opacity: 0.4; }
+.wk-nav-next-off { padding: 0.3rem 0.75rem; color: var(--text-muted); }
 .wk-nav-center { flex: 1; text-align: center; }
 .wk-nav-title  { font-size: 1.1rem; }
-.wk-badge      { margin-left: 0.5rem; font-size: 0.8rem; background: var(--accent); color: #fff; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.wk-badge      { margin-left: 0.5rem; font-size: 0.8rem; background: var(--accent); color: var(--on-fill); padding: 0.1rem 0.4rem; border-radius: 4px; }
 .wk-stats      { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 .wk-card       { background: var(--bg-card); padding: 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
 .wk-card.center { text-align: center; }
@@ -2841,14 +2858,14 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .qz-actions    { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
 .qz-btn-group  { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .qz-btn        { padding: 0.25rem 0.6rem; border-radius: var(--radius); cursor: pointer; font-size: 0.8rem; white-space: nowrap; }
-.qz-btn.approve { background: var(--success); color: #fff; border: none; }
+.qz-btn.approve { background: var(--success); color: var(--on-fill); border: none; }
 .qz-btn.reject  { background: none; border: 1px solid var(--warning); color: var(--warning); }
 .qz-btn.delete  { background: none; border: 1px solid var(--danger); color: var(--danger); }
 .qz-btn.share   { background: none; border: 1px solid var(--border); color: var(--text); }
 .qz-loadmore-row { text-align: center; padding: 1rem; }
 .qz-loadmore   { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 1.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.9rem; }
 .qz-err        { color: var(--danger); }
-.qz-pending-badge { background: var(--warning); color: #000; border-radius: 9999px; padding: 0.1rem 0.45rem; font-size: 0.7rem; font-weight: 700; margin-left: 0.25rem; }
+.qz-pending-badge { background: var(--warning); color: var(--on-fill); border-radius: 9999px; /* #000 on the light --warning read about 3.5:1 (UX-17) */ padding: 0.1rem 0.45rem; font-size: 0.7rem; font-weight: 700; margin-left: 0.25rem; }
 
 /* ── Behavioral analytics partials (/analytics) — O-25 harmonisation ───────
    Faithful extraction of the static inline styles the behavioral.rs HTMX
@@ -3354,7 +3371,7 @@ a.dr-link      { color: var(--fg); text-decoration: underline; }
 a.dr-row-name  { font-weight: 600; color: var(--fg); }
 .dr-row-sci    { color: var(--fg-3); font-size: 0.8rem; font-style: italic; }
 .dr-row-meta   { color: var(--fg-3); font-size: 0.8rem; }
-.dr-confirm-btn { background: var(--moss); color: var(--bg); border: none; white-space: nowrap; }
+.dr-confirm-btn { background: var(--moss); color: var(--on-fill); border: none; white-space: nowrap; }
 .dr-nowrap     { white-space: nowrap; }
 .dr-vrow       { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.5rem 0; border-top: 0.5px solid var(--hairline); }
 .dr-vrow-main  { flex: 1 1 180px; min-width: 0; font-weight: 500; }
@@ -3395,7 +3412,7 @@ a.dr-row-name  { font-weight: 600; color: var(--fg); }
 .img-field-row  { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 input.img-input      { flex: 1; min-width: 150px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
 input.img-input-wide { flex: 2; min-width: 250px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
-.img-add-btn    { padding: 0.4rem 1rem; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); cursor: pointer; }
+.img-add-btn    { padding: 0.4rem 1rem; background: var(--accent); color: var(--on-fill); border: none; border-radius: var(--radius); cursor: pointer; }
 .img-table      { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .img-thead-row  { background: var(--bg-hover); }
 .img-th         { padding: 0.5rem; text-align: left; }
@@ -3665,7 +3682,7 @@ a.sr-about       { color: var(--fg-3); }
 .ga-card       { padding: 0; overflow: hidden; transition: transform 0.15s, box-shadow 0.15s; cursor: pointer; }
 .ga-thumb      { height: 120px; overflow: hidden; position: relative; }
 .ga-thumb-bg   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.ga-code       { font-size: 1.7rem; letter-spacing: 0.04em; }
+.ga-code       { font-size: 1.7rem; letter-spacing: 0.04em; color: color-mix(in oklch, var(--sp, var(--moss)) 62%, var(--sp-ink)); }
 .ga-img        { position: relative; width: 100%; height: 100%; object-fit: cover; }
 .ga-body       { padding: 0.75rem; }
 .ga-name       { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

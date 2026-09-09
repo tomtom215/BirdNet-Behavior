@@ -16,9 +16,9 @@ The automatic schedule runs on **elapsed wall-clock time, not uptime**, so a sta
 
 ## Restoring
 
-**Restore from file** takes a full backup archive and unpacks it over the current database and recordings.
+**Restore from file** takes a full backup archive and puts its database and recordings in place of the current ones. The station first checks that the disk can hold the archive's contents with headroom, refuses an archive whose database is not named as this station's, stops recording detections, unpacks the archive beside the database and integrity-checks the copy there, and only then swaps the files in (the database by rename, so the running process is never left reading a half-written file; recordings merged clip by clip, so clips the archive lacks are kept). Under systemd the station restarts itself to load the result; elsewhere it tells you to.
 
-> **Restoring is destructive and cannot be undone.** It overwrites what is on the station now, and the station does **not** snapshot the current state first. Download a full backup before you restore, then restart the service when it finishes.
+> **Restoring is destructive and cannot be undone.** It replaces what is on the station now, and the station does **not** snapshot the current state first. Download a full backup before you restore. Detections stay paused until the restart that follows.
 >
 > The archive's contents are not signed or verified — only restore an archive you produced yourself and trust.
 
@@ -28,10 +28,11 @@ Individual snapshots can be downloaded and deleted from the snapshot list, so yo
 
 Your detection data is yours, in formats other tools read:
 
-- **Detections (CSV or JSON)** — every detection the station stands behind, with date, species and confidence. Rows a reviewer rejected, and imported rows on a station that excludes imports from its analytics, are left out; the same rule the charts use.
+- **Detections (CSV or JSON)** — every detection the station stands behind, with date, species and confidence. Rows a reviewer rejected, and imported rows on a station that excludes imports from its analytics, are left out; the same rule the charts use. `Date` and `Time` are the station's local wall clock with no offset, exactly as BirdNET-Pi wrote them; beside them every row carries `Event_Date` (that wall clock with the offset that was in force, RFC 3339, so the two passes of a repeated autumn hour are told apart) and `Detected_At_UTC` (the instant), both blank on a row that names no point in time. Every row also says which model made it: the CSV ends in `Run_Id,Model_Name,Model_SHA256` and the JSON carries `run_id`, `model_name` and `model_sha256` per row — the model file's name and the SHA-256 of its bytes, so a season that spans a model upgrade can be split by which model heard what. The runs themselves (when each started, the labels checksum, the settings in force) are at `/api/v2/analysis-runs`. The three columns are empty on a row this station did not analyse: imported history, or rows older than the run table.
 - **Species summary (CSV)** — per-species totals and first-seen dates.
 - **eBird checklist** — eBird Record Format, one record per species per hour with `Number` written as `X` (present, not counted) and the detection tally in the comment. Only detections at or above a confidence floor (0.75 by default, `?min_confidence=`) that a reviewer has not rejected are included, and the coordinates are the station's configured location — blank, never `0,0`, if none is set. Protocol, observer count, region and completeness are query parameters (`?protocol=Stationary&observers=1&state=&country=&complete=false`), because they are facts about the submitter rather than the station.
-- **BirdNET-Pi `BirdDB.txt`** — tab-separated, for tools expecting the original format. Same rows as the CSV.
+- **BirdNET-Pi `BirdDB.txt`** — semicolon-separated, the twelve BirdNET-Pi columns and nothing more, for tools expecting the original format. Same rows as the CSV, without the three model columns: the format has no room for them and its consumers count fields.
+- **Raven selection table** — one tab-separated table over every detection that has a clip, in the format BirdNET-Analyzer writes (`Selection`, `View`, `Channel`, `Begin Time (s)`, `End Time (s)`, `Low Freq (Hz)`, `High Freq (Hz)`, `Common Name`, `Species Code`, `Confidence`, `Begin Path`, `File Offset (s)`), so Raven Pro opens it against the recordings folder as a multi-file table. Each selection is placed where the detection sits inside its clip, from the lead-in the extractor recorded; a row written before that was recorded (schema 47) spans its whole clip, and a row with no clip, or no clip length, is left out rather than given a made-up window. The species code is the eBird code from the station's label file, or the scientific name when it has none. Every clip also has its own table at `/api/v2/recordings/<clip>/raven.txt` and an Audacity label track (`begin`, `end`, label; **File → Import → Labels**) at `/api/v2/recordings/<clip>/labels.txt`; the detection page links to neither yet, so paste the clip's filename in.
 
 ## Storage & retention
 
@@ -132,7 +133,7 @@ birdnet-behavior --doctor
 
 reports the destination, how many backups it will keep, and — for SSH — whether the key exists, whether its permissions are ones OpenSSH will accept, and whether the host is known. It makes no connection: `--doctor` runs on every start, and a diagnostic that dials a remote host fails whenever the uplink is down.
 
-Uploads are logged at `info` on success and `warn` on failure, with the destination named. A failed upload never affects the local backup or the VACUUM that follows it.
+Uploads are logged at `info` on success and `warn` on failure, with the destination named. A failed upload never affects the local backup or the space reclaim that follows it.
 
 ### Restoring one
 

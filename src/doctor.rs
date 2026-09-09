@@ -197,15 +197,22 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 21] = [
+const CHECK_FAMILIES: [(&str, Family); 25] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
+    }),
+    ("environment::check_environment_variables", |_, _| {
+        environment::check_environment_variables()
+    }),
+    ("environment::check_power", |_, _| {
+        environment::check_power()
     }),
     ("config::check_config_file", |cli, cfg| {
         vec![config::check_config_file(cli, cfg)]
     }),
-    ("config::check_config_values", |_, cfg| {
-        cfg.map(config::check_config_values).unwrap_or_default()
+    ("config::check_config_values", |cli, cfg| {
+        cfg.map(|c| config::check_config_values(cli, c))
+            .unwrap_or_default()
     }),
     ("config::check_station_location", |cli, cfg| {
         vec![config::check_station_location(cli, cfg)]
@@ -225,9 +232,16 @@ const CHECK_FAMILIES: [(&str, Family); 21] = [
     ("config::check_api_surface", |_, cfg| {
         vec![config::check_api_surface(cfg)]
     }),
+    ("config::check_private_mode", |cli, cfg| {
+        vec![config::check_private_mode(cli, cfg)]
+    }),
     ("tls::check_tls", tls::check_tls),
     ("clock::check_clock", clock::check_clock),
     ("database::check_database", database::check_database),
+    (
+        "database::check_maintenance_verdicts",
+        database::check_maintenance_verdicts,
+    ),
     ("offsite::check_offsite", offsite::check_offsite),
     ("paths::check_paths", paths::check_paths),
     ("audio::check_audio_source", audio::check_audio_source),

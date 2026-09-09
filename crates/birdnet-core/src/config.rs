@@ -8,6 +8,7 @@
 //! The [`validate`] submodule provides range and shape checks for the parsed
 //! values so misconfiguration surfaces at startup instead of at first use.
 
+pub mod known_keys;
 pub mod locale;
 pub mod redact;
 pub mod validate;
@@ -84,6 +85,25 @@ impl fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+/// A key present in the file that no reader asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownKey {
+    /// The key as written.
+    pub key: String,
+    /// The known key it is closest to, when one is close enough to suggest.
+    pub did_you_mean: Option<&'static str>,
+}
+
+impl fmt::Display for UnknownKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} is not a setting this station reads", self.key)?;
+        if let Some(meant) = self.did_you_mean {
+            write!(f, "; did you mean {meant}?")?;
+        }
+        Ok(())
+    }
+}
 
 impl Config {
     /// Create an empty configuration with no entries.
@@ -216,6 +236,27 @@ impl Config {
     /// Get a value with a default if the key is missing.
     pub fn get_or(&self, key: &str, default: &str) -> String {
         self.get(key).unwrap_or(default).to_string()
+    }
+
+    /// The keys in this configuration that nothing reads, each with the
+    /// known key it was most likely meant to be. Sorted by key.
+    ///
+    /// A typo'd key is parsed, stored and never asked for, so without this a
+    /// misspelt setting silently keeps its default; see
+    /// [`known_keys::KNOWN_CONFIG_KEYS`].
+    #[must_use]
+    pub fn unknown_keys(&self) -> Vec<UnknownKey> {
+        let mut out: Vec<UnknownKey> = self
+            .values
+            .keys()
+            .filter(|k| !known_keys::is_known(k))
+            .map(|k| UnknownKey {
+                key: k.clone(),
+                did_you_mean: known_keys::did_you_mean(k),
+            })
+            .collect();
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        out
     }
 
     /// Get all key-value pairs.

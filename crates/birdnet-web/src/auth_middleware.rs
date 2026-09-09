@@ -25,6 +25,18 @@
 //! middleware lets the request through unauthenticated and attaches a
 //! synthetic `RequestUser` mapped onto the seed admin id. Matches the
 //! fresh-Pi "no password = open admin" contract.
+//!
+//! ## Private mode (O-4)
+//!
+//! [`apply_public`] is the second gate, in front of the *public* router. It
+//! does nothing unless the station is in private mode; then every path that
+//! [`crate::private_mode::is_open`] does not name needs the same session the
+//! admin panel needs. It shares the cookie validation with the admin gate
+//! (`session_user`) and differs in two places: it never open-bypasses (a
+//! private station with no password answers `503` rather than serving the
+//! garden to the internet), and it refuses API and WebSocket paths with a
+//! `401` rather than a redirect, since nothing that calls them can follow
+//! one to a form.
 
 use std::sync::Arc;
 
@@ -130,8 +142,93 @@ pub fn apply(admin: axum::Router<AppState>, state: AppState) -> axum::Router<App
     ))
 }
 
+/// Apply the private-mode gate to the public `Router` (O-4).
+///
+/// A no-op layer on an open station; on a private one, everything outside
+/// [`crate::private_mode::is_open`] needs a session. See the module docs.
+pub fn apply_public(public: axum::Router<AppState>, state: AppState) -> axum::Router<AppState> {
+    let shared = Arc::new(state);
+    public.layer(axum::middleware::from_fn(
+        move |req: Request<Body>, next: Next| {
+            let shared = Arc::clone(&shared);
+            let fut: AuthFuture =
+                Box::pin(async move { private_gate_middleware(req, next, &shared).await });
+            fut
+        },
+    ))
+}
+
 /// Boxed-future type alias for the middleware closure.
 type AuthFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>;
+
+async fn private_gate_middleware(request: Request<Body>, next: Next, state: &AppState) -> Response {
+    if !state.private_mode() {
+        return next.run(request).await;
+    }
+    let path = request.uri().path();
+    if crate::private_mode::is_open(path, state.public_access()) {
+        return next.run(request).await;
+    }
+    // Fail closed. The admin gate's open-bypass exists so a fresh Pi is
+    // usable before anyone sets a password; a station the operator declared
+    // private and then left without one must not quietly become the open
+    // station they asked it not to be.
+    if !admin_password_configured(state) {
+        return private_without_password();
+    }
+    let original_path = request
+        .uri()
+        .path_and_query()
+        .map_or_else(|| path.to_string(), ToString::to_string);
+    let Some(user) = session_user(&request, state) else {
+        return refuse_private(&request, &original_path);
+    };
+    let mut req = request;
+    req.extensions_mut().insert(user);
+    next.run(req).await
+}
+
+/// The refusal a private station gives a request with no session.
+///
+/// Pages get the same `303` to the sign-in form the admin panel gives; the
+/// API and the `WebSockets` get a `401`, because a JSON client or a socket
+/// upgrade cannot do anything useful with a redirect to an HTML form.
+fn refuse_private(request: &Request<Body>, original_path: &str) -> Response {
+    if request.uri().path().starts_with("/api/") {
+        let login = format!("/login?next={}", urlencode_path(original_path));
+        return (
+            StatusCode::UNAUTHORIZED,
+            [
+                (header::CONTENT_TYPE, "application/json"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            serde_json::json!({
+                "error": "sign in required: this station is in private mode",
+                "login": login,
+            })
+            .to_string(),
+        )
+            .into_response();
+    }
+    redirect_to_login(request, original_path)
+}
+
+/// What a private station with no admin password serves: nothing, and a
+/// message saying why. `503` because the condition is the operator's to fix
+/// and every probe that treats `5xx` as "not ready" is right to.
+fn private_without_password() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        "<p>This station is in private mode but has no admin password, so nobody can sign in. \
+         Set <code>CADDY_PWD</code> in the config or the environment and restart, \
+         or unset <code>BIRDNET_PRIVATE_MODE</code>.</p>",
+    )
+        .into_response()
+}
 
 async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppState) -> Response {
     let path = request.uri().path();
@@ -159,38 +256,8 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
     // configured, or no admin row yet) fall through to the
     // cookie-validation path.
 
-    let token = request
-        .headers()
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(session::extract_token);
-
-    let Some(validated) = token.and_then(session::validate_token) else {
+    let Some(user) = session_user(&request, state) else {
         return redirect_to_login(&request, &original_path);
-    };
-
-    let lookup = state.with_db(|conn| -> Result<RequestUser, accounts::AccountsError> {
-        let session = conn.find_active_session(&validated.session_id)?;
-        // Touch last_seen; failure is non-fatal (the auth still succeeds).
-        let _ = SessionStore::touch_session(conn, &validated.session_id);
-        let user = conn.find_user(session.user_id)?;
-        if user.disabled_at.is_some() {
-            return Err(accounts::AccountsError::Invalid(
-                "user disabled".to_string(),
-            ));
-        }
-        Ok(RequestUser {
-            user,
-            session_id: validated.session_id,
-        })
-    });
-
-    let user = match lookup {
-        Ok(u) => u,
-        Err(e) => {
-            tracing::debug!(error = %e, "cookie auth: session/user lookup failed");
-            return redirect_to_login(&request, &original_path);
-        }
     };
 
     // Authorization: viewers are read-only on `/admin`. Every unsafe method
@@ -217,11 +284,55 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
     next.run(req).await
 }
 
+/// The signed-in user behind a request's `bnb-session` cookie, if the cookie
+/// validates and its session row is live and its user not disabled. `None`
+/// covers every way of not being signed in; the reason is logged at debug.
+///
+/// Shared by the admin gate and the private-mode gate so the two cannot
+/// accept different cookies.
+fn session_user(request: &Request<Body>, state: &AppState) -> Option<RequestUser> {
+    let token = request
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(session::extract_token);
+    let validated = token.and_then(session::validate_token)?;
+
+    let lookup = state.with_db(|conn| -> Result<RequestUser, accounts::AccountsError> {
+        let session = conn.find_active_session(&validated.session_id)?;
+        // Touch last_seen; failure is non-fatal (the auth still succeeds).
+        let _ = SessionStore::touch_session(conn, &validated.session_id);
+        let user = conn.find_user(session.user_id)?;
+        if user.disabled_at.is_some() {
+            return Err(accounts::AccountsError::Invalid(
+                "user disabled".to_string(),
+            ));
+        }
+        Ok(RequestUser {
+            user,
+            session_id: validated.session_id,
+        })
+    });
+
+    match lookup {
+        Ok(u) => Some(u),
+        Err(e) => {
+            tracing::debug!(error = %e, "cookie auth: session/user lookup failed");
+            None
+        }
+    }
+}
+
 fn is_excluded(path: &str) -> bool {
     matches!(path, "/api/v2/health" | "/api/v2/ws/detections") || path.starts_with("/api/v2/ws/")
 }
 
-fn admin_password_configured(state: &AppState) -> bool {
+/// Whether this station has an admin password at all.
+///
+/// `CADDY_PWD` in the environment, or a real Argon2 hash on the seed admin
+/// row. `false` is the open station the middleware waves everyone through —
+/// and the one the wizard must offer a password step to (DD-14).
+pub fn admin_password_configured(state: &AppState) -> bool {
     // Either CADDY_PWD env is set OR the seed admin row carries a real
     // password hash. The bootstrap in `helpers::auth` keeps these in sync.
     let env_set = std::env::var("CADDY_PWD").is_ok_and(|v| !v.is_empty());

@@ -31,6 +31,9 @@ ort.workspace = true
 # File watching
 notify.workspace = true
 
+# Model identity (SHA-256 of the model and labels a run analysed with)
+sha2.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 tempfile = "3"

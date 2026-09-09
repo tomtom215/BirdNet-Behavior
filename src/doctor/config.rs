@@ -136,11 +136,49 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
         );
     }
 
+    // ON-9: `exists()` was the whole check. Load it the way the daemon does,
+    // which also compares its declared width with the vocabulary it will be
+    // read against; a truncated download or a model for another classifier
+    // fails here and not on the first inference of a station nobody watches.
+    let classifier_labels = cli
+        .labels
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("LABELS_PATH").map(PathBuf::from)))
+        .filter(|p| p.exists())
+        .and_then(|p| birdnet_core::inference::labels::LabelSet::load(&p).ok());
+    let meta_labels = labels
+        .as_ref()
+        .and_then(|p| birdnet_core::inference::labels::LabelSet::load(p).ok());
+    if let Some(classifier) = classifier_labels.as_ref()
+        && let Err(e) = birdnet_core::inference::species_filter::SpeciesFilter::load_with_vocabulary(
+            &model,
+            meta_labels,
+            classifier.len(),
+            birdnet_core::inference::species_filter::SpeciesFilterConfig::default(),
+        )
+    {
+        return Check::fail(
+            NAME,
+            format!(
+                "{} is present but cannot be used as a metadata model ({e}); the daemon would \
+                 fall back to admitting every species",
+                model.display()
+            ),
+            "download the metadata model that matches the installed classifier again, and \
+             the label file it shipped with",
+        );
+    }
+
     let how = labels.map_or_else(
         || " (indexed against the classifier's labels)".to_owned(),
         |l| format!(" (matched by name through {})", l.display()),
     );
-    Check::pass(NAME, format!("active — {}{how}", model.display()))
+    let loaded = if classifier_labels.is_some() {
+        "; loads, and its width matches the vocabulary"
+    } else {
+        "; not loaded here because the classifier's labels file could not be read"
+    };
+    Check::pass(NAME, format!("active — {}{how}{loaded}", model.display()))
 }
 
 /// Is the repeat-confirmation filter set to something that can actually reject?
@@ -283,7 +321,7 @@ pub(super) fn check_config_file(cli: &Cli, config: Option<&Config>) -> Check {
     }
 }
 
-pub(super) fn check_config_values(config: &Config) -> Vec<Check> {
+pub(super) fn check_config_values(cli: &Cli, config: &Config) -> Vec<Check> {
     let findings = cfg_validate::validate(config);
     if findings.is_empty() {
         return vec![Check::pass(
@@ -291,16 +329,57 @@ pub(super) fn check_config_values(config: &Config) -> Vec<Check> {
             "all settings are within valid ranges",
         )];
     }
-    findings
+    // An error used to be a Fail, which through ExecStartPre's exit-2 gate
+    // kept the service from starting at all: a typo over SSH became a restart
+    // loop with no web UI (LC-6). The start now recovers on its own — it runs
+    // on the last-good copy when one exists, web-only on the file otherwise —
+    // so the doctor reports the same decision the start will make, as a
+    // warning, and the gate lets the start happen.
+    let recovery = crate::helpers::startup_config::recovery_for(&cli.config);
+    let has_errors = findings.iter().any(|f| f.severity == ConfigSeverity::Error);
+    let mut out: Vec<Check> = findings
         .into_iter()
         .map(|f| {
             let name = format!("Config: {}", f.key);
             match f.severity {
-                ConfigSeverity::Error => Check::fail(name, f.message, f.remediation),
+                ConfigSeverity::Error => Check::warn(
+                    name,
+                    format!(
+                        "{} — an error: the station will not run on this value",
+                        f.message
+                    ),
+                    f.remediation,
+                ),
                 ConfigSeverity::Warning => Check::warn(name, f.message, f.remediation),
             }
         })
-        .collect()
+        .collect();
+    if has_errors {
+        out.push(recovery.map_or_else(
+            || {
+                Check::warn(
+                    "Config: fallback",
+                    "the file has errors and there is no last good copy; the station will start \
+                     web-only, recording nothing, so that this report is reachable at /station",
+                    "fix the file and restart, or `--apply-config <corrected file>`; the boot \
+                     journal reports `config_rejected` until then",
+                )
+            },
+            |last_good| {
+                Check::warn(
+                    "Config: fallback",
+                    format!(
+                        "the file has errors; the station will start on the last good \
+                         configuration, {}",
+                        last_good.display()
+                    ),
+                    "fix the file and restart, or `--apply-config <corrected file>`; the boot \
+                     journal reports `config_reverted` until then",
+                )
+            },
+        ));
+    }
+    out
 }
 
 pub(super) fn check_listen_address(cli: &Cli) -> Check {
@@ -431,6 +510,51 @@ pub(super) fn check_admin_exposure(cli: &Cli, config: Option<&Config>) -> Check 
     admin_exposure(&cli.listen, password_configured)
 }
 
+/// Private mode (`O-4`): on, off, or on with nothing to sign in with.
+///
+/// The third is the one that matters. A private station with no admin
+/// password answers `503` to everything but the sign-in and the probe — the
+/// gate fails closed rather than falling back to the open station the
+/// operator asked not to have — and the only other sign of it is an `error!`
+/// at startup. The password resolves through the same rule the auth
+/// bootstrap uses, for the reason [`check_admin_exposure`] gives.
+pub(super) fn check_private_mode(cli: &Cli, config: Option<&Config>) -> Check {
+    let setting = crate::helpers::resolve_private_mode(cli, config);
+    let password_configured =
+        crate::helpers::resolve_admin_password(config, std::env::var("CADDY_PWD").ok()).is_some();
+    private_mode(&setting, password_configured)
+}
+
+fn private_mode(setting: &crate::helpers::PrivateModeSetting, password_configured: bool) -> Check {
+    const NAME: &str = "Private mode";
+    let public = birdnet_web::private_mode::PublicAccess::describe(&setting.public);
+    if !setting.rejected.is_empty() {
+        return Check::fail(
+            NAME,
+            format!(
+                "PUBLIC_ACCESS names {} — not a carve-out; the station skips it",
+                setting.rejected.join(", ")
+            ),
+            "use a comma-separated list of live_audio, share and metrics",
+        );
+    }
+    if !setting.enabled {
+        return Check::pass(
+            NAME,
+            "off — viewing is open, the admin panel and every change need a sign-in",
+        );
+    }
+    if !password_configured {
+        return Check::fail(
+            NAME,
+            "on, but no admin password is set — the station answers 503 to everything but \
+             the sign-in and the health probe, and nobody can sign in",
+            "set CADDY_PWD in the config or the environment, or unset PRIVATE_MODE",
+        );
+    }
+    Check::pass(NAME, format!("on — public access: {public}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +563,57 @@ mod tests {
 
     fn cli() -> Cli {
         Cli::parse_from(["birdnet-behavior"])
+    }
+
+    // ── private mode (O-4) ─────────────────────────────────────────────
+
+    fn private_setting(enabled: bool, rejected: &[&str]) -> crate::helpers::PrivateModeSetting {
+        crate::helpers::PrivateModeSetting {
+            enabled,
+            public: std::iter::once(birdnet_web::private_mode::PublicAccess::Share).collect(),
+            rejected: rejected.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn private_mode_without_a_password_is_a_failure_naming_the_503() {
+        let check = private_mode(&private_setting(true, &[]), false);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.message.contains("503"), "{}", check.message);
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("CADDY_PWD")),
+            "{:?}",
+            check.remediation
+        );
+    }
+
+    #[test]
+    fn private_mode_with_a_password_passes_and_names_the_carve_outs() {
+        let check = private_mode(&private_setting(true, &[]), true);
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.message.contains("share"), "{}", check.message);
+    }
+
+    #[test]
+    fn private_mode_off_passes_whatever_the_password() {
+        assert_eq!(
+            private_mode(&private_setting(false, &[]), false).status,
+            Status::Pass
+        );
+        assert_eq!(
+            private_mode(&private_setting(false, &[]), true).status,
+            Status::Pass
+        );
+    }
+
+    #[test]
+    fn a_rejected_carve_out_is_a_failure_even_with_private_mode_off() {
+        let check = private_mode(&private_setting(false, &["live_audo"]), true);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.message.contains("live_audo"), "{}", check.message);
     }
 
     // ── admin exposure ─────────────────────────────────────────────────
@@ -664,27 +839,32 @@ mod tests {
     fn config_values_pass_when_all_valid() {
         // ALSA_CARD set so the audio-source check stays quiet; no invalid values.
         let cfg = config_from(&[("ALSA_CARD", "hw:1")]);
-        let checks = check_config_values(&cfg);
+        let checks = check_config_values(&Cli::parse_from(["birdnet-behavior"]), &cfg);
         assert!(!checks.is_empty());
         assert!(checks.iter().all(|c| c.status == Status::Pass));
     }
 
     #[test]
     fn config_values_flags_out_of_range_error() {
+        // An out-of-range value is an error the station will not run on. It
+        // is reported as a warning that says so (LC-6: a Fail through the
+        // ExecStartPre gate was a restart loop), alongside the fallback line.
         let cfg = config_from(&[("ALSA_CARD", "hw:1"), ("CONFIDENCE", "5.0")]);
-        let checks = check_config_values(&cfg);
-        assert!(
-            checks
-                .iter()
-                .any(|c| c.status == Status::Fail && c.name.contains("CONFIDENCE"))
-        );
+        let checks = check_config_values(&Cli::parse_from(["birdnet-behavior"]), &cfg);
+        assert!(checks.iter().any(|c| {
+            c.status == Status::Warn
+                && c.name.contains("CONFIDENCE")
+                && c.message.contains("an error")
+        }));
+        assert!(checks.iter().any(|c| c.name == "Config: fallback"));
+        assert!(checks.iter().all(|c| c.status != Status::Fail));
     }
 
     #[test]
     fn config_values_flags_warning() {
         // LATITUDE set without LONGITUDE → a warning keyed to one of the pair.
         let cfg = config_from(&[("ALSA_CARD", "hw:1"), ("LATITUDE", "10.0")]);
-        let checks = check_config_values(&cfg);
+        let checks = check_config_values(&Cli::parse_from(["birdnet-behavior"]), &cfg);
         assert!(checks.iter().any(|c| {
             c.status == Status::Warn
                 && (c.name.contains("LATITUDE") || c.name.contains("LONGITUDE"))
@@ -841,6 +1021,51 @@ mod occurrence_filter_gates {
         assert_eq!(
             check_occurrence_filter(&cli_from(&[]), Some(&cfg)).status,
             Status::Fail
+        );
+    }
+
+    /// LC-6: a configuration error is reported as a warning naming what the
+    /// start will do, so `ExecStartPre`'s exit-2 gate lets the start happen and
+    /// the station recovers on its own instead of looping.
+    #[test]
+    fn a_config_error_is_a_warning_that_names_the_fallback_not_a_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("birdnet.conf");
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.config = path.clone();
+        let bad = Config::parse("LATITUDE=abc\nLONGITUDE=1\n").unwrap();
+
+        let checks = check_config_values(&cli, &bad);
+        assert!(
+            checks
+                .iter()
+                .all(|c| c.status != crate::doctor::Status::Fail),
+            "no Fail: the exit-2 gate must let the start happen: {checks:?}"
+        );
+        let fallback = checks
+            .iter()
+            .find(|c| c.name == "Config: fallback")
+            .expect("the decision the start will make is reported");
+        assert!(fallback.message.contains("web-only"), "{fallback:?}");
+
+        std::fs::write(&path, "LATITUDE=1\nLONGITUDE=1\n").unwrap();
+        crate::helpers::startup_config::record_last_good(&path).unwrap();
+        let checks = check_config_values(&cli, &bad);
+        let fallback = checks
+            .iter()
+            .find(|c| c.name == "Config: fallback")
+            .expect("reported");
+        assert!(
+            fallback.message.contains("last good configuration"),
+            "{fallback:?}"
+        );
+
+        let good = Config::parse("LATITUDE=1\nLONGITUDE=1\n").unwrap();
+        assert!(
+            check_config_values(&cli, &good)
+                .iter()
+                .all(|c| c.name != "Config: fallback"),
+            "a good file needs no fallback line"
         );
     }
 }

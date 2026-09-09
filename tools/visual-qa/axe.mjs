@@ -12,8 +12,7 @@
 //   BASE         base url                       (default http://127.0.0.1:8502)
 //   THEMES       csv of light,dark              (default light,dark)
 //   AXE_FAIL_ON  csv impact levels that fail    (default serious,critical)
-//   AXE_DISABLE  csv rules to skip              (default color-contrast,
-//                                                link-in-text-block — see below)
+//   AXE_DISABLE  csv rules to skip              (default link-in-text-block)
 //   ONLY         substring filter on route name
 //
 // Run from this directory after `npm i playwright @axe-core/playwright`.
@@ -26,24 +25,25 @@ import { ROUTES } from './qa.mjs';
 const AxeBuilder = AxeModule.default || AxeModule.AxeBuilder || AxeModule;
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
+// Explicit browser binary, for sandboxes that ship their own Chromium rather
+// than the build this playwright pinned (same knob as interactions.mjs).
+const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '';
 const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
 const FAIL_ON = new Set(
   (process.env.AXE_FAIL_ON || 'serious,critical').split(',').filter(Boolean),
 );
 const ONLY = process.env.ONLY || '';
 
-// Two WCAG rules are deferred to a dedicated, design-reviewed pass and excluded
-// from this gate (tracked in CHANGELOG / IMPLEMENTATION_PLAN):
-//   - color-contrast: the v3 palette renders each species' *identity* hue
-//     (oklch ~62% L) as text and uses a deliberately muted meta-text
-//     hierarchy. Meeting AA there means changing locked design tokens / species
-//     colours — a design decision, not an a11y-batch one, and an all-or-nothing
-//     one (any remaining low-contrast node keeps the gate red).
+// One WCAG rule is deferred to a design pass and excluded from this gate:
 //   - link-in-text-block: distinguishing in-text links without relying on
-//     colour is an app-wide link-underline policy — the same design pass.
+//     colour is an app-wide link-underline policy.
+// color-contrast is enforced (DD-29): the species avatar mixes its identity
+// hue towards an ink token, the muted text tokens sit at AA on every tinted
+// surface, and the bright fills carry --on-fill. It is all-or-nothing — any
+// low-contrast node keeps the gate red — which is the point.
 // Everything else at serious/critical is enforced. Re-check the full picture
-// with AXE_DISABLE="" (or e.g. AXE_DISABLE=color-contrast to audit links only).
-const DISABLED_RULES = (process.env.AXE_DISABLE ?? 'color-contrast,link-in-text-block')
+// with AXE_DISABLE="".
+const DISABLED_RULES = (process.env.AXE_DISABLE ?? 'link-in-text-block')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -51,7 +51,7 @@ const DISABLED_RULES = (process.env.AXE_DISABLE ?? 'color-contrast,link-in-text-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
   let blocking = 0;
   let total = 0;
   const seen = new Set(); // unique "[impact] rule" pairs, for the summary

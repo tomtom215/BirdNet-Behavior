@@ -34,8 +34,11 @@
 
 use std::fmt::Write as _;
 
+use crate::client_ip::ClientIp;
 use axum::extract::State;
+use axum::extract::{Extension, Request};
 use axum::response::{Html, Redirect};
+use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
 use axum::{Form, Router};
 
@@ -45,6 +48,7 @@ use birdnet_db::settings::{self, SettingsCategory};
 use crate::routes::admin::audio::{detail_for, kind_label};
 use crate::routes::pages::escape_html;
 use crate::state::AppState;
+use birdnet_db::accounts::{self, UserStore as _};
 
 /// Every settings key `POST /onboarding/save` can persist.
 ///
@@ -138,7 +142,7 @@ impl Prefill {
 /// has none set.
 const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
 
-async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
+async fn onboarding_page(State(state): State<AppState>, req: Request) -> Html<String> {
     // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
     let (sources, prefill) = state
         .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
@@ -146,12 +150,59 @@ async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
             tracing::error!(error = %err, "onboarding: audio_sources list failed");
             (Vec::new(), Prefill::default())
         });
+    let needs_password = !crate::auth_middleware::admin_password_configured(&state);
+    let password_error = req
+        .uri()
+        .query()
+        .is_some_and(|q| q.split('&').any(|p| p == "error=password"));
 
     Html(render_page(
         &render_mic_body(&sources),
         &escape_html(&mic_summary(&sources)),
         &prefill,
+        PasswordStep {
+            needed: needs_password,
+            error: password_error,
+        },
     ))
+}
+
+/// Whether the Welcome step asks for the admin password, and whether the
+/// last attempt was refused.
+#[derive(Clone, Copy, Default)]
+struct PasswordStep {
+    needed: bool,
+    error: bool,
+}
+
+/// The shortest password the accounts page accepts; the wizard holds the
+/// same line so the two cannot disagree about what a password is.
+const MIN_PASSWORD_LEN: usize = 10;
+
+/// The Welcome step's password block (DD-14): rendered only while the
+/// station has no admin password, because that is the station every
+/// `/admin/*` page is open on until somebody sets one. The first browser to
+/// finish setup owns the station; the same POST that saves the settings
+/// creates the password and hands that browser the session.
+fn render_password_step(step: PasswordStep) -> String {
+    if !step.needed {
+        return String::new();
+    }
+    let error = if step.error {
+        r#"<p class="ob-password-error" role="alert">The two passwords did not match, or the password was shorter than 10 characters. Nothing was saved.</p>"#
+    } else {
+        ""
+    };
+    format!(
+        r#"<div class="bnb-card pad ob-mt-16" id="ob-password">
+            <div class="ob-eyebrow">First, the admin password</div>
+            <p class="ob-p">Right now anyone who can reach this station can change its settings. Choose the password for <code>admin</code>; this browser is signed in with it when you finish.</p>
+            {error}
+            <div class="ob-field"><label for="ob-password-1">Password (at least {MIN_PASSWORD_LEN} characters)</label><input id="ob-password-1" name="password" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
+            <div class="ob-field"><label for="ob-password-2">Password again</label><input id="ob-password-2" name="password_confirm" type="password" minlength="{MIN_PASSWORD_LEN}" autocomplete="new-password"></div>
+            <p class="bnb-meta" id="ob-password-hint">Change it any time under Settings → Accounts.</p>
+          </div>"#
+    )
 }
 
 /// Substitute the two server-filled placeholders into the wizard template.
@@ -166,7 +217,12 @@ async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
 /// Each placeholder appears exactly once. If one is ever removed from the
 /// template this degrades to dropping that value rather than panicking in a
 /// request handler; the rendering tests pin the output either way.
-fn render_page(mic_body: &str, mic_summary: &str, prefill: &Prefill) -> String {
+fn render_page(
+    mic_body: &str,
+    mic_summary: &str,
+    prefill: &Prefill,
+    password: PasswordStep,
+) -> String {
     // Substituted in one pass each. `mic_body` is already-rendered markup and
     // `mic_summary` is pre-escaped by the caller; the `prefill` values come
     // from the database and land inside HTML attributes, so they are escaped
@@ -178,6 +234,7 @@ fn render_page(mic_body: &str, mic_summary: &str, prefill: &Prefill) -> String {
         .replace("{{longitude}}", &escape_html(&prefill.longitude))
         .replace("{{confidence}}", &escape_html(&prefill.confidence))
         .replace("{{notify_trigger}}", &escape_html(&prefill.notify_trigger))
+        .replace("{{password_step}}", &render_password_step(password))
         // Versioned stylesheet URL — see `pages::with_asset_version`.
         .replace("{{version}}", env!("CARGO_PKG_VERSION"))
 }
@@ -283,6 +340,11 @@ struct OnboardingForm {
     notification_mode: String,
     #[serde(default)]
     confidence_threshold: String,
+    /// The admin password, on a station that has none (DD-14).
+    #[serde(default)]
+    password: String,
+    #[serde(default)]
+    password_confirm: String,
 }
 
 /// Whether `raw` is a confidence threshold the daemon will accept.
@@ -324,7 +386,11 @@ fn valid_coordinate(raw: &str, limit: f64) -> Option<String> {
 
 /// The zoneinfo tree `timedatectl` and the tz database read; when it is
 /// present, a zone the wizard stores must exist in it.
-const ZONEINFO_DIR: &str = "/usr/share/zoneinfo";
+/// Where the zoneinfo tree lives.
+///
+/// [`plausible_timezone`] checks a name against it, and the doctor reads the
+/// zoneinfo version from it.
+pub const ZONEINFO_DIR: &str = "/usr/share/zoneinfo";
 
 /// Whether `raw` names a time zone this host knows.
 ///
@@ -337,7 +403,7 @@ const ZONEINFO_DIR: &str = "/usr/share/zoneinfo";
 /// tzdata still needs it stored. `Mars/Olympus` used to be accepted, and the
 /// doctor then told the operator to run `timedatectl set-timezone
 /// Mars/Olympus`.
-fn plausible_timezone(raw: &str) -> bool {
+pub fn plausible_timezone(raw: &str) -> bool {
     let name = raw.trim();
     if name.is_empty() || name.len() > 64 {
         return false;
@@ -371,8 +437,35 @@ fn plausible_timezone(raw: &str) -> bool {
 /// latitude/longitude and the confidence threshold on the next start.
 async fn onboarding_save(
     State(state): State<AppState>,
+    client: Option<Extension<ClientIp>>,
+    headers: axum::http::HeaderMap,
     Form(form): Form<OnboardingForm>,
-) -> Redirect {
+) -> Response {
+    // The password first (DD-14), and only on a station that has none: with
+    // one set, the operator signed in to reach this page and the fields are
+    // not rendered. A refused password saves nothing else either — the
+    // operator is sent back to the step that failed rather than left with a
+    // configured, still-open station and no idea why.
+    let mut set_cookie = None;
+    if !crate::auth_middleware::admin_password_configured(&state) && !form.password.is_empty() {
+        if form.password.len() < MIN_PASSWORD_LEN || form.password != form.password_confirm {
+            return Redirect::to("/onboarding?error=password").into_response();
+        }
+        match set_first_admin_password(&state, &form.password) {
+            Ok(admin_id) => {
+                set_cookie = super::super::auth_pages::mint_session_cookie(
+                    &state,
+                    admin_id,
+                    client.as_deref(),
+                    &headers,
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "onboarding: could not set the admin password");
+                return Redirect::to("/onboarding?error=password").into_response();
+            }
+        }
+    }
     state.with_db(|conn| {
         // Idempotent safety net; the table is also created by migration 14.
         settings::ensure_settings_table(conn).ok();
@@ -448,7 +541,38 @@ async fn onboarding_save(
             SettingsCategory::System,
         );
     });
-    Redirect::to("/")
+    let mut resp = Redirect::to("/").into_response();
+    if let Some(cookie) = set_cookie
+        && let Ok(value) = axum::http::HeaderValue::from_str(&cookie)
+    {
+        resp.headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+    resp
+}
+
+/// Hash `password` onto the seed admin row and record it. Returns the
+/// admin's id, for the session the wizard mints next.
+fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, String> {
+    let hash = accounts::hash_password(password).map_err(|e| e.to_string())?;
+    let admin_id = state
+        .with_db(|conn| {
+            let admin = conn.find_user_by_name("admin")?;
+            conn.set_password(admin.id, &hash)?;
+            Ok::<i64, accounts::AccountsError>(admin.id)
+        })
+        .map_err(|e| e.to_string())?;
+    // No actor: there is no account yet that could be one. The target is the
+    // row that just acquired a password.
+    crate::audit::audit_user_id(
+        state,
+        None,
+        "account.password.set",
+        Some(&format!("user:{admin_id}")),
+        None,
+    );
+    tracing::info!("admin password set from the setup wizard; /admin is now gated");
+    Ok(admin_id)
 }
 
 const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
@@ -486,8 +610,12 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   .ob-field label { font-size:12.5px; font-weight:500; }
   .ob-field input { padding:9px 12px; border-radius:var(--r-sm); border:0.5px solid var(--border-2); background:var(--surface); color:var(--fg); font:inherit; }
   .ob-cards { display:grid; gap:12px; }
-  .ob-card { display:flex; gap:14px; align-items:center; padding:14px; border-radius:var(--r-md); border:0.5px solid var(--border); background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s; }
+  .ob-card { position:relative; display:flex; gap:14px; align-items:center; padding:14px; border-radius:var(--r-md); border:0.5px solid var(--border); background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s; }
   .ob-card.sel { border-color:var(--moss); background:var(--moss-soft); }
+  /* The real radio behind each preference card (UX-1): kept in the tab order
+     and off the screen, never display:none, which would take it out of both. */
+  .ob-card .ob-pick { position:absolute; width:1px; height:1px; margin:-1px; padding:0; border:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; opacity:0; }
+  .ob-card:focus-within { outline:2px solid var(--moss); outline-offset:2px; }
   .ob-card .ic { width:34px; height:34px; flex-shrink:0; border-radius:8px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; color:var(--fg-2); }
   .ob-card .t { font-weight:500; font-size:14px; }
   .ob-card .s { font-size:12px; color:var(--fg-3); }
@@ -570,10 +698,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <h1 class="ob-h">Let's teach the yard<br>to <em>listen</em>.</h1>
           <p class="ob-p">Ninety seconds, six steps. Your Raspberry Pi will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
           <ul class="ob-bullets">
-            <li><span class="tick">✓</span> No accounts — runs entirely on your Pi</li>
+            <li><span class="tick">✓</span> No cloud accounts — runs entirely on your Pi</li>
             <li><span class="tick">✓</span> Set once — sensible defaults the whole way</li>
             <li><span class="tick">✓</span> Always tweakable — change anything later in Settings</li>
           </ul>
+          {{password_step}}
         </div>
         <div class="ob-center">
           <svg class="sonar" width="240" height="240" viewBox="0 0 240 240" aria-hidden="true">
@@ -635,13 +764,13 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <!-- Step 4 — Detection threshold -->
     <section class="ob-step" data-step="4">
       <div class="ob-eyebrow">How sure is sure</div>
-      <h1 class="ob-h">How picky should it be?</h1>
+      <h1 class="ob-h" id="ob-conf-h">How picky should it be?</h1>
       <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
-      <div class="ob-cards cols2">
-        <div class="ob-card" data-radio="conf" data-value="0.9"><div class="ob-grow"><div class="t">Strict</div><div class="s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></div>
-        <div class="ob-card" data-radio="conf" data-value="0.75"><div class="ob-grow"><div class="t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">0.75 — realistic results without over-filtering. Start here.</div></div></div>
-        <div class="ob-card" data-radio="conf" data-value="0.6"><div class="ob-grow"><div class="t">Sensitive</div><div class="s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></div>
-        <div class="ob-card" data-radio="conf" data-value="0.4"><div class="ob-grow"><div class="t">Everything</div><div class="s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></div>
+      <div class="ob-cards cols2" role="radiogroup" aria-labelledby="ob-conf-h">
+        <label class="ob-card" data-radio="conf" data-value="0.9"><input class="ob-pick" type="radio" name="conf_card" value="0.9" aria-labelledby="ob-conf-strict-t" aria-describedby="ob-conf-strict-s"><div class="ob-grow"><div class="t" id="ob-conf-strict-t">Strict</div><div class="s" id="ob-conf-strict-s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.75"><input class="ob-pick" type="radio" name="conf_card" value="0.75" aria-labelledby="ob-conf-balanced-t" aria-describedby="ob-conf-balanced-s"><div class="ob-grow"><div class="t" id="ob-conf-balanced-t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-conf-balanced-s">0.75 — realistic results without over-filtering. Start here.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.6"><input class="ob-pick" type="radio" name="conf_card" value="0.6" aria-labelledby="ob-conf-sensitive-t" aria-describedby="ob-conf-sensitive-s"><div class="ob-grow"><div class="t" id="ob-conf-sensitive-t">Sensitive</div><div class="s" id="ob-conf-sensitive-s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></label>
+        <label class="ob-card" data-radio="conf" data-value="0.4"><input class="ob-pick" type="radio" name="conf_card" value="0.4" aria-labelledby="ob-conf-everything-t" aria-describedby="ob-conf-everything-s"><div class="ob-grow"><div class="t" id="ob-conf-everything-t">Everything</div><div class="s" id="ob-conf-everything-s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></label>
       </div>
       <input type="hidden" name="confidence_threshold" id="ob-conf" value="{{confidence}}">
       <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/admin">Settings → Detection</a>, and set per-species thresholds under Species.</p>
@@ -650,12 +779,12 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <!-- Step 5 — Notifications -->
     <section class="ob-step" data-step="5">
       <div class="ob-eyebrow">Who gets told</div>
-      <h1 class="ob-h">When should we ping you?</h1>
+      <h1 class="ob-h" id="ob-notify-h">When should we ping you?</h1>
       <p class="ob-p ob-mb-18">This sets <em>how often</em> alerts go out. Nothing is sent until you add somewhere to send it — you can do that whenever you like.</p>
-      <div class="ob-cards">
-        <div class="ob-card" data-radio="notify" data-value="new-species"><div class="ob-grow"><div class="t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only birds you have barely heard lately — the interesting ones.</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="new-species-daily"><div class="ob-grow"><div class="t">First of each species, daily</div><div class="s">One alert per species per day. A good middle ground.</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="each"><div class="ob-grow"><div class="t">Every detection</div><div class="s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></div>
+      <div class="ob-cards" role="radiogroup" aria-labelledby="ob-notify-h">
+        <label class="ob-card" data-radio="notify" data-value="new-species"><input class="ob-pick" type="radio" name="notify_card" value="new-species" aria-labelledby="ob-notify-weekly-t" aria-describedby="ob-notify-weekly-s"><div class="ob-grow"><div class="t" id="ob-notify-weekly-t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-notify-weekly-s">Only birds you have barely heard lately — the interesting ones.</div></div></label>
+        <label class="ob-card" data-radio="notify" data-value="new-species-daily"><input class="ob-pick" type="radio" name="notify_card" value="new-species-daily" aria-labelledby="ob-notify-daily-t" aria-describedby="ob-notify-daily-s"><div class="ob-grow"><div class="t" id="ob-notify-daily-t">First of each species, daily</div><div class="s" id="ob-notify-daily-s">One alert per species per day. A good middle ground.</div></div></label>
+        <label class="ob-card" data-radio="notify" data-value="each"><input class="ob-pick" type="radio" name="notify_card" value="each" aria-labelledby="ob-notify-each-t" aria-describedby="ob-notify-each-s"><div class="ob-grow"><div class="t" id="ob-notify-each-t">Every detection</div><div class="s" id="ob-notify-each-s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></label>
       </div>
       <input type="hidden" name="notification_mode" id="ob-notify" value="{{notify_trigger}}">
       <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/admin/settings">Settings → Notifications</a>. Until then this setting is simply waiting.</p>
@@ -667,7 +796,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <div>
           <div class="ob-eyebrow">All set</div>
           <h1 class="ob-h">You're <em>listening</em>.</h1>
-          <p class="ob-p">The pipeline is warming up. Within a minute or two you'll see the first detections roll in.</p>
+          <p class="ob-p">Your answers are saved. The location, accuracy and alert settings take effect the next time the station starts — restart it from <a href="/admin/system">Settings → System</a> (or reboot the Pi); detections then start rolling in within a minute or two.</p>
           <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
             <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>
@@ -724,11 +853,28 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   function finish() { form.requestSubmit(); }
 
   back.addEventListener('click', function () { if (step > 1) { step--; render(); } });
+  // The password block is rendered only on a station that has none. Both
+  // fields blank means "not now" (the station stays open and the dashboard
+  // keeps saying so); anything typed must be long enough and typed twice.
+  function passwordOk() {
+    var a = document.getElementById('ob-password-1');
+    var b = document.getElementById('ob-password-2');
+    if (!a || !b) { return true; }
+    if (!a.value && !b.value) { return true; }
+    if (a.value.length < 10 || a.value !== b.value) {
+      var hint = document.getElementById('ob-password-hint');
+      if (hint) { hint.textContent = a.value.length < 10 ? 'At least 10 characters.' : 'The two passwords do not match.'; }
+      (a.value.length < 10 ? a : b).focus();
+      return false;
+    }
+    return true;
+  }
   next.addEventListener('click', function (e) {
     e.preventDefault();
+    if (step === 1 && !passwordOk()) { return; }
     if (step < total) { step++; render(); } else { finish(); }
   });
-  skip.addEventListener('click', function (e) { e.preventDefault(); finish(); });
+  skip.addEventListener('click', function (e) { e.preventDefault(); if (passwordOk()) { finish(); } });
 
   // Single-select radio cards; mirror the chosen value into the form's hidden
   // input for that group. Keyed by data-radio so a new group only needs an
@@ -751,12 +897,25 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     var input = document.getElementById(mirrors[group]);
     if (!input) { return; }
     document.querySelectorAll('[data-radio="' + group + '"]').forEach(function (c) {
-      if (c.dataset.value === input.value) { c.classList.add('sel'); }
+      if (c.dataset.value === input.value) {
+        c.classList.add('sel');
+        var pick = c.querySelector('.ob-pick');
+        if (pick) { pick.checked = true; }
+      }
     });
   });
 
-  document.querySelectorAll('[data-radio]').forEach(function (card) {
-    card.addEventListener('click', function () {
+  // Each card is a <label> around a real radio input (UX-1), so Tab reaches
+  // the group and the arrow keys move within it. A click on the card and an
+  // arrow key both end in the input's `change`, so one handler serves both;
+  // the delegated click handler this replaces was unreachable without a
+  // mouse. The radios' own names (`conf_card`, `notify_card`) are not what
+  // the server reads: the mirrored hidden input still carries the value, so
+  // a station whose current setting matches no card keeps it.
+  document.querySelectorAll('[data-radio] .ob-pick').forEach(function (pick) {
+    pick.addEventListener('change', function () {
+      var card = pick.closest('[data-radio]');
+      if (!card || !pick.checked) { return; }
       document.querySelectorAll('[data-radio="' + card.dataset.radio + '"]').forEach(function (c) {
         c.classList.remove('sel');
       });

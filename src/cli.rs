@@ -165,6 +165,17 @@ pub struct Cli {
     #[arg(long)]
     pub check_db: bool,
 
+    /// Validate FILE, install it as the configuration, restart the service,
+    /// and exit.
+    ///
+    /// The safe way to change the configuration on a running station: a file
+    /// with errors is refused and nothing changes; a good one is installed
+    /// behind a timestamped backup of the previous file and the service is
+    /// restarted. Should the station fail to start on it anyway, it runs on
+    /// the last configuration a start succeeded on and says so at /station.
+    #[arg(long, value_name = "FILE")]
+    pub apply_config: Option<PathBuf>,
+
     /// Create database backup and exit.
     #[arg(long)]
     pub backup_db: bool,
@@ -376,6 +387,28 @@ pub struct Cli {
     /// for the full egress list.
     #[arg(long, env = "BIRDNET_OFFLINE")]
     pub offline: bool,
+
+    /// Put the whole station behind the sign-in, not only the admin panel.
+    ///
+    /// By default viewing is open: the dashboard, the read API, the live
+    /// audio stream and both `WebSockets` are served to anyone who can reach
+    /// the port. Behind a tunnel or a port forward that is the internet.
+    /// With this set, everything needs a session except the sign-in form,
+    /// its assets, the health probe and what `--public-access` names. A
+    /// private station with no admin password (`CADDY_PWD`) answers 503 to
+    /// everything else rather than falling open. Config file:
+    /// `PRIVATE_MODE`.
+    #[arg(long, env = "BIRDNET_PRIVATE_MODE")]
+    pub private_mode: bool,
+
+    /// What stays open on a private station: a comma-separated list of
+    /// `live_audio` (the stream and the live spectrogram), `share`
+    /// (operator-minted `/r/<token>` links) and `metrics` (`/api/v2/metrics`).
+    ///
+    /// No effect without `--private-mode`. An unknown name is reported and
+    /// skipped. Config file: `PUBLIC_ACCESS`.
+    #[arg(long, env = "BIRDNET_PUBLIC_ACCESS")]
+    pub public_access: Option<String>,
 
     /// Skip the daily check for a new release.
     ///
@@ -595,6 +628,10 @@ pub struct Cli {
     /// classifier (a matched BirdNET pair). The station verifies that at
     /// startup and refuses a mismatched model rather than reporting one bird
     /// under another bird's name.
+    ///
+    /// This file also carries each species' eBird code, which the species
+    /// page's "View on eBird" link is built from; without it that link is
+    /// not shown.
     #[arg(long, env = "BIRDNET_METADATA_LABELS")]
     pub metadata_labels: Option<PathBuf>,
 
@@ -607,8 +644,11 @@ pub struct Cli {
 
     /// Privacy filter threshold for human voice detection (0.0 = disabled).
     ///
-    /// When enabled, audio chunks containing human voice are suppressed along
-    /// with adjacent chunks. Typical values: 0.01-0.03.
+    /// The model's confidence for its human classes (speech, whistling, other
+    /// human sounds) at or above which an analysis window is suppressed, along
+    /// with the windows either side of it. Read from the model's output before
+    /// the detection threshold applies, so this value binds on its own: lower
+    /// suppresses more. Typical values: 0.01-0.03.
     #[arg(long, default_value = "0.0", env = "BIRDNET_PRIVACY_THRESHOLD")]
     pub privacy_threshold: f32,
 
@@ -799,17 +839,29 @@ pub struct Cli {
     #[arg(long, default_value = "0", env = "BIRDNET_CLIP_RETENTION_DAYS")]
     pub clip_retention_days: u32,
 
-    /// Disk-usage percentage at which the oldest recordings start being purged.
+    /// Disk-usage percentage at which recordings start being purged.
     ///
     /// The safety net that keeps a 24/7 station from filling its card: once the
-    /// data disk crosses this, the oldest clips are deleted first, and locked
-    /// clips are never touched. `BirdNET-Pi` equivalent: `DISK_PURGE_THRESHOLD`.
+    /// data disk crosses this, clips are deleted from the most-recorded species
+    /// first (lowest confidence, then oldest, within it), no species is taken
+    /// below `--purge-species-floor`, and locked clips are never touched.
+    /// `BirdNET-Pi` equivalent: `DISK_PURGE_THRESHOLD`.
     ///
     /// `0` leaves the resolution to the config file / admin settings, then the
     /// 95 % default — the flag is only "set" when given, so it never silently
     /// overrides a value chosen in the UI.
     #[arg(long, default_value = "0", env = "BIRDNET_DISK_PURGE_THRESHOLD")]
     pub disk_purge_threshold: u8,
+
+    /// Clips every species keeps when the disk-full purge runs.
+    ///
+    /// The purge takes from the most-recorded species first, so the single
+    /// clip of the year's rarest bird is the last thing to go; this floor makes
+    /// it never go: a species with this many clips or fewer is not touched,
+    /// however full the disk is. `0` removes the floor. Config file:
+    /// `PURGE_SPECIES_FLOOR`; unset, 5.
+    #[arg(long, env = "BIRDNET_PURGE_SPECIES_FLOOR")]
+    pub purge_species_floor: Option<u32>,
 
     /// Seconds a raw capture segment is kept in the transient stream directory.
     ///
@@ -827,6 +879,19 @@ pub struct Cli {
     /// default.
     #[arg(long, default_value = "0", env = "BIRDNET_STREAM_MAX_MB")]
     pub stream_max_mb: u64,
+
+    /// Keep one raw capture segment in N on the data disk.
+    ///
+    /// The raw audio is otherwise gone once analysed, so only what already
+    /// triggered a detection survives and a season can never be re-analysed
+    /// under a new model. With this set, one aged segment in N (in capture
+    /// order) is copied to `<recordings>/raw` before the stream directory
+    /// drains it; `1` keeps every segment. Budget it: a 15 s segment at 48 kHz
+    /// mono is about 1.4 MB, so `1` is roughly 8 GB a day per source and `10`
+    /// about 0.8 GB. The disk-full purge takes kept raw audio before any clip.
+    /// Config file: `RAW_AUDIO_KEEP_EVERY`; unset or 0, nothing is kept.
+    #[arg(long, env = "BIRDNET_RAW_AUDIO_KEEP_EVERY")]
+    pub raw_audio_keep_every: Option<u32>,
 
     /// Directory containing custom species images (checked before Wikipedia cache).
     ///

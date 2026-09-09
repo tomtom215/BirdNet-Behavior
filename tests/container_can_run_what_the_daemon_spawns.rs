@@ -118,6 +118,18 @@ const TOOLS: &[(&str, Provenance)] = &[
         "umount",
         Provenance::NotInContainer("the counterpart to `mount` — host-side tmpfs teardown"),
     ),
+    (
+        "vcgencmd",
+        // `system_info::pi_throttled` asks the Raspberry Pi firmware for its
+        // under-voltage and throttling bits. The binary comes with the Pi OS
+        // firmware packages, not Debian; everywhere else (this container
+        // included) the spawn fails, the reading is `None`, and the power
+        // condition simply does not exist. Installing it in the container would
+        // not help: it needs the VideoCore mailbox, which is the host's.
+        Provenance::NotInContainer(
+            "Raspberry Pi firmware tool; needs the host's VideoCore mailbox",
+        ),
+    ),
 ];
 
 /// Repository root, from `CARGO_MANIFEST_DIR` (this test lives in the root
@@ -332,7 +344,9 @@ fn no_command_spawn_hides_below_a_cfg_test() {
     // The production/test split above cuts at the first `#[cfg(test)]`. If a
     // real spawn ever lands below one, this catches it: everything in the tail
     // must be either classified or a known test-only helper.
-    const TEST_ONLY: &[&str] = &["sleep"];
+    // `sh` and the nonexistent path are what `birdnet_core::process`'s own
+    // tests spawn to prove a deadline kills and a missing program is reported.
+    const TEST_ONLY: &[&str] = &["sleep", "sh", "/nonexistent/birdnet-no-such-tool"];
     let mut stray: Vec<String> = Vec::new();
     for file in source_files() {
         let Ok(src) = std::fs::read_to_string(&file) else {
@@ -399,5 +413,40 @@ fn the_alsa_overlay_is_only_shipped_if_the_image_can_use_it() {
         "docker-compose.alsa.yml is shipped as the supported USB-microphone \
          path, but the runtime image installs no alsa-utils, so `arecord` \
          cannot be spawned and the container records nothing"
+    );
+}
+
+/// ON-7 / NT-6. Detections are filed under local hours, and in the container
+/// those come from `TZ`: glibc reads it, and SQLite's `localtime` (the one
+/// source of the station's offset) with it. That needs the zoneinfo files
+/// (`tzdata`, which `debian:*-slim` does not carry) and the variable passed
+/// through. Without both, every container station filed a season under UTC
+/// hours while its operator read local ones — and with `TZ` set but no
+/// zoneinfo, glibc falls back to UTC silently, which looks configured.
+#[test]
+fn the_image_carries_zoneinfo_and_compose_passes_tz_through() {
+    assert!(
+        runtime_stage_packages().contains("tzdata"),
+        "the runtime stage must install tzdata, or TZ resolves to UTC whatever it says"
+    );
+    let compose = std::fs::read_to_string(repo_root().join("docker-compose.yml")).unwrap();
+    // Assembled from two halves so no literal holds a brace pair the
+    // formatting-argument lint would read as one.
+    let tz_line = ["TZ: ${", "TZ:-UTC}"].concat();
+    assert!(
+        compose.contains(&tz_line),
+        "docker-compose.yml must pass TZ into the container (defaulting to UTC, never blank)"
+    );
+    let entrypoint = std::fs::read_to_string(repo_root().join("docker/entrypoint.sh")).unwrap();
+    assert!(
+        entrypoint.contains("/usr/share/zoneinfo/$TZ"),
+        "the entrypoint must check TZ names a zone the image knows"
+    );
+    let env_example = std::fs::read_to_string(repo_root().join(".env.example")).unwrap();
+    assert!(
+        env_example
+            .lines()
+            .any(|l| l.trim_start().starts_with("#TZ=") || l.starts_with("TZ=")),
+        ".env.example must document TZ"
     );
 }

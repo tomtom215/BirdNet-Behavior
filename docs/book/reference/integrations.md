@@ -97,6 +97,9 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_inference_duration_seconds` | histogram | Per-chunk inference latency (decode → prediction). |
 | `birdnet_db_write_duration_seconds` | histogram | SQLite insert latency for one detection row. |
 | `birdnet_files_analysed_total` | counter | Audio files the pipeline finished analysing, labeled by `source`. **The series that separates "the model is answering nothing" from "the pipeline is not running"** — every other signal is downstream of a prediction the model made, so both states leave them flat and empty. A 15-second segment length gives about 5 760 a day per source. |
+| `birdnet_segments_dropped_total` | counter | Raw segments the watcher announced that were gone before the pipeline read them, labeled by `source`: recorded audio that was never analysed. Rising means the stream directory is being drained faster than inference keeps up. A segment the pipeline is reading is claimed and never the one the purge takes. |
+| `birdnet_analysis_queue_depth` | gauge | Raw segments waiting for analysis after the daemon's last sweep. Climbing means inference is slower than real time; above 40 the daemon sheds (below). Absent until the daemon reports. |
+| `birdnet_segments_shed_total` | counter | Raw segments the shed policy chose not to analyse, labeled by `reason`: `backlog` (more than 40 waiting) or `thermal` (the board at or above 80 °C, or throttling). One segment in two is skipped while either holds, so the queue drains at twice the rate and the skipped audio is counted rather than lost. |
 | `birdnet_audio_source_up` | gauge | `1` if an audio source is producing samples, else `0`, labeled by `source` (e.g. `local`, `cam1`). One series per capture source. |
 | `birdnet_detection_silence_seconds` | gauge | Seconds since the most recent stored detection — the end-to-end "is it actually detecting?" freshness signal (see [System Health](../admin/system.md)). Absent until the first measurement / on a station with no detections yet. |
 | `birdnet_outbound_queue_depth` | gauge | Store-and-forward uploads parked for replay after a network failure, labeled by `kind` (e.g. `birdweather`). A depth that only grows means the uplink or token has been broken for a while. |
@@ -117,6 +120,15 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_capture_stalls_total` | counter | Capture processes found alive but producing no segments, labeled by `source`. |
 | `birdnet_occurrence_filter_active` | gauge | `1` when species occurrence filtering is running, `0` when every species the classifier knows is admitted. |
 | `birdnet_occurrence_candidates` | gauge | Species the occurrence filter currently admits. |
+| `birdnet_orphaned_clips` | gauge | Detections whose clip the disk no longer had, found and stamped by the last daily reconciliation pass; absent until one has run. |
+| `birdnet_analytics_mirror_failures_total` | counter | Detections the database accepted and the DuckDB analytics copy refused since process start. |
+| `birdnet_purge_ineffective` | gauge | `1` when the last disk-full purge removed recordings without lowering usage: the card is full of something the purge cannot reach, and it has stopped deleting until usage falls. |
+| `birdnet_disk_used_percent` | gauge | Space used on the volume, labeled `volume="data"` (the database's directory) and, when it is a different filesystem, `volume="scratch"` (the temporary directory). |
+| `birdnet_disk_available_bytes` | gauge | Bytes this user can still write on the volume, same labels. |
+| `birdnet_cpu_temperature_celsius` | gauge | CPU temperature from the board's sensor; absent where none is exposed. |
+| `birdnet_pi_throttled_bits` | gauge | A Raspberry Pi firmware's `get_throttled` mask: bits 0–3 now (under-voltage, frequency capped, throttled, soft temperature limit), bits 16–19 since boot. Absent off a Pi. |
+| `birdnet_maintenance_last_run_seconds` | gauge | When the scheduled job last completed, seconds since the Unix epoch, labeled by `job` (`backup_vacuum`, `integrity_check`, `offsite_backup`). |
+| `birdnet_maintenance_last_ok` | gauge | Whether the job's last run succeeded (`1`) or failed (`0`); absent for a job that records no verdict. |
 | `birdnet_http_responses_total` | counter | Web responses served, labeled by status `class`. |
 | `birdnet_http_request_duration_seconds` | histogram | Web request handling latency in seconds. |
 
@@ -136,9 +148,13 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 for the container health check — Docker restarts an unhealthy container, and a
 station whose detection daemon is down is exactly the one that must stay up to
 be diagnosed. The strict form additionally returns `503` when the detection
-daemon is not running, so a monitor that should wake a human can get a red out
-of the same endpoint. Both report `detection_daemon` and
-`detection_silence_secs` in the body either way.
+daemon is not running, when the data disk is critically full or `df` cannot
+read it, or when the admin-password bootstrap failed at start, so a monitor
+that should wake a human can get a red out of the same endpoint. A data volume
+that is not taking writes at all — a read-only remount, a card full to the
+byte, a mount that has gone away — is `503` on both forms. Both report
+`detection_daemon`, `detection_silence_secs` and `data_volume` in the body
+either way.
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:
@@ -189,6 +205,16 @@ Share detections with the [BirdWeather](https://www.birdweather.com/) network us
 ```dotenv
 BIRDNET_BIRDWEATHER_TOKEN=your-station-token
 ```
+
+Each detection goes up with its audio: the saved clip is uploaded first as a
+soundscape, and the detection post carries that soundscape's id and the
+detection's start and end inside it, so what BirdWeather shows for this
+station can be listened to. The id is kept on the detection row
+(`birdweather_soundscape_id`). If the clip cannot be uploaded the detection
+still goes, without it. Posts are stamped with the station's local time and
+its UTC offset. `algorithm` is sent only for a model BirdWeather has a name
+for (`2p4`, the V2.4 classifier); the shipped V3.0 model is left unnamed rather
+than mislabelled.
 
 Uploads are **resilient to a flaky uplink**: a post that fails after its
 in-flight retries is parked in the local database and replayed **oldest-first**

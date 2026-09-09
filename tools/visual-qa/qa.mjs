@@ -29,6 +29,9 @@ const DENSITY = process.env.DENSITY || 'regular';
 const MOTION = process.env.MOTION || '';
 const CONTRAST = process.env.CONTRAST || '';
 const ONLY = process.env.ONLY || '';
+// Explicit browser binary, for sandboxes that ship their own Chromium rather
+// than the build this playwright pinned (same knob as axe.mjs / interactions.mjs).
+const CHROMIUM_PATH = process.env.CHROMIUM_PATH || '';
 
 // `touch: true` is load-bearing, not cosmetic. The phone layout is behind
 // `@media (max-width: 720px) and (pointer: coarse)`, and a Playwright context
@@ -153,7 +156,7 @@ async function diagnose(page) {
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  const browser = await chromium.launch();
+  const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
   const report = {};
   let n = 0;
 

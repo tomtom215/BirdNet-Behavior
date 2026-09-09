@@ -49,6 +49,7 @@ mod daylight;
 pub mod disposition;
 mod duplicate;
 mod processor;
+mod run;
 
 #[cfg(test)]
 mod test_support;
@@ -93,6 +94,67 @@ fn is_enabled_but_inert(
     config.enabled && !config.is_effective_at(global_confidence)
 }
 
+/// What the daemon reports about its own throughput (OB-12, PR-1, PR-2),
+/// mapped onto the metrics registry. The source label is derived here
+/// because `derive_source_label` is the one place that knows the convention.
+fn throughput_observer(
+    state: &birdnet_web::state::AppState,
+) -> birdnet_core::detection::daemon::ThroughputObserver {
+    birdnet_core::detection::daemon::ThroughputObserver::new({
+                let metrics = state.metrics();
+                move |path| {
+                    metrics
+                        .inc_file_analysed(&crate::daemon::disposition::derive_source_label(path));
+                }
+            })
+            // A segment gone before the pipeline read it (PR-1 / S-3): the
+            // counter that used to be a log line identical to the healthy case.
+            .with_dropped({
+                let metrics = state.metrics();
+                move |path| {
+                    metrics.inc_segment_dropped(&crate::daemon::disposition::derive_source_label(
+                        path,
+                    ));
+                }
+            })
+            // The queue's depth and what the shed policy skipped (PR-2).
+            .with_queue_depth({
+                let metrics = state.metrics();
+                move |depth| metrics.set_analysis_queue_depth(depth)
+            })
+            .with_shed({
+                let metrics = state.metrics();
+                move |_path, reason| metrics.inc_segment_shed(reason.as_str())
+            })
+}
+
+/// Whether the board is at the limit the shed policy backs off at: the CPU
+/// at or above the thermal-alert line, or the firmware throttling now.
+///
+/// The sensor reads stay in [`shed_policy`]'s closure; the decision is here
+/// so it can be stated as a table. Both of its operators survived a full
+/// mutation run inside the closure (`>=` for `<`, `||` for `&&`) because
+/// nothing could call a closure that reads the real sensor.
+fn thermal_limit_reached(cpu_temp_c: Option<f32>, throttled_now: bool) -> bool {
+    cpu_temp_c.is_some_and(|t| t >= crate::integrations::THERMAL_ALERT_C) || throttled_now
+}
+
+/// One segment in two while the queue is deep or the board is at its thermal
+/// limit (PR-2); the thermal condition and this read the same sensor and the
+/// same line, so the notification and the shed agree.
+fn shed_policy() -> birdnet_core::detection::daemon::ShedPolicy {
+    birdnet_core::detection::daemon::ShedPolicy::new(
+        birdnet_core::detection::daemon::DEFAULT_SHED_BACKLOG_ABOVE,
+    )
+    .with_thermal(|| {
+        thermal_limit_reached(
+            birdnet_web::system_info::cpu_temperature(),
+            birdnet_web::system_info::pi_throttled()
+                .is_some_and(birdnet_web::system_info::PiThrottle::throttled_now),
+        )
+    })
+}
+
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
@@ -113,6 +175,7 @@ pub fn start_detection_daemon(
     mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
+    in_flight: birdnet_core::detection::daemon::InFlight,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     let Some((model_path, labels_path, watch_dir)) = resolve_required_paths(cli, config) else {
         tracing::warn!(
@@ -271,12 +334,13 @@ pub fn start_detection_daemon(
         // empty. The label is derived here rather than in `birdnet-core`
         // because `derive_source_label` is the one place that knows the
         // convention.
-        on_file_analysed: Some(birdnet_core::detection::daemon::ThroughputObserver::new({
-            let metrics = state.metrics();
-            move |path| {
-                metrics.inc_file_analysed(&crate::daemon::disposition::derive_source_label(path));
-            }
-        })),
+        on_file_analysed: Some(throughput_observer(&state)),
+        // The stream directory's purge honours these claims (PR-1 / S-3).
+        in_flight: Some(in_flight),
+        // One segment in two while the queue is deep or the board is at its
+        // thermal limit (PR-2); the thermal condition and this read the same
+        // sensor and the same line, so the notification and the shed agree.
+        shed: Some(shed_policy()),
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
@@ -292,15 +356,24 @@ pub fn start_detection_daemon(
 
     let thresholds_for_processor = daemon_config.species_thresholds.clone();
     let global_confidence = confidence;
-    // What every row this run writes will say about the station and the
-    // settings that produced it (R-2 / UP-1). Taken from the same resolved
-    // values the model and the daylight filter use, so the row and the run
-    // cannot disagree.
-    let provenance = processor::RunProvenance {
-        lat: latitude,
-        lon: longitude,
+    // What every row this run writes will say about the station, the settings
+    // (R-2 / UP-1) and the model (R-1) that produced it. The settings are the
+    // same resolved values the model and the daylight filter use, so the row
+    // and the run cannot disagree; the model is hashed and written to
+    // `analysis_runs` on the processor thread before it consumes an event —
+    // paths only here, because the hashing reads 541 MB and does not belong
+    // on the async runtime.
+    let manifest = run::RunManifest {
+        model_path: daemon_config.model_path.clone(),
+        labels_path: daemon_config.labels_path.clone(),
+        geomodel_path: daemon_config.metadata_model_path.clone(),
+        app_version: env!("CARGO_PKG_VERSION"),
+        confidence: f64::from(confidence),
         sensitivity: f64::from(sensitivity),
         overlap: f64::from(overlap),
+        sf_thresh: f64::from(sf_thresh),
+        lat: latitude,
+        lon: longitude,
     };
 
     // Extract clips into the SAME dir the web serves recordings from
@@ -316,6 +389,11 @@ pub fn start_detection_daemon(
             tracing::info!("detection daemon started");
             let rt_handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
+                // No run, no rows: returning here drops the receiver, the
+                // daemon stops on its next send, and `?strict=1` says so.
+                let Some(provenance) = run::provenance_for(&state, &manifest) else {
+                    return;
+                };
                 event_processor(
                     event_rx,
                     state,
@@ -443,6 +521,30 @@ mod liveness_mirror_tests {
 mod tests {
     use super::*;
 
+    /// The shed policy's thermal input, as a table.
+    ///
+    /// | CPU temperature        | throttled now | at the limit? |
+    /// |------------------------|---------------|---------------|
+    /// | unknown                | no            | no            |
+    /// | below the alert line   | no            | no            |
+    /// | exactly the alert line | no            | yes           |
+    /// | above it               | no            | yes           |
+    /// | unknown                | yes           | yes           |
+    /// | below the alert line   | yes           | yes           |
+    ///
+    /// The exact-line row separates `>=` from `>` and from `<`; the two
+    /// throttled rows with a cool or unknown CPU separate `||` from `&&`.
+    #[test]
+    fn the_thermal_limit_is_the_alert_line_or_the_firmware_throttling() {
+        let line = crate::integrations::THERMAL_ALERT_C;
+        assert!(!thermal_limit_reached(None, false));
+        assert!(!thermal_limit_reached(Some(line - 0.5), false));
+        assert!(thermal_limit_reached(Some(line), false));
+        assert!(thermal_limit_reached(Some(line + 10.0), false));
+        assert!(thermal_limit_reached(None, true));
+        assert!(thermal_limit_reached(Some(line - 20.0), true));
+    }
+
     /// The full truth table for the "enabled but inert" warning.
     ///
     /// Both of this branch's mutants — `&&` to `||`, and dropping the `!` —
@@ -558,7 +660,17 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, filter, template,
+            &cli,
+            None,
+            state,
+            broadcast,
+            None,
+            None,
+            None,
+            None,
+            filter,
+            template,
+            birdnet_core::detection::daemon::InFlight::new(),
         );
 
         assert!(
@@ -610,7 +722,17 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, filter, template,
+            &cli,
+            None,
+            state,
+            broadcast,
+            None,
+            None,
+            None,
+            None,
+            filter,
+            template,
+            birdnet_core::detection::daemon::InFlight::new(),
         );
 
         assert!(
@@ -644,7 +766,17 @@ mod tests {
         let template = birdnet_integrations::notification::NotificationTemplate::default();
 
         let handle = start_detection_daemon(
-            &cli, None, state, broadcast, None, None, None, None, filter, template,
+            &cli,
+            None,
+            state,
+            broadcast,
+            None,
+            None,
+            None,
+            None,
+            filter,
+            template,
+            birdnet_core::detection::daemon::InFlight::new(),
         );
         assert!(
             handle.is_none(),

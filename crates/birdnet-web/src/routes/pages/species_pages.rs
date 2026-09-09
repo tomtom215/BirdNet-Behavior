@@ -221,7 +221,7 @@ fn photos_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
         let enc_sci = simple_url_encode(&s.sci_name);
         let _ = write!(
             cards,
-            r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="color:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
+            r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
             name = escape_html(&s.com_name),
             count = format_count(s.count),
         );
@@ -671,7 +671,6 @@ async fn species_info_partial(
     // Add species info links (eBird/AllAboutBirds) — always shown
     let info_site = state.info_site();
     if info_site != "none" {
-        let encoded_sci = simple_url_encode(&sci_name);
         let encoded_com = simple_url_encode(&name);
         match info_site {
             "allaboutbirds" => {
@@ -681,16 +680,45 @@ async fn species_info_partial(
                 );
             }
             _ => {
-                // Default to eBird
-                let _ = write!(
-                    html,
-                    r#"<p class="spp-mt"><a href="https://ebird.org/species/{encoded_sci}" target="_blank" rel="noopener" class="spp-link">View on eBird</a></p>"#,
-                );
+                // Default to eBird.
+                html.push_str(&ebird_link(
+                    state.ebird_species_code(&sci_name),
+                    if sci_name.is_empty() {
+                        &name
+                    } else {
+                        &sci_name
+                    },
+                ));
             }
         }
     }
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// The "View on eBird" line of the species panel (NP-1).
+///
+/// eBird's species pages are keyed on the six-letter eBird species code
+/// (`https://ebird.org/species/zothaw`), not on the scientific name: the link
+/// this replaced put the name in the path and every one of them 404'd. The
+/// code comes from the geomodel's label file, so a station without that file
+/// has none — and then this says so, with the flag that supplies it, rather
+/// than linking to a page that is not there.
+fn ebird_link(code: Option<&str>, shown_name: &str) -> String {
+    code.map_or_else(
+        || {
+            format!(
+                r#"<p class="spp-muted-sm">No eBird link: this station has no eBird species code for <em>{}</em>. The geomodel's label file supplies the codes — see <code>--metadata-labels</code>.</p>"#,
+                escape_html(shown_name),
+            )
+        },
+        |code| {
+            format!(
+                r#"<p class="spp-mt"><a href="https://ebird.org/species/{}" target="_blank" rel="noopener" class="spp-link">View on eBird</a></p>"#,
+                simple_url_encode(code),
+            )
+        },
+    )
 }
 
 /// HTMX partial: status pills (detection count, first/last heard, mean

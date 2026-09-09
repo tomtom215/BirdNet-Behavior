@@ -25,7 +25,7 @@ The [scheduler](../reference/architecture.md) computes sunrise and sunset from y
 
 ## Privacy threshold
 
-`BIRDNET_PRIVACY_THRESHOLD` (default `0.0`, disabled) discards segments where **human speech** is the dominant sound above the given confidence, so casual conversation near the mic isn't written to disk. Raise it (e.g. `0.5`) if the microphone is near a patio or path.
+`BIRDNET_PRIVACY_THRESHOLD` (default `0.0`, disabled) discards every analysis window in which the model's confidence for a **human** class (speech, whistling, other human sounds) reaches the value, and the windows either side of it, so casual conversation near the mic isn't written to disk. The confidence is read from the model's output before the detection threshold applies, so the setting binds on its own: changing the detection threshold does not change what the privacy filter does. Lower values suppress more. `0.02` is a usual starting point; *lower* it (towards `0.01`) if the microphone is near a patio or path, and raise it if birdsong is being suppressed.
 
 ## Retention — how clips are purged
 
@@ -36,4 +36,4 @@ Retention is **disk-based by default**, with an optional age limit on top:
 - At most `BIRDNET_MAX_FILES_PER_SPECIES` (`--max-files-per-species`, default `0` = unlimited) clips are kept per species.
 - **Locked** clips are *never* purged — lock anything you want to keep permanently from the [Today](../guide/today.md) page or a species' recordings.
 
-The detection rows in the database are kept regardless; purging only removes the audio files, not the history. The [storage breakdown](./backups.md) on the Backups page shows how much space recordings are using.
+The detection rows in the database are kept regardless; purging only removes the audio files, not the history. Once a day the station also reconciles the database with the recordings folder: a detection whose clip is no longer on disk, whatever removed it, is marked as pruned so its play button goes away, and any half-written `.part` file older than an hour is removed. The count reaches the log and the `birdnet_orphaned_clips` metric. The [storage breakdown](./backups.md) on the Backups page shows how much space recordings are using.

@@ -67,6 +67,13 @@ services:
       # Web server — must bind to all interfaces inside the container
       BIRDNET_LISTEN: ${BIRDNET_LISTEN:-0.0.0.0:8502}
 
+      # Timezone. Detections are filed under the container's local hours, and
+      # those come from TZ (the image carries the zoneinfo files it needs).
+      # Unset, the station runs on UTC and every hour on the dashboard is a
+      # UTC hour. Set it in .env: TZ=Europe/Berlin. This one is written with a
+      # real default so it is never a blank string.
+      TZ: ${TZ:-UTC}
+
       # Data paths inside the container (change only if you remap the volumes)
       BIRDNET_WATCH_DIR: /data/recordings
       BIRDNET_ANALYTICS_DB: /data/analytics.db
@@ -148,6 +155,15 @@ services:
     # starts reuse the cached model in the named volume and come up almost
     # instantly, so the long start_period has no steady-state cost.
     # -------------------------------------------------------------------------
+    # Deliberately NOT `?strict=1`. The plain probe answers 200 whenever the
+    # database is serving and the data volume takes writes; it stays 200 with
+    # the detection daemon stopped, and that is the point: Docker restarts an
+    # unhealthy container, and a station whose daemon is down is exactly the
+    # one that must stay up to be diagnosed — a restart loop destroys the
+    # journal that says why. Point a monitor that should wake a human at
+    # `/api/v2/health?strict=1` instead (see the integrations reference); it
+    # returns 503 for a stopped daemon, a critically full disk and a failed
+    # admin bootstrap as well.
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent",
              "http://localhost:8502/api/v2/health"]

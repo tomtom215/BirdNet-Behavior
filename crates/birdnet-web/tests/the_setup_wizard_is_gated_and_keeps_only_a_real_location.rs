@@ -79,6 +79,61 @@ async fn post_form(state: &AppState, path: &str, body: &str) -> (StatusCode, Opt
     (resp.status(), location)
 }
 
+/// As [`post_form`], also returning the `Set-Cookie` the response carried.
+async fn post_form_with_cookie(
+    state: &AppState,
+    path: &str,
+    body: &str,
+) -> (StatusCode, Option<String>, Option<String>) {
+    let resp = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::HOST, "localhost")
+                .header(header::ORIGIN, "http://localhost")
+                .body(Body::from(body.to_owned()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let header_str = |name: header::HeaderName| {
+        resp.headers()
+            .get(name)
+            .map(|v| v.to_str().unwrap().to_owned())
+    };
+    (
+        resp.status(),
+        header_str(header::LOCATION),
+        header_str(header::SET_COOKIE),
+    )
+}
+
+/// `GET path` carrying `cookie` (the raw `Set-Cookie` value's first pair).
+async fn get_with_cookie(
+    state: &AppState,
+    path: &str,
+    cookie: &str,
+) -> (StatusCode, Option<String>) {
+    let pair = cookie.split(';').next().unwrap_or_default().to_owned();
+    let resp = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header(header::COOKIE, pair)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let location = resp
+        .headers()
+        .get(header::LOCATION)
+        .map(|v| v.to_str().unwrap().to_owned());
+    (resp.status(), location)
+}
+
 fn setting(state: &AppState, key: &str) -> Option<String> {
     state.with_db(|conn| {
         conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
@@ -181,4 +236,109 @@ async fn the_wizard_keeps_a_real_location_and_nothing_else() {
         setting(&state, "onboarding_complete").as_deref(),
         Some("true")
     );
+}
+
+/// DD-14: an open station's wizard asks for the admin password first, and the
+/// browser that finishes setup with one owns the station — it leaves with a
+/// session, and everybody else meets the login page from then on. Before
+/// this, the six steps never asked, and `/admin/*` stayed open until the
+/// operator found a form labelled "Reset password" on their own.
+#[tokio::test]
+async fn an_open_station_asks_for_a_password_and_the_first_browser_owns_it() {
+    let (_dir, state) = station(None);
+
+    let (status, _, body) = get(&state, "/onboarding").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("First, the admin password"), "{body}");
+    assert!(body.contains(r#"name="password_confirm""#), "{body}");
+
+    // Anyone can reach an admin page right now — that is the condition.
+    let (status, _, _) = get(&state, "/admin/settings").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "an open station serves /admin/settings"
+    );
+
+    let (status, location, cookie) = post_form_with_cookie(
+        &state,
+        "/onboarding/save",
+        "password=correct-horse-battery&password_confirm=correct-horse-battery&latitude=51.48&longitude=-0.13",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{location:?}");
+    assert_eq!(location.as_deref(), Some("/"));
+    let cookie = cookie.expect("the browser that set the password leaves signed in");
+    assert!(cookie.starts_with("bnb-session="), "{cookie}");
+    assert_eq!(setting(&state, "latitude").as_deref(), Some("51.48"));
+
+    // Everybody else now meets the login page; the one that set it does not.
+    let (status, location, _) = get(&state, "/admin/settings").await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "the station is gated now");
+    assert_eq!(location.as_deref(), Some("/login?next=/admin/settings"));
+    let (status, _) = get_with_cookie(&state, "/admin/settings", &cookie).await;
+    assert_eq!(status, StatusCode::OK, "the setting browser is signed in");
+
+    // And the wizard no longer asks, because the answer is on file.
+    let (status, _) = get_with_cookie(&state, "/onboarding", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, body) = {
+        let pair = cookie.split(';').next().unwrap().to_owned();
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/onboarding")
+                    .header(header::COOKIE, pair)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            None::<String>,
+            String::from_utf8_lossy(&bytes).into_owned(),
+        )
+    };
+    assert!(!body.contains("First, the admin password"), "{body}");
+}
+
+/// A password that does not match its confirmation, or is too short, saves
+/// nothing at all and sends the operator back to the step — not a configured,
+/// still-open station with no explanation.
+#[tokio::test]
+async fn a_refused_password_saves_nothing_and_says_why() {
+    let (_dir, state) = station(None);
+    for body in [
+        "password=correct-horse-battery&password_confirm=different-one-here&latitude=51.48&longitude=-0.13",
+        "password=short&password_confirm=short&latitude=51.48&longitude=-0.13",
+    ] {
+        let (status, location, cookie) =
+            post_form_with_cookie(&state, "/onboarding/save", body).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+        assert_eq!(
+            location.as_deref(),
+            Some("/onboarding?error=password"),
+            "{body}"
+        );
+        assert!(cookie.is_none(), "{body}");
+        assert_eq!(setting(&state, "latitude"), None, "{body}");
+        assert_eq!(setting(&state, "onboarding_complete"), None, "{body}");
+        let (status, _, _) = get(&state, "/admin/settings").await;
+        assert_eq!(status, StatusCode::OK, "still open: nothing was set");
+    }
+    let (_, _, page) = get(&state, "/onboarding?error=password").await;
+    assert!(page.contains("did not match"), "{page}");
+
+    // Blank means "not now": setup completes, the station stays open, no cookie.
+    let (status, location, cookie) =
+        post_form_with_cookie(&state, "/onboarding/save", "latitude=51.48&longitude=-0.13").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert_eq!(location.as_deref(), Some("/"));
+    assert!(cookie.is_none());
+    assert_eq!(setting(&state, "latitude").as_deref(), Some("51.48"));
 }

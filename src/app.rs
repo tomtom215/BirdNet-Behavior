@@ -102,35 +102,48 @@ async fn serve(
     log_broadcaster: birdnet_web::routes::admin::logs::LogBroadcaster,
     started: tokio::sync::oneshot::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Fail fast on a misconfigured station: validate the loaded config and
-    // refuse to start if any setting is outright invalid (e.g. a latitude
-    // outside ±90 or a malformed recording schedule) rather than limping along
-    // with a silently-degraded pipeline. Warnings are logged but non-fatal.
-    // `--doctor` runs the same checks for an explicit preflight.
-    if let Some(ref cfg) = config {
-        use birdnet_core::config::validate::{Severity, is_usable, validate};
-        let findings = validate(cfg);
-        for f in &findings {
-            match f.severity {
-                Severity::Error => {
-                    tracing::error!(key = %f.key, remediation = %f.remediation, "{}", f.message);
-                }
-                Severity::Warning => {
-                    tracing::warn!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+    // A misconfigured station used to refuse to start here — validation ran
+    // inside the new process, after systemd had killed the old one, so a typo
+    // made over SSH became a restart loop with no web UI and no way back
+    // (LC-6). Now: warnings are logged; errors are logged and the station
+    // runs on the last configuration a start succeeded on when there is one,
+    // else web-only on the file as it is, and the boot journal says which.
+    let mut cli = cli;
+    let (config, config_decision) = {
+        if let Some(ref cfg) = config {
+            use birdnet_core::config::validate::{Severity, validate};
+            for f in validate(cfg) {
+                match f.severity {
+                    Severity::Error => {
+                        tracing::error!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+                    }
+                    Severity::Warning => {
+                        tracing::warn!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+                    }
                 }
             }
         }
-        if !is_usable(&findings) {
-            let errors = findings
-                .iter()
-                .filter(|f| f.severity == Severity::Error)
-                .count();
-            return Err(format!(
-                "configuration has {errors} error(s); fix the setting(s) logged above and restart \
-                 (run with --doctor to re-check)"
-            )
-            .into());
+        helpers::startup_config::choose(config, &cli.config)
+    };
+    match &config_decision {
+        helpers::startup_config::ConfigDecision::Loaded => {}
+        helpers::startup_config::ConfigDecision::Reverted { errors, last_good } => {
+            tracing::error!(
+                errors = errors.len(),
+                last_good = %last_good.display(),
+                "configuration has errors; running on the last good configuration instead"
+            );
         }
+        helpers::startup_config::ConfigDecision::Rejected { errors } => {
+            tracing::error!(
+                errors = errors.len(),
+                "configuration has errors and there is no last good copy; running web-only so \
+                 the diagnostics are reachable"
+            );
+        }
+    }
+    if config_decision.forces_web_only() {
+        cli.web_only = true;
     }
 
     // Startup database resilience check.
@@ -141,6 +154,21 @@ async fn serve(
     // station owns already does, and makes `--doctor`'s "will be created on
     // first run" true rather than aspirational.
     helpers::ensure_db_dir(&db_path)?;
+    // For the boot journal (UP-3): whether the database existed before this
+    // start opened it. `open_or_create` makes the path exist, so it has to be
+    // read here.
+    let db_present_at_start = db_path.exists();
+    // One process per data directory (DD-25), before anything opens a file
+    // there: a second instance used to quarantine the first one's live
+    // analytics store and only then die on the bind. Held until `serve`
+    // returns.
+    let instance_lock = helpers::instance_lock::acquire(
+        db_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
+        helpers::instance_lock::grace_from_env(),
+    )?;
+    tracing::debug!(lock = %instance_lock.path.display(), "data directory locked for this process");
     let backup_dir = db_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
@@ -194,6 +222,29 @@ async fn serve(
         }
     }
 
+    // PS-3: a database from before incremental auto-vacuum is rewritten into
+    // it once, here, before anything writes — so the weekly reclaim never has
+    // to. The copy is staged beside the file, not in the unit's tmpfs.
+    if db_path.exists() {
+        match birdnet_db::resilience::ensure_incremental_vacuum(&db_path) {
+            Ok(birdnet_db::resilience::VacuumMode::AlreadyIncremental) => {}
+            Ok(birdnet_db::resilience::VacuumMode::Converted {
+                bytes_before,
+                bytes_after,
+            }) => tracing::info!(
+                bytes_before,
+                bytes_after,
+                "database converted to incremental auto-vacuum (a one-time rewrite; the \
+                 weekly reclaim now moves only the free pages)"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "database could not be converted to incremental auto-vacuum; the weekly space \
+                 reclaim will fail until it is (free space beside the database is what it needs)"
+            ),
+        }
+    }
+
     // Build app state.
     let addr: std::net::SocketAddr = cli.listen.parse()?;
 
@@ -203,6 +254,19 @@ async fn serve(
     let tls_plan = helpers::tls::plan(&cli, config.as_ref(), addr, &db_path)?;
     for warning in &tls_plan.warnings {
         tracing::warn!("{warning}");
+    }
+    // The station's own session-signing secret, beside the database (DD-15):
+    // without it every bare-metal install ran on a per-process secret and
+    // every login died on restart. A data directory that cannot take the
+    // file degrades to the old derivation, and says so.
+    if let Some(data_dir) = db_path.parent()
+        && let Err(e) = birdnet_web::session::install_persisted_secret(data_dir)
+    {
+        tracing::warn!(
+            error = %e,
+            dir = %data_dir.display(),
+            "could not persist a session secret; login sessions will not survive a restart"
+        );
     }
     let server_config = birdnet_web::server::ServerConfig {
         addr,
@@ -253,6 +317,14 @@ async fn serve(
     // O-1: enable the mutating `/api/v2` endpoints when the operator has set a
     // token. Absent one — the default — those routes answer 404 and this
     // station has no write API at all.
+    // The boot journal (UP-3): this start against the last one, kept outside
+    // the database so a volume that did not mount cannot take the memory of
+    // it with it. Read by the health verdict and the station-health notifier.
+    let mut boot_anomalies =
+        helpers::boot_journal::record_boot(&cli.config, &db_path, db_present_at_start, &state);
+    boot_anomalies.extend(config_decision.anomaly());
+    state.set_boot_anomalies(boot_anomalies);
+
     let state = match helpers::build_api_token(config.as_ref()) {
         Some(token) => state.with_api_token(token),
         None => state,
@@ -318,7 +390,9 @@ async fn serve(
     } else {
         state.with_info_site(cli.info_site.clone())
     };
+    let state = helpers::init_species_codes(state, &cli, config.as_ref());
     let state = helpers::init_i18n(state, &cli, config.as_ref());
+    let state = helpers::init_private_mode(state, &cli, config.as_ref());
 
     // The capture supervisor publishes per-source health into this shared
     // handle; the web layer reads it for Station Health. One clone goes into
@@ -341,6 +415,7 @@ async fn serve(
     // the one that has to stop the detection writes, so it holds a clone of the
     // latch the ingest path reads.
     let ingest_halt_for_maintenance = state.ingest_halt_flag();
+    let metrics_for_maintenance = state.metrics();
 
     let broadcast = state.detection_broadcast();
 
@@ -348,6 +423,12 @@ async fn serve(
     let apprise_client = integrations::create_apprise_client(&cli, config.as_ref());
     let birdweather_client = integrations::create_birdweather_client(&cli, config.as_ref());
     let email_notifier = integrations::create_email_notifier(&state);
+    // What "Test all channels" can reach (DD-24): the integrations this
+    // binary built, wrapped as probes the web layer runs on demand.
+    state.set_notification_probes(integrations::notification_probes(
+        integrations::get_mqtt_client_ref(&cli, config.as_ref()),
+        email_notifier.clone(),
+    ));
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
     // Cloned before the detection pipeline takes ownership: the presence
@@ -451,7 +532,16 @@ async fn serve(
     }
 
     // Start background subsystems.
-    let _disk_manager_threads = helpers::start_disk_manager(&cli, config.as_ref(), &state);
+    // The data volume's own watch (PS-9, DD-19, DD-20): writable, still
+    // mounted, how full — measured now and every minute, read by the health
+    // verdict. Nothing else in the process finds out about a read-only remount.
+    let _data_volume_watch = birdnet_web::data_volume::spawn_watch(state.clone());
+    // Shared between the stream directory's purge and the detection daemon
+    // (PR-1 / S-3): the segments the pipeline is reading are the ones the
+    // purge must not take.
+    let in_flight = birdnet_core::detection::daemon::InFlight::new();
+    let _disk_manager_threads =
+        helpers::start_disk_manager(&cli, config.as_ref(), &state, &in_flight);
     let _live_spectrogram_thread = helpers::start_live_spectrogram(&cli, config.as_ref(), &state);
     let _capture_handle = capture::start_capture_manager(
         &cli,
@@ -461,6 +551,20 @@ async fn serve(
         capture_status,
         Some(&live_audio),
     );
+
+    // The file this start ran on becomes the one a bad edit falls back to.
+    // Only a start that validated writes it: a reverted or rejected start
+    // must not make its file the "last good" one.
+    if config_decision == helpers::startup_config::ConfigDecision::Loaded
+        && cli.config.exists()
+        && let Err(e) = helpers::startup_config::record_last_good(&cli.config)
+    {
+        tracing::warn!(
+            error = %e,
+            path = %helpers::startup_config::last_good_path(&cli.config).display(),
+            "could not keep a last-good copy of the configuration; a bad edit will not have one to fall back to"
+        );
+    }
 
     let daemon_handle = if cli.web_only {
         tracing::info!("running in web-only mode (no detection daemon)");
@@ -477,6 +581,7 @@ async fn serve(
             mqtt_client,
             notification_filter,
             notification_template,
+            in_flight,
         )
     };
 
@@ -515,6 +620,16 @@ async fn serve(
         .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
         .or_else(|| std::env::var("CADDY_PWD").ok())
         .is_some_and(|pwd| !pwd.is_empty());
+    // O-4: a private station with no password fails closed — every request
+    // outside the sign-in and the probe gets a 503 — so say so where the
+    // operator will look first. `--doctor` reports the same.
+    if !admin_password_configured && state.private_mode() {
+        tracing::error!(
+            "private mode is on but NO admin password is set: the station will answer 503 to \
+             everything except the sign-in and the health probe, and nobody can sign in. Set \
+             CADDY_PWD in the config or the environment, or unset BIRDNET_PRIVATE_MODE."
+        );
+    }
     if !admin_password_configured && !addr.ip().is_loopback() {
         tracing::warn!(
             addr = %addr,
@@ -568,8 +683,22 @@ async fn serve(
     // writes to disk in self-signed mode, and doing that before the database
     // and configuration have been validated would leave material behind from a
     // start that never completed.
+    // A clock that has not been set yet (NT-2) is not a reason to refuse to
+    // start, and not a reason to mint a 1970 certificate either: serve plain
+    // HTTP for this run, and restart once the clock is set so the next run
+    // mints a real one. `Restart=always` and `restart: unless-stopped` bring
+    // the process back after a clean exit.
+    let mut tls_deferred_for_clock = false;
     let tls_server_config = match birdnet_web::tls::server_config(&tls_plan.settings) {
         Ok(v) => v,
+        Err(e @ birdnet_web::tls::TlsError::ClockNotSet(_)) => {
+            tracing::error!(
+                error = %e,
+                "HTTPS deferred: serving plain HTTP on {addr} until the clock is set"
+            );
+            tls_deferred_for_clock = true;
+            None
+        }
         Err(e) => {
             return Err(format!(
                 "TLS is enabled (--tls-mode {}) but the certificate could not be prepared: {e}",
@@ -703,13 +832,16 @@ async fn serve(
         clip_retention_days,
         offsite,
         ingest_halt_for_maintenance,
+        Some(metrics_for_maintenance),
     );
 
     // Bind every listener the plan calls for before telling systemd we are up:
     // `Type=notify` treats READY=1 as "the socket is accepting", and a station
     // that reports ready and then fails to bind 8503 is a worse outcome than
     // one that fails to start at all.
-    let listener = if tls_plan.wants_plain_listener() {
+    // With HTTPS deferred, the plain listener is the only way in, even on a
+    // plan that would have served HTTPS alone on this port.
+    let listener = if tls_plan.wants_plain_listener() || tls_deferred_for_clock {
         Some(tokio::net::TcpListener::bind(addr).await?)
     } else {
         None
@@ -727,6 +859,10 @@ async fn serve(
                 )
             {
                 birdnet_web::tls::spawn_reloader(resolver, cert, key);
+            } else if tls_plan.settings.mode == birdnet_web::tls::TlsMode::SelfSigned {
+                // The leaf used to be renewed only at process start (NT-3):
+                // a station up past day 397 served an expired certificate.
+                birdnet_web::tls::spawn_renewer(resolver, tls_plan.settings.clone());
             }
             tracing::info!(
                 addr = %https_addr,
@@ -763,6 +899,30 @@ async fn serve(
     // sockets and the drain finishes in milliseconds, instead of every restart
     // waiting out SHUTDOWN_GRACE.
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+    if tls_deferred_for_clock {
+        // Wait for the clock (NTP), then leave cleanly so the supervisor's
+        // restart mints the certificate. Checked once a minute; the clock
+        // moving from 1970 to today is not a thing that half-happens.
+        let tx = shutdown_tx.clone();
+        let state_for_restart = shutdown_state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                if birdnet_core::civil::clock_looks_plausible(now) {
+                    tracing::warn!(
+                        "the clock has been set since boot; restarting to mint the HTTPS \
+                         certificate that was deferred"
+                    );
+                    state_for_restart.begin_shutdown();
+                    let _ = tx.send(());
+                    return;
+                }
+            }
+        });
+    }
     {
         let tx = shutdown_tx.clone();
         tokio::spawn(async move {
@@ -790,7 +950,9 @@ async fn serve(
     let plain_task = listener.map(|listener| {
         // With `--tls-redirect` the plain port stops serving the application
         // and answers only "the same URL, over HTTPS".
-        let router = if tls_plan.redirect {
+        // A redirect to a port that is not listening is a dead station: with
+        // HTTPS deferred, the plain port serves the application.
+        let router = if tls_plan.redirect && !tls_deferred_for_clock {
             let port = tls_plan
                 .https_addr
                 .map_or_else(|| addr.port(), |a| a.port());

@@ -1,7 +1,8 @@
 //! Disk manager for automatic disk usage monitoring and purging.
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use crate::audio::capture::process::is_audio_file;
@@ -10,8 +11,46 @@ use crate::audio::capture::types::CaptureError;
 use super::disk_usage;
 use super::purge::{
     cleanup_empty_dirs, is_protected, purge_flat_older_than, purge_flat_over_size,
-    purge_oldest_files, purge_oldest_flat_files,
+    purge_oldest_files, purge_oldest_flat_files, purge_recordings,
 };
+
+/// How the disk-full purge chooses what goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurgePolicy {
+    /// Oldest files first, regardless of what they are. Right for the
+    /// transient raw-capture segments, which carry no species and are worth
+    /// nothing once read.
+    OldestFirst,
+    /// Keep every species (S-2): the most-recorded species gives up clips
+    /// first, lowest confidence then oldest within it, and no species is ever
+    /// taken below `floor` clips. Right for the extracted clips, where
+    /// oldest-first deleted the single clip of the year's rarest bird before
+    /// the thousandth clip of the commonest.
+    KeepEverySpecies {
+        /// Clips a species always keeps, however full the disk is.
+        floor: u32,
+    },
+}
+
+/// The per-species floor the recordings purge keeps when nothing sets one.
+pub const DEFAULT_PURGE_SPECIES_FLOOR: u32 = 5;
+
+/// Where kept raw audio lives, under the recordings directory (R-4).
+pub const RAW_KEEP_SUBDIR: &str = "raw";
+
+/// Keep a share of the raw segments the stream drain would delete (R-4).
+///
+/// The raw audio used to be worth nothing once analysed: only what already
+/// triggered a detection survived, so the archive was selected by the very
+/// model under test and nothing could be re-scored. Kept at a duty cycle —
+/// one segment in `every` — it is what a season can be re-analysed from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawKeep {
+    /// Where the kept segments go; created on first use.
+    pub dir: PathBuf,
+    /// Keep one aged segment in this many, in capture order; `1` keeps all.
+    pub every: u32,
+}
 
 /// What to do when the disk reaches the purge threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +108,14 @@ pub struct DiskManagerConfig {
     /// exceeded. Like [`Self::stream_retention_secs`], only set for the transient
     /// stream dir.
     pub stream_max_bytes: u64,
+    /// Where to publish that the purge has stopped achieving anything (PR-7),
+    /// for the health surfaces; `None` publishes nowhere.
+    pub ineffective_flag: Option<Arc<AtomicBool>>,
+    /// What the disk-full purge takes first (S-2).
+    pub purge_policy: PurgePolicy,
+    /// Keep a share of the raw segments the age drain removes (R-4); `None`
+    /// keeps nothing. Only meaningful on the transient stream directory.
+    pub raw_keep: Option<RawKeep>,
 }
 
 impl Default for DiskManagerConfig {
@@ -84,7 +131,58 @@ impl Default for DiskManagerConfig {
             locked_provider: None,
             stream_retention_secs: 0,
             stream_max_bytes: 0,
+            ineffective_flag: None,
+            purge_policy: PurgePolicy::KeepEverySpecies {
+                floor: DEFAULT_PURGE_SPECIES_FLOOR,
+            },
+            raw_keep: None,
         }
+    }
+}
+
+/// Whether a purge pass is worth running, from what the last one achieved
+/// (PR-7).
+///
+/// When the card fills for a reason that is not recordings — the database,
+/// the analytics store, the backup ring, a runaway log — the purge deleted 10 %
+/// of the operator's clips every minute until every one was gone and the disk
+/// was still 96.9 % full. A pass that removed files and moved usage by nothing
+/// is proof the space is elsewhere, and deleting more clips will not find it.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PurgeGovernor {
+    /// Set by a pass that removed files without lowering usage; cleared when
+    /// usage falls below the threshold again by any means.
+    ineffective: bool,
+}
+
+impl PurgeGovernor {
+    /// Below one fifth of a per cent is the filesystem breathing, not a purge
+    /// working: a 3-second clip on a 32 GB card is 0.001 %.
+    const MIN_EFFECT_PERCENT: f64 = 0.2;
+
+    /// Whether to purge now, at `percent` used against `threshold`.
+    pub fn should_purge(&mut self, percent: f64, threshold: f64) -> bool {
+        if percent < threshold {
+            self.ineffective = false;
+            return false;
+        }
+        !self.ineffective
+    }
+
+    /// What the pass achieved: `removed` files, usage from `before` to
+    /// `after` per cent. Returns whether the pass was ineffective.
+    pub fn observe(&mut self, removed: u32, before: f64, after: f64) -> bool {
+        if removed > 0 && before - after < Self::MIN_EFFECT_PERCENT {
+            self.ineffective = true;
+        }
+        self.ineffective
+    }
+
+    /// Whether the last pass found the space to be somewhere the purge
+    /// cannot reach.
+    #[must_use]
+    pub const fn is_ineffective(&self) -> bool {
+        self.ineffective
     }
 }
 
@@ -105,6 +203,9 @@ impl std::fmt::Debug for DiskManagerConfig {
             .field("locked_provider", &self.locked_provider.is_some())
             .field("stream_retention_secs", &self.stream_retention_secs)
             .field("stream_max_bytes", &self.stream_max_bytes)
+            .field("ineffective_flag", &self.ineffective_flag.is_some())
+            .field("purge_policy", &self.purge_policy)
+            .field("raw_keep", &self.raw_keep)
             .finish()
     }
 }
@@ -117,12 +218,28 @@ impl std::fmt::Debug for DiskManagerConfig {
 #[derive(Debug, Clone)]
 pub struct DiskManager {
     config: DiskManagerConfig,
+    /// What the last purge achieved; shared across the per-cycle copies
+    /// [`Self::with_fresh_locks`] makes, so the verdict survives a cycle.
+    governor: Arc<Mutex<PurgeGovernor>>,
+    /// Aged segments the drain has seen, for the keep cadence (R-4).
+    raw_seen: Arc<Mutex<u64>>,
 }
 
 impl DiskManager {
     /// Create a new disk manager with the given configuration.
-    pub const fn new(config: DiskManagerConfig) -> Self {
-        Self { config }
+    #[must_use]
+    pub fn new(config: DiskManagerConfig) -> Self {
+        Self {
+            config,
+            governor: Arc::new(Mutex::new(PurgeGovernor::default())),
+            raw_seen: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    /// Whether the last purge removed recordings without lowering usage.
+    #[must_use]
+    pub fn purge_ineffective(&self) -> bool {
+        self.governor.lock().is_ok_and(|g| g.is_ineffective())
     }
 
     /// Return a reference to the disk manager configuration.
@@ -152,6 +269,11 @@ impl DiskManager {
                 threshold = self.config.purge_threshold,
                 "disk usage below threshold"
             );
+            // Usage fell, by whatever means: the purge is allowed again.
+            if let Ok(mut g) = self.governor.lock() {
+                g.should_purge(percent, threshold);
+            }
+            self.publish_ineffective(false);
             return Ok(0);
         }
 
@@ -166,25 +288,78 @@ impl DiskManager {
                 "disk full: stopping recording (full_disk_action=Keep)".into(),
             )),
             FullDiskAction::Purge => {
-                let mut removed = purge_oldest_files(
-                    &self.config.monitored_dir,
-                    &self.config.exclude_paths,
-                    &self.config.locked_file_names,
-                );
-                // The raw capture segments sit FLAT in the watch/stream dir (no
-                // `By_Date/` subtree), so `purge_oldest_files` above reclaims
-                // none of them. Purge the oldest flat segments too — without
-                // this the disk-full safety net frees nothing on the RAM-backed
-                // stream dir and the tmpfs runs to 100 % (breaking capture and
-                // even `apt` on a Pi).
-                removed += purge_oldest_flat_files(
-                    &self.config.monitored_dir,
-                    &self.config.exclude_paths,
-                    &self.config.locked_file_names,
-                );
+                // PR-7: a pass that removed recordings and moved usage by
+                // nothing proved the space is elsewhere; deleting more finds
+                // nothing and costs the operator their clips.
+                let allowed = self
+                    .governor
+                    .lock()
+                    .map_or(true, |mut g| g.should_purge(percent, threshold));
+                if !allowed {
+                    self.publish_ineffective(true);
+                    tracing::error!(
+                        used_pct = format!("{percent:.1}"),
+                        dir = %self.config.monitored_dir.display(),
+                        "disk is over the purge threshold and the last purge freed nothing: the \
+                         space is not in recordings; not deleting more"
+                    );
+                    return Ok(0);
+                }
+                let removed = match self.config.purge_policy {
+                    PurgePolicy::KeepEverySpecies { floor } => purge_recordings(
+                        &self.config.monitored_dir,
+                        floor,
+                        &self.config.exclude_paths,
+                        &self.config.locked_file_names,
+                    ),
+                    PurgePolicy::OldestFirst => {
+                        let by_date = purge_oldest_files(
+                            &self.config.monitored_dir,
+                            &self.config.exclude_paths,
+                            &self.config.locked_file_names,
+                        );
+                        // The raw capture segments sit FLAT in the watch/stream
+                        // dir (no `By_Date/` subtree), so `purge_oldest_files`
+                        // above reclaims none of them. Purge the oldest flat
+                        // segments too — without this the disk-full safety net
+                        // frees nothing on the RAM-backed stream dir and the
+                        // tmpfs runs to 100 % (breaking capture and even `apt`
+                        // on a Pi).
+                        by_date
+                            + purge_oldest_flat_files(
+                                &self.config.monitored_dir,
+                                &self.config.exclude_paths,
+                                &self.config.locked_file_names,
+                            )
+                    }
+                };
                 cleanup_empty_dirs(&self.config.monitored_dir);
+                let after =
+                    disk_usage(&self.config.monitored_dir).map_or(percent, |u| u.used_percent());
+                let ineffective = self
+                    .governor
+                    .lock()
+                    .is_ok_and(|mut g| g.observe(removed, percent, after));
+                self.publish_ineffective(ineffective);
+                if ineffective {
+                    tracing::error!(
+                        removed,
+                        before_pct = format!("{percent:.1}"),
+                        after_pct = format!("{after:.1}"),
+                        dir = %self.config.monitored_dir.display(),
+                        "purge removed recordings and usage did not fall: the space is not in \
+                         recordings (database, analytics store, backups, logs); stopping"
+                    );
+                }
                 Ok(removed)
             }
+        }
+    }
+
+    /// Publish the governor's verdict where the health surfaces read it.
+    fn publish_ineffective(&self, ineffective: bool) {
+        if let Some(flag) = &self.config.ineffective_flag {
+            flag.store(ineffective, Ordering::Relaxed);
         }
     }
 
@@ -211,6 +386,10 @@ impl DiskManager {
                 Duration::from_secs(self.config.stream_retention_secs),
                 &self.config.exclude_paths,
                 &self.config.locked_file_names,
+                self.config
+                    .raw_keep
+                    .as_ref()
+                    .map(|policy| (policy, &*self.raw_seen)),
             );
         }
         if self.config.stream_max_bytes > 0 {
@@ -355,7 +534,11 @@ impl DiskManager {
         };
         let mut config = self.config.clone();
         config.locked_file_names = provider();
-        std::borrow::Cow::Owned(Self::new(config))
+        std::borrow::Cow::Owned(Self {
+            config,
+            governor: Arc::clone(&self.governor),
+            raw_seen: Arc::clone(&self.raw_seen),
+        })
     }
 
     /// Run the disk manager loop (blocking).
@@ -469,6 +652,44 @@ mod tests {
             manager.with_fresh_locks().config().locked_file_names,
             vec!["static.wav".to_string()]
         );
+    }
+
+    /// PR-1 / S-3: the lease the daemon holds while reading a segment is what
+    /// the stream drain consults; the segment survives exactly while the
+    /// guard is alive.
+    #[test]
+    fn a_segment_under_analysis_survives_the_stream_drain() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for name in ["reading.wav", "done.wav"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, vec![0_u8; 128]).expect("write");
+            filetime::set_file_mtime(&p, filetime::FileTime::from_unix_time(1_000_000, 0))
+                .expect("mtime");
+        }
+        let table = crate::detection::daemon::InFlight::new();
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            stream_retention_secs: 60,
+            locked_provider: Some({
+                let table = table.clone();
+                std::sync::Arc::new(move || table.names())
+            }),
+            ..DiskManagerConfig::default()
+        });
+        let lease = table.claim(&dir.path().join("reading.wav"));
+        assert_eq!(manager.with_fresh_locks().cleanup_stream_segments(), 1);
+        assert!(
+            dir.path().join("reading.wav").exists(),
+            "under analysis: kept"
+        );
+        assert!(!dir.path().join("done.wav").exists());
+        drop(lease);
+        assert_eq!(
+            manager.with_fresh_locks().cleanup_stream_segments(),
+            1,
+            "released: drained"
+        );
+        assert!(!dir.path().join("reading.wav").exists());
     }
 
     #[test]
@@ -655,5 +876,57 @@ mod tests {
         h.extend_from_slice(b"data");
         h.extend_from_slice(&0_u32.to_le_bytes());
         h
+    }
+
+    /// The gate for PR-7. The governor's decisions, one pass at a time:
+    /// a pass that removed files and moved usage by nothing stops the next;
+    /// a pass that lowered usage does not; usage below the threshold clears
+    /// the stop.
+    #[test]
+    fn a_pass_that_frees_nothing_stops_the_purge_until_usage_falls() {
+        let mut g = PurgeGovernor::default();
+        assert!(g.should_purge(96.9, 95.0), "over the threshold: purge");
+        // Deleted ten clips; usage did not move — the row's exact case.
+        assert!(g.observe(10, 96.9, 96.9), "reported as ineffective");
+        assert!(
+            !g.should_purge(96.9, 95.0),
+            "the next pass must be refused: the space is not in recordings"
+        );
+        assert!(g.is_ineffective());
+        assert!(
+            !g.should_purge(94.0, 95.0) && !g.is_ineffective(),
+            "below: cleared"
+        );
+        assert!(
+            g.should_purge(96.0, 95.0),
+            "over again after clearing: purge"
+        );
+
+        // Counterpart: a pass that worked keeps the purge running.
+        let mut working = PurgeGovernor::default();
+        assert!(working.should_purge(96.0, 95.0));
+        assert!(!working.observe(10, 96.0, 95.1), "usage fell: effective");
+        assert!(working.should_purge(95.5, 95.0), "still allowed");
+        // A pass that removed nothing says nothing about where the space is.
+        assert!(!working.observe(0, 95.5, 95.5));
+    }
+
+    #[test]
+    fn the_ineffective_verdict_reaches_the_shared_flag() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: PathBuf::from("/tmp"),
+            purge_threshold: 99,
+            ineffective_flag: Some(Arc::clone(&flag)),
+            ..DiskManagerConfig::default()
+        });
+        manager.publish_ineffective(true);
+        assert!(flag.load(Ordering::Relaxed));
+        assert!(
+            !manager.purge_ineffective(),
+            "the governor itself has seen no pass"
+        );
+        manager.publish_ineffective(false);
+        assert!(!flag.load(Ordering::Relaxed));
     }
 }

@@ -74,7 +74,9 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_coords(config, &mut out);
     check_unit_range(config, "CONFIDENCE", 0.0, 1.0, &mut out);
     check_confidence_floor(config, &mut out);
+    check_confidence_ceiling(config, &mut out);
     check_unit_range(config, "SF_THRESH", 0.0, 1.0, &mut out);
+    check_sf_thresh_ceiling(config, &mut out);
     check_unit_range(config, "PRIVACY_THRESHOLD", 0.0, 1.0, &mut out);
     check_bounded(config, "SENSITIVITY", 0.5, 1.5, &mut out);
     check_bounded(config, "OVERLAP", 0.0, 2.9, &mut out);
@@ -85,7 +87,22 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     check_audio_format(config, &mut out);
     check_info_site(config, &mut out);
     check_lang(config, &mut out);
+    check_private_mode(config, &mut out);
+    check_public_access(config, &mut out);
+    check_unknown_keys(config, &mut out);
     out
+}
+
+/// A key nothing reads is a setting the operator believes is in force and is
+/// not (LC-7). A warning, not an error: the station runs, on the default.
+fn check_unknown_keys(config: &Config, out: &mut Vec<Finding>) {
+    for unknown in config.unknown_keys() {
+        let fix = unknown.did_you_mean.map_or_else(
+            || "remove the line, or check the key against the configuration reference".to_string(),
+            |meant| format!("rename it to {meant}"),
+        );
+        out.push(Finding::warn(unknown.key.clone(), unknown.to_string(), fix));
+    }
 }
 
 /// Convenience predicate: true when no findings are present.
@@ -194,6 +211,66 @@ fn check_confidence_floor(config: &Config, out: &mut Vec<Finding>) {
              SF_THRESH a CONFIDENCE of 0 does not mean \"disabled\"",
             super::DEFAULT_CONFIDENCE_THRESHOLD
         ),
+    ));
+}
+
+/// Threshold above which `CONFIDENCE` is treated as a probable mistake.
+///
+/// The classifier's scores for a real, clear call sit mostly between 0.5 and
+/// 0.9; a station asked for more than 0.95 records a few calls a day from a
+/// dawn chorus of hundreds, and one asked for 0.99 records almost nothing at
+/// all — which looks, from the dashboard, exactly like a dead microphone.
+/// The floor has warned since the low-side slip was first seen; the high side
+/// drew no finding (ON-5).
+const CONFIDENCE_CEILING: f64 = 0.95;
+
+/// Threshold above which `SF_THRESH` is treated as a probable mistake.
+///
+/// `SF_THRESH` is the occurrence probability below which the geomodel drops
+/// a species from the candidate list. Its default is 0.03; even common
+/// species sit under 0.3 for most weeks of the year, so a value above that
+/// silences most of the list, and the station reports fewer species without
+/// saying why.
+const SF_THRESH_CEILING: f64 = 0.3;
+
+/// Warn about a `CONFIDENCE` that is in range but implausibly high.
+fn check_confidence_ceiling(config: &Config, out: &mut Vec<Finding>) {
+    let Some(Ok(v)) = parse_float(config, "CONFIDENCE") else {
+        return;
+    };
+    if v <= CONFIDENCE_CEILING {
+        return;
+    }
+    out.push(Finding::warn(
+        "CONFIDENCE",
+        format!(
+            "CONFIDENCE={v} is very high — only the clearest calls will be recorded, and a \
+             quiet station is indistinguishable from a deaf one"
+        ),
+        format!(
+            "unless this is deliberate, set CONFIDENCE={} (the default); review the \
+             uncertain detections in the quarantine queue instead of raising the bar",
+            super::DEFAULT_CONFIDENCE_THRESHOLD
+        ),
+    ));
+}
+
+/// Warn about an `SF_THRESH` that is in range but implausibly high.
+fn check_sf_thresh_ceiling(config: &Config, out: &mut Vec<Finding>) {
+    let Some(Ok(v)) = parse_float(config, "SF_THRESH") else {
+        return;
+    };
+    if v <= SF_THRESH_CEILING {
+        return;
+    }
+    out.push(Finding::warn(
+        "SF_THRESH",
+        format!(
+            "SF_THRESH={v} is very high — the occurrence filter will drop most species from \
+             the candidate list, including common ones outside their peak weeks"
+        ),
+        "unless this is deliberate, set SF_THRESH=0.03 (the default); the filter is meant to \
+         remove species that never occur here, not to rank the ones that do",
     ));
 }
 
@@ -315,6 +392,54 @@ fn check_info_site(config: &Config, out: &mut Vec<Finding>) {
             format!("INFO_SITE={raw:?} is not recognised"),
             r#"use "ebird", "allaboutbirds", or "none""#.to_string(),
         ));
+    }
+}
+
+/// The names `PUBLIC_ACCESS` may carry.
+///
+/// The web crate owns the routes each one opens; its `private_mode` module
+/// holds a gate that its list and this one agree, so a carve-out added there
+/// is validated here.
+pub const PUBLIC_ACCESS_NAMES: [&str; 3] = ["live_audio", "share", "metrics"];
+
+/// The boolean spellings the config file and the settings form produce.
+const BOOL_SPELLINGS: [&str; 8] = ["true", "false", "1", "0", "yes", "no", "on", "off"];
+
+fn check_private_mode(config: &Config, out: &mut Vec<Finding>) {
+    let Some(raw) = config.get("PRIVATE_MODE") else {
+        return;
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return;
+    }
+    if !BOOL_SPELLINGS.contains(&raw.to_ascii_lowercase().as_str()) {
+        out.push(Finding::error(
+            "PRIVATE_MODE",
+            format!("PRIVATE_MODE={raw:?} is not a boolean; the station treats it as off"),
+            "use true or false".to_string(),
+        ));
+    }
+}
+
+fn check_public_access(config: &Config, out: &mut Vec<Finding>) {
+    let Some(raw) = config.get("PUBLIC_ACCESS") else {
+        return;
+    };
+    for name in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let normalised = name.to_ascii_lowercase().replace('-', "_");
+        if !PUBLIC_ACCESS_NAMES.contains(&normalised.as_str()) {
+            out.push(Finding::error(
+                "PUBLIC_ACCESS",
+                format!(
+                    "PUBLIC_ACCESS names {name:?}, which is not a carve-out; the station skips it"
+                ),
+                format!(
+                    "use a comma-separated list of {}",
+                    PUBLIC_ACCESS_NAMES.join(", ")
+                ),
+            ));
+        }
     }
 }
 
@@ -444,11 +569,40 @@ mod tests {
         }
     }
 
+    /// ON-5: the high side warns as the low side does. `1.0` used to sit in
+    /// the "normal" list below; a station at 1.0 records nothing, which is
+    /// the case this exists for.
+    #[test]
+    fn implausibly_high_confidence_and_sf_thresh_are_warned() {
+        for v in ["0.96", "0.99", "1.0"] {
+            let findings = validate(&cfg(&[("CONFIDENCE", v)]));
+            let hit = findings
+                .iter()
+                .find(|f| f.key == "CONFIDENCE")
+                .unwrap_or_else(|| panic!("CONFIDENCE={v} must warn, got {findings:?}"));
+            assert_eq!(
+                hit.severity,
+                Severity::Warning,
+                "usable, so a warning: {hit:?}"
+            );
+            assert!(hit.message.contains("very high"), "{hit:?}");
+        }
+        let findings = validate(&cfg(&[("SF_THRESH", "0.5")]));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.key == "SF_THRESH" && f.severity == Severity::Warning),
+            "{findings:?}"
+        );
+        // The boundaries themselves are inside the plausible range.
+        assert!(validate(&cfg(&[("CONFIDENCE", "0.95"), ("SF_THRESH", "0.3")])).is_empty());
+    }
+
     #[test]
     fn ordinary_confidence_is_not_warned() {
-        // Counter-test: the floor must not fire on real configurations,
-        // including the default itself and the boundary value.
-        for v in ["0.1", "0.25", "0.5", "0.7", "0,7", "0.95", "1.0"] {
+        // Counter-test: neither the floor nor the ceiling may fire on real
+        // configurations, including the default itself and both boundaries.
+        for v in ["0.1", "0.25", "0.5", "0.7", "0,7", "0.95"] {
             let findings = validate(&cfg(&[("CONFIDENCE", v)]));
             assert!(
                 !findings.iter().any(|f| f.key == "CONFIDENCE"),
@@ -572,6 +726,51 @@ mod tests {
         assert!(!is_usable(&with_error));
     }
 
+    /// `PRIVATE_MODE` takes the boolean spellings the file and the form
+    /// produce, in any case, and nothing else. A value the station would
+    /// silently read as "off" is an error here, because an operator who wrote
+    /// `PRIVATE_MODE=enabled` believes the station is closed. The gate for
+    /// the whole feature is end-to-end in the web crate; nothing in this
+    /// crate read these two checks back, and cargo-mutants emptied both
+    /// without a test noticing.
+    #[test]
+    fn private_mode_must_be_a_boolean_spelling() {
+        for ok in [
+            "true", "False", "1", "0", "YES", "no", "on", "Off", " true ",
+        ] {
+            let findings = validate(&cfg(&[("PRIVATE_MODE", ok)]));
+            assert!(is_clean(&findings), "{ok:?}: {findings:?}");
+        }
+        let findings = validate(&cfg(&[("PRIVATE_MODE", "enabled")]));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].severity, Severity::Error);
+        assert_eq!(findings[0].key, "PRIVATE_MODE");
+        assert!(findings[0].message.contains("enabled"), "{findings:?}");
+    }
+
+    /// `PUBLIC_ACCESS` names only the carve-outs the web crate implements.
+    /// Hyphens, case, spaces and a trailing comma are forgiven; an unknown
+    /// name is an error that quotes it, one finding per unknown name.
+    #[test]
+    fn public_access_names_only_the_carve_outs_that_exist() {
+        let findings = validate(&cfg(&[(
+            "PUBLIC_ACCESS",
+            "live_audio, Share,METRICS, live-audio,",
+        )]));
+        assert!(is_clean(&findings), "{findings:?}");
+
+        let findings = validate(&cfg(&[("PUBLIC_ACCESS", "share,live_audo,dashboard")]));
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .all(|f| f.severity == Severity::Error && f.key == "PUBLIC_ACCESS"),
+            "{findings:?}"
+        );
+        assert!(findings[0].message.contains("live_audo"), "{findings:?}");
+        assert!(findings[1].message.contains("dashboard"), "{findings:?}");
+    }
+
     #[test]
     fn is_clean_distinguishes_empty_from_populated() {
         // The counter-direction matters as much as the positive case: a
@@ -645,11 +844,11 @@ mod tests {
         /// The only CONFIDENCE finding in range is the low-threshold warning,
         /// and it fires exactly below the floor — never at or above it.
         #[test]
-        fn confidence_warning_tracks_the_floor(c in 0.0_f64..=1.0_f64) {
+        fn confidence_warning_tracks_the_floor_and_the_ceiling(c in 0.0_f64..=1.0_f64) {
             let cfg_ = cfg(&[("CONFIDENCE", &c.to_string())]);
             let findings = validate(&cfg_);
             let warned = findings.iter().any(|f| f.key == "CONFIDENCE");
-            prop_assert_eq!(warned, c < CONFIDENCE_FLOOR, "c={}", c);
+            prop_assert_eq!(warned, c < CONFIDENCE_FLOOR || c > CONFIDENCE_CEILING, "c={}", c);
         }
 
         /// CONFIDENCE outside [0, 1] always errors. Restrict to a finite,
@@ -736,5 +935,31 @@ mod tests {
             let c = cfg(&pairs);
             let _ = validate(&c);
         }
+    }
+
+    /// The gate for LC-7: a misspelt key is reported, named, with the key it
+    /// was meant to be; a file of real keys draws no such finding.
+    #[test]
+    fn a_misspelt_key_is_reported_with_the_key_it_was_meant_to_be() {
+        let cfg = Config::parse("CONFIDENC=0.90\nLATITUDE=42.36\nLONGITUDE=-71.06").unwrap();
+        let findings = validate(&cfg);
+        let f = findings
+            .iter()
+            .find(|f| f.key == "CONFIDENC")
+            .unwrap_or_else(|| panic!("CONFIDENC drew no finding: {findings:?}"));
+        assert_eq!(f.severity, Severity::Warning);
+        assert_eq!(
+            f.message,
+            "CONFIDENC is not a setting this station reads; did you mean CONFIDENCE?"
+        );
+        assert_eq!(f.remediation, "rename it to CONFIDENCE");
+
+        // Counterpart: the same file with the key spelt right draws nothing.
+        let cfg = Config::parse("CONFIDENCE=0.90\nLATITUDE=42.36\nLONGITUDE=-71.06").unwrap();
+        assert!(
+            validate(&cfg).is_empty(),
+            "a correct file drew findings: {:?}",
+            validate(&cfg)
+        );
     }
 }

@@ -38,6 +38,566 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the target-sensitive crates' tests run natively on aarch64
+
+**A `test-aarch64` CI job** (`ARM-1`). No `cargo test` had ever executed on
+the architecture the station ships to; `cross-aarch64` compiles for the Pi
+and runs nothing. The new job runs `birdnet-core`, `birdnet-scheduler` and
+`birdnet-timeseries` natively on `ubuntu-24.04-arm`, and its comment says
+which crates are excluded and why.
+
+### Added — detections can be handed to Raven and Audacity
+
+**A Raven selection table and an Audacity label track** (`FR-1`). No output
+of the station was one a verification tool read; the ecologist opened the
+clip and found the call by ear. `GET /api/v2/detections/export/raven` is one
+table over every detection with a clip, in BirdNET-Analyzer's column layout
+with `Begin Path` naming the clip, so Raven Pro opens it against the
+recordings folder; each clip has its own table and an Audacity label track
+at `/api/v2/recordings/<clip>/raven.txt` and `…/labels.txt`. Each selection
+is placed where the detection sits inside its clip: migration 47 records
+the lead-in the extractor actually wrote and the window's length, which
+`chunk_offset_secs` (the start in the source segment) never said. Rows from
+before that span their clip; rows with no clip are left out.
+
+### Fixed — the weekly space reclaim no longer rewrites the database
+
+**`PRAGMA incremental_vacuum` in place of `VACUUM`** (`PS-3`). The weekly
+`VACUUM` wrote three times the file size, staged the copy in the unit's
+memory-charged `/tmp` inside `MemoryMax=1G`, and held the write lock long
+enough for a detection to time out and be logged lost. New databases are
+created in `auto_vacuum=INCREMENTAL`; an existing one is converted once at
+the next start, with the copy staged beside the file, and the weekly job
+then moves only the free pages, a MiB at a time, pausing between steps.
+The writer's lock wait is fifteen seconds, up from five.
+
+### Added — a private mode puts the whole station behind the sign-in
+
+**`BIRDNET_PRIVATE_MODE` and `BIRDNET_PUBLIC_ACCESS`** (`O-4`). The default
+contract — viewing is open, only changing things needs a password — was the
+right one for a Pi on a home LAN and the wrong one for the same Pi behind a
+tunnel or a port forward, where the open dashboard is the detection history
+and a live microphone feed for anyone with the URL. Private mode moves the
+public router behind the cookie gate the admin panel uses; what stays open
+is the sign-in form, its assets, the health probe and the carve-outs the
+operator names: `live_audio` (the stream and the live spectrogram), `share`
+(operator-minted `/r/<token>` links, whose audio and spectrogram are now
+served directly rather than redirected to the gated media routes) and
+`metrics`. Pages are sent to `/login`; the API and the WebSockets get a
+`401`. A private station with no admin password fails closed with a `503`
+and a message, at startup, on the page and in `--doctor`, rather than
+falling back to the open station it was asked not to be. Config file:
+`PRIVATE_MODE`, `PUBLIC_ACCESS`.
+
+### Added — the analysis queue is measured, and a station that falls behind sheds instead of losing audio quietly
+
+**A queue-depth gauge and a stated shed policy** (`PR-2`). "Inference slower
+than real time for an hour" resolved to the stream drain deleting the oldest
+unanalysed audio and saying nothing. The daemon now publishes
+`birdnet_analysis_queue_depth` (and `analysis_queue_depth` on the health
+body); while more than 40 segments wait, or while the board is at its
+thermal limit or throttling, it analyses one segment in two, counts the rest
+in `birdnet_segments_shed_total` by reason, and raises the `backlog`
+station-health condition.
+
+### Added — raw audio can be kept at a duty cycle
+
+**`RAW_AUDIO_KEEP_EVERY` keeps one raw capture segment in N** (`R-4`). The
+raw audio was gone once analysed, so only what already triggered a
+detection survived and a season could never be re-scored under a new
+model. One aged segment in N, in capture order, is now copied into
+`<recordings>/raw` before the stream directory drains it; the disk-full
+purge takes that raw audio before any clip.
+
+### Fixed — a segment being analysed is never the one the purge deletes, and one lost before analysis is counted
+
+**Unanalysed audio is no longer destroyed silently** (`PR-1`, `S-3`). The
+stream directory's drain, size cap and disk-full purge ran on age and size
+alone, and a probe deleted a segment a live reader held open; a segment
+lost before the pipeline read it left a log line identical to the healthy
+case and moved no counter. The daemon now claims each segment while it
+reads it and the purge skips claimed names; a segment gone before analysis
+is a warning and `birdnet_segments_dropped_total`, per source.
+
+### Fixed — every text reads at WCAG AA contrast, and the gate now checks
+
+**Colour contrast is enforced in the accessibility gate** (`DD-29`, `UX-16`,
+`UX-17`). Measured across every page in both themes, 285 text nodes fell
+below AA: the species chip's identity hue on its own tint, the muted text
+tokens on tinted surfaces, white on the bright dark-theme fills, the
+failure pill, the amber badges. The species hue is kept as identity and
+mixed towards an ink token wherever it is text; `--moss`, `--rare` and the
+muted greys sit at AA on every surface; fills carry `--on-fill`. The axe
+gate runs `color-contrast` by default and reports 0 violations.
+
+### Fixed — the backup page no longer scrolls sideways on a phone
+
+**A snapshot row fits a 390 px viewport** (`DD-30`). Once a station had one
+backup snapshot, its unbreakable file name widened the row's grid track and
+the whole page scrolled sideways on a phone. The track is now
+`minmax(0, 1fr)`, the children may shrink, and the name wraps.
+
+### Fixed — an approved quarantine row keeps its provenance
+
+**A quarantined detection records the bar it was heard under** (`DD-9`).
+The quarantine table never held the confidence threshold, sensitivity or
+overlap, so approving a row wrote NULLs into the detection: the records an
+operator had looked at hardest had the least provenance. Migration 46 adds
+the three columns, the daemon fills them at quarantine time, and approval
+copies them across.
+
+### Fixed — the journal survives a reboot and cannot fill the card
+
+**The installer writes a persistent, bounded journald drop-in** (`OP-5`,
+`OB-15`, `PS-19`). On a default Raspberry Pi OS the journal was volatile:
+about a month on a 2 GB Pi and nothing across a reboot, so every watchdog
+bounce, power cut and update erased the evidence of what caused it. The
+installer now sets `Storage=persistent` and `SystemMaxUse=200M` beside the
+unit, and `uninstall` removes the drop-in. The two per-file INFO lines
+("begin processing file", "file processing complete"), measured at 92 % of
+the journal's volume and 1.6–2.8 GB a year, are DEBUG; the
+`birdnet_files_analysed_total` counter carries what they said.
+
+### Fixed — a silent station is a strict fault
+
+**The detection deadman's verdict is on the health endpoint** (`AD-4`).
+`detection_silence_secs` was on the body and in no status code, so a week
+without a detection left even `?strict=1` green. The deadman now publishes
+its verdict, `/api/v2/health` carries it as `detection_deadman`, and
+`tripped` is degraded under `?strict=1`: the pager and the notifier agree
+on one threshold and one moment. The plain endpoint stays 200, since a
+silent station is the one a container supervisor must not restart. The
+doctor's model-integrity gate also covers a download cut off part-way,
+closing the last half of `LC-2`.
+
+### Fixed — the container knows what time it is
+
+**The image carries zoneinfo and the compose file passes `TZ` through**
+(`ON-7`, `NT-6`). Detections are filed under local hours, and in the
+container those come from `TZ`, which needed zoneinfo the slim image did
+not carry: every container station filed a season under UTC hours while
+its operator read local ones, and a `TZ` the image did not know fell back
+to UTC just as silently. The image now installs `tzdata`, compose sets
+`TZ` from `.env` (UTC when unset), the entrypoint warns when it is unset or
+unknown, and `--doctor` reads `TZ` first, warns when no zone is configured
+at all (that used to be silence), warns on a zone it does not know, and
+reports the zoneinfo version.
+
+### Fixed — a flapping audio source is reported
+
+**A source that keeps dying and coming back is called flapping** (`AD-3`).
+Every signal was built on consecutive failure, so a source restarting every
+minute and back in two seconds read as healthy everywhere: live at each
+poll, attempt 0, backoff at its base, uptime strip green, and never down
+long enough for the "still down" warning. Restarts are now counted over the
+last hour; five or more put the count on the Station Health card, an issue
+in the banner, a warning in the log, and the `flapping` station-health
+condition on the notifier.
+
+### Fixed — a microphone addressed by card index is watched for moving
+
+**A resolving ALSA card index is an advisory, and a moved card is a boot
+anomaly** (`AU-1`, `S-13`). The same microphone was `card 1` before a reboot
+and `card 3` after it; a station addressing it as `plughw:1,0` passed the
+doctor before and after, recording from whatever then sat at 1. `--doctor`
+now grades a resolving index as an advisory naming the `CARD=<id>` form for
+the very card it resolved to, and every start records the card id the
+kernel reports behind each index-form device and compares it with the last
+start: a change is the `audio_card_moved` boot anomaly, on the health
+endpoint, in the station-health notification, and in the log.
+
+### Fixed — the disk-full purge keeps every species
+
+**A full disk no longer costs the rarest bird its only clip** (`S-2`). The
+purge deleted the oldest tenth of the recordings, whatever they were, so
+the single clip of the year's rarest bird went before the thousandth of
+the commonest. It now takes from the most-recorded species first, the
+lowest-confidence and then oldest clip within it, and never takes a species
+below `--purge-species-floor` clips (5 unless set; `0` removes the floor).
+The raw capture segments, which carry no species, are still drained
+oldest-first.
+
+### Fixed — "View on eBird" reaches a page
+
+**The species page's eBird link is built from the eBird species code**
+(`NP-1`). eBird keys its species pages on the six-letter code, and the link
+put the scientific name in the path, so every one of them 404'd. The code
+is on every station that has the geomodel's label file — column 1, which
+the parser used to drop — and is now kept, loaded at startup, and used for
+the link. A station without that file gets a line saying so, and which flag
+supplies it, instead of a dead link.
+
+### Fixed — the setup wizard's preference cards work from the keyboard
+
+**The threshold and alert cards are real radio inputs** (`UX-1`). The seven
+cards were `<div>`s with a click handler: nothing a keyboard could reach, so
+an operator without a mouse could set neither the detection threshold nor
+the alert mode during first-run setup. Each card is now a label around a
+radio input in a labelled group: Tab reaches the group, the arrow keys move
+within it, and the card draws a focus ring. The interaction gate drives
+this in a real browser.
+
+### Fixed — a purge that frees nothing stops, and says what is filling the card
+
+**The disk-full purge stops when a pass achieves nothing** (`PR-7`). When
+the card filled for a reason that was not recordings — the database, the
+analytics store, the backup ring — the purge deleted a tenth of the
+operator's clips every minute until every one was gone and the disk was
+still full. A pass that removes recordings and lowers usage by nothing now
+marks the purge ineffective; no further pass runs until usage falls, the
+`purge` condition names what to look at, and `birdnet_purge_ineffective`
+exports the mark.
+
+### Fixed — six smaller gaps a station in a field would find
+
+**The doctor grades the card, not the RAM disk** (`PS-8`): its disk check
+read `--watch-dir`, which the unit always sets to the tmpfs; it now grades
+the database's directory and, separately, the stream directory when that is
+a different filesystem. **A missing `arecord` on an ALSA station fails the
+doctor** (`LC-4`) instead of being skipped. **The timezone check no longer
+trusts the wizard's row** (`ON-8`): a stored zone that is not a zone is
+named as such rather than turned into a `set-timezone` instruction, and with
+no row the host's zone is reported. **The Access tab's help trigger is a
+button** (`UX-2`). **A Raspberry Pi's under-voltage and throttling are
+read** (`NP-5`): a `power` condition while it is happening, a doctor check
+that also remembers since boot, and `birdnet_pi_throttled_bits`. **Disk,
+scratch, CPU temperature and the maintenance record are exported as
+metrics** (`OP-3`).
+
+### Fixed — what is wrong can be asked, the doctor reads the maintenance record, and a lagging analytics copy is a condition
+
+**`GET /api/v2/health/conditions`** (`OP-4`) answers "what is wrong right
+now?" with the station-health conditions as the notifier last evaluated them
+and when it looked; they were push-only, so an operator who missed a push
+could not ask. Alerts disabled no longer means evaluation disabled.
+
+**`--doctor` reads the maintenance verdicts** (`OP-6`): the backup, the
+integrity check and the offsite backup, through the notifier's own policy,
+so "your backup has failed for a year" is something the diagnostic an
+operator runs can now say.
+
+**A detection the DuckDB copy refused is counted and conditioned** (`OP-7`):
+`birdnet_analytics_mirror_failures_total`, `analytics_mirror_failures` on
+`/api/v2/health`, and the `analytics-mirror` condition while the failures
+are recent. It was a `warn!` line while health went on asserting
+`"analytics": true`.
+
+### Fixed — a bad configuration edit no longer takes the station down
+
+**A file with an error is run around, not on** (`LC-6`). The daemon
+validated its file at start and refused to run on an invalid setting; since
+that ran in the new process after systemd had stopped the old one, a typo in
+`LATITUDE` made over SSH became a restart loop with no web UI and no way
+back. Every successful start now keeps `birdnet.conf.last-good`; a start
+whose file has errors runs on that copy and reports `config_reverted`; one
+with errors and no copy runs web-only on the file as it is and reports
+`config_rejected`, so the diagnostics are reachable. `--apply-config <file>`
+is the one-step safe change: it validates the candidate, refuses one with
+errors, installs a good one behind a backup and restarts the service. The
+doctor reports a configuration error as a warning naming what the start will
+do, so the unit's preflight gate lets the start happen.
+
+### Fixed — the doctor loads the model instead of weighing it
+
+**`--doctor` checks the model as a model** (`ON-9`, `OP-13`). It used to
+check that the file was larger than a megabyte, so a truncated download or
+a stand-in passed, and it checked the metadata model for nothing but
+existence. It now loads the classifier with ONNX Runtime and compares the
+class width of the output the daemon scores with the labels file's count —
+species are assigned by position, so a mispaired station names every bird
+wrong — and loads the metadata model through the daemon's own loader, which
+checks its width against the vocabulary. A file that is not a model, and a
+model that is not the labels file's, both fail with both numbers named.
+
+### Fixed — clips that vanished behind the database's back are reconciled
+
+**A daily reconciliation pass finds clips the disk no longer has** (`S-14`).
+The two retention passes stamp the rows whose audio they reclaim; nothing
+stamped a row whose clip went any other way — the disk-full purge deletes
+the oldest files by name and never opens the database, and so does a person
+tidying a card — so those rows kept offering a play button that answered 404,
+and nothing counted them. The pass stamps every such row, removes the
+`.part` files a killed writer left behind, and reports both, to the log and
+as the `birdnet_orphaned_clips` gauge.
+
+**A clip that could not be converted keeps its `.wav` name** (`DD-36`). When
+both `ffmpeg` and `sox` failed, the WAV was renamed under the `.mp3`,
+`.flac` or `.ogg` name, so the file was a WAV under the wrong extension and
+the detection said the wrong format. The WAV now stays a `.wav`, and the
+row, the metadata step and the BirdWeather upload record what is there.
+
+### Fixed — a start that lost the database says so
+
+**The station keeps a boot journal outside its database** (`UP-3`). A data
+volume that fails to mount leaves the station starting on the empty directory
+beneath it, which looked exactly like a first run — a fresh database, an empty
+chart, and nothing anywhere saying a season's detections are on a card that
+is not mounted. Each start now writes what it saw (version, database path and
+rows, whether the data directory is its own mount) to `boot-journal.json` in
+the configuration directory, and the next start compares: a database that
+held detections and holds none, a changed database path, a mount that is
+gone, a downgraded binary. Each is an error in the journal, `boot_anomalies`
+on `/api/v2/health` (a strict fault), and the `boot-anomaly` station-health
+condition, so the notifier says it the morning it happens.
+
+### Fixed — a restore no longer unpacks over the live database
+
+**Restore from file checks, stops, swaps, restarts** (`UP-2`). It used to
+run `tar` straight into the data directory over the open database with no
+free-space check and no pause in recording, then ask the operator to restart.
+It now lists the archive with sizes and refuses one the disk cannot hold with
+headroom, refuses one whose database is not named as this station's, halts
+detection writes, unpacks beside the database and integrity-checks the copy
+there, and only then swaps the files in — the database by rename, so the
+running process is never left reading a half-written file; recordings merged
+clip by clip. Under systemd the station then restarts itself.
+
+### Fixed — the analytics copy notices drift that nets to zero
+
+**Net-zero drift between the database and its analytics copy is found and
+repaired** (`DD-23`). The startup check compared three counts — rows,
+rejected rows, unstamped rows — so a detection deleted and another written
+back-dated onto the same day left every count where it was and the copy
+wrong for ever: the owl in SQLite and not in DuckDB, the robin the other way
+round, the totals equal. Both stores now reduce each day to a fingerprint of
+the rows they hold, and the days whose fingerprints differ are rebuilt from
+the database — day by day when a few differ, in full when many do.
+
+### Fixed — a misspelt setting is named, not ignored
+
+**An unknown key is reported with the key it was meant to be** (`LC-7`,
+`O-7`, `RC-14`). `birdnet.conf` is a bag of strings and clap ignores any
+environment variable it was not told about, so `CONFIDENC=0.90` in the file
+and `BIRDNET_LATITUD=…` in a unit file were both accepted by everything and
+changed nothing, with no journal line, no doctor note and no hint in the UI.
+The station now knows which keys it reads — the config-file list is a
+constant kept honest by a source scan in both directions, the environment
+list is built from the command-line definition itself plus the handful of
+direct reads — and names each key set and unread at startup and in
+`--doctor`, with the nearest real name when one is close: *"CONFIDENC is not
+a setting this station reads; did you mean CONFIDENCE?"* `.env.example` is
+now gated against the code in both directions too; that gate documented five
+variables the binary read and the file did not name, and removed the two
+`BIRDNET_QUALITY_*` keys the file shipped, one uncommented, for a feature
+that had been removed.
+
+### Fixed — the species filter's state is on the station page
+
+**`/station` says what the occurrence filter is doing** (`ON-12`). Whether
+the metadata model is filtering, and how many species it currently admits,
+reached Prometheus and nothing a person reads; a filter admitting zero species
+is a station that records nothing, and an operator without a metrics stack
+could not see it. The Pipeline row now carries it, and the status banner names
+a filter admitting nothing as something to fix.
+
+### Fixed — no child process can hang the station
+
+**Every tool the station shells out to has a deadline** (`PR-8`). `ffmpeg`,
+`sox`, `tar`, `df`, `arecord`, `mount`, `timedatectl`, `systemctl`, `apprise`:
+twenty-odd production spawns, all reaped, none with a timeout, because
+`std::process` has no bounded wait. Several of them sit on the single
+event-processor thread or in a periodic probe, so one `df` on a dead network
+mount or one `ffmpeg` on a device that stopped answering held that thread for
+ever: the detection channel filled, the heartbeat stopped, and the watchdog
+restarted the station with no line saying why. `birdnet_core::process::
+run_with_timeout` is now the one synchronous wait — both pipes drained on their
+own threads, the child polled to a deadline, then killed, reaped and reported
+as `TimedOut` with the program and the limit in the message — and every spawn
+in the workspace goes through it, with a limit sized to the job (a minute for
+a clip conversion, hours for a backup archive). A source scan keeps the next
+spawn from waiting on its own. Moving the clip conversion off the event thread
+is deliberately not part of this; the register row says why.
+
+### Fixed — the privacy threshold now does something
+
+**`BIRDNET_PRIVACY_THRESHOLD` binds** (`S-5`). The filter inherited
+BirdNET-Pi's rule — flag a chunk when a human label sits within the top
+`max(10, 6000 × threshold / 100)` of its predictions — and applied it to a
+detection list that was at most ten long and had already been cut at the
+*detection* threshold. So the setting never mattered: speech was suppressed
+exactly when it scored above the detection threshold, and lowering that
+threshold to catch quieter birds silently tightened privacy while raising it
+loosened it. The model now reports a per-chunk *human score* — the highest
+confidence among its human classes, read from its output before either cut —
+and the filter suppresses a chunk and its neighbours when that score reaches
+the threshold. The value is a confidence on the same scale as a detection's,
+and lower suppresses more; the CLI help, the settings form, the recording page
+and the hardening guide now say so in one voice, where before one told the
+operator to raise it towards `0.5` near a footpath and another said it routed
+rows to a log that does not exist. A station whose loaded label set has no
+human class is warned at start that the filter cannot fire.
+
+### Fixed — every detection row now says which model made it
+
+**A detection row records the model that produced it** (`R-1`, the register's
+only open P0). A row carried where it was heard, when, at what threshold, with
+what sensitivity and overlap — and nothing about the classifier. `install.sh`
+pins the release checksum of the model and it never reached the database; the
+shipped model is a pre-release, and the day an operator swapped it the rows of
+two classifiers with different label sets and different calibrations shared one
+table indistinguishably. Migration 43 adds `analysis_runs` — one row per
+detection-daemon start: the SHA-256 and length of the model file, the SHA-256
+and label count of the labels file, the geomodel's SHA-256 when an occurrence
+filter is configured, the binary version and the run-wide settings — and a
+`run_id` on `detections` and `quarantine` that references it, foreign key
+enforced. The daemon hashes the files and registers its run on the processor
+thread before it consumes its first event, and refuses to start without one:
+a station that cannot say what model it is running does not record detections,
+it stops and `?strict=1` says so. Every row the run inserts or quarantines
+carries the id; an approved quarantine row carries it into `detections`; the
+DuckDB mirror carries the same column. The CSV export ends in
+`Run_Id,Model_Name,Model_SHA256`, the JSON export carries the same three per
+row, and `/api/v2/detections` carries `run_id`; `BirdDB.txt` is left at
+BirdNET-Pi's twelve fields because its consumers count them.
+`GET /api/v2/analysis-runs` lists the runs with their row counts. The doctor
+hashes the model on disk and warns when it is not the model of the last run.
+Imported history and rows older than the migration are NULL, never a guess.
+The demo seeder registers a run whose identity is the checksum of the word
+`demo`, so it cannot be mistaken for a release model.
+
+**The exports say which clock they are on, and the instant trigger no longer
+invents a time** (`R-8`). Every export was local `Date`/`Time` with no
+offset, and the instant migration 32 put on every row reached no
+`DetectionRow` field, export or route. `detected_at_utc` is now on
+`DetectionRow` and `/api/v2/detections`; the CSV export carries `Event_Date`
+(the wall clock with the offset that was in force, RFC 3339, so the two
+passes of a repeated autumn hour export as `+01:00` and `+00:00`) and
+`Detected_At_UTC`, and the JSON export `event_date`. Separately, the trigger
+that stamps rows nothing else stamped — imports, the backfill — collapsed a
+local time that does not exist (01:30 on London's spring-forward day) onto the
+instant an hour before it, because that is what SQLite's `'utc'` modifier does.
+Migration 44 converts and converts back, and a time that never happened keeps
+a NULL instant. Rows already stamped are left alone: the same check over
+history would fire on every row of a station whose zone has since changed.
+
+**The sign-in form is throttled** (`O-6`). The "Too many attempts" page
+existed and the flag that rendered it was set in one place: a unit test.
+`login_submit` never set it, so the global limiter's tens of posts a second per
+address were all Argon2id hashes the Pi computed for whoever asked. Five
+failures from one client address inside fifteen minutes now answer `429 Too
+Many Requests` with a `Retry-After` and the form disabled, before the password
+is checked — a correct password from a throttled address gets the same answer
+and no cookie. Each refusal is in the audit log as `auth.login.throttled`; a
+successful sign-in clears the address; a restart forgives everything; another
+address is never affected, because a blanket lock is a denial of service any
+stranger can trigger against the operator.
+
+**Every detection sent to BirdWeather now carries its soundscape** (`DD-32`).
+`Client::post_soundscape` was written, tested and never called; the daemon
+posted six bare fields, so nothing on BirdWeather from this station could be
+listened to and nothing there could be verified. The daemon now uploads the
+clip as a soundscape first — the bytes as the body, `?timestamp=&type=` on the
+URL, the id from the answer, the shape both reference projects use — and posts
+the detection with `soundscapeId`, the detection's start and end inside the
+clip, and `algorithm` where BirdWeather has a name for the model (`2p4` for
+V2.4; omitted otherwise rather than mislabelled). The row keeps the id
+(`birdweather_soundscape_id`, migration 45). A failed upload posts the
+detection without it, as every post was before. The post's timestamp was the
+local wall clock labelled `Z`, an hour or more wrong on every station outside
+UTC; it is now the local time with its offset.
+
+**The setup wizard asks for the admin password first, and the browser that
+sets it owns the station** (`DD-14`). With no password set, every `/admin/*`
+page was open to anyone who could reach the port for as long as the operator
+did not act, the six-step wizard never asked, and the only browser route to a
+first password was a form labelled "Reset password" that then signed the
+operator out without saying so. The Welcome step now carries a password block
+on a passwordless station; finishing setup hashes it onto the admin account
+and hands that browser a session, so the next click is not a login prompt. A
+mismatched or short password saves nothing and says why; blank means "not
+now", and the dashboard's first-run checklist then says in its first row that
+the station is open. The accounts form reads "Set password" on such a
+station and signs the browser in the same way; a rotation signs the account's
+other sessions out and says how many.
+
+**Login sessions survive a restart** (`DD-15`). The signing secret was read
+from `BNB_SESSION_SECRET` or `CADDY_PWD` in the environment only; the
+installer writes `CADDY_PWD` to the config file, nothing exports it, and the
+unit sets neither, so every bare-metal install ran on a per-process random
+secret and every session died on restart while the accounts page promised
+fourteen days. The station now generates a secret once and keeps it beside
+its database (`session.secret`, mode 0600), ahead of the password derivation.
+Because the secret no longer rotates with the password, rotating `CADDY_PWD`
+signs the old sessions out at the next start, and rotating on the accounts
+page signs the other sessions out — the promise the page always made, now by
+the mechanism that can keep the operator's own session.
+
+**The health verdict sees a full card, a read-only remount and a vanished
+data volume** (`DD-19`, `DD-20`, the writability half of `PS-9`/`AD-4`). On a
+100 % full volume `/api/v2/health` answered `200 "healthy"` while
+`/api/v2/system/disk` said `critical`, DuckDB had been quarantined on `ENOSPC`
+and the admin bootstrap had failed; after the data mount was detached the
+station kept writing into the directory underneath it and reported the parent
+filesystem as fine; and nothing probed writability at all, so a read-only
+remount left every detection classified and discarded behind a green probe.
+A watch now probes the data directory once a minute — a create/sync/remove
+write, the directory's device id against its parent's, and the `df` verdict —
+and the health endpoint reads it: unwritable or vanished is degraded on every
+reading, like a halted ingest; a critically full or unanswerable disk and a
+failed admin bootstrap are `?strict=1` faults. The body carries `data_volume`
+and `admin_bootstrap`; the station-health alerts gained a `data-volume`
+condition; the disk endpoint answers a failed `df` with `503 unknown` instead
+of `500`; and the journal gets one line on a transition instead of one a
+minute.
+
+**Four first-run gaps** (`ON-4`, `ON-5`, `ON-10`, `ON-11`). The wizard's Done
+step said detections would roll in within a minute or two; the settings it had
+just saved take effect on the next start, which `/admin/settings` said and
+the wizard did not — it now says so and links the restart. `CONFIDENCE=0.99`
+and `SF_THRESH=0.5` drew no finding: the validator warns above 0.95 and 0.3,
+as it always warned below 0.1. The first-run checklist's model row was a
+hard-coded tick that read "Model bundled … included" on a process with no
+model; it now reads the detector's liveness and says "Detector not running"
+with a link to the doctor. The compose file's health check says why it is not
+`?strict=1` and where the strict probe is for.
+
+**A clip is on disk whole or not at all** (`S-4`, `PS-7`). Clips were written
+straight to their final names, so a power cut mid-write — the field station's
+ordinary way of stopping — left a truncated WAV the database row pointed at
+for ever, indistinguishable from a short recording; `sync_all` appeared at one
+production site in the whole workspace, none of them in the audio path. Clips
+and converted clips are now written as `name.part.ext`, synced, renamed into
+place, and the directory synced. The gate kills a worker mid-write and looks
+at what is left.
+
+**A live sibling's lock is not corruption, and one process owns a data
+directory** (`DD-25`). A second instance on the same data directory — a
+`systemctl restart` overlapping a slow shutdown, or the binary started by hand
+beside the unit — met DuckDB's "Could not set lock on file", took it for a
+damaged store, moved the first process's live analytics database aside and
+rebuilt an empty one, and only then died on the port. A lock conflict is now
+retried for the shutdown grace (30 s) and, if still held, reported as locked
+with analytics off for that start; the file is never touched. And before
+anything opens a file there, the process takes an advisory lock on
+`birdnet.lock` beside the database, waits the same grace for a previous
+instance to go, and otherwise refuses to start saying so
+(`BNB_INSTANCE_LOCK_GRACE_SECS` lengthens the wait).
+
+**No certificate is minted on an unset clock, and the self-signed one renews
+while the station runs** (`NT-2`, `NT-3`). A first boot before NTP minted a
+local CA and leaf valid 1969-12-31 to 1971-02-01, nothing regenerated them
+while the process ran, `--doctor` reported "valid 397 days" from the
+configured number, and recovery was physical. A clock below the plausibility
+floor now mints nothing: the station serves plain HTTP on its address, says
+so, and restarts itself once the clock is set so the next start mints a real
+certificate; material minted on a good clock is still served on a bad one.
+Separately, the leaf was renewed only at process start, so a station up past
+day 397 served an expired certificate; it is now checked daily and swapped
+into the running listener without a restart. The doctor reports the
+certificate's real expiry date.
+
+**A dead MQTT broker is an alert, and "Test all channels" tests all of them**
+(`DD-22`, `DD-24`). A silent broker was handled soundly and reported at
+`debug!` and on one Prometheus gauge; a broker dead from boot never reached
+even that. The presence loop now dates the outage and keeps the last error,
+the station-health alerts carry an `mqtt` condition after ten minutes, and the
+health body says `mqtt: off|connected|disconnected`. The notifications test
+page's "Test all" answered "All configured channels passed" with MQTT dead,
+because it tested push and BirdWeather only and called an empty run a pass;
+it now publishes a real test message over MQTT and sends a test email through
+the configured notifier, and a run in which every channel was skipped says
+that nothing was tested.
+
 ### Fixed — the head of the audit's queue, and what running the station found
 
 The queue at the top of `docs/UNATTENDED_DEPLOYMENT_AUDIT.md` §6 was worked in

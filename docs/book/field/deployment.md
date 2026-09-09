@@ -97,13 +97,37 @@ the retention each one needs:
 - the **recordings directory**, holding your extracted clips beside
   `birds.db`. These are your data, so they are never removed by age. Only the
   disk-full backstop touches them: once usage exceeds `DISK_PURGE_THRESHOLD`
-  it removes the oldest clips first, skipping any file the database has marked
+  it removes a tenth of them, taken from the most-recorded species first
+  (lowest confidence, then oldest, within a species) and never taking a
+  species below `PURGE_SPECIES_FLOOR` clips (5 unless you set it; `0` removes
+  the floor), so the one clip of a rare bird outlives the thousandth of a
+  common one. It skips any file the database has marked
   locked (the 🔒 **Lock** action on **Recordings**, or on a Today row). The locked set is re-read every cycle,
   so locking a clip takes effect immediately — no restart needed.
 - the **raw capture directory** (`--watch-dir`, typically the RAM-backed
   `/tmp/birdnet-stream`), which the detector reads and never needs again. It is
   drained continuously by age and by a total-size ceiling
   (`STREAM_RETENTION_SECS`, `STREAM_MAX_MB`) so the tmpfs self-empties.
+  Set `RAW_AUDIO_KEEP_EVERY=N` to copy one aged segment in N (in capture
+  order) into `<recordings>/raw` before the drain removes it: that is the
+  audio a season can be re-analysed from under a new model, and without it
+  only the audio that already triggered a detection survives. Budget it — a
+  15 s segment at 48 kHz mono is about 1.4 MB, so `1` is roughly 8 GB a day
+  per source and `10` about 0.8 GB — and know that the disk-full purge takes
+  kept raw audio before it takes any clip.
+
+**When inference falls behind.** The daemon measures its own queue — the raw
+segments waiting for analysis — and publishes it as `birdnet_analysis_queue_depth`
+and on `/api/v2/health` as `analysis_queue_depth`. While more than 40 are
+waiting (ten minutes of 15 s segments from one source), or while the board is
+at or above 80 °C or reports throttling, it analyses one segment in two, in
+capture order, and counts the rest in `birdnet_segments_shed_total` by reason.
+The queue then drains at twice the rate, the skipped audio is counted rather
+than lost, and the `backlog` station-health condition tells you it happened.
+Before this, the same situation resolved to the stream drain deleting the
+oldest unanalysed audio with nothing to show for it. If the condition keeps
+returning, the board cannot keep up with what it is asked: fewer sources, a
+longer segment, or a faster board.
 
 Two further limits are enforced from the database on the daily maintenance
 tick, and both leave the detection rows intact — only the audio is reclaimed,
@@ -123,7 +147,7 @@ change them. A command-line flag or `BIRDNET_*` variable wins over the UI,
 which wins over the config file.
 
 **Maintenance runs on wall-clock time, not uptime.** The daily jobs (integrity
-check, session prune, species cap) and the weekly backup + VACUUM record their
+check, session prune, species cap) and the weekly backup + reclaim record their
 completion in the database, so a station that reboots often still runs them —
 an overdue job fires shortly after the next boot rather than restarting its
 timer.
@@ -377,9 +401,14 @@ operator action needed):
 
 - **Daily** `PRAGMA integrity_check`. Failure is logged at `ERROR` and
   appears in the `/api/v2/health` endpoint.
-- **Weekly** WAL checkpoint + `VACUUM` to reclaim space and prevent
-  long-term page fragmentation.
-- **Weekly** backup snapshot taken just before VACUUM, written to
+- **Weekly** WAL checkpoint + `PRAGMA incremental_vacuum`, a MiB at a time,
+  to return the pages that deletes freed. Not `VACUUM`: that rewrote the whole
+  file through the temp directory under one lock — three times the file size
+  written, staged in the unit's memory-charged `/tmp`, and a detection lost to
+  `database is locked` while it ran. A database created before this mode
+  existed is converted once, at the next start, with the copy staged beside
+  the file; the log says so.
+- **Weekly** backup snapshot taken just before the reclaim, written to
   `${DATA_DIR}/backups/`. The 14 most recent are kept; older ones are
   pruned automatically.
 - **Manual** snapshot any time: `birdnet-behavior --backup-db`.

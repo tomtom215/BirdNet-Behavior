@@ -93,6 +93,200 @@ pub(super) fn purge_oldest_files(
     removed
 }
 
+/// What an extracted clip's name says about it.
+///
+/// The extractor names clips `Common_Name-ConfPct-YYYY-MM-DD-birdnet-[RTSP_ID-]HH:MM:SS.ext`,
+/// with a `-n` suffix when the name was already taken. That is the only
+/// record of species and confidence the disk manager can reach: it runs in
+/// the capture crate, with no database, and the purge has to keep the
+/// station's rarest birds from going first (S-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ClipName<'a> {
+    /// The common name as the extractor wrote it (`Great_Tit`).
+    pub species: &'a str,
+    /// The confidence, in whole percent.
+    pub confidence_pct: u8,
+}
+
+/// Parse the extractor's clip naming; `None` for anything else (a raw
+/// segment, a BirdNET-Pi import with another shape, a stray file).
+pub(super) fn parse_clip_name(name: &str) -> Option<ClipName<'_>> {
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    let (head, _) = stem.split_once("-birdnet-")?;
+    // `head` is `Common_Name-ConfPct-YYYY-MM-DD`; the name may itself contain
+    // dashes (`Black-capped_Chickadee`), so take the fixed parts from the right.
+    let date_start = head.len().checked_sub(10)?;
+    let date = &head[date_start..];
+    let date_ok = date.bytes().enumerate().all(|(i, b)| {
+        if i == 4 || i == 7 {
+            b == b'-'
+        } else {
+            b.is_ascii_digit()
+        }
+    });
+    if !date_ok || !head[..date_start].ends_with('-') {
+        return None;
+    }
+    let (species, conf) = head[..date_start - 1].rsplit_once('-')?;
+    let confidence_pct: u8 = conf.parse().ok().filter(|c| *c <= 100)?;
+    if species.is_empty() {
+        return None;
+    }
+    Some(ClipName {
+        species,
+        confidence_pct,
+    })
+}
+
+/// One species' clips, in the order the purge takes them.
+struct SpeciesClips {
+    /// The clips: lowest confidence first, then oldest first.
+    files: Vec<(PathBuf, u8, std::time::SystemTime)>,
+    /// How many of them still exist (protected ones included: a locked clip is
+    /// still a clip of this species).
+    count: usize,
+    /// The next file to try.
+    next: usize,
+    /// Whether the per-species floor applies: it does not for files whose
+    /// name is not an extracted clip's, which have no species to protect.
+    floored: bool,
+}
+
+/// Purge extracted clips from `base_dir` to free space, keeping every species
+/// (S-2).
+///
+/// Walks the clips flat in `base_dir` and, for a migrated BirdNET-Pi tree,
+/// under `base_dir/By_Date/`. Removes 10 % of them (minimum 1), chosen so that
+/// what remains stays as diverse as it was:
+///
+/// - the species with the most clips gives up a clip first, and keeps giving
+///   until another has more;
+/// - within a species, the lowest-confidence clip goes first, then the oldest;
+/// - no species is ever taken below `floor` clips. With `floor` 0 nothing is
+///   protected; between species with equal counts the lower confidence, then
+///   the older clip, goes first.
+///
+/// Files under `exclude_paths` or named in `locked_file_names` are never
+/// removed, and still count towards their species. Files whose name is not an
+/// extracted clip's are ordered oldest-first and have no floor.
+///
+/// Returns the number of files removed.
+pub(super) fn purge_recordings(
+    base_dir: &Path,
+    floor: u32,
+    exclude_paths: &[PathBuf],
+    locked_file_names: &[String],
+) -> u32 {
+    let mut all_files: Vec<(PathBuf, std::time::SystemTime)> = collect_flat_audio(base_dir)
+        .into_iter()
+        .map(|(p, m, _)| (p, m))
+        .collect();
+    let by_date_dir = base_dir.join("By_Date");
+    if by_date_dir.is_dir() {
+        collect_audio_files_recursive(&by_date_dir, &mut all_files);
+    }
+    // The kept raw audio (R-4). Its names are not clips', so it has no floor
+    // and is one big group: the first thing a full disk gives up, before any
+    // clip of any species.
+    let raw_dir = base_dir.join(super::manager::RAW_KEEP_SUBDIR);
+    if raw_dir.is_dir() {
+        collect_audio_files_recursive(&raw_dir, &mut all_files);
+    }
+    if all_files.is_empty() {
+        return 0;
+    }
+    let quota = (all_files.len() / 10).max(1);
+
+    let mut groups: std::collections::BTreeMap<String, SpeciesClips> =
+        std::collections::BTreeMap::new();
+    for (path, modified) in all_files {
+        let parsed = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(parse_clip_name)
+            .map(|c| (c.species.to_owned(), c.confidence_pct));
+        let (key, conf, floored) = match parsed {
+            Some((species, conf)) => (species, conf, true),
+            None => (String::new(), 0, false),
+        };
+        let group = groups.entry(key).or_insert_with(|| SpeciesClips {
+            files: Vec::new(),
+            count: 0,
+            next: 0,
+            floored,
+        });
+        group.files.push((path, conf, modified));
+        group.count += 1;
+    }
+    for group in groups.values_mut() {
+        group
+            .files
+            .sort_by_key(|(_, conf, modified)| (*conf, *modified));
+    }
+
+    let floor = usize::try_from(floor).unwrap_or(usize::MAX);
+    let mut removed = 0_u32;
+    let mut skipped_protected = 0_usize;
+    let mut skipped_floor = 0_usize;
+    while (removed as usize) < quota {
+        // The species to take from: most clips first; among equals, the one
+        // whose next clip is least confident, then oldest. A species at its
+        // floor, or with nothing left to try, is out.
+        let pick = groups
+            .iter()
+            .filter(|(_, g)| g.next < g.files.len() && (!g.floored || g.count > floor))
+            .min_by_key(|(name, g)| {
+                let (_, conf, modified) = &g.files[g.next];
+                (
+                    std::cmp::Reverse(g.count),
+                    *conf,
+                    *modified,
+                    (*name).clone(),
+                )
+            })
+            .map(|(name, _)| name.clone());
+        let Some(name) = pick else { break };
+        let group = groups.get_mut(&name).expect("picked from the map");
+        let (path, _, _) = &group.files[group.next];
+        group.next += 1;
+        if is_protected(path, exclude_paths, locked_file_names) {
+            skipped_protected += 1;
+            continue;
+        }
+        if std::fs::remove_file(path).is_ok() {
+            tracing::debug!(path = %path.display(), species = %name, "purged clip");
+            removed += 1;
+            group.count -= 1;
+        }
+    }
+    for g in groups.values() {
+        if g.floored && g.count <= floor {
+            skipped_floor += g.count;
+        }
+    }
+
+    if removed > 0 {
+        tracing::info!(
+            count = removed,
+            floor,
+            "purged clips, most-recorded species first, none below the floor"
+        );
+    } else {
+        // Nothing could go: every species is at its floor, or everything
+        // reachable is protected. Say which, or `check_and_purge` warns "disk
+        // full" every minute with no clue why.
+        tracing::warn!(
+            floor,
+            protected_by_floor = skipped_floor,
+            protected_or_failed = skipped_protected,
+            "disk purge made no progress: every species is at its floor of clips, or \
+             every candidate is protected (exclude_paths / locked) or could not be \
+             removed; the space is not in expendable recordings"
+        );
+    }
+    removed
+}
+
 /// Recursively collect audio files and their modification times.
 pub(super) fn collect_audio_files_recursive(
     dir: &Path,
@@ -192,22 +386,70 @@ pub(super) fn purge_flat_older_than(
     max_age: std::time::Duration,
     exclude_paths: &[PathBuf],
     locked_file_names: &[String],
+    keep: Option<(&super::manager::RawKeep, &std::sync::Mutex<u64>)>,
 ) -> u32 {
     let now = std::time::SystemTime::now();
     let mut removed = 0_u32;
-    for (path, modified, _) in collect_flat_audio(dir) {
-        let old_enough = now.duration_since(modified).is_ok_and(|age| age > max_age);
-        if !old_enough || is_protected(&path, exclude_paths, locked_file_names) {
+    let mut kept = 0_u32;
+    // In capture order, so "one in N" is a steady duty cycle across the day
+    // rather than whichever N the directory listing happened to yield.
+    let mut aged: Vec<(PathBuf, std::time::SystemTime)> = collect_flat_audio(dir)
+        .into_iter()
+        .filter(|(_, modified, _)| now.duration_since(*modified).is_ok_and(|age| age > max_age))
+        .map(|(p, m, _)| (p, m))
+        .collect();
+    aged.sort_by_key(|(_, modified)| *modified);
+    for (path, _) in aged {
+        if is_protected(&path, exclude_paths, locked_file_names) {
             continue;
+        }
+        // R-4: the raw audio used to be worth nothing once analysed. Kept at
+        // a duty cycle it is what a season can be re-analysed from. A copy,
+        // not a rename: the stream dir is a RAM-backed tmpfs and the keep dir
+        // is the data disk. A copy that fails (the disk is full) is reported
+        // and the segment still drained, or the tmpfs fills and capture stops.
+        if let Some((policy, counter)) = keep
+            && policy.every > 0
+            && let Ok(mut n) = counter.lock()
+        {
+            let take = *n % u64::from(policy.every) == 0;
+            *n += 1;
+            if take {
+                match keep_raw_segment(&path, &policy.dir) {
+                    Ok(()) => kept += 1,
+                    Err(e) => tracing::warn!(
+                        file = %path.display(),
+                        keep_dir = %policy.dir.display(),
+                        error = %e,
+                        "could not keep a raw segment; draining it anyway"
+                    ),
+                }
+            }
         }
         if std::fs::remove_file(&path).is_ok() {
             removed += 1;
         }
     }
     if removed > 0 {
-        tracing::info!(count = removed, dir = %dir.display(), "drained aged raw stream segments");
+        tracing::info!(
+            count = removed,
+            kept,
+            dir = %dir.display(),
+            "drained aged raw stream segments"
+        );
     }
     removed
+}
+
+/// Copy one raw segment into the keep directory (R-4), creating it on first
+/// use. The name is kept: `YYYY-MM-DD-birdnet-[RTSP_ID-]HH:MM:SS.wav` says when
+/// and from which source it was captured, which a re-analysis needs.
+fn keep_raw_segment(path: &Path, keep_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(keep_dir)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("a segment path with no file name"))?;
+    std::fs::copy(path, keep_dir.join(name)).map(|_| ())
 }
 
 /// Keep the flat (top-level) audio in `dir` under `max_bytes` by deleting the
@@ -386,6 +628,279 @@ mod tests {
         assert!(!is_protected(Path::new("/any/dir/other.wav"), &[], &locked));
     }
 
+    #[test]
+    fn a_clip_name_yields_its_species_and_confidence() {
+        let c = parse_clip_name("Great_Tit-95-2026-03-14-birdnet-10:00:00.wav").unwrap();
+        assert_eq!((c.species, c.confidence_pct), ("Great_Tit", 95));
+        // An RTSP source, a collision suffix, a dash in the name, another
+        // extension: all the extractor's own spellings.
+        let c =
+            parse_clip_name("Black-capped_Chickadee-71-2026-03-14-birdnet-RTSP_2-10:00:00-3.mp3")
+                .unwrap();
+        assert_eq!(
+            (c.species, c.confidence_pct),
+            ("Black-capped_Chickadee", 71)
+        );
+        // Not clips: a raw segment, a bare name, a date in the wrong place.
+        assert_eq!(parse_clip_name("2026-03-14-birdnet-10:00:00.wav"), None);
+        assert_eq!(parse_clip_name("clip_01.wav"), None);
+        assert_eq!(parse_clip_name("Great_Tit-95-birdnet-10:00:00.wav"), None);
+        assert_eq!(parse_clip_name("-95-2026-03-14-birdnet-10:00:00.wav"), None);
+        assert_eq!(
+            parse_clip_name("Great_Tit-101-2026-03-14-birdnet-10:00:00.wav"),
+            None
+        );
+    }
+
+    /// A clip named as the extractor names them, with a fixed mtime.
+    fn write_clip(dir: &Path, species: &str, conf: u8, n: u32, mtime_secs: i64) -> PathBuf {
+        let path = dir.join(format!(
+            "{species}-{conf}-2026-03-14-birdnet-{:02}:{:02}:00.wav",
+            n / 60,
+            n % 60
+        ));
+        write_sized_wav(&path, 64, mtime_secs);
+        path
+    }
+
+    /// The gate for S-2: the register's exact case. Ninety-seven clips of the
+    /// commonest bird and one each of three rare ones, the rare clips older
+    /// and less confident than every common one — the old purge, oldest 10 %
+    /// first, took all three rare clips in its first pass.
+    #[test]
+    fn the_purge_takes_from_the_commonest_species_and_never_below_the_floor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Corncrake is the oldest; Hoopoe the least confident.
+        let rare: Vec<PathBuf> = [("Corncrake", 40), ("Wryneck", 40), ("Hoopoe", 30)]
+            .iter()
+            .enumerate()
+            .map(|(i, (sp, conf))| {
+                let i = u32::try_from(i).unwrap();
+                write_clip(dir.path(), sp, *conf, i, 1_000 + i64::from(i))
+            })
+            .collect();
+        let mut common: Vec<(PathBuf, u8)> = Vec::new();
+        for i in 0..97_u32 {
+            // Confidence climbs with time, so "lowest confidence" and "oldest"
+            // agree except where the test breaks the tie on purpose below.
+            let conf = 60 + (i % 40) as u8;
+            common.push((
+                write_clip(dir.path(), "Great_Tit", conf, 10 + i, 10_000 + i64::from(i)),
+                conf,
+            ));
+        }
+
+        let removed = purge_recordings(dir.path(), 5, &[], &[]);
+        assert_eq!(removed, 10, "a tenth of 100");
+        for r in &rare {
+            assert!(
+                r.exists(),
+                "{} must survive: its species is at the floor",
+                r.display()
+            );
+        }
+        let gone: Vec<u8> = common
+            .iter()
+            .filter(|(p, _)| !p.exists())
+            .map(|(_, c)| *c)
+            .collect();
+        assert_eq!(gone.len(), 10);
+        assert!(
+            gone.iter()
+                .all(|c| *c == 60 || *c == 61 || *c == 62 || *c == 63 || *c == 64),
+            "the least confident common clips go first, not the oldest: {gone:?}"
+        );
+        // Counterpart: the floor really is a floor, not a preference. With the
+        // common species purged down to it, the next pass finds nothing to take
+        // and says so, rather than reaching for the rare birds.
+        for (p, _) in &common {
+            let _ = std::fs::remove_file(p);
+        }
+        for i in 0..5 {
+            write_clip(dir.path(), "Great_Tit", 90, 200 + i, 20_000 + i64::from(i));
+        }
+        assert_eq!(
+            purge_recordings(dir.path(), 5, &[], &[]),
+            0,
+            "every species is at the floor"
+        );
+        for r in &rare {
+            assert!(r.exists());
+        }
+        // And with no floor, the purge frees space again — still from the
+        // commonest species, which at five clips is still the commonest.
+        assert_eq!(purge_recordings(dir.path(), 0, &[], &[]), 1);
+        assert!(
+            rare.iter().all(|r| r.exists()),
+            "the Great Tit clip went, not a rare one"
+        );
+        // Among species with equal counts the least confident clip goes, and
+        // age only breaks a tie in confidence.
+        for entry in std::fs::read_dir(dir.path()).unwrap().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("Great_Tit") {
+                std::fs::remove_file(entry.path()).unwrap();
+            }
+        }
+        assert_eq!(purge_recordings(dir.path(), 0, &[], &[]), 1);
+        assert!(
+            !rare[2].exists(),
+            "Hoopoe: least confident, though the newest"
+        );
+        assert_eq!(purge_recordings(dir.path(), 0, &[], &[]), 1);
+        assert!(
+            !rare[0].exists(),
+            "Corncrake: same confidence as Wryneck, and older"
+        );
+        assert!(rare[1].exists());
+    }
+
+    #[test]
+    fn a_locked_clip_is_skipped_and_still_counts_for_its_species() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Six clips of one species, floor 5: exactly one may go. The least
+        // confident is locked, so the next-least goes instead — and the locked
+        // one still counts, so a second pass is refused.
+        let locked = write_clip(dir.path(), "Robin", 50, 0, 1_000);
+        let next = write_clip(dir.path(), "Robin", 55, 1, 1_001);
+        for i in 2..6 {
+            write_clip(dir.path(), "Robin", 80, i, 1_000 + i64::from(i));
+        }
+        let locked_names = vec![locked.file_name().unwrap().to_string_lossy().into_owned()];
+        assert_eq!(purge_recordings(dir.path(), 5, &[], &locked_names), 1);
+        assert!(locked.exists());
+        assert!(!next.exists());
+        assert_eq!(purge_recordings(dir.path(), 5, &[], &locked_names), 0);
+    }
+
+    #[test]
+    fn a_migrated_by_date_tree_is_purged_with_the_same_policy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tree = dir.path().join("By_Date/2026-03-14/Great_Tit");
+        std::fs::create_dir_all(&tree).expect("mkdir");
+        for i in 0..20 {
+            write_clip(&tree, "Great_Tit", 90, i, 1_000 + i64::from(i));
+        }
+        let rare = write_clip(dir.path(), "Wryneck", 40, 99, 10);
+        assert_eq!(purge_recordings(dir.path(), 5, &[], &[]), 2);
+        assert!(rare.exists());
+    }
+
+    /// R-4. One raw segment in N survives the drain, in capture order, and
+    /// the cadence carries across passes; the stream directory is emptied
+    /// either way.
+    #[test]
+    fn the_stream_drain_keeps_one_segment_in_n_when_asked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let keep_dir = dir.path().join("keep");
+        for i in 0..6_i64 {
+            write_sized_wav(
+                &dir.path()
+                    .join(format!("2026-03-14-birdnet-06:00:{i:02}.wav")),
+                64,
+                1_000 + i,
+            );
+        }
+        let policy = super::super::manager::RawKeep {
+            dir: keep_dir.clone(),
+            every: 3,
+        };
+        let counter = std::sync::Mutex::new(0_u64);
+        let removed = purge_flat_older_than(
+            dir.path(),
+            std::time::Duration::from_secs(1),
+            &[],
+            &[],
+            Some((&policy, &counter)),
+        );
+        assert_eq!(removed, 6, "the stream directory is drained in full");
+        let mut kept: Vec<String> = std::fs::read_dir(&keep_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        kept.sort();
+        assert_eq!(
+            kept,
+            vec![
+                "2026-03-14-birdnet-06:00:00.wav".to_owned(),
+                "2026-03-14-birdnet-06:00:03.wav".to_owned()
+            ],
+            "the first and the fourth, by capture time"
+        );
+        // The next pass continues the cadence: segment 6 is the next kept.
+        write_sized_wav(
+            &dir.path().join("2026-03-14-birdnet-06:00:06.wav"),
+            64,
+            1_006,
+        );
+        assert_eq!(
+            purge_flat_older_than(
+                dir.path(),
+                std::time::Duration::from_secs(1),
+                &[],
+                &[],
+                Some((&policy, &counter))
+            ),
+            1
+        );
+        assert!(keep_dir.join("2026-03-14-birdnet-06:00:06.wav").exists());
+        // Counterpart: no policy keeps nothing, as before.
+        write_sized_wav(
+            &dir.path().join("2026-03-14-birdnet-06:00:07.wav"),
+            64,
+            1_007,
+        );
+        assert_eq!(
+            purge_flat_older_than(
+                dir.path(),
+                std::time::Duration::from_secs(1),
+                &[],
+                &[],
+                None
+            ),
+            1
+        );
+        assert_eq!(std::fs::read_dir(&keep_dir).unwrap().count(), 3);
+    }
+
+    /// R-4. Kept raw audio is the first thing the recordings purge gives up:
+    /// it has no species and no floor, so a full disk costs no clip while any
+    /// raw segment remains.
+    #[test]
+    fn kept_raw_audio_goes_before_any_clip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let raw = dir.path().join(super::super::manager::RAW_KEEP_SUBDIR);
+        std::fs::create_dir_all(&raw).unwrap();
+        for i in 0..20_i64 {
+            write_sized_wav(
+                &raw.join(format!("2026-03-14-birdnet-06:00:{i:02}.wav")),
+                64,
+                1_000 + i,
+            );
+        }
+        // Three clips, older than every raw segment, of a species at its floor.
+        for i in 0..3 {
+            write_clip(dir.path(), "Wryneck", 40, i, 10 + i64::from(i));
+        }
+        assert_eq!(
+            purge_recordings(dir.path(), 5, &[], &[]),
+            2,
+            "a tenth of 23"
+        );
+        assert_eq!(
+            std::fs::read_dir(&raw).unwrap().count(),
+            18,
+            "both came from the raw audio"
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter(|e| e.as_ref().unwrap().path().is_file())
+                .count(),
+            3,
+            "no clip went"
+        );
+    }
+
     /// Write `n` bytes of `.wav` at `path` with a fixed mtime (unix seconds).
     fn write_sized_wav(path: &Path, bytes: usize, mtime_secs: i64) {
         std::fs::write(path, vec![0_u8; bytes]).expect("write wav");
@@ -421,8 +936,13 @@ mod tests {
             // Natural mtime = now; well under the max_age below.
             std::fs::write(dir.path().join(format!("new_{i}.wav")), vec![0_u8; 64]).expect("write");
         }
-        let removed =
-            purge_flat_older_than(dir.path(), std::time::Duration::from_secs(3600), &[], &[]);
+        let removed = purge_flat_older_than(
+            dir.path(),
+            std::time::Duration::from_secs(3600),
+            &[],
+            &[],
+            None,
+        );
         assert_eq!(removed, 3, "only the three aged segments should drain");
         assert!(dir.path().join("new_0.wav").exists());
         assert!(dir.path().join("new_1.wav").exists());
@@ -467,8 +987,13 @@ mod tests {
         write_sized_wav(&dir.path().join("drop.wav"), 1000, 1_000_002);
 
         let locked = vec!["locked.wav".to_string()];
-        let removed =
-            purge_flat_older_than(dir.path(), std::time::Duration::from_secs(1), &[], &locked);
+        let removed = purge_flat_older_than(
+            dir.path(),
+            std::time::Duration::from_secs(1),
+            &[],
+            &locked,
+            None,
+        );
         assert_eq!(removed, 1, "only the unlocked flat segment drains");
         assert!(dir.path().join("locked.wav").exists(), "locked file kept");
         assert!(

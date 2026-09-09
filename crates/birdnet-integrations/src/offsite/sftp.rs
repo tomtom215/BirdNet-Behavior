@@ -52,6 +52,11 @@ pub const SFTP_BINARY: &str = "sftp";
 /// Seconds to wait for the TCP connection, passed through as `ConnectTimeout`.
 const CONNECT_TIMEOUT_SECS: u32 = 30;
 
+/// The longest one batch may run. A station database is hundreds of
+/// megabytes and the link is often cellular, so this is hours; it bounds an
+/// `sftp` that neither finishes nor loses its link.
+const BATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+
 /// Seconds between SSH keepalive probes on an idle connection.
 ///
 /// `ConnectTimeout` bounds the connect only. A session that establishes and
@@ -431,7 +436,10 @@ impl SftpTarget {
         cmd.args(self.argv()?)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // The deadline below drops the child on expiry; this is what makes
+            // the drop a kill rather than an orphaned upload.
+            .kill_on_drop(true);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -449,7 +457,20 @@ impl SftpTarget {
             stdin.shutdown().await.map_err(SftpError::Spawn)?;
         }
 
-        let output = child.wait_with_output().await.map_err(SftpError::Spawn)?;
+        // A dead link is ended by `ServerAliveInterval` above; this is the
+        // ceiling for an `sftp` that is alive and going nowhere.
+        let output = tokio::time::timeout(BATCH_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                SftpError::Spawn(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!(
+                        "sftp did not finish within {} s and was killed",
+                        BATCH_TIMEOUT.as_secs()
+                    ),
+                ))
+            })?
+            .map_err(SftpError::Spawn)?;
         if output.status.success() {
             String::from_utf8(output.stdout).map_err(|e| SftpError::BadOutput(e.to_string()))
         } else {

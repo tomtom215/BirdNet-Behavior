@@ -41,6 +41,15 @@
 //! re-exported here so this module's callers and its own history are
 //! unchanged.
 
+use birdnet_core::process::run_with_timeout;
+use std::time::Duration;
+
+/// How long one diagnostic command (`journalctl`, `systemctl`, `df`, …) may
+/// take before the bundle records it as unavailable and moves on.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long `tar` may take to build the bundle.
+const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(300);
+
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -100,7 +109,7 @@ fn read_error_log(config: Option<&Config>) -> String {
 /// non-systemd install) should still produce everything else, and "this tool
 /// was not available" is itself worth knowing when reading the bundle.
 fn capture(cmd: &str, args: &[&str]) -> String {
-    match std::process::Command::new(cmd).args(args).output() {
+    match run_with_timeout(std::process::Command::new(cmd).args(args), CAPTURE_TIMEOUT) {
         Ok(out) => {
             let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
             if !out.stderr.is_empty() {
@@ -258,16 +267,22 @@ pub fn build_with_recent_log(
 
     // `tar` rather than a crate, matching how the web backup builds its archive
     // — one fewer dependency and one fewer way for the two to disagree.
-    let status = std::process::Command::new("tar")
-        .arg("czf")
-        .arg(dest)
-        .arg("-C")
-        .arg(&staging)
-        .arg("birdnet-support")
-        .status()
-        .map_err(|e| format!("could not run tar: {e}"))?;
-    if !status.success() {
-        return Err(format!("tar exited with {status}"));
+    let out = run_with_timeout(
+        std::process::Command::new("tar")
+            .arg("czf")
+            .arg(dest)
+            .arg("-C")
+            .arg(&staging)
+            .arg("birdnet-support"),
+        ARCHIVE_TIMEOUT,
+    )
+    .map_err(|e| format!("could not run tar: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "tar exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     let size = std::fs::metadata(dest).map_or(0, |m| m.len());
     Ok(Bundle { size, warnings })
