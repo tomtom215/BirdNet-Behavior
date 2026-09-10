@@ -48,20 +48,13 @@ use birdnet_core::audio::capture::{
 use birdnet_web::metrics::SharedMetrics;
 
 use super::uptime::UptimeRing;
+use super::watchdog::WatchdogConfig;
 
-/// First retry delay after a source is found dead.
-const BACKOFF_BASE: Duration = Duration::from_secs(2);
-
-/// Upper bound on the retry delay. A persistently broken source is retried
-/// at least this often, forever — we never stop trying to bring a field
-/// sensor back.
-const BACKOFF_CAP: Duration = Duration::from_secs(60);
-
-/// How long a source may be unexpectedly down before we log a loud warning.
-const DOWN_WARN_AFTER: Duration = Duration::from_secs(120);
-
-/// Cadence for repeating the "still down" warning after the first one.
-const DOWN_WARN_EVERY: Duration = Duration::from_secs(300);
+// The retry, stall and warning timings these decisions use are no longer
+// constants: they live in [`super::watchdog::WatchdogConfig`], defaulted to the
+// values this supervisor has always used and tunable per station (`G-9`). They
+// are passed in rather than read here so every decision below stays a pure
+// function of its inputs, which is what makes them testable against a table.
 
 /// The slice of `CaptureManager` behaviour the supervisor depends on.
 ///
@@ -116,7 +109,7 @@ pub(super) fn source_gauge_label(source: &CaptureSource) -> String {
 /// `0` attempts → no delay (the first attempt fires immediately); then
 /// `2s, 4s, 8s, …` doubling up to [`BACKOFF_CAP`].
 #[must_use]
-fn backoff_delay(attempts_since_healthy: u32) -> Duration {
+fn backoff_delay(attempts_since_healthy: u32, watchdog: &WatchdogConfig) -> Duration {
     if attempts_since_healthy == 0 {
         return Duration::ZERO;
     }
@@ -126,35 +119,51 @@ fn backoff_delay(attempts_since_healthy: u32) -> Duration {
     // the cap boundary coincide with their neighbours, making `>`→`>=` an
     // equivalent (unkillable) mutation.
     let shift = (attempts_since_healthy - 1).min(20);
-    let secs = (BACKOFF_BASE.as_secs() << shift).min(BACKOFF_CAP.as_secs());
+    let secs = (watchdog.backoff_base.as_secs() << shift).min(watchdog.backoff_cap.as_secs());
     Duration::from_secs(secs)
 }
 
 /// Whether a "still down" warning is due right now.
 ///
 /// True only once a source has been continuously down for at least
-/// [`DOWN_WARN_AFTER`], and then no more often than [`DOWN_WARN_EVERY`].
+/// `down_warn_after`, and then no more often than `down_warn_every`.
 #[must_use]
-fn should_warn_down(down_since: Option<Instant>, last_warn: Option<Instant>, now: Instant) -> bool {
+fn should_warn_down(
+    down_since: Option<Instant>,
+    last_warn: Option<Instant>,
+    now: Instant,
+    watchdog: &WatchdogConfig,
+) -> bool {
     let Some(since) = down_since else {
         return false;
     };
-    if now.saturating_duration_since(since) < DOWN_WARN_AFTER {
+    if now.saturating_duration_since(since) < watchdog.down_warn_after {
         return false;
     }
-    last_warn.is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
+    last_warn.is_none_or(|last| now.saturating_duration_since(last) >= watchdog.down_warn_every)
 }
 
 /// Whether the flapping warning is due: the source has (re)started at least
 /// [`FLAP_THRESHOLD`] times inside the window, and the last such warning is
-/// at least [`DOWN_WARN_EVERY`] old or never happened.
+/// at least `down_warn_every` old or never happened.
 ///
 /// A pure function for the same reason as the one above: the caller only
 /// writes a log line, so every operator in this decision survived a
 /// mutation run while it lived there.
-fn flap_warning_due(restarts: u32, last_warn: Option<Instant>, now: Instant) -> bool {
+///
+/// The threshold and the window are still fixed — they live in `birdnet-core`
+/// because the web layer renders against them too — while the repeat cadence
+/// follows the operator's `down_warn_every`, which is the knob that stops a
+/// station's journal filling up.
+fn flap_warning_due(
+    restarts: u32,
+    last_warn: Option<Instant>,
+    now: Instant,
+    watchdog: &WatchdogConfig,
+) -> bool {
     restarts >= FLAP_THRESHOLD
-        && last_warn.is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
+        && last_warn
+            .is_none_or(|last| now.saturating_duration_since(last) >= watchdog.down_warn_every)
 }
 
 /// One end of a per-source quiet window.
@@ -388,12 +397,12 @@ impl<S: Source> SupervisedSource<S> {
         u32::try_from(self.restarts.len()).unwrap_or(u32::MAX)
     }
 
-    /// Warn, at most once per [`DOWN_WARN_EVERY`], while the source is
+    /// Warn, at most once per [`wd().down_warn_every`], while the source is
     /// flapping: the "still down" warning cannot fire for a source that is
     /// never down for long, so this is the log line such a source gets.
-    fn maybe_warn_flapping(&mut self, now: Instant) {
+    fn maybe_warn_flapping(&mut self, now: Instant, watchdog: &WatchdogConfig) {
         let restarts = self.restarts_in_window(now);
-        if flap_warning_due(restarts, self.last_flap_warn, now) {
+        if flap_warning_due(restarts, self.last_flap_warn, now, watchdog) {
             tracing::warn!(
                 source = %self.label,
                 restarts_last_hour = restarts,
@@ -457,8 +466,8 @@ impl<S: Source> SupervisedSource<S> {
     }
 
     /// Emit (and rate-limit) the loud "source still down" warning.
-    fn maybe_warn_down(&mut self, now: Instant) {
-        if should_warn_down(self.down_since, self.last_down_warn, now) {
+    fn maybe_warn_down(&mut self, now: Instant, watchdog: &WatchdogConfig) {
+        if should_warn_down(self.down_since, self.last_down_warn, now, watchdog) {
             let down_for = self
                 .down_since
                 .map_or(Duration::ZERO, |s| now.saturating_duration_since(s));
@@ -485,6 +494,7 @@ impl<S: Source> SupervisedSource<S> {
         now_min: Option<u32>,
         solar: SolarMinutes,
         metrics: &SharedMetrics,
+        watchdog: &WatchdogConfig,
     ) {
         let allowed = recording_allowed && !self.in_quiet(now_min, solar);
         // Whether this tick caught the (alive) process silently stalled, so the
@@ -558,7 +568,7 @@ impl<S: Source> SupervisedSource<S> {
 
         // Honour the backoff window before trying again.
         if self.next_attempt_at.is_some_and(|at| now < at) {
-            self.maybe_warn_down(now);
+            self.maybe_warn_down(now, watchdog);
             return;
         }
 
@@ -573,7 +583,7 @@ impl<S: Source> SupervisedSource<S> {
         if !operator_asked {
             self.restarts.push_back(now);
         }
-        let delay = backoff_delay(self.attempts_since_healthy);
+        let delay = backoff_delay(self.attempts_since_healthy, watchdog);
         self.next_attempt_at = Some(now + delay);
         // The stall clock measures from the newest of {fresh output, this
         // attempt}: a process that starts and then never writes a segment is
@@ -595,8 +605,8 @@ impl<S: Source> SupervisedSource<S> {
                 "capture (re)start failed; will retry"
             ),
         }
-        self.maybe_warn_down(now);
-        self.maybe_warn_flapping(now);
+        self.maybe_warn_down(now, watchdog);
+        self.maybe_warn_flapping(now, watchdog);
     }
 
     /// Record this tick into the 24-hour ring and build the published snapshot.
@@ -636,13 +646,20 @@ impl<S: Source> SupervisedSource<S> {
 /// pausing/resuming them with the recording schedule.
 pub(super) struct Supervisor<S: Source> {
     sources: Vec<SupervisedSource<S>>,
+    /// The operator's timings, or the defaults (`G-9`). Held here rather than
+    /// on each source because they are station-wide: a per-source retry policy
+    /// would be four more numbers for a distinction nobody has asked for.
+    watchdog: WatchdogConfig,
 }
 
 impl<S: Source> Supervisor<S> {
     /// Build a supervisor over `(source, gauge_label, quiet_window,
     /// stall_after)` tuples. `stall_after` is the per-source silent-stall
     /// threshold (`Duration::MAX` disables stall detection).
-    pub(super) fn new(sources: Vec<(S, String, Option<QuietWindow>, Duration)>) -> Self {
+    pub(super) fn new(
+        sources: Vec<(S, String, Option<QuietWindow>, Duration)>,
+        watchdog: WatchdogConfig,
+    ) -> Self {
         Self {
             sources: sources
                 .into_iter()
@@ -650,7 +667,15 @@ impl<S: Source> Supervisor<S> {
                     SupervisedSource::new(source, label, quiet, stall_after)
                 })
                 .collect(),
+            watchdog,
         }
+    }
+
+    /// A supervisor with the default timings, for tests that are not about
+    /// tuning them.
+    #[cfg(test)]
+    pub(super) fn new_for_test(sources: Vec<(S, String, Option<QuietWindow>, Duration)>) -> Self {
+        Self::new(sources, WatchdogConfig::default())
     }
 
     /// Run one reconciliation pass over every source.
@@ -669,7 +694,14 @@ impl<S: Source> Supervisor<S> {
         metrics: &SharedMetrics,
     ) {
         for source in &mut self.sources {
-            source.reconcile(now, recording_allowed, now_min, solar, metrics);
+            source.reconcile(
+                now,
+                recording_allowed,
+                now_min,
+                solar,
+                metrics,
+                &self.watchdog,
+            );
         }
     }
 
@@ -805,6 +837,12 @@ mod tests {
         Arc::new(MetricsRegistry::new())
     }
 
+    /// The timings the supervisor has always used, which every test below
+    /// asserts against unless it is specifically about tuning them.
+    fn wd() -> WatchdogConfig {
+        WatchdogConfig::default()
+    }
+
     fn gauge(m: &SharedMetrics, label: &str) -> Option<u64> {
         m.snapshot()
             .source_up
@@ -814,12 +852,12 @@ mod tests {
     }
 
     fn one(source: FakeSource) -> Supervisor<FakeSource> {
-        Supervisor::new(vec![(source, "local".to_owned(), None, Duration::MAX)])
+        Supervisor::new_for_test(vec![(source, "local".to_owned(), None, Duration::MAX)])
     }
 
     /// A supervisor over one source that carries a quiet window.
     fn one_with_quiet(source: FakeSource, quiet: QuietWindow) -> Supervisor<FakeSource> {
-        Supervisor::new(vec![(
+        Supervisor::new_for_test(vec![(
             source,
             "local".to_owned(),
             Some(quiet),
@@ -880,26 +918,26 @@ mod tests {
 
     #[test]
     fn backoff_zero_attempts_is_immediate() {
-        assert_eq!(backoff_delay(0), Duration::ZERO);
+        assert_eq!(backoff_delay(0, &wd()), Duration::ZERO);
     }
 
     #[test]
     fn backoff_doubles_then_caps() {
-        assert_eq!(backoff_delay(1), Duration::from_secs(2));
-        assert_eq!(backoff_delay(2), Duration::from_secs(4));
-        assert_eq!(backoff_delay(3), Duration::from_secs(8));
-        assert_eq!(backoff_delay(4), Duration::from_secs(16));
-        assert_eq!(backoff_delay(5), Duration::from_secs(32));
+        assert_eq!(backoff_delay(1, &wd()), Duration::from_secs(2));
+        assert_eq!(backoff_delay(2, &wd()), Duration::from_secs(4));
+        assert_eq!(backoff_delay(3, &wd()), Duration::from_secs(8));
+        assert_eq!(backoff_delay(4, &wd()), Duration::from_secs(16));
+        assert_eq!(backoff_delay(5, &wd()), Duration::from_secs(32));
         // 64s would exceed the 60s cap.
-        assert_eq!(backoff_delay(6), Duration::from_secs(60));
-        assert_eq!(backoff_delay(7), Duration::from_secs(60));
+        assert_eq!(backoff_delay(6, &wd()), Duration::from_secs(60));
+        assert_eq!(backoff_delay(7, &wd()), Duration::from_secs(60));
     }
 
     #[test]
     fn backoff_never_overflows_at_extreme_attempts() {
         // Must stay capped (and not panic) for absurd attempt counts.
-        assert_eq!(backoff_delay(u32::MAX), Duration::from_secs(60));
-        assert_eq!(backoff_delay(1000), Duration::from_secs(60));
+        assert_eq!(backoff_delay(u32::MAX, &wd()), Duration::from_secs(60));
+        assert_eq!(backoff_delay(1000, &wd()), Duration::from_secs(60));
     }
 
     // ---- should_warn_down --------------------------------------------------
@@ -912,37 +950,37 @@ mod tests {
 
     #[test]
     fn no_warn_when_not_down() {
-        assert!(!should_warn_down(None, None, Instant::now()));
+        assert!(!should_warn_down(None, None, Instant::now(), &wd()));
     }
 
     #[test]
     fn no_warn_before_threshold() {
         let now = Instant::now();
-        let since = earlier(now, Duration::from_secs(DOWN_WARN_AFTER.as_secs() - 1));
-        assert!(!should_warn_down(Some(since), None, now));
+        let since = earlier(now, Duration::from_secs(wd().down_warn_after.as_secs() - 1));
+        assert!(!should_warn_down(Some(since), None, now, &wd()));
     }
 
     #[test]
     fn warn_at_threshold_when_never_warned() {
         let now = Instant::now();
-        let since = earlier(now, DOWN_WARN_AFTER);
-        assert!(should_warn_down(Some(since), None, now));
+        let since = earlier(now, wd().down_warn_after);
+        assert!(should_warn_down(Some(since), None, now, &wd()));
     }
 
     #[test]
     fn no_repeat_warn_within_interval() {
         let now = Instant::now();
-        let since = earlier(now, DOWN_WARN_AFTER + DOWN_WARN_EVERY);
-        let last = earlier(now, Duration::from_secs(DOWN_WARN_EVERY.as_secs() - 1));
-        assert!(!should_warn_down(Some(since), Some(last), now));
+        let since = earlier(now, wd().down_warn_after + wd().down_warn_every);
+        let last = earlier(now, Duration::from_secs(wd().down_warn_every.as_secs() - 1));
+        assert!(!should_warn_down(Some(since), Some(last), now, &wd()));
     }
 
     #[test]
     fn repeat_warn_after_interval() {
         let now = Instant::now();
-        let since = earlier(now, DOWN_WARN_AFTER + DOWN_WARN_EVERY);
-        let last = earlier(now, DOWN_WARN_EVERY);
-        assert!(should_warn_down(Some(since), Some(last), now));
+        let since = earlier(now, wd().down_warn_after + wd().down_warn_every);
+        let last = earlier(now, wd().down_warn_every);
+        assert!(should_warn_down(Some(since), Some(last), now, &wd()));
     }
 
     // ---- reconcile: schedule gate -----------------------------------------
@@ -1171,7 +1209,7 @@ mod tests {
     /// AD-3. A source that dies every minute and comes back in two seconds:
     /// `attempts_since_healthy` is refunded on every healthy tick, so the
     /// backoff stays at its base and `restart_attempts` reads 0 or 1; the
-    /// source is never down for `DOWN_WARN_AFTER`; the strip is green. The
+    /// source is never down for `wd().down_warn_after`; the strip is green. The
     /// restart count over the last hour is what reports it, and it ages out.
     #[test]
     fn a_flapping_source_is_reported_by_its_restarts_over_the_hour() {
@@ -1213,7 +1251,7 @@ mod tests {
 
     /// One source, one label, so a request can be aimed at it.
     fn labelled(source: FakeSource, label: &str) -> Supervisor<FakeSource> {
-        Supervisor::new(vec![(source, label.to_owned(), None, Duration::MAX)])
+        Supervisor::new_for_test(vec![(source, label.to_owned(), None, Duration::MAX)])
     }
 
     fn request(labels: &[&str]) -> BTreeSet<String> {
@@ -1229,7 +1267,7 @@ mod tests {
     #[test]
     fn an_operator_restart_cycles_only_the_named_source() {
         let m = metrics();
-        let mut sup = Supervisor::new(vec![
+        let mut sup = Supervisor::new_for_test(vec![
             (FakeSource::healthy(), "cam".to_owned(), None, Duration::MAX),
             (FakeSource::healthy(), "mic".to_owned(), None, Duration::MAX),
         ]);
@@ -1378,7 +1416,7 @@ mod tests {
     }
 
     /// The flapping warning, as a table. `T` is `FLAP_THRESHOLD`, `E` is
-    /// `DOWN_WARN_EVERY`.
+    /// `wd().down_warn_every`.
     ///
     /// | restarts | last warning     | due? |
     /// |----------|------------------|------|
@@ -1393,19 +1431,24 @@ mod tests {
     #[test]
     fn the_flapping_warning_is_due_at_the_threshold_and_once_per_interval() {
         let now = Instant::now();
-        assert!(!flap_warning_due(FLAP_THRESHOLD - 1, None, now));
-        assert!(flap_warning_due(FLAP_THRESHOLD, None, now));
-        assert!(flap_warning_due(FLAP_THRESHOLD + 3, None, now));
+        assert!(!flap_warning_due(FLAP_THRESHOLD - 1, None, now, &wd()));
+        assert!(flap_warning_due(FLAP_THRESHOLD, None, now, &wd()));
+        assert!(flap_warning_due(FLAP_THRESHOLD + 3, None, now, &wd()));
         let last = now;
         assert!(!flap_warning_due(
             FLAP_THRESHOLD,
             Some(last),
-            last + DOWN_WARN_EVERY.checked_sub(Duration::from_secs(1)).unwrap()
+            last + wd()
+                .down_warn_every
+                .checked_sub(Duration::from_secs(1))
+                .unwrap(),
+            &wd()
         ));
         assert!(flap_warning_due(
             FLAP_THRESHOLD,
             Some(last),
-            last + DOWN_WARN_EVERY
+            last + wd().down_warn_every,
+            &wd()
         ));
     }
 
@@ -1421,18 +1464,18 @@ mod tests {
                 .push_back(t0 + Duration::from_secs(u64::from(i)));
         }
         let warned_at = t0 + Duration::from_secs(60);
-        sup.sources[0].maybe_warn_flapping(warned_at);
+        sup.sources[0].maybe_warn_flapping(warned_at, &wd());
         assert_eq!(sup.sources[0].last_flap_warn, Some(warned_at));
-        sup.sources[0].maybe_warn_flapping(warned_at + Duration::from_secs(1));
+        sup.sources[0].maybe_warn_flapping(warned_at + Duration::from_secs(1), &wd());
         assert_eq!(
             sup.sources[0].last_flap_warn,
             Some(warned_at),
             "inside the interval"
         );
-        sup.sources[0].maybe_warn_flapping(warned_at + DOWN_WARN_EVERY);
+        sup.sources[0].maybe_warn_flapping(warned_at + wd().down_warn_every, &wd());
         assert_eq!(
             sup.sources[0].last_flap_warn,
-            Some(warned_at + DOWN_WARN_EVERY)
+            Some(warned_at + wd().down_warn_every)
         );
     }
 
@@ -1457,7 +1500,7 @@ mod tests {
     #[test]
     fn sources_are_supervised_independently() {
         let m = metrics();
-        let mut sup = Supervisor::new(vec![
+        let mut sup = Supervisor::new_for_test(vec![
             (
                 FakeSource::healthy(),
                 "local".to_owned(),
@@ -1493,7 +1536,7 @@ mod tests {
 
         // Still down well past the warn threshold.
         sup.tick(
-            t0 + DOWN_WARN_AFTER + Duration::from_secs(1),
+            t0 + wd().down_warn_after + Duration::from_secs(1),
             true,
             None,
             SolarMinutes::default(),
@@ -1609,7 +1652,7 @@ mod tests {
     fn stalled_source_is_stopped_and_restarted() {
         let m = metrics();
         let stall_after = Duration::from_secs(60);
-        let mut sup = Supervisor::new(vec![(
+        let mut sup = Supervisor::new_for_test(vec![(
             FakeSource::dead(),
             "RTSP_1".to_owned(),
             None,
@@ -1685,7 +1728,7 @@ mod tests {
         let stall_after = Duration::from_secs(60);
         let mut src = FakeSource::dead();
         src.output_age = Some(stall_after); // exactly at the boundary
-        let mut sup = Supervisor::new(vec![(src, "RTSP_1".to_owned(), None, stall_after)]);
+        let mut sup = Supervisor::new_for_test(vec![(src, "RTSP_1".to_owned(), None, stall_after)]);
         let t0 = Instant::now();
 
         sup.tick(t0, true, Some(400), SolarMinutes::default(), &m); // start issued; stall clock armed
@@ -1710,7 +1753,7 @@ mod tests {
         let stall_after = Duration::from_secs(60);
         let mut src = FakeSource::dead();
         src.output_age = Some(Duration::from_secs(5));
-        let mut sup = Supervisor::new(vec![(src, "local".to_owned(), None, stall_after)]);
+        let mut sup = Supervisor::new_for_test(vec![(src, "local".to_owned(), None, stall_after)]);
         let t0 = Instant::now();
 
         sup.tick(t0, true, Some(400), SolarMinutes::default(), &m);
@@ -1738,7 +1781,7 @@ mod tests {
         mute.output_age = None;
         let mut chatty = FakeSource::healthy();
         chatty.output_age = Some(Duration::from_secs(3));
-        let mut sup = Supervisor::new(vec![
+        let mut sup = Supervisor::new_for_test(vec![
             (mute, "RTSP_1".to_owned(), None, stall_after),
             (chatty, "RTSP_2".to_owned(), None, stall_after),
         ]);
@@ -1770,7 +1813,7 @@ mod tests {
     fn stall_detection_fails_open_when_clock_untrusted() {
         let m = metrics();
         let stall_after = Duration::from_secs(60);
-        let mut sup = Supervisor::new(vec![(
+        let mut sup = Supervisor::new_for_test(vec![(
             FakeSource::dead(),
             "local".to_owned(),
             None,

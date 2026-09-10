@@ -70,6 +70,13 @@ pub fn known_env_names() -> BTreeSet<String> {
     // `BIRDNET_<KEY>_FILE` variable, built from the key rather than written out
     // — so the list here cannot fall behind the list that is actually read.
     out.extend(birdnet_core::config::secret_file::file_env_names());
+    // The capture watchdog's knobs are read through a table, so their names
+    // never appear as `env::var("…")` literals for the scan below to find.
+    out.extend(
+        crate::capture::watchdog::WATCHDOG_ENV_KEYS
+            .iter()
+            .map(|k| (*k).to_owned()),
+    );
     out
 }
 

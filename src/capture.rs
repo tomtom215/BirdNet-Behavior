@@ -47,6 +47,7 @@ pub fn schedule_config_for_test(
 mod sources;
 mod supervisor;
 mod uptime;
+pub mod watchdog;
 
 use runloop::run_supervisor;
 use sources::{ResolvedSource, resolve_sources, resolve_sources_from_db, seed_sources_from_config};
@@ -74,18 +75,6 @@ impl Source for CaptureManager {
     fn latest_output_age(&mut self) -> Option<Duration> {
         Self::latest_output_age(self)
     }
-}
-
-/// Silent-stall threshold for a source writing `segment_secs`-long segments.
-///
-/// Several consecutive segments must be overdue before the supervisor calls
-/// a running process stalled — one slow write or a settling hiccup must not
-/// bounce a healthy source — with a floor so short segments (3 s minimum)
-/// don't make the verdict hair-triggered.
-fn stall_threshold(segment_secs: u32) -> Duration {
-    const STALL_SEGMENTS: u64 = 4;
-    const STALL_FLOOR: Duration = Duration::from_secs(120);
-    Duration::from_secs(u64::from(segment_secs).saturating_mul(STALL_SEGMENTS)).max(STALL_FLOOR)
 }
 
 /// Handle that keeps audio capture alive. Dropping it signals the supervisor
@@ -219,7 +208,22 @@ pub fn start_capture_manager(
         config,
         "SEGMENT_DURATION",
     );
-    let stall_after = stall_threshold(segment_duration);
+    // Operator-tunable timings (`G-9`), defaulted to the values this
+    // supervisor has always used. Anything the operator asked for that could
+    // not be used as written is reported here rather than silently replaced —
+    // a clamped watchdog is a station behaving differently from what its
+    // config file says.
+    let (watchdog, adjusted) = watchdog::from_config(config);
+    for a in &adjusted {
+        tracing::warn!(
+            key = a.key,
+            asked = %a.asked,
+            using = a.used,
+            reason = a.reason,
+            "watchdog setting adjusted"
+        );
+    }
+    let stall_after = watchdog.stall_after(segment_duration);
 
     // Segment filenames carry **local** civil time, because that is what
     // `arecord --use-strftime` wrote and what `RecordingFile::parse` turns into
@@ -283,7 +287,8 @@ pub fn start_capture_manager(
         tracing::info!(count = supervised.len(), "multi-stream capture active");
     }
 
-    let supervisor = Supervisor::new(supervised);
+    let check_interval = watchdog.check_interval;
+    let supervisor = Supervisor::new(supervised, watchdog);
     let stop_signal = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop_signal);
     let thread = std::thread::spawn(move || {
@@ -294,6 +299,7 @@ pub fn start_capture_manager(
             &status,
             &control,
             &local_offset,
+            check_interval,
             &stop_for_thread,
         );
     });

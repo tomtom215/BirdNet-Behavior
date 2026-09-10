@@ -108,6 +108,10 @@ const READ_SHAPES: &[&str] = &[
     "check_positive_int(config, \"",
     // The API token is read through a named constant.
     "pub const API_TOKEN_KEY: &str = \"",
+    // The capture watchdog's knobs carry both their names in one table
+    // (`src/capture/watchdog.rs`), so the file key is a literal this can see
+    // rather than a prefix stripped at runtime.
+    "config_key: \"",
 ];
 
 /// Keys read in `src`, by shape. `get_parsed::<T>("KEY")` is matched

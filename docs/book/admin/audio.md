@@ -21,6 +21,30 @@ Every source is supervised on its own, which is what makes a multi-camera statio
 - **You can say which source Listen plays.** Each row carries **Make listen default**; the source you pick is what `/stream` serves — and so what the Listen button plays — when the listener has not chosen one of their own. A two-microphone station (feeder and nest box) has one that people actually want to hear, and this is where it says so. If that source is later disabled or removed, Listen falls back to the first working source rather than going silent.
 - **You can restart one source by hand.** Each row carries a **Restart** button that stops and starts that source alone, within a couple of seconds; every other source keeps recording, and nothing in flight elsewhere is lost. It is the right remedy for one camera that has wedged in a way the supervisor has not yet called stalled. Restarts you ask for are deliberately not counted towards the *flapping* verdict — that number is there to spot a source failing on its own. The same action is `POST /api/v2/control/restart-source` for automation, and `GET /api/v2/system/capture` reads the state back; both are in the [API reference](../reference/api.md). Note that a per-source restart **re-launches the source with the settings the service started with** — it does not pick up an edit, which still needs a service restart.
 
+### Tuning the watchdog (expert)
+
+The supervisor's own timings are settable, and the defaults are what the station
+has always used — leave them alone unless a specific site misbehaves. The knobs
+are `BIRDNET_WATCHDOG_CHECK_SECS` (how often every source is reconciled),
+`…_STALL_SEGMENTS` and `…_STALL_FLOOR_SECS` (how much missing output makes a
+live process stalled), `…_BACKOFF_BASE_SECS` and `…_BACKOFF_CAP_SECS` (the
+restart delay and its ceiling), and `…_DOWN_WARN_AFTER_SECS` and
+`…_DOWN_WARN_EVERY_SECS` (how long down before the loud journal warning, and how
+often to repeat it). Each is documented with its range in `.env.example`; a
+value outside it is clamped and the adjustment is logged, so a station never
+runs on timings its config file does not describe.
+
+Two things that are deliberately *not* knobs:
+
+- **There is no maximum retry count.** A field sensor unreachable for six hours
+  must still be reachable on hour seven, and a supervisor that has given up is a
+  station that is silently not recording. Upstream BirdNET-Go has one; this is a
+  considered divergence, not an omission.
+- **None of these is "how long may the station go without a detection".** That
+  is `BIRDNET_DEADMAN_HOURS`. A microphone writes segments through hours of
+  silence, so no amount of quiet trips the stall threshold — the threshold is
+  about segments arriving, not about birds calling.
+
 ## Tuning a source
 
 Open a source's **edit** panel to change:

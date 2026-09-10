@@ -38,6 +38,40 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the capture watchdog's timings are the operator's
+
+**`WatchdogConfig`** (`G-9`). Every number the capture supervisor decides with
+was a `const`: how often it looks, how much missing output makes a live process
+stalled, how fast the restart backoff grows, how long down before the loud
+warning and how often to repeat it. Defensible defaults, but a station with slow
+storage, long segments or a camera that legitimately pauses had no way to say so
+short of rebuilding.
+
+Seven knobs, each read from `BIRDNET_WATCHDOG_*` or the unprefixed
+`birdnet.conf` key, each clamped to a documented range — and every adjustment
+logged, because a clamped watchdog running on timings its config file does not
+describe is worse than a refused one. The defaults are exactly the constants the
+supervisor used before, and a test asserts that, since a tuning feature that
+changes the default behaviour is worthless.
+
+Two knobs deliberately absent. **A maximum retry count**, which upstream
+BirdNET-Go has: a field sensor unreachable for six hours must still be reachable
+on hour seven, and a supervisor that has given up is a station that is silently
+not recording — offering it would be offering a way to break the property the
+supervisor exists to provide. And **the flapping threshold and window**, which
+live in `birdnet-core` because the web layer renders against them too; a
+per-station value would have to reach both, and half-wiring it is worse than
+leaving it fixed.
+
+The finding's own rationale turned out to be misattributed, which is worth
+recording. It read *"the right silence threshold at a busy feeder is not the
+right one for an arctic winter station where 30 s of silence is normal and 6 h
+is not"*. That describes `BIRDNET_DEADMAN_HOURS`, which is already a settings
+field. The stall threshold is not about silence: it ages the newest *recording
+segment*, and a microphone writes segments through hours of quiet. The real case
+for tuning is narrower and still real. `docs/FEATURE_GAP_ANALYSIS.md` carries
+the correction.
+
 ### Added — saved clips can be normalised to an even loudness
 
 **ITU-R BS.1770 integrated loudness, and one gain per clip** (`G-5`). Clips

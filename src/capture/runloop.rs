@@ -17,11 +17,10 @@ use birdnet_web::metrics::SharedMetrics;
 use super::schedule;
 use super::supervisor::{SolarMinutes, Supervisor};
 
-/// How often the supervisor reconciles each source toward its desired state.
-/// Short enough to notice a dead subprocess and resume after a scheduled
-/// pause promptly; the per-source backoff timers (not this cadence) govern
-/// restart spacing.
-const SUPERVISE_TICK: Duration = Duration::from_secs(2);
+// The reconcile cadence is `WatchdogConfig::check_interval` (`G-9`), passed in
+// rather than a constant here. Short enough to notice a dead subprocess and
+// resume after a scheduled pause promptly; the per-source backoff timers, not
+// this cadence, govern restart spacing.
 
 /// The supervisor's background loop: reconcile every source on a fixed
 /// cadence until asked to stop.
@@ -40,6 +39,7 @@ pub(super) fn run_supervisor(
     status: &CaptureStatusHandle,
     control: &CaptureControlHandle,
     local_offset: &LocalOffset,
+    check_interval: Duration,
     stop: &AtomicBool,
 ) {
     tracing::info!("capture supervisor started");
@@ -79,7 +79,7 @@ pub(super) fn run_supervisor(
         // Publish per-source health for the web layer's Station Health page,
         // using the same monotonic instant the tick reconciled against.
         supervisor.publish_status(now, secs, status);
-        sleep_with_stop(SUPERVISE_TICK, stop);
+        sleep_with_stop(check_interval, stop);
     }
     tracing::info!("capture supervisor stopped");
 }

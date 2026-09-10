@@ -200,14 +200,16 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Cameras have a bounded number of concurrent video sessions. A station that opens a video slot to listen to audio can lock the owner out of their own camera. |
 | **Plan** | A per-source `media_mode` mapping onto ffmpeg's `-allowed_media_types audio`, with the upstream fallback ladder and its failure accounting. |
 
-#### G‑9 · Audio watchdog tuning — PARTIAL
+#### G‑9 · Audio watchdog tuning — SHIPPED, and the row's rationale was misattributed
 
 | | |
 |---|---|
 | **Upstream** | `conf.WatchdogSettings` — operator-tunable `checkInterval`, `silenceThreshold`, `maxRetries`, `retryBackoff`, `cooldown`, `escalationTimeout`, with an explicit ESCALATED→FAILED state machine (`internal/audiocore/liveness.go`). |
 | **Ours** | We have a watchdog (`src/doctor/watchdog.rs`, `sd_notify.rs`, capture restart logic in `audio/capture/manager.rs`) and a deadman timer (`BIRDNET_DEADMAN_HOURS`), but the thresholds are constants. |
-| **Why it matters** | The right silence threshold at a busy feeder is not the right one for an arctic winter station where 30 s of silence is normal and 6 h is not. |
-| **Plan** | Lift the constants into a `WatchdogConfig` with the same six knobs, defaulted to today's values, and expose them under `/station/capture`. |
+| **Why it matters — corrected** | The rationale this row carried was *"the right silence threshold at a busy feeder is not the right one for an arctic winter station where 30 s of silence is normal and 6 h is not"*. That describes `BIRDNET_DEADMAN_HOURS`, which is **already** an operator setting (`deadman_hours` on the settings form, bridged to `DEADMAN_HOURS`). Our stall threshold is not about silence at all: `stalled()` ages the newest *recording segment*, and a microphone writes segments through hours of quiet. The real case for tuning is narrower and still real — slow storage, long segments, a camera that legitimately pauses, a station whose journal is filling with repeat warnings. |
+| **Resolution** | `src/capture/watchdog.rs`: `WatchdogConfig` with seven timings — reconcile cadence, stall segments and floor, backoff base and cap, down-warn delay and repeat — each read from `BIRDNET_WATCHDOG_*` or the unprefixed `birdnet.conf` key, clamped to a documented range, with every adjustment logged so a station never runs on timings its config file does not describe. Defaults are exactly the constants the supervisor used before, and a gate asserts that. |
+| **Two knobs deliberately not added** | **A maximum retry count**, which upstream has: a field sensor unreachable for six hours must still be reachable on hour seven, and a supervisor that has given up is a station silently not recording. Offering it would be offering a way to break the property the supervisor exists to provide. And **the flapping threshold and window**, which live in `birdnet-core` because the web layer renders against them too — a per-station value would have to reach both, and half-wiring it is worse than leaving it fixed. |
+| **Not exposed on `/station/capture`** | The plan said to. Seven expert numeric fields on a page an operator visits to see whether their microphone is alive is a poor trade; the values are in `.env.example` with their ranges, and the journal reports any that were adjusted. Recorded as a deliberate divergence rather than left as an open item. |
 
 ### 2.2 Classification and detection quality
 
@@ -516,7 +518,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 20 | ~~Config schema generation + drift gate~~ — the drift gate has shipped; the schema artifact is declined with a reason. See G‑34. | G‑34 |
 | 21 | ~~A station-wide default source for the live stream~~ — **shipped**, see N‑3 | N‑3 |
 | 22 | Bulk species management page | N‑4 |
-| 23 | Watchdog tuning | G‑9 |
+| 23 | ~~Watchdog tuning~~ — **shipped**, see G‑9 | G‑9 |
 | 24 | Memory-budget capability gating | G‑33 |
 | 25 | Noise "remember" window | G‑17 |
 
