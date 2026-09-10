@@ -44,6 +44,49 @@ For monitoring (Nagios / Zabbix / a Home Assistant command sensor / a Prometheus
 birdnet-behavior --doctor-json | jq .
 ```
 
+## How much memory the analytics engine gets
+
+DuckDB treats its memory limit as permission to use that much, so on a small
+board a limit that is a large share of physical RAM is a standing invitation to
+be OOM-killed in the middle of a dashboard query — at three in the morning,
+when nobody is looking.
+
+The station sizes the pool itself. Unset, `BIRDNET_DUCKDB_MEMORY_LIMIT` becomes
+**a quarter of whatever this process may actually use**: the smaller of physical
+RAM and any cgroup limit it is under (the systemd unit ships `MemoryMax=1G`; a
+container has its own). That is capped at 256 MiB and floored at 64 MiB.
+
+- On the shipped unit that comes to exactly 256 MiB — the flat value the station
+  used before, so nothing changes on the hardware it was written for.
+- On a 512 MB board it comes to 128 MiB, instead of handing one subsystem half
+  the machine.
+- Below a 256 MiB ceiling the floor cannot be met, and **analytics is refused at
+  startup** with a line in the journal saying so. The station still records,
+  classifies and serves; it just has no behavioural dashboards. Refusing is the
+  point: the alternative is starting something that will be killed mid-query.
+
+Set the variable and it is used verbatim, on any machine — including one the
+sizing would have refused. Someone who has measured their own station knows more
+than this does.
+
+Where the two numbers come from, since neither is a preference:
+
+- **A quarter** is the proportion the shipped unit already implies —
+  `MemoryMax=1G` with a 256 MB pool — so the default hardware is unchanged by
+  construction. A `const` assertion in the source fails the build if either
+  number moves without the other.
+- **64 MiB** was measured, not chosen. A sessionisation shaped like the
+  behavioural queries — `lag` and a running sum over 1.5 million detections
+  partitioned by species, then aggregated — ran out of memory at 8, 16 and
+  32 MiB and succeeded from 48 MiB up on DuckDB 1.5. 64 MiB is the next step
+  above the smallest observed working value.
+
+What is *not* measured is the rest of the process's footprint on a Raspberry Pi,
+which would need a Pi. So this sizes a proportion, not a budget: it makes the
+analytics engine's share scale with the machine, and does not claim to know the
+remainder is enough. `--doctor` reports which case applied under **Analytics
+memory**.
+
 ## Metrics & logs
 
 - **Prometheus metrics** are exposed at `/api/v2/metrics`.

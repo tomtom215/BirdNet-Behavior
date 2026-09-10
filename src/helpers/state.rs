@@ -32,7 +32,25 @@ pub fn build_state_with_analytics(
         .or_else(|| config.and_then(|c| c.get("ANALYTICS_DB_PATH").map(PathBuf::from)))
         .unwrap_or_else(|| default_analytics_path(&server_config.db_path));
 
+    // Whether this machine can carry the analytics engine at all (`G-33`).
+    // DuckDB treats its memory limit as permission to use that much, and the
+    // flat 256 MiB default is half of physical RAM on a 512 MB board — the
+    // standing invitation to be OOM-killed mid-query at three in the morning
+    // that this check exists to withdraw.
+    let budget = birdnet_behavioral::memory::decide(
+        std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref(),
+        birdnet_behavioral::memory::detect_ceiling(),
+    );
+    if matches!(budget, birdnet_behavioral::memory::Budget::TooSmall { .. }) {
+        // Refused, not crippled: a station that cannot run analytics is still a
+        // station that records and classifies birds, and taking the whole
+        // process down over an optional subsystem would be the worse failure.
+        tracing::warn!("{}", budget.explain());
+        return birdnet_web::state::AppState::new(server_config.db_path.clone())
+            .map_err(|e| format!("database error: {e}").into());
+    }
     tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
+    tracing::info!("{}", budget.explain());
     birdnet_web::state::AppState::new_with_analytics(server_config.db_path.clone(), &analytics_path)
         .map_err(|e| format!("database error: {e}").into())
 }

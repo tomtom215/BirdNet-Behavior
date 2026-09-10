@@ -432,14 +432,18 @@ within each group by how much they change what a station can do.
 | **A divergence from upstream's URL, on purpose** | Ours takes the source in the JSON body (`POST /api/v2/control/restart-source`, `{"source_id": …}`) rather than upstream's `restart-source/:id`. `WRITE_ROUTES`/`READ_ROUTES` in `routes/api_write.rs` are literal paths read by the CSRF guard, the OpenAPI gate and four test loops that *send a request to each entry*; a `{id}` placeholder would be a path none of them could exercise, which would cost more than matching a URL shape. |
 | **Plan (what remains)** | `/api/v2/system/jobs` over the `maintenance_runs` table. Network interfaces and external media are onboarding aids and follow. |
 
-#### G‑33 · Hardware profiling and memory policy — PARTIAL
+#### G‑33 · Hardware profiling and memory policy — SHIPPED (the capability-gating half)
 
 | | |
 |---|---|
 | **Upstream** | `internal/hwprofile`, `internal/cpuspec`, `internal/mempolicy` — detect the machine, set `GOMEMLIMIT` and cap the glibc arena, and gate features on available memory (`LowMemoryConfig`). |
 | **Ours** | `sysinfo`-based CPU/memory/temperature reporting, `--doctor` checks, and `BIRDNET_DUCKDB_MEMORY_LIMIT`. |
 | **Verdict** | Most of `mempolicy` is a Go GC concern that does not transfer to Rust. What does transfer is **capability gating**: refusing to enable DuckDB analytics or a second model on a 1 GB Pi Zero, with an explanation, rather than being OOM-killed at 3 a.m. |
-| **Plan** | A startup memory-budget check that sizes the DuckDB limit and the analytics sync from detected RAM, warns when a configured feature will not fit, and records the decision in `--doctor` output. |
+| **Resolution** | `crates/birdnet-behavioral/src/memory.rs`. The buffer pool is sized to a quarter of the *effective ceiling* — the smaller of `/proc/meminfo`'s `MemTotal` and any cgroup limit (`memory.max`, or v1's `memory.limit_in_bytes`) — capped at 256 MiB and floored at 64 MiB. Below the floor, `helpers::state` starts the station **without** analytics and says why, rather than starting something that will be OOM-killed mid-query. `--doctor` reports the decision under *Analytics memory*, because the choice is made once at startup and an operator diagnosing a dead station months later is looking at `--doctor`, not at a boot they no longer have. |
+| **Both numbers are anchored, not chosen** | **A quarter** is the proportion the shipped systemd unit already implies (`MemoryHigh=768M`/`MemoryMax=1G` with a flat `256MB` pool), so a station on that unit gets exactly the limit it got before — asserted at compile time, `const _: () = assert!(1024 / POOL_SHARE_DENOMINATOR == MAX_POOL_MIB)`, because the unit test that looks like it covers this is satisfied by the cap alone (measured: halving the fraction still passed it). **64 MiB** was measured: a sessionisation shaped like `queries.rs`'s — `lag` and a running sum over 1.5 M detections partitioned by species, then aggregated — OOM'd at 8, 16 and 32 MiB and succeeded from 48 MiB up on DuckDB 1.5. |
+| **What this deliberately does not claim** | The rest of the process's footprint on a Pi is *not* measured — that needs a Pi. So this sizes a **proportion**, not a budget: it makes the analytics engine's share scale with the machine and does not claim the remainder is enough. What would falsify the fraction is a station inside its ceiling still being OOM-killed with the pool at a quarter of it; the answer then is a smaller fraction, not a different mechanism. Stated in the module header rather than left implied. |
+| **A defect found while doing it** | `.env.example` shipped `BIRDNET_DUCKDB_MEMORY_LIMIT=256MB` **uncommented**, so any container using that file as its `.env` pinned 256 MiB on every board — including the 512 MB ones this sizing exists for, where it is half the machine. Now commented, with the sizing explained. |
+| **Plan (what remains)** | The analytics *sync* is not yet sized from RAM, only the query engine's pool. Upstream's `GOMEMLIMIT`/glibc-arena half does not transfer to Rust. |
 
 #### G‑34 · Machine-readable config schema — PARTIAL (the drift gate has shipped; the schema artifact is declined for now)
 
@@ -519,7 +523,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 21 | ~~A station-wide default source for the live stream~~ — **shipped**, see N‑3 | N‑3 |
 | 22 | Bulk species management page | N‑4 |
 | 23 | ~~Watchdog tuning~~ — **shipped**, see G‑9 | G‑9 |
-| 24 | Memory-budget capability gating | G‑33 |
+| 24 | ~~Memory-budget capability gating~~ — **shipped**, see G‑33; sizing the analytics *sync* remains | G‑33 |
 | 25 | Noise "remember" window | G‑17 |
 
 ### Tier 3 — programmes, not tickets

@@ -38,6 +38,50 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the analytics engine's memory is sized to the machine, not assumed
+
+**A memory budget for DuckDB** (`G-33`). The buffer-pool cap was a flat 256 MiB
+whatever the machine. On the hardware the shipped systemd unit is written for —
+`MemoryMax=1G` — that is a quarter of the budget and reasonable. On a 512 MB
+board it is **half of physical RAM** for one subsystem, alongside the model, the
+web server and the OS. DuckDB treats the limit as permission to use that much,
+so the flat default was a standing invitation to be OOM-killed mid-query at
+three in the morning.
+
+`crates/birdnet-behavioral/src/memory.rs` sizes the pool to a quarter of the
+*effective ceiling* — the smaller of `/proc/meminfo`'s `MemTotal` and any cgroup
+limit the process is under — capped at 256 MiB and floored at 64 MiB. Below the
+floor the station starts **without** analytics and says why: it still records,
+classifies and serves, it just has no behavioural dashboards. Refusing is the
+point; the alternative is starting something that will be killed.
+
+Both numbers are anchored rather than chosen, and the source says which is
+which:
+
+- **A quarter** is the proportion the shipped unit already implies (`MemoryMax=1G`
+  with a 256 MB pool), so a station on that unit gets exactly the limit it got
+  before. That derivation is a `const` assertion, because the unit test that
+  looks like it covers it is satisfied by the cap alone — measured: halving the
+  fraction still passed that test, and only the assertion catches it.
+- **64 MiB** was measured. A sessionisation shaped like the behavioural
+  queries — `lag` and a running sum over 1.5 million detections partitioned by
+  species, then aggregated — ran out of memory at 8, 16 and 32 MiB and succeeded
+  from 48 MiB up on DuckDB 1.5.
+
+What is deliberately *not* claimed: the rest of the process's footprint on a
+Raspberry Pi is not measured, because that needs a Pi. So this sizes a
+proportion, not a budget. The module header says so, and says what would
+falsify the fraction.
+
+`--doctor` reports the decision under **Analytics memory** — the choice is made
+once at startup, and an operator diagnosing an OOM-killed station months later
+is looking at `--doctor`, not at a boot they no longer have.
+
+One defect found while doing this: `.env.example` shipped
+`BIRDNET_DUCKDB_MEMORY_LIMIT=256MB` **uncommented**, so any container using that
+file as its `.env` pinned 256 MiB on every board — including the small ones the
+sizing exists for. Now commented, with the sizing explained in its place.
+
 ### Added — the capture watchdog's timings are the operator's
 
 **`WatchdogConfig`** (`G-9`). Every number the capture supervisor decides with

@@ -294,20 +294,17 @@ fn load_by_path(conn: &Connection, path: &Path) -> Result<(), String> {
 /// `%`) are accepted — anything else falls back to the default. That both
 /// keeps untrusted text out of the statement and avoids a startup failure from
 /// an operator typo.
+/// The limit for an operator-supplied literal with nothing detected.
+///
+/// Test-only: the production path calls [`crate::memory::decide`] with a real
+/// detected ceiling. This keeps the injection-defence tests below written
+/// against the shape they were written for, which is "what does a hostile
+/// `BIRDNET_DUCKDB_MEMORY_LIMIT` reach".
+#[cfg(test)]
 fn resolve_memory_limit(configured: Option<&str>) -> String {
-    match configured.map(str::trim) {
-        Some(v) if is_valid_memory_limit(v) => v.to_owned(),
-        _ => DEFAULT_DUCKDB_MEMORY_LIMIT.to_owned(),
-    }
-}
-
-/// Whether `v` is a safe `DuckDB` memory-limit literal: a leading ASCII digit
-/// followed only by alphanumerics, `.`, or `%` (e.g. `512MB`, `2GB`, `80%`,
-/// `1073741824`).
-fn is_valid_memory_limit(v: &str) -> bool {
-    v.bytes().next().is_some_and(|b| b.is_ascii_digit())
-        && v.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'%')
+    crate::memory::decide(configured, None)
+        .limit()
+        .unwrap_or_else(|| DEFAULT_DUCKDB_MEMORY_LIMIT.to_owned())
 }
 
 /// How [`AnalyticsDb::open_or_quarantine`] obtained its handle.
@@ -485,8 +482,18 @@ impl AnalyticsDb {
         // Bound DuckDB's buffer memory before any query runs, so a heavy
         // analytics query cannot OOM the process on a small Pi (DuckDB
         // otherwise targets ~80% of system RAM).
-        let memory_limit =
-            resolve_memory_limit(std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref());
+        let budget = crate::memory::decide(
+            std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref(),
+            crate::memory::detect_ceiling(),
+        );
+        // `None` means the machine cannot carry the smallest usable pool. The
+        // open still proceeds — refusing here would take the *whole station*
+        // down over an optional subsystem — with the flat default, and the
+        // caller decides whether to run analytics at all. `--doctor` and the
+        // startup log carry the explanation either way.
+        let memory_limit = budget
+            .limit()
+            .unwrap_or_else(|| DEFAULT_DUCKDB_MEMORY_LIMIT.to_owned());
         conn.execute_batch(&format!("SET memory_limit='{memory_limit}';"))?;
 
         // Before anything can install or load: keep extension writes inside the
