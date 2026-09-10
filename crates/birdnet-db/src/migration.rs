@@ -2012,6 +2012,42 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "ALTER TABLE detections ADD COLUMN clip_offset_secs REAL;
         ALTER TABLE detections ADD COLUMN detection_secs REAL;",
     },
+    Migration {
+        version: 48,
+        description: "Operator-defined alerts on the station's own measurements",
+        // ## Why (G-29)
+        //
+        // The station failure that actually loses a season is silent: the disk
+        // fills, or one microphone of three dies, and nobody notices for weeks.
+        // `station_health` already alerts on a fixed set of conditions with
+        // thresholds compiled in — 85% disk, 80 °C, and so on — and those are
+        // the right defaults, but they are not everyone's. The rule that
+        // catches a dying microphone at a particular station is "tell me when
+        // the hourly detection count drops below what it normally is *here*",
+        // and no compiled-in number can be that.
+        //
+        // A separate table rather than columns on `alert_rules`, deliberately.
+        // The two are different mechanisms that share a word: an `alert_rules`
+        // row matches one *detection* as it arrives and fires an action
+        // (webhook, log, suppress); one of these is a *sampled measurement*
+        // compared against a threshold every five minutes, and it produces a
+        // station-health condition — which is how it inherits the debounce, the
+        // episode latching, the recovery notice and the outbox that path
+        // already has. Bolting a discriminant onto `alert_rules` would have
+        // made every detection-rule read carry columns that are always NULL and
+        // given neither mechanism the other's machinery.
+        up_sql: "CREATE TABLE IF NOT EXISTS metric_rules (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    NOT NULL,
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            metric       TEXT    NOT NULL,
+            comparison   TEXT    NOT NULL,
+            threshold    REAL    NOT NULL,
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_metric_rules_enabled
+            ON metric_rules(enabled);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

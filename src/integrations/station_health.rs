@@ -54,7 +54,15 @@
 //!   the "still down" warning never elapses, and the uptime strip is green;
 //! * inference falling behind real time — a model too big for the board, a
 //!   board that is throttling, too many sources — which resolved to "delete
-//!   the oldest audio and say nothing" while every series stayed green.
+//!   the oldest audio and say nothing" while every series stayed green;
+//! * anything the **operator** wrote a rule for (`G-29`). Every condition above
+//!   is a threshold chosen in this repository. Those are the right defaults and
+//!   they are not everyone's: the rule that catches a dying microphone at a
+//!   particular station is "tell me when the hourly detection count drops below
+//!   what it normally is *here*", and no compiled-in number can be that. A rule
+//!   stored in `metric_rules` becomes an ordinary condition, so it inherits the
+//!   debounce, the episode latching, the recovery notice and the outbox rather
+//!   than getting a parallel engine of its own.
 //!
 //! On a station nobody logs into and no Prometheus scrapes, the journal is a
 //! diary written for nobody. **The instrumentation was never the gap — the
@@ -71,7 +79,7 @@
 //! Each condition keeps its own episode state, so a hot afternoon does not
 //! suppress a disk alert.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 /// How long `timedatectl` may take to answer. It asks systemd over the bus;
@@ -255,7 +263,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 14] = [
+const CHECKS: [(&str, Check); 15] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -270,6 +278,7 @@ const CHECKS: [(&str, Check); 14] = [
     ("purge", check_purge),
     ("flapping", check_flapping),
     ("backlog", check_backlog),
+    ("metric-rules", check_metric_rules),
 ];
 
 /// Everything currently wrong with the station, as of this poll.
@@ -592,6 +601,113 @@ fn flapping_conditions(sources: &[(String, u32, bool)]) -> Vec<Condition> {
 }
 
 /// Inference falling behind real time (PR-2).
+/// The operator's own rules on the station's measurements (`G-29`).
+///
+/// Every other check here is a fixed threshold chosen in this repository. Those
+/// are the right defaults and they are not everyone's: the rule that catches a
+/// dying microphone at a particular station is "tell me when the hourly
+/// detection count drops below what it normally is *here*", and no compiled-in
+/// number can be that.
+///
+/// A firing rule produces an ordinary [`Condition`], which is the whole reason
+/// the feature lives here rather than in the detection-rule action path: it
+/// inherits the fifteen-minute debounce, the episode latching, the recovery
+/// notice, the notification log, the store-and-forward outbox, and a place on
+/// `/api/v2/health/conditions` — none of which a parallel engine would have.
+fn check_metric_rules(state: &AppState, out: &mut Vec<Condition>) {
+    use birdnet_db::metric_rules::{Metric, Sample};
+
+    let rules = state.with_db(|conn| birdnet_db::metric_rules::list(conn).unwrap_or_default());
+    if rules.is_empty() {
+        return;
+    }
+
+    // Sampled once per metric per poll, and only for metrics some rule
+    // actually asks about: several of these are a SQL count or a `statvfs`,
+    // and a station with one disk rule should not pay for the other six every
+    // five minutes.
+    let mut cache: HashMap<Metric, Sample> = HashMap::new();
+    let firings = birdnet_db::metric_rules::evaluate(&rules, |metric| {
+        *cache
+            .entry(metric)
+            .or_insert_with(|| sample_metric(state, metric))
+    });
+
+    out.extend(firings.into_iter().map(|f| Condition {
+        key: f.key(),
+        title: f.title(),
+        body: f.body(),
+    }));
+}
+
+/// Read one metric, or `None` when this station cannot.
+///
+/// `None` is deliberately not zero. A station with no capture supervisor has
+/// not had zero restarts, it has had no answer; a board with no temperature
+/// sensor is not cold. A rule against a metric with no sample does not fire,
+/// which is the only honest thing to do with a measurement that does not exist.
+fn sample_metric(state: &AppState, metric: birdnet_db::metric_rules::Metric) -> Option<f64> {
+    use birdnet_db::metric_rules::Metric;
+
+    match metric {
+        Metric::DiskPercent => {
+            let dir = state
+                .db_path()
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map_or_else(
+                    || std::path::PathBuf::from("."),
+                    std::path::Path::to_path_buf,
+                );
+            birdnet_core::audio::capture::disk_usage(&dir)
+                .ok()
+                .map(|u| u.used_percent())
+        }
+        Metric::MemoryPercent => {
+            let snap = birdnet_web::system_info::sample();
+            #[allow(clippy::cast_precision_loss)]
+            (snap.total_memory_bytes > 0).then(|| {
+                let used = snap
+                    .total_memory_bytes
+                    .saturating_sub(snap.available_memory_bytes);
+                (used as f64 / snap.total_memory_bytes as f64) * 100.0
+            })
+        }
+        Metric::CpuTemperatureC => birdnet_web::system_info::cpu_temperature().map(f64::from),
+        Metric::DetectionsPerHour => state.with_db(|conn| {
+            #[allow(clippy::cast_precision_loss)]
+            birdnet_db::sqlite::last_hour_count(conn)
+                .ok()
+                .map(|n| n as f64)
+        }),
+        Metric::SecondsSinceLastDetection => state.with_db(|conn| {
+            #[allow(clippy::cast_precision_loss)]
+            birdnet_db::sqlite::seconds_since_last_detection(conn)
+                .ok()
+                .flatten()
+                .map(|s| s as f64)
+        }),
+        Metric::MaxCaptureRestartsPerHour => {
+            let status = state.capture_status()?;
+            let status = birdnet_core::audio::capture::read_capture_status(&status);
+            // No sources is no answer, not zero: a supervisor that has not
+            // published yet has not told us there were no restarts.
+            status
+                .sources
+                .iter()
+                .map(|s| s.restarts_last_hour)
+                .max()
+                .map(f64::from)
+        }
+        Metric::OutboundQueueDepth => state.with_db(|conn| {
+            #[allow(clippy::cast_precision_loss)]
+            birdnet_db::outbound_queue::depth(conn, birdnet_integrations::birdweather::QUEUE_KIND)
+                .ok()
+                .map(|d| d as f64)
+        }),
+    }
+}
+
 fn check_backlog(state: &AppState, out: &mut Vec<Condition>) {
     out.extend(backlog_condition(state.metrics().analysis_queue_depth()));
 }
@@ -1200,6 +1316,7 @@ mod tests {
             "purge",
             "flapping",
             "backlog",
+            "metric-rules",
         ] {
             assert!(
                 CHECKS.iter().any(|(n, _)| *n == name),
@@ -1208,8 +1325,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            14,
-            "a fifteenth check needs a line in the module doc and in this gate"
+            15,
+            "a sixteenth check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1800,6 +1917,219 @@ mod tests {
                 .is_none(),
             "two hours old: the copy is repaired at the next start, and the counter stays"
         );
+    }
+
+    /// The operator's own rules reach the same alert path the built-in
+    /// conditions use (`G-29`).
+    ///
+    /// The evaluator is unit-tested in `birdnet-db`; this is the *wiring* — that
+    /// a rule stored in the database is read by the poll, sampled against a
+    /// real metric, and comes out as a `Condition` with the rule's own episode
+    /// key. Without it, a rule could be storable and editable and evaluated by
+    /// nothing, which is the failure this project has shipped before.
+    #[test]
+    fn a_stored_metric_rule_becomes_a_station_condition() {
+        use birdnet_db::metric_rules::{Comparison, Metric, NewMetricRule};
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+
+        // `seconds_since_last_detection` on a database with no detections is
+        // the one metric that reads deterministically here: no detections means
+        // no answer, so the rule must NOT fire. That is the "cannot tell is not
+        // a fault" half.
+        let quiet = NewMetricRule {
+            name: "Nothing heard".into(),
+            enabled: true,
+            metric: Metric::SecondsSinceLastDetection,
+            comparison: Comparison::Above,
+            threshold: 1.0,
+        };
+        state
+            .with_db(|c| birdnet_db::metric_rules::insert(c, &quiet))
+            .expect("insert");
+
+        let mut out = Vec::new();
+        check_metric_rules(&state, &mut out);
+        assert!(
+            out.is_empty(),
+            "a metric with no reading must not fire: {out:?}"
+        );
+
+        // The other half: a rule on a metric that always reads — the hourly
+        // detection count, which is 0 on an empty database — fires, and comes
+        // out keyed on the rule.
+        let dying_mic = NewMetricRule {
+            name: "Feeder mic has gone quiet".into(),
+            enabled: true,
+            metric: Metric::DetectionsPerHour,
+            comparison: Comparison::Below,
+            threshold: 20.0,
+        };
+        let id = state
+            .with_db(|c| birdnet_db::metric_rules::insert(c, &dying_mic))
+            .expect("insert");
+
+        let mut out = Vec::new();
+        check_metric_rules(&state, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].key, format!("metric-rule:{id}"));
+        assert!(
+            out[0].title.contains("Feeder mic has gone quiet"),
+            "the alert has to name the rule: {}",
+            out[0].title
+        );
+        assert!(out[0].body.contains("20"), "{}", out[0].body);
+    }
+
+    /// And the poll itself runs it — not just the function in isolation.
+    ///
+    /// `check_metric_rules` being correct is worth nothing if `evaluate` never
+    /// calls it, which is the "editable control that does nothing" failure this
+    /// project has shipped twice. Going through `evaluate` is what makes the
+    /// rule's presence in `CHECKS` part of the assertion rather than a separate
+    /// list a mutation can edit alongside the code.
+    #[test]
+    fn the_poll_evaluates_the_operators_rules() {
+        use birdnet_db::metric_rules::{Comparison, Metric, NewMetricRule};
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let id = state
+            .with_db(|c| {
+                birdnet_db::metric_rules::insert(
+                    c,
+                    &NewMetricRule {
+                        name: "Feeder mic has gone quiet".into(),
+                        enabled: true,
+                        metric: Metric::DetectionsPerHour,
+                        comparison: Comparison::Below,
+                        threshold: 20.0,
+                    },
+                )
+            })
+            .expect("insert");
+
+        let found = evaluate(&state);
+        assert!(
+            found.iter().any(|c| c.key == format!("metric-rule:{id}")),
+            "the poll did not evaluate the operator's rule; it found {:?}",
+            found.iter().map(|c| &c.key).collect::<Vec<_>>()
+        );
+    }
+
+    /// The detection count is the database's, not a constant.
+    ///
+    /// Every other test here runs against an empty database, where the real
+    /// count and a hard-coded `0` are indistinguishable — measured: replacing
+    /// the query with `Some(0.0)` passed all of them. Seeding detections in the
+    /// last hour is what separates them, and it is the metric this whole
+    /// feature is for, so it is the one worth separating.
+    #[test]
+    fn the_detection_count_metric_reads_the_database() {
+        use birdnet_db::metric_rules::Metric;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+
+        assert_eq!(
+            sample_metric(&state, Metric::DetectionsPerHour),
+            Some(0.0),
+            "an empty database really has had no detections"
+        );
+
+        // `date('now')`/`time('now')` rather than a literal: the query compares
+        // against `datetime('now')`, so letting SQLite write both sides keeps
+        // this independent of the runner's timezone.
+        state.with_db(|conn| {
+            for i in 0..3 {
+                conn.execute(
+                    "INSERT INTO detections
+                         (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens,
+                          Overlap, File_Name, chunk_offset_secs)
+                     VALUES (date('now'), time('now'), 'Pica pica', 'Eurasian Magpie',
+                             0.9, 0.7, 36, 1.25, 0.0, ?1, 0)",
+                    rusqlite::params![format!("x{i}.wav")],
+                )
+                .expect("seed a detection");
+            }
+        });
+
+        assert_eq!(
+            sample_metric(&state, Metric::DetectionsPerHour),
+            Some(3.0),
+            "the metric must count the rows that are there"
+        );
+    }
+
+    /// A station with no rules pays nothing and says nothing.
+    #[test]
+    fn no_rules_is_no_conditions() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let mut out = Vec::new();
+        check_metric_rules(&state, &mut out);
+        assert!(out.is_empty());
+    }
+
+    /// A disabled rule is stored and not evaluated.
+    #[test]
+    fn a_disabled_metric_rule_produces_no_condition() {
+        use birdnet_db::metric_rules::{Comparison, Metric, NewMetricRule};
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let id = state
+            .with_db(|c| {
+                birdnet_db::metric_rules::insert(
+                    c,
+                    &NewMetricRule {
+                        name: "off".into(),
+                        enabled: true,
+                        metric: Metric::DetectionsPerHour,
+                        comparison: Comparison::Below,
+                        threshold: 20.0,
+                    },
+                )
+            })
+            .expect("insert");
+
+        let mut on = Vec::new();
+        check_metric_rules(&state, &mut on);
+        assert_eq!(on.len(), 1, "the counterpart: enabled, it fires");
+
+        state
+            .with_db(|c| birdnet_db::metric_rules::toggle(c, id))
+            .expect("toggle");
+        let mut off = Vec::new();
+        check_metric_rules(&state, &mut off);
+        assert!(off.is_empty(), "{off:?}");
+    }
+
+    /// Every metric can be sampled without panicking, whatever this machine is.
+    ///
+    /// Several read sysfs, `statvfs` or a shared handle that may not exist in a
+    /// test process. What matters is that each returns an answer or `None` —
+    /// a metric that panicked would take the whole health poll down, and with
+    /// it every other condition.
+    #[test]
+    fn every_metric_can_be_sampled_without_panicking() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        for metric in birdnet_db::metric_rules::Metric::ALL {
+            let sample = sample_metric(&state, metric);
+            assert!(
+                sample.is_none_or(f64::is_finite),
+                "{} sampled as {sample:?}",
+                metric.key()
+            );
+        }
     }
 
     /// OP-4: what `evaluate` finds is published where a request can read it.

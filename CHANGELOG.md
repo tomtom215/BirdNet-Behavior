@@ -38,6 +38,52 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — an operator can write their own alerts on the station's measurements
+
+**Metric rules** (`G-29`). The station failure that loses a season is silent:
+the disk fills, or one microphone of three dies, and nothing says so until
+somebody looks at a chart weeks later. The station alerts on a fixed set of
+conditions already — 85 % disk, a flapping source, a drifting clock — and those
+are the right defaults and not everyone's. The rule that catches a dying
+microphone at a particular station is *"tell me when the hourly detection count
+drops below what it normally is here"*, and no number chosen in this repository
+can be that.
+
+Seven measurements, on the same **Station → Alerts** page as the detection
+rules: disk in use, memory in use, CPU temperature, detections in the last hour,
+seconds since the last detection, capture restarts in the last hour (the worst
+source), and uploads waiting to be sent. A rule is a measurement, a direction
+(`above`/`below`) and a threshold.
+
+Three departures from the finding's original plan, each for a reason that only
+became clear on reading the code:
+
+- **A separate table, not a discriminant on `alert_rules`.** The two are
+  different mechanisms sharing a word: an `alert_rules` row matches one
+  *detection* as it arrives and fires an action of its own; one of these is a
+  *sampled measurement*. A discriminant would have made every detection-rule
+  read carry columns that are always NULL, and given neither mechanism the
+  other's machinery.
+- **Evaluated by the station-health poll, not the maintenance loop.** The
+  maintenance loop is daily and weekly, which is the wrong cadence for "tell me
+  when the disk passes 85 %". More to the point, a firing rule becomes an
+  ordinary station-health `Condition` — so it inherits the three-poll (fifteen
+  minute) debounce, the episode latching, the recovery notice, the notification
+  log, the store-and-forward outbox, and a place on
+  `/api/v2/health/conditions`. A parallel engine would have had none of that.
+- **No per-rule cooldown, and no export-format bump.** The episode *is* the
+  cooldown. Nothing was added to the `alert_rules` export, so its version is
+  untouched; export/import for metric rules is still to come.
+
+Two decisions the tests exist to hold. A metric the station cannot read right
+now produces **no** alert — a board with no temperature sensor is not cold, and
+treating a missing reading as zero would make every `below` rule fire for ever.
+That mutation *survived* the first version of the gate, because an `above` rule
+cannot tell zero from missing; the gate now uses a `below` rule, which is also
+the shape the feature exists for. And a rule that could never stop firing —
+"disk above −1" — is refused when it is created, rather than becoming a
+notification that arrives for ever.
+
 ### Added — the analytics engine's memory is sized to the machine, not assumed
 
 **A memory budget for DuckDB** (`G-33`). The buffer-pool cap was a flat 256 MiB

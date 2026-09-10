@@ -10,6 +10,7 @@ pub mod audio_levels;
 pub mod audio_sources;
 pub mod clock;
 pub mod dynamic_thresholds;
+pub mod metric_rules;
 pub mod migration;
 pub mod notifications;
 pub mod outbound_queue;

@@ -131,6 +131,48 @@ Add `-addext basicConstraints=critical,CA:FALSE` when generating it.
 
 With `--mqtt-ha-discovery`, the station registers itself in Home Assistant automatically, so the latest detection, species count and confidence appear as entities you can put on a dashboard or trigger automations from.
 
+## Alerts on the station itself
+
+The rules below watch **detections**. A second kind, on the same page
+(**Station → Alerts**), watches the **station**: a measurement it already takes,
+compared against a threshold you choose.
+
+The station alerts on a fixed set of conditions already — disk over 85 %, a
+source flapping, the clock adrift, the analytics copy falling behind. Those are
+good defaults and they are not everyone's. The rule that catches a dying
+microphone at a particular station is *"tell me when the hourly detection count
+drops below what it normally is here"*, and no number chosen in this project can
+be that.
+
+Seven measurements are available: disk in use (%), memory in use (%), CPU
+temperature (°C), detections in the last hour, seconds since the last detection,
+capture restarts in the last hour (the worst source), and uploads waiting to be
+sent. Each rule is a measurement, a direction (**above** or **below**), and a
+threshold.
+
+Two things follow from where these live:
+
+- **A rule that trips has to stay tripped for three polls — fifteen minutes —
+  before it alerts**, and you get a notice when it recovers. That is the same
+  debounce and the same episode handling the built-in conditions use, so a
+  momentary spike does not wake anybody and a long fault is not announced every
+  five minutes. There is no per-rule cooldown to set, because that is what the
+  episode is.
+- **A firing rule appears on `/api/v2/health/conditions`** alongside the
+  built-in ones, and is delivered through the same notifier, logged in the same
+  notification log, and parked in the same store-and-forward outbox if the
+  destination is unreachable.
+
+A measurement the station cannot read right now — CPU temperature on a board
+with no sensor, capture restarts with no capture supervisor — produces no
+alert. "Cannot tell" is not "fine", but it is not a fault to wake somebody for
+either, and treating a missing reading as zero would make every *below* rule
+fire for ever.
+
+A rule that could never stop firing is refused when you create it: a percentage
+is never below zero or above 100, so "disk above −1" is a notification, not an
+alert.
+
 ## Alert rules
 
 The **Rules** engine (**Station → Alerts**, `/station/alerts#rules`; the old `/admin/rules` redirects there) fires conditional actions on detections — for example, a webhook only when an owl is heard at night above 0.7 confidence, or a rule that suppresses a noisy false-positive species. Each rule matches on species pattern, confidence range, hour-of-day and day-of-week.
