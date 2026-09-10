@@ -38,6 +38,62 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — saved clips can be normalised to an even loudness
+
+**ITU-R BS.1770 integrated loudness, and one gain per clip** (`G-5`). Clips
+were written at capture level, so a gallery of them recorded across a season is
+not level: the listener rides the volume control between every one, and a quiet
+clip at the end of a playlist gets missed.
+
+`crates/birdnet-core/src/audio/extraction/loudness.rs` implements the
+measurement: the two-stage K-weighting filter, 400 ms blocks at 75 % overlap,
+the `-0.691` offset, the absolute gate at −70 LUFS and the relative gate at
+10 LU below the absolutely-gated mean. Mono, which is what every clip this
+station writes is. The filter is built from BS.1770's analogue prototype rather
+than transcribed from the standard's 48 kHz table, so a station capturing at
+44.1 kHz is measured through a filter designed for 44.1 kHz.
+
+Off by default — a clip is an archival record as well as something to listen to
+— and set from **Settings → Audio Capture** or `BIRDNET_CLIP_TARGET_LUFS`.
+−18 LUFS is the recommended value; −14 and −23 are offered.
+
+It is applied at clip-write time only. The samples the mel spectrogram and the
+classifier see are untouched: a per-clip gain there would move every confidence
+score and make two stations' thresholds mean different things. The module lives
+under `extraction/` rather than beside `audio::soundlevel` so the module tree
+says that too.
+
+The peak ceiling (−1 dBFS by default) wins over the target: a clip that is
+quiet but peaky — one loud wing-beat over a distant song — is turned up only as
+far as the ceiling allows. That ceiling is a **sample** peak, not an ITU true
+peak, and the module says so rather than glossing it: BS.1770's true peak needs
+4× oversampling through a specified interpolation filter, which this does not
+do. The default leaves about a decibel of headroom for inter-sample peaks.
+
+A normalised clip's RIFF INFO comment carries
+`Normalised to -18.0 LUFS from -31.4`, appended to the existing comment rather
+than given a tag of its own — RIFF INFO has no identifier for loudness, and
+inventing a four-letter one would put a field in the file that no player can
+read.
+
+Two things the verification turned up, both worth recording because they change
+what the tests are worth:
+
+- The first version of the coefficient test carried a "published table" typed
+  from memory and **failed against a correct implementation** — the derivation
+  produced `1.53512485958697` where the recalled value read `1.535123299202456`.
+  The construction was then checked line by line against libebur128's
+  `ebur128_init_filter`, the implementation ffmpeg and most loudness tooling
+  use: prototype constants, `Vb` exponent, and the RLB stage's un-normalised
+  `1, -2, 1` numerator all agree.
+- That pinned-coefficient test turned out to be the *more* sensitive of the
+  two, which was not the expectation. Replacing the shelf `Q` with `1/√2` — the
+  plausible value anyone would write from habit, one part in ten thousand from
+  the specified `0.7071752369554196` — moves the 1 kHz gain by less than the
+  relationship test's tolerance and passes it. Only the pin catches it. The
+  test's own comment now says so instead of describing the pin as the weaker
+  check.
+
 ### Added — the settings-key guard is now general, and it found a key outside it
 
 **A source-scanning drift gate for the `settings` table** (`G-34`, the part

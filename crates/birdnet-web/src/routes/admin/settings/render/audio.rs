@@ -16,6 +16,14 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let fmt_flac = if fmt == "flac" { " selected" } else { "" };
     let fmt_ogg = if fmt == "ogg" { " selected" } else { "" };
     let freq_shift = get_setting(s, "freq_shift_hz", "0");
+    let lufs = get_setting(s, "clip_target_lufs", "");
+    let lufs_opt = |v: &str| if lufs == v { " selected" } else { "" };
+    let (lufs_off, lufs_14, lufs_18, lufs_23) = (
+        lufs_opt(""),
+        lufs_opt("-14"),
+        lufs_opt("-18"),
+        lufs_opt("-23"),
+    );
     write!(out, r#"
   <section class="card" id="set-audio" aria-labelledby="set-audio-h">
     <h2 class="section-title" id="set-audio-h">Audio Capture</h2>
@@ -59,6 +67,20 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
           <option value="ogg"{fmt_ogg}>OGG (requires ffmpeg)</option>
         </select>
         <p class="hint">Format for saved detection audio clips (BirdNET-Pi: AUDIOFMT)</p>
+      </div>
+      <div>
+        <label for="clip_target_lufs">Normalise Clip Loudness</label>
+        <select id="clip_target_lufs" name="clip_target_lufs" class="bnb-w-select">
+          <option value=""{lufs_off}>Off — write clips at capture level</option>
+          <option value="-14"{lufs_14}>−14 LUFS (loud; streaming)</option>
+          <option value="-18"{lufs_18}>−18 LUFS (recommended)</option>
+          <option value="-23"{lufs_23}>−23 LUFS (EBU R128 broadcast)</option>
+        </select>
+        <p class="hint">Measures each saved clip (ITU-R BS.1770) and applies one gain, so a
+        gallery of clips plays at an even level instead of sending you to the volume control
+        between every one. Applied to the <b>saved clip only</b> — never to the audio the
+        classifier hears, so it cannot move a confidence score. A clip that is quiet but
+        peaky is turned up only as far as the −1&nbsp;dBFS ceiling allows.</p>
       </div>
       <div>
         <label for="freq_shift_hz">Frequency Shift (Hz, 0 = disabled)</label>

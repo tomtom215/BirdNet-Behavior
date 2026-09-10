@@ -466,6 +466,39 @@ pub(super) fn build_extraction_config(
         .unwrap_or(0.0)
         .clamp(0.0, 30.0);
 
+    // Loudness normalisation of the exported clip (G-5). Off unless the
+    // operator asks: a clip is an archival record as well as something to
+    // listen to, and changing what is in it is their decision. Any value
+    // outside the range is treated as "not configured" rather than clamped —
+    // a mistyped target should not quietly normalise every clip to something
+    // nobody chose.
+    //
+    // No CLI flag, for the same reason `pre_capture_secs` has none: it is a
+    // per-station preference, not something flipped per run.
+    // Environment first, then the config file — the precedence every other
+    // input here uses, and what makes a container station configurable without
+    // a config file. The settings page writes the config key, so an operator
+    // who sets both gets the environment one, as the notifications page already
+    // documents for its own keys.
+    // The environment variables are read as literals rather than through a
+    // helper taking the name: `helpers::env_keys` finds a station's readable
+    // variables by scanning the source for `env::var("…")`, and a name that
+    // arrives as an argument is invisible to it — so the station would call a
+    // real variable unknown.
+    let target_lufs = parse_decimal(
+        std::env::var("BIRDNET_CLIP_TARGET_LUFS")
+            .ok()
+            .or_else(|| config.and_then(|c| c.get("CLIP_TARGET_LUFS").map(str::to_owned))),
+    )
+    .filter(|v| (MIN_TARGET_LUFS..=MAX_TARGET_LUFS).contains(v));
+    let peak_ceiling_dbfs = parse_decimal(
+        std::env::var("BIRDNET_CLIP_PEAK_CEILING_DBFS")
+            .ok()
+            .or_else(|| config.and_then(|c| c.get("CLIP_PEAK_CEILING_DBFS").map(str::to_owned))),
+    )
+    .filter(|v| (MIN_CEILING_DBFS..MAX_CEILING_DBFS).contains(v))
+    .unwrap_or(birdnet_core::audio::extraction::DEFAULT_PEAK_CEILING_DBFS);
+
     ExtractionConfig {
         extraction_length,
         target_format: AudioFormat::parse(&cli.audio_format),
@@ -474,8 +507,41 @@ pub(super) fn build_extraction_config(
         recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz,
         pre_capture_secs,
+        target_lufs,
+        peak_ceiling_dbfs,
     }
 }
+
+/// A finite `f64` from a raw setting value, or `None`.
+///
+/// Blank is "not configured" rather than zero: every surface that can supply
+/// one of these produces a blank when the operator declines the feature.
+fn parse_decimal(raw: Option<String>) -> Option<f64> {
+    raw.map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v: &f64| v.is_finite())
+}
+
+/// Quietest loudness target worth honouring, in LUFS.
+///
+/// Below this the gain needed would be so large that a clip's noise floor
+/// becomes its content. −40 is already far quieter than any listening target.
+const MIN_TARGET_LUFS: f64 = -40.0;
+
+/// Loudest loudness target worth honouring, in LUFS.
+///
+/// Above −6 the peak ceiling decides the gain for almost every clip, so the
+/// target stops meaning anything; refusing it is more honest than accepting a
+/// number that will not be reached.
+const MAX_TARGET_LUFS: f64 = -6.0;
+
+/// Lowest sample-peak ceiling worth honouring, in dBFS.
+const MIN_CEILING_DBFS: f64 = -12.0;
+
+/// The ceiling is a *sample* peak on a 16-bit write, so it must stay below
+/// full scale — a sample at exactly 0 dBFS has nowhere to round to.
+const MAX_CEILING_DBFS: f64 = 0.0;
 
 /// Resolve the three "must be configured for the daemon to run" paths.
 ///

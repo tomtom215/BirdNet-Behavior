@@ -12,7 +12,7 @@
 //! | `INAM`  | Title   | Species common name |
 //! | `IART`  | Artist  | `"BirdNet-Behavior"` |
 //! | `IPRD`  | Product | Species scientific name |
-//! | `ICMT`  | Comment | `"Confidence: 87%  [2026-03-23 06:15:00]"` |
+//! | `ICMT`  | Comment | `"Confidence: 87%  [2026-03-23 06:15:00]"`, plus `"  Normalised to -18.0 LUFS from -31.4"` when the clip was loudness-normalised |
 //! | `ICRD`  | Created | Detection date (`YYYY-MM-DD`) |
 //! | `ISFT`  | Software| `"BirdNet-Behavior"` |
 //!
@@ -35,6 +35,7 @@
 //!     confidence: 0.923,
 //!     date: "2026-03-23".into(),
 //!     time: "21:45:00".into(),
+//!     loudness: None,
 //! };
 //!
 //! // embed_wav_metadata(Path::new("Barn_Owl-92-2026-03-23.wav"), &meta).unwrap();
@@ -85,6 +86,21 @@ impl From<io::Error> for MetaError {
 // Detection metadata
 // ---------------------------------------------------------------------------
 
+/// What a normalised clip's loudness was, and what it was moved to.
+///
+/// Recorded so the change is auditable from the file itself: a listener
+/// comparing two clips, or an ecologist measuring one, can see that a gain was
+/// applied and how much. Re-normalising is idempotent without this — measuring
+/// an already-normalised clip returns the target — but "the file says what was
+/// done to it" is worth more than an invariant nobody can see.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipLoudness {
+    /// The clip's integrated loudness before the gain, in LUFS.
+    pub measured_lufs: f64,
+    /// The loudness it was moved to, in LUFS.
+    pub target_lufs: f64,
+}
+
 /// Metadata to embed in an extracted WAV file.
 #[derive(Debug, Clone)]
 pub struct DetectionMeta {
@@ -98,6 +114,8 @@ pub struct DetectionMeta {
     pub date: String,
     /// Detection time (`"HH:MM:SS"`).
     pub time: String,
+    /// Present when the clip was loudness-normalised on the way out.
+    pub loudness: Option<ClipLoudness>,
 }
 
 // ---------------------------------------------------------------------------
@@ -177,11 +195,22 @@ fn build_info_chunk(tags: &[(&[u8; 4], &str)]) -> Vec<u8> {
 pub fn embed_wav_metadata(path: &Path, meta: &DetectionMeta) -> Result<(), MetaError> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let conf_pct = (meta.confidence * 100.0).round() as u32;
-    let comment = format!(
+    let mut comment = format!(
         "Confidence: {conf_pct}%  [{date} {time}]",
         date = meta.date,
         time = meta.time,
     );
+    if let Some(l) = meta.loudness {
+        use std::fmt::Write as _;
+        // Appended to the standard comment rather than given a tag of its own:
+        // RIFF INFO has no identifier for loudness, and inventing a four-letter
+        // one would put a field in the file that no player or editor can read.
+        let _ = write!(
+            comment,
+            "  Normalised to {:.1} LUFS from {:.1}",
+            l.target_lufs, l.measured_lufs
+        );
+    }
 
     let tags: [(&[u8; 4], &str); 6] = [
         (b"INAM", &meta.common_name),
@@ -276,6 +305,7 @@ mod tests {
             confidence: 0.923,
             date: "2026-03-23".into(),
             time: "21:45:00".into(),
+            loudness: None,
         }
     }
 
@@ -380,6 +410,7 @@ mod tests {
             confidence: 0.75,
             date: "2026-03-23".into(),
             time: "10:00:00".into(),
+            loudness: None,
         };
         // Should not panic, just truncate/encode non-ASCII gracefully
         let result = embed_wav_metadata(&path, &meta);

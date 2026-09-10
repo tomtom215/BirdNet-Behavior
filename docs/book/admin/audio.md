@@ -285,6 +285,40 @@ For **saved clips** the equivalent is `--freq-shift-hz` (config key
 > value helped high-frequency hearing loss. It does the opposite. If you set a
 > positive value on that advice, negate it.
 
+## Evening out the level of saved clips
+
+Clips are written at whatever level the microphone delivered, and a gallery of
+them recorded across a season is not level: the listener rides the volume
+control between every one, and a quiet clip at the end of a playlist gets
+missed. **Settings → Audio Capture → Normalise Clip Loudness** fixes that. It
+measures each saved clip's integrated loudness (ITU-R BS.1770, the measurement
+behind EBU R128) and applies a single gain.
+
+Off by default, because a clip is an archival record as well as something to
+listen to and changing what is in it should be your decision. The choices are
+−14 LUFS (loud, the streaming convention), **−18 LUFS (recommended)** and
+−23 LUFS (the EBU R128 broadcast reference, noticeably quiet on a phone).
+`BIRDNET_CLIP_TARGET_LUFS` sets the same thing from the environment, and wins
+over the settings page when both are set.
+
+Four things worth knowing:
+
+- **It never touches the audio the classifier hears.** The gain is applied when
+  the clip is written, long after the analysis window has been scored. A gain
+  applied before inference would move every confidence score and make two
+  stations' thresholds mean different things.
+- **A quiet, peaky clip will not reach the target.** One loud wing-beat over a
+  distant song cannot be brought up by a single gain without a sample clipping,
+  so the clip is turned up only as far as the ceiling allows and no further —
+  `BIRDNET_CLIP_PEAK_CEILING_DBFS`, −1 dBFS by default.
+- **That ceiling is a *sample* peak, not an ITU true peak.** The station does
+  not oversample to find inter-sample peaks; the default leaves about a decibel
+  of headroom for them, which is the usual allowance for ordinary material.
+- **The clip says what was done to it.** A normalised WAV's RIFF INFO comment
+  carries `Normalised to -18.0 LUFS from -31.4`, so the change is visible from
+  the file rather than only from the setting. Re-normalising is a no-op:
+  measuring an already-normalised clip returns the target.
+
 ## Common pitfalls
 
 - USB hubs can drop audio under load — prefer a direct port on the Pi.

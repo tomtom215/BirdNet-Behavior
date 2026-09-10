@@ -8,6 +8,7 @@ mod config;
 mod convert;
 mod extractor;
 mod format;
+pub mod loudness;
 pub mod metadata;
 mod span;
 mod wav;
@@ -17,11 +18,11 @@ use std::fmt;
 use crate::audio::decode::DecodeError;
 
 // Re-export public API.
-pub use config::ExtractionConfig;
+pub use config::{DEFAULT_PEAK_CEILING_DBFS, DEFAULT_TARGET_LUFS, ExtractionConfig};
 pub use convert::ACCESSIBILITY_SHIFT_HZ;
 pub use extractor::{ExtractedClip, Extractor};
 pub use format::AudioFormat;
-pub use metadata::{DetectionMeta, MetaError, embed_wav_metadata};
+pub use metadata::{ClipLoudness, DetectionMeta, MetaError, embed_wav_metadata};
 pub use span::{CONTIGUITY_TOLERANCE_SECS, SpannedWindow, read_window};
 pub use wav::generate_spectrogram;
 

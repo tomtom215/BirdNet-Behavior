@@ -74,6 +74,7 @@ fn config(out: std::path::PathBuf, pre_capture_secs: f32) -> ExtractionConfig {
         recording_length: 15.0,
         freq_shift_hz: 0,
         pre_capture_secs,
+        ..ExtractionConfig::default()
     }
 }
 

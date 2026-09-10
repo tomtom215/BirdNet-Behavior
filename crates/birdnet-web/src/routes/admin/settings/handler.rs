@@ -338,6 +338,11 @@ pub(crate) fn build_settings_items(
     );
     push!(form.audio_format, "audio_format", SettingsCategory::Audio);
     push!(form.freq_shift_hz, "freq_shift_hz", SettingsCategory::Audio);
+    push!(
+        form.clip_target_lufs,
+        "clip_target_lufs",
+        SettingsCategory::Audio
+    );
     // Location
     push!(form.latitude, "latitude", SettingsCategory::Location);
     push!(form.longitude, "longitude", SettingsCategory::Location);
@@ -594,6 +599,7 @@ mod tests {
             segment_duration: None,
             audio_format: None,
             freq_shift_hz: None,
+            clip_target_lufs: None,
             latitude: None,
             longitude: None,
             station_name: None,

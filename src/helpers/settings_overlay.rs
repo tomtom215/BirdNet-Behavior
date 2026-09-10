@@ -132,6 +132,11 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::Audio,
     ),
     (
+        "clip_target_lufs",
+        Wiring::Bridged("CLIP_TARGET_LUFS"),
+        SettingsCategory::Audio,
+    ),
+    (
         "livestream_source",
         Wiring::OwnedBy("birdnet_web::routes::livestream (the station's default /stream source)"),
         SettingsCategory::Audio,

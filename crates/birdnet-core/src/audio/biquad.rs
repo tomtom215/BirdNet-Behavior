@@ -301,6 +301,30 @@ impl Biquad {
         .checked()
     }
 
+    /// A section from coefficients computed elsewhere, checked for stability.
+    ///
+    /// The designers above cover the RBJ cookbook; this is for a filter whose
+    /// coefficients come from a *specification* rather than from a cookbook
+    /// design — ITU-R BS.1770's K-weighting, whose two sections are given as an
+    /// analogue prototype with its own bilinear transform and do not reduce to
+    /// any RBJ form. Coefficients must already be normalised so `a0 == 1`.
+    ///
+    /// # Errors
+    ///
+    /// [`BiquadError::Unstable`] when the poles are not inside the unit
+    /// circle — the same check every designer here goes through, so a
+    /// specification transcribed wrongly fails at construction rather than
+    /// diverging on the first loud clip.
+    pub fn from_normalised(
+        b0: f64,
+        b1: f64,
+        b2: f64,
+        a1: f64,
+        a2: f64,
+    ) -> Result<Self, BiquadError> {
+        Self::from_coefficients(b0, b1, b2, a1, a2).checked()
+    }
+
     /// A section from already-normalised coefficients, with zero state.
     const fn from_coefficients(b0: f64, b1: f64, b2: f64, a1: f64, a2: f64) -> Self {
         Self {
@@ -384,6 +408,16 @@ impl Biquad {
         for _ in 0..n {
             let _ = self.process(0.0);
         }
+    }
+
+    /// The normalised coefficients, as `(b0, b1, b2, a1, a2)`.
+    ///
+    /// For a gate that compares a filter built from a specification against the
+    /// numbers that specification publishes. Nothing in the audio path needs
+    /// them — [`Self::process`] and [`Self::magnitude_at`] are the interface.
+    #[must_use]
+    pub const fn coefficients(&self) -> (f64, f64, f64, f64, f64) {
+        (self.b0, self.b1, self.b2, self.a1, self.a2)
     }
 
     /// Magnitude response at `hz`, as a linear gain.
