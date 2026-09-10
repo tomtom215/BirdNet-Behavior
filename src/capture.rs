@@ -20,8 +20,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use birdnet_core::audio::capture::{
-    AudioFormat, CaptureError, CaptureManager, CaptureStatusHandle, LiveAudioHubHandle,
-    LocalOffset, RecordingConfig,
+    AudioFormat, CaptureControlHandle, CaptureError, CaptureManager, CaptureStatusHandle,
+    LiveAudioHubHandle, LocalOffset, RecordingConfig,
 };
 use birdnet_scheduler::ScheduleConfig;
 use birdnet_web::metrics::SharedMetrics;
@@ -151,6 +151,7 @@ pub fn start_capture_manager(
     state: Option<&birdnet_web::state::AppState>,
     metrics: SharedMetrics,
     status: CaptureStatusHandle,
+    control: CaptureControlHandle,
     live_audio: Option<&LiveAudioHubHandle>,
 ) -> Option<CaptureHandle> {
     // O-13: seed an empty audio_sources table from CLI/config first, so the
@@ -291,6 +292,7 @@ pub fn start_capture_manager(
             &schedule_config,
             &metrics,
             &status,
+            &control,
             &local_offset,
             &stop_for_thread,
         );

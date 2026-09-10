@@ -401,6 +401,14 @@ async fn serve(
     let capture_status = birdnet_core::audio::capture::new_capture_status();
     let state = state.with_capture_status(capture_status.clone());
 
+    // The reverse direction of the same seam: the web layer records a
+    // restart request for one source here, and the supervisor drains it on its
+    // next tick. Without this an operator's only remedy for one wedged RTSP
+    // camera is restarting the whole service, which drops every other source
+    // and the audio in flight with them.
+    let capture_control = birdnet_core::audio::capture::new_capture_control();
+    let state = state.with_capture_control(capture_control.clone());
+
     // Teed capture sources publish their live PCM here, and `/stream` reads it
     // instead of opening the audio device a second time — which an ALSA
     // microphone refuses with `Device or resource busy` while it is being
@@ -549,6 +557,7 @@ async fn serve(
         Some(&state),
         state.metrics(),
         capture_status,
+        capture_control,
         Some(&live_audio),
     );
 

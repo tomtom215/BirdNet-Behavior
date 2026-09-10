@@ -195,6 +195,125 @@
         }
       }
     },
+    "/system/capture": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Per-source capture health",
+        "description": "What the Station Health page draws, as JSON: one entry per source the capture supervisor is actually running, with its lifecycle state, uptime, restart history and rolling 24-hour strip.\n\nThis is the discovery half of `POST /control/restart-source`: `label` here is what that endpoint takes as `source_id`, and re-reading this is how a caller sees whether the restart took.\n\n`supervised` is `false`, with an empty list, when no capture supervisor is running in this process — web-only mode or tooling. That is an answer, not an error.",
+        "operationId": "captureStatus",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current per-source capture health.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "supervised",
+                    "sources",
+                    "published_unix"
+                  ],
+                  "properties": {
+                    "supervised": {
+                      "type": "boolean"
+                    },
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "label",
+                          "state",
+                          "restart_attempts",
+                          "restarts_last_hour",
+                          "flapping",
+                          "uptime_24h"
+                        ],
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "description": "The supervisor's label — the `audio_sources` row id on a station whose sources are managed from `/admin/audio`. This is what `POST /control/restart-source` takes as `source_id`."
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "connected",
+                              "stalled",
+                              "backing_off",
+                              "paused"
+                            ]
+                          },
+                          "uptime_secs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Seconds the current process has been running, when connected."
+                          },
+                          "last_audio_age_secs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Seconds since this source last delivered fresh audio, if ever observed."
+                          },
+                          "restart_attempts": {
+                            "type": "integer",
+                            "description": "Consecutive (re)start attempts not yet healthy; `0` when connected."
+                          },
+                          "restarts_last_hour": {
+                            "type": "integer",
+                            "description": "Restarts in the last hour whatever the state now — the number that shows a source which keeps coming back."
+                          },
+                          "flapping": {
+                            "type": "boolean"
+                          },
+                          "next_retry_in_secs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "uptime_24h": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "up",
+                                "down",
+                                "out"
+                              ]
+                            },
+                            "description": "Rolling 24 hours, oldest first, one entry per half hour."
+                          }
+                        }
+                      }
+                    },
+                    "published_unix": {
+                      "type": "integer",
+                      "description": "When the supervisor last published this snapshot; `0` if never."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, so the gated API does not exist."
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [
@@ -1062,6 +1181,115 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/control/restart-source": {
+      "post": {
+        "tags": [
+          "control"
+        ],
+        "summary": "Restart one capture source",
+        "description": "Stops and restarts a single capture source, leaving every other source recording. On a multi-source station `POST /control/restart` is a blunt instrument: one wedged RTSP camera costs every other microphone its in-flight audio.\n\nThe restart goes through the supervisor's own start path, so the recording schedule and the source's quiet window still hold — a source that is `paused` when the request arrives stays paused, and the response says so rather than reporting a restart that will not happen.\n\n`source_id` is the supervisor's label for the source, which is the `audio_sources` row id on any station whose sources are managed from `/admin/audio`. The labels currently supervised are returned with the `404`.",
+        "operationId": "restartCaptureSource",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source_id"
+                ],
+                "properties": {
+                  "source_id": {
+                    "type": "string",
+                    "description": "The supervised source's label."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Request recorded; the supervisor applies it on its next tick.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "restart_requested",
+                    "source",
+                    "state"
+                  ],
+                  "properties": {
+                    "restart_requested": {
+                      "type": "boolean"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "connected",
+                        "stalled",
+                        "backing_off",
+                        "paused"
+                      ],
+                      "description": "The source's last published state. `paused` means the request is spent without a restart."
+                    },
+                    "already_pending": {
+                      "type": "boolean",
+                      "description": "A restart was already queued for this source and had not been applied yet."
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, or no supervised source carries that label.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "restart_requested": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "known_sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not an object with a `source_id` string."
+          },
+          "503": {
+            "description": "No capture supervisor is running in this process, so nothing would drain the request."
           }
         }
       }

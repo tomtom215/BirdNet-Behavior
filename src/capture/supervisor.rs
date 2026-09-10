@@ -38,7 +38,7 @@
 //! exercise death → backoff → recovery and the schedule gate without ever
 //! spawning a real subprocess.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use birdnet_core::audio::capture::{
@@ -323,6 +323,15 @@ struct SupervisedSource<S: Source> {
     restarts: VecDeque<Instant>,
     /// Last instant a "flapping" warning was emitted, to rate-limit it.
     last_flap_warn: Option<Instant>,
+    /// An operator asked for this source to be restarted, and the restart has
+    /// not been issued yet. Set by [`SupervisedSource::force_restart`] and
+    /// cleared by the next reconcile, whichever branch it takes.
+    ///
+    /// Its only effect is on *diagnosis*: a restart the operator asked for is
+    /// not evidence that the source cannot stay up, so it is kept out of the
+    /// flap ring. Counting it there would let three clicks of a Restart button
+    /// paint a healthy source as flapping.
+    operator_restart: bool,
 }
 
 impl<S: Source> SupervisedSource<S> {
@@ -347,7 +356,24 @@ impl<S: Source> SupervisedSource<S> {
             uptime_ring: UptimeRing::new(),
             restarts: VecDeque::new(),
             last_flap_warn: None,
+            operator_restart: false,
         }
+    }
+
+    /// Stop this source now and clear its fault state, so the reconcile that
+    /// follows starts it again immediately rather than waiting out a backoff
+    /// the operator has no way to see or shorten.
+    ///
+    /// Deliberately does *not* start anything itself: the single start path in
+    /// [`Self::reconcile`] stays the only one, so an operator restart cannot
+    /// bypass the schedule gate or the quiet window. A source that is paused
+    /// when this is called stays paused, and the request is spent.
+    fn force_restart(&mut self) {
+        if self.source.is_running() {
+            self.source.stop();
+        }
+        self.clear_fault();
+        self.operator_restart = true;
     }
 
     /// (Re)start attempts within the last [`FLAP_WINDOW`], dropping older ones.
@@ -476,6 +502,11 @@ impl<S: Source> SupervisedSource<S> {
                 );
             }
             self.clear_fault();
+            // A restart asked for while the source is paused has nowhere to go:
+            // starting it would override the schedule the operator themselves
+            // configured. Spend the request here rather than letting it fire
+            // whenever the window next opens, minutes or hours later.
+            self.operator_restart = false;
             metrics.set_source_up(&self.label, false);
             self.last_state = SourceState::Paused;
             return;
@@ -538,7 +569,10 @@ impl<S: Source> SupervisedSource<S> {
         // loop. The attempt counter is only refunded once the process is
         // actually observed running (the healthy branch above).
         self.attempts_since_healthy = self.attempts_since_healthy.saturating_add(1);
-        self.restarts.push_back(now);
+        let operator_asked = std::mem::take(&mut self.operator_restart);
+        if !operator_asked {
+            self.restarts.push_back(now);
+        }
         let delay = backoff_delay(self.attempts_since_healthy);
         self.next_attempt_at = Some(now + delay);
         // The stall clock measures from the newest of {fresh output, this
@@ -550,6 +584,7 @@ impl<S: Source> SupervisedSource<S> {
             Ok(()) => tracing::info!(
                 source = %self.label,
                 attempt = self.attempts_since_healthy,
+                operator_requested = operator_asked,
                 "capture (re)start issued"
             ),
             Err(e) => tracing::warn!(
@@ -636,6 +671,32 @@ impl<S: Source> Supervisor<S> {
         for source in &mut self.sources {
             source.reconcile(now, recording_allowed, now_min, solar, metrics);
         }
+    }
+
+    /// Apply operator-requested restarts, drained from the control handle by
+    /// the caller, before this tick's reconciliation.
+    ///
+    /// Each matching source is stopped and has its fault state cleared, so the
+    /// [`Self::tick`] that follows starts it again on this same tick instead of
+    /// waiting out a backoff. Returns how many of `labels` matched a supervised
+    /// source; the rest are dropped, which is what should happen to a request
+    /// for a source that has since been removed or disabled.
+    pub(super) fn apply_restart_requests(&mut self, labels: &BTreeSet<String>) -> usize {
+        if labels.is_empty() {
+            return 0;
+        }
+        let mut applied = 0;
+        for source in &mut self.sources {
+            if labels.contains(&source.label) {
+                tracing::info!(
+                    source = %source.label,
+                    "operator requested a restart of this capture source"
+                );
+                source.force_restart();
+                applied += 1;
+            }
+        }
+        applied
     }
 
     /// Publish a fresh per-source health snapshot into the shared handle the web
@@ -1146,6 +1207,174 @@ mod tests {
         let snap = sup.sources[0].snapshot(later, 1_700_003_601);
         assert_eq!(snap.restarts_last_hour, 0);
         assert!(!snap.flapping);
+    }
+
+    // ---- operator-requested restart (G-32) --------------------------------
+
+    /// One source, one label, so a request can be aimed at it.
+    fn labelled(source: FakeSource, label: &str) -> Supervisor<FakeSource> {
+        Supervisor::new(vec![(source, label.to_owned(), None, Duration::MAX)])
+    }
+
+    fn request(labels: &[&str]) -> BTreeSet<String> {
+        labels.iter().map(|l| (*l).to_owned()).collect()
+    }
+
+    /// The point of the feature: a healthy source is stopped and started again
+    /// within one tick, and the *other* sources are not touched.
+    ///
+    /// The second half is the whole reason this exists rather than
+    /// `POST /api/v2/control/restart` — restarting the process to recover one
+    /// wedged camera costs every other source its in-flight audio.
+    #[test]
+    fn an_operator_restart_cycles_only_the_named_source() {
+        let m = metrics();
+        let mut sup = Supervisor::new(vec![
+            (FakeSource::healthy(), "cam".to_owned(), None, Duration::MAX),
+            (FakeSource::healthy(), "mic".to_owned(), None, Duration::MAX),
+        ]);
+        let t0 = Instant::now();
+
+        assert_eq!(sup.apply_restart_requests(&request(&["cam"])), 1);
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
+
+        assert_eq!(sup.sources[0].source.stop_calls, 1, "cam was stopped");
+        assert_eq!(
+            sup.sources[0].source.start_calls, 1,
+            "cam was started again on the same tick, not one backoff later"
+        );
+        assert!(sup.sources[0].source.running);
+
+        assert_eq!(sup.sources[1].source.stop_calls, 0, "mic was not touched");
+        assert_eq!(sup.sources[1].source.start_calls, 0);
+        assert!(sup.sources[1].source.running);
+    }
+
+    /// A request naming a source this supervisor does not have is dropped.
+    #[test]
+    fn a_request_for_an_unknown_source_matches_nothing() {
+        let m = metrics();
+        let mut sup = labelled(FakeSource::healthy(), "cam");
+        assert_eq!(sup.apply_restart_requests(&request(&["gone"])), 0);
+        sup.tick(Instant::now(), true, None, SolarMinutes::default(), &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 0);
+        assert_eq!(sup.sources[0].source.start_calls, 0);
+    }
+
+    /// A source backing off after repeated failures retries *now* when asked,
+    /// rather than waiting out a delay the operator cannot see or shorten.
+    #[test]
+    fn an_operator_restart_clears_a_pending_backoff() {
+        let m = metrics();
+        let mut sup = labelled(FakeSource::always_failing(), "cam");
+        let t0 = Instant::now();
+
+        // Two failed attempts, so the next one is armed some seconds out.
+        sup.tick(t0, true, None, SolarMinutes::default(), &m);
+        let armed = sup.sources[0].next_attempt_at.expect("backoff armed");
+        assert!(armed > t0, "the next attempt is in the future");
+        let attempts_before = sup.sources[0].source.start_calls;
+
+        // A tick one second in makes no attempt: the backoff is holding.
+        sup.tick(
+            t0 + Duration::from_secs(1),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
+        assert_eq!(
+            sup.sources[0].source.start_calls, attempts_before,
+            "the backoff must really be holding, or this test proves nothing"
+        );
+
+        // Asked to restart, the same instant now produces an attempt.
+        sup.apply_restart_requests(&request(&["cam"]));
+        sup.tick(
+            t0 + Duration::from_secs(1),
+            true,
+            None,
+            SolarMinutes::default(),
+            &m,
+        );
+        assert_eq!(
+            sup.sources[0].source.start_calls,
+            attempts_before + 1,
+            "the request must clear the backoff, not queue behind it"
+        );
+    }
+
+    /// A paused source stays paused: the restart path is the supervisor's own,
+    /// so it cannot override the recording schedule the operator configured.
+    #[test]
+    fn an_operator_restart_does_not_override_the_schedule() {
+        let m = metrics();
+        let mut sup = labelled(FakeSource::healthy(), "cam");
+        let t0 = Instant::now();
+
+        sup.apply_restart_requests(&request(&["cam"]));
+        // `recording_allowed = false` — outside the window.
+        sup.tick(t0, false, None, SolarMinutes::default(), &m);
+
+        assert!(!sup.sources[0].source.running, "it was stopped");
+        assert_eq!(
+            sup.sources[0].source.start_calls, 0,
+            "and nothing started it again while the schedule is closed"
+        );
+        assert_eq!(sup.sources[0].last_state, SourceState::Paused);
+
+        // The request is spent, not held: when the window opens the source
+        // starts because the schedule says so, and is not additionally
+        // attributed to the operator.
+        assert!(!sup.sources[0].operator_restart);
+    }
+
+    /// The discrimination, both halves. Restarts an operator asked for are not
+    /// evidence that a source cannot stay up, so they must not paint it as
+    /// flapping — but the process deaths the flap detector exists for still
+    /// must.
+    ///
+    /// Without the counterpart this would pass for a supervisor that had simply
+    /// stopped counting restarts at all.
+    #[test]
+    fn operator_restarts_do_not_read_as_flapping_but_deaths_still_do() {
+        let m = metrics();
+        let mut sup = labelled(FakeSource::healthy(), "cam");
+        let t0 = Instant::now();
+        let mut t = t0;
+
+        // Enough operator restarts to cross the threshold twice over.
+        for _ in 0..(FLAP_THRESHOLD + 2) {
+            sup.apply_restart_requests(&request(&["cam"]));
+            sup.tick(t, true, None, SolarMinutes::default(), &m);
+            t += Duration::from_secs(30);
+            sup.tick(t, true, None, SolarMinutes::default(), &m);
+            t += Duration::from_secs(30);
+        }
+        let snap = sup.sources[0].snapshot(t, 1_700_000_000);
+        assert_eq!(
+            snap.restarts_last_hour, 0,
+            "an operator's own restarts must not accumulate as a fault signal"
+        );
+        assert!(!snap.flapping, "{snap:?}");
+
+        // Counterpart: the same number of *deaths* in the same window does
+        // read as flapping.
+        let mut sup = labelled(FakeSource::healthy(), "cam");
+        let mut t = t0;
+        for _ in 0..FLAP_THRESHOLD {
+            sup.tick(t, true, None, SolarMinutes::default(), &m);
+            sup.sources[0].source.running = false;
+            t += Duration::from_secs(30);
+            sup.tick(t, true, None, SolarMinutes::default(), &m);
+            t += Duration::from_secs(30);
+        }
+        let snap = sup.sources[0].snapshot(t, 1_700_000_000);
+        assert_eq!(snap.restarts_last_hour, FLAP_THRESHOLD);
+        assert!(
+            snap.flapping,
+            "a source that keeps dying must still read as flapping: {snap:?}"
+        );
     }
 
     /// The flapping warning, as a table. `T` is `FLAP_THRESHOLD`, `E` is

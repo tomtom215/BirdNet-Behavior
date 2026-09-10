@@ -75,6 +75,19 @@
               hx-swap="outerHTML">Edit</button>
       <span class="audio-source__sep" aria-hidden="true"></span>
       <!--
+        Restart cycles THIS source only. The station-wide restart on
+        /admin/system takes every other microphone down with it and loses the
+        audio in flight, which is the wrong remedy for one wedged camera.
+        Explicit hx-target for the same reason the Edit and Remove buttons
+        carry one: the inherited "this" would resolve to the <li>, and the
+        response here is a whole row, so it must.
+      -->
+      <button class="bnb-btn ghost"
+              hx-post="/admin/audio/sources/{{id}}/restart"
+              hx-target="closest li"
+              hx-swap="outerHTML">Restart</button>
+      <span class="audio-source__sep" aria-hidden="true"></span>
+      <!--
         Remove goes through the O-17 confirmation modal — note the dual
         attributes: hx-delete + data-confirm-* keys. Native confirm is the
         fallback when the modal is unavailable.

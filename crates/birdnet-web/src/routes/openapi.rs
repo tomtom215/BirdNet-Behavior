@@ -118,6 +118,70 @@ mod tests {
         }
     }
 
+    /// The `enum` lists in the capture-status schema are the Rust enums.
+    ///
+    /// Written after this document shipped `["up","down","paused","unknown"]`
+    /// for `uptime_24h` — four plausible names, three of them wrong, none of
+    /// them ever emitted. A generated client would have carried a variant the
+    /// station cannot produce and been missing the one it does (`out`), and
+    /// nothing about the document is self-checking: it is a static file, so a
+    /// wrong string here is indistinguishable from a right one until a client
+    /// meets real data.
+    ///
+    /// Two things settle it rather than reading the enum and applying the
+    /// `rename_all` rule by eye: the variants are *serialised* to get their
+    /// wire names, and the exhaustive `match` in each helper below fails to
+    /// compile if a variant is added — so a new state cannot ship undocumented.
+    #[test]
+    fn the_capture_schema_enums_are_the_rust_enums() {
+        use birdnet_core::audio::capture::{SourceState, UptimeSegment};
+
+        /// Every `SourceState`, in the order the document lists them.
+        fn all_states() -> Vec<SourceState> {
+            let all = [
+                SourceState::Connected,
+                SourceState::Stalled,
+                SourceState::BackingOff,
+                SourceState::Paused,
+            ];
+            for state in all {
+                match state {
+                    SourceState::Connected
+                    | SourceState::Stalled
+                    | SourceState::BackingOff
+                    | SourceState::Paused => {}
+                }
+            }
+            all.to_vec()
+        }
+
+        /// Every `UptimeSegment`, in the order the document lists them.
+        fn all_segments() -> Vec<UptimeSegment> {
+            let all = [UptimeSegment::Up, UptimeSegment::Down, UptimeSegment::Out];
+            for segment in all {
+                match segment {
+                    UptimeSegment::Up | UptimeSegment::Down | UptimeSegment::Out => {}
+                }
+            }
+            all.to_vec()
+        }
+
+        let spec: serde_json::Value = serde_json::from_str(OPENAPI_JSON).unwrap();
+        let source = &spec["paths"]["/system/capture"]["get"]["responses"]["200"]["content"]["application/json"]
+            ["schema"]["properties"]["sources"]["items"]["properties"];
+
+        assert_eq!(
+            source["state"]["enum"],
+            serde_json::to_value(all_states()).unwrap(),
+            "the documented `state` values are not the ones SourceState serialises to"
+        );
+        assert_eq!(
+            source["uptime_24h"]["items"]["enum"],
+            serde_json::to_value(all_segments()).unwrap(),
+            "the documented `uptime_24h` values are not the ones UptimeSegment serialises to"
+        );
+    }
+
     /// The counterpart: the read-only surface is documented as anonymous.
     ///
     /// Without this, marking every operation `bearerAuth` would satisfy the

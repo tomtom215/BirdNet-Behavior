@@ -411,14 +411,17 @@ within each group by how much they change what a station can do.
 
 ### 2.5 Operations and platform
 
-#### G‑32 · System introspection APIs — PARTIAL
+#### G‑32 · System introspection APIs — PARTIAL (the per-source restart has shipped)
 
 | | |
 |---|---|
 | **Upstream** | `/api/v2/system/{info,resources,disks,processes,network-interfaces,jobs,temperature/cpu,external-media,inference}` plus `/api/v2/control/{restart,reload,rebuild-filter,restart-source/:id}`. |
-| **Ours** | `/api/v2/health`, `/api/v2/metrics`, `/station/*`, `/system/disk`, `/admin/system/*` and `POST /admin/system/service/restart`. Missing: per-process view, network interfaces, external media detection, a job list, per-source restart, and filter rebuild. |
+| **Ours** | `/api/v2/health`, `/api/v2/metrics`, `/station/*`, `/system/disk`, `/admin/system/*` and `POST /admin/system/service/restart`. **Per-source restart has landed** — see the resolution below. Still missing: per-process view, network interfaces, external media detection, a job list, and filter rebuild. |
 | **Why it matters** | Per-source restart is the one that matters daily — restarting the whole service to recover one wedged RTSP camera drops every other source and loses in-flight audio. |
-| **Plan** | Add `POST /api/v2/control/restart-source/:id` against the capture manager's existing supervisor, plus `/api/v2/system/jobs` over the `maintenance_runs` table. Network interfaces and external media are onboarding aids and follow. |
+| **Resolution (per-source restart)** | The supervisor owns its source list privately on its own thread, so this needed a seam in the direction that did not exist: `crates/birdnet-core/src/audio/capture/control.rs` holds the set of pending restart requests the web layer writes and `run_supervisor` drains once per tick (`src/capture/runloop.rs`), the mirror of `status.rs`. A drained request stops the source and clears its fault state, so `reconcile` starts it again on that same tick rather than waiting out a backoff. It goes through the supervisor's *own* start path, so the schedule and quiet window still hold and a request for a paused source is spent rather than overriding them. Three surfaces: a **Restart** button per row on `/admin/audio`, `POST /api/v2/control/restart-source`, and `GET /api/v2/system/capture` to read the labels it takes. Audited as `audio.source.restart`. |
+| **Two things this deliberately does not do** | It does **not** reload the source's settings — `CaptureManager` is built once at supervisor start and `start()` respawns from that stored config, so an edit still needs a service restart. And an operator-requested restart is **not** counted in `restarts_last_hour`, so it never raises `flapping`: that verdict exists to spot a source that cannot stay up on its own. Both are gated, the second with its counterpart. |
+| **A divergence from upstream's URL, on purpose** | Ours takes the source in the JSON body (`POST /api/v2/control/restart-source`, `{"source_id": …}`) rather than upstream's `restart-source/:id`. `WRITE_ROUTES`/`READ_ROUTES` in `routes/api_write.rs` are literal paths read by the CSRF guard, the OpenAPI gate and four test loops that *send a request to each entry*; a `{id}` placeholder would be a path none of them could exercise, which would cost more than matching a URL shape. |
+| **Plan (what remains)** | `/api/v2/system/jobs` over the `maintenance_runs` table. Network interfaces and external media are onboarding aids and follow. |
 
 #### G‑33 · Hardware profiling and memory policy — PARTIAL
 
@@ -499,7 +502,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 15 | Weather provider trait + Wunderground + yr.no | G‑26 |
 | 16 | eBird recent-observations client | G‑27 |
 | 17 | Loudness normalisation of exports | G‑5 |
-| 18 | Per-source restart + jobs API | G‑32 |
+| 18 | Jobs API over `maintenance_runs` (per-source restart has shipped) | G‑32 |
 | 19 | `rsync` backup target + daily schedules | G‑30 |
 | 20 | Config schema generation + drift gate | G‑34 |
 | 21 | A station-wide default source for the live stream (`?source_id=` has shipped) | N‑3 |

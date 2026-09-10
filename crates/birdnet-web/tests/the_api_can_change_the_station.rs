@@ -1029,3 +1029,203 @@ async fn a_batch_audits_every_detection_it_changed_and_no_others() {
         "the key that matched nothing must not be recorded as a deletion: {entries:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Per-source capture control (G‑32)
+// ---------------------------------------------------------------------------
+
+/// A station whose capture supervisor is publishing `labels`, plus the control
+/// handle the supervisor would drain.
+///
+/// The published status is what the endpoint validates against — it is the only
+/// authority on what is *being supervised right now*, as opposed to what the
+/// `audio_sources` table happens to hold.
+fn station_with_capture(
+    labels: &[&str],
+) -> (
+    tempfile::TempDir,
+    AppState,
+    birdnet_core::audio::capture::CaptureControlHandle,
+) {
+    use birdnet_core::audio::capture::{
+        CaptureStatus, SourceState, SourceStatus, UPTIME_SEGMENTS, UptimeSegment,
+        new_capture_control, new_capture_status, publish_capture_status,
+    };
+
+    let (dir, state) = station(true);
+    let status = new_capture_status();
+    publish_capture_status(
+        &status,
+        CaptureStatus {
+            sources: labels
+                .iter()
+                .map(|label| SourceStatus {
+                    label: (*label).to_owned(),
+                    state: SourceState::Connected,
+                    uptime_secs: Some(600),
+                    last_audio_age_secs: Some(1),
+                    restart_attempts: 0,
+                    restarts_last_hour: 0,
+                    flapping: false,
+                    next_retry_in_secs: None,
+                    uptime_24h: vec![UptimeSegment::Up; UPTIME_SEGMENTS],
+                })
+                .collect(),
+            published_unix: 1_700_000_000,
+        },
+    );
+    let control = new_capture_control();
+    let state = state
+        .with_capture_status(status)
+        .with_capture_control(control.clone());
+    (dir, state, control)
+}
+
+/// The feature: one source is restarted and the request reaches the supervisor.
+///
+/// `202` rather than `200` because nothing has restarted yet when the response
+/// is written — the supervisor applies it on its next tick.
+#[tokio::test]
+async fn restarting_one_source_records_a_request_the_supervisor_will_drain() {
+    use birdnet_core::audio::capture::{is_restart_pending, take_source_restarts};
+
+    let (_dir, state, control) = station_with_capture(&["cam", "mic"]);
+    let (status, body) = call(
+        &state,
+        "/api/v2/control/restart-source",
+        Some(TOKEN),
+        None,
+        r#"{"source_id":"cam"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED, "body: {body}");
+    assert!(
+        is_restart_pending(&control, "cam"),
+        "the request must be recorded where the supervisor drains it: {body}"
+    );
+    assert!(
+        !is_restart_pending(&control, "mic"),
+        "and only for the source that was named — restarting every source is \
+         exactly what this endpoint exists to avoid"
+    );
+    assert!(body.contains("\"restart_requested\":true"), "body: {body}");
+
+    let drained = take_source_restarts(&control);
+    assert_eq!(drained.len(), 1);
+    assert!(drained.contains("cam"));
+}
+
+/// A label nothing is supervising is a 404 that says what *is* supervised.
+///
+/// Silently accepting it would be worse than useless: the operator would watch
+/// a camera stay wedged, having been told the restart was requested.
+#[tokio::test]
+async fn restarting_an_unknown_source_names_the_real_ones() {
+    use birdnet_core::audio::capture::take_source_restarts;
+
+    let (_dir, state, control) = station_with_capture(&["cam"]);
+    let (status, body) = call(
+        &state,
+        "/api/v2/control/restart-source",
+        Some(TOKEN),
+        None,
+        r#"{"source_id":"typo"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(
+        body.contains("cam"),
+        "the answer has to be actionable — it must name the labels that exist: {body}"
+    );
+    assert!(
+        take_source_restarts(&control).is_empty(),
+        "nothing may be queued for a source that does not exist"
+    );
+}
+
+/// With no supervisor in the process there is nothing to drain the request, and
+/// the endpoint says so instead of recording one that will sit there forever.
+#[tokio::test]
+async fn a_station_with_no_capture_supervisor_refuses_rather_than_pretending() {
+    let (_dir, state) = station(true);
+    let (status, body) = call(
+        &state,
+        "/api/v2/control/restart-source",
+        Some(TOKEN),
+        None,
+        r#"{"source_id":"cam"}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body: {body}");
+    assert!(body.contains("\"restart_requested\":false"), "body: {body}");
+}
+
+/// The discovery half: the labels `restart-source` takes are readable.
+///
+/// Without this an operator has no way to learn a source's label except by
+/// guessing at it and reading a 404.
+#[tokio::test]
+async fn the_capture_endpoint_reports_the_labels_restart_source_takes() {
+    let (_dir, state, _control) = station_with_capture(&["cam", "mic"]);
+    let (status, body) =
+        call_method(&state, "GET", "/api/v2/system/capture", Some(TOKEN), "").await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("\"supervised\":true"), "body: {body}");
+    assert!(body.contains("\"label\":\"cam\""), "body: {body}");
+    assert!(body.contains("\"label\":\"mic\""), "body: {body}");
+    assert!(
+        body.contains("\"state\":\"connected\""),
+        "the state is the serialised enum, not a prettified string: {body}"
+    );
+
+    // Counterpart: a station with no supervisor answers the question rather
+    // than erroring, and says plainly that nothing is being supervised.
+    let (_dir, bare) = station(true);
+    let (status, body) = call_method(&bare, "GET", "/api/v2/system/capture", Some(TOKEN), "").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(body.contains("\"supervised\":false"), "body: {body}");
+}
+
+/// The restart is written to the audit log, named for the source it touched.
+#[tokio::test]
+async fn a_source_restart_is_recorded_in_the_audit_log() {
+    let (_dir, state, _control) = station_with_capture(&["cam"]);
+    let (status, _) = call(
+        &state,
+        "/api/v2/control/restart-source",
+        Some(TOKEN),
+        None,
+        r#"{"source_id":"cam"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+
+    let entries = state.with_db(|conn| {
+        let mut stmt = conn
+            .prepare("SELECT action, target, metadata FROM audit_log ORDER BY id")
+            .expect("prepare");
+        let rows: Vec<(String, String, String)> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                ))
+            })
+            .expect("query")
+            .filter_map(Result::ok)
+            .collect();
+        rows
+    });
+
+    let restart = entries
+        .iter()
+        .find(|(action, _, _)| action == "audio.source.restart")
+        .unwrap_or_else(|| panic!("no restart entry in {entries:?}"));
+    assert_eq!(restart.1, "cam", "the row must name the source");
+    assert!(restart.2.contains("via=api"), "metadata: {}", restart.2);
+}

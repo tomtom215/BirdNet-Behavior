@@ -275,6 +275,7 @@ const ACTIONS: &[&str] = &[
     "account.user.delete",
     "audio.source.create",
     "audio.source.delete",
+    "audio.source.restart",
     "audio.source.update",
     "auth.login.fail",
     "auth.login.ok",

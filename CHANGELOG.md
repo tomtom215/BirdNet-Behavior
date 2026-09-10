@@ -38,6 +38,47 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — one capture source can be restarted without restarting the station
+
+**A per-source restart** (`G-32`). The only remedy a station had for one
+wedged RTSP camera was `POST /api/v2/control/restart` or the Restart button on
+`/admin/system` — both of which stop the whole process, taking every *other*
+microphone down with it and losing the audio in flight on each. On a
+multi-source station that is a blunt instrument for a fault in one source.
+
+The capture supervisor owns its source list privately on its own thread, so
+this is a new seam in the direction that did not exist:
+`birdnet-core`'s `audio::capture::control` carries a set of pending restart
+requests the web layer writes and the supervisor drains once per reconcile
+tick — the mirror of the `status` module that carries per-source health the
+other way. A drained request stops the named source and clears its fault
+state, so the reconcile in that same tick starts it again immediately rather
+than waiting out a backoff the operator can neither see nor shorten. Asking
+twice before a tick still restarts it once.
+
+The restart goes through the supervisor's own start path, deliberately: the
+recording schedule and the source's quiet window still hold, so a request for
+a paused source is spent without overriding the schedule the operator
+configured, and the response says so instead of reporting a restart that will
+not happen. It recovers a wedged source; it does **not** reload that source's
+settings, because the supervisor builds each source's capture config once at
+start-up — an edit still needs a service restart, as it always did.
+
+Three surfaces: a **Restart** button on each row of `/admin/audio`,
+`POST /api/v2/control/restart-source` for automation, and
+`GET /api/v2/system/capture` to read the labels it takes and see whether the
+restart took. The capture read is bearer-gated rather than public — a
+station's source labels and per-source fault history are operational detail
+about someone's home, not a public detection count. Every restart is written
+to the audit log as `audio.source.restart`.
+
+One diagnostic subtlety, gated in both directions: a restart an *operator*
+asked for is not counted toward `restarts_last_hour` and so never raises the
+`flapping` verdict. That number exists to spot a source that cannot stay up on
+its own, and three clicks while debugging a camera is not that — but a source
+that keeps dying still reads as flapping, which is the counterpart the gate
+asserts so the discrimination cannot decay into "stopped counting".
+
 ### Added — the target-sensitive crates' tests run natively on aarch64
 
 **A `test-aarch64` CI job** (`ARM-1`). No `cargo test` had ever executed on

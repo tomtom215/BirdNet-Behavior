@@ -5,7 +5,7 @@
 
 #[cfg(feature = "analytics")]
 use birdnet_behavioral::connection::AnalyticsDb;
-use birdnet_core::audio::capture::{CaptureStatusHandle, LiveAudioHubHandle};
+use birdnet_core::audio::capture::{CaptureControlHandle, CaptureStatusHandle, LiveAudioHubHandle};
 use birdnet_core::i18n::I18nManager;
 
 use crate::analytics_cache::AnalyticsCache;
@@ -130,6 +130,11 @@ struct AppStateInner {
     /// thread for the Station Health page. `None` when no supervisor is running
     /// (web-only mode, or tooling); the page then falls back to DB activity.
     capture_status: Option<CaptureStatusHandle>,
+    /// The reverse seam: restart requests this layer records for the capture
+    /// supervisor to drain. `None` when no supervisor is running (web-only
+    /// mode, or tooling), in which case there is nothing to restart and the
+    /// control endpoint says so rather than pretending to have acted.
+    capture_control: Option<CaptureControlHandle>,
     /// Live PCM taps published by teed capture sources, so `/stream` can serve
     /// live audio without opening the (exclusive) capture device a second time.
     /// `None` in web-only mode and tooling, where `/stream` falls back to
@@ -261,6 +266,7 @@ impl AppState {
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
+                capture_control: None,
                 live_audio: None,
                 notifier: None,
                 diagnostics: None,
@@ -499,6 +505,7 @@ impl AppState {
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
+                capture_control: None,
                 live_audio: None,
                 notifier: None,
                 diagnostics: None,
@@ -550,6 +557,7 @@ impl AppState {
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
+                capture_control: None,
                 live_audio: None,
                 notifier: None,
                 diagnostics: None,
@@ -695,6 +703,17 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_capture_status");
         Self {
             inner: rebuild_inner(inner, |s| s.capture_status = Some(status)),
+        }
+    }
+
+    /// Attach the capture supervisor's shared control handle, so a single
+    /// source can be restarted without restarting the whole service. The binary
+    /// clones one handle into here and another into the supervisor thread.
+    #[must_use]
+    pub fn with_capture_control(self, control: CaptureControlHandle) -> Self {
+        let inner = unwrap_inner(self.inner, "with_capture_control");
+        Self {
+            inner: rebuild_inner(inner, |s| s.capture_control = Some(control)),
         }
     }
 
@@ -1186,6 +1205,14 @@ impl AppState {
     #[must_use]
     pub fn capture_status(&self) -> Option<CaptureStatusHandle> {
         self.inner.capture_status.clone()
+    }
+
+    /// The capture supervisor's shared control handle, if a supervisor is
+    /// running. `None` means nothing is supervising capture in this process, so
+    /// a restart request would be recorded and never drained.
+    #[must_use]
+    pub fn capture_control(&self) -> Option<CaptureControlHandle> {
+        self.inner.capture_control.clone()
     }
 
     /// The live-audio tap registry, if capture is publishing into one.

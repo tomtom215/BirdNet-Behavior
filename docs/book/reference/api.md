@@ -438,12 +438,96 @@ Outside systemd — a bare `cargo run`, a container without an init — nothing
 would bring the station back, so the endpoint answers `503` and signals nothing
 rather than reporting a restart that would in fact be a shutdown.
 
+### Restarting one source
+
+Restarting the station to recover a single wedged RTSP camera takes every other
+microphone down with it, and loses the audio in flight. This restarts one:
+
+```bash
+curl -X POST http://localhost:8502/api/v2/control/restart-source \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source_id": "src_rtsp_1"}'
+```
+
+```json
+{
+  "restart_requested": true,
+  "source": "src_rtsp_1",
+  "state": "stalled",
+  "already_pending": false,
+  "note": "the supervisor stops and restarts this source on its next tick; every other source keeps recording"
+}
+```
+
+`202`, not `200`: nothing has restarted yet when the response is written. The
+capture supervisor drains the request on its next reconcile tick, a couple of
+seconds later. Asking twice before that happens still restarts the source once —
+the second call answers `"already_pending": true`.
+
+The restart goes through the supervisor's own start path, so the recording
+schedule and the source's quiet window still hold. A source that is `paused`
+when the request arrives stays paused, and the `note` says so rather than
+reporting a restart that will not happen.
+
+This recovers a wedged source; it does **not** reload that source's settings.
+The supervisor builds each source's capture configuration once, when the service
+starts, and a restarted process comes back with that same configuration. Editing
+a source on `/admin/audio` still needs a service restart to take effect.
+
+`source_id` is the supervisor's label for the source, which is the
+`audio_sources` row id on any station whose sources are managed from
+`/admin/audio`. An unknown label answers `404` and lists the labels that do
+exist; a process with no capture supervisor at all answers `503`.
+
+The same action is a **Restart** button beside each source on `/admin/audio`.
+
+To read the labels — and to see whether the restart took — ask for the capture
+status. It is bearer-gated rather than public, because a station's source labels
+and per-source fault history are operational detail about someone's home:
+
+```bash
+curl http://localhost:8502/api/v2/system/capture \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+```json
+{
+  "supervised": true,
+  "published_unix": 1789000000,
+  "sources": [
+    {
+      "label": "src_rtsp_1",
+      "state": "connected",
+      "uptime_secs": 512,
+      "last_audio_age_secs": 1,
+      "restart_attempts": 0,
+      "restarts_last_hour": 1,
+      "flapping": false,
+      "next_retry_in_secs": null,
+      "uptime_24h": ["up", "up", "…"]
+    }
+  ]
+}
+```
+
+`state` is one of `connected`, `stalled`, `backing_off`, `paused`;
+`uptime_24h` is 48 half-hour cells, oldest first, each `up`, `down` or `out`
+(no data — before the source was first seen, or intentionally paused).
+`supervised` is `false`, with an empty list, when nothing in this process is
+supervising capture: web-only mode, or tooling. That is an answer, not an error.
+
+Restarts an operator asked for are deliberately **not** counted in
+`restarts_last_hour`, and so never raise `flapping`. That number exists to spot
+a source that cannot stay up on its own; clicking Restart three times while
+debugging a camera is not that.
+
 ### The audit log
 
 Every change is written to the [audit log](../admin/system.md) as
 `detection.review` / `detection.lock` / `detection.unlock` / `detection.delete`
-/ `settings.update` / `system.restart`, with no user and `via=api` in the
-metadata — a batch writes one such row per detection it changed, under the same
+/ `settings.update` / `system.restart` / `audio.source.restart`, with no user
+and `via=api` in the metadata — a batch writes one such row per detection it changed, under the same
 names — a token is not a person, and the log says so rather than inventing
 one. A settings change records the key *names* only: an entry reading
 `birdweather_token=…` would put a credential on the page that renders the log.

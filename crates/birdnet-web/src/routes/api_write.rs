@@ -60,17 +60,26 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v2/detections/batch"),
     ("PUT", "/api/v2/settings"),
     ("POST", "/api/v2/control/restart"),
+    ("POST", "/api/v2/control/restart-source"),
 ];
 
 /// Read endpoints that live behind the same bearer gate.
 ///
-/// `GET /api/v2/settings` is a read, so it is not in [`WRITE_ROUTES`] — the
-/// CSRF guard has no interest in a `GET`. It is here rather than in
-/// `public_routes()` because a station's settings are not public: the values
-/// are redacted (by `redacted_settings`, private to this module, so it is
-/// named rather than linked), but the *shape* of a station's configuration is
-/// still not something to hand an anonymous visitor.
-pub const READ_ROUTES: &[(&str, &str)] = &[("GET", "/api/v2/settings")];
+/// These are reads, so they are not in [`WRITE_ROUTES`] — the CSRF guard has no
+/// interest in a `GET`. They are here rather than in `public_routes()` because
+/// neither is public:
+///
+/// * `GET /api/v2/settings` — the values are redacted (by `redacted_settings`,
+///   private to this module, so it is named rather than linked), but the
+///   *shape* of a station's configuration is still not something to hand an
+///   anonymous visitor.
+/// * `GET /api/v2/system/capture` — source labels are `audio_sources` row ids
+///   and the payload is per-source fault history: operational detail about
+///   someone's home, not a public detection count.
+pub const READ_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/v2/settings"),
+    ("GET", "/api/v2/system/capture"),
+];
 
 /// Whether `path` is one of the mutating API endpoints.
 ///
@@ -96,6 +105,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/detections/batch", post(batch))
         .route("/api/v2/settings", get(read_settings).put(write_settings))
         .route("/api/v2/control/restart", post(restart))
+        .route("/api/v2/control/restart-source", post(restart_source))
+        .route("/api/v2/system/capture", get(capture_status))
 }
 
 /// The composite key that identifies a detection.
@@ -800,6 +811,147 @@ async fn restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
             })),
         ),
     }
+}
+
+/// Per-source capture health: what the Station Health page draws, as JSON.
+///
+/// This is the discovery half of `POST /api/v2/control/restart-source` — it
+/// names every source the supervisor is actually running, which is what that
+/// endpoint's `source_id` has to match, and it is how a caller sees whether the
+/// restart it asked for took.
+///
+/// Bearer-gated rather than public: a station's source labels are its
+/// `audio_sources` row ids and its per-source fault history, which is
+/// operational detail about someone's home, not a public detection count.
+///
+/// `supervised` is `false` — with an empty source list — when no capture
+/// supervisor is running in this process (web-only mode, or tooling). That is
+/// reported rather than erroring, because "nothing is supervising capture" is a
+/// true and useful answer to the question.
+async fn capture_status(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    use birdnet_core::audio::capture::read_capture_status;
+
+    let Some(status) = state.capture_status().map(|h| read_capture_status(&h)) else {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "supervised": false,
+                "sources": [],
+                "published_unix": 0,
+            })),
+        );
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "supervised": true,
+            "sources": status.sources,
+            "published_unix": status.published_unix,
+        })),
+    )
+}
+
+/// The body of `POST /api/v2/control/restart-source`.
+#[derive(Debug, Deserialize)]
+struct SourceRef {
+    /// The supervisor's label for the source — for a station whose sources are
+    /// managed in `/admin/audio` (every station that has ever saved one) this
+    /// is the `audio_sources` row id. `GET /api/v2/system/capture` lists the
+    /// labels actually being supervised, and a `404` from this endpoint returns
+    /// them too.
+    source_id: String,
+}
+
+/// Restart one capture source, leaving every other source recording.
+///
+/// The path an operator has without this is `POST /api/v2/control/restart`,
+/// which takes the whole station down: on a multi-source station that means one
+/// wedged RTSP camera costs every other microphone its in-flight audio and its
+/// analysis queue. This stops and restarts exactly the named source, through
+/// the supervisor's own start path — so the recording schedule and the source's
+/// quiet window still hold, and a restart asked for while the source is paused
+/// does not override them.
+///
+/// It recovers a wedged source; it does **not** reload that source's settings.
+/// The supervisor builds each source's capture config once, when it starts, so
+/// the restarted process comes up with the configuration the *service* started
+/// with. An edit made on `/admin/audio` still needs a service restart to take
+/// effect — the same as before this endpoint existed.
+///
+/// Answers:
+/// * `202` — the request is recorded; the supervisor applies it on its next
+///   tick, within a couple of seconds. The last known state is echoed back so a
+///   caller can see it was `paused` (and so nothing will happen) rather than
+///   guessing from a bare acknowledgement.
+/// * `404` — no supervised source carries that label, with the labels that do.
+/// * `503` — nothing is supervising capture in this process, so a request would
+///   be recorded and never drained.
+async fn restart_source(
+    State(state): State<AppState>,
+    Json(body): Json<SourceRef>,
+) -> (StatusCode, Json<Value>) {
+    use birdnet_core::audio::capture::{read_capture_status, request_source_restart};
+
+    let Some(control) = state.capture_control() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "restart_requested": false,
+                "error": "no capture supervisor is running in this process, so there is \
+                          nothing to restart"
+            })),
+        );
+    };
+
+    // The supervisor's published status is the authoritative list of what is
+    // being supervised right now — more so than the `audio_sources` table,
+    // which can hold a row added since the supervisor last read it.
+    let known = state.capture_status().map(|h| read_capture_status(&h));
+    let Some(source) = known
+        .as_ref()
+        .and_then(|s| s.sources.iter().find(|src| src.label == body.source_id))
+    else {
+        let labels: Vec<&str> = known
+            .as_ref()
+            .map(|s| s.sources.iter().map(|src| src.label.as_str()).collect())
+            .unwrap_or_default();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "restart_requested": false,
+                "error": format!("no supervised capture source is labelled {:?}", body.source_id),
+                "known_sources": labels,
+            })),
+        );
+    };
+    let state_now = source.state;
+
+    crate::audit::audit(
+        &state,
+        None,
+        "audio.source.restart",
+        Some(&body.source_id),
+        Some(VIA_API),
+    );
+
+    let newly = request_source_restart(&control, &body.source_id);
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "restart_requested": true,
+            "source": body.source_id,
+            "state": state_now,
+            "already_pending": !newly,
+            "note": if state_now == birdnet_core::audio::capture::SourceState::Paused {
+                "this source is paused by its recording schedule or quiet window; the \
+                 request is spent without restarting it, because starting it would \
+                 override the schedule"
+            } else {
+                "the supervisor stops and restarts this source on its next tick; every \
+                 other source keeps recording"
+            },
+        })),
+    )
 }
 
 #[cfg(test)]

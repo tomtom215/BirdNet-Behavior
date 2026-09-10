@@ -8,7 +8,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use birdnet_core::audio::capture::{CaptureManager, CaptureStatusHandle, LocalOffset};
+use birdnet_core::audio::capture::{
+    CaptureControlHandle, CaptureManager, CaptureStatusHandle, LocalOffset, take_source_restarts,
+};
 use birdnet_scheduler::{DailySchedule, ScheduleClock, ScheduleConfig, SolarDay};
 use birdnet_web::metrics::SharedMetrics;
 
@@ -36,6 +38,7 @@ pub(super) fn run_supervisor(
     schedule_config: &ScheduleConfig,
     metrics: &SharedMetrics,
     status: &CaptureStatusHandle,
+    control: &CaptureControlHandle,
     local_offset: &LocalOffset,
     stop: &AtomicBool,
 ) {
@@ -60,6 +63,12 @@ pub(super) fn run_supervisor(
         }
         let now = Instant::now();
         let offset = local_offset.get();
+        // Drained before the reconcile, so a source an operator asked to
+        // restart is stopped and re-started within this same tick rather than
+        // one tick later. A request that arrives mid-tick is picked up by the
+        // next drain — never lost, never applied twice.
+        let restarts = take_source_restarts(control);
+        supervisor.apply_restart_requests(&restarts);
         supervisor.tick(
             now,
             recording_allowed(schedule_config, secs, offset),

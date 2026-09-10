@@ -16,8 +16,10 @@
 //! | `disk` | `DiskUsage`, `disk_usage`, `recording_stats`, `cleanup_old_recordings` |
 //! | `tmpfs` | `TmpfsConfig`, `TmpfsError`, tmpfs mount/unmount helpers |
 //! | `status` | `CaptureStatus` — the supervisor→web per-source health seam |
+//! | `control` | `CaptureControlHandle` — the web→supervisor restart-request seam |
 
 pub mod alsa;
+pub mod control;
 pub mod disk;
 pub mod live;
 pub mod manager;
@@ -31,6 +33,10 @@ mod segment;
 mod tee;
 
 // Re-export the public API so callers keep the same import path.
+pub use control::{
+    CaptureControlHandle, is_restart_pending, new_capture_control, request_source_restart,
+    take_source_restarts,
+};
 pub use disk::{
     DEFAULT_PURGE_SPECIES_FLOOR, DiskManager, DiskManagerConfig, DiskUsage, FullDiskAction,
     LockedFilesProvider, PurgePolicy, RAW_KEEP_SUBDIR, RawKeep, cleanup_old_recordings, disk_usage,

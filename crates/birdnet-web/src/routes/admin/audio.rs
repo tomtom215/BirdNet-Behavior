@@ -54,6 +54,7 @@ pub fn router() -> Router<AppState> {
             get(row).delete(remove).patch(update),
         )
         .route("/admin/audio/sources/{id}/edit", get(edit_form))
+        .route("/admin/audio/sources/{id}/restart", post(restart))
         .route("/admin/audio/sources/{id}/probe", get(probe))
         .route("/admin/audio/sources/{id}/eq-preview", get(eq_preview))
 }
@@ -487,6 +488,65 @@ async fn remove(
             internal_response("Could not remove the source.")
         }
     }
+}
+
+/// Restart one capture source, leaving every other source recording.
+///
+/// The button beside it on `/admin/audio` is the point: an operator whose one
+/// RTSP camera has wedged should not have to restart the station — which takes
+/// down every other microphone with it, along with the audio in flight — nor
+/// reach for `curl` and the API token to avoid that.
+///
+/// The request is recorded for the capture supervisor, which applies it on its
+/// next reconcile tick, and the row is re-rendered so the status pill's poll
+/// picks the change up from there.
+///
+/// This recovers a wedged source; it does **not** reload the source's settings.
+/// The supervisor builds each source's `RecordingConfig` once, at start-up, and
+/// `CaptureManager::start` respawns from that stored config — so a restarted
+/// process comes back with the configuration the service started with. Editing
+/// a source still needs a service restart, which is what the edit form already
+/// says.
+async fn restart(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Path(id): Path<String>,
+) -> Response {
+    use birdnet_core::audio::capture::request_source_restart;
+
+    // Confirm the source exists before claiming anything happened: an id from a
+    // stale page must not answer "restarting" for a source that was removed.
+    let row = match state.with_db(|conn| conn.get(&id)) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found_row(&id),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source get failed");
+            return internal_response("Could not load that source.");
+        }
+    };
+
+    let Some(control) = state.capture_control() else {
+        // Web-only mode, or the daemon is not supervising capture in this
+        // process. Saying so beats a success toast for a restart that no
+        // thread exists to perform.
+        return toast::oob_only(Toast::warn(
+            "Capture is not being supervised by this process, so there is nothing to restart.",
+        ))
+        .into_response();
+    };
+
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "audio.source.restart",
+        Some(&id),
+        None,
+    );
+    request_source_restart(&control, &id);
+
+    let mut body = render_row(&row, daemon_status(&row, &state));
+    body.push_str(&Toast::success("Restarting this source…").render_oob());
+    Html(body).into_response()
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<String>) -> Response {
@@ -1888,6 +1948,98 @@ mod tests {
     fn synth_id_uses_kind_prefix() {
         let id = synth_id(SourceKind::Rtsp);
         assert!(id.starts_with("src_rtsp_"));
+    }
+
+    // ---- per-source restart (G-32) ----------------------------------------
+
+    /// The button does what it says: the named source is queued for the
+    /// supervisor, and no other source is.
+    ///
+    /// The second half is the feature. The remedy this replaces is
+    /// `/admin/system/restart`, which takes every source down.
+    #[tokio::test]
+    async fn restarting_one_source_queues_only_that_source() {
+        use birdnet_core::audio::capture::{is_restart_pending, new_capture_control};
+
+        let (_d, state) = fixture();
+        insert_one(&state, "src_cam", SourceKind::Rtsp, "rtsp://cam/1");
+        insert_one(&state, "src_mic", SourceKind::UsbAlsa, "plughw:1,0");
+        let control = new_capture_control();
+        let state = state.with_capture_control(control.clone());
+
+        let res = restart(
+            State(state.clone()),
+            actor(&state),
+            Path("src_cam".to_owned()),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(is_restart_pending(&control, "src_cam"));
+        assert!(
+            !is_restart_pending(&control, "src_mic"),
+            "restarting one source must not disturb the others"
+        );
+    }
+
+    /// A row that is gone answers 404 rather than queueing a restart for an id
+    /// nothing will ever match — which would look, from the page, like success.
+    #[tokio::test]
+    async fn restarting_a_removed_source_is_not_reported_as_success() {
+        use birdnet_core::audio::capture::{is_restart_pending, new_capture_control};
+
+        let (_d, state) = fixture();
+        let control = new_capture_control();
+        let state = state.with_capture_control(control.clone());
+
+        let res = restart(
+            State(state.clone()),
+            actor(&state),
+            Path("src_ghost".to_owned()),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert!(!is_restart_pending(&control, "src_ghost"));
+    }
+
+    /// With no supervisor in the process the page says so rather than showing a
+    /// success toast for a restart nothing will perform.
+    #[tokio::test]
+    async fn restarting_without_a_supervisor_says_so() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_cam", SourceKind::Rtsp, "rtsp://cam/1");
+
+        let res = restart(
+            State(state.clone()),
+            actor(&state),
+            Path("src_cam".to_owned()),
+        )
+        .await;
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains("not being supervised"),
+            "the operator has to be told nothing will happen: {html}"
+        );
+    }
+
+    /// The row markup offers the action at all — the handler is unreachable
+    /// from the page without it.
+    #[test]
+    fn the_row_offers_a_per_source_restart() {
+        let (_d, state) = fixture();
+        let row = insert_one(&state, "src_cam", SourceKind::Rtsp, "rtsp://cam/1");
+        let html = render_row(&row, Status::Capturing);
+        assert!(
+            html.contains(r#"hx-post="/admin/audio/sources/src_cam/restart""#),
+            "the Restart button must post to the per-source route: {html}"
+        );
+        assert!(
+            !html.contains(r#"hx-post="/admin/system/restart""#),
+            "and must not be wired to the station-wide restart, which is the \
+             blunt remedy this replaces"
+        );
     }
 }
 
