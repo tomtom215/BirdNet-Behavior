@@ -64,6 +64,10 @@ pub fn known_env_names() -> BTreeSet<String> {
             .filter(|k| k.starts_with("OFFSITE_"))
             .map(|k| format!("BIRDNET_{k}")),
     );
+    // Each credential that can be supplied as a mounted file reads a
+    // `BIRDNET_<KEY>_FILE` variable, built from the key rather than written out
+    // — so the list here cannot fall behind the list that is actually read.
+    out.extend(birdnet_core::config::secret_file::file_env_names());
     out
 }
 

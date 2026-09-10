@@ -125,6 +125,14 @@ async fn serve(
         }
         helpers::startup_config::choose(config, &cli.config)
     };
+
+    // Credentials mounted as files (`BIRDNET_<KEY>_FILE`), the way Docker and
+    // Kubernetes hand a secret to a process without putting it in the
+    // environment. Resolved here — after the config is chosen, before anything
+    // reads a credential out of it — and the keys that came from a file are
+    // carried to the settings seed below, which must not copy them into the
+    // database.
+    let (config, secret_files) = helpers::resolve_secret_files(config);
     match &config_decision {
         helpers::startup_config::ConfigDecision::Loaded => {}
         helpers::startup_config::ConfigDecision::Reverted { errors, last_good } => {
@@ -348,7 +356,7 @@ async fn serve(
     // configured station is not bounced back through the onboarding wizard.
     // Insert-only, so it never overwrites a setting the operator later changed
     // in the UI.
-    helpers::seed_db_settings_from_config(config.as_ref(), &cli, &state);
+    helpers::seed_db_settings_from_config(config.as_ref(), &cli, &state, &secret_files.resolved());
 
     // Overlay the admin-UI settings (SQLite `settings` table) on top of the
     // file config so settings saved in the web UI actually take effect. Without

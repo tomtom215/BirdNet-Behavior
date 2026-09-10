@@ -7,10 +7,15 @@
 //!
 //! The [`validate`] submodule provides range and shape checks for the parsed
 //! values so misconfiguration surfaces at startup instead of at first use.
+//!
+//! The [`secret_file`] submodule accepts a credential as the contents of a
+//! file named by `BIRDNET_<KEY>_FILE`, which is how Docker and Kubernetes hand
+//! a secret to a process without putting it in the environment.
 
 pub mod known_keys;
 pub mod locale;
 pub mod redact;
+pub mod secret_file;
 pub mod validate;
 
 use std::collections::HashMap;

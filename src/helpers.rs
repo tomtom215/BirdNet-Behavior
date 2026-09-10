@@ -28,6 +28,7 @@ pub mod instance_lock;
 pub mod offsite;
 pub mod private_mode;
 pub mod resolve;
+mod secret_files;
 mod settings_overlay;
 pub mod startup_config;
 mod state;
@@ -47,6 +48,7 @@ pub use db::{
     run_rebuild_species_summary,
 };
 pub use private_mode::{PrivateModeSetting, init_private_mode, resolve_private_mode};
+pub use secret_files::resolve_secret_files;
 pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
 pub use state::{
     init_i18n, init_image_cache, init_site_name, init_species_codes, run_refresh_extension,

@@ -38,6 +38,58 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a credential can be mounted as a file instead of set in the environment
+
+**`BIRDNET_<KEY>_FILE` for every outbound credential** (`G-28`, first half).
+A notification URL carries its bot token *inside* the URL, and an environment
+variable is readable by `docker inspect`, by anything holding the process's
+`/proc/<pid>/environ`, and by anything that logs its own environment. Docker
+(`secrets:` → `/run/secrets/<name>`) and Kubernetes (a projected secret volume)
+both solve this by mounting the secret as a file, with a `<VAR>_FILE` variable
+naming the path. This station had no way to accept that.
+
+Five keys take it: `NOTIFY_URLS`, `APPRISE_URL`, `BIRDWEATHER_TOKEN`,
+`MQTT_PASSWORD` and `HEARTBEAT_URL` — every credential that leaves the station,
+which is to say every value where knowing it is enough to post as this station.
+
+Four decisions, each gated:
+
+- **The direct value wins**, and the file is reported rather than read. The rest
+  of startup resolves the direct value first anyway, so a resolver that
+  preferred the file would be describing a station other than the one running.
+- **An unreadable or empty file leaves the feature off, at *error* level.** A
+  projected volume that has not been populated yet reads as a zero-length file,
+  and accepting that as "the password is the empty string" sends the station off
+  to authenticate with nothing. More to the point, a station that sends no
+  notifications because a mount path had a typo looks exactly like one that was
+  told to be quiet.
+- **Surrounding whitespace is trimmed, inner newlines are kept.** Secret files
+  end with a newline; a bot token with `\n` glued to it fails at the far end,
+  which is far harder to diagnose than an empty one. A `NOTIFY_URLS` file may
+  still list one URL per line.
+- **A file-supplied value is never seeded into the `settings` table.** That
+  table is in the database, and the database is in every backup, restore bundle
+  and support archive — which is the exposure the mount exists to avoid. The
+  first-run seed now takes the list of file-resolved keys and skips them.
+
+The other half of `G-28` — parking a notification in `outbound_queue` while a
+destination's circuit is open — was **not** implemented, because reading the
+code showed the gap analysis was wrong about the consequence. An alert about the
+station is not lost when a circuit is open: `src/integrations/announce.rs` holds
+it in an outbox keyed by episode and retries at every poll until it goes out,
+and `Alert::body_at` already appends "(Raised N minutes ago; earlier attempts to
+send this did not reach a destination.)" so a late alert says so. The finding,
+and the two narrow things that really are left, are recorded in
+`docs/FEATURE_GAP_ANALYSIS.md`.
+
+Environment only, deliberately: this is a container-deployment facility, and a
+station editing `birdnet.conf` by hand can put the secret in the file it is
+already editing. `APPRISE_CONFIG` is excluded because `APPRISE_CONFIG_FILE`
+already exists and means the path of an Apprise *configuration* file; giving one
+variable name two meanings is how an operator's config gets read as a
+credential, and a gate now asserts no indirect key can collide that way. The
+SMTP password is excluded because it lives only in the settings table.
+
 ### Added — a station can say which source Listen plays
 
 **A station-wide default live-stream source** (`N-3`). `?source_id=` has let a

@@ -35,6 +35,55 @@ on the next restart.
 The **Send Test Push Notification** button under **Station → Alerts** (`/station/alerts`) uses the values saved on the
 Settings page, so a successful test means live detections will notify too.
 
+### Keeping the credential out of the environment
+
+A notification URL carries its bot token *inside* the URL, and an environment
+variable is readable by `docker inspect`, by anything with the process's
+`/proc/<pid>/environ`, and by anything that logs its own environment. Docker and
+Kubernetes both solve this by mounting the secret as a file; this station accepts
+that convention:
+
+| Instead of | Set | To the path of a file holding the value |
+|---|---|---|
+| `BIRDNET_NOTIFY_URLS` | `BIRDNET_NOTIFY_URLS_FILE` | e.g. `/run/secrets/birdnet_notify_urls` |
+| `BIRDNET_APPRISE_URL` | `BIRDNET_APPRISE_URL_FILE` | |
+| `BIRDNET_BIRDWEATHER_TOKEN` | `BIRDNET_BIRDWEATHER_TOKEN_FILE` | |
+| `BIRDNET_MQTT_PASSWORD` | `BIRDNET_MQTT_PASSWORD_FILE` | |
+| `BIRDNET_HEARTBEAT_URL` | `BIRDNET_HEARTBEAT_URL_FILE` | |
+
+```yaml
+services:
+  birdnet:
+    environment:
+      BIRDNET_NOTIFY_URLS_FILE: /run/secrets/birdnet_notify_urls
+    secrets:
+      - birdnet_notify_urls
+secrets:
+  birdnet_notify_urls:
+    file: ./secrets/notify_urls.txt
+```
+
+Four things worth knowing, each reported in the journal at startup:
+
+- **The direct value wins.** Set both and the file is not read; the station says
+  so at warning level rather than silently choosing one.
+- **A file that cannot be read, or that is empty, leaves the feature off** — and
+  says so at *error* level. A station that sends no notifications because a
+  mount path had a typo looks exactly like one that was told to be quiet, so
+  this is the one case worth an error line.
+- **Surrounding whitespace is trimmed**, so the trailing newline every secret
+  file has is harmless; inner newlines are kept, so a `NOTIFY_URLS` file may
+  list one URL per line.
+- **A value read from a file is not copied into the settings table**, so it
+  stays out of the database and out of every backup, restore bundle and support
+  archive taken from it. It will not appear on the Settings page either — which
+  is the point.
+
+`BIRDNET_APPRISE_CONFIG` has no `_FILE` form, because `APPRISE_CONFIG_FILE`
+already exists and means something different: the path of an `apprise`
+configuration file, which `apprise` itself reads. The SMTP password has none
+either — it lives only in the settings table, set from the admin UI.
+
 ## MQTT & Home Assistant
 
 A pure-Rust MQTT 3.1.1 client publishes detections to any broker (Mosquitto, Node-RED, EMQX, …) — no external broker library required.

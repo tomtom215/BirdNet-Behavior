@@ -490,6 +490,7 @@ pub fn overlay_db_settings(config: Option<Config>, state: &AppState) -> Option<C
 fn settings_to_seed(
     config: &Config,
     existing: &HashSet<String>,
+    from_secret_file: &[&str],
 ) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut out = Vec::new();
     for &(ui_key, wiring, category) in SETTING_SPECS {
@@ -502,6 +503,14 @@ fn settings_to_seed(
         let Wiring::Bridged(config_key) = wiring else {
             continue;
         };
+        // A value that came from a mounted secret file is in the config only
+        // because `resolve_secret_files` put it there. Copying it into the
+        // settings table would write the credential into the database — and so
+        // into every backup of it — which is the precise thing an operator
+        // choosing `BIRDNET_<KEY>_FILE` was avoiding.
+        if from_secret_file.contains(&config_key) {
+            continue;
+        }
         if let Some(value) = config.get(config_key) {
             let value = value.trim();
             if !value.is_empty() {
@@ -567,7 +576,12 @@ fn cli_station_settings(cli: &Cli) -> Vec<(&'static str, String, SettingsCategor
 /// row is left untouched, so this never clobbers a setting the operator changed
 /// in the UI, and it is safe to call on every startup. Returns the number of
 /// rows seeded.
-pub fn seed_db_settings_from_config(config: Option<&Config>, cli: &Cli, state: &AppState) -> usize {
+pub fn seed_db_settings_from_config(
+    config: Option<&Config>,
+    cli: &Cli,
+    state: &AppState,
+    from_secret_file: &[&str],
+) -> usize {
     state.with_db(|conn| {
         // The table may not exist yet on a brand-new database; treat that (and
         // any read error) as "nothing already present" rather than failing.
@@ -581,7 +595,7 @@ pub fn seed_db_settings_from_config(config: Option<&Config>, cli: &Cli, state: &
         // seed order (and the logged count) deterministic.
         let mut merged: BTreeMap<&'static str, (String, SettingsCategory)> = BTreeMap::new();
         if let Some(config) = config {
-            for (key, value, category) in settings_to_seed(config, &existing) {
+            for (key, value, category) in settings_to_seed(config, &existing, from_secret_file) {
                 merged.insert(key, (value, category));
             }
         }
@@ -941,7 +955,7 @@ mod tests {
         // under the UI keys + categories the admin form reads.
         let config =
             Config::parse("LATITUDE=42.36\nRTSP_URL=rtsp://cam/stream\nCONFIDENCE=0.7").unwrap();
-        let seed = settings_to_seed(&config, &HashSet::new());
+        let seed = settings_to_seed(&config, &HashSet::new(), &[]);
 
         let lat = seed
             .iter()
@@ -972,7 +986,7 @@ mod tests {
         let config = Config::parse("LATITUDE=42.36\nLONGITUDE=-71.06").unwrap();
         let mut existing = HashSet::new();
         existing.insert("latitude".to_string());
-        let seed = settings_to_seed(&config, &existing);
+        let seed = settings_to_seed(&config, &existing, &[]);
         assert!(!seed.iter().any(|(k, _, _)| *k == "latitude"));
         assert!(seed.iter().any(|(k, _, _)| *k == "longitude"));
     }
@@ -983,11 +997,43 @@ mod tests {
         config.set("ALSA_CARD", ""); // installer skipped → empty, must not seed
         config.set("SOME_UNMAPPED_KEY", "x"); // not a bridge key → never seeded
         config.set("LATITUDE", "51.5");
-        let seed = settings_to_seed(&config, &HashSet::new());
+        let seed = settings_to_seed(&config, &HashSet::new(), &[]);
         assert!(!seed.iter().any(|(k, _, _)| *k == "alsa_device"));
         assert!(seed.iter().any(|(k, _, _)| *k == "latitude"));
         // Only mapped UI keys are ever produced.
         assert!(seed.iter().all(|(k, _, _)| config_key_for(k).is_some()));
+    }
+
+    /// A credential that came from a mounted file is not copied into the
+    /// settings table.
+    ///
+    /// The seed's whole job is to make an installed value editable in the web
+    /// UI, and for every ordinary setting that is right. For a secret the
+    /// operator deliberately mounted as a file it is the opposite: writing it
+    /// into the `settings` table puts it in the database, and so in every
+    /// backup, restore bundle and support archive taken from it — which is the
+    /// exact exposure `BIRDNET_<KEY>_FILE` exists to avoid.
+    #[test]
+    fn a_credential_read_from_a_file_is_not_seeded_into_the_database() {
+        let config = Config::parse("NOTIFY_URLS=ntfy://ntfy.sh/garden\nLATITUDE=51.5").unwrap();
+
+        let seeded_normally = settings_to_seed(&config, &HashSet::new(), &[]);
+        assert!(
+            seeded_normally.iter().any(|(k, _, _)| *k == "notify_urls"),
+            "the counterpart: a value that did NOT come from a file is still seeded, so \
+             the assertion below is about the exclusion and not about the key having \
+             stopped being seeded at all"
+        );
+
+        let seeded_from_file = settings_to_seed(&config, &HashSet::new(), &["NOTIFY_URLS"]);
+        assert!(
+            !seeded_from_file.iter().any(|(k, _, _)| *k == "notify_urls"),
+            "a file-supplied credential must not reach the settings table"
+        );
+        assert!(
+            seeded_from_file.iter().any(|(k, _, _)| *k == "latitude"),
+            "and the exclusion must be per key, not a switch that stops seeding"
+        );
     }
 
     #[test]
@@ -995,7 +1041,7 @@ mod tests {
         // Round-trip invariant: a value seeded under a UI key overlays back onto
         // exactly the config key it was read from.
         let config = Config::parse("LATITUDE=12.34").unwrap();
-        let seed = settings_to_seed(&config, &HashSet::new());
+        let seed = settings_to_seed(&config, &HashSet::new(), &[]);
         let (ui_key, value, _) = seed
             .iter()
             .find(|(k, _, _)| *k == "latitude")
