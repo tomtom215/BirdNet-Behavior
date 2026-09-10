@@ -38,6 +38,52 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the settings-key guard is now general, and it found a key outside it
+
+**A source-scanning drift gate for the `settings` table** (`G-34`, the part
+worth having). The `settings` table is a bag of strings, so a key written under
+a name nothing reads is indistinguishable, from the operator's side, from one
+that works: the control saves, the page redraws, the value is in the database,
+and nothing happens. This project has shipped that twice — twenty admin-form
+fields that were editable and inert, and a first-run wizard field
+(`notification_mode`, a four-way choice of how often to be alerted) that a
+non-technical operator picked on their first day and which governed nothing.
+
+Each fix added a guard for *that writer*, from a list maintained by hand:
+`SETTINGS_FORM_KEYS`, then `ONBOARDING_SETTING_KEYS`, then
+`AUDIO_ADMIN_SETTING_KEYS`. Three lists, and a fourth writer outside all of
+them.
+
+The new gates read the source instead. `every_settings_key_written_anywhere_is_classified`
+finds every `settings::set` in production code — resolving a key given as a
+named constant, and excluding `#[cfg(test)]` fixtures, both of which the scan's
+own self-test pins — and fails when one is not classified in `SETTING_SPECS`.
+`every_subsystem_owned_setting_is_read_somewhere` is the other direction: a key
+classified as read straight out of the settings table by a named subsystem must
+have a read somewhere in the source, so a subsystem that stops reading a key it
+owns is caught rather than leaving an inert control behind. Call sites that
+build their keys at runtime (`set_many`) are allowlisted by file with a note
+saying what bounds their keys, so a *new* dynamic writer trips the gate.
+
+It found one on its first run: **`analytics_exclude_imports`**, written from
+`/admin/migration` and read by both analytics engines, was classified nowhere —
+so nothing was checking that the "exclude imported detections" control did
+anything. It does; it is now classified, and would have been caught the day it
+stopped.
+
+It also reported `timezone` as owned-but-never-read, which was the gate's own
+message coming true from the other side: `--doctor` reads it through
+`setting_from_db(config, "timezone")`, a shape the scan did not know. Taught.
+
+Not done, with a reason rather than an omission: the JSON Schema artifact the
+finding also asks for. `SETTING_SPECS` records a key, its wiring and its
+category — no types, defaults or descriptions — so a schema derived from it
+today would say `"type": "string"` about every setting and assert nothing.
+Adding that metadata to ~50 specs is a separate piece of work, and the drift it
+would catch between `.env.example`, the config keys and the readers is already
+gated from the env-variable side by `helpers::env_keys` and from the config-key
+side by `tests/every_config_key_is_known.rs`.
+
 ### Added — a credential can be mounted as a file instead of set in the environment
 
 **`BIRDNET_<KEY>_FILE` for every outbound credential** (`G-28`, first half).
