@@ -15,6 +15,12 @@
     {{status_class}}  — "live" | "starting" | "paused" | "down"
     {{status_label}}  — "Capturing" | "Starting…" | "Paused (schedule)" | "Down"
     {{meta_line}}     — "up 6d 04h" | "EHOSTUNREACH · retry in 38s" | …
+    listen_default    — (written without braces here on purpose: this comment
+                        goes through the same substitution the markup does, so
+                        naming the placeholder would render a second copy of
+                        the control inside this comment) — either a "Listen
+                        default" pill, when this source is the station's
+                        default for /stream, or the button that makes it one.
 
   Each row polls /admin/audio/sources/{id}/probe every 8s for live status.
 -->
@@ -86,6 +92,15 @@
               hx-post="/admin/audio/sources/{{id}}/restart"
               hx-target="closest li"
               hx-swap="outerHTML">Restart</button>
+      <span class="audio-source__sep" aria-hidden="true"></span>
+      <!--
+        Which source the Listen button plays when the listener has not picked
+        one. Server-rendered as either a pill (this is the default) or a button
+        (make it the default); the POST answers with both source lists as
+        out-of-band swaps, so the row that *was* the default loses its pill in
+        the same exchange.
+      -->
+      {{listen_default}}
       <span class="audio-source__sep" aria-hidden="true"></span>
       <!--
         Remove goes through the O-17 confirmation modal — note the dual

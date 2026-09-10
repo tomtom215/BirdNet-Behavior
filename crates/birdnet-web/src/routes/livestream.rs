@@ -205,8 +205,10 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 /// listen-now page uses this to switch between configured mics / streams
 /// without restarting the daemon. An unknown id returns `404`.
 ///
-/// Without `?source_id=`, the first non-disabled `audio_sources` row wins
-/// (DB-driven default). On a station whose `audio_sources` table is still
+/// Without `?source_id=`, the station's configured default wins: the
+/// `audio_sources` row named by the `livestream_source` setting, or the first
+/// non-disabled row when that setting is unset or names a row that has since
+/// been removed or disabled. On a station whose `audio_sources` table is still
 /// empty, `/stream` returns `503` until an operator adds a row through
 /// `/admin/audio` — the new row then takes over without a restart.
 async fn livestream(State(state): State<AppState>, Query(params): Query<StreamParams>) -> Response {
@@ -665,19 +667,68 @@ fn resolve_by_source_id(state: &AppState, id: &str) -> Option<ResolvedSource> {
     pick_by_id(&sources, id)
 }
 
+/// The settings key naming the `audio_sources` row `/stream` serves by default.
+///
+/// Empty, or absent, means "whichever source comes first" — the behaviour
+/// before this setting existed, and still the behaviour of a station with one
+/// source, which is most of them.
+pub const LIVESTREAM_SOURCE_SETTING: &str = "livestream_source";
+
 /// Resolve the default audio source when no `?source_id=` is supplied.
 ///
-/// DB-only: the first non-disabled `audio_sources` row (in `created_at ASC`
-/// order) wins. Returns `None` when the table is empty or unreadable, in which
-/// case the caller responds with `503 Service Unavailable`. (The legacy
-/// single-string `state.audio_source()` fallback was retired in O-13 — sources
-/// are managed exclusively through the `audio_sources` table now.)
+/// DB-only, in two steps: the row named by [`LIVESTREAM_SOURCE_SETTING`] if it
+/// is set and still enabled, else the first non-disabled `audio_sources` row
+/// (in `created_at ASC` order). Returns `None` when the table is empty or
+/// unreadable, in which case the caller responds with `503 Service
+/// Unavailable`. (The legacy single-string `state.audio_source()` fallback was
+/// retired in O-13 — sources are managed exclusively through the
+/// `audio_sources` table now.)
 fn resolve_default_source(state: &AppState) -> Option<ResolvedSource> {
     use birdnet_db::audio_sources::AudioSourceStore;
-    let sources = state
-        .with_db(|conn| AudioSourceStore::list(conn).ok())
-        .unwrap_or_default();
-    pick_first_enabled(&sources)
+    let (sources, configured) = state.with_db(|conn| {
+        (
+            AudioSourceStore::list(conn).unwrap_or_default(),
+            birdnet_db::settings::get_or(conn, LIVESTREAM_SOURCE_SETTING, "").unwrap_or_default(),
+        )
+    });
+    pick_default(&sources, &configured)
+}
+
+/// The id of the source `/stream` serves for a request with no `?source_id=`.
+///
+/// Test-only, and deliberately so: it exists for the gate in
+/// `routes::admin::audio` that asserts the key the audio page *writes* is the
+/// key this resolver *reads*. Those two live in different modules, and the pure
+/// `pick_default` tests below cannot see a disagreement about the key's
+/// spelling — which is exactly how a setting comes to be stored and never read.
+#[cfg(test)]
+pub(crate) fn default_source_id(state: &AppState) -> Option<String> {
+    resolve_default_source(state).map(|resolved| resolved.id)
+}
+
+/// Pure helper: the configured default if it is still there, else the first
+/// enabled source.
+///
+/// The fallback is deliberate rather than a `404`. This is the path a visitor
+/// reaches by pressing Listen with no choice of their own, and a station whose
+/// named default was unplugged last week should keep streaming the microphone
+/// it still has — silence, or an error page, would be a worse answer to
+/// "let me hear the garden" than the other microphone.
+fn pick_default(
+    sources: &[birdnet_db::audio_sources::AudioSource],
+    configured: &str,
+) -> Option<ResolvedSource> {
+    if !configured.is_empty() {
+        if let Some(resolved) = pick_by_id(sources, configured) {
+            return Some(resolved);
+        }
+        tracing::warn!(
+            configured,
+            "the configured default live-stream source is missing or disabled; \
+             falling back to the first enabled source"
+        );
+    }
+    pick_first_enabled(sources)
 }
 
 /// Pure helper: walk `sources` for an id-match that's still enabled.
@@ -872,6 +923,70 @@ mod tests {
         assert_eq!(picked.device, "default");
         assert_eq!(picked.id, "src_active");
         assert!(matches!(picked.kind, Some(SourceKind::PipeWire)));
+    }
+
+    // ---- the station's default source (N-3) --------------------------------
+
+    /// The point of the setting: a two-microphone station says once which one a
+    /// visitor pressing Listen should hear, and it is not simply the oldest row.
+    #[test]
+    fn the_configured_default_beats_the_first_row() {
+        let sources = vec![
+            sample("src_feeder", SourceKind::UsbAlsa, "plughw:0", false),
+            sample("src_nestbox", SourceKind::Rtsp, "rtsp://box/feed", false),
+        ];
+        let picked = pick_default(&sources, "src_nestbox").expect("a source");
+        assert_eq!(picked.id, "src_nestbox");
+        assert_eq!(picked.device, "rtsp://box/feed");
+    }
+
+    /// The counterpart, and the behaviour of every station that never sets one:
+    /// no default configured means the first enabled row, exactly as before.
+    #[test]
+    fn no_configured_default_is_the_first_enabled_row() {
+        let sources = vec![
+            sample("src_feeder", SourceKind::UsbAlsa, "plughw:0", false),
+            sample("src_nestbox", SourceKind::Rtsp, "rtsp://box/feed", false),
+        ];
+        assert_eq!(
+            pick_default(&sources, "").expect("a source").id,
+            "src_feeder"
+        );
+    }
+
+    /// A default naming a row that has since been disabled falls back rather
+    /// than serving nothing.
+    ///
+    /// Silence — or a 503 — would be a worse answer to "let me hear the garden"
+    /// than the microphone the station still has.
+    #[test]
+    fn a_default_that_is_disabled_falls_back_to_a_working_source() {
+        let sources = vec![
+            sample("src_feeder", SourceKind::UsbAlsa, "plughw:0", false),
+            sample("src_nestbox", SourceKind::Rtsp, "rtsp://box/feed", true),
+        ];
+        assert_eq!(
+            pick_default(&sources, "src_nestbox").expect("a source").id,
+            "src_feeder"
+        );
+    }
+
+    /// The same for a default naming a row that was removed outright.
+    #[test]
+    fn a_default_that_no_longer_exists_falls_back() {
+        let sources = vec![sample("src_feeder", SourceKind::UsbAlsa, "plughw:0", false)];
+        assert_eq!(
+            pick_default(&sources, "src_gone").expect("a source").id,
+            "src_feeder"
+        );
+    }
+
+    /// And with nothing to fall back to, the caller still gets `None` — which
+    /// is the 503 an empty station has always answered with.
+    #[test]
+    fn a_default_on_a_station_with_no_sources_is_still_none() {
+        assert!(pick_default(&[], "src_gone").is_none());
+        assert!(pick_default(&[], "").is_none());
     }
 
     // ---- ffmpeg input selection (the point of the whole change) ------------

@@ -131,6 +131,11 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         Wiring::Bridged("FREQ_SHIFT"),
         SettingsCategory::Audio,
     ),
+    (
+        "livestream_source",
+        Wiring::OwnedBy("birdnet_web::routes::livestream (the station's default /stream source)"),
+        SettingsCategory::Audio,
+    ),
     // ── Station / location ─────────────────────────────────────────────────
     (
         "latitude",
@@ -618,7 +623,15 @@ mod tests {
     /// The onboarding wizard's keys live here too: it persists settings the
     /// admin form does not expose (the first-run completion flag, the detected
     /// timezone), and they are legitimate rather than orphaned.
-    const NON_FORM_BRIDGE_KEYS: &[&str] = &["alsa_devices", "timezone", "onboarding_complete"];
+    const NON_FORM_BRIDGE_KEYS: &[&str] = &[
+        "alsa_devices",
+        "timezone",
+        "onboarding_complete",
+        // Written from `/admin/audio`, where the source it names is chosen from
+        // a list of real rows rather than typed as an id. Covered by
+        // `audio_admin_keys_are_all_classified` below.
+        "livestream_source",
+    ];
 
     #[test]
     fn settings_form_keys_are_all_classified() {
@@ -665,6 +678,33 @@ mod tests {
             "onboarding-wizard keys with no wiring classification: {unclassified:?}\n\
              The setup wizard must not persist a setting nothing reads. Add each \
              to SETTING_SPECS as Wiring::Bridged(config key) or \
+             Wiring::OwnedBy(subsystem), or stop writing it."
+        );
+    }
+
+    /// And for the third place settings get written.
+    ///
+    /// `/admin/audio` writes `livestream_source` — the source `/stream` serves
+    /// when the listener has not chosen one — because the value is an
+    /// `audio_sources` row id, which belongs beside the rows and not in a text
+    /// field on the settings page. That made the audio page a settings writer
+    /// with no membership of the guard the other two writers have, which is
+    /// how a key nothing reads gets shipped.
+    #[test]
+    fn audio_admin_keys_are_all_classified() {
+        use birdnet_web::routes::admin::audio::AUDIO_ADMIN_SETTING_KEYS;
+
+        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let unclassified: Vec<&str> = AUDIO_ADMIN_SETTING_KEYS
+            .iter()
+            .copied()
+            .filter(|key| !classified.contains(key))
+            .collect();
+
+        assert!(
+            unclassified.is_empty(),
+            "audio-admin keys with no wiring classification: {unclassified:?}\n\
+             Add each to SETTING_SPECS as Wiring::Bridged(config key) or \
              Wiring::OwnedBy(subsystem), or stop writing it."
         );
     }

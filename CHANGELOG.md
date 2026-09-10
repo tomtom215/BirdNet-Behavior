@@ -38,6 +38,40 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a station can say which source Listen plays
+
+**A station-wide default live-stream source** (`N-3`). `?source_id=` has let a
+*listener* pick a source since it shipped, and the Recordings picker builds it —
+but a station could not say once, for everyone, which of its microphones people
+actually want to hear. A two-microphone station (feeder and nest box) has one of
+each, and every visitor pressing Listen got whichever row happened to be oldest.
+
+`livestream_source` names the default `audio_sources` row. `/stream` with no
+`?source_id=` serves it if it is still enabled, and otherwise falls back to the
+first working source — deliberately, because this is the path a visitor reaches
+by pressing Listen with no choice of their own, and a station whose named
+default was unplugged last week should keep streaming the microphone it still
+has rather than answering with silence or a 503. The journal says when the
+fallback fires.
+
+It is set with a **Make listen default** button on each row of `/admin/audio`,
+not a field on the settings page: the value is an `audio_sources` row id, which
+belongs beside the rows rather than typed into a text box. The POST answers with
+*both* source lists as out-of-band swaps, because the row losing the pill is
+usually in the other one — making an RTSP camera the default takes the pill off
+a microphone. A disabled source is neither offered the choice nor accepted if
+asked for it, since `/stream` skips disabled rows and the setting would then
+name a default that is not the default. Audited as
+`audio.source.listen_default`.
+
+That made `/admin/audio` a **third writer of the settings table**, and the guard
+that fails when a settings key nothing reads is shipped covered only the admin
+form and the first-run wizard — the two writers whose past mistakes created it
+(twenty inert form fields, and one wizard field governing nothing).
+`AUDIO_ADMIN_SETTING_KEYS` and a third classification gate extend it to this
+one. `routes/admin/migration.rs` writes `exclude_imports` and is still outside
+that guard; closing that properly is G-34's drift gate, which is still open.
+
 ### Added — one capture source can be restarted without restarting the station
 
 **A per-source restart** (`G-32`). The only remedy a station had for one
