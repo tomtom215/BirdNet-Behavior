@@ -40,6 +40,47 @@
 //! usable dawn chorus for each one, and it is not needed to catch a bark that
 //! straddles a boundary — the pipeline's chunks overlap, so such a bark is
 //! present in both chunks and each is judged on its own evidence.
+//!
+//! # The remember window (`G-17`)
+//!
+//! The paragraph above is right about a *bark*, and it leaves something
+//! uncovered. A dog that barks for a minute is not one bark: it is a bark, a
+//! gap, a bark, a gap. In the gaps there is no `Dog` above threshold, so the
+//! chunk filter has nothing to fire on — and the classifier, still hearing the
+//! tail and the room, produces the same phantom species it produced during the
+//! bark. The chunk filter silences the barks and lets the gaps through, which
+//! is exactly backwards for the record.
+//!
+//! [`NoiseFilter::remember_secs`] closes it. When a watched class suppresses a
+//! chunk, the **species that were in that chunk with it** are remembered, and
+//! for the next `remember_secs` those species alone are dropped from later
+//! chunks.
+//!
+//! **Those species alone, not every species.** A blanket window would be a
+//! mute button: a dog barking through the dawn chorus would erase the chorus,
+//! and the operator would be trading a phantom wren for every real bird in the
+//! minute. What the bark produces is a *specific* wrong answer — the species
+//! its spectrum most resembles, the same one each time — so that is what the
+//! window suppresses. A blackbird singing through the same gap is recorded.
+//!
+//! Off unless `NOISE_REMEMBER_SECS` is set. It removes real detections when a
+//! real bird happens to be the species a dog resembles, and an operator should
+//! opt into that knowingly.
+//!
+//! ## It does not cross recordings, deliberately
+//!
+//! The window is computed from the chunk start times the filter chain already
+//! carries, so it reaches only as far as the end of the recording being
+//! analysed. A bark in the last chunk of one segment does not suppress
+//! anything in the next.
+//!
+//! Carrying it across would mean state on the filter, and this filter is
+//! shared by every audio source: a bark on the garden microphone would then
+//! silence a species on the pond microphone, which is a worse error than the
+//! one being fixed and an invisible one. Within-recording covers the gaps
+//! inside each segment, which at the default fifteen-second segment and
+//! three-second chunks is most of them; the boundary case is stated here
+//! rather than papered over.
 
 use crate::detection::types::Detection;
 
@@ -60,6 +101,11 @@ pub struct NoiseFilter {
     threshold: f32,
     /// Label names to watch, as the operator entered them.
     classes: Vec<String>,
+    /// How long a suppressed chunk's species stay suppressed, in seconds.
+    ///
+    /// `0.0` — the default — means no window at all, and the filter behaves
+    /// exactly as it did before `G-17`.
+    remember_secs: f32,
 }
 
 impl NoiseFilter {
@@ -76,7 +122,29 @@ impl NoiseFilter {
                 .into_iter()
                 .filter(|c| !c.trim().is_empty())
                 .collect(),
+            remember_secs: 0.0,
         }
+    }
+
+    /// Keep suppressing a noisy chunk's species for `secs` afterwards.
+    ///
+    /// A non-positive or non-finite `secs` leaves the window off rather than
+    /// producing one of unbounded length — an operator's typo must not silence
+    /// a species for the rest of the recording.
+    #[must_use]
+    pub fn remembering(mut self, secs: f32) -> Self {
+        self.remember_secs = if secs.is_finite() && secs > 0.0 {
+            secs
+        } else {
+            0.0
+        };
+        self
+    }
+
+    /// How long a suppressed chunk's species stay suppressed. `0.0` is off.
+    #[must_use]
+    pub const fn remember_secs(&self) -> f32 {
+        self.remember_secs
     }
 
     /// A filter watching [`DEFAULT_NOISE_CLASSES`] at `threshold`.
@@ -126,29 +194,96 @@ impl NoiseFilter {
         })
     }
 
-    /// Drop every detection in each chunk a watched class was heard in.
+    /// Drop every detection in each chunk a watched class was heard in, and —
+    /// when [`NoiseFilter::remember_secs`] is set — the species that were in
+    /// such a chunk from later chunks inside the window.
+    ///
+    /// `starts[i]` is the start time in seconds, within this recording, of the
+    /// chunk whose predictions are `predictions[i]`. It is read only by the
+    /// remember window; with the window off, a shorter or empty `starts` is
+    /// harmless and the result is the plain per-chunk verdict.
     #[must_use]
-    pub fn filter_predictions(&self, predictions: &[Vec<Detection>]) -> Vec<Vec<Detection>> {
+    pub fn filter_predictions(
+        &self,
+        starts: &[f32],
+        predictions: &[Vec<Detection>],
+    ) -> Vec<Vec<Detection>> {
         if !self.is_enabled() {
             return predictions.to_vec();
         }
-        predictions
-            .iter()
-            .map(|chunk| {
-                self.offending(chunk).map_or_else(
-                    || chunk.clone(),
-                    |noise| {
-                        tracing::debug!(
-                            class = %noise.common_name,
-                            confidence = noise.confidence,
-                            suppressed = chunk.len(),
-                            "noise filter: discarding a chunk"
-                        );
-                        Vec::new()
-                    },
-                )
-            })
-            .collect()
+
+        // Pass one: which chunks a watched class fired in, and what else was
+        // in them. Computed before anything is dropped, because the species to
+        // remember are precisely the ones about to be discarded.
+        let mut suppressed_at: Vec<(f32, Vec<String>)> = Vec::new();
+        let mut out: Vec<Vec<Detection>> = Vec::with_capacity(predictions.len());
+        for (i, chunk) in predictions.iter().enumerate() {
+            if let Some(noise) = self.offending(chunk) {
+                tracing::debug!(
+                    class = %noise.common_name,
+                    confidence = noise.confidence,
+                    suppressed = chunk.len(),
+                    "noise filter: discarding a chunk"
+                );
+                if self.remember_secs > 0.0
+                    && let Some(&start) = starts.get(i)
+                {
+                    // The noise class itself is not a species to remember;
+                    // everything else in the chunk is what the bark produced.
+                    let species: Vec<String> = chunk
+                        .iter()
+                        .filter(|d| !self.classes.iter().any(|class| names_detection(class, d)))
+                        .map(|d| d.scientific_name.trim().to_ascii_lowercase())
+                        .filter(|n| !n.is_empty())
+                        .collect();
+                    if !species.is_empty() {
+                        suppressed_at.push((start, species));
+                    }
+                }
+                out.push(Vec::new());
+            } else {
+                out.push(chunk.clone());
+            }
+        }
+
+        if self.remember_secs <= 0.0 || suppressed_at.is_empty() {
+            return out;
+        }
+
+        // Pass two: inside the window after each suppressed chunk, drop that
+        // chunk's species and nothing else.
+        for (i, chunk) in out.iter_mut().enumerate() {
+            if chunk.is_empty() {
+                continue;
+            }
+            let Some(&now) = starts.get(i) else {
+                continue;
+            };
+            let remembered: Vec<&String> = suppressed_at
+                .iter()
+                // Strictly after, and within the window. A chunk is never
+                // judged against a noisy chunk that starts later than it.
+                .filter(|(at, _)| now > *at && now - *at <= self.remember_secs)
+                .flat_map(|(_, species)| species.iter())
+                .collect();
+            if remembered.is_empty() {
+                continue;
+            }
+            let before = chunk.len();
+            chunk.retain(|d| {
+                let name = d.scientific_name.trim().to_ascii_lowercase();
+                !remembered.iter().any(|r| **r == name)
+            });
+            if chunk.len() < before {
+                tracing::debug!(
+                    dropped = before - chunk.len(),
+                    kept = chunk.len(),
+                    window_secs = self.remember_secs,
+                    "noise filter: species last heard with the noise are still suppressed"
+                );
+            }
+        }
+        out
     }
 }
 
@@ -206,7 +341,7 @@ mod tests {
         // The whole point: the blackbird in this chunk is what the bark was
         // misheard as, and it is what would otherwise be recorded.
         let f = NoiseFilter::with_default_classes(0.5);
-        let out = f.filter_predictions(&[barked_chunk(0.91)]);
+        let out = f.filter_predictions(&[0.0], &[barked_chunk(0.91)]);
         assert!(out[0].is_empty(), "the misheard bird survived the bark");
     }
 
@@ -216,7 +351,7 @@ mod tests {
         // scores a little on all sorts of things. A filter that fired on any
         // non-zero dog score would silence most of a suburban evening.
         let f = NoiseFilter::with_default_classes(0.5);
-        let out = f.filter_predictions(&[barked_chunk(0.49)]);
+        let out = f.filter_predictions(&[0.0], &[barked_chunk(0.49)]);
         assert_eq!(out[0].len(), 2, "a quiet dog score suppressed the chunk");
     }
 
@@ -226,7 +361,7 @@ mod tests {
         // and by `>=`, and the two differ for an operator who sets the
         // threshold to exactly the score they saw in the log.
         let f = NoiseFilter::with_default_classes(0.5);
-        assert!(f.filter_predictions(&[barked_chunk(0.5)])[0].is_empty());
+        assert!(f.filter_predictions(&[0.0], &[barked_chunk(0.5)])[0].is_empty());
     }
 
     #[test]
@@ -236,7 +371,7 @@ mod tests {
         // dawn chorus for each one.
         let f = NoiseFilter::with_default_classes(0.5);
         let quiet = vec![d("Parus major", "Great Tit", 0.9)];
-        let out = f.filter_predictions(&[quiet.clone(), barked_chunk(0.91), quiet]);
+        let out = f.filter_predictions(&[0.0], &[quiet.clone(), barked_chunk(0.91), quiet]);
         assert_eq!(out[0].len(), 1, "the chunk before the bark was discarded");
         assert!(out[1].is_empty());
         assert_eq!(out[2].len(), 1, "the chunk after the bark was discarded");
@@ -249,7 +384,7 @@ mod tests {
             d("Turdus merula", "Eurasian Blackbird", 0.95),
             d("Siren", "Siren", 0.99),
         ];
-        let out = f.filter_predictions(std::slice::from_ref(&chunk));
+        let out = f.filter_predictions(&[0.0], std::slice::from_ref(&chunk));
         assert_eq!(
             out[0].len(),
             2,
@@ -266,7 +401,7 @@ mod tests {
             d("Siren", "Siren", 0.88),
             d("Turdus merula", "Eurasian Blackbird", 0.82),
         ];
-        assert!(f.filter_predictions(&[chunk])[0].is_empty());
+        assert!(f.filter_predictions(&[0.0], &[chunk])[0].is_empty());
     }
 
     // ── what "enabled" means ────────────────────────────────────────────
@@ -275,7 +410,10 @@ mod tests {
     fn a_zero_threshold_disables_the_filter() {
         let f = NoiseFilter::with_default_classes(0.0);
         assert!(!f.is_enabled());
-        assert_eq!(f.filter_predictions(&[barked_chunk(0.99)])[0].len(), 2);
+        assert_eq!(
+            f.filter_predictions(&[0.0], &[barked_chunk(0.99)])[0].len(),
+            2
+        );
     }
 
     #[test]
@@ -286,7 +424,10 @@ mod tests {
         for classes in [vec![], vec!["   ".to_owned()], vec![String::new()]] {
             let f = NoiseFilter::new(0.5, classes.clone());
             assert!(!f.is_enabled(), "enabled while watching {classes:?}");
-            assert_eq!(f.filter_predictions(&[barked_chunk(0.99)])[0].len(), 2);
+            assert_eq!(
+                f.filter_predictions(&[0.0], &[barked_chunk(0.99)])[0].len(),
+                2
+            );
         }
     }
 
@@ -298,7 +439,7 @@ mod tests {
         let f = NoiseFilter::new(0.5, vec!["  ".into(), "Dog".into()]);
         assert!(f.is_enabled());
         assert_eq!(f.classes(), ["Dog"]);
-        assert!(f.filter_predictions(&[barked_chunk(0.91)])[0].is_empty());
+        assert!(f.filter_predictions(&[0.0], &[barked_chunk(0.91)])[0].is_empty());
     }
 
     // ── name matching ───────────────────────────────────────────────────
@@ -330,7 +471,7 @@ mod tests {
 
         let f = NoiseFilter::new(0.5, vec!["Gun".into()]);
         assert_eq!(
-            f.filter_predictions(&[vec![guineafowl]])[0].len(),
+            f.filter_predictions(&[0.0], &[vec![guineafowl]])[0].len(),
             1,
             "a Guineafowl was silenced by a filter watching for gunshots"
         );
@@ -359,5 +500,175 @@ mod tests {
         // `Noise` and `Environmental` score highly on ordinary quiet
         // recordings; defaulting to them would suppress most of the night.
         assert_eq!(DEFAULT_NOISE_CLASSES, ["Dog"]);
+    }
+}
+
+#[cfg(test)]
+mod remember_tests {
+    use super::NoiseFilter;
+    use crate::detection::types::Detection;
+
+    fn d(sci: &str, com: &str, confidence: f32) -> Detection {
+        Detection {
+            date: "2026-03-14".into(),
+            time: "19:40:00".into(),
+            scientific_name: sci.into(),
+            common_name: com.into(),
+            confidence,
+            start: 0.0,
+            stop: 3.0,
+            week: 11,
+            file_name_extr: None,
+        }
+    }
+
+    /// A bark, and the wren it was misheard as.
+    fn bark() -> Vec<Detection> {
+        vec![
+            d("Dog", "Dog", 0.91),
+            d("Troglodytes troglodytes", "Eurasian Wren", 0.72),
+        ]
+    }
+
+    /// The gap between barks: no dog above threshold, the same phantom wren,
+    /// and a real blackbird singing through it.
+    fn gap() -> Vec<Detection> {
+        vec![
+            d("Troglodytes troglodytes", "Eurasian Wren", 0.69),
+            d("Turdus merula", "Eurasian Blackbird", 0.88),
+        ]
+    }
+
+    fn filter(remember: f32) -> NoiseFilter {
+        NoiseFilter::new(0.5, vec!["Dog".to_owned()]).remembering(remember)
+    }
+
+    /// **The gap this feature exists for.** The bark's chunk is dropped by the
+    /// chunk filter; the gap two seconds later has no dog in it and sails
+    /// through, carrying the same phantom the bark produced.
+    ///
+    /// Observed failing with `remembering(0.0)` — which is the shipped default
+    /// and the behaviour before `G-17`: the wren survived the gap.
+    #[test]
+    fn a_species_the_bark_produced_is_still_suppressed_in_the_gap() {
+        let out = filter(30.0).filter_predictions(&[0.0, 2.0], &[bark(), gap()]);
+        assert!(out[0].is_empty(), "the barking chunk is dropped whole");
+        let names: Vec<&str> = out[1].iter().map(|d| d.common_name.as_str()).collect();
+        assert!(
+            !names.contains(&"Eurasian Wren"),
+            "the phantom the bark produced must not survive the gap: {names:?}"
+        );
+    }
+
+    /// **The counterpart, and the reason this is not a mute button.** A
+    /// blackbird singing through the same gap is a real bird, and a blanket
+    /// window would erase it — trading one phantom wren for every real
+    /// detection in the minute.
+    ///
+    /// Observed failing with the `retain` replaced by `chunk.clear()`: the
+    /// blackbird went too.
+    #[test]
+    fn a_different_species_in_the_same_gap_is_kept() {
+        let out = filter(30.0).filter_predictions(&[0.0, 2.0], &[bark(), gap()]);
+        let names: Vec<&str> = out[1].iter().map(|d| d.common_name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Eurasian Blackbird"],
+            "only the species the bark produced is suppressed: {names:?}"
+        );
+    }
+
+    /// The window is bounded. Past it, the species is recorded again — a dog
+    /// that barked at teatime must not silence a wren all evening.
+    ///
+    /// Observed failing with the `now - *at <= self.remember_secs` test
+    /// removed: the wren was still suppressed a minute later.
+    #[test]
+    fn the_window_ends() {
+        let out = filter(30.0).filter_predictions(&[0.0, 31.0], &[bark(), gap()]);
+        let names: Vec<&str> = out[1].iter().map(|d| d.common_name.as_str()).collect();
+        assert!(
+            names.contains(&"Eurasian Wren"),
+            "past the window the species is recorded again: {names:?}"
+        );
+        // And the boundary itself is inside the window.
+        let out = filter(30.0).filter_predictions(&[0.0, 30.0], &[bark(), gap()]);
+        let names: Vec<&str> = out[1].iter().map(|d| d.common_name.as_str()).collect();
+        assert!(!names.contains(&"Eurasian Wren"), "{names:?}");
+    }
+
+    /// Off by default: a filter built the ordinary way behaves exactly as it
+    /// did before this existed.
+    ///
+    /// Observed failing with `remember_secs: 0.0` changed to a non-zero
+    /// default in `new`: the wren was suppressed on a station that never
+    /// asked for a window.
+    // `==` is the contract: the window is either exactly off or exactly the
+    // number the operator gave. The same reasoning `resolve_f32_with_default`
+    // records for its own comparison.
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn the_window_is_off_unless_it_is_asked_for() {
+        let f = NoiseFilter::new(0.5, vec!["Dog".to_owned()]);
+        assert_eq!(f.remember_secs(), 0.0);
+        let out = f.filter_predictions(&[0.0, 2.0], &[bark(), gap()]);
+        let names: Vec<&str> = out[1].iter().map(|d| d.common_name.as_str()).collect();
+        assert!(names.contains(&"Eurasian Wren"), "{names:?}");
+    }
+
+    /// A typo must not silence a species for the rest of the recording.
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn a_nonsense_window_is_off_rather_than_unbounded() {
+        for bad in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(filter(bad).remember_secs(), 0.0, "{bad}");
+        }
+        assert_eq!(filter(0.5).remember_secs(), 0.5);
+    }
+
+    /// The window looks forward only. A chunk is never judged against a noisy
+    /// chunk that starts after it — otherwise a bark would retroactively erase
+    /// a bird recorded before the dog was let out.
+    ///
+    /// Observed failing with the `now > *at` test removed: the wren in the
+    /// earlier chunk was suppressed by a bark that had not happened yet.
+    #[test]
+    fn a_bark_does_not_reach_backwards() {
+        let out = filter(30.0).filter_predictions(&[0.0, 2.0], &[gap(), bark()]);
+        let names: Vec<&str> = out[0].iter().map(|d| d.common_name.as_str()).collect();
+        assert!(
+            names.contains(&"Eurasian Wren"),
+            "a bark must not suppress what was recorded before it: {names:?}"
+        );
+        assert!(
+            out[1].is_empty(),
+            "the barking chunk itself is still dropped"
+        );
+    }
+
+    /// The noise class itself is not a species to remember. Remembering `Dog`
+    /// would be harmless but meaningless, and it would show up in the log as a
+    /// suppression the operator cannot account for.
+    #[test]
+    fn the_noise_class_is_not_remembered_as_a_species() {
+        // A later chunk in which the dog is below threshold: the chunk filter
+        // does not fire, and nothing should drop it either.
+        let quiet_dog = vec![
+            d("Dog", "Dog", 0.20),
+            d("Turdus merula", "Eurasian Blackbird", 0.9),
+        ];
+        let out = filter(30.0).filter_predictions(&[0.0, 2.0], &[bark(), quiet_dog]);
+        let names: Vec<&str> = out[1].iter().map(|d| d.common_name.as_str()).collect();
+        assert_eq!(names, ["Dog", "Eurasian Blackbird"], "{names:?}");
+    }
+
+    /// Missing start times cannot make the window misbehave: with no time for
+    /// a chunk there is no way to know whether it is inside the window, and
+    /// the safe answer is to leave the chunk alone.
+    #[test]
+    fn a_chunk_with_no_start_time_is_left_alone() {
+        let out = filter(30.0).filter_predictions(&[], &[bark(), gap()]);
+        assert!(out[0].is_empty(), "the chunk filter still fires");
+        assert_eq!(out[1].len(), 2, "without times the window does nothing");
     }
 }

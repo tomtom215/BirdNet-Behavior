@@ -201,7 +201,8 @@ pub fn run_daemon(
     // Create the whole-chunk filters.
     let chunk_filters = ChunkFilters {
         privacy: PrivacyFilter::new(config.privacy_threshold),
-        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone()),
+        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
+            .remembering(config.noise_remember_secs),
         confirmation: config.confirmation,
     };
 
@@ -221,7 +222,18 @@ pub fn run_daemon(
         tracing::info!(
             threshold = config.noise_threshold,
             classes = ?chunk_filters.noise.classes(),
+            remember_secs = chunk_filters.noise.remember_secs(),
             "noise filter enabled"
+        );
+    } else if config.noise_remember_secs > 0.0 {
+        // The window is a rider on the chunk filter and does nothing without
+        // it. Said out loud, because an operator who set only the window has
+        // configured a protection that cannot fire, and silence here would
+        // look exactly like one that is working.
+        tracing::warn!(
+            remember_secs = config.noise_remember_secs,
+            "NOISE_REMEMBER_SECS is set but the noise filter is off; set \
+             NOISE_THRESHOLD above 0 and name at least one class for it to do anything"
         );
     }
     if chunk_filters.confirmation.enabled() {
@@ -645,6 +657,7 @@ mod tests {
             species_lists_provider: None,
             privacy_threshold: 0.0,
             noise_threshold: 0.0,
+            noise_remember_secs: 0.0,
             noise_classes: Vec::new(),
             confirmation: crate::detection::corroboration::ConfirmationLevel::Off,
             latitude: None,

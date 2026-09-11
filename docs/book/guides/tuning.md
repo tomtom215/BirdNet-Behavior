@@ -136,6 +136,30 @@ Beside a road or a fire station, add `Siren` and `Engine`. Do **not** add
 `Noise` or `Environmental`: they score highly on ordinary quiet recordings and
 will suppress most of the night.
 
+That handles the barks. It does not handle the **gaps between** them, and for a
+dog that barks for a minute the gaps are where the damage is: no `Dog` above
+threshold, nothing for the filter to fire on, and the classifier — still
+hearing the tail of the bark and the room — producing the same phantom species
+it produced during it. The filter silences the barks and lets the gaps through.
+
+```ini
+NOISE_REMEMBER_SECS=45           # 0 = off, the default
+```
+
+After a chunk is suppressed, the species that were **in that chunk** stay
+suppressed for this many seconds. Only those species: a blanket window would be
+a mute button, and a dog barking through the dawn chorus would erase the
+chorus. A blackbird singing in the same gap is still recorded.
+
+It is off by default because it does remove real detections whenever a real
+bird happens to be the species a dog resembles. Reach for it when a regular dog
+is filling your log with one particular phantom; 30–60 seconds is a sensible
+starting point.
+
+It reaches to the end of the recording being analysed and no further. Carrying
+it across segments would mean state on a filter that every audio source shares,
+and a bark on the garden microphone must not silence a species on the pond one.
+
 ### 8. One song, one detection
 
 A 15-second recording is five 3-second chunks, so a bird singing throughout is

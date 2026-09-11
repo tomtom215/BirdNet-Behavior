@@ -282,7 +282,7 @@ within each group by how much they change what a station can do.
 | **Why it matters** | "First of the year" is the unit birders actually keep score in, and a station is uniquely good at catching it — it is listening at 04:40 when nobody is awake. Seasonal firsts are the phenology signal this project's DuckDB analytics already exist to measure, so not surfacing them on the dashboard is leaving the best story untold. Hemisphere matters because half the potential users are south of the equator and a northern-defaults season table is wrong by six months for all of them. |
 | **Resolution** | The module and the season table landed as planned, and the API reports the windows alongside the species rather than as a courtesy — a bare "first this season" is unreadable without knowing which season the station thinks it is in, and a station with no latitude honestly returns `season: null`. **What did not land is the wiring.** `crate::tracking` has exactly one consumer, `routes/species.rs:52`; the flags do not reach the today page, the RSS/iCal feeds or the notification trigger vocabulary, so the capability exists but nothing a non-API user looks at shows it. That is the remainder of this item. |
 
-#### G‑17 · Dog-bark suppression window — PARTIAL
+#### G‑17 · Dog-bark suppression window — SHIPPED
 
 | | |
 |---|---|
@@ -290,6 +290,9 @@ within each group by how much they change what a station can do.
 | **Ours** | `crates/birdnet-core/src/detection/noise.rs` drops the whole chunk on a noise class at or above threshold, and its doc comment argues explicitly against spreading to neighbouring chunks (a bark is a few hundred milliseconds and the chunks overlap). |
 | **Verdict** | Our design is better reasoned for the *chunk* case. The upstream `remember` window addresses something different: a dog that barks for a minute produces phantom detections in the gaps *between* barks, where no bark is present to trigger the chunk filter. |
 | **Plan** | Keep the chunk filter as-is; add an optional `noise_remember_secs` that suppresses the specific species that co-occur with the noise class, not all species, for a bounded window after it. Off by default. |
+| **Resolution** | Shipped as planned. `NOISE_REMEMBER_SECS` (a `birdnet.conf` key; no CLI flag) sets the window; the chunk filter is untouched. When a watched class suppresses a chunk, the species that were in it are remembered and dropped from later chunks inside the window — **those species alone**, which is the whole point: a blanket window is a mute button, and a dog barking through the dawn chorus would erase the chorus. A gate asserts a blackbird singing in the same gap survives. Off by default because the window does remove real detections whenever a real bird is the species a dog resembles; setting it without `NOISE_THRESHOLD` logs a warning rather than doing nothing quietly. |
+| **Stateless, and bounded by the recording** | Computed from the chunk start times `ChunkFilters::apply` already carries, so `filter_predictions` stays `&self` and the window reaches only to the end of the recording being analysed. Carrying it across segments would need state on a filter **every audio source shares**, so a bark on the garden microphone could silence a species on the pond one — a worse error than the one being fixed, and invisible. Within-recording covers the gaps inside each segment, which at the default fifteen-second segment and three-second chunks is most of them. The boundary case is stated in the module header rather than papered over. |
+| **The four properties the gates pin** | Forward only (a bark must not retroactively erase a bird recorded before the dog was let out); bounded (a dog that barked at teatime must not silence a wren all evening, boundary inclusive); the noise class itself is not remembered as a species; and a non-finite or non-positive setting leaves the window **off** rather than making it unbounded — an operator's typo must not silence a species for the rest of the recording. |
 
 ### 2.3 Web, security and deployment
 
@@ -550,7 +553,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 22 | ~~Bulk species management page~~ — **shipped** at `/admin/species/manage`, with bulk actions that never touch a locked detection. See N‑4. | N‑4 |
 | 23 | ~~Watchdog tuning~~ — **shipped**, see G‑9 | G‑9 |
 | 24 | ~~Memory-budget capability gating~~ — **shipped**, see G‑33; sizing the analytics *sync* remains | G‑33 |
-| 25 | Noise "remember" window | G‑17 |
+| 25 | ~~Noise "remember" window~~ — **shipped** as `NOISE_REMEMBER_SECS`, suppressing only the species a bark produced. See G‑17. | G‑17 |
 
 ### Tier 3 — programmes, not tickets
 

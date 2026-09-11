@@ -38,6 +38,41 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the gaps between the barks
+
+**`NOISE_REMEMBER_SECS`** (`G-17`). The noise filter discards a chunk a dog
+barked in, and its doc comment argues — correctly — against spreading that to
+neighbouring chunks: a bark is a few hundred milliseconds and the chunks
+overlap.
+
+That is right about a *bark* and leaves something uncovered. A dog that barks
+for a minute is not one bark; it is a bark, a gap, a bark, a gap. In the gaps
+there is no `Dog` above threshold, so the chunk filter has nothing to fire on —
+and the classifier, still hearing the tail and the room, produces the same
+phantom species it produced during the bark. The filter silences the barks and
+lets the gaps through, which is exactly backwards for the record.
+
+After a chunk is suppressed, the species that were **in that chunk with the
+noise** now stay suppressed for `NOISE_REMEMBER_SECS`.
+
+**Those species, not every species.** A blanket window would be a mute button:
+a dog barking through the dawn chorus would erase the chorus, trading one
+phantom wren for every real bird in the minute. What a bark produces is a
+*specific* wrong answer — the species its spectrum most resembles, the same one
+each time — so that is what the window suppresses. A gate asserts a blackbird
+singing in the same gap is still recorded.
+
+Off by default, because it does remove real detections whenever a real bird
+happens to be the species a dog resembles, and that is a trade an operator
+should make knowingly. Setting it without `NOISE_THRESHOLD` logs a warning
+rather than doing nothing quietly.
+
+It reaches to the end of the recording being analysed and no further. Carrying
+it across segments would mean state on a filter every audio source shares, so a
+bark on the garden microphone could silence a species on the pond one — a worse
+error than the one being fixed, and an invisible one. The boundary is stated in
+the module header rather than left to be discovered.
+
 ### Added — one page for "this species has cost me four thousand detections"
 
 **Species storage** (`N-4`), at `/admin/species/manage`. One row per species

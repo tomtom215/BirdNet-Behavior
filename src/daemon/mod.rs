@@ -269,6 +269,12 @@ pub fn start_detection_daemon(
         cli.noise_classes.as_deref(),
         config.and_then(|c| c.get("NOISE_CLASSES")),
     );
+    // Off unless asked for: the window removes real detections whenever a real
+    // bird happens to be the species a dog resembles, and that is a trade an
+    // operator should make knowingly.
+    let noise_remember_secs = config
+        .and_then(|c| c.get_parsed::<f32>("NOISE_REMEMBER_SECS").ok())
+        .unwrap_or(0.0);
 
     let (confirmation, confirmation_warning) = resolve_confirmation_level(
         &cli.confirmation_level,
@@ -352,6 +358,7 @@ pub fn start_detection_daemon(
         privacy_threshold,
         noise_threshold,
         noise_classes,
+        noise_remember_secs,
         confirmation,
         latitude,
         longitude,

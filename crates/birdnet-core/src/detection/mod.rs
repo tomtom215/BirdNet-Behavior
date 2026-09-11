@@ -50,7 +50,7 @@ impl ChunkFilters {
         chunks: &[types::ChunkPrediction],
     ) -> Vec<Vec<types::Detection>> {
         let after_privacy = self.privacy.filter_predictions(chunks);
-        let after_noise = self.noise.filter_predictions(&after_privacy);
+        let after_noise = self.noise.filter_predictions(starts, &after_privacy);
         corroboration::corroborate(self.confirmation, starts, &after_noise)
     }
 

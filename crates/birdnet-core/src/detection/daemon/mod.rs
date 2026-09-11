@@ -625,6 +625,9 @@ pub struct DaemonConfig {
     pub noise_threshold: f32,
     /// Non-bird label names the noise filter watches.
     pub noise_classes: Vec<String>,
+    /// How long a noise-suppressed chunk's species stay suppressed, in seconds
+    /// (`G-17`). `0.0` — the default — is no window at all.
+    pub noise_remember_secs: f32,
     /// How much corroboration from neighbouring windows a species needs before
     /// it is recorded ([`ConfirmationLevel::Off`] = disabled).
     ///
@@ -773,6 +776,7 @@ mod tests {
             privacy_threshold: 0.0,
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
+            noise_remember_secs: 0.0,
             confirmation: ConfirmationLevel::Off,
             latitude: None,
             longitude: None,
