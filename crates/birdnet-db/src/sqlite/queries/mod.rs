@@ -54,9 +54,9 @@ pub use images::{
 };
 pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches};
 pub use maintenance::{
-    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,
-    record_run_result,
+    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM,
+    JOB_INTEGRITY_CHECK, JOB_SESSION_PRUNE, JOB_SPECIES_CAP, JOBS, JobSpec, JobStatus, due_state,
+    job_statuses, last_run_result, last_run_unix, record_run, record_run_result,
 };
 pub use quarantine::{
     ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,

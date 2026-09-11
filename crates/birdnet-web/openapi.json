@@ -314,6 +314,120 @@
         }
       }
     },
+    "/system/jobs": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Scheduled maintenance jobs and their state",
+        "description": "Every job the maintenance loop schedules, with when it last completed, whether it passed, and whether it is due now.\n\nThe list is driven by the job catalogue, **not** by the `maintenance_runs` table. That table holds a row per job that has completed at least once, so a listing built from rows would omit exactly the jobs worth asking about — a station whose backup has never run once would show a short, clean list with the problem absent. A job that has never run appears here with `last_run_unix: null` and `due: true`.\n\n`ok` is tri-state and must not be collapsed. `null` means either “never run” or “this job has no pass/fail to report”; `reports_verdict` separates those from a recorded `false`. A session prune that succeeded and an integrity check that failed both have falsy verdicts and mean opposite things.\n\n`due` is the scheduler's own rule, shared with the loop that runs the jobs rather than re-implemented here. It does not account for the loop's in-process floor, which can only delay a job within one process lifetime, so a job reported as due may already have run since its last recorded completion.",
+        "operationId": "systemJobs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every scheduled maintenance job and its current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "now_unix",
+                    "jobs"
+                  ],
+                  "properties": {
+                    "now_unix": {
+                      "type": "integer",
+                      "format": "int64",
+                      "description": "The clock the `due` flags were computed against."
+                    },
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "job",
+                          "title",
+                          "interval_secs",
+                          "last_run_unix",
+                          "next_due_unix",
+                          "ok",
+                          "reports_verdict",
+                          "due",
+                          "due_reason"
+                        ],
+                        "properties": {
+                          "job": {
+                            "type": "string",
+                            "description": "Its key in `maintenance_runs`."
+                          },
+                          "title": {
+                            "type": "string",
+                            "description": "What it does."
+                          },
+                          "interval_secs": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "How often it should run."
+                          },
+                          "last_run_unix": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "description": "When it last completed; null if it never has."
+                          },
+                          "next_due_unix": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "description": "When it next falls due; null if it has never run."
+                          },
+                          "ok": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "Its last verdict. Null means never run, or no verdict to report — see `reports_verdict`."
+                          },
+                          "reports_verdict": {
+                            "type": "boolean",
+                            "description": "Whether this job records a pass/fail at all. When false, a null `ok` is not a failure."
+                          },
+                          "due": {
+                            "type": "boolean",
+                            "description": "Whether it is due to run."
+                          },
+                          "due_reason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "enum": [
+                              "never_run",
+                              "clock_went_backwards",
+                              "interval_elapsed",
+                              null
+                            ],
+                            "description": "Why it is due, or null when it is not."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [

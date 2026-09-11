@@ -81,6 +81,7 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
 pub const READ_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v2/settings"),
     ("GET", "/api/v2/system/capture"),
+    ("GET", "/api/v2/system/jobs"),
     ("GET", "/api/v2/detections/comments"),
 ];
 
@@ -110,6 +111,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/control/restart", post(restart))
         .route("/api/v2/control/restart-source", post(restart_source))
         .route("/api/v2/system/capture", get(capture_status))
+        .route("/api/v2/system/jobs", get(system_jobs))
         .route(
             "/api/v2/detections/comments",
             get(list_comments).post(add_comment),
@@ -998,6 +1000,70 @@ async fn capture_status(State(state): State<AppState>) -> (StatusCode, Json<Valu
             "published_unix": status.published_unix,
         })),
     )
+}
+
+/// `GET /api/v2/system/jobs` — every scheduled maintenance job and its state.
+///
+/// # Why this is driven by a catalogue and not by the table
+///
+/// `maintenance_runs` holds a row per job that has **completed at least
+/// once**, so enumerating it answers a different question from the one an
+/// operator is asking. A station whose backup job has never run once — the
+/// case most worth knowing about — has no row for it, and a listing built
+/// from rows would show a clean, short list with the problem simply absent.
+/// `birdnet_db::sqlite::job_statuses` walks `JOBS` and looks each row up, so
+/// a job that has never run appears with `last_run` null and `due` set.
+///
+/// `ok` is tri-state and callers must not collapse it: `null` means either
+/// "never run" or "this job has no verdict to report", and `reports_verdict`
+/// is what separates those from a recorded `false`. A session prune that
+/// succeeded and an integrity check that failed both have falsy verdicts and
+/// mean opposite things.
+///
+/// Bearer-gated like its neighbour: a station's maintenance history says when
+/// its backups run and whether they are failing, which is operational detail
+/// about someone's home.
+async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let now = now_unix_secs();
+    let statuses = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::job_statuses(conn, now).unwrap_or_default())
+    })
+    .await
+    .unwrap_or_default();
+
+    let jobs: Vec<Value> = statuses
+        .iter()
+        .map(|s| {
+            let spec = birdnet_db::sqlite::JOBS.iter().find(|j| j.job == s.job);
+            json!({
+                "job": s.job,
+                "title": s.title,
+                "interval_secs": s.interval_secs,
+                "last_run_unix": s.last_run_unix,
+                "next_due_unix": s.next_due_unix,
+                "ok": s.ok,
+                "reports_verdict": spec.is_some_and(|j| j.reports_verdict),
+                "due": s.due.is_some(),
+                "due_reason": s.due.map(|r| match r {
+                    birdnet_db::sqlite::DueReason::NeverRun => "never_run",
+                    birdnet_db::sqlite::DueReason::ClockWentBackwards => "clock_went_backwards",
+                    birdnet_db::sqlite::DueReason::IntervalElapsed => "interval_elapsed",
+                }),
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(json!({ "now_unix": now, "jobs": jobs })),
+    )
+}
+
+/// Seconds since the Unix epoch, saturating rather than wrapping.
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 /// The body of `POST /api/v2/control/restart-source`.

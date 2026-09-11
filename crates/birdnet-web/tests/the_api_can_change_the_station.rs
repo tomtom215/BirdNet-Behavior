@@ -1229,3 +1229,139 @@ async fn a_source_restart_is_recorded_in_the_audit_log() {
     assert_eq!(restart.1, "cam", "the row must name the source");
     assert!(restart.2.contains("via=api"), "metadata: {}", restart.2);
 }
+
+// ---------------------------------------------------------------------------
+// G-32: GET /api/v2/system/jobs
+// ---------------------------------------------------------------------------
+
+/// A fresh station has run no maintenance job yet, and that is exactly the
+/// state worth reporting: its backup has never happened.
+///
+/// This is the gate for the whole design. `maintenance_runs` holds a row per
+/// job that has *completed*, so an endpoint built by enumerating rows would
+/// answer this request with an empty list — a clean, short, entirely
+/// misleading answer. The catalogue is what makes the never-run jobs visible.
+///
+/// Observed failing with `job_statuses` rewritten to enumerate the table
+/// (`SELECT job, last_run_unix, ok FROM maintenance_runs`): `jobs` came back
+/// as `[]` and the assertion on its length went red.
+#[tokio::test]
+async fn a_station_that_has_never_run_a_job_still_lists_every_job() {
+    let (_dir, state) = station(true);
+    let (status, body) = call_method(&state, "GET", "/api/v2/system/jobs", Some(TOKEN), "").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let jobs = v["jobs"].as_array().expect("jobs is an array");
+    assert_eq!(
+        jobs.len(),
+        birdnet_db::sqlite::JOBS.len(),
+        "every catalogued job must be listed, not only the ones with a row: {body}"
+    );
+    for job in jobs {
+        assert!(job["last_run_unix"].is_null(), "{job}");
+        assert_eq!(job["due"], serde_json::json!(true), "{job}");
+        assert_eq!(job["due_reason"], serde_json::json!("never_run"), "{job}");
+        assert!(
+            job["title"].as_str().is_some_and(|t| !t.is_empty()),
+            "a job with no title is not actionable: {job}"
+        );
+    }
+    // The backup is the one an operator most needs to see as never-run.
+    assert!(
+        jobs.iter()
+            .any(|j| j["job"] == serde_json::json!("backup_vacuum")),
+        "{body}"
+    );
+}
+
+/// A recorded failure and a job with no verdict both have a falsy `ok` and
+/// mean opposite things. `reports_verdict` is what tells them apart, and a
+/// client that collapses them would report the session prune as broken on
+/// every healthy station.
+///
+/// Observed failing with `reports_verdict` emitted as a constant `true`: the
+/// session prune's assertion went red.
+#[tokio::test]
+async fn a_failed_job_and_a_job_with_no_verdict_are_distinguishable() {
+    let (_dir, state) = station(true);
+    state.with_db(|conn| {
+        birdnet_db::sqlite::record_run_result(
+            conn,
+            birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
+            1_000_000,
+            Some(false),
+        )
+        .expect("record the failure");
+        birdnet_db::sqlite::record_run(conn, birdnet_db::sqlite::JOB_SESSION_PRUNE, 1_000_000)
+            .expect("record the quiet job");
+    });
+
+    let (status, body) = call_method(&state, "GET", "/api/v2/system/jobs", Some(TOKEN), "").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let jobs = v["jobs"].as_array().expect("jobs");
+    let find = |key: &str| {
+        jobs.iter()
+            .find(|j| j["job"] == serde_json::json!(key))
+            .unwrap_or_else(|| panic!("{key} missing from {body}"))
+            .clone()
+    };
+
+    let failed = find("integrity_check");
+    assert_eq!(failed["ok"], serde_json::json!(false));
+    assert_eq!(failed["reports_verdict"], serde_json::json!(true));
+    assert_eq!(failed["last_run_unix"], serde_json::json!(1_000_000));
+
+    let quiet = find("session_prune");
+    assert!(
+        quiet["ok"].is_null(),
+        "a job with no verdict must not invent one: {quiet}"
+    );
+    assert_eq!(
+        quiet["reports_verdict"],
+        serde_json::json!(false),
+        "without this a client reads the null as a failure: {quiet}"
+    );
+    assert_eq!(quiet["last_run_unix"], serde_json::json!(1_000_000));
+}
+
+/// The counterpart to the never-run gate: a job that has just run is not due,
+/// and says when it next will be. Without it, an endpoint that reported every
+/// job as due would pass the gate above.
+#[tokio::test]
+async fn a_job_that_just_ran_is_not_reported_as_due() {
+    let (_dir, state) = station(true);
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs(),
+    )
+    .expect("fits");
+    state.with_db(|conn| {
+        birdnet_db::sqlite::record_run(conn, birdnet_db::sqlite::JOB_INTEGRITY_CHECK, now)
+            .expect("record");
+    });
+
+    let (_status, body) = call_method(&state, "GET", "/api/v2/system/jobs", Some(TOKEN), "").await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let jobs = v["jobs"].as_array().expect("jobs");
+    let it = jobs
+        .iter()
+        .find(|j| j["job"] == serde_json::json!("integrity_check"))
+        .expect("present");
+    assert_eq!(it["due"], serde_json::json!(false), "{it}");
+    assert!(it["due_reason"].is_null(), "{it}");
+    assert_eq!(
+        it["next_due_unix"],
+        serde_json::json!(now + birdnet_db::sqlite::DAILY_INTERVAL_SECS),
+        "{it}"
+    );
+    // Its neighbours are still never-run, so one job running did not mark all.
+    let prune = jobs
+        .iter()
+        .find(|j| j["job"] == serde_json::json!("session_prune"))
+        .expect("present");
+    assert_eq!(prune["due"], serde_json::json!(true), "{prune}");
+}

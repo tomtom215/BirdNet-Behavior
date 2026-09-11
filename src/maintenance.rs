@@ -561,28 +561,27 @@ async fn due(
         (some, None) | (None, some) => some,
     };
 
-    let Some(last) = last else {
-        return true;
-    };
-
+    // The decision itself lives in `birdnet-db`, beside the job keys, so the
+    // loop that runs a job and `GET /api/v2/system/jobs` that reports it as
+    // overdue cannot disagree (`G-32`). Everything above this line is what a
+    // pure function cannot do: read the timestamp off disk, and apply the
+    // in-process floor.
     let now = now_unix();
-    // A Pi without an RTC boots at the epoch and jumps forward when NTP lands;
-    // a correction can also move the clock *backwards*, leaving a stored
-    // timestamp in the future. Treat that as due and re-anchor on the next
-    // completion — otherwise the job would be suppressed until real time caught
-    // up with the bogus timestamp, potentially for years.
-    if last > now {
-        tracing::warn!(
-            job,
-            last_run_unix = last,
-            now_unix = now,
-            "maintenance last-run timestamp is in the future (clock moved backwards); \
-             running now to re-anchor the schedule"
-        );
-        return true;
+    let interval_secs = i64::try_from(interval.as_secs()).unwrap_or(i64::MAX);
+    match birdnet_db::sqlite::due_state(last, interval_secs, now) {
+        Some(birdnet_db::sqlite::DueReason::ClockWentBackwards) => {
+            tracing::warn!(
+                job,
+                last_run_unix = last,
+                now_unix = now,
+                "maintenance last-run timestamp is in the future (clock moved backwards); \
+                 running now to re-anchor the schedule"
+            );
+            true
+        }
+        Some(_) => true,
+        None => false,
     }
-    let elapsed = now.saturating_sub(last);
-    elapsed >= i64::try_from(interval.as_secs()).unwrap_or(i64::MAX)
 }
 
 /// Persist the completion time for `job`, and record it in the in-process

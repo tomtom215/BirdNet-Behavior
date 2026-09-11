@@ -555,6 +555,76 @@ Restarts an operator asked for are deliberately **not** counted in
 a source that cannot stay up on its own; clicking Restart three times while
 debugging a camera is not that.
 
+### Scheduled maintenance jobs
+
+`GET /api/v2/system/jobs` reports every job the maintenance loop schedules —
+the integrity check, the backup and VACUUM, the offsite upload, the recording
+cap, the log retention pass, the summary drift check and the session prune —
+with when each last completed, whether it passed, and whether it is due now.
+Bearer-gated, for the same reason as `/system/capture`: when a station's
+backups run, and whether they are failing, is operational detail about
+someone's home.
+
+```bash
+curl http://localhost:8502/api/v2/system/jobs \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+```json
+{
+  "now_unix": 1789000000,
+  "jobs": [
+    {
+      "job": "integrity_check",
+      "title": "Database integrity check",
+      "interval_secs": 86400,
+      "last_run_unix": 1788950000,
+      "next_due_unix": 1789036400,
+      "ok": true,
+      "reports_verdict": true,
+      "due": false,
+      "due_reason": null
+    },
+    {
+      "job": "backup_vacuum",
+      "title": "Backup and VACUUM",
+      "interval_secs": 604800,
+      "last_run_unix": null,
+      "next_due_unix": null,
+      "ok": null,
+      "reports_verdict": true,
+      "due": true,
+      "due_reason": "never_run"
+    }
+  ]
+}
+```
+
+**The list is every job, not every job that has run.** `maintenance_runs`
+holds a row per job that has completed at least once, so an endpoint built by
+listing rows would answer with a short, clean list that omitted exactly the
+jobs worth asking about — a station whose backup has never run once would
+simply not mention it. The second entry above is that case.
+
+**`ok` is tri-state; do not collapse it.** `null` means either *never run* or
+*this job has no pass/fail to report*, and `reports_verdict` separates those
+from a recorded `false`. A session prune that succeeded and an integrity check
+that failed both have falsy verdicts and mean opposite things.
+
+`due_reason` is `never_run`, `interval_elapsed`, or `clock_went_backwards` —
+the last meaning the recorded run is in the future, which happens on a Pi with
+no real-time clock that boots at the epoch and then has NTP land. The job runs
+and re-anchors its schedule rather than waiting years for real time to catch
+up.
+
+`due` is the scheduler's own rule, shared with the loop that runs the jobs
+rather than re-implemented here. One thing it cannot see is that loop's
+in-process floor, which stops a station with a full disk re-running a weekly
+VACUUM every half hour; it only ever delays a job within one process lifetime,
+so a job reported as due may already have run since its last recorded
+completion. That is the honest answer from persisted state, which is the only
+state you can inspect.
+
 ### The audit log
 
 Every change is written to the [audit log](../admin/system.md) as

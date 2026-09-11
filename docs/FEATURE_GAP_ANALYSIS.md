@@ -431,7 +431,7 @@ within each group by how much they change what a station can do.
 
 ### 2.5 Operations and platform
 
-#### G‑32 · System introspection APIs — PARTIAL (the per-source restart has shipped)
+#### G‑32 · System introspection APIs — PARTIAL (per-source restart and the jobs API have shipped)
 
 | | |
 |---|---|
@@ -441,7 +441,9 @@ within each group by how much they change what a station can do.
 | **Resolution (per-source restart)** | The supervisor owns its source list privately on its own thread, so this needed a seam in the direction that did not exist: `crates/birdnet-core/src/audio/capture/control.rs` holds the set of pending restart requests the web layer writes and `run_supervisor` drains once per tick (`src/capture/runloop.rs`), the mirror of `status.rs`. A drained request stops the source and clears its fault state, so `reconcile` starts it again on that same tick rather than waiting out a backoff. It goes through the supervisor's *own* start path, so the schedule and quiet window still hold and a request for a paused source is spent rather than overriding them. Three surfaces: a **Restart** button per row on `/admin/audio`, `POST /api/v2/control/restart-source`, and `GET /api/v2/system/capture` to read the labels it takes. Audited as `audio.source.restart`. |
 | **Two things this deliberately does not do** | It does **not** reload the source's settings — `CaptureManager` is built once at supervisor start and `start()` respawns from that stored config, so an edit still needs a service restart. And an operator-requested restart is **not** counted in `restarts_last_hour`, so it never raises `flapping`: that verdict exists to spot a source that cannot stay up on its own. Both are gated, the second with its counterpart. |
 | **A divergence from upstream's URL, on purpose** | Ours takes the source in the JSON body (`POST /api/v2/control/restart-source`, `{"source_id": …}`) rather than upstream's `restart-source/:id`. `WRITE_ROUTES`/`READ_ROUTES` in `routes/api_write.rs` are literal paths read by the CSRF guard, the OpenAPI gate and four test loops that *send a request to each entry*; a `{id}` placeholder would be a path none of them could exercise, which would cost more than matching a URL shape. |
-| **Plan (what remains)** | `/api/v2/system/jobs` over the `maintenance_runs` table. Network interfaces and external media are onboarding aids and follow. |
+| **Resolution (the jobs API)** | `GET /api/v2/system/jobs`, bearer-gated beside `/system/capture`. The substantive decision is that it is **not** "over the `maintenance_runs` table" as the plan worded it: that table holds a row per job that has *completed at least once*, so enumerating it omits precisely the jobs worth asking about — a station whose backup has never run would get a short, clean list with the problem absent. `JOBS` in `crates/birdnet-db/src/sqlite/queries/maintenance.rs` is the catalogue, `job_statuses` walks it and looks each row up, and a never-run job reports `last_run_unix: null` with `due_reason: "never_run"`. A unit test scans that file's own source for `pub const JOB_` declarations and fails when one is missing from the catalogue. `ok` is tri-state — never-run and no-verdict both serialise `null` — so a `reports_verdict` flag ships alongside it, because a session prune that succeeded and an integrity check that failed otherwise look identical. |
+| **A refactor the gap made necessary** | The scheduler's due-rule was three branches (never run, clock moved backwards, interval elapsed) living only in `src/maintenance.rs`, and a reporting surface would have been a second copy of them. It moved to `birdnet_db::sqlite::due_state` and `due` now calls it, keeping only what a pure function cannot do: read the timestamp off disk and apply the in-process floor that stops a full-disk station re-running a weekly VACUUM every half hour. The clock-went-backwards branch had **no test** before this; it has one now. The API cannot see the in-process floor, which is documented rather than hidden: it only ever delays a job within one process lifetime, so a job reported as due may already have run. |
+| **Plan (what remains)** | Per-process view, network interfaces, external media detection and filter rebuild. Network interfaces and external media are onboarding aids. |
 
 #### G‑33 · Hardware profiling and memory policy — SHIPPED (the capability-gating half)
 
@@ -528,7 +530,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 15 | ~~Weather provider trait + Wunderground + yr.no~~ — **shipped** as an enum over three providers; OpenWeather declined with a reason. See G‑26. | G‑26 |
 | 16 | ~~eBird recent-observations client~~ — **shipped**: a cached client, corroboration on two pages, and a stated refusal to let eBird's silence count against a species. See G‑27. | G‑27 |
 | 17 | ~~Loudness normalisation of exports~~ — **shipped**, see G‑5 | G‑5 |
-| 18 | Jobs API over `maintenance_runs` (per-source restart has shipped) | G‑32 |
+| 18 | ~~Jobs API over `maintenance_runs`~~ — **shipped** as `GET /api/v2/system/jobs`, driven by a job catalogue rather than the table so a never-run job is visible. See G‑32. | G‑32 |
 | 19 | `rsync` backup target + daily schedules | G‑30 |
 | 20 | ~~Config schema generation + drift gate~~ — the drift gate has shipped; the schema artifact is declined with a reason. See G‑34. | G‑34 |
 | 21 | ~~A station-wide default source for the live stream~~ — **shipped**, see N‑3 | N‑3 |

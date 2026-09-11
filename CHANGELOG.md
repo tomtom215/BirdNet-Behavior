@@ -38,6 +38,40 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the station can say which of its own jobs have never run
+
+**`GET /api/v2/system/jobs`** (`G-32`, completing it). Seven background jobs
+keep a station healthy — the integrity check, the backup and VACUUM, the
+offsite upload, the recording cap, the log retention pass, the summary drift
+check, the session prune — and until now there was no way to ask about them
+except to read the journal.
+
+The design point is what the list is built from. `maintenance_runs` holds a
+row per job that has **completed at least once**, so an endpoint written the
+obvious way — enumerate the table — answers a different question from the one
+being asked, and answers it reassuringly: a station whose backup has never run
+would return a short, clean list with the problem simply absent. Migration 28's
+own note already said this ("a third state the badge must not confuse with a
+failure") about the same table. So the endpoint walks a job *catalogue* and
+looks each row up, and a job that has never run appears with `last_run_unix:
+null` and `due_reason: "never_run"`. A unit test scans the source for `pub
+const JOB_` declarations and fails if one is missing from the catalogue, so a
+job cannot be added to the scheduler and stay invisible here.
+
+`ok` is tri-state and the response says so: `null` means either *never run* or
+*this job has no pass/fail to report*, and a `reports_verdict` flag separates
+those from a recorded `false`. A session prune that succeeded and an integrity
+check that failed both have falsy verdicts and mean opposite things.
+
+**The due rule now has one definition instead of two.** It moved into
+`birdnet-db` beside the job keys as `due_state`, and `src/maintenance.rs::due`
+calls it for the decision, keeping only what a pure function cannot do: read
+the timestamp off disk and apply its in-process floor. Before this the loop
+that runs a job and anything reporting it as overdue were separate copies of
+three branches — never run, clock moved backwards, interval elapsed — and the
+third of those had no test at all. It has one now, in the crate both callers
+share.
+
 ### Added — eBird says whether anybody else has seen it lately
 
 **eBird recent observations** (`G-27`). The station already had a geographic
