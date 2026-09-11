@@ -575,6 +575,16 @@ pub struct DaemonConfig {
     /// a metadata model indexed identically to the classifier — a matched
     /// BirdNET pair — which the loader verifies rather than assumes.
     pub metadata_labels_path: Option<PathBuf>,
+    /// Optional path to an operator's scientific-name alias file.
+    ///
+    /// Tab-separated `legacy<TAB>canonical` lines, `#` comments skipped. It
+    /// exists because the automatic alignment between the two label files
+    /// cannot place every reclassified species by itself, and a station that
+    /// hits one has no other way to say "these two names are the same bird".
+    /// No table ships: see
+    /// [`crate::inference::vocabulary`] for why the obvious one is neither
+    /// usable here nor useful on the pinned model pair.
+    pub species_aliases_path: Option<PathBuf>,
     /// Species filter configuration (threshold, whitelist, include/exclude).
     pub species_filter: crate::inference::species_filter::SpeciesFilterConfig,
     /// Optional callback re-read on a short TTL to refresh the operator's
@@ -753,6 +763,7 @@ mod tests {
             process_existing: false,
             metadata_model_path: None,
             metadata_labels_path: None,
+            species_aliases_path: None,
             on_species_filter_state: None,
             on_file_analysed: None,
             in_flight: None,

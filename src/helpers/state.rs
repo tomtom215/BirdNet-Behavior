@@ -266,6 +266,67 @@ pub fn init_species_codes(
     }
 }
 
+/// Load the taxonomy the species pages browse by (`G-15`), from the
+/// *classifier's* label file.
+///
+/// A different file from [`init_species_codes`]'s, and for a different reason.
+/// The geomodel's label file carries the eBird species code; the classifier's
+/// carries the `class` and `order` columns, and it is the classifier's names
+/// the stored detections are keyed on. Resolved exactly as the daemon resolves
+/// it (`--labels`, else `LABELS_PATH`).
+///
+/// A file that will not parse is reported and skipped: the daemon refuses to
+/// start on it with its own message, and the web layer's only stake is a
+/// browsing control.
+pub fn init_taxonomy(
+    state: birdnet_web::state::AppState,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_web::state::AppState {
+    let path = cli
+        .labels
+        .clone()
+        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
+    let Some(path) = path else {
+        tracing::info!(
+            "no classifier label file configured: the species pages will not offer browsing by order or genus"
+        );
+        return state;
+    };
+    match birdnet_core::inference::labels::LabelSet::load(&path) {
+        Ok(labels) => {
+            let taxa: Vec<(String, birdnet_web::state::Taxon)> = labels
+                .iter()
+                .map(|l| {
+                    (
+                        l.scientific_name.clone(),
+                        birdnet_web::state::Taxon {
+                            class: l.class.clone(),
+                            order: l.order.clone(),
+                            genus: l.genus().map(ToOwned::to_owned),
+                        },
+                    )
+                })
+                .filter(|(_, t)| !t.is_empty())
+                .collect();
+            tracing::info!(
+                path = %path.display(),
+                species_with_taxonomy = taxa.len(),
+                "taxonomy loaded for the species pages"
+            );
+            state.with_taxonomy(taxa)
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "classifier label file could not be read: the species pages will not offer browsing by order or genus"
+            );
+            state
+        }
+    }
+}
+
 /// Reinstall the behavioral `DuckDB` extension and exit (`--refresh-extension`).
 ///
 /// Resolves the analytics database path the same way

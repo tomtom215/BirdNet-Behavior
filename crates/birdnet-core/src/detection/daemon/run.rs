@@ -14,6 +14,7 @@ use crate::file_settle::{FILE_SETTLE, PendingFiles};
 use crate::inference::labels::LabelSet;
 use crate::inference::model::BirdNetModel;
 use crate::inference::species_filter::SpeciesFilter;
+use crate::inference::vocabulary::parse_alias_file;
 
 use super::process::process_and_infer_filtered;
 use super::{
@@ -140,10 +141,38 @@ pub fn run_daemon(
                     }
                 },
             };
+            // An unreadable alias file is a warning, not a failure: the
+            // alignment works without it, and taking the occurrence filter off
+            // a station over a typo'd path would admit every species the
+            // classifier knows, wherever it is.
+            let aliases = config.species_aliases_path.as_ref().map_or_else(
+                std::collections::HashMap::new,
+                |p| match std::fs::read_to_string(p) {
+                    Ok(text) => {
+                        let (map, skipped) = parse_alias_file(&text);
+                        tracing::info!(
+                            path = %p.display(),
+                            aliases = map.len(),
+                            skipped_lines = skipped,
+                            "species alias file loaded"
+                        );
+                        map
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %p.display(),
+                            error = %e,
+                            "species alias file could not be read; continuing without it"
+                        );
+                        std::collections::HashMap::new()
+                    }
+                },
+            );
             match SpeciesFilter::load_with_vocabulary(
                 mdata_path,
                 meta_labels,
-                model.labels().len(),
+                model.labels(),
+                &aliases,
                 config.species_filter.clone(),
             ) {
                 Ok(sf) => sf,
@@ -607,6 +636,7 @@ mod tests {
             process_existing: false,
             metadata_model_path: None,
             metadata_labels_path: None,
+            species_aliases_path: None,
             on_species_filter_state: None,
             on_file_analysed: None,
             in_flight: None,

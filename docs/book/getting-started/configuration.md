@@ -32,6 +32,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
 | `BIRDNET_METADATA_MODEL` | `--metadata-model` | `METADATA_MODEL_PATH` | set by the installer / entrypoint |
 | `BIRDNET_METADATA_LABELS` | `--metadata-labels` | `METADATA_LABELS_PATH` | set by the installer / entrypoint |
+| `BIRDNET_SPECIES_ALIASES` | `--species-aliases` | `SPECIES_ALIASES_PATH` | — (a tab-separated `legacy<TAB>canonical` scientific-name map, for species the geomodel and the classifier name differently and the automatic rules cannot connect &mdash; see [tuning](../guides/tuning.md#when-the-two-files-disagree-about-a-name)) |
 | `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` (no effect without a metadata model) |
 | `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |

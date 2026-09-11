@@ -59,10 +59,47 @@ A `WARN` there names whichever of the three is missing. The geomodel download is
 |---|---|---|---|
 | Geomodel | `METADATA_MODEL_PATH` | `BIRDNET_METADATA_MODEL` | `--metadata-model` |
 | Its label file | `METADATA_LABELS_PATH` | `BIRDNET_METADATA_LABELS` | `--metadata-labels` |
+| Extra name aliases | `SPECIES_ALIASES_PATH` | `BIRDNET_SPECIES_ALIASES` | `--species-aliases` |
 
-The model takes `(latitude, longitude, week)` and returns one occurrence probability per species. **It does not score the same species list as the classifier** &mdash; the geomodel covers 12 012 species across birds, mammals, insects, amphibians and reptiles, where the V3.0 Global 11K classifier emits 11 560 &mdash; so the label file is what maps one list onto the other, matched by scientific name.
+The model takes `(latitude, longitude, week)` and returns one occurrence probability per species. **It does not score the same species list as the classifier** &mdash; the geomodel covers 12 012 species across birds, mammals, insects, amphibians and reptiles, where the V3.0 Global 11K classifier emits 11 560 &mdash; so the label file is what maps one list onto the other.
 
 Omit the label file only for a metadata model indexed identically to the classifier (a matched BirdNET pair, e.g. a V2.4 `MData` model beside V2.4 labels). The station checks that at startup and **refuses a mismatched model** rather than reading one list's index into the other, which would report birds under other birds' names with full confidence.
+
+#### When the two files disagree about a name
+
+The two label files were frozen at different points in a moving taxonomy, so they do not always spell a species the same way. On the pinned pair, 1 679 of the geomodel's 12 012 rows have no exact scientific-name counterpart in the classifier &mdash; and 62 of those are the same bird under a reclassified genus. The geomodel says *Leuconotopicus villosus* where the classifier says *Dryobates villosus*; both mean Hairy Woodpecker.
+
+Matching on the scientific name alone, those 62 species are **permanently undetectable** while the occurrence filter is on: the geomodel's opinion about them never reaches the passing set under a name a detection can carry. Forty-one of them are birds, among them Hairy Woodpecker, Red-cockaded Woodpecker, White-headed Woodpecker and Evening Grosbeak.
+
+So a name that does not match exactly is tried a second way: the **common name**, compared on its letters alone so `Fruit-Dove` and `Fruit Dove` are one name, together with the **specific epithet**, which must agree exactly or differ only by its Latin gender ending (*gymnocerca* / *gymnocercus*). A common name that names two species in either file identifies neither and is not used, and a species the scientific-name pass already matched is never re-matched by the looser rule.
+
+The epithet is what makes that rule safe rather than merely generous. The classifier's own label file calls *Lama glama* &mdash; the llama &mdash; "Guanaco", and calls *Scapteriscus borellii* "Southern Mole Cricket", which the geomodel uses for a different genus entirely. Both would match on the common name alone; neither matches once the epithet has to agree.
+
+`--doctor` reports the result, in both directions:
+
+```console
+$ birdnet-behavior --doctor | grep occurrence
+[ PASS ] Species occurrence filter - active - ... ; 10395 of the metadata model's
+12012 species map onto the classifier (62 by common name + epithet, 0 by an operator
+alias, e.g. Drymomantis fallax = Litoria fallax), 1617 do not, and 1165 of the
+classifier's 11560 species are reached by no metadata row and so cannot pass
+while it runs
+```
+
+Read those two residues differently. A metadata species with no classifier counterpart is almost always right &mdash; the geomodel simply knows more species than the classifier can emit. A **classifier** species that no metadata row resolves to is one this station cannot report at all while the filter is on, because the geomodel has no opinion to offer about it.
+
+##### Your own aliases
+
+For a pair the automatic rules cannot connect &mdash; different genus *and* different common name &mdash; point `SPECIES_ALIASES_PATH` (`BIRDNET_SPECIES_ALIASES`, `--species-aliases`) at a tab-separated file:
+
+```text
+# legacy name (as the geomodel spells it)	the classifier's name
+Streptopelia senegalensis	Spilopelia senegalensis
+```
+
+Blank lines and `#` comments are skipped, and a malformed line is skipped rather than taken as fatal: a typo here must not take the occurrence filter off a running station. The count loaded and the number of lines skipped are logged at startup.
+
+No alias table ships with the station. The obvious candidate, [OpenFauna](https://github.com/tphakala/openfauna)'s `aliases.json`, is CC BY-SA 4.0 where this project is CC BY-NC-SA 4.0, and ShareAlike does not permit adding the NonCommercial restriction. It would also not help: applied to the pinned model pair, all 237 of its entries recover **none** of the 1 679 unmatched rows, because the reclassifications it records are ones both of our label files already agree on. If you want it anyway, it is yours to install under its own licence.
 
 Once it is running:
 

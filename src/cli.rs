@@ -635,6 +635,20 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_METADATA_LABELS")]
     pub metadata_labels: Option<PathBuf>,
 
+    /// Extra scientific-name aliases for the occurrence filter: a
+    /// tab-separated `legacy<TAB>canonical` file.
+    ///
+    /// The geomodel and the classifier were frozen at different points in a
+    /// moving taxonomy and do not always spell a species the same way. Most of
+    /// those the station reconciles by itself, on the common name and the
+    /// specific epithet; this file is for the pairs that share neither.
+    ///
+    /// Blank lines and `#` comments are skipped, and a malformed line is
+    /// skipped rather than fatal — a typo here must not take the occurrence
+    /// filter off a running station.
+    #[arg(long, env = "BIRDNET_SPECIES_ALIASES")]
+    pub species_aliases: Option<PathBuf>,
+
     /// Species frequency threshold for the metadata model filter (0.0-1.0).
     ///
     /// Species with occurrence probability below this threshold are filtered out.

@@ -399,6 +399,7 @@ async fn serve(
         state.with_info_site(cli.info_site.clone())
     };
     let state = helpers::init_species_codes(state, &cli, config.as_ref());
+    let state = helpers::init_taxonomy(state, &cli, config.as_ref());
     let state = helpers::init_i18n(state, &cli, config.as_ref());
     let state = helpers::init_private_mode(state, &cli, config.as_ref());
 

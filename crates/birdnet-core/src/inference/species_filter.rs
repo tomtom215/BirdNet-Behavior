@@ -21,7 +21,7 @@
 //! this guard exists to prevent: it is silent, and it reports one bird as
 //! another with full confidence.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
@@ -30,6 +30,7 @@ use ort::value::{Tensor, ValueType};
 
 use crate::inference::labels::{LabelSet, SpeciesLabel};
 use crate::inference::model::InferenceError;
+use crate::inference::vocabulary::{Alignment, AlignmentStats};
 
 /// Configuration for the species occurrence filter.
 ///
@@ -188,16 +189,19 @@ impl CacheKey {
 /// above the threshold (plus whitelisted species) pass through.
 pub struct SpeciesFilter {
     session: Option<Session>,
-    /// The metadata model's *own* species vocabulary, when it has one.
+    /// How each of the metadata model's *own* output indices maps onto a
+    /// species the classifier can emit, when the model has its own vocabulary.
     ///
     /// The BirdNET geomodel scores 12 012 species; the V3.0 classifier emits
     /// 11 560. The two lists are neither the same length nor the same order,
     /// so the model's output index means nothing to the classifier — only the
-    /// scientific name at that index does. `None` means the caller asserted
-    /// the two vocabularies are index-identical, which
+    /// species at that index does. Resolving that is
+    /// [`Alignment`]'s job, and it is done once at load rather than by
+    /// scanning the classifier's labels on every inference. `None` means the
+    /// caller asserted the two vocabularies are index-identical, which
     /// [`SpeciesFilter::load_with_vocabulary`] verifies against the model's
     /// declared output width before accepting it.
-    meta_labels: Option<LabelSet>,
+    alignment: Option<Alignment>,
     /// How many species the loaded model is expected to score: the metadata
     /// label count when there is one, otherwise the classifier's. Re-checked
     /// against the actual output on every inference, because a model that
@@ -214,7 +218,7 @@ impl fmt::Debug for SpeciesFilter {
             .field("has_model", &self.session.is_some())
             .field(
                 "meta_species",
-                &self.meta_labels.as_ref().map(LabelSet::len),
+                &self.alignment.as_ref().map(|a| a.stats().metadata_species),
             )
             .field("config", &self.config)
             .field("cached", &self.cache_key.is_some())
@@ -227,7 +231,7 @@ impl SpeciesFilter {
     pub const fn new_passthrough(config: SpeciesFilterConfig) -> Self {
         Self {
             session: None,
-            meta_labels: None,
+            alignment: None,
             expected_width: None,
             config,
             cache_key: None,
@@ -247,10 +251,21 @@ impl SpeciesFilter {
     ///   reason: it covers 12 012 species where the V3.0 classifier emits
     ///   11 560. Pass `Some(..)` and the outputs are resolved through it and
     ///   matched to the classifier by **scientific name**.
-    /// * `classifier_species` — how many species the classifier emits. Pass
+    /// * `classifier` — the classifier's own labels. Pass
     ///   `meta_labels: None` only when the model is known to be indexed
     ///   identically to the classifier (a matched BirdNET pair, e.g. a V2.4
     ///   `MData` model beside V2.4 labels).
+    /// * `aliases` — an operator's `legacy -> canonical` scientific-name map,
+    ///   lowercased on both sides (see
+    ///   [`vocabulary::parse_alias_file`](crate::inference::vocabulary::parse_alias_file)).
+    ///   Empty for none.
+    ///
+    /// Matching by name is not the same as matching by *spelling*. The two
+    /// files disagree about the genus of 62 species on the pinned pair, 41 of
+    /// them birds, and reading only the scientific name leaves every one of
+    /// them permanently undetectable — see [`Alignment`] for the rules and the
+    /// measurements. The alignment is built here, once, and
+    /// [`Self::alignment_stats`] reports what it found.
     ///
     /// Whichever mode is asked for, the model's declared output width must
     /// equal the number of species that mode expects, or the model is
@@ -273,7 +288,8 @@ impl SpeciesFilter {
     pub fn load_with_vocabulary(
         path: &Path,
         meta_labels: Option<LabelSet>,
-        classifier_species: usize,
+        classifier: &LabelSet,
+        aliases: &HashMap<String, String>,
         config: SpeciesFilterConfig,
     ) -> Result<Self, InferenceError> {
         if !path.exists() {
@@ -293,7 +309,7 @@ impl SpeciesFilter {
 
         let expected_width = meta_labels
             .as_ref()
-            .map_or(classifier_species, LabelSet::len);
+            .map_or_else(|| classifier.len(), LabelSet::len);
         let declared = declared_output_width(&session)?;
 
         if let Some(actual) = declared
@@ -306,26 +322,48 @@ impl SpeciesFilter {
             )));
         }
 
-        tracing::info!(
-            meta_species = meta_labels.as_ref().map(LabelSet::len),
-            classifier_species,
-            declared_outputs = declared,
-            matching = if meta_labels.is_some() {
-                "by scientific name, through the model's own labels"
-            } else {
-                "by index, against the classifier's labels"
-            },
-            "metadata model loaded; species occurrence filtering is active"
-        );
+        let alignment = meta_labels.map(|meta| Alignment::build(&meta, classifier, aliases));
+
+        if let Some(stats) = alignment.as_ref().map(Alignment::stats) {
+            tracing::info!(
+                meta_species = stats.metadata_species,
+                classifier_species = stats.classifier_species,
+                declared_outputs = declared,
+                matched_by_scientific_name = stats.by_scientific_name,
+                matched_by_common_name = stats.by_common_name,
+                matched_by_operator_alias = stats.by_alias,
+                unmatched_metadata_species = stats.unmatched,
+                classifier_species_unreachable = stats.classifier_unreachable,
+                recovered_sample = ?stats.recovered_sample,
+                "metadata model loaded; species occurrence filtering is active, matching by name through the model's own labels"
+            );
+        } else {
+            tracing::info!(
+                classifier_species = classifier.len(),
+                declared_outputs = declared,
+                "metadata model loaded; species occurrence filtering is active, matching by index against the classifier's labels"
+            );
+        }
 
         Ok(Self {
             session: Some(session),
-            meta_labels,
+            alignment,
             expected_width: Some(expected_width),
             config,
             cache_key: None,
             cache_result: None,
         })
+    }
+
+    /// What aligning the metadata model's vocabulary to the classifier's
+    /// found, or `None` when the model has no vocabulary of its own.
+    ///
+    /// The counts exist to be shown. A species the two files name differently
+    /// is dropped in silence otherwise, and an operator has no way to ask why
+    /// a bird they can hear never appears.
+    #[must_use]
+    pub fn alignment_stats(&self) -> Option<&AlignmentStats> {
+        self.alignment.as_ref().map(Alignment::stats)
     }
 
     /// Filter species based on location and week.
@@ -398,7 +436,7 @@ impl SpeciesFilter {
             return Err(InferenceError::Shape(vocabulary_mismatch_message(
                 probabilities.len(),
                 expected,
-                self.meta_labels.is_some(),
+                self.alignment.is_some(),
             )));
         }
 
@@ -406,28 +444,34 @@ impl SpeciesFilter {
         //
         // Which list the index refers to depends on how the model was loaded.
         // With the model's own labels the index names a species in *its*
-        // vocabulary, and only the ones the classifier can also emit are worth
-        // carrying forward — a geomodel entry the classifier has never heard of
-        // can never be detected, and letting it through would put a name in the
-        // passing set that no detection can ever match.
+        // vocabulary, and the alignment built at load says which classifier
+        // species — under the classifier's own spelling — that is. Only that
+        // spelling may go into the passing set: it is what a detection carries,
+        // and the set is tested with `HashSet::contains` downstream, so the
+        // metadata file's spelling of a name the two files write differently
+        // would put an entry in the set that no detection can ever match.
+        //
+        // A metadata index the alignment could not place names a species the
+        // classifier cannot emit, and is dropped. How many were dropped is in
+        // `alignment_stats`, because doing it in silence is the defect this
+        // replaced.
         let mut passing = HashSet::new();
-        let vocabulary = self.meta_labels.as_ref().unwrap_or(labels);
-        let by_name = self.meta_labels.is_some();
         for (i, &prob) in probabilities.iter().enumerate() {
             if prob < self.config.sf_thresh {
                 continue;
             }
-            let Some(label) = vocabulary.get(i) else {
-                continue;
-            };
-            if by_name
-                && labels
-                    .find_by_scientific_name(&label.scientific_name)
-                    .is_none()
-            {
-                continue;
+            match self.alignment.as_ref() {
+                Some(alignment) => {
+                    if let Some(name) = alignment.classifier_name(i) {
+                        passing.insert(name.to_owned());
+                    }
+                }
+                None => {
+                    if let Some(label) = labels.get(i) {
+                        passing.insert(label.scientific_name.clone());
+                    }
+                }
             }
-            passing.insert(label.scientific_name.clone());
         }
 
         // Add whitelisted species. Resolved through the label set so an entry
@@ -764,6 +808,7 @@ mod tests {
             common_name: "Eurasian Blackbird".into(),
             class: None,
             species_code: None,
+            order: None,
         };
         assert!(matches_species("Eurasian Blackbird", &label));
         assert!(matches_species("turdus merula", &label));
@@ -878,7 +923,8 @@ mod tests {
         let result = SpeciesFilter::load_with_vocabulary(
             Path::new("/nonexistent/metadata.onnx"),
             None,
-            6522,
+            &test_labels(),
+            &HashMap::new(),
             SpeciesFilterConfig::default(),
         );
         assert!(matches!(result, Err(InferenceError::NotFound(_))));
@@ -963,7 +1009,8 @@ mod metadata_vocabulary_tests {
         let mut filter = SpeciesFilter::load_with_vocabulary(
             &write_model(&dir),
             Some(meta_labels()),
-            4,
+            &classifier_labels(),
+            &HashMap::new(),
             config(),
         )
         .expect("a metadata model with matching labels must load");
@@ -990,7 +1037,8 @@ mod metadata_vocabulary_tests {
         let mut filter = SpeciesFilter::load_with_vocabulary(
             &write_model(&dir),
             Some(meta_labels()),
-            4,
+            &classifier_labels(),
+            &HashMap::new(),
             config(),
         )
         .unwrap();
@@ -1015,8 +1063,14 @@ mod metadata_vocabulary_tests {
     #[test]
     fn width_mismatch_without_labels_is_refused_at_load() {
         let dir = tempfile::tempdir().unwrap();
-        let err = SpeciesFilter::load_with_vocabulary(&write_model(&dir), None, 4, config())
-            .expect_err("a 5-output model must not be accepted for a 4-species classifier");
+        let err = SpeciesFilter::load_with_vocabulary(
+            &write_model(&dir),
+            None,
+            &classifier_labels(),
+            &HashMap::new(),
+            config(),
+        )
+        .expect_err("a 5-output model must not be accepted for a 4-species classifier");
 
         assert!(
             matches!(err, InferenceError::Shape(_)),
@@ -1042,8 +1096,14 @@ mod metadata_vocabulary_tests {
                 .map(|i| (format!("Genus species{i}"), format!("Bird {i}")))
                 .collect(),
         );
-        let mut filter = SpeciesFilter::load_with_vocabulary(&write_model(&dir), None, 5, config())
-            .expect("matching widths must load");
+        let mut filter = SpeciesFilter::load_with_vocabulary(
+            &write_model(&dir),
+            None,
+            &five,
+            &HashMap::new(),
+            config(),
+        )
+        .expect("matching widths must load");
 
         let passing = filter
             .filter_species(Some((42.0, -71.0)), 10, &five)
@@ -1069,9 +1129,85 @@ mod metadata_vocabulary_tests {
     fn labels_that_do_not_match_the_model_width_are_refused() {
         let dir = tempfile::tempdir().unwrap();
         let wrong = LabelSet::from_entries(vec![("Pica pica".into(), "Eurasian Magpie".into())]);
-        let err = SpeciesFilter::load_with_vocabulary(&write_model(&dir), Some(wrong), 4, config())
-            .expect_err("1 label against a 5-output model must be refused");
+        let err = SpeciesFilter::load_with_vocabulary(
+            &write_model(&dir),
+            Some(wrong),
+            &classifier_labels(),
+            &HashMap::new(),
+            config(),
+        )
+        .expect_err("1 label against a 5-output model must be refused");
         assert!(matches!(err, InferenceError::Shape(_)), "got {err:?}");
+    }
+
+    /// The metadata model's own five species, where the two files disagree
+    /// about two of them the way the real pair does.
+    ///
+    /// `sigmoid(B) = [0.9002, 0.0998, 0.8022, 0.0474, 0.7006]`, so indices 0,
+    /// 2 and 4 clear a 0.5 threshold.
+    fn reclassified_meta() -> LabelSet {
+        LabelSet::from_entries(vec![
+            // 0.9002 — the classifier calls this Dryobates villosus.
+            ("Leuconotopicus villosus".into(), "Hairy Woodpecker".into()),
+            ("Parus major".into(), "Great Tit".into()), // 0.0998, below
+            // 0.8022 — shares a common name with the classifier's Lama glama
+            // and nothing else. The llama must not be let in on the guanaco's
+            // probability.
+            ("Lama guanicoe".into(), "Guanaco".into()),
+            ("Corvus corax".into(), "Common Raven".into()), // 0.0474, below
+            ("Turdus merula".into(), "Eurasian Blackbird".into()), // 0.7006
+        ])
+    }
+
+    /// The classifier's four, spelling two of them differently.
+    fn reclassified_classifier() -> LabelSet {
+        LabelSet::from_entries(vec![
+            ("Dryobates villosus".into(), "Hairy Woodpecker".into()),
+            ("Lama glama".into(), "Guanaco".into()),
+            ("Turdus merula".into(), "Eurasian Blackbird".into()),
+            ("Parus major".into(), "Great Tit".into()),
+        ])
+    }
+
+    /// The whole defect, end to end through the filter rather than through
+    /// [`Alignment`] alone: a species the two files name differently is
+    /// admitted under the *classifier's* name, and one that only shares a
+    /// common name still is not.
+    ///
+    /// On the code this replaced the answer is `{Turdus merula}` — Hairy
+    /// Woodpecker is above threshold in the geomodel, present in the
+    /// classifier, and dropped anyway, with nothing said. Disjoint enough from
+    /// the expected answer that neither can pass by accident on the other.
+    #[test]
+    fn a_species_the_two_files_name_differently_still_passes_the_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut filter = SpeciesFilter::load_with_vocabulary(
+            &write_model(&dir),
+            Some(reclassified_meta()),
+            &reclassified_classifier(),
+            &HashMap::new(),
+            config(),
+        )
+        .expect("a metadata model with matching labels must load");
+
+        let stats = filter
+            .alignment_stats()
+            .expect("a model with its own labels has an alignment");
+        assert_eq!(stats.by_scientific_name, 2, "Parus major and Turdus merula");
+        assert_eq!(stats.by_common_name, 1, "Hairy Woodpecker");
+        assert_eq!(stats.unmatched, 2, "Lama guanicoe and Corvus corax");
+
+        let passing = filter
+            .filter_species(Some((42.0, -71.0)), 10, &reclassified_classifier())
+            .unwrap();
+
+        assert_eq!(
+            passing,
+            HashSet::from(["Dryobates villosus".to_owned(), "Turdus merula".to_owned()]),
+            "Hairy Woodpecker must pass under the name a detection will carry, \
+             the llama must not ride in on the guanaco's probability, and the \
+             two below threshold must stay out; got {passing:?}"
+        );
     }
 
     /// `has_model` must reflect a real, aligned model — the daemon and the
@@ -1083,7 +1219,8 @@ mod metadata_vocabulary_tests {
         let filter = SpeciesFilter::load_with_vocabulary(
             &write_model(&dir),
             Some(meta_labels()),
-            4,
+            &classifier_labels(),
+            &HashMap::new(),
             config(),
         )
         .unwrap();

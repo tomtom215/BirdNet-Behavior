@@ -1,5 +1,6 @@
 //! Species list page, species detail page, and all species HTMX partials.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
@@ -24,6 +25,97 @@ pub(super) struct HomeParams {
     view: Option<String>,
     filter: Option<String>,
     q: Option<String>,
+    /// Which taxonomic rank `taxon` names: `class`, `order` or `genus`.
+    rank: Option<String>,
+    /// The value at that rank, e.g. `Piciformes`. Ignored without a `rank`.
+    taxon: Option<String>,
+}
+
+/// The taxonomic ranks the species pages can browse by (`G-15`).
+///
+/// Three, and deliberately not four: the classifier's label file states a
+/// class and an order and nothing between them, so there is no family to
+/// browse. See [`birdnet_web::state::Taxon`](crate::state::Taxon).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Rank {
+    /// `Aves`, `Insecta`, … — what tells a bird from a bush-cricket.
+    Class,
+    /// `Piciformes`, `Strigiformes`, … — from the label file's column.
+    Order,
+    /// The first word of the binomial.
+    Genus,
+}
+
+impl Rank {
+    /// The rank named by a query parameter, or `None` for anything else.
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "class" => Some(Self::Class),
+            "order" => Some(Self::Order),
+            "genus" => Some(Self::Genus),
+            _ => None,
+        }
+    }
+
+    /// The query-parameter spelling, which is also the URL's.
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Class => "class",
+            Self::Order => "order",
+            Self::Genus => "genus",
+        }
+    }
+
+    /// This rank's value for a species, if the station has its taxonomy.
+    fn of(self, taxon: &crate::state::Taxon) -> Option<&str> {
+        match self {
+            Self::Class => taxon.class.as_deref(),
+            Self::Order => taxon.order.as_deref(),
+            Self::Genus => taxon.genus.as_deref(),
+        }
+    }
+}
+
+/// A chosen `rank = value` pair, e.g. order = Piciformes.
+#[derive(Debug, Clone)]
+pub(super) struct TaxonFilter {
+    rank: Rank,
+    value: String,
+}
+
+impl TaxonFilter {
+    /// Read one out of the query string. Both halves are required, and an
+    /// unknown rank name is no filter rather than an empty page.
+    fn from_params(params: &HomeParams) -> Option<Self> {
+        let rank = Rank::parse(params.rank.as_deref()?.trim())?;
+        let value = params.taxon.as_deref()?.trim();
+        (!value.is_empty()).then(|| Self {
+            rank,
+            value: value.to_owned(),
+        })
+    }
+
+    /// Whether a species sits at this rank and value.
+    ///
+    /// A species the station has no taxonomy for does **not** match. That is
+    /// the honest answer — nothing says it belongs — and it is why the chips
+    /// are built from the species that do have one, so a chip always leads
+    /// somewhere.
+    fn admits(&self, state: &AppState, scientific_name: &str) -> bool {
+        state
+            .taxon(scientific_name)
+            .and_then(|t| self.rank.of(t))
+            .is_some_and(|v| v.eq_ignore_ascii_case(&self.value))
+    }
+
+    /// The `&rank=…&taxon=…` tail for a link that keeps this filter.
+    fn query_tail(&self) -> String {
+        format!(
+            "&amp;rank={}&amp;taxon={}",
+            self.rank.key(),
+            simple_url_encode(&self.value)
+        )
+    }
 }
 
 /// Mount the species list, species detail, and HTMX partial routes.
@@ -71,12 +163,19 @@ async fn species_page(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
+    // The Life list counts every species ever, so a taxonomy filter there
+    // would silently change what "life list" means.
+    let taxon = (view != "lifelist")
+        .then(|| TaxonFilter::from_params(&params))
+        .flatten();
+
     let st = state.clone();
     let s2 = search.clone();
+    let t2 = taxon.clone();
     let body = tokio::task::spawn_blocking(move || match view {
-        "photos" => photos_view(&st, filter, s2.as_deref()),
+        "photos" => photos_view(&st, filter, s2.as_deref(), t2.as_ref()),
         "lifelist" => lifelist_view(&st),
-        _ => list_view(&st, filter, s2.as_deref()),
+        _ => list_view(&st, filter, s2.as_deref(), t2.as_ref()),
     })
     .await
     .unwrap_or_default();
@@ -93,7 +192,7 @@ async fn species_page(
     );
     let content = format!(
         "{head}{controls}{body}",
-        controls = controls(view, filter, search.as_deref())
+        controls = controls(view, filter, search.as_deref(), taxon.as_ref())
     );
     super::render_page_for_request("Species", &content, "species", &headers)
 }
@@ -112,7 +211,7 @@ const FILTERS: &[(&str, &str)] = &[("all", "All"), ("week", "This week")];
 
 /// The controls row: view switcher (`sp-seg`) · filter chips (`sp-chips`, List
 /// and Photos only) · search (a GET form, so every view is bookmarkable).
-fn controls(view: &str, filter: &str, search: Option<&str>) -> String {
+fn controls(view: &str, filter: &str, search: Option<&str>, taxon: Option<&TaxonFilter>) -> String {
     // A labelled group of navigation links (each loads a full page), with
     // aria-current marking the active view — not an ARIA tablist, which would
     // require role="tab" children and JS-controlled tabpanels.
@@ -126,7 +225,8 @@ fn controls(view: &str, filter: &str, search: Option<&str>) -> String {
         };
         let _ = write!(
             seg,
-            r#"<a class="sp-seg-link{active}" href="/species?view={key}"{cur}>{label}</a>"#
+            r#"<a class="sp-seg-link{active}" href="/species?view={key}{tail}"{cur}>{label}</a>"#,
+            tail = taxon.map(TaxonFilter::query_tail).unwrap_or_default(),
         );
     }
     seg.push_str("</div>");
@@ -140,22 +240,102 @@ fn controls(view: &str, filter: &str, search: Option<&str>) -> String {
             let active = if *key == filter { " active" } else { "" };
             let _ = write!(
                 c,
-                r#"<a class="sp-chip{active}" href="/species?view={view}&amp;filter={key}">{label}</a>"#
+                r#"<a class="sp-chip{active}" href="/species?view={view}&amp;filter={key}{tail}">{label}</a>"#,
+                tail = taxon.map(TaxonFilter::query_tail).unwrap_or_default(),
             );
         }
         c.push_str("</div>");
         let val = search.map(escape_html).unwrap_or_default();
+        // The taxonomy filter rides along as hidden fields, or searching from
+        // inside "only the woodpeckers" would quietly drop the woodpeckers.
+        let keep = taxon.map_or_else(String::new, |t| {
+            format!(
+                r#"<input type="hidden" name="rank" value="{}"><input type="hidden" name="taxon" value="{}">"#,
+                t.rank.key(),
+                escape_html(&t.value),
+            )
+        });
         let form = format!(
-            r#"<span class="sp-search"><span class="ico" aria-hidden="true">⌕</span><form method="get" action="/species" role="search"><input type="hidden" name="view" value="{view}"><input type="hidden" name="filter" value="{filter}"><input type="search" name="q" value="{val}" placeholder="Find a species…" aria-label="Find a species"></form></span>"#
+            r#"<span class="sp-search"><span class="ico" aria-hidden="true">⌕</span><form method="get" action="/species" role="search"><input type="hidden" name="view" value="{view}"><input type="hidden" name="filter" value="{filter}">{keep}<input type="search" name="q" value="{val}" placeholder="Find a species…" aria-label="Find a species"></form></span>"#
         );
         (c, form)
     };
     format!(r#"<div class="sp-controls">{seg}{chips}{search_form}</div>"#)
 }
 
+/// How many order chips to offer before the row stops being browsable.
+const MAX_ORDER_CHIPS: usize = 12;
+
+/// One chip per taxonomic order among the species on this page (`G-15`).
+///
+/// Built from *this station's* species rather than the classifier's 11 560, so
+/// a garden with 40 birds gets a handful of orders and not 75 — and every chip
+/// is guaranteed to lead somewhere, because the species behind it are the ones
+/// counted. Ordered by species count, so the orders an operator actually has
+/// come first, and capped at [`MAX_ORDER_CHIPS`].
+///
+/// Empty when fewer than two orders are represented, which covers both the
+/// station with no classifier label file (no taxonomy at all, so no orders) and
+/// the one whose species all sit in a single order — a chip row offering the
+/// only choice there is is furniture, not navigation. A separate
+/// `has_taxonomy()` early-out stood here until a mutation of it survived every
+/// gate: this one already subsumes it.
+///
+/// Order and not family: see [`crate::state::Taxon`]. Genus is reachable from
+/// each species' own detail page, where "the other *Dryobates* here" is the
+/// question; 2 907 genera is not a chip row.
+fn order_chips(
+    state: &AppState,
+    species: &[birdnet_db::sqlite::SpeciesCount],
+    view: &str,
+    filter: &str,
+    search: Option<&str>,
+    active: Option<&TaxonFilter>,
+) -> String {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for s in species {
+        if let Some(order) = state.taxon(&s.sci_name).and_then(|t| t.order.as_deref()) {
+            *counts.entry(order).or_default() += 1;
+        }
+    }
+    if counts.len() < 2 {
+        return String::new();
+    }
+    // Count descending, then name, so the row is stable between requests.
+    let mut ranked: Vec<(&str, usize)> = counts.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    ranked.truncate(MAX_ORDER_CHIPS);
+
+    let keep = search.map_or_else(String::new, |q| format!("&amp;q={}", simple_url_encode(q)));
+    let base = format!("/species?view={view}&amp;filter={filter}{keep}");
+    let showing_all = active.is_none_or(|t| t.rank != Rank::Order);
+    let mut out = format!(
+        r#"<div class="sp-chips" role="group" aria-label="Taxonomic order"><a class="sp-chip{a}" href="{base}">All orders</a>"#,
+        a = if showing_all { " active" } else { "" },
+    );
+    for (order, n) in ranked {
+        let on =
+            active.is_some_and(|t| t.rank == Rank::Order && t.value.eq_ignore_ascii_case(order));
+        let _ = write!(
+            out,
+            r#"<a class="sp-chip{a}" href="{base}&amp;rank=order&amp;taxon={enc}">{name} <span class="bnb-meta">{n}</span></a>"#,
+            a = if on { " active" } else { "" },
+            enc = simple_url_encode(order),
+            name = escape_html(order),
+        );
+    }
+    out.push_str("</div>");
+    out
+}
+
 /// The **List** view: `sp-count` headline + the `sp-table` (rank · avatar ·
 /// 14-day sparkline · count · Avg confidence), every row a link to its detail.
-fn list_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
+fn list_view(
+    state: &AppState,
+    filter: &str,
+    search: Option<&str>,
+    taxon: Option<&TaxonFilter>,
+) -> String {
     let (mut species, sparks) = state.with_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 500).unwrap_or_default(),
@@ -166,6 +346,12 @@ fn list_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
     });
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
+    }
+    // Built before the filter narrows the list, so choosing a chip does not
+    // make the other chips disappear.
+    let chips = order_chips(state, &species, "list", filter, search, taxon);
+    if let Some(t) = taxon {
+        species.retain(|s| t.admits(state, &s.sci_name));
     }
 
     let total: i64 = species.iter().map(|s| s.count).sum();
@@ -191,16 +377,21 @@ fn list_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
 
     let count_line = species_count_line(species.len(), filter, total);
     if species.is_empty() {
-        return format!("{count_line}{}", empty_note(search));
+        return format!("{chips}{count_line}{}", empty_note(search));
     }
     format!(
-        r#"{count_line}<div class="bnb-card pad"><table class="sp-table"><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
+        r#"{chips}{count_line}<div class="bnb-card pad"><table class="sp-table"><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
     )
 }
 
 /// The **Photos** view: the gallery grid (`sp-grid` of `sp-photo-card`s) with
 /// Wikipedia thumbnails over the gradient banding-code fallback.
-fn photos_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
+fn photos_view(
+    state: &AppState,
+    filter: &str,
+    search: Option<&str>,
+    taxon: Option<&TaxonFilter>,
+) -> String {
     let (mut species, sparks) = state.with_db(|conn| {
         let species = search.map_or_else(
             || birdnet_db::sqlite::top_species(conn, 200).unwrap_or_default(),
@@ -211,6 +402,10 @@ fn photos_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
     });
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
+    }
+    let chips = order_chips(state, &species, "photos", filter, search, taxon);
+    if let Some(t) = taxon {
+        species.retain(|s| t.admits(state, &s.sci_name));
     }
 
     let mut cards = String::new();
@@ -236,9 +431,9 @@ fn photos_view(state: &AppState, filter: &str, search: Option<&str>) -> String {
         },
     );
     if species.is_empty() {
-        return format!("{count_line}{}", empty_note(search));
+        return format!("{chips}{count_line}{}", empty_note(search));
     }
-    format!(r#"{count_line}<div class="sp-grid">{cards}</div>"#)
+    format!(r#"{chips}{count_line}<div class="sp-grid">{cards}</div>"#)
 }
 
 /// The **Life list** view: the big counters, the accumulation curve, and the
@@ -668,6 +863,10 @@ async fn species_info_partial(
         );
     }
 
+    // The taxonomy line, and the way back to "everything else like this"
+    // (`G-15`). Only what the label file states, and only when it states it.
+    html.push_str(&taxonomy_line(&state, &sci_name));
+
     // Add species info links (eBird/AllAboutBirds) — always shown
     let info_site = state.info_site();
     if info_site != "none" {
@@ -694,6 +893,37 @@ async fn species_info_partial(
     }
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// The taxonomy line of the species panel: class · order · genus, each a link
+/// back to the species list filtered to it (`G-15`).
+///
+/// Empty when the station has no classifier label file, or has one that says
+/// nothing about this species. There is no family here because the label file
+/// has no family column — see [`crate::state::Taxon`] — and inventing one from
+/// the genus would put a guess beside two stated facts.
+fn taxonomy_line(state: &AppState, scientific_name: &str) -> String {
+    if scientific_name.is_empty() {
+        return String::new();
+    }
+    let Some(taxon) = state.taxon(scientific_name) else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for rank in [Rank::Class, Rank::Order, Rank::Genus] {
+        if let Some(value) = rank.of(taxon) {
+            parts.push(format!(
+                r#"<a href="/species?view=list&amp;filter=all&amp;rank={key}&amp;taxon={enc}" class="spp-link">{name}</a>"#,
+                key = rank.key(),
+                enc = simple_url_encode(value),
+                name = escape_html(value),
+            ));
+        }
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(r#"<p class="spp-mt bnb-meta">{}</p>"#, parts.join(" · "))
 }
 
 /// The "View on eBird" line of the species panel (NP-1).
@@ -880,5 +1110,261 @@ async fn species_companions_partial(
             [(header::CONTENT_TYPE, "text/html")],
             "<p>Error loading companion species</p>".to_string(),
         ),
+    }
+}
+
+// ── browsing by taxonomic rank (G-15) ───────────────────────────────────
+//
+// The gates below were written against the pre-feature page and observed
+// failing: `HomeParams` had no `rank`/`taxon`, `AppState` no taxonomy, and the
+// two grid views no way to narrow to a rank, so each of these asserts
+// something that did not exist. Where a gate could be satisfied by a filter
+// that simply drops everything, or by a chip row that always renders, the
+// counterpart is here too.
+#[cfg(test)]
+mod taxonomy_browsing_tests {
+    use super::*;
+    use crate::state::Taxon;
+    use birdnet_db::sqlite::SpeciesCount;
+
+    fn taxon(class: &str, order: &str, genus: &str) -> Taxon {
+        Taxon {
+            class: Some(class.to_owned()),
+            order: Some(order.to_owned()),
+            genus: Some(genus.to_owned()),
+        }
+    }
+
+    /// Four species over three orders, so a filter that keeps everything and
+    /// one that keeps nothing both fail.
+    fn state_with_taxonomy() -> AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        AppState::from_connection(conn, std::path::PathBuf::from(":memory:")).with_taxonomy([
+            (
+                "Dryobates villosus",
+                taxon("Aves", "Piciformes", "Dryobates"),
+            ),
+            (
+                "Dryobates pubescens",
+                taxon("Aves", "Piciformes", "Dryobates"),
+            ),
+            ("Strix varia", taxon("Aves", "Strigiformes", "Strix")),
+            (
+                "Tettigonia viridissima",
+                taxon("Insecta", "Orthoptera", "Tettigonia"),
+            ),
+        ])
+    }
+
+    fn species() -> Vec<SpeciesCount> {
+        [
+            ("Hairy Woodpecker", "Dryobates villosus"),
+            ("Downy Woodpecker", "Dryobates pubescens"),
+            ("Barred Owl", "Strix varia"),
+            ("Great Green Bush-Cricket", "Tettigonia viridissima"),
+        ]
+        .into_iter()
+        .map(|(com, sci)| SpeciesCount {
+            com_name: com.to_owned(),
+            sci_name: sci.to_owned(),
+            count: 1,
+            avg_confidence: 0.9,
+        })
+        .collect()
+    }
+
+    fn params(rank: Option<&str>, taxon: Option<&str>) -> HomeParams {
+        HomeParams {
+            view: None,
+            filter: None,
+            q: None,
+            rank: rank.map(str::to_owned),
+            taxon: taxon.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_rank_and_a_value_select_exactly_the_species_at_that_rank() {
+        let state = state_with_taxonomy();
+        for (rank, value, expected) in [
+            (
+                "order",
+                "Piciformes",
+                vec!["Dryobates villosus", "Dryobates pubescens"],
+            ),
+            ("order", "Strigiformes", vec!["Strix varia"]),
+            (
+                "genus",
+                "Dryobates",
+                vec!["Dryobates villosus", "Dryobates pubescens"],
+            ),
+            ("class", "Insecta", vec!["Tettigonia viridissima"]),
+            (
+                "class",
+                "Aves",
+                vec!["Dryobates villosus", "Dryobates pubescens", "Strix varia"],
+            ),
+        ] {
+            let filter = TaxonFilter::from_params(&params(Some(rank), Some(value)))
+                .unwrap_or_else(|| panic!("{rank}={value} must parse"));
+            let kept: Vec<&str> = species()
+                .iter()
+                .filter(|s| filter.admits(&state, &s.sci_name))
+                .map(|s| s.sci_name.clone())
+                .map(|s| Box::leak(s.into_boxed_str()) as &str)
+                .collect();
+            assert_eq!(kept, expected, "for {rank}={value}");
+        }
+    }
+
+    /// The value is matched case-insensitively — a chip's own link is exact,
+    /// but a bookmarked or hand-typed URL is not.
+    #[test]
+    fn the_value_is_matched_case_insensitively() {
+        let state = state_with_taxonomy();
+        let filter = TaxonFilter::from_params(&params(Some("order"), Some("piciFORMES"))).unwrap();
+        assert!(filter.admits(&state, "Dryobates villosus"));
+        assert!(!filter.admits(&state, "Strix varia"));
+    }
+
+    /// A rank the page does not know, a missing half of the pair, or a blank
+    /// value is **no filter**, not an empty page. A station whose URL carries
+    /// `rank=family` must still show its species.
+    #[test]
+    fn an_unusable_rank_or_value_is_no_filter_rather_than_an_empty_list() {
+        for (rank, value) in [
+            (Some("family"), Some("Picidae")),
+            (Some("order"), None),
+            (None, Some("Piciformes")),
+            (Some("order"), Some("   ")),
+            (None, None),
+        ] {
+            assert!(
+                TaxonFilter::from_params(&params(rank, value)).is_none(),
+                "rank={rank:?} taxon={value:?} must not become a filter"
+            );
+        }
+    }
+
+    /// A species the station has no taxonomy for does not match any rank. The
+    /// counterpart to the selection gate: without this, a filter that returned
+    /// `true` on a missing taxon would still pass the tests above for every
+    /// species that *does* have one.
+    #[test]
+    fn a_species_with_no_taxonomy_matches_no_rank() {
+        let state = state_with_taxonomy();
+        let filter = TaxonFilter::from_params(&params(Some("order"), Some("Piciformes"))).unwrap();
+        assert!(!filter.admits(&state, "Corvus corax"));
+    }
+
+    /// The chips are built from the species on the page, in count order, and
+    /// the active one is marked.
+    #[test]
+    fn the_chip_row_offers_the_orders_this_station_actually_has() {
+        let state = state_with_taxonomy();
+        let html = order_chips(&state, &species(), "list", "all", None, None);
+
+        assert!(html.contains("Piciformes"), "{html}");
+        assert!(html.contains("Strigiformes"), "{html}");
+        assert!(html.contains("Orthoptera"), "{html}");
+        assert!(
+            !html.contains("Passeriformes"),
+            "only the orders on the page, not the classifier's 75: {html}"
+        );
+        // Two woodpeckers put Piciformes first; the other two tie and sort by
+        // name, so Orthoptera precedes Strigiformes.
+        let pos = |needle: &str| {
+            html.find(needle)
+                .unwrap_or_else(|| panic!("{needle} in {html}"))
+        };
+        assert!(pos("Piciformes") < pos("Orthoptera"), "{html}");
+        assert!(pos("Orthoptera") < pos("Strigiformes"), "{html}");
+        assert!(
+            html.contains(r#"<a class="sp-chip active" href="/species?view=list&amp;filter=all">All orders</a>"#),
+            "with no filter chosen, All orders is the active chip: {html}"
+        );
+
+        let active = TaxonFilter::from_params(&params(Some("order"), Some("Piciformes"))).unwrap();
+        let chosen = order_chips(&state, &species(), "list", "all", None, Some(&active));
+        assert!(
+            chosen.contains(r#"&amp;rank=order&amp;taxon=Strigiformes">Strigiformes"#),
+            "the other orders stay reachable once one is chosen: {chosen}"
+        );
+        assert!(
+            !chosen.contains(r#"<a class="sp-chip active" href="/species?view=list&amp;filter=all">All orders</a>"#),
+            "All orders is no longer the active chip: {chosen}"
+        );
+    }
+
+    /// No taxonomy, or only one order, means no chip row: a control offering
+    /// the only choice there is is furniture.
+    #[test]
+    fn there_is_no_chip_row_without_a_choice_to_make() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let bare = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        assert_eq!(
+            order_chips(&bare, &species(), "list", "all", None, None),
+            "",
+            "no taxonomy means no orders, so no row"
+        );
+
+        let state = state_with_taxonomy();
+        let one_order: Vec<SpeciesCount> = species()
+            .into_iter()
+            .filter(|s| s.sci_name.starts_with("Dryobates"))
+            .collect();
+        assert_eq!(
+            order_chips(&state, &one_order, "list", "all", None, None),
+            "",
+            "both woodpeckers are Piciformes, so there is nothing to choose"
+        );
+    }
+
+    /// A search term survives a chip click, and the chosen order survives a
+    /// search — each used to be dropped by the other's link.
+    #[test]
+    fn a_search_and_a_chosen_order_each_survive_the_other() {
+        let state = state_with_taxonomy();
+        let html = order_chips(&state, &species(), "list", "all", Some("wood pecker"), None);
+        assert!(
+            html.contains("&amp;q=wood%20pecker&amp;rank=order"),
+            "a chip link keeps the search: {html}"
+        );
+
+        let active = TaxonFilter::from_params(&params(Some("order"), Some("Piciformes"))).unwrap();
+        let controls = controls("list", "all", Some("owl"), Some(&active));
+        assert!(
+            controls.contains(r#"<input type="hidden" name="rank" value="order">"#)
+                && controls.contains(r#"<input type="hidden" name="taxon" value="Piciformes">"#),
+            "the search form keeps the order: {controls}"
+        );
+        assert!(
+            controls.contains("/species?view=photos&amp;rank=order&amp;taxon=Piciformes"),
+            "so does the view switcher: {controls}"
+        );
+    }
+
+    /// The detail panel's taxonomy line links each rank back to the list, and
+    /// says nothing at all when the station has no taxonomy for the species.
+    #[test]
+    fn the_detail_panel_links_each_rank_back_to_the_list() {
+        let state = state_with_taxonomy();
+        let line = taxonomy_line(&state, "Dryobates villosus");
+        for (rank, value) in [
+            ("class", "Aves"),
+            ("order", "Piciformes"),
+            ("genus", "Dryobates"),
+        ] {
+            assert!(
+                line.contains(&format!("rank={rank}&amp;taxon={value}")),
+                "{rank} must link to the filtered list: {line}"
+            );
+        }
+        assert!(
+            !line.contains("family"),
+            "the label file states no family, so the panel must not show one: {line}"
+        );
+        assert_eq!(taxonomy_line(&state, "Corvus corax"), "");
+        assert_eq!(taxonomy_line(&state, ""), "");
     }
 }

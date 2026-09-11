@@ -233,6 +233,11 @@ pub fn start_detection_daemon(
         .clone()
         .or_else(|| config.and_then(|c| c.get("METADATA_LABELS_PATH").map(PathBuf::from)));
 
+    // No CLI flag: this is a file an operator curates over months, not
+    // something worth typing at a one-off invocation.
+    let species_aliases_path =
+        config.and_then(|c| c.get("SPECIES_ALIASES_PATH").map(PathBuf::from));
+
     let sf_thresh = resolve_f32_with_default(
         cli.sf_thresh,
         0.03,
@@ -317,6 +322,7 @@ pub fn start_detection_daemon(
         process_existing: cli.process_existing,
         metadata_model_path,
         metadata_labels_path,
+        species_aliases_path,
         // Publish the occurrence filter's real state to Prometheus. This is
         // the number that would have made the inert-filter defect visible from
         // a dashboard instead of from reading the code: 0 means every species

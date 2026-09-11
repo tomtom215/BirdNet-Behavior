@@ -77,12 +77,13 @@ pub(super) fn check_station_location(cli: &Cli, config: Option<&Config>) -> Chec
 /// have caught this said it was fine. It now reports only the coordinates; the
 /// filter's state is this check's to report.
 ///
-/// Deliberately no ONNX session is opened. `--doctor` runs from
-/// `ExecStartPre` on every start, and a diagnostic that loads a model can fail
-/// for reasons that have nothing to do with the thing being diagnosed. The
-/// vocabulary alignment a session would prove is checked by
-/// `SpeciesFilter::load_with_vocabulary` at startup, which refuses a
-/// mismatched model outright; this check owns the configuration half.
+/// It loads the model the way the daemon does (ON-9) — `exists()` used to be
+/// the whole check, and a truncated download or a model for another classifier
+/// passed it — and then reports how the two vocabularies aligned. That last
+/// part is the point: the two label files disagree about the genus of dozens
+/// of species, every one of them dropped in silence before
+/// `inference::vocabulary` existed, and the counts here are where an operator
+/// can see how many and which rule saved them.
 pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Check {
     const NAME: &str = "Species occurrence filter";
 
@@ -149,24 +150,40 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
     let meta_labels = labels
         .as_ref()
         .and_then(|p| birdnet_core::inference::labels::LabelSet::load(p).ok());
-    if let Some(classifier) = classifier_labels.as_ref()
-        && let Err(e) = birdnet_core::inference::species_filter::SpeciesFilter::load_with_vocabulary(
+    // The same alias file the daemon reads, so the counts below are the ones
+    // the running station will have.
+    let aliases = cli
+        .species_aliases
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("SPECIES_ALIASES_PATH").map(PathBuf::from)))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map_or_else(std::collections::HashMap::new, |text| {
+            birdnet_core::inference::vocabulary::parse_alias_file(&text).0
+        });
+
+    let mut alignment = None;
+    if let Some(classifier) = classifier_labels.as_ref() {
+        match birdnet_core::inference::species_filter::SpeciesFilter::load_with_vocabulary(
             &model,
             meta_labels,
-            classifier.len(),
+            classifier,
+            &aliases,
             birdnet_core::inference::species_filter::SpeciesFilterConfig::default(),
-        )
-    {
-        return Check::fail(
-            NAME,
-            format!(
-                "{} is present but cannot be used as a metadata model ({e}); the daemon would \
-                 fall back to admitting every species",
-                model.display()
-            ),
-            "download the metadata model that matches the installed classifier again, and \
-             the label file it shipped with",
-        );
+        ) {
+            Ok(filter) => alignment = filter.alignment_stats().cloned(),
+            Err(e) => {
+                return Check::fail(
+                    NAME,
+                    format!(
+                        "{} is present but cannot be used as a metadata model ({e}); the daemon \
+                         would fall back to admitting every species",
+                        model.display()
+                    ),
+                    "download the metadata model that matches the installed classifier again, and \
+                     the label file it shipped with",
+                );
+            }
+        }
     }
 
     let how = labels.map_or_else(
@@ -178,7 +195,50 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
     } else {
         "; not loaded here because the classifier's labels file could not be read"
     };
-    Check::pass(NAME, format!("active — {}{how}{loaded}", model.display()))
+    Check::pass(
+        NAME,
+        format!(
+            "active — {}{how}{loaded}{}",
+            model.display(),
+            alignment
+                .as_ref()
+                .map_or_else(String::new, describe_alignment)
+        ),
+    )
+}
+
+/// The one-line summary of how the two vocabularies lined up.
+///
+/// Both directions are named because they fail differently and an operator
+/// needs to tell them apart. A metadata species with no classifier counterpart
+/// is nearly always right — the geomodel knows 12 012 species and the
+/// classifier emits 11 560. A *classifier* species no metadata row resolves to
+/// is one this station cannot report at all while the filter runs, and there
+/// is nothing else that would ever say so.
+fn describe_alignment(stats: &birdnet_core::inference::vocabulary::AlignmentStats) -> String {
+    let recovered = if stats.by_common_name == 0 && stats.by_alias == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({} by common name + epithet, {} by an operator alias, e.g. {})",
+            stats.by_common_name,
+            stats.by_alias,
+            stats
+                .recovered_sample
+                .first()
+                .map_or("—", std::string::String::as_str)
+        )
+    };
+    format!(
+        "; {} of the metadata model's {} species map onto the classifier{recovered}, {} do not, \
+         and {} of the classifier's {} species are reached by no metadata row and so cannot pass \
+         while it runs",
+        stats.matched(),
+        stats.metadata_species,
+        stats.unmatched,
+        stats.classifier_unreachable,
+        stats.classifier_species,
+    )
 }
 
 /// Is the repeat-confirmation filter set to something that can actually reject?

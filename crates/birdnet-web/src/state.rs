@@ -53,6 +53,33 @@ pub struct AppState {
     inner: Arc<AppStateInner>,
 }
 
+/// One species' taxonomy, as far as the classifier's label file carries it.
+///
+/// Three ranks, and deliberately not four. The pinned label file's header is
+/// `idx;id;sci_name;com_name;class;order` — there is **no family column** — and
+/// a family inferred from a genus would be a guess wearing the same clothes as
+/// the two ranks the file actually states.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Taxon {
+    /// `Aves`, `Insecta`, `Amphibia`, … — what tells a bird from a
+    /// bush-cricket when the common name does not.
+    pub class: Option<String>,
+    /// `Piciformes`, `Strigiformes`, … — the only rank above genus the file
+    /// states.
+    pub order: Option<String>,
+    /// The first word of a binomial. `None` for a one-word label, whose rank
+    /// the name alone does not settle.
+    pub genus: Option<String>,
+}
+
+impl Taxon {
+    /// Whether this carries nothing worth showing.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.class.is_none() && self.order.is_none() && self.genus.is_none()
+    }
+}
+
 /// Inner state (wrapped in Arc for sharing).
 #[derive(Debug)]
 struct AppStateInner {
@@ -101,6 +128,11 @@ struct AppStateInner {
     /// case the species page says so instead of linking to a page that does
     /// not exist.
     species_codes: HashMap<String, String>,
+    /// Taxonomy by lower-cased scientific name, from the *classifier's* label
+    /// file — the one with the `class` and `order` columns. Empty when the
+    /// station has no such file, in which case the species pages simply do not
+    /// offer taxonomy rather than guessing it.
+    taxonomy: HashMap<String, Taxon>,
     /// Whether the whole public surface sits behind the sign-in (O-4).
     private_mode: bool,
     /// The surfaces left open on a private station; empty otherwise.
@@ -258,6 +290,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
+                taxonomy: HashMap::new(),
                 private_mode: false,
                 public_access: BTreeSet::new(),
                 custom_image_dir: None,
@@ -497,6 +530,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
+                taxonomy: HashMap::new(),
                 private_mode: false,
                 public_access: BTreeSet::new(),
                 custom_image_dir: None,
@@ -549,6 +583,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 species_codes: HashMap::new(),
+                taxonomy: HashMap::new(),
                 private_mode: false,
                 public_access: BTreeSet::new(),
                 custom_image_dir: None,
@@ -624,6 +659,25 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_info_site");
         Self {
             inner: rebuild_inner(inner, |s| s.info_site = site),
+        }
+    }
+
+    /// Install the taxonomy the species pages browse by (`G-15`), as
+    /// `(scientific name, taxon)` pairs; the lookup is case-insensitive on the
+    /// name.
+    #[must_use]
+    pub fn with_taxonomy<I, S>(self, taxa: I) -> Self
+    where
+        I: IntoIterator<Item = (S, Taxon)>,
+        S: AsRef<str>,
+    {
+        let map: HashMap<String, Taxon> = taxa
+            .into_iter()
+            .map(|(sci, taxon)| (sci.as_ref().to_lowercase(), taxon))
+            .collect();
+        let inner = unwrap_inner(self.inner, "with_taxonomy");
+        Self {
+            inner: rebuild_inner(inner, |s| s.taxonomy = map),
         }
     }
 
@@ -1498,6 +1552,13 @@ impl AppState {
             .species_codes
             .get(&scientific_name.to_lowercase())
             .map(String::as_str)
+    }
+
+    /// The taxonomy for a scientific name, if the station's classifier label
+    /// file supplied one (`G-15`).
+    #[must_use]
+    pub fn taxon(&self, scientific_name: &str) -> Option<&Taxon> {
+        self.inner.taxonomy.get(&scientific_name.to_lowercase())
     }
 
     /// Shared handle to the detection-daemon-running flag, for the orchestrator

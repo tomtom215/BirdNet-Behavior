@@ -38,6 +38,105 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — the species pages browse by taxonomic rank
+
+**Class, order and genus** (`G-15`, second half). A flat list of every bird a
+station has heard cannot answer "show me the woodpeckers". The classifier's
+label file states two ranks — its header is
+`idx;id;sci_name;com_name;class;order` — and the genus is the first word of the
+binomial, so three ranks are available without inventing anything.
+
+The List and Photos views gain a row of **order chips** with each order's
+species count, built from the species *this station* has recorded rather than
+the classifier's 11 560: a garden with forty birds gets a handful of orders, not
+seventy-five, and every chip leads somewhere. Chips, search and the view
+switcher compose — each one's links carry the others, which is how a filter
+control usually breaks. Each species' detail page gains a `class · order ·
+genus` line, every rank a link back to the list narrowed to it, so "the other
+*Dryobates* I've heard" is one click from a woodpecker.
+
+**No family rank**, and that is the whole of the design decision. The label file
+has no family column; a family inferred from a genus would be a guess sitting
+beside two stated facts. Genus gets no chip row either — 2 907 genera is not a
+control — only the detail-page link, where the question is about one bird.
+
+A station whose label file carries no taxonomy (the V2.4 text format has no
+columns at all) gets no chips and pages identical to before; so does one where
+every species falls in a single order, because a control offering the only
+choice there is is furniture. `labels.rs` now parses the `order` column
+alongside `class`, and `SpeciesLabel::genus()` returns `None` for a one-word
+label rather than guessing its rank — the pinned file has 55, of which 14 are
+family names ending `-idae` and the rest bare genera.
+
+### Fixed — 41 birds the range filter could never admit
+
+**Vocabulary alignment between the two models** (`G-15`, first half). The
+classifier says what it heard; the geomodel says which species plausibly occur
+at this latitude in this week. They are two models with two label files, frozen
+at different points in a moving taxonomy, and they do not always spell a species
+the same way. A geomodel name the classifier does not carry verbatim was
+dropped, in silence.
+
+Measured on the pair the installer pins — geomodel labels `sha256 c15818db…`,
+12 012 rows; classifier labels `sha256 8124b0ea…`, 11 560 rows, both downloaded
+and hash-verified rather than described from memory — **1 679 geomodel rows have
+no exact scientific-name counterpart**. Most of those the classifier genuinely
+cannot emit. **Sixty-two are the same taxon under a reclassified genus**, and
+forty-one of those are birds: the geomodel writes *Leuconotopicus villosus*
+where the classifier writes *Dryobates villosus*, and both mean Hairy
+Woodpecker. Every one of the 41 was **permanently undetectable at every station
+running the range filter** — Hairy Woodpecker, Red-cockaded Woodpecker,
+White-headed Woodpecker, Evening Grosbeak, Arizona Woodpecker and fifteen more
+woodpeckers among them (nineteen of the forty-one are woodpeckers, the
+*Veniliornis* and *Leuconotopicus* the classifier files under *Dryobates*) — and
+nothing reported it.
+
+`crates/birdnet-core/src/inference/vocabulary.rs` resolves the two vocabularies
+once at load: exact scientific name first, then the **common name and the
+specific epithet together**, the common name compared on its letters alone
+(`Fruit-Dove` = `Fruit Dove`) and the epithet required to agree exactly or
+modulo its Latin gender ending (*gymnocerca* / *gymnocercus*). A match returns
+the **classifier's** spelling, because that is what a detection carries and what
+the passing set is tested against.
+
+The epithet is a veto, not decoration. Three rows match by common name and
+disagree on the epithet, and two are plainly wrong: the classifier's own label
+file calls *Lama glama* — the llama — "Guanaco", and calls *Scapteriscus
+borellii* "Southern Mole Cricket" for a geomodel row that is *Gryllotalpa
+australis*. The third, *Physeter macrocephalus* against *Physeter catodon*, is a
+real synonym the guard costs us; it is not a bird, and one lost whale against
+two wrong admissions is the trade.
+
+Two departures from the finding's original plan, both forced by evidence:
+
+- **No alias table ships.** The plan was to vendor OpenFauna's `aliases.json`,
+  which `tphakala/birdnet-go` embeds. It is CC BY-SA 4.0 and this project is CC
+  BY-NC-SA 4.0 — ShareAlike does not permit adding the NonCommercial
+  restriction. And it does not work: applied to the pinned pair, **all 237 of
+  its entries recover 0 of the 1 679**, because its reclassifications
+  (*Accipiter* → *Tachyspiza* and the like) are ones both of our files already
+  agree on. `SPECIES_ALIASES_PATH` takes an operator's own tab-separated map for
+  the pairs no automatic rule can reach; an unreadable file is a warning, never
+  a reason to take the filter off a running station.
+- **No normalisation on write, and no migration.** The plan called for
+  rewriting stored detections to a canonical name. The names disagree *between
+  two label files*, not between a detection and its own model — a detection
+  already carries the classifier's spelling — so there is nothing in
+  `detections` to collapse, and rewriting it would have broken every join back
+  to the label file the row came from.
+
+`--doctor` now reports both residues, which is the half of the defect that was
+"nothing says so": how many metadata species map onto the classifier and by
+which rule, how many do not, and — read differently — how many *classifier*
+species no metadata row resolves to, and so cannot pass at all while the filter
+runs (1 165 of 11 560 on the pinned pair).
+
+Building the map at load also replaced a linear scan of the classifier's labels
+per passing species per inference, which on the pinned pair is up to 12 012 ×
+11 560 lowercasing comparisons behind one cache miss. The whole alignment takes
+52 ms once (debug build, this machine); no claim is made about the end-to-end
+saving, which was not measured.
+
 ### Added — an operator can write their own alerts on the station's measurements
 
 **Metric rules** (`G-29`). The station failure that loses a season is silent:
