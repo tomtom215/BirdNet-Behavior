@@ -617,6 +617,12 @@ no real-time clock that boots at the epoch and then has NTP land. The job runs
 and re-anchors its schedule rather than waiting years for real time to catch
 up.
 
+The backup's `interval_secs` follows `BACKUP_SCHEDULE`, the one cadence an
+operator sets, so a station on `daily` is reported on a daily cadence rather
+than told it is not due for another six days. Every other job's interval is
+fixed — including the space reclaim, which stays weekly whatever the backup is
+set to.
+
 `due` is the scheduler's own rule, shared with the loop that runs the jobs
 rather than re-implemented here. One thing it cannot see is that loop's
 in-process floor, which stops a station with a full disk re-running a weekly

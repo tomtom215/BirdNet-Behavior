@@ -48,8 +48,8 @@ use std::time::Duration;
 use birdnet_integrations::offsite::OffsiteConfig;
 
 use birdnet_db::sqlite::{
-    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_LOG_RETENTION, JOB_SESSION_PRUNE, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
+    BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM,
+    JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION, JOB_SESSION_PRUNE, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
 };
 
 /// Daily integrity-check cadence.
@@ -85,40 +85,55 @@ const SCHEDULER_TICK: Duration = Duration::from_secs(30 * 60);
 /// extracted clips per species and prune the older ones off disk.
 /// `species_cap == 0` disables the cap (keep everything).
 pub fn spawn_database_maintenance(
-    db_path: PathBuf,
-    backup_dir: PathBuf,
-    recordings_dir: PathBuf,
-    species_cap: u32,
-    clip_retention_days: u32,
-    offsite: Option<Arc<OffsiteConfig>>,
+    plan: MaintenancePlan,
     ingest_halted: Arc<AtomicBool>,
     metrics: Option<birdnet_web::metrics::SharedMetrics>,
 ) {
     tokio::spawn(async move {
-        run_loop(
-            db_path,
-            backup_dir,
-            recordings_dir,
-            species_cap,
-            clip_retention_days,
-            offsite,
-            &ingest_halted,
-            metrics.as_deref(),
-        )
-        .await;
+        run_loop(plan, &ingest_halted, metrics.as_deref()).await;
     });
 }
 
+/// Everything the maintenance loop is configured with.
+///
+/// A struct rather than nine positional parameters. Two of them are `u32` and
+/// three are paths, so a transposed pair would compile and be wrong — which is
+/// the kind of mistake that shows up as a station pruning the wrong directory.
+#[derive(Debug, Clone)]
+pub struct MaintenancePlan {
+    /// The station's database.
+    pub db_path: PathBuf,
+    /// Where local snapshots are written.
+    pub backup_dir: PathBuf,
+    /// Where extracted clips live, for the per-species cap.
+    pub recordings_dir: PathBuf,
+    /// Newest clips kept per species; `0` keeps everything.
+    pub species_cap: u32,
+    /// Days a clip is kept before the date-based retention removes it.
+    pub clip_retention_days: u32,
+    /// Where backups are sent, if anywhere.
+    pub offsite: Option<Arc<OffsiteConfig>>,
+    /// How often a backup is taken (`G-30`).
+    pub backup_schedule: BackupSchedule,
+}
+
 async fn run_loop(
-    db_path: PathBuf,
-    backup_dir: PathBuf,
-    recordings_dir: PathBuf,
-    species_cap: u32,
-    clip_retention_days: u32,
-    offsite: Option<Arc<OffsiteConfig>>,
+    plan: MaintenancePlan,
     ingest_halted: &AtomicBool,
     metrics: Option<&birdnet_web::metrics::MetricsRegistry>,
 ) {
+    let MaintenancePlan {
+        db_path,
+        backup_dir,
+        recordings_dir,
+        species_cap,
+        clip_retention_days,
+        offsite,
+        backup_schedule,
+    } = plan;
+    // From `birdnet-db`, so the cadence this loop schedules against and the
+    // one `GET /api/v2/system/jobs` reports are one number (`G-30`).
+    let backup_interval = Duration::from_secs(backup_schedule.interval_secs().unsigned_abs());
     tracing::info!(
         db_path = %db_path.display(),
         backup_dir = %backup_dir.display(),
@@ -126,7 +141,8 @@ async fn run_loop(
         species_cap,
         clip_retention_days,
         integrity_check_every_hours = INTEGRITY_CHECK_INTERVAL.as_secs() / 3600,
-        vacuum_every_days = VACUUM_INTERVAL.as_secs() / 86400,
+        backup_every_hours = backup_interval.as_secs() / 3600,
+        reclaim_every_days = VACUUM_INTERVAL.as_secs() / 86400,
         backup_retention = BACKUP_RETENTION,
         offsite = offsite.as_ref().map_or_else(
             || "off".to_owned(),
@@ -218,7 +234,7 @@ async fn run_loop(
             run_summary_audit(&db_path).await;
             mark_ran(&db_path, JOB_SUMMARY_AUDIT, &mut attempted).await;
         }
-        if due(&db_path, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await {
+        if due(&db_path, JOB_BACKUP_VACUUM, backup_interval, &attempted).await {
             // The verdict, not merely the fact that the loop reached this line.
             //
             // `mark_ran` was called unconditionally here, and the station-health
@@ -226,7 +242,7 @@ async fn run_loop(
             // backup that failed every week for a year refreshed its timestamp
             // every week and never once looked stale. The only thing that check
             // could ever detect was the maintenance loop having *stopped*.
-            let outcome = run_backup_and_vacuum(&db_path, &backup_dir, offsite.as_deref()).await;
+            let outcome = run_backup(&db_path, &backup_dir, offsite.as_deref()).await;
             mark_ran_with(
                 &db_path,
                 JOB_BACKUP_VACUUM,
@@ -247,6 +263,26 @@ async fn run_loop(
                 )
                 .await;
             }
+        }
+        // Its own job, on its own weekly cadence, because it is the expensive
+        // half. A station backing up daily should not also rewrite its
+        // database file daily: on the SD card this project targets that is
+        // write endurance spent for space nobody needed back yet.
+        if due(
+            &db_path,
+            birdnet_db::sqlite::JOB_SPACE_RECLAIM,
+            VACUUM_INTERVAL,
+            &attempted,
+        )
+        .await
+        {
+            run_space_reclaim(&db_path).await;
+            mark_ran(
+                &db_path,
+                birdnet_db::sqlite::JOB_SPACE_RECLAIM,
+                &mut attempted,
+            )
+            .await;
         }
     }
 }
@@ -1064,7 +1100,7 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
     }
 }
 
-async fn run_backup_and_vacuum(
+async fn run_backup(
     db_path: &Path,
     backup_dir: &Path,
     offsite: Option<&OffsiteConfig>,
@@ -1124,7 +1160,28 @@ async fn run_backup_and_vacuum(
         tracing::warn!(error = %e, "backup pruning failed");
     }
 
-    // Step 3: checkpoint the WAL, then return the free pages a step at a time.
+    BackupOutcome {
+        local: true,
+        offsite: offsite_ok,
+    }
+}
+
+/// Checkpoint the WAL, then return the free pages a step at a time.
+///
+/// Its own job since `G-30`. It used to be step 3 of the backup, which was
+/// fine while the backup was weekly and stopped being fine the moment the
+/// backup became schedulable: an operator asking for a daily *backup* is not
+/// asking to rewrite the database file every day, and on an SD card that is
+/// write endurance spent for nothing.
+///
+/// Best-effort throughout, and it records no verdict. A failed reclaim costs
+/// disk space; a failed backup costs the ability to recover at all, and that
+/// asymmetry is why the backup's verdict was never the reclaim's.
+async fn run_space_reclaim(db_path: &Path) {
+    if !db_path.exists() {
+        tracing::debug!("space reclaim skipped: db not present yet");
+        return;
+    }
     let db_path_v = db_path.to_path_buf();
     let vac = tokio::task::spawn_blocking(move || {
         // Best-effort checkpoint: the reclaim works even if this fails.
@@ -1143,14 +1200,6 @@ async fn run_backup_and_vacuum(
         ),
         Ok(Err(e)) => tracing::warn!(error = %e, "scheduled space reclaim failed"),
         Err(e) => tracing::warn!(error = %e, "scheduled space reclaim task panicked"),
-    }
-
-    // The local verdict is the *backup's*, not the reclaim's. A failed reclaim
-    // costs disk space; a failed backup costs the ability to recover at all,
-    // and that is the value a health check keys on.
-    BackupOutcome {
-        local: true,
-        offsite: offsite_ok,
     }
 }
 

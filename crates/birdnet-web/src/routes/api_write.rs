@@ -1026,7 +1026,15 @@ async fn capture_status(State(state): State<AppState>) -> (StatusCode, Json<Valu
 async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let now = now_unix_secs();
     let statuses = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::job_statuses(conn, now).unwrap_or_default())
+        // The backup is the one job whose cadence the operator sets, so the
+        // config file is read for it rather than the default assumed — a
+        // station on `daily` told it is not due for six more days would be
+        // worse than no answer. `routes::admin::doctor` reads the config the
+        // same way, for the same reason: it is the only place the truth is.
+        let schedule = read_backup_schedule(&state);
+        state.with_db(|conn| {
+            birdnet_db::sqlite::job_statuses(conn, now, schedule).unwrap_or_default()
+        })
     })
     .await
     .unwrap_or_default();
@@ -1057,6 +1065,26 @@ async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>)
         StatusCode::OK,
         Json(json!({ "now_unix": now, "jobs": jobs })),
     )
+}
+
+/// The station's configured backup cadence, or the default when it has none.
+///
+/// A station with no config file, an unreadable one, or a `BACKUP_SCHEDULE`
+/// nobody implements falls back to the default rather than failing the
+/// request: this endpoint reports the schedule, it does not enforce it, and an
+/// unreadable config is the scheduler's problem to complain about (it does).
+fn read_backup_schedule(state: &AppState) -> birdnet_db::sqlite::BackupSchedule {
+    use birdnet_db::sqlite::BackupSchedule;
+
+    state
+        .config_path()
+        .and_then(|path| birdnet_core::config::Config::load_from(path).ok())
+        .and_then(|cfg| {
+            cfg.get("BACKUP_SCHEDULE")
+                .map(std::borrow::ToOwned::to_owned)
+        })
+        .and_then(|raw| BackupSchedule::parse(&raw).ok())
+        .unwrap_or_default()
 }
 
 /// Seconds since the Unix epoch, saturating rather than wrapping.

@@ -849,13 +849,32 @@ async fn serve(
         }
     };
 
+    // The one cadence an operator chooses. A name nobody implements is
+    // reported and the default kept, rather than stopping the station: a
+    // typo in a schedule must not cost it its backups entirely.
+    let backup_schedule = config
+        .as_ref()
+        .and_then(|c| c.get("BACKUP_SCHEDULE"))
+        .map_or_else(birdnet_db::sqlite::BackupSchedule::default, |raw| {
+            match birdnet_db::sqlite::BackupSchedule::parse(raw) {
+                Ok(s) => s,
+                Err(why) => {
+                    tracing::warn!(%why, "keeping the default weekly backup schedule");
+                    birdnet_db::sqlite::BackupSchedule::default()
+                }
+            }
+        });
+
     maintenance::spawn_database_maintenance(
-        db_path.clone(),
-        backup_dir.clone(),
-        recordings_dir_for_maintenance,
-        species_cap,
-        clip_retention_days,
-        offsite,
+        maintenance::MaintenancePlan {
+            db_path: db_path.clone(),
+            backup_dir: backup_dir.clone(),
+            recordings_dir: recordings_dir_for_maintenance,
+            species_cap,
+            clip_retention_days,
+            offsite,
+            backup_schedule,
+        },
         ingest_halt_for_maintenance,
         Some(metrics_for_maintenance),
     );

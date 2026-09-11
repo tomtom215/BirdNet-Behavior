@@ -38,6 +38,40 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a daily backup, without a daily rewrite of the database
+
+**`BACKUP_SCHEDULE=daily`** (`G-30`, the schedule half). Weekly stays the
+default, because switching an existing station to daily would multiply its
+offsite upload by seven and that is not a change to make underneath somebody.
+
+The interesting half is what `daily` deliberately does **not** make daily. The
+weekly job was four steps — local snapshot, offsite upload, prune, then a
+**space reclaim** that checkpoints the write-ahead log and returns free pages
+to the filesystem. Shortening that job's interval would have rewritten parts of
+the database file every day, and on the SD card this project targets that is
+write endurance spent for space nobody asked to have back. An operator who
+wants a daily backup is not asking for that.
+
+So the reclaim is now its own job on its own weekly cadence, under the new key
+`space_reclaim`, and `BACKUP_SCHEDULE` moves only the backup. The catalogue
+drift gate from `G-32` is what made this cheap: adding the job to the scheduler
+without adding it to the catalogue fails a test that scans the source for `pub
+const JOB_` declarations.
+
+`GET /api/v2/system/jobs` reports the configured cadence rather than the
+default, so a daily station is not told its backup is not due for another six
+days. That took one parameter rather than a second copy of the schedule: the
+`BackupSchedule` type lives in `birdnet-db` beside the job keys, the scheduler
+reads it, and the API reads the config file the way `routes::admin::doctor`
+already does — a gate asserts the reclaim keeps its weekly interval under both
+schedules, which is what would catch the cadence being applied to every job
+instead of the one that is configurable.
+
+`spawn_database_maintenance` took its ninth positional parameter with this
+change, two of them `u32` and three of them paths — a transposed pair would
+have compiled and shown up as a station pruning the wrong directory. It takes a
+`MaintenancePlan` now.
+
 ### Added — a backup that survives a bad uplink
 
 **`OFFSITE_BACKUP=rsync`** (`G-30`, the target half). The same backup, to the

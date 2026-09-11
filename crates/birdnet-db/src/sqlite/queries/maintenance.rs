@@ -20,8 +20,22 @@ pub const JOB_INTEGRITY_CHECK: &str = "integrity_check";
 pub const JOB_SESSION_PRUNE: &str = "session_prune";
 /// Job key for the daily per-species recording cap (`MAX_FILES_SPECIES`).
 pub const JOB_SPECIES_CAP: &str = "species_cap";
-/// Job key for the weekly backup + VACUUM pass.
+/// Job key for the backup pass (local snapshot, then the offsite upload).
+///
+/// Still spelled `backup_vacuum` because that is what existing stations have a
+/// row under, and renaming it would orphan every recorded history. It no
+/// longer vacuums: the space reclaim is [`JOB_SPACE_RECLAIM`], on its own
+/// cadence, because a backup that an operator wants daily is not a reason to
+/// rewrite the database file daily on an SD card.
 pub const JOB_BACKUP_VACUUM: &str = "backup_vacuum";
+
+/// Job key for the weekly space reclaim (WAL checkpoint, then free pages back).
+///
+/// Split out of the backup job when the backup became schedulable
+/// ([`BackupSchedule`]). The reclaim rewrites parts of the database file, and
+/// on the SD card this project targets that is a write-endurance cost with no
+/// reason to pay it more often than the space is actually needed back.
+pub const JOB_SPACE_RECLAIM: &str = "space_reclaim";
 /// Job key for the daily prune of the append-only operational logs.
 pub const JOB_LOG_RETENTION: &str = "log_retention";
 /// Job key for the daily `species_summary` drift check.
@@ -81,8 +95,54 @@ pub const NOTIFICATION_RETENTION_DAYS: u32 = 90;
 /// instead of each carrying its own copy to drift out of sync.
 pub const DAILY_INTERVAL_SECS: i64 = 24 * 60 * 60;
 
-/// Period of the backup + VACUUM job.
+/// Period of the space reclaim, and the default period of the backup.
 pub const BACKUP_VACUUM_INTERVAL_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// How often the station takes a backup.
+///
+/// The one cadence an operator chooses, because it is the one with a real
+/// trade behind it: a daily backup means losing at most a day rather than a
+/// week, and it also means seven times the offsite upload on a link that may
+/// be metered. Weekly stays the default so an existing station's bandwidth
+/// does not change underneath it.
+///
+/// Lives here beside the job keys for the same reason the intervals do: the
+/// loop that schedules the backup and `GET /api/v2/system/jobs` that reports
+/// when it is next due read one definition instead of two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackupSchedule {
+    /// Every seven days. The default.
+    #[default]
+    Weekly,
+    /// Every day.
+    Daily,
+}
+
+impl BackupSchedule {
+    /// Parse the `BACKUP_SCHEDULE` setting. Empty or absent is [`Self::Weekly`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the operator-facing reason when the value is neither.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "weekly" => Ok(Self::Weekly),
+            "daily" => Ok(Self::Daily),
+            other => Err(format!(
+                "BACKUP_SCHEDULE is `{other}`; use `weekly` (the default) or `daily`"
+            )),
+        }
+    }
+
+    /// How many seconds between backups.
+    #[must_use]
+    pub const fn interval_secs(self) -> i64 {
+        match self {
+            Self::Weekly => BACKUP_VACUUM_INTERVAL_SECS,
+            Self::Daily => DAILY_INTERVAL_SECS,
+        }
+    }
+}
 
 /// Read the Unix-seconds timestamp at which `job` last completed.
 ///
@@ -215,9 +275,17 @@ pub const JOBS: &[JobSpec] = &[
     },
     JobSpec {
         job: JOB_BACKUP_VACUUM,
-        title: "Backup and VACUUM",
+        title: "Backup and offsite upload",
+        // The default. `job_statuses` substitutes the configured cadence, so
+        // a station set to `daily` is not reported as overdue for six days.
         interval_secs: BACKUP_VACUUM_INTERVAL_SECS,
         reports_verdict: true,
+    },
+    JobSpec {
+        job: JOB_SPACE_RECLAIM,
+        title: "Space reclaim",
+        interval_secs: BACKUP_VACUUM_INTERVAL_SECS,
+        reports_verdict: false,
     },
     JobSpec {
         job: JOB_OFFSITE_BACKUP,
@@ -334,13 +402,22 @@ pub struct JobStatus {
 /// Driven by the catalogue and not by the table, so a job that has never run
 /// appears with `last_run_unix: None` rather than not appearing at all.
 ///
+/// `schedule` is the station's configured backup cadence. It is a parameter
+/// rather than a constant because it is the one cadence an operator sets, and
+/// a reader told the default would be told a daily station is not due for
+/// another six days.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure. A missing `maintenance_runs` table is
 /// an error rather than an empty answer, for the reason [`last_run_unix`]
 /// gives: it would otherwise report every job as never-run on a database whose
 /// migrations did not run.
-pub fn job_statuses(conn: &Connection, now_unix: i64) -> Result<Vec<JobStatus>, DbError> {
+pub fn job_statuses(
+    conn: &Connection,
+    now_unix: i64,
+    schedule: BackupSchedule,
+) -> Result<Vec<JobStatus>, DbError> {
     let mut out = Vec::with_capacity(JOBS.len());
     for spec in JOBS {
         let row = last_run_result(conn, spec.job)?;
@@ -348,14 +425,22 @@ pub fn job_statuses(conn: &Connection, now_unix: i64) -> Result<Vec<JobStatus>, 
             Some((when, ok)) => (Some(when), ok),
             None => (None, None),
         };
+        // The backup is the one job whose cadence the operator chooses, so its
+        // catalogue entry is a default rather than the answer. Reporting the
+        // default would tell a daily station it is not due for six more days.
+        let interval_secs = if spec.job == JOB_BACKUP_VACUUM {
+            schedule.interval_secs()
+        } else {
+            spec.interval_secs
+        };
         out.push(JobStatus {
             job: spec.job,
             title: spec.title,
-            interval_secs: spec.interval_secs,
+            interval_secs,
             last_run_unix,
             ok,
-            due: due_state(last_run_unix, spec.interval_secs, now_unix),
-            next_due_unix: last_run_unix.map(|t| t.saturating_add(spec.interval_secs)),
+            due: due_state(last_run_unix, interval_secs, now_unix),
+            next_due_unix: last_run_unix.map(|t| t.saturating_add(interval_secs)),
         });
     }
     Ok(out)
@@ -437,8 +522,8 @@ mod tests {
 #[cfg(test)]
 mod job_catalogue_tests {
     use super::{
-        BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, DueReason, JOBS, JobSpec, due_state,
-        job_statuses,
+        BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason, JOBS, JobSpec,
+        due_state, job_statuses,
     };
     use crate::sqlite::open_or_create;
 
@@ -525,6 +610,113 @@ mod job_catalogue_tests {
         }
     }
 
+    // ── the backup schedule ─────────────────────────────────────────────
+
+    /// Weekly is the default, including for an absent or blank setting: an
+    /// existing station's upload volume must not change underneath it because
+    /// a key went missing.
+    ///
+    /// Observed failing with the `"" | "weekly"` arm returning `Daily`: the
+    /// assertion on the empty string went red.
+    #[test]
+    fn an_absent_backup_schedule_is_weekly() {
+        for raw in ["", "  ", "weekly", "WEEKLY", " Weekly "] {
+            assert_eq!(
+                BackupSchedule::parse(raw),
+                Ok(BackupSchedule::Weekly),
+                "{raw:?}"
+            );
+        }
+        assert_eq!(BackupSchedule::default(), BackupSchedule::Weekly);
+        assert_eq!(
+            BackupSchedule::Weekly.interval_secs(),
+            BACKUP_VACUUM_INTERVAL_SECS
+        );
+    }
+
+    /// Daily is a day, and a name nobody implements is refused with both
+    /// spellings named rather than silently treated as one of them.
+    #[test]
+    fn daily_is_a_day_and_a_typo_is_refused() {
+        assert_eq!(BackupSchedule::parse("daily"), Ok(BackupSchedule::Daily));
+        assert_eq!(BackupSchedule::Daily.interval_secs(), DAILY_INTERVAL_SECS);
+
+        match BackupSchedule::parse("hourly") {
+            Err(why) => {
+                assert!(why.contains("weekly") && why.contains("daily"), "{why}");
+            }
+            Ok(s) => panic!("`hourly` was accepted as {s:?}"),
+        }
+    }
+
+    /// **The gate that stops the API lying to a daily station.** The
+    /// catalogue's interval for the backup is a default; `job_statuses` has to
+    /// substitute the configured one, or a station backing up daily is told it
+    /// is not due for another six days.
+    ///
+    /// Observed failing with `interval_secs: spec.interval_secs` restored in
+    /// `job_statuses`: the backup reported 604800 and was not due.
+    #[test]
+    fn a_daily_station_is_reported_on_its_own_cadence() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_or_create(&dir.path().join("t.db")).expect("db");
+        let last = 1_000_000;
+        super::record_run(&conn, super::JOB_BACKUP_VACUUM, last).expect("rec");
+
+        // A day and a minute later: due on a daily schedule, not on a weekly.
+        let now = last + DAILY_INTERVAL_SECS + 60;
+
+        let daily = job_statuses(&conn, now, BackupSchedule::Daily).expect("s");
+        let backup = daily
+            .iter()
+            .find(|s| s.job == super::JOB_BACKUP_VACUUM)
+            .expect("present");
+        assert_eq!(backup.interval_secs, DAILY_INTERVAL_SECS);
+        assert_eq!(backup.due, Some(DueReason::IntervalElapsed));
+        assert_eq!(backup.next_due_unix, Some(last + DAILY_INTERVAL_SECS));
+
+        let weekly = job_statuses(&conn, now, BackupSchedule::Weekly).expect("s");
+        let backup = weekly
+            .iter()
+            .find(|s| s.job == super::JOB_BACKUP_VACUUM)
+            .expect("present");
+        assert_eq!(backup.interval_secs, BACKUP_VACUUM_INTERVAL_SECS);
+        assert_eq!(backup.due, None, "not due for another six days");
+    }
+
+    /// **The reason the reclaim was split out.** A daily *backup* is not a
+    /// request to rewrite the database file daily; on an SD card that is write
+    /// endurance spent for space nobody needed back. The reclaim keeps its own
+    /// weekly cadence whatever the backup is set to.
+    ///
+    /// Observed failing with the `spec.job == JOB_BACKUP_VACUUM` condition
+    /// removed, so the schedule applied to every job: the reclaim came back on
+    /// a daily cadence.
+    #[test]
+    fn the_space_reclaim_stays_weekly_even_on_a_daily_station() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_or_create(&dir.path().join("t.db")).expect("db");
+        for schedule in [BackupSchedule::Weekly, BackupSchedule::Daily] {
+            let statuses = job_statuses(&conn, 1_000_000, schedule).expect("s");
+            let reclaim = statuses
+                .iter()
+                .find(|s| s.job == super::JOB_SPACE_RECLAIM)
+                .expect("the reclaim is a job of its own");
+            assert_eq!(
+                reclaim.interval_secs, BACKUP_VACUUM_INTERVAL_SECS,
+                "the reclaim must not follow the backup schedule ({schedule:?})"
+            );
+            let spec = JOBS
+                .iter()
+                .find(|j| j.job == super::JOB_SPACE_RECLAIM)
+                .expect("catalogued");
+            assert!(
+                !spec.reports_verdict,
+                "a failed reclaim costs disk space, not recoverability, so it has no verdict"
+            );
+        }
+    }
+
     // ── the due rule ────────────────────────────────────────────────────
 
     /// A job that has never run is due now, not one full period from now: an
@@ -579,7 +771,7 @@ mod job_catalogue_tests {
     fn a_fresh_database_reports_every_job_as_never_run() {
         let dir = tempfile::tempdir().expect("tempdir");
         let conn = open_or_create(&dir.path().join("t.db")).expect("db");
-        let statuses = job_statuses(&conn, 1_000_000).expect("statuses");
+        let statuses = job_statuses(&conn, 1_000_000, BackupSchedule::Weekly).expect("statuses");
         assert_eq!(statuses.len(), JOBS.len());
         for s in &statuses {
             assert_eq!(s.last_run_unix, None, "{}", s.job);
@@ -598,7 +790,7 @@ mod job_catalogue_tests {
         let now = 1_000_000;
         super::record_run_result(&conn, super::JOB_INTEGRITY_CHECK, now, Some(true)).expect("rec");
 
-        let statuses = job_statuses(&conn, now + 60).expect("statuses");
+        let statuses = job_statuses(&conn, now + 60, BackupSchedule::Weekly).expect("statuses");
         let it = statuses
             .iter()
             .find(|s| s.job == super::JOB_INTEGRITY_CHECK)
@@ -631,7 +823,7 @@ mod job_catalogue_tests {
         super::record_run_result(&conn, super::JOB_INTEGRITY_CHECK, now, Some(false)).expect("a");
         super::record_run(&conn, super::JOB_SESSION_PRUNE, now).expect("b");
 
-        let statuses = job_statuses(&conn, now).expect("statuses");
+        let statuses = job_statuses(&conn, now, BackupSchedule::Weekly).expect("statuses");
         let failed = statuses
             .iter()
             .find(|s| s.job == super::JOB_INTEGRITY_CHECK)
@@ -666,7 +858,12 @@ mod job_catalogue_tests {
         let conn = open_or_create(&dir.path().join("t.db")).expect("db");
         let last = 1_000;
         super::record_run(&conn, super::JOB_BACKUP_VACUUM, last).expect("rec");
-        let statuses = job_statuses(&conn, last + BACKUP_VACUUM_INTERVAL_SECS * 10).expect("s");
+        let statuses = job_statuses(
+            &conn,
+            last + BACKUP_VACUUM_INTERVAL_SECS * 10,
+            BackupSchedule::Weekly,
+        )
+        .expect("s");
         let it = statuses
             .iter()
             .find(|s| s.job == super::JOB_BACKUP_VACUUM)

@@ -119,6 +119,14 @@ ssh-keyscan -p 22 backup.example.net | sudo -u birdnet tee /var/lib/birdnet/ssh/
 
 `OFFSITE_SFTP_HOST_KEY_POLICY` has no "off". Host key checking is what makes the upload go to *your* server rather than to whoever answers, and there is no setting that disables it. Use `accept-new` for the first connection on a network you control, then set it back to `yes` so a *changed* key is refused.
 
+### How often
+
+`BACKUP_SCHEDULE` is `weekly` (the default) or `daily`. Daily means losing at most a day rather than a week; it also means seven times the offsite upload, which is why weekly stays the default rather than changing an existing station's bandwidth underneath it.
+
+It schedules the **backup** only. The space reclaim — checkpointing the write-ahead log and returning free pages to the filesystem — is a separate job and stays weekly whatever you set here. Asking for a daily backup is not asking to rewrite the database file every day, and on an SD card that is write endurance spent for space nobody needed back.
+
+Both are listed at `GET /api/v2/system/jobs`, with when each last ran and whether it is due.
+
 ### Over rsync, when the link is bad
 
 `OFFSITE_BACKUP=rsync` sends the same backup to the same SSH server, with the same `OFFSITE_SFTP_*` settings above — only the program that moves the bytes changes. Switching is one word:
