@@ -9,6 +9,7 @@ pub mod alert_rules;
 pub mod audio_levels;
 pub mod audio_sources;
 pub mod clock;
+pub mod detection_comments;
 pub mod dynamic_thresholds;
 pub mod metric_rules;
 pub mod migration;

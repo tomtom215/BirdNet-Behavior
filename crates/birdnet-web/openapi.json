@@ -2641,6 +2641,277 @@
           }
         }
       }
+    },
+    "/detections/comments": {
+      "get": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "List a detection's comments",
+        "description": "Every comment on one detection, oldest first, so a reply follows what it answers. Comments are append-only: the database refuses to rewrite one.",
+        "operationId": "listDetectionComments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "2026-09-03"
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "06:12:44"
+          },
+          {
+            "name": "sci_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "Dryobates villosus"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thread, oldest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detection": {
+                      "type": "string",
+                      "example": "2026-09-03 06:12:44 Dryobates villosus"
+                    },
+                    "comments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "example": 42
+                          },
+                          "date": {
+                            "type": "string",
+                            "example": "2026-09-03"
+                          },
+                          "time": {
+                            "type": "string",
+                            "example": "06:12:44"
+                          },
+                          "sci_name": {
+                            "type": "string",
+                            "example": "Dryobates villosus"
+                          },
+                          "author": {
+                            "type": "string",
+                            "example": "api",
+                            "description": "The name recorded when the comment was written. Comments posted through this API are always attributed to `api`: a bearer token is not a person, and a caller-supplied name would be a name the caller chose."
+                          },
+                          "body": {
+                            "type": "string",
+                            "example": "Call length says Downy, but the spectrogram is Hairy."
+                          },
+                          "at": {
+                            "type": "string",
+                            "example": "2026-09-03 06:20:11",
+                            "description": "UTC, whole seconds."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed."
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Comment on a detection",
+        "description": "Adds one comment. Many comments per detection are the point — unlike a review's `notes`, which is keyed on the detection and replaces whatever was there. The body is trimmed and must be 1 to 2000 characters after trimming.",
+        "operationId": "addDetectionComment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "date",
+                  "time",
+                  "sci_name",
+                  "body"
+                ],
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "example": "2026-09-03",
+                    "description": "Local calendar date of the detection, `YYYY-MM-DD`."
+                  },
+                  "time": {
+                    "type": "string",
+                    "example": "06:12:44",
+                    "description": "Local time of the detection, `HH:MM:SS`."
+                  },
+                  "sci_name": {
+                    "type": "string",
+                    "example": "Dryobates villosus",
+                    "description": "Scientific name exactly as the detection was recorded."
+                  },
+                  "body": {
+                    "type": "string",
+                    "example": "Call length says Downy, but the spectrogram is Hairy.",
+                    "description": "1 to 2000 characters after trimming. There is no `author` field: comments written here are attributed to `api`."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The comment as stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 42
+                    },
+                    "date": {
+                      "type": "string",
+                      "example": "2026-09-03"
+                    },
+                    "time": {
+                      "type": "string",
+                      "example": "06:12:44"
+                    },
+                    "sci_name": {
+                      "type": "string",
+                      "example": "Dryobates villosus"
+                    },
+                    "author": {
+                      "type": "string",
+                      "example": "api",
+                      "description": "The name recorded when the comment was written. Comments posted through this API are always attributed to `api`: a bearer token is not a person, and a caller-supplied name would be a name the caller chose."
+                    },
+                    "body": {
+                      "type": "string",
+                      "example": "Call length says Downy, but the spectrogram is Hairy."
+                    },
+                    "at": {
+                      "type": "string",
+                      "example": "2026-09-03 06:20:11",
+                      "description": "UTC, whole seconds."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed, or the body is empty or over 2000 characters."
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          }
+        }
+      }
+    },
+    "/detections/comments/delete": {
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Remove a comment",
+        "description": "Deletes one comment by id. A comment is never edited — the database refuses that — but it can be withdrawn, which is what a note containing a mistake or a person's name needs. The audit row records the id and the author, never the body.",
+        "operationId": "deleteDetectionComment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "format": "int64",
+                    "example": 42
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The comment was removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "author": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "404": {
+            "description": "No comment has that id."
+          }
+        }
+      }
     }
   },
   "components": {

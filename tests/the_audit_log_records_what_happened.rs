@@ -286,6 +286,8 @@ const ACTIONS: &[&str] = &[
     "data.database.restore",
     "data.detections.clear",
     "data.recordings.clear",
+    "detection.comment.add",
+    "detection.comment.delete",
     "detection.delete",
     "detection.lock",
     "detection.review",

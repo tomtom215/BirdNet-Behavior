@@ -32,7 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::{
     Json, Router,
@@ -61,6 +61,8 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/v2/settings"),
     ("POST", "/api/v2/control/restart"),
     ("POST", "/api/v2/control/restart-source"),
+    ("POST", "/api/v2/detections/comments"),
+    ("POST", "/api/v2/detections/comments/delete"),
 ];
 
 /// Read endpoints that live behind the same bearer gate.
@@ -79,6 +81,7 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
 pub const READ_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v2/settings"),
     ("GET", "/api/v2/system/capture"),
+    ("GET", "/api/v2/detections/comments"),
 ];
 
 /// Whether `path` is one of the mutating API endpoints.
@@ -107,6 +110,152 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/control/restart", post(restart))
         .route("/api/v2/control/restart-source", post(restart_source))
         .route("/api/v2/system/capture", get(capture_status))
+        .route(
+            "/api/v2/detections/comments",
+            get(list_comments).post(add_comment),
+        )
+        .route("/api/v2/detections/comments/delete", post(delete_comment))
+}
+
+/// The comment to write.
+///
+/// No `author` field, deliberately. A bearer token is not a person — the same
+/// reason every audit row this module writes has `user_id: None` — and a name
+/// the caller supplies is a name the caller chose. Comments written through the
+/// API are attributed to [`API_AUTHOR`], which is unforgeable in the only sense
+/// that matters here: a reader can tell a script's note from a person's. A
+/// script with something to say about *who* says it in the body.
+#[derive(Debug, Deserialize)]
+struct CommentBody {
+    date: String,
+    time: String,
+    sci_name: String,
+    body: String,
+}
+
+/// The comment to remove.
+#[derive(Debug, Deserialize)]
+struct CommentId {
+    id: i64,
+}
+
+/// What a comment written through this API is attributed to.
+const API_AUTHOR: &str = "api";
+
+async fn list_comments(
+    State(state): State<AppState>,
+    Query(key): Query<Key>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
+        return e;
+    }
+    let comments = state.with_db(|conn| {
+        birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
+    });
+    match comments {
+        Ok(comments) => (
+            StatusCode::OK,
+            Json(json!({
+                "detection": target_of(&key.date, &key.time, &key.sci_name),
+                "comments": comments.iter().map(comment_json).collect::<Vec<_>>(),
+            })),
+        ),
+        Err(e) => comment_error(&e),
+    }
+}
+
+async fn add_comment(
+    State(state): State<AppState>,
+    Json(body): Json<CommentBody>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
+        return e;
+    }
+    let written = state.with_db(|conn| {
+        birdnet_db::detection_comments::insert(
+            conn,
+            &birdnet_db::detection_comments::NewComment {
+                date: &body.date,
+                time: &body.time,
+                sci_name: &body.sci_name,
+                user_id: None,
+                author: API_AUTHOR,
+                body: &body.body,
+            },
+        )
+    });
+    match written {
+        Ok(comment) => {
+            crate::audit::audit(
+                &state,
+                None,
+                "detection.comment.add",
+                Some(&target_of(&body.date, &body.time, &body.sci_name)),
+                Some(&format!("{VIA_API} id={}", comment.id)),
+            );
+            (StatusCode::CREATED, Json(comment_json(&comment)))
+        }
+        Err(e) => comment_error(&e),
+    }
+}
+
+async fn delete_comment(
+    State(state): State<AppState>,
+    Json(key): Json<CommentId>,
+) -> (StatusCode, Json<Value>) {
+    match state.with_db(|conn| birdnet_db::detection_comments::delete(conn, key.id)) {
+        Ok(Some(comment)) => {
+            crate::audit::audit(
+                &state,
+                None,
+                "detection.comment.delete",
+                Some(&target_of(&comment.date, &comment.time, &comment.sci_name)),
+                // Never the body: a comment removed because it named somebody
+                // must not survive in the log that recorded its removal.
+                Some(&format!(
+                    "{VIA_API} id={} author={}",
+                    comment.id, comment.author
+                )),
+            );
+            (
+                StatusCode::OK,
+                Json(json!({ "deleted": comment.id, "author": comment.author })),
+            )
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no comment has that id" })),
+        ),
+        Err(e) => comment_error(&e),
+    }
+}
+
+fn comment_json(c: &birdnet_db::detection_comments::DetectionComment) -> Value {
+    json!({
+        "id": c.id,
+        "date": c.date,
+        "time": c.time,
+        "sci_name": c.sci_name,
+        "author": c.author,
+        "body": c.body,
+        "at": c.at,
+    })
+}
+
+/// A refused comment is the caller's mistake, not the server's, and the
+/// database's own message says which — an empty body and a body 40 characters
+/// too long need different fixes.
+fn comment_error(e: &birdnet_db::detection_comments::CommentError) -> (StatusCode, Json<Value>) {
+    match e {
+        birdnet_db::detection_comments::CommentError::Invalid(m) => bad_request(m),
+        birdnet_db::detection_comments::CommentError::Sqlite(_) => {
+            tracing::warn!(error = %e, "comment API request failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "the database refused the change" })),
+            )
+        }
+    }
 }
 
 /// The composite key that identifies a detection.

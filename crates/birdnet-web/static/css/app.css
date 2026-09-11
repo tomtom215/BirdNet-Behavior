@@ -3402,6 +3402,24 @@ a.dr-row-name  { font-weight: 600; color: var(--fg); }
 .dr-widget-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .dr-widget-note { margin-top: 8px; }
 
+/* ── Detection comments (G-23) — the thread under the review widget. ───── */
+.dc-list        { list-style: none; margin: 0.75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.dc-item        { border-left: 2px solid var(--hairline); padding-left: 0.75rem; }
+.dc-head        { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.dc-author      { font-weight: 600; }
+.dc-at          { font-size: 0.8rem; }
+.dc-del         { margin-left: auto; }
+.dc-del-btn     { font-size: 0.75rem; padding: 0.1rem 0.45rem; }
+/* pre-wrap so a reviewer's line breaks survive; break-word so a pasted URL
+   cannot push the card wider than the phone it is read on. */
+.dc-body        { margin: 0.25rem 0 0; white-space: pre-wrap; overflow-wrap: break-word; }
+.dc-empty       { margin: 0.75rem 0 0; }
+.dc-problem     { margin: 0.75rem 0 0; color: var(--danger); }
+.dc-form        { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1rem; align-items: flex-start; }
+.dc-form textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 0.5rem;
+                    border: 1px solid var(--border); border-radius: var(--radius);
+                    background: var(--surface); color: var(--text); resize: vertical; }
+
 /* ── Image blacklist (/admin/images) — standalone old-style page, no <style>
       block, so its inline styles fold onto app.css classes. ─────────────── */
 .img-wrap       { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }

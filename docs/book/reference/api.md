@@ -291,6 +291,9 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `POST` | `/api/v2/detections/unlock` | Return it to the ordinary purge rules |
 | `POST` | `/api/v2/detections/delete` | Remove the detection row |
 | `POST` | `/api/v2/detections/batch` | Apply one of the four above to up to 500 detections |
+| `GET` | `/api/v2/detections/comments` | Read one detection's comment thread, oldest first |
+| `POST` | `/api/v2/detections/comments` | Add a comment (1–2000 characters) |
+| `POST` | `/api/v2/detections/comments/delete` | Withdraw one comment by `id` |
 | `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
 | `PUT` | `/api/v2/settings` | Change one or more settings |
 | `POST` | `/api/v2/control/restart` | Restart the station |
@@ -307,6 +310,36 @@ curl -X POST http://localhost:8502/api/v2/detections/lock \
   -H "Authorization: Bearer $BNB_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula"}'
+```
+
+### Comments
+
+A verdict records *what* the station decided; a comment records *why*. Many
+comments per detection — that is the difference from a review's `notes`, which
+is keyed on the detection and replaces whatever was there.
+
+A comment is **never edited**: a database trigger aborts any attempt to rewrite
+its text, author or timestamp. It can be withdrawn, which is what a note with a
+mistake or somebody's name in it needs; the audit row then carries the id and
+the author and never the body.
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/comments \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Dryobates villosus",
+       "body":"Call length says Downy, but the spectrogram is Hairy."}'
+```
+
+There is **no `author` field**, deliberately. A bearer token is not a person —
+the same reason every audit row this API writes has a null user — so comments
+written here are attributed to `api`. A name the caller supplies would be a name
+the caller chose; a script with something to say about who is speaking says it
+in the body. Comments written from the web UI carry the signed-in username.
+
+```bash
+curl "http://localhost:8502/api/v2/detections/comments?date=2026-09-03&time=06:12:44&sci_name=Dryobates%20villosus" \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
 ```
 
 ### Batches

@@ -145,6 +145,11 @@ fn render_detail_page(
 
     // Public, HMAC-signed share link for this detection (O-07). The button
     // copies an absolute `/r/<token>` URL built from the page's own origin.
+    // The thread is a database read the page need not block on, and it is
+    // loaded the same way the page's other panels are.
+    let comments =
+        super::detection_comments::thread_placeholder(&det.date, &det.time, &det.sci_name);
+
     let token = crate::routes::share::issue_token_for(&det.date, &det.time, &det.com_name);
     let share_path = format!("/r/{token}");
     let share_button = format!(
@@ -177,6 +182,7 @@ fn render_detail_page(
     </div>
     {corroboration_section}
     {review_widget}
+    {comments}
     {correlation_section}
   </div>
   <div class="bnb-card pad">

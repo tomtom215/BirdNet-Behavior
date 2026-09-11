@@ -68,6 +68,51 @@ alongside `class`, and `SpeciesLabel::genus()` returns `None` for a one-word
 label rather than guessing its rank — the pinned file has 55, of which 14 are
 family names ending `-idae` and the rest bare genera.
 
+### Added — a detection can carry more than one person's reasoning
+
+**Detection comments** (`G-23`). A verdict says what the station decided; six
+months later the question is why. "Call length says Downy, but the spectrogram
+is Hairy" is the sentence that makes a record defensible to somebody who was not
+there, and there was nowhere to put it.
+
+`detection_reviews.notes` looked like that field and could not be it. Migration
+13 puts that table under `UNIQUE(date, time, sci_name)` and writes it with
+`INSERT … ON CONFLICT`, so a second reviewer's note **replaced** the first —
+silently, and with no user column, so neither of them was named.
+
+Migration 49 adds `detection_comments`: many rows per detection, each with the
+account that wrote it *and* the username as it was at the time, so removing an
+account (`ON DELETE SET NULL`, never `CASCADE`) does not delete the reasoning or
+make it anonymous.
+
+**Append-only at the database, not by convention.** A trigger aborts any UPDATE
+of a comment's id, detection, author, body or timestamp. A no-rewrite rule that
+lives only in the absence of an update function is one `conn.execute` away from
+being untrue.
+
+That trigger was written to cover the whole row first, and a test caught what
+that does: `ON DELETE SET NULL` *is* an UPDATE of the child row, so deleting any
+account that had ever commented aborted with the append-only message — **users
+became undeletable**. The trigger now names its columns and leaves `user_id` out
+of them. It is the join, not the record; `author` holds the name and is locked.
+
+Deleting a comment stays possible, because a note with a typo or a neighbour's
+name in it needs a way out. The audit log records the id and the author and
+never the body — a comment removed because of what it said must not survive in
+the log that recorded its removal.
+
+On the page: a thread under the review widget on every detection-detail page,
+oldest first so a reply follows what it answers, lazily loaded like the page's
+other panels. Writing needs the same admin sign-in as confirming or rejecting;
+reading needs nothing. Over the API: `GET`/`POST` on
+`/api/v2/detections/comments` and `POST /api/v2/detections/comments/delete`,
+with comments attributed to `api` rather than to a name the caller supplies —
+a bearer token is not a person, the same reason every audit row this API writes
+has a null user.
+
+The batch half of this finding shipped earlier, in PR #234; nothing here was
+blocked on it.
+
 ### Fixed — 41 birds the range filter could never admit
 
 **Vocabulary alignment between the two models** (`G-15`, first half). The
