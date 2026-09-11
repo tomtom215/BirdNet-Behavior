@@ -1,0 +1,44 @@
+[
+  {
+    "speciesCode": "domgoo1",
+    "comName": "Domestic goose sp. (Domestic type)",
+    "sciName": "Anser sp. (Domestic type)",
+    "locId": "L99381",
+    "locName": "Stewart Park",
+    "obsDt": "2017-08-23 08:14",
+    "howMany": 2,
+    "lat": 42.4613413,
+    "lng": -76.5054578,
+    "obsValid": true,
+    "obsReviewed": false,
+    "locationPrivate": false
+  },
+  {
+    "speciesCode": "cangoo",
+    "comName": "Canada Goose",
+    "sciName": "Branta canadensis",
+    "locId": "L1150539",
+    "locName": "Hanshaw Rd. fields",
+    "obsDt": "2017-08-23 20:05",
+    "howMany": 30,
+    "lat": 42.4663513,
+    "lng": -76.4531064,
+    "obsValid": true,
+    "obsReviewed": false,
+    "locationPrivate": false
+  },
+  {
+    "speciesCode": "wooduc",
+    "comName": "Wood Duck",
+    "sciName": "Aix sponsa",
+    "locId": "L1150931",
+    "locName": "Danby - Bald Hill Rd/Comfort Rd/Lieb Rd block",
+    "obsDt": "2017-08-23 19:05",
+    "howMany": 12,
+    "lat": 42.3361988,
+    "lng": -76.4980173,
+    "obsValid": true,
+    "obsReviewed": false,
+    "locationPrivate": true
+  }
+]

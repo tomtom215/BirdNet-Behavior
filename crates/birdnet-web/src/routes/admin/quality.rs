@@ -55,10 +55,12 @@ pub fn router() -> Router<AppState> {
 
 /// The HTMX partial listing species whose detections look like artefacts.
 async fn phantoms_partial(State(state): State<AppState>) -> Html<String> {
+    // An in-memory read, taken before `state` is moved into the closure.
+    let nearby = state.nearby();
     let reports = tokio::task::spawn_blocking(move || load_phantoms(&state))
         .await
         .unwrap_or_default();
-    Html(render_phantoms(&reports))
+    Html(render_phantoms(&reports, nearby.as_deref()))
 }
 
 /// Read the per-species shapes and score them.
@@ -95,19 +97,32 @@ async fn exclude_phantom(
         .await;
         tracing::info!(species = %sci_name, "species excluded from the suspect-species report");
     }
+    // An in-memory read, taken before `state` is moved into the closure.
+    let nearby = state.nearby();
     let reports = tokio::task::spawn_blocking(move || load_phantoms(&state))
         .await
         .unwrap_or_default();
-    Html(render_phantoms(&reports))
+    Html(render_phantoms(&reports, nearby.as_deref()))
 }
 
 /// Render the suspect-species report.
-pub(crate) fn render_phantoms(reports: &[birdnet_db::phantoms::PhantomReport]) -> String {
+pub(crate) fn render_phantoms(
+    reports: &[birdnet_db::phantoms::PhantomReport],
+    nearby: Option<&birdnet_integrations::ebird::Snapshot>,
+) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str(
         r#"<div class="section-title">Species that may not be birds</div>
   <p class="hint">Flagged by the <em>shape</em> of their detections, not by name: a repeated non-bird sound — a barking dog, a creaking gate — produces the same wrong species at the same confidence, on the same few days, and never survives review. This is a heuristic and it will sometimes be wrong about a genuinely scarce visitor, so nothing is filtered until you say so. Excluding a species adds it to the list under <a href="/admin/species">Species</a>, where you can undo it.</p>"#,
     );
+    if let Some(snapshot) = nearby {
+        let _ = write!(
+            out,
+            r#"<p class="hint">Where somebody else has reported a species {scope} in the last {back} days, eBird says so below — that is independent evidence the bird is real, and a strong reason not to exclude it. eBird saying nothing is <em>not</em> evidence against a species: it only means nobody nearby submitted a checklist with it, which is common wherever there are few birders.</p>"#,
+            scope = escape_html(&snapshot.scope_label),
+            back = snapshot.back_days,
+        );
+    }
 
     if reports.is_empty() {
         out.push_str(
@@ -132,10 +147,26 @@ pub(crate) fn render_phantoms(reports: &[birdnet_db::phantoms::PhantomReport]) -
             .map(|s| escape_html(s.label()))
             .collect::<Vec<_>>()
             .join("; ");
+        // Corroboration only ever argues *against* excluding. A species eBird
+        // has nothing on renders exactly as it did before this existed.
+        let seen = nearby.and_then(|s| s.reported(&r.shape.sci_name));
+        let nearby_pill = seen.map_or_else(String::new, |s| {
+            format!(
+                r#"<br><span class="bnb-pill moss">eBird: reported nearby {date}</span>"#,
+                date = escape_html(&s.last_seen)
+            )
+        });
+        let confirm_body = seen.map_or_else(
+            || format!("Stop recording {com}? Existing detections are kept; you can undo this under Species."),
+            |s| format!(
+                "Somebody reported {com} nearby on {date}, so this is probably a real bird. Stop recording it anyway? Existing detections are kept; you can undo this under Species.",
+                date = escape_html(&s.last_seen)
+            ),
+        );
         let _ = write!(
             out,
             r##"<tr>
-  <td>{com}<br><span class="hint">{sci}</span></td>
+  <td>{com}<br><span class="hint">{sci}</span>{nearby_pill}</td>
   <td class="cell-center">{total}</td>
   <td class="cell-center">{days}</td>
   <td class="cell-center">{lo:.0}–{hi:.0}%</td>
@@ -147,7 +178,7 @@ pub(crate) fn render_phantoms(reports: &[birdnet_db::phantoms::PhantomReport]) -
               data-confirm-action="hx-post"
               data-confirm-url="/admin/quality/phantoms/exclude"
               data-confirm-title="Exclude species"
-              data-confirm-body="Stop recording {com}? Existing detections are kept; you can undo this under Species."
+              data-confirm-body="{confirm_body}"
               data-confirm-confirm-label="Exclude"
               data-confirm-style="danger">Exclude</button>
     </form>
@@ -750,14 +781,17 @@ mod phantom_tests {
         // The operator is being asked to remove a species from their own
         // record. A verdict with no evidence beside it is not actionable, and
         // the numbers are what let them overrule it.
-        let html = render_phantoms(&[report(
-            "Phantomus fictus",
-            "Not A Bird",
-            vec![
-                PhantomSignal::NeverConfirmed,
-                PhantomSignal::ConfinedToFewDays,
-            ],
-        )]);
+        let html = render_phantoms(
+            &[report(
+                "Phantomus fictus",
+                "Not A Bird",
+                vec![
+                    PhantomSignal::NeverConfirmed,
+                    PhantomSignal::ConfinedToFewDays,
+                ],
+            )],
+            None,
+        );
         assert!(html.contains("Not A Bird"), "{html}");
         assert!(html.contains("Phantomus fictus"), "{html}");
         assert!(html.contains("every review rejected"), "{html}");
@@ -777,7 +811,7 @@ mod phantom_tests {
         // A bare table header reads as a broken page. It also has to say what
         // "nothing" means, or a station whose species all sit below the
         // minimum looks like one with nothing to find.
-        let html = render_phantoms(&[]);
+        let html = render_phantoms(&[], None);
         assert!(html.contains("Nothing looks suspicious"), "{html}");
         assert!(
             !html.contains("<tbody>"),
@@ -793,14 +827,17 @@ mod phantom_tests {
     fn the_exclude_button_carries_the_scientific_name() {
         // The exclusion list is keyed on the scientific name; posting the
         // common name would silently exclude nothing.
-        let html = render_phantoms(&[report(
-            "Phantomus fictus",
-            "Not A Bird",
-            vec![
-                PhantomSignal::NeverConfirmed,
-                PhantomSignal::ConfinedToFewDays,
-            ],
-        )]);
+        let html = render_phantoms(
+            &[report(
+                "Phantomus fictus",
+                "Not A Bird",
+                vec![
+                    PhantomSignal::NeverConfirmed,
+                    PhantomSignal::ConfinedToFewDays,
+                ],
+            )],
+            None,
+        );
         assert!(
             html.contains(r#"name="sci_name" value="Phantomus fictus""#),
             "{html}"
@@ -812,14 +849,17 @@ mod phantom_tests {
         // It stops a species being recorded at all. The station's other
         // destructive actions all confirm first, and this is the one that is
         // easiest to press by accident while reading a table.
-        let html = render_phantoms(&[report(
-            "Phantomus fictus",
-            "Not A Bird",
-            vec![
-                PhantomSignal::NeverConfirmed,
-                PhantomSignal::ConfinedToFewDays,
-            ],
-        )]);
+        let html = render_phantoms(
+            &[report(
+                "Phantomus fictus",
+                "Not A Bird",
+                vec![
+                    PhantomSignal::NeverConfirmed,
+                    PhantomSignal::ConfinedToFewDays,
+                ],
+            )],
+            None,
+        );
         assert!(html.contains("data-confirm-action"), "{html}");
         assert!(
             html.contains("Existing detections are kept"),
@@ -831,15 +871,145 @@ mod phantom_tests {
     fn a_species_name_is_escaped_in_the_row_and_the_form() {
         // Names reach here from the model's label file, and land in a table
         // cell, an attribute value, and the confirmation text.
-        let html = render_phantoms(&[report(
-            r#"Evil" onload="x"#,
-            r"<script>alert(1)</script>",
-            vec![
+        let html = render_phantoms(
+            &[report(
+                r#"Evil" onload="x"#,
+                r"<script>alert(1)</script>",
+                vec![
+                    PhantomSignal::NeverConfirmed,
+                    PhantomSignal::ConfinedToFewDays,
+                ],
+            )],
+            None,
+        );
+        assert!(!html.contains(r#"onload="x"#), "{html}");
+        assert!(!html.contains("<script>alert"), "{html}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G-27: eBird corroboration in the suspect-species report
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod nearby_phantom_tests {
+    use super::render_phantoms;
+    use birdnet_db::phantoms::{PhantomReport, PhantomSignal, SpeciesShape};
+    use birdnet_integrations::ebird::{NearbySpecies, Snapshot};
+
+    fn flagged(sci: &str) -> PhantomReport {
+        PhantomReport {
+            shape: SpeciesShape {
+                sci_name: sci.to_owned(),
+                com_name: "Not A Bird".to_owned(),
+                total: 80,
+                distinct_days: 2,
+                min_confidence: 0.71,
+                max_confidence: 0.73,
+                confirmed: 0,
+                rejected: 6,
+            },
+            signals: vec![
                 PhantomSignal::NeverConfirmed,
                 PhantomSignal::ConfinedToFewDays,
             ],
-        )]);
-        assert!(!html.contains(r#"onload="x"#), "{html}");
-        assert!(!html.contains("<script>alert"), "{html}");
+        }
+    }
+
+    fn snapshot_of(sci_normalised: &str) -> Snapshot {
+        Snapshot {
+            fetched_at: 1_800_000_000,
+            scope: "geo:42.45,-76.48:25".to_owned(),
+            scope_label: "within 25 km".to_owned(),
+            back_days: 14,
+            species: vec![NearbySpecies {
+                sci_name: sci_normalised.to_owned(),
+                com_name: "A Real Bird".to_owned(),
+                last_seen: "2026-09-07".to_owned(),
+                locality: "Hanshaw Rd. fields".to_owned(),
+                how_many: Some(1),
+            }],
+        }
+    }
+
+    /// The most valuable thing eBird can say on this page: *do not exclude
+    /// this one*. It must be visible in the row and repeated in the
+    /// confirmation, because the confirmation is the last thing the operator
+    /// reads before removing a species from their own record.
+    ///
+    /// Observed failing with the `seen` lookup hard-coded to `None`: neither
+    /// the pill nor the warning appeared, and the confirmation was the plain
+    /// one.
+    #[test]
+    fn a_flagged_species_somebody_reported_nearby_is_marked_and_its_warning_says_so() {
+        let html = render_phantoms(
+            &[flagged("Turdus merula")],
+            Some(&snapshot_of("turdus merula")),
+        );
+        assert!(html.contains("eBird: reported nearby 2026-09-07"), "{html}");
+        assert!(
+            html.contains("probably a real bird"),
+            "the confirmation does not warn: {html}"
+        );
+    }
+
+    /// The discrimination counterpart. A species eBird has nothing on must
+    /// render exactly as it did before this feature existed — no pill, and
+    /// the plain confirmation — because eBird's silence is evidence of
+    /// nothing at all.
+    ///
+    /// Without this gate, a version that marked every row would pass the one
+    /// above.
+    #[test]
+    fn a_flagged_species_ebird_says_nothing_about_is_unchanged() {
+        let with_snapshot = render_phantoms(
+            &[flagged("Phantomus fictus")],
+            Some(&snapshot_of("turdus merula")),
+        );
+        assert!(
+            !with_snapshot.contains("eBird: reported nearby"),
+            "{with_snapshot}"
+        );
+        assert!(
+            !with_snapshot.contains("probably a real bird"),
+            "{with_snapshot}"
+        );
+        assert!(
+            with_snapshot.contains("Stop recording Not A Bird?"),
+            "the plain confirmation is missing: {with_snapshot}"
+        );
+    }
+
+    /// A station with no eBird key renders the report it always rendered,
+    /// down to the absence of the explanatory paragraph.
+    #[test]
+    fn a_station_with_no_snapshot_renders_the_report_it_always_did() {
+        let html = render_phantoms(&[flagged("Turdus merula")], None);
+        assert!(!html.contains("eBird"), "{html}");
+        assert!(html.contains("Stop recording Not A Bird?"), "{html}");
+    }
+
+    /// The explanatory paragraph has to say what silence means, or an
+    /// operator reads an unmarked row as "eBird disagrees".
+    #[test]
+    fn the_explanation_says_that_silence_is_not_evidence() {
+        let html = render_phantoms(
+            &[flagged("Turdus merula")],
+            Some(&snapshot_of("turdus merula")),
+        );
+        assert!(html.contains("is <em>not</em> evidence"), "{html}");
+        assert!(html.contains("within 25 km"), "{html}");
+        assert!(html.contains("14 days"), "{html}");
+    }
+
+    /// Matching is on the normalised scientific name, so a label file that
+    /// spells a name with different case still corroborates.
+    #[test]
+    fn the_match_survives_a_difference_of_case() {
+        let html = render_phantoms(
+            &[flagged("TURDUS MERULA")],
+            Some(&snapshot_of("turdus merula")),
+        );
+        assert!(html.contains("eBird: reported nearby"), "{html}");
     }
 }

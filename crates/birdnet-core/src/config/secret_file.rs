@@ -50,6 +50,7 @@ use std::collections::BTreeSet;
 pub const FILE_INDIRECT_KEYS: &[&str] = &[
     "APPRISE_URL",
     "BIRDWEATHER_TOKEN",
+    "EBIRD_API_KEY",
     "HEARTBEAT_URL",
     "MQTT_PASSWORD",
     "NOTIFY_URLS",

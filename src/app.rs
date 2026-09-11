@@ -669,6 +669,13 @@ async fn serve(
     // abort it; today the loop runs for the lifetime of the process.
     let _weather_poll_handle = integrations::spawn_weather_poll(config.as_ref(), state.clone());
 
+    // G-27 eBird corroboration. Off unless `EBIRD_API_KEY` is configured —
+    // eBird needs a key for every endpoint, so the key is the opt-in and there
+    // is no second switch. Publishes what other people reported near the
+    // station into `AppState`, where the suspect-species report and the
+    // detection detail page consult it.
+    let _ebird_poll_handle = integrations::spawn_ebird_poll(config.as_ref(), state.clone());
+
     // Pre-warm the heavy-analytics fragment cache so the first visit to the
     // Heatmap / phenology / co-occurrence / time-series pages is instant, then
     // keep it warm on an interval a little under the cache TTL (10 min). Each

@@ -244,6 +244,15 @@ needs at least 10 detections first, so a genuine scarce visitor is not flagged
 on the day it arrives. The Exclude button adds it to the ordinary species
 exclusion list, where you can undo it.
 
+If you have configured [eBird](../reference/integrations.md#ebird), a flagged
+species that somebody else reported near you recently is marked as such, and
+the Exclude confirmation says so — somebody standing near your microphone wrote
+that bird down, which is about the strongest argument there is against
+excluding it. The reverse does not hold and the station never pretends it does:
+eBird saying nothing about a species means nobody nearby submitted a checklist
+with it, which is the normal state of affairs anywhere without many
+birdwatchers. An unmarked row is not a row eBird disagrees with.
+
 ## A recommended starting recipe
 
 1. Set your **location** accurately.

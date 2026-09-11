@@ -222,6 +222,13 @@ struct AppStateInner {
     /// The station-health conditions as last evaluated (OP-4), published by
     /// the notifier on every poll so they can be asked for.
     station_conditions: std::sync::RwLock<crate::station_conditions::ConditionsSnapshot>,
+    /// What eBird last said other people have reported near this station
+    /// (`G-27`), published by the eBird poll. `None` until the first fetch,
+    /// and on every station that has no eBird API key — which is the default.
+    ///
+    /// An `Arc` so a page that consults it for fifty species clones a pointer
+    /// rather than several hundred names.
+    nearby: std::sync::RwLock<Option<Arc<birdnet_integrations::ebird::Snapshot>>>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -316,6 +323,7 @@ impl AppState {
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
+                nearby: std::sync::RwLock::new(None),
             }),
         })
     }
@@ -556,6 +564,7 @@ impl AppState {
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
+                nearby: std::sync::RwLock::new(None),
             }),
         })
     }
@@ -609,6 +618,7 @@ impl AppState {
                 station_conditions: std::sync::RwLock::new(
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
+                nearby: std::sync::RwLock::new(None),
             }),
         }
     }
@@ -1374,6 +1384,24 @@ impl AppState {
             .read()
             .map(|g| g.clone())
             .unwrap_or_default()
+    }
+
+    /// Publish what eBird last said was reported near the station (`G-27`).
+    pub fn set_nearby(&self, snapshot: birdnet_integrations::ebird::Snapshot) {
+        if let Ok(mut guard) = self.inner.nearby.write() {
+            *guard = Some(Arc::new(snapshot));
+        }
+    }
+
+    /// What eBird last said was reported near the station.
+    ///
+    /// `None` on a station with no eBird API key — which is the default — and
+    /// until the first fetch or cache read has happened. A `None` here, and a
+    /// species missing from a `Some`, both mean *nothing is known*, never
+    /// *the bird is absent*: see `birdnet_integrations::ebird`.
+    #[must_use]
+    pub fn nearby(&self) -> Option<Arc<birdnet_integrations::ebird::Snapshot>> {
+        self.inner.nearby.read().ok()?.clone()
     }
 
     /// Record what the boot journal found at this start.

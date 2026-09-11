@@ -38,6 +38,55 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — eBird says whether anybody else has seen it lately
+
+**eBird recent observations** (`G-27`). The station already had a geographic
+opinion about which species are plausible: the BirdNET range model. That
+opinion is climatological. It knows a Common Swift belongs here in July, and it
+has no idea the first one of the year arrived last Tuesday. eBird's recent
+observations are the opposite kind of evidence — a person stood near here
+within the last fortnight and wrote down what they saw — and that is the better
+answer to *is this bird around right now*.
+
+Two places use it, both as corroboration and neither as a filter. A detection's
+detail page gains a **Reported nearby** card when somebody reported that species
+in the station's neighbourhood recently. The suspect-species report under
+Station → Data marks a flagged species somebody reported nearby, and its
+*Exclude* confirmation says so — a human birder standing near the microphone is
+about the strongest argument there is against excluding a species.
+
+**What it deliberately does not do is treat eBird's silence as evidence.**
+eBird coverage follows birdwatchers, not birds: a well-watched county produces
+hundreds of checklists a week, and a quiet valley produces none, ever, for
+anything. Had absence from eBird been allowed to count against a species, the
+station with nobody nearby to confirm anything — the one that most needs an
+automated check — would have had its whole list flagged. So a species eBird
+says nothing about renders exactly as it did before, and no verdict anywhere
+changes.
+
+Off unless `EBIRD_API_KEY` is set. There is no second enable flag: eBird needs
+a key for every endpoint, so the key is the opt-in and a station without one
+never contacts eBird. By default it asks about a 25 km circle around the
+station's own coordinates rather than an administrative region — *reported
+within 25 km* says far more than *reported somewhere in this state* — and
+`EBIRD_REGION` overrides that for the genuinely remote station whose radius
+contains no observers. Coordinates are sent rounded to two decimal places,
+which is all eBird documents that it accepts and about a kilometre of
+precision. The key is mountable from a file (`BIRDNET_EBIRD_API_KEY_FILE`) and
+travels in eBird's `x-ebirdapitoken` header, never in a URL where a proxy log
+would keep it.
+
+The snapshot is cached to disk and read back before the first fetch, so a
+station restarting at 03:00 can answer immediately and a station whose uplink
+is down keeps the last answer it got — labelled as old rather than passed off
+as current — instead of losing the feature.
+
+The decoder is written against eBird's published API documentation rather than
+against live bytes: every `/v2/` endpoint answers `403` without a key this
+repository does not have, confirmed against four of them. Its fixtures are that
+documentation's own example bodies, and its doc comment says so rather than
+implying a verification that did not happen.
+
 ### Added — the species pages browse by taxonomic rank
 
 **Class, order and genus** (`G-15`, second half). A flat list of every bird a

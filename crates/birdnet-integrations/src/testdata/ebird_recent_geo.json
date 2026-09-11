@@ -1,0 +1,44 @@
+[
+  {
+    "speciesCode": "veery",
+    "comName": "Veery",
+    "sciName": "Catharus fuscescens",
+    "locId": "L1483567",
+    "locName": "Cornell University--Libe Slope",
+    "obsDt": "2017-08-23 22:30",
+    "howMany": 2,
+    "lat": 42.44786,
+    "lng": -76.48595,
+    "obsValid": true,
+    "obsReviewed": false,
+    "locationPrivate": false
+  },
+  {
+    "speciesCode": "swathr",
+    "comName": "Swainson's Thrush",
+    "sciName": "Catharus ustulatus",
+    "locId": "L1483567",
+    "locName": "Cornell University--Libe Slope",
+    "obsDt": "2017-08-23 22:30",
+    "howMany": 1,
+    "lat": 42.44786,
+    "lng": -76.48595,
+    "obsValid": true,
+    "obsReviewed": false,
+    "locationPrivate": false
+  },
+  {
+    "speciesCode": "ovenbi1",
+    "comName": "Ovenbird",
+    "sciName": "Seiurus aurocapilla",
+    "locId": "L1483567",
+    "locName": "Cornell University--Libe Slope",
+    "obsDt": "2017-08-23 22:30",
+    "howMany": 3,
+    "lat": 42.44786,
+    "lng": -76.48595,
+    "obsValid": true,
+    "obsReviewed": false,
+    "locationPrivate": false
+  }
+]

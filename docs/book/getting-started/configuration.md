@@ -36,6 +36,10 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | — | — | `WEATHER_PROVIDER` | `open-meteo`; also `met-no` (MET Norway, keyless) and `wunderground` (your own personal weather station). An unimplemented name does not start the poll — see [the weather overlay](../guide/analytics.md) |
 | — | — | `WEATHER_STATION_ID` | — (`wunderground` only: the station's Weather Underground id) |
 | `BIRDNET_WEATHER_API_KEY_FILE` | — | `WEATHER_API_KEY` | — (`wunderground` only; mountable from a file like the other credentials) |
+| `BIRDNET_EBIRD_API_KEY_FILE` | — | `EBIRD_API_KEY` | — (absent ⇒ eBird corroboration is off entirely; mountable from a file like the other credentials — see [eBird](../reference/integrations.md#ebird)) |
+| — | — | `EBIRD_REGION` | — (empty ⇒ the station's own `LATITUDE`/`LONGITUDE` are used, which is usually better) |
+| — | — | `EBIRD_DIST_KM` | `25` (0–50; the radius asked about when using coordinates) |
+| — | — | `EBIRD_BACK_DAYS` | `14` (1–30; days of eBird history to ask about) |
 | `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` (no effect without a metadata model) |
 | `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
