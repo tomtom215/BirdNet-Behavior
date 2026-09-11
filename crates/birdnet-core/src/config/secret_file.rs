@@ -53,6 +53,7 @@ pub const FILE_INDIRECT_KEYS: &[&str] = &[
     "HEARTBEAT_URL",
     "MQTT_PASSWORD",
     "NOTIFY_URLS",
+    "WEATHER_API_KEY",
 ];
 
 /// The environment variable naming the file for `key`.

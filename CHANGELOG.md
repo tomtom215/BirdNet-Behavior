@@ -68,6 +68,63 @@ alongside `class`, and `SpeciesLabel::genus()` returns `None` for a one-word
 label rather than guessing its rank — the pinned file has 55, of which 14 are
 family names ending `-idae` and the rest bare genera.
 
+### Added — the weather can come from the anemometer in your own garden
+
+**Three weather providers** (`G-26`). Open-Meteo stays the default and nothing
+about an existing station changes. Two more are selectable with
+`WEATHER_PROVIDER` in `birdnet.conf`:
+
+- **`met-no`** — the Norwegian Meteorological Institute's Locationforecast.
+  Keyless, and a better model over Europe. Its terms require a User-Agent that
+  identifies the application and gives a contact address; a generic one is
+  answered with `403`, so the client sends a real one.
+- **`wunderground`** — a **personal weather station's** own current
+  observations, with `WEATHER_STATION_ID` and `WEATHER_API_KEY`. This is the one
+  worth having: a gridded forecast is a model's opinion about a cell several
+  kilometres across, and a personal weather station is an instrument ten metres
+  from the microphone. For asking why the birds were quiet on Tuesday, the
+  instrument wins.
+
+An enum rather than the trait the finding proposed. The set is closed,
+`birdnet-integrations` carries no `async-trait` and constructs no runtime, so a
+trait here would be either dyn-incompatible or a boxed-future dance for no gain
+— and an exhaustive `match` is what makes a fourth provider *fail to compile*
+until every site handles it.
+
+A `WEATHER_PROVIDER` nobody implements does not start the poll, rather than
+falling back to the default. A station configured to read its own anemometer
+and quietly served a county forecast instead looks exactly like a station that
+is working. Wunderground without both credentials is refused the same way, at
+startup, rather than discovered as a `401` every half hour in a log nobody
+reads. The API key joins the mountable credentials from `G-28`
+(`BIRDNET_WEATHER_API_KEY_FILE`), and the error path never logs the request URL
+— Wunderground's carries the key in its query string.
+
+Two things each provider honestly cannot fill in, left empty rather than
+invented:
+
+- **MET Norway reports no weather code.** It describes the sky with a symbol
+  string (`partlycloudy_day`), not a WMO number. A mapping table would be
+  guesses in a column that reads as fact.
+- **A personal weather station reports no cloud cover**, because it measures
+  the air rather than the sky. Its precipitation is the hourly *rate* —
+  deliberately not `precipTotal`, which accumulates since local midnight and
+  would read as a downpour by evening after one morning shower.
+
+Which provider is asked is gated by a test that stands up a listener and reads
+the request line off the socket. Every other gate here exercises a decoder or a
+struct field, and a `fetch_hourly` whose `match` sent all three providers to the
+same endpoint would have passed all of them — which is exactly what a mutation
+of that `match` showed before the gate existed.
+
+The MET Norway decoder is written against a **live response**, captured from
+`api.met.no` on 2026-09-11 and committed as the test fixture; its units come
+from that response's own `properties.meta.units` block rather than from memory.
+The Wunderground decoder is **not** verified that way and says so in its own
+doc comment: that endpoint needs a station owner's API key, which this
+repository does not have, so it is written against the published shape and
+pinned to a documented sample.
+
 ### Added — a detection can carry more than one person's reasoning
 
 **Detection comments** (`G-23`). A verdict says what the station decided; six

@@ -2,6 +2,52 @@
 
 Wiring BirdNet-Behavior into the rest of your stack — MQTT, Home Assistant, Prometheus, BirdWeather and webhooks.
 
+## Weather
+
+Off by default — a fresh install contacts no weather service until
+`BNB_WEATHER_ENABLED=1`. Once on, a background task polls every 30 minutes,
+stores hourly rows, and paints them as a signal-context band behind the
+day-strip and dawn-chorus charts.
+
+Three upstreams, chosen with the `WEATHER_PROVIDER` key in `birdnet.conf`:
+
+| `WEATHER_PROVIDER` | What it is | Needs |
+|---|---|---|
+| `open-meteo` *(default)* | Free gridded forecast, no key, and self-hostable — point `BNB_WEATHER_BASE_URL` at your own instance | nothing |
+| `met-no` | The Norwegian Meteorological Institute's Locationforecast. Keyless, and a better model over Europe | nothing |
+| `wunderground` | **Your own personal weather station's** current observations | `WEATHER_STATION_ID` and `WEATHER_API_KEY` |
+
+```dotenv
+# birdnet.conf — read the anemometer in the garden, not a forecast for the county
+WEATHER_PROVIDER=wunderground
+WEATHER_STATION_ID=KMAHANOV10
+WEATHER_API_KEY=…
+```
+
+The last one is the interesting one. A gridded forecast is a model's opinion
+about a cell several kilometres across; a personal weather station is an
+instrument ten metres from the microphone. For asking *why the birds were quiet
+on Tuesday*, the instrument wins.
+
+The API key can be mounted from a file rather than written into the config, the
+same way the other credentials can:
+`BIRDNET_WEATHER_API_KEY_FILE=/run/secrets/weather_api_key`.
+
+A `WEATHER_PROVIDER` nobody implements **does not start the poll**. That is
+deliberate: a station configured to read its own anemometer and quietly served a
+county forecast instead looks exactly like a station that is working.
+
+Two things to know about what each provider can and cannot fill in:
+
+- **MET Norway reports no weather code.** It describes the sky with a symbol
+  string (`partlycloudy_day`) rather than a WMO number, and mapping one onto the
+  other would be a table of guesses sitting in a column that reads as fact. The
+  column stays empty.
+- **A personal weather station reports no cloud cover**, because it measures the
+  air rather than the sky. Its precipitation is the hourly *rate* — not
+  Wunderground's `precipTotal`, which accumulates since local midnight and would
+  read as a downpour by evening after one morning shower.
+
 ## MQTT
 
 A pure-Rust MQTT 3.1.1 client publishes detections to any broker (Mosquitto, EMQX, Node-RED, …). Enable it with at least:

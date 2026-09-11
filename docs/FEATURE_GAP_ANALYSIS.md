@@ -364,14 +364,15 @@ within each group by how much they change what a station can do.
 
 ### 2.4 Integrations
 
-#### G‑26 · Weather providers — PARTIAL
+#### G‑26 · Weather providers — SHIPPED (three of four; OpenWeather declined)
 
 | | |
 |---|---|
 | **Upstream** | `internal/weather/` — `provider_yrno.go`, `provider_openweather.go`, `provider_wunderground.go`, a common interface, icon mapping, and a poll interval. Weather is joined onto detections and shown on the dashboard banner. |
-| **Ours** | `crates/birdnet-integrations/src/weather.rs` — Open-Meteo only, off unless `BNB_WEATHER_ENABLED=1`, self-host-able via `BNB_WEATHER_BASE_URL`. Stored in a `weather` table. |
+| **Ours** | `crates/birdnet-integrations/src/weather.rs` — a `Provider` enum over Open-Meteo (default), MET Norway and Wunderground personal stations, chosen with `WEATHER_PROVIDER`. Still off unless `BNB_WEATHER_ENABLED=1`, still self-host-able via `BNB_WEATHER_BASE_URL`, still one `weather` table. `WEATHER_API_KEY` is mountable from a file. |
 | **Why it matters** | Open-Meteo is the right default (no key, permissive terms, self-hostable) and we should keep it. But a station owner who already runs a **personal weather station** has ground-truth data ten metres from the microphone, and that is a far better covariate for bird activity than a gridded forecast — which is exactly what the Wunderground provider is for. |
-| **Plan** | Extract a `WeatherProvider` trait from the existing client, keep Open-Meteo as the default implementation, and add Wunderground (personal station) and yr.no (no key, Norwegian Met, good for Europe). OpenWeather is the least interesting of the three and comes last. |
+| **Departures from the plan** | **An enum, not a trait.** The set is closed, `birdnet-integrations` carries no `async-trait` and builds no runtime, so a trait would be dyn-incompatible (`async fn` in traits) or a boxed-future dance for no gain; an exhaustive `match` also makes a fourth provider fail to compile until every site handles it. **OpenWeather is declined, not deferred**: it needs a key like Wunderground but returns a gridded forecast like the two keyless ones, so it is the only one of the four that asks an operator for a credential and gives nothing the default does not. |
+| **Verification** | The MET Norway decoder is written against a live response captured from `api.met.no` on 2026-09-11 and committed as the fixture; its units are read from that response's own `properties.meta.units`. The **Wunderground decoder is not verified against real bytes** — that endpoint needs a station owner's API key this repository does not have — and its doc comment says so rather than implying otherwise. |
 
 #### G‑27 · eBird API integration — GAP
 
@@ -520,7 +521,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 12 | ~~Notification `*_file` secrets + enqueue-while-open~~ — **closed**: `*_file` shipped, and the queue half turned out to be already covered by `announce.rs`'s outbox. See G‑28. | G‑28 |
 | 13 | ~~Taxonomy: synonyms, family, genus~~ — **shipped**: vocabulary alignment (41 birds recovered) and browsing by class/order/genus. No family rank: the label file states none. See G‑15. | G‑15 |
 | 14 | ~~Detection comments~~ — **shipped**: `detection_comments`, append-only at the database, attributed, audited. See G‑23. | G‑23 |
-| 15 | Weather provider trait + Wunderground + yr.no | G‑26 |
+| 15 | ~~Weather provider trait + Wunderground + yr.no~~ — **shipped** as an enum over three providers; OpenWeather declined with a reason. See G‑26. | G‑26 |
 | 16 | eBird recent-observations client | G‑27 |
 | 17 | ~~Loudness normalisation of exports~~ — **shipped**, see G‑5 | G‑5 |
 | 18 | Jobs API over `maintenance_runs` (per-source restart has shipped) | G‑32 |

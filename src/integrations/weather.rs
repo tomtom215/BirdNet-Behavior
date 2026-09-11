@@ -1,4 +1,4 @@
-//! Open-Meteo poll-loop bootstrap (O-23 follow-up).
+//! Weather poll-loop bootstrap (O-23 follow-up, `G-26`).
 //!
 //! Default-off per the maintainer's privacy posture: a fresh install does
 //! NOT phone home until the operator sets `BNB_WEATHER_ENABLED=1`. When
@@ -6,6 +6,11 @@
 //! tokio task that calls [`birdnet_integrations::weather::Client::fetch_hourly`]
 //! every `POLL_INTERVAL`, upserts the rows into the `weather` SQLite table,
 //! and prunes rows older than 30 days.
+//!
+//! Which upstream it asks comes from `WEATHER_PROVIDER` (`open-meteo`, the
+//! default; `met-no`; `wunderground`). A name nobody implements does not start
+//! the poll: see [`birdnet_integrations::weather::Provider::resolve`] for why
+//! that is a refusal rather than a fall back.
 //!
 //! Coordinate resolution order:
 //!
@@ -46,7 +51,26 @@ pub fn spawn_weather_poll(
     let lat = resolve_lat(config)?;
     let lon = resolve_lon(config)?;
 
-    let client = match upstream::Client::new() {
+    let provider = match resolve_provider(config) {
+        Ok(p) => p,
+        Err(e) => {
+            // Named rather than swallowed: the operator asked for a specific
+            // upstream and is not getting it, and a station quietly serving a
+            // gridded forecast where a personal weather station was configured
+            // looks exactly like one that is working.
+            tracing::warn!(error = %e, "weather provider not usable; poll disabled");
+            return None;
+        }
+    };
+
+    // An explicit base URL overrides the provider's own host — that is how a
+    // self-hosted Open-Meteo is reached, and how these are tested.
+    let base = std::env::var("BNB_WEATHER_BASE_URL")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+
+    let client = match upstream::Client::new_for(provider.clone(), base.clone()) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "weather client init failed; poll disabled");
@@ -54,14 +78,14 @@ pub fn spawn_weather_poll(
         }
     };
 
-    let base = std::env::var("BNB_WEATHER_BASE_URL")
-        .unwrap_or_else(|_| upstream::DEFAULT_BASE_URL.to_string());
     tracing::info!(
         lat,
         lon,
-        base = %base,
+        provider = provider.key(),
+        base = %base.unwrap_or_else(|| provider.default_base_url().to_owned()),
         interval_secs = upstream::POLL_INTERVAL.as_secs(),
-        "weather poll loop enabled (Open-Meteo)"
+        "weather poll loop enabled ({})",
+        provider.label()
     );
 
     Some(tokio::spawn(async move {
@@ -142,6 +166,25 @@ fn normalise_at(at: &str) -> String {
     at.to_string()
 }
 
+/// Which upstream the operator asked for, with its credentials.
+///
+/// The API key is read from the config the same way every other credential is,
+/// which means `BIRDNET_WEATHER_API_KEY_FILE` mounts it from a file — see
+/// `birdnet_core::config::secret_file`. Nothing here logs it.
+fn resolve_provider(config: Option<&Config>) -> Result<upstream::Provider, upstream::WeatherError> {
+    // Each key is read as a literal `config.get("KEY")` rather than through a
+    // helper closure. `tests/every_config_key_is_known.rs` finds reads by their
+    // shape, and a closure hides the name from it — which is exactly how it
+    // reported these three as "known but nothing reads them".
+    upstream::Provider::resolve(
+        config
+            .and_then(|c| c.get("WEATHER_PROVIDER"))
+            .unwrap_or_default(),
+        config.and_then(|c| c.get("WEATHER_STATION_ID")),
+        config.and_then(|c| c.get("WEATHER_API_KEY")),
+    )
+}
+
 fn resolve_lat(config: Option<&Config>) -> Option<f64> {
     resolve_decimal_env("BNB_STATION_LAT")
         .or_else(|| config.and_then(|cfg| cfg.get_parsed::<f64>("LATITUDE").ok()))
@@ -181,6 +224,72 @@ mod tests {
         assert_eq!(normalise_at(""), "");
         assert_eq!(normalise_at("garbage"), "garbage");
         assert_eq!(normalise_at("2026-05-28"), "2026-05-28");
+    }
+
+    /// The provider the operator configured is the one the poll asks (`G-26`).
+    ///
+    /// Observed failing against the single-provider bootstrap: `resolve_provider`
+    /// did not exist, and the client was built with `Client::new()`, which is
+    /// Open-Meteo whatever the config says.
+    #[test]
+    fn the_configured_provider_is_the_one_resolved() {
+        use crate::integrations::test_support::config_with;
+        use birdnet_integrations::weather::Provider;
+
+        // No key at all is the default, which is what leaves an existing
+        // station on Open-Meteo without touching its config.
+        assert_eq!(
+            resolve_provider(None).expect("no config resolves"),
+            Provider::OpenMeteo
+        );
+        assert_eq!(
+            resolve_provider(Some(&config_with(&[]))).expect("empty config resolves"),
+            Provider::OpenMeteo
+        );
+        assert_eq!(
+            resolve_provider(Some(&config_with(&[("WEATHER_PROVIDER", "met-no")])))
+                .expect("met-no resolves"),
+            Provider::MetNorway
+        );
+        assert_eq!(
+            resolve_provider(Some(&config_with(&[
+                ("WEATHER_PROVIDER", "wunderground"),
+                ("WEATHER_STATION_ID", "KMAHANOV10"),
+                ("WEATHER_API_KEY", "abc123"),
+            ])))
+            .expect("wunderground resolves with both credentials"),
+            Provider::Wunderground {
+                station_id: "KMAHANOV10".to_owned(),
+                api_key: "abc123".to_owned(),
+            }
+        );
+    }
+
+    /// The counterpart: a misconfigured provider does not silently become the
+    /// default. Without this, a `resolve_provider` that returned
+    /// `Provider::OpenMeteo` on every error would pass the gate above.
+    #[test]
+    fn a_misconfigured_provider_is_an_error_rather_than_the_default() {
+        use crate::integrations::test_support::config_with;
+
+        for entries in [
+            vec![("WEATHER_PROVIDER", "accuweather")],
+            // Asked for the personal station, gave it no station.
+            vec![
+                ("WEATHER_PROVIDER", "wunderground"),
+                ("WEATHER_API_KEY", "abc123"),
+            ],
+            vec![
+                ("WEATHER_PROVIDER", "wunderground"),
+                ("WEATHER_STATION_ID", "KMAHANOV10"),
+            ],
+        ] {
+            let cfg = config_with(&entries);
+            assert!(
+                resolve_provider(Some(&cfg)).is_err(),
+                "{entries:?} must not resolve to a working provider"
+            );
+        }
     }
 
     #[test]

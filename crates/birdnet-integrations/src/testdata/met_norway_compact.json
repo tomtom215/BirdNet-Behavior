@@ -1,0 +1,130 @@
+{
+ "type": "Feature",
+ "geometry": {
+  "type": "Point",
+  "coordinates": [
+   13.405,
+   52.52,
+   37
+  ]
+ },
+ "properties": {
+  "meta": {
+   "updated_at": "2026-09-11T08:22:53Z",
+   "units": {
+    "air_pressure_at_sea_level": "hPa",
+    "air_temperature": "celsius",
+    "cloud_area_fraction": "%",
+    "precipitation_amount": "mm",
+    "relative_humidity": "%",
+    "wind_from_direction": "degrees",
+    "wind_speed": "m/s"
+   }
+  },
+  "timeseries": [
+   {
+    "time": "2026-09-11T08:00:00Z",
+    "data": {
+     "instant": {
+      "details": {
+       "air_pressure_at_sea_level": 1020.8,
+       "air_temperature": 15.2,
+       "cloud_area_fraction": 96.9,
+       "relative_humidity": 65.5,
+       "wind_from_direction": 169.6,
+       "wind_speed": 1.6
+      }
+     },
+     "next_12_hours": {
+      "summary": {
+       "symbol_code": "partlycloudy_day"
+      },
+      "details": {}
+     },
+     "next_1_hours": {
+      "summary": {
+       "symbol_code": "partlycloudy_day"
+      },
+      "details": {
+       "precipitation_amount": 0.0
+      }
+     },
+     "next_6_hours": {
+      "summary": {
+       "symbol_code": "cloudy"
+      },
+      "details": {
+       "precipitation_amount": 0.0
+      }
+     }
+    }
+   },
+   {
+    "time": "2026-09-11T09:00:00Z",
+    "data": {
+     "instant": {
+      "details": {
+       "air_pressure_at_sea_level": 1020.7,
+       "air_temperature": 16.9,
+       "cloud_area_fraction": 89.1,
+       "relative_humidity": 56.3,
+       "wind_from_direction": 165.9,
+       "wind_speed": 1.8
+      }
+     },
+     "next_12_hours": {
+      "summary": {
+       "symbol_code": "partlycloudy_day"
+      },
+      "details": {}
+     },
+     "next_1_hours": {
+      "summary": {
+       "symbol_code": "partlycloudy_day"
+      },
+      "details": {
+       "precipitation_amount": 0.0
+      }
+     },
+     "next_6_hours": {
+      "summary": {
+       "symbol_code": "cloudy"
+      },
+      "details": {
+       "precipitation_amount": 0.0
+      }
+     }
+    }
+   },
+   {
+    "time": "2026-09-14T00:00:00Z",
+    "data": {
+     "instant": {
+      "details": {
+       "air_pressure_at_sea_level": 1018.3,
+       "air_temperature": 15.5,
+       "cloud_area_fraction": 100.0,
+       "relative_humidity": 96.4,
+       "wind_from_direction": 277.5,
+       "wind_speed": 2.9
+      }
+     },
+     "next_12_hours": {
+      "summary": {
+       "symbol_code": "lightrain"
+      },
+      "details": {}
+     },
+     "next_6_hours": {
+      "summary": {
+       "symbol_code": "cloudy"
+      },
+      "details": {
+       "precipitation_amount": 0.1
+      }
+     }
+    }
+   }
+  ]
+ }
+}
