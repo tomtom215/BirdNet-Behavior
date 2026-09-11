@@ -242,6 +242,83 @@ pub struct NewMetricRule {
     pub threshold: f64,
 }
 
+/// One metric rule in its portable form (`G-29`).
+///
+/// Flat, and with the metric and comparison written as their stored keys
+/// rather than as serde enum tags, for the reason [`crate::alert_rules::RuleExport`]
+/// gives about its own shape: an exported file is something an operator reads,
+/// hand-edits and pastes into a chat with somebody else.
+///
+/// There is no credential here and so no redaction: a metric rule is a
+/// measurement, a direction and a number. That is why it can be shared
+/// without the `?secrets=1` question the detection rules need.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct MetricRuleExport {
+    /// What the operator called it.
+    pub name: String,
+    /// Whether it starts enabled. Absent means enabled.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    /// [`Metric::key`].
+    pub metric: String,
+    /// [`Comparison::key`].
+    pub comparison: String,
+    /// The threshold, in the metric's own unit.
+    pub threshold: f64,
+}
+
+/// serde default for [`MetricRuleExport::enabled`].
+const fn default_enabled() -> bool {
+    true
+}
+
+/// Convert a stored metric rule to its portable form.
+#[must_use]
+pub fn to_export(rule: &MetricRule) -> MetricRuleExport {
+    MetricRuleExport {
+        name: rule.name.clone(),
+        enabled: rule.enabled,
+        metric: rule.metric.key().to_owned(),
+        comparison: rule.comparison.key().to_owned(),
+        threshold: rule.threshold,
+    }
+}
+
+/// Convert a portable metric rule back, validating it.
+///
+/// A metric or comparison this station does not implement is an error naming
+/// the offending value, not a silent drop: a rule set written by a newer
+/// station would otherwise import looking complete while quietly missing the
+/// rules that mattered.
+///
+/// # Errors
+///
+/// [`MetricRuleError::Invalid`] for an unknown metric or comparison, or for
+/// anything [`NewMetricRule::validate`] refuses.
+pub fn from_export(entry: &MetricRuleExport) -> Result<NewMetricRule, MetricRuleError> {
+    let metric = Metric::parse(entry.metric.trim()).ok_or_else(|| {
+        MetricRuleError::Invalid(format!(
+            "`{}` is not a measurement this station knows how to take",
+            entry.metric.trim()
+        ))
+    })?;
+    let comparison = Comparison::parse(entry.comparison.trim()).ok_or_else(|| {
+        MetricRuleError::Invalid(format!(
+            "`{}` is not a comparison; use `above` or `below`",
+            entry.comparison.trim()
+        ))
+    })?;
+    let rule = NewMetricRule {
+        name: entry.name.trim().to_owned(),
+        enabled: entry.enabled,
+        metric,
+        comparison,
+        threshold: entry.threshold,
+    };
+    rule.validate()?;
+    Ok(rule)
+}
+
 /// Longest rule name accepted.
 ///
 /// The name goes into an alert title, which goes into a push notification; past

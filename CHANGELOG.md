@@ -38,6 +38,33 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — both kinds of rule travel in one file
+
+**Metric-rule export and import** (`G-29`, completing it). `/admin/rules/export`
+now carries the station alerts — disk, memory, temperature, detection rate,
+queue depth — alongside the detection rules, and the import reads both. They are
+different mechanisms sharing a word, but an operator moving a station or asking
+for help wants one file, not two.
+
+`EXPORT_VERSION` goes to 2, which is only safe because the files already in
+operators' hands still import: a version-1 file has no `metric_rules` field at
+all, and that has to read as "no metric rules" rather than a parse failure that
+would take the detection rules down with it. A gate removes the serde default
+to prove it catches that. A file from a *newer* station is still refused with a
+message naming both versions — which is what the version is for.
+
+Metric rules carry no credential, so the `?secrets=1` question does not apply
+to them; the `redacted` flag says nothing about them either way, and the
+documentation says so rather than leaving it ambiguous.
+
+Two things an import deliberately does not do. A metric this station has never
+heard of is **named and skipped**, not silently dropped — a file from a newer
+station would otherwise import looking complete while missing the rules that
+mattered. And an import applies the same validation the form does, so a rule
+that could never stop firing ("disk above −1", which fires on every poll of
+every station for ever) is refused on both paths; an import is not a way around
+the check.
+
 ### Added — the gaps between the barks
 
 **`NOISE_REMEMBER_SECS`** (`G-17`). The noise filter discards a chunk a dog

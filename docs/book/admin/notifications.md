@@ -203,3 +203,19 @@ is a secret. **Import** adds the rules in a pasted set — it never replaces wha
 is already there — and names any rule whose credential arrived redacted, since
 those will fire unauthenticated until one is entered. One unusable entry is
 reported and skipped rather than discarding the rest of the paste.
+
+The file carries **both kinds of rule**: the detection rules above and the
+[station alerts](#alerts-on-the-station-itself) that watch disk, memory,
+temperature and the rest. They are different mechanisms — one matches a detection as it arrives,
+the other compares a measurement every five minutes — but an operator moving a
+station or asking for help wants one file, not two. Metric rules have no
+credential, so the redaction question does not apply to them.
+
+The file records a format version. A rule set written before metric rules
+existed still imports, as a set with none; a set from a *newer* station is
+refused with a message naming both versions rather than being read as a set of
+rules with fields missing. A metric this station does not implement is named
+and skipped, not silently dropped — otherwise a file from a newer station would
+import looking complete while missing the rules that mattered. Import applies
+the same validation the form does, so a rule that could never stop firing
+("disk above −1") is refused either way.
