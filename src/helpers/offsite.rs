@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use birdnet_core::config::Config;
 use birdnet_integrations::offsite::{
     Destination, OffsiteConfig, Passphrase,
+    rsync::RsyncTarget,
     s3::{Addressing, S3Target},
     sftp::{HostKeyPolicy, SftpTarget},
     sigv4::Credentials,
@@ -119,9 +120,11 @@ pub fn plan(cli: &Cli, config: Option<&Config>) -> OffsitePlan {
         "off" | "none" | "disabled" | "" => return OffsitePlan::Off,
         "s3" => s3_destination(config, &mut problems),
         "sftp" | "ssh" => sftp_destination(config, &mut problems),
+        "rsync" => rsync_destination(config, &mut problems),
         other => {
             return OffsitePlan::Broken(vec![format!(
-                "`{other}` is not an offsite backup destination; use `off`, `s3` or `sftp`"
+                "`{other}` is not an offsite backup destination; use `off`, `s3`, `sftp` \
+                 or `rsync`"
             )]);
         }
     };
@@ -318,6 +321,46 @@ fn sftp_destination(config: Option<&Config>, problems: &mut Vec<String>) -> Opti
         identity_file: identity,
         known_hosts,
         host_key_policy,
+    })))
+}
+
+/// Build the `rsync` destination.
+///
+/// **It reads the same `OFFSITE_SFTP_*` settings.** That is deliberate and not
+/// an oversight: the connection genuinely is the same SSH connection to the
+/// same account on the same server, and `rsync` here differs only in which
+/// program moves the bytes. Giving it a parallel `OFFSITE_RSYNC_HOST` family
+/// would mean seven more keys, seven more chances to configure one of them and
+/// not the other, and no new capability — and it would stop an operator
+/// switching `OFFSITE_BACKUP=sftp` to `rsync` by editing one word, which is
+/// exactly the change they want to make and undo while testing a flaky link.
+///
+/// The one setting that is genuinely rsync's own is the bandwidth cap.
+fn rsync_destination(config: Option<&Config>, problems: &mut Vec<String>) -> Option<Destination> {
+    let Some(Destination::Sftp(ssh)) = sftp_destination(config, problems) else {
+        return None;
+    };
+    let bwlimit_kib = match setting(config, "OFFSITE_RSYNC_BWLIMIT") {
+        None => None,
+        Some(raw) if raw.trim().is_empty() => None,
+        Some(raw) => match raw.trim().parse::<u32>() {
+            // 0 is rsync's own spelling of "no limit"; accept it as such rather
+            // than passing `--bwlimit=0` and relying on that staying true.
+            Ok(0) => None,
+            Ok(kib) => Some(kib),
+            Err(_) => {
+                problems.push(format!(
+                    "OFFSITE_RSYNC_BWLIMIT is `{}`; give a whole number of KiB/s, or 0 for no \
+                     limit",
+                    raw.trim()
+                ));
+                return None;
+            }
+        },
+    };
+    Some(Destination::Rsync(Box::new(RsyncTarget {
+        ssh: *ssh,
+        bwlimit_kib,
     })))
 }
 
@@ -535,6 +578,89 @@ mod tests {
             "known_hosts should default beside the identity file"
         );
         assert_eq!(t.host_key_policy, HostKeyPolicy::Strict);
+    }
+
+    /// `rsync` reads the same connection settings as `sftp`, so switching
+    /// between the two while debugging a flaky link is one word. A parallel
+    /// `OFFSITE_RSYNC_HOST` family would have made it seven.
+    ///
+    /// Observed failing with the `"rsync"` arm removed from `plan`: the mode
+    /// fell through to the unknown-destination branch and the plan was Broken.
+    #[test]
+    fn rsync_reads_the_same_connection_settings_as_sftp() {
+        let cfg = config(&[
+            "OFFSITE_BACKUP=rsync",
+            "OFFSITE_SFTP_HOST=nas.local",
+            "OFFSITE_SFTP_PORT=2222",
+            "OFFSITE_SFTP_USER=birds",
+            "OFFSITE_SFTP_DIR=/volume1/backups",
+            "OFFSITE_SFTP_IDENTITY=/var/lib/birdnet/ssh/id_ed25519",
+            "OFFSITE_PASSPHRASE=correct horse battery staple",
+        ]);
+        let OffsitePlan::On(plan) = plan(&cli(), Some(&cfg)) else {
+            panic!("expected a usable plan");
+        };
+        let Destination::Rsync(t) = &plan.destination else {
+            panic!("expected rsync, got {}", plan.destination.describe());
+        };
+        assert_eq!(t.ssh.host, "nas.local");
+        assert_eq!(t.ssh.port, 2222);
+        assert_eq!(t.ssh.user, "birds");
+        assert_eq!(t.ssh.remote_dir, "/volume1/backups");
+        // Unset means unlimited, not zero.
+        assert_eq!(t.bwlimit_kib, None);
+        // The host-key policy is the sftp one, not a weaker default.
+        assert_eq!(t.ssh.host_key_policy, HostKeyPolicy::Strict);
+    }
+
+    /// The one setting that is rsync's own. `0` is rsync's spelling of "no
+    /// limit" and is resolved to `None` rather than passed through as
+    /// `--bwlimit=0`, which would rely on that staying true.
+    ///
+    /// Observed failing with the `Ok(0) => None` arm changed to
+    /// `Ok(0) => Some(0)`: the assertion that zero means unlimited went red.
+    #[test]
+    fn a_zero_bandwidth_cap_means_unlimited_and_a_word_is_refused() {
+        let with = |bw: &str| {
+            config(&[
+                "OFFSITE_BACKUP=rsync",
+                "OFFSITE_SFTP_HOST=nas.local",
+                "OFFSITE_SFTP_USER=birds",
+                "OFFSITE_SFTP_DIR=/volume1/backups",
+                "OFFSITE_SFTP_IDENTITY=/k/id_ed25519",
+                "OFFSITE_PASSPHRASE=correct horse battery staple",
+                bw,
+            ])
+        };
+
+        let cfg = with("OFFSITE_RSYNC_BWLIMIT=0");
+        let OffsitePlan::On(p) = plan(&cli(), Some(&cfg)) else {
+            panic!("0 should be a usable plan");
+        };
+        let Destination::Rsync(t) = &p.destination else {
+            panic!("expected rsync");
+        };
+        assert_eq!(t.bwlimit_kib, None, "0 is rsync's own spelling of no limit");
+
+        let cfg = with("OFFSITE_RSYNC_BWLIMIT=512");
+        let OffsitePlan::On(p) = plan(&cli(), Some(&cfg)) else {
+            panic!("512 should be a usable plan");
+        };
+        let Destination::Rsync(t) = &p.destination else {
+            panic!("expected rsync");
+        };
+        assert_eq!(t.bwlimit_kib, Some(512));
+
+        // A typo is reported, not silently ignored: a station the operator
+        // believes is rate-limited and is not will saturate their link.
+        let cfg = with("OFFSITE_RSYNC_BWLIMIT=slow");
+        match plan(&cli(), Some(&cfg)) {
+            OffsitePlan::Broken(problems) => assert!(
+                problems.iter().any(|p| p.contains("OFFSITE_RSYNC_BWLIMIT")),
+                "{problems:?}"
+            ),
+            other => panic!("a typo was accepted: {other:?}"),
+        }
     }
 
     #[test]

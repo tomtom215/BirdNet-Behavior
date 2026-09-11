@@ -119,6 +119,21 @@ ssh-keyscan -p 22 backup.example.net | sudo -u birdnet tee /var/lib/birdnet/ssh/
 
 `OFFSITE_SFTP_HOST_KEY_POLICY` has no "off". Host key checking is what makes the upload go to *your* server rather than to whoever answers, and there is no setting that disables it. Use `accept-new` for the first connection on a network you control, then set it back to `yes` so a *changed* key is refused.
 
+### Over rsync, when the link is bad
+
+`OFFSITE_BACKUP=rsync` sends the same backup to the same SSH server, with the same `OFFSITE_SFTP_*` settings above — only the program that moves the bytes changes. Switching is one word:
+
+```ini
+OFFSITE_BACKUP=rsync
+OFFSITE_RSYNC_BWLIMIT=512   # KiB/s; 0 or unset for no limit
+```
+
+**Use it if your uplink drops.** rsync keeps what already arrived, so a transfer that dies at 90 % of a 1.3 GB backup continues from there next time. Over SFTP the same backup starts again from zero, and on a link bad enough to matter it may never finish at all. `OFFSITE_RSYNC_BWLIMIT` is the other reason: it stops a backup saturating a shared or metered connection for an hour.
+
+**It is not faster because it is "incremental".** rsync's famous trick is sending only the blocks that changed, and that is worth nothing here. Your backups are encrypted before they leave, under a fresh random salt each time, so consecutive backups share no blocks at all — not even when the database has not changed. Measured on a 1 MiB file: 1496 of 1497 blocks reusable in plaintext, **0 of 1498** once encrypted. rsync sends the whole file every run, exactly as SFTP does. The resume and the speed limit are the reasons to use it.
+
+It needs both `rsync` and `sftp` installed. rsync moves the bytes; `sftp` creates the directory, lists what is there and deletes what retention drops — rsync has no command that removes one named remote file, and its nearest equivalent deletes everything a filter does not mention, which is not a risk worth taking with your only offsite copies.
+
 ### Retention
 
 `OFFSITE_KEEP` is how many backups stay at the destination; the oldest go when a new one arrives. `0` keeps everything.

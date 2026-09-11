@@ -35,6 +35,7 @@
 //! offsite copy is stale" into "there is no offsite copy".
 
 pub mod envelope;
+pub mod rsync;
 pub mod s3;
 pub mod sftp;
 pub mod sigv4;
@@ -56,6 +57,9 @@ pub enum Destination {
     S3(Box<s3::S3Target>),
     /// An SSH file server.
     Sftp(Box<sftp::SftpTarget>),
+    /// An SSH file server, with the bytes moved by `rsync` so a dropped
+    /// transfer resumes instead of starting again.
+    Rsync(Box<rsync::RsyncTarget>),
 }
 
 impl Destination {
@@ -65,6 +69,7 @@ impl Destination {
         match self {
             Self::S3(t) => format!("s3 {}/{}", t.endpoint, t.bucket),
             Self::Sftp(t) => format!("sftp {}@{}:{}", t.user, t.host, t.remote_dir),
+            Self::Rsync(t) => format!("rsync {}@{}:{}", t.ssh.user, t.ssh.host, t.ssh.remote_dir),
         }
     }
 }
@@ -338,6 +343,15 @@ async fn send_and_prune(
             Ok((doomed.clone(), kept_count(&names, &doomed)))
         }
         Destination::Sftp(t) => {
+            t.put(name, ciphertext).await?;
+            let names = t.list().await?;
+            let doomed = prune_list(&names, config.keep);
+            for victim in &doomed {
+                t.remove(victim).await?;
+            }
+            Ok((doomed.clone(), kept_count(&names, &doomed)))
+        }
+        Destination::Rsync(t) => {
             t.put(name, ciphertext).await?;
             let names = t.list().await?;
             let doomed = prune_list(&names, config.keep);

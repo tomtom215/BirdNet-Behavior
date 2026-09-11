@@ -38,6 +38,48 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a backup that survives a bad uplink
+
+**`OFFSITE_BACKUP=rsync`** (`G-30`, the target half). The same backup, to the
+same SSH server, with the same `OFFSITE_SFTP_*` settings — only the program
+moving the bytes changes, so switching is one word and switching back is one
+word.
+
+It is here for one reason: **it resumes.** A station on a rural link that drops
+at 90 % of a 1.3 GB backup continues from there next time; over SFTP the same
+backup starts again from zero, and on a link bad enough to matter it may never
+finish at all. `OFFSITE_RSYNC_BWLIMIT` is the second reason — a backup that
+saturates a shared connection for an hour is its own kind of failure.
+
+**It is not here because rsync is incremental, and the row that asked for it
+was wrong about that.** The gap analysis justified rsync as "it is
+incremental". Backups are encrypted before they leave under a fresh random
+argon2 salt and nonce prefix, so every run derives a different key. Measured on
+a 1 MiB file at rsync's 700-byte block size, counting matches at every offset:
+1496/1497 blocks reusable in plaintext with one region changed, **0/1498**
+encrypted, and **0/1498** encrypted with byte-identical plaintext. The last
+figure is the one that settles it — with nothing changed at all, the salt alone
+leaves no block in common. rsync sends the whole file every time. The module
+says so in its own header rather than repeating the claim.
+
+rsync moves the bytes; `sftp` still creates the directory, lists it and deletes
+what retention drops. That is not a shortcut: rsync has no command that removes
+one named remote file, and its nearest idiom — an empty source directory with
+`--delete` and an include filter — removes everything the filter does not name.
+Adding a second way to lose every offsite backup, in exchange for nothing, was
+not a trade worth making.
+
+The SSH policy is now written once. `SftpTarget::ssh_policy_options` is shared
+by the `sftp` client and by the `ssh` transport rsync is handed, because a
+copied list is the obvious way for host-key checking to be enforced on one path
+and quietly missing from the other — and neither path's own tests would have
+noticed. A gate asserts the two carry the same policy.
+
+One asymmetry the gates pinned: the remote-path allowlist permits a space,
+because `sftp` quotes its batch arguments and can carry one. rsync splits its
+own arguments and cannot, so the rsync target refuses a remote directory its
+sibling accepts.
+
 ### Added — the station can say which of its own jobs have never run
 
 **`GET /api/v2/system/jobs`** (`G-32`, completing it). Seven background jobs
