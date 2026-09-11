@@ -61,6 +61,24 @@ is what will happen.
 An allow list whose entries match no species this model knows is ignored, and a
 warning is logged, rather than being taken literally and suppressing everything.
 
+### Species storage
+
+**Station → Capture → Species → Species storage** (`/admin/species/manage`) is one row per species this station has ever recorded, with its detection count, how many still have audio on disk, how many you have locked, and when it was last heard. It exists for one recurring situation: a squeaky gate has produced four thousand Eurasian Wrens and you want them gone.
+
+Three actions per row, each confirmed:
+
+| Action | What it does | What survives |
+|---|---|---|
+| **Exclude** | Stops the species being recorded from now on | Everything already stored |
+| **Delete detections** | Removes its rows | Nothing — this cannot be undone |
+| **Delete clips** | Reclaims the audio files | The detections, so the record of *what was heard* stays intact |
+
+**Locked detections are never touched by any of them.** The row shows the locked count before you press anything, and the result tells you how many were kept — so a species you deleted that still has two detections is explained rather than looking like a bug. Unlock those first if you meant to include them.
+
+**Measure** adds up the species' clips on disk. It is a separate button rather than a column because it has to `stat` every file, and doing that for every species on every page load would make the page take many seconds to open on an SD card.
+
+All three actions are written to the [audit log](system.md).
+
 ## Species photographs
 
 Each species page shows a photograph, cached on disk so the station works

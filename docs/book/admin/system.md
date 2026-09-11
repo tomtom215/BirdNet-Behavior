@@ -111,11 +111,16 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 | `auth.` | `login.ok`, `login.fail`, `login.throttled`, `logout` |
 | `account.` | `user.create`, `user.delete`, `password.set`, `session.revoke`, `session.revoke_others` |
 | `settings.` | `update` |
-| `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `threshold.set`, `threshold.delete` |
-| `audio.` | `source.create`, `source.update`, `source.delete` |
+| `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `threshold.set`, `threshold.delete`, `detections.delete`, `clips.delete` |
+| `audio.` | `source.create`, `source.update`, `source.delete`, `source.restart`, `source.listen_default` |
 | `rule.` | `create`, `delete`, `toggle`, `import` |
 | `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run` |
 | `system.` | `restart`, `update.apply` |
+
+`species.detections.delete` and `species.clips.delete` are the bulk actions on
+[Species storage](settings.md#species-storage). Each records how many rows it
+changed **and** how many locked detections it deliberately kept, so the log
+explains a count that would otherwise look wrong.
 
 A failed sign-in records the *submitted* username and no actor — "someone tried
 to sign in as `admin` sixty times last night" is the thing worth knowing, and a

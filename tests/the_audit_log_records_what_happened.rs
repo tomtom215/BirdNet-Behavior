@@ -297,6 +297,8 @@ const ACTIONS: &[&str] = &[
     "rule.import",
     "rule.toggle",
     "settings.update",
+    "species.clips.delete",
+    "species.detections.delete",
     "species.exclude.add",
     "species.exclude.remove",
     "species.include.add",

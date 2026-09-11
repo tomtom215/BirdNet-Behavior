@@ -66,8 +66,10 @@ pub use quarantine::{
     quarantine_stats, reject_quarantine,
 };
 pub use species::{
-    SpeciesThreshold, delete_species_threshold, get_species_threshold_map, get_species_thresholds,
-    recent_by_species, search_species, set_species_threshold, species_count, species_daily_counts,
+    BulkOutcome, SpeciesThreshold, SpeciesUsage, delete_species_detections,
+    delete_species_threshold, get_species_threshold_map, get_species_thresholds,
+    prune_species_clips, recent_by_species, search_species, set_species_threshold,
+    species_clip_files, species_count, species_daily_counts, species_disk_usage,
     species_first_detection, species_first_seen, species_hourly_activity,
     species_hourly_activity_batch, species_sparklines, species_summary, top_species,
 };

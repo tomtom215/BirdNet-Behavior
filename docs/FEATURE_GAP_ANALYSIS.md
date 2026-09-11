@@ -90,7 +90,7 @@ gaps and a handful of deliberate divergences.
 | **Where it is set** | A **Make listen default** button per row on `/admin/audio`, not a field on the settings page: the value is an `audio_sources` row id, which belongs beside the rows rather than typed into a text box. The POST answers with *both* source lists as out-of-band swaps, because the row losing the pill is usually in the other one. Audited as `audio.source.listen_default`. |
 | **And a gate the change had to add** | That made `/admin/audio` a third writer of the `settings` table, and the guard that fails when a settings key nothing reads is shipped covered only the admin form and the first-run wizard — the two writers whose past mistakes created it. `AUDIO_ADMIN_SETTING_KEYS` and `audio_admin_keys_are_all_classified` extend it to this one. That made three hand-maintained per-writer lists, and a fourth writer — `routes/admin/migration.rs`, writing `analytics_exclude_imports` — was outside all of them. G‑34's drift gate has since replaced the three lists with a scan of the source and caught exactly that key. |
 
-### N‑4 · Bulk species management — PARTIAL
+### N‑4 · Bulk species management — SHIPPED
 
 | | |
 |---|---|
@@ -98,6 +98,11 @@ gaps and a handful of deliberate divergences.
 | **Ours** | Per-species retention and purge exist (`crates/birdnet-core/src/audio/capture/disk/purge.rs`, driven by `max_files_per_species` on the disk manager, `disk/manager.rs:47`), the quarantine review flow exists (`routes/pages/quarantine.rs`), and include/exclude editing exists (`routes/admin/species/`). What is missing is the single table that shows *every* species with its clip count and offers "delete this species entirely". |
 | **Why it matters** | The recurring real-world need is "my station has logged 4 000 phantom Eurasian Wrens from a squeaky gate; remove them and stop recording them". Today that is three separate screens. |
 | **Plan** | Add `/admin/species/manage`: one row per species with detection count, on-disk clip count and bytes, last-heard date, and current list membership; actions are *exclude*, *delete detections*, *delete clips*, each confirmed and audit-logged through the existing `audit_log` table. Counts come from a new `species_disk_usage` query in `birdnet-db` rather than shelling out. |
+| **Resolution** | Shipped as planned: `species_disk_usage` in `crates/birdnet-db/src/sqlite/queries/species.rs`, the page at `crates/birdnet-web/src/routes/admin/species/manage.rs`, three actions audited as `species.exclude.add`, `species.detections.delete` and `species.clips.delete`. Admin-gated by inheritance — `admin_routes()` is cookie-gated as a unit — and registered in the nav subpage gate, which live-requests it under its parent tab. |
+| **The decision the plan did not anticipate** | **Locked detections are never touched by a bulk action.** `delete_detection` does not check `is_locked`, and that is right for a single row the operator is looking at; a bulk action is issued against a *species* and sweeps up rows nobody is thinking about. So every action here skips locked rows, `SpeciesUsage.locked` is shown **before** the button, and `BulkOutcome.locked_skipped` is reported after — an operator not told would find two detections of a species they believe they deleted and conclude the button is broken. Deleting clips keeps the rows and filenames (migration 22's provenance point) and marks them reclaimed *before* unlinking, because a row marked pruned whose file survives merely wastes disk while a file removed without the mark offers a player for audio that is gone. |
+| **Bytes are measured, not tabulated** | Clip size is not in the database, so a byte total is `stat` per file — thousands of syscalls for the species this page exists for. It is a per-row **Measure** action rather than a column: a page that took twenty seconds to open on an SD card would not be worth the number. |
+| **A path that unlinks** | `File_Name` comes from the database, which on a migrated station holds whatever BirdNET-Pi wrote there, and this page removes what it resolves. Paths are canonicalised and checked to be under the recordings directory, with a gate that puts a file outside the tree and asserts it survives a `../` filename. |
+| **A gate that was green for the wrong reason** | The "worst first" ordering test used a fixture in which detection-count order and alphabetical order coincided, so a mutation replacing `ORDER BY count DESC` with `ORDER BY name` passed. Found by running the mutation rather than by reading the test. The fixture now makes the two orders disagree, and the repaired gate also catches a rejected-detections mutation it could not have caught before. |
 
 ### Deliberate divergences from BirdNET-Pi — DECLINED
 
@@ -542,7 +547,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 19 | ~~`rsync` backup target + daily schedules~~ — **shipped**: rsync for resume rather than the incrementality the row assumed (measured at 0 %), and a daily backup that leaves the space reclaim weekly. See G‑30. | G‑30 |
 | 20 | ~~Config schema generation + drift gate~~ — the drift gate has shipped; the schema artifact is declined with a reason. See G‑34. | G‑34 |
 | 21 | ~~A station-wide default source for the live stream~~ — **shipped**, see N‑3 | N‑3 |
-| 22 | Bulk species management page | N‑4 |
+| 22 | ~~Bulk species management page~~ — **shipped** at `/admin/species/manage`, with bulk actions that never touch a locked detection. See N‑4. | N‑4 |
 | 23 | ~~Watchdog tuning~~ — **shipped**, see G‑9 | G‑9 |
 | 24 | ~~Memory-budget capability gating~~ — **shipped**, see G‑33; sizing the analytics *sync* remains | G‑33 |
 | 25 | Noise "remember" window | G‑17 |

@@ -38,6 +38,51 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — one page for "this species has cost me four thousand detections"
+
+**Species storage** (`N-4`), at `/admin/species/manage`. One row per species
+this station has ever recorded: detections, clips still on disk, how many are
+locked, when it was last heard. Three actions, each confirmed and each written
+to the audit log — exclude it from now on, delete its detections, or reclaim
+its audio while keeping the rows.
+
+The recurring situation is a squeaky gate that has produced four thousand
+Eurasian Wrens. Doing anything about it previously meant three screens, and
+there was no screen at all for the detections themselves.
+
+**Locked detections are never touched.** A single-row delete does not check the
+lock, because there the operator is looking at the row they named; a bulk
+action is issued against a *species* and sweeps up rows nobody is thinking
+about — including the one locked last spring because it was a county first. So
+every bulk action here skips locked rows, the table shows the locked count
+**before** the button is pressed, and the result says how many were kept. An
+operator not told would find two detections of a species they believe they
+deleted and reasonably conclude the button is broken.
+
+Deleting clips keeps the rows and their filenames, which is migration 22's
+point: the name records that audio existed and what it was called, and that is
+provenance an analysis may need long after the space was recovered. The rows
+are marked reclaimed *before* the files are unlinked — a row marked pruned
+whose file survives wastes disk, while a file removed without the mark offers a
+player for audio that is gone, and the first is the cheaper thing to be wrong
+about.
+
+`File_Name` comes from the database, which on a migrated station holds whatever
+BirdNET-Pi wrote there, and this page **unlinks** what it resolves. Every path
+is canonicalised and checked to be inside the recordings directory first; a
+gate puts a file outside the tree and asserts it survives a `../` filename.
+
+Byte totals are a per-row **Measure** action rather than a column, because they
+are `stat` per clip — thousands of syscalls for the species this page exists
+for, and a page that took twenty seconds to open on an SD card would not be
+worth the number.
+
+One gate in this change was green for the wrong reason and was found by
+mutating it: the "worst first" ordering test used a fixture where detection
+order and alphabetical order coincided, so replacing `ORDER BY count DESC` with
+`ORDER BY name` changed nothing. The fixture now makes the two disagree, and
+the repaired gate catches a second mutation it could not have caught before.
+
 ### Added — a daily backup, without a daily rewrite of the database
 
 **`BACKUP_SCHEDULE=daily`** (`G-30`, the schedule half). Weekly stays the
