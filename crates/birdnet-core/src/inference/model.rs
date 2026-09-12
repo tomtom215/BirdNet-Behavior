@@ -569,6 +569,56 @@ impl BirdNetModel {
         &self.labels
     }
 
+    /// The width of this classifier's embedding output, or `None` when it
+    /// exposes none.
+    ///
+    /// A chained head declares the width it consumes — `BattyBirdNET` wants
+    /// 1024, which is BirdNET **v2.4**'s. BirdNET+ V3.0 emits 1280 and Perch
+    /// v2 emits 1536, so the widths are how a mispaired chain is caught before
+    /// it produces confident nonsense from a tensor of the wrong shape.
+    #[must_use]
+    pub fn embedding_width(&self) -> Option<usize> {
+        let descriptors = self.output_descriptors();
+        let idx = embedding_output_index(&descriptors)?;
+        descriptors.get(idx).and_then(|(_, width)| *width)
+    }
+
+    /// Run inference and return the embedding rather than the class scores.
+    ///
+    /// For a chained classifier — see [`embedding_output_index`]. The window
+    /// is prepared exactly as [`Self::predict_chunk`] prepares it, including
+    /// the too-short refusal, because a chained head is no less sensitive to
+    /// being handed the wrong kind of data than a class head is.
+    ///
+    /// # Errors
+    ///
+    /// [`InferenceError::Shape`] when this classifier exposes no embedding
+    /// output, or when the window cannot be made into its input tensor;
+    /// [`InferenceError::Runtime`] if the session fails.
+    pub fn embed(&mut self, window: &[f32]) -> Result<Vec<f32>, InferenceError> {
+        let descriptors = self.output_descriptors();
+        let idx = embedding_output_index(&descriptors).ok_or_else(|| {
+            InferenceError::Shape(format!(
+                "this classifier exposes no embedding output (it has: {}), so it cannot \
+                 feed a chained classifier",
+                descriptors
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+        let input_tensor = self.build_input_tensor(window)?;
+        let outputs = self
+            .session
+            .run(ort::inputs![input_tensor])
+            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
+        let (_shape, flat) = outputs[idx]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| InferenceError::Runtime(format!("cannot extract embedding: {e}")))?;
+        Ok(flat.to_vec())
+    }
+
     /// Each output's name and trailing dimension, for
     /// [`class_output_index`].
     fn output_descriptors(&self) -> Vec<(String, Option<usize>)> {
@@ -845,6 +895,39 @@ pub fn class_output_index(outputs: &[(String, Option<usize>)], label_count: usiz
     // Last resort: the historical behaviour, so a model that matches neither
     // test behaves exactly as it did before this function existed.
     usize::from(outputs.len() > 1)
+}
+
+/// Which output of a classifier carries its embedding, if any (`G-10` Stage 6
+/// groundwork).
+///
+/// # Why a chained classifier needs this
+///
+/// The bat classifier this project plans to add is not a peer of BirdNET. Its
+/// input is `[batch, 1024]` — **BirdNET v2.4's embeddings** — and it maps them
+/// to bat species. 256 kHz recordings are fed to BirdNET without resampling,
+/// deliberately: 144 000 samples is 0.5625 s at 256 kHz, which BirdNET treats
+/// as the 3 s at 48 kHz it was trained on, aliasing ultrasound down into the
+/// audible band. The bat head then reads the embedding that comes out.
+///
+/// So a station that runs one needs to get an embedding *out* of a classifier,
+/// which nothing before this could do.
+///
+/// # Why only an exact name
+///
+/// By name, and only the conventional one. BirdNET+ V3.0 names it
+/// `embeddings`; Perch v2 names one `embedding` and a second
+/// `spatial_embedding`, which is a 16 × 4 × 1536 feature map and not the
+/// pooled vector a downstream head expects. Guessing — "the output that is not
+/// the class head" — would pick that map for Perch and something arbitrary for
+/// a model with three. A classifier that does not name its embedding
+/// conventionally is one this cannot use, and saying so is better than
+/// returning the wrong tensor.
+#[must_use]
+pub fn embedding_output_index(outputs: &[(String, Option<usize>)]) -> Option<usize> {
+    outputs.iter().position(|(name, _)| {
+        let lower = name.to_ascii_lowercase();
+        lower == "embedding" || lower == "embeddings"
+    })
 }
 
 /// Pure helper: derive sample rate from any ONNX input shape.
@@ -1871,6 +1954,132 @@ mod tests {
             short.output_dimension(),
             Some(short.labels().len()),
             "a one-label file does not match an eleven-class model"
+        );
+    }
+}
+
+#[cfg(test)]
+mod embedding_tests {
+    use super::{BirdNetModel, LabelSet, ModelConfig, embedding_output_index};
+
+    const TINY_V30: &[u8] = include_bytes!("../testdata/tiny_v30_test.onnx");
+    const TINY_V24: &[u8] = include_bytes!("../testdata/tiny_v24_test.onnx");
+
+    fn outs(v: &[(&str, Option<usize>)]) -> Vec<(String, Option<usize>)> {
+        v.iter().map(|(n, w)| ((*n).to_owned(), *w)).collect()
+    }
+
+    fn load(bytes: &[u8]) -> BirdNetModel {
+        let labels: Vec<String> = (0..11).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        let set = LabelSet::parse(&labels.join("\n")).expect("labels");
+        BirdNetModel::load_from_bytes(bytes, set, ModelConfig::default()).expect("loads")
+    }
+
+    /// BirdNET+ V3.0 names its embedding `embeddings`; Perch v2 names one
+    /// `embedding`. Both are found.
+    #[test]
+    fn the_conventional_embedding_names_are_found() {
+        let v30 = outs(&[("embeddings", Some(1280)), ("predictions", Some(11560))]);
+        assert_eq!(embedding_output_index(&v30), Some(0));
+
+        let perch = outs(&[
+            ("embedding", Some(1536)),
+            ("spatial_embedding", Some(1536)),
+            ("spectrogram", Some(128)),
+            ("label", Some(14795)),
+        ]);
+        assert_eq!(embedding_output_index(&perch), Some(0));
+    }
+
+    /// **Perch's `spatial_embedding` must never be mistaken for its
+    /// embedding.** It is a 16 × 4 × 1536 feature map, not the pooled vector a
+    /// chained head consumes, and a downstream classifier handed it would read
+    /// 98 304 numbers as though they were 1 536.
+    ///
+    /// Observed failing with the exact-name test relaxed to `contains`:
+    /// `spatial_embedding` matched and, on a model listing it first, was
+    /// returned instead of the pooled one.
+    #[test]
+    fn a_spatial_feature_map_is_not_an_embedding() {
+        let reordered = outs(&[
+            ("spatial_embedding", Some(1536)),
+            ("embedding", Some(1536)),
+            ("label", Some(14795)),
+        ]);
+        assert_eq!(
+            embedding_output_index(&reordered),
+            Some(1),
+            "the pooled `embedding` must win even when the feature map comes first"
+        );
+    }
+
+    /// A classifier with no embedding output reports none rather than
+    /// offering its class head, which a chained classifier would consume as
+    /// though it were a feature vector.
+    ///
+    /// Observed failing with the `position` replaced by `Some(0)`: a V2.4
+    /// model with only `predictions` claimed output 0 was its embedding.
+    #[test]
+    fn a_model_without_an_embedding_output_reports_none() {
+        let v24 = outs(&[("predictions", Some(6522))]);
+        assert_eq!(embedding_output_index(&v24), None);
+        assert_eq!(embedding_output_index(&[]), None);
+    }
+
+    /// Against the real fixtures: V3.0 exposes a 1 280-wide embedding, V2.4
+    /// exposes none. Measured from the ONNX files, not assumed.
+    #[test]
+    fn the_fixtures_report_the_embedding_widths_they_actually_have() {
+        assert_eq!(load(TINY_V30).embedding_width(), Some(1280));
+        assert_eq!(
+            load(TINY_V24).embedding_width(),
+            None,
+            "the V2.4 fixture has only `predictions`"
+        );
+    }
+
+    /// **The extraction itself**, run against a real ONNX session: the
+    /// embedding comes back at its declared width, and is not the class
+    /// scores.
+    ///
+    /// Observed failing with `embed` reading `outputs[0]` unconditionally on
+    /// a model whose embedding is not first — it returned 11 values, the
+    /// class head's width, instead of 1 280.
+    #[test]
+    fn embedding_extraction_returns_the_embedding_not_the_scores() {
+        let mut model = load(TINY_V30);
+        let window = vec![0.1_f32; model.recommended_chunk_samples()];
+        let embedding = model.embed(&window).expect("the V3.0 fixture embeds");
+        assert_eq!(embedding.len(), 1280, "the declared embedding width");
+        assert_ne!(embedding.len(), 11, "that is the class head's width");
+    }
+
+    /// Asking a classifier that has none for an embedding is an error naming
+    /// what it does have — a chained station misconfigured this way must be
+    /// told, not handed the wrong tensor.
+    #[test]
+    fn embedding_extraction_refuses_a_model_that_has_none() {
+        let mut model = load(TINY_V24);
+        let window = vec![0.1_f32; model.recommended_chunk_samples()];
+        let err = model
+            .embed(&window)
+            .expect_err("a model with no embedding output must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("no embedding output"), "{msg}");
+        assert!(
+            msg.contains("predictions"),
+            "it must name what it does have: {msg}"
+        );
+    }
+
+    /// The too-short refusal applies to the embedding path too: a chained head
+    /// is no less sensitive to the wrong kind of data than a class head.
+    #[test]
+    fn embedding_extraction_refuses_a_window_that_is_far_too_short() {
+        let mut model = load(TINY_V30);
+        assert!(
+            model.embed(&[0.0_f32; 10]).is_err(),
+            "a ten-sample window is not a partial window"
         );
     }
 }

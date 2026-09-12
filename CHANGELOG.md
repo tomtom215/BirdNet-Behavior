@@ -38,6 +38,48 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — getting an embedding out of a classifier, and what that revealed about the bat stage
+
+**Embedding extraction** (`G-10`, groundwork for Stage 6):
+`embedding_output_index`, `BirdNetModel::embedding_width` and
+`BirdNetModel::embed`. A classifier can now be asked for its embedding rather
+than its class scores.
+
+This exists because **Stage 6 is not the shape the plan described.** The plan
+called the bat classifier "the bat classifier, which additionally needs the
+≥192 kHz capture path and the ultrasonic validation filter". Checked against
+the model itself, `BattyBirdNET` is not a peer classifier at all: its input is
+`[batch, 1024]` — BirdNET **v2.4** embeddings — and 256 kHz recordings are fed
+to BirdNET *without resampling*, deliberately, so that 144 000 samples reads as
+the 3 s at 48 kHz BirdNET was trained on and ultrasound aliases down into the
+audible band. It is a **chained second stage**.
+
+That changes three things the plan did not capture. Stage 3's **agreement count
+must not apply to it** — "two classifiers agreed" is false when one is reading
+the other's intermediate output, and counting it would manufacture
+corroboration from a single model's opinion. The pipeline needs a **deliberate
+no-resample path**, the opposite of what it does. And it needs **BirdNET v2.4
+specifically**: V3.0 emits 1280-wide embeddings, Perch 1536, `BattyBirdNET`
+wants 1024 — and this repository ships V3.0 and has no real v2.4.
+
+The extraction finds the embedding **by exact name only**. Perch v2 exposes
+both `embedding` (a 1536-wide pooled vector) and `spatial_embedding` (a
+16 × 4 × 1536 feature map); a `contains` match would hand a chained head 98 304
+numbers where it expected 1 536, which is the Stage 4 output-head defect one
+layer down. A classifier with no embedding output reports `None` rather than
+offering its class head, which a chained head would consume as though it were a
+feature vector.
+
+Verified against the real BirdNET+ V3.0 (`embeddings [-1, 1280]`) and both
+committed fixtures — the V3.0 one exposes a 1280-wide embedding, the V2.4 one
+exposes none.
+
+**Stage 6 itself remains blocked**, and on things that are decisions or missing
+artifacts rather than unwritten code: the no-resample path, a real BirdNET
+v2.4, `audio_sources`'s sample-rate `CHECK` (which permits nothing above
+48 kHz), `G-14`'s ultrasonic filter, and Stage 4's unfinished half — a 256 kHz
+chained head differs from the primary's spec, and the registry refuses that.
+
 ### Added — installing a classifier, without ever installing the wrong one
 
 **A model catalogue and a verified installer** (`G-10` Stage 5).
