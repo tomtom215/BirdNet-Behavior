@@ -111,6 +111,32 @@ extend-ignore-re = [
     # `doctor/model.rs` as the digest a fixture model must report. typos
     # splits it at the first digit and reads `ba` as a word.
     'ba7816bf8f01[0-9a-f]*',
+    # Hyphenated prefixes. typos splits a token at the hyphen and reads the
+    # prefix on its own, so `pre-empted` becomes "empted" (flagged for
+    # "emptied") and `mis-read` becomes "mis" (flagged for "miss"/"mist").
+    # Both spellings are correct English and both appear in ordinary prose
+    # here, so the prefix is matched as a shape rather than allow-listed as a
+    # word: `empted` and `mis` standing alone anywhere else are still caught.
+    #
+    # Only the prefix is matched, not the whole hyphenated word, so the half
+    # after the hyphen stays spell-checked. Both halves of that were measured
+    # rather than assumed: these two rules clear the fifteen findings that
+    # were failing the build, and a scratch file containing `mis-recieve` is
+    # still reported at the `recieve`, as is `pre-empt-recieve`.
+    #
+    # (A first attempt matched the whole word, `'pre-empt\w*'`. It also
+    # passes — a span that merely overlaps an ignore-re match is suppressed —
+    # but it switches off the checker for the rest of the token for nothing.)
+    'pre-empt',
+    'mis-',
+    # `piciFORMES` in `species_pages.rs` is a deliberately mixed-case order
+    # name: its gate proves `TaxonFilter::from_params` matches a taxonomic
+    # rank without regard to case, so the odd casing IS the fixture. typos
+    # reads the `FORMES` half as a typo for "FORMS".
+    #
+    # Whole token, like `NoNewPrivilages` above, so a real "FORMES" elsewhere
+    # is still caught.
+    'piciFORMES',
 ]
 
 [default.extend-words]
@@ -128,6 +154,9 @@ inh = "inh"           # short for "inhibit" — used as local var name
 unparseable = "unparseable" # alternative spelling of "unparsable", widely used
 cardinalis = "cardinalis" # Latin species epithet — Cardinalis cardinalis (Northern Cardinal)
 ater = "ater"         # Latin species epithet — Periparus ater (Coal Tit)
+anser = "anser"       # Latin genus and epithet — Anser anser (Greylag Goose); eBird's
+                      # own documented example response carries `Anser sp. (Domestic
+                      # type)`, quoted verbatim as a fixture in `ebird.rs`
 aas = "aas"           # CSS class prefix for the admin_audio_sources templates
 thr = "thr"           # CSS class prefix for the species threshold table
 woth = "woth"         # four-letter banding code for Wood Thrush (Hylocichla mustelina)
