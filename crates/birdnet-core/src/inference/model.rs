@@ -1298,6 +1298,37 @@ mod tests {
         );
     }
 
+    /// **The `Classifier` trait's `infer` had no test at all.** Every
+    /// inference assertion in this file goes through `predict`/`predict_chunk`
+    /// — the concrete path — so the trait method Stage 1 extracted could have
+    /// returned any constant vector and nothing would have said otherwise.
+    /// `cargo-mutants` reported exactly that: four surviving mutants replacing
+    /// its body with `Ok(vec![])`, `Ok(vec![0.0])`, `Ok(vec![1.0])` and
+    /// `Ok(vec![-1.0])`.
+    ///
+    /// `tiny_v30_test.onnx` returns `audio[i]` at output `i`, so the scores
+    /// are checkable rather than merely countable — the assertion names the
+    /// values, not just the length, and each of the four constants fails it.
+    #[test]
+    fn the_classifier_trait_returns_this_model_s_own_scores() {
+        use crate::inference::classifier::Classifier;
+        let mut m = load_tiny_v30();
+        let window: Vec<f32> = (0..96_000).map(|i| (i % 13) as f32 * 0.25).collect();
+        let scores = Classifier::infer(&mut m, &window).expect("the tiny V3.0 model infers");
+        assert_eq!(
+            scores.len(),
+            11,
+            "one score per label, not a constant vector"
+        );
+        for (i, score) in scores.iter().enumerate() {
+            assert!(
+                (score - window[i]).abs() < 1e-6,
+                "score {i} is {score}, expected the fixture's own {}",
+                window[i]
+            );
+        }
+    }
+
     #[test]
     fn loaded_v30_model_expects_raw_audio() {
         // V3.0 is 32 kHz → raw audio path.
@@ -2169,6 +2200,30 @@ mod class_output_tests {
             ("label", Some(14795)),
         ]);
         assert_eq!(class_output_index(&perch, 14_795), 3);
+    }
+
+    /// **A zero label count must not be matched by a zero-width output.**
+    /// `label_count > 0` guards the width test because "no labels loaded" is
+    /// not a width to search for; without it, an output that declares width 0
+    /// — a placeholder, or a shape the runtime could not resolve — would be
+    /// selected as the class head and the model would be scored against
+    /// nothing.
+    ///
+    /// Observed failing with the guard relaxed to `label_count >= 0`, which is
+    /// vacuously true for a `usize`: the width test ran, matched `Some(0)` at
+    /// index 0, and returned it instead of falling through to the name test.
+    /// That is the mutant `cargo-mutants` reported surviving on this line.
+    #[test]
+    fn a_zero_label_count_does_not_match_a_zero_width_output() {
+        let with_placeholder = outs(&[("zeros", Some(0)), ("predictions", Some(11))]);
+        assert_eq!(
+            class_output_index(&with_placeholder, 0),
+            1,
+            "with no labels to match on, the conventional name decides"
+        );
+        // Its counterpart: a real label count still selects by width, so the
+        // gate above cannot pass against a width test that never runs.
+        assert_eq!(class_output_index(&with_placeholder, 11), 1);
     }
 
     /// BirdNET+ V3.0 must keep working: two outputs, the head second.
