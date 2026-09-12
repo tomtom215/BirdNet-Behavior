@@ -6,7 +6,7 @@ use std::time::Instant;
 use crate::detection::ChunkFilters;
 use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
 use crate::detection::types::ChunkPrediction;
-use crate::inference::model::BirdNetModel;
+use crate::inference::registry::ClassifierRegistry;
 use crate::inference::species_filter::SpeciesFilter;
 
 use super::{DaemonError, DetectionEvent};
@@ -57,6 +57,55 @@ fn geomodel_week(date: &str, path: &Path) -> u32 {
 /// Returns all detections found in the file, or an empty vec if
 /// nothing meets the confidence threshold.
 ///
+/// Run every classifier routed to this chunk and combine what they said.
+///
+/// One classifier is the overwhelmingly common case and costs one pass, as it
+/// always did. With more than one the detections are merged by
+/// [`crate::detection::merge::merge_verdicts`] — union, each model judged
+/// against its own threshold, agreement counted rather than folded into the
+/// confidence.
+///
+/// The human score is the **highest** any classifier reported, not the
+/// primary's. It drives the privacy gate, and if any model heard speech the
+/// safe reading is that there was speech: erring towards suppressing a bird is
+/// recoverable, erring towards publishing a conversation is not.
+fn infer_chunk(
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
+    chunk: &crate::detection::pipeline::PreparedChunk,
+    week: u32,
+) -> Result<ChunkPrediction, DaemonError> {
+    let mut verdicts = Vec::with_capacity(route.len());
+    let mut human_score = 0.0_f32;
+
+    for &idx in route {
+        let Some(registered) = registry.model_mut(idx) else {
+            // Unreachable: routes are resolved against the loaded models at
+            // startup and refused if they name one that does not exist.
+            continue;
+        };
+        let model_id = registered.id.clone();
+        let prediction = registered.model.predict_chunk(
+            &chunk.spectrogram.data,
+            &chunk.recording.date,
+            &chunk.recording.time,
+            chunk.start_secs,
+            chunk.end_secs,
+            week,
+        )?;
+        human_score = human_score.max(prediction.human_score);
+        verdicts.push(crate::detection::merge::ModelVerdict {
+            model_id,
+            detections: prediction.detections,
+        });
+    }
+
+    Ok(ChunkPrediction {
+        detections: crate::detection::merge::merge_verdicts(&verdicts),
+        human_score,
+    })
+}
+
 /// `correlation_id`, if non-empty, is stamped on every event emitted for
 /// this file and surfaced in every log line — see [`DetectionEvent::correlation_id`].
 ///
@@ -67,7 +116,8 @@ fn geomodel_week(date: &str, path: &Path) -> u32 {
 pub fn process_and_infer(
     path: &Path,
     pipeline_config: &PipelineConfig,
-    model: &mut BirdNetModel,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
     correlation_id: &str,
 ) -> Result<Vec<DetectionEvent>, DaemonError> {
     let start = Instant::now();
@@ -88,14 +138,13 @@ pub fn process_and_infer(
     for chunk in &chunks {
         let infer_start = Instant::now();
 
-        let detections = model.predict(
-            &chunk.spectrogram.data,
-            &chunk.recording.date,
-            &chunk.recording.time,
-            chunk.start_secs,
-            chunk.end_secs,
+        let detections = infer_chunk(
+            registry,
+            route,
+            chunk,
             geomodel_week(&chunk.recording.date, path),
-        )?;
+        )?
+        .detections;
 
         let infer_elapsed = infer_start.elapsed();
         let total_ms = start.elapsed().as_millis() as u64;
@@ -151,7 +200,8 @@ pub fn process_and_infer(
 pub fn process_and_infer_filtered(
     path: &Path,
     pipeline_config: &PipelineConfig,
-    model: &mut BirdNetModel,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
     chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&crate::detection::daemon::SpeciesFilterObserver>,
@@ -183,15 +233,7 @@ pub fn process_and_infer_filtered(
     let mut all_predictions: Vec<ChunkPrediction> = Vec::with_capacity(chunks.len());
 
     for chunk in &chunks {
-        let prediction = model.predict_chunk(
-            &chunk.spectrogram.data,
-            &chunk.recording.date,
-            &chunk.recording.time,
-            chunk.start_secs,
-            chunk.end_secs,
-            week,
-        )?;
-        all_predictions.push(prediction);
+        all_predictions.push(infer_chunk(registry, route, chunk, week)?);
     }
 
     // Apply the whole-chunk filters: human speech, then non-bird noise, then
@@ -208,7 +250,12 @@ pub fn process_and_infer_filtered(
     // explicit instruction and still apply — gating the whole filter on
     // coordinates, as this used to, meant a station that never set a latitude
     // kept recording every species its operator had asked to suppress.
-    let allowed_species = species_filter.filter_species(lat.zip(lon), week, model.labels())?;
+    // The primary classifier's labels. The occurrence filter is a BirdNET
+    // geomodel scored against a BirdNET label set; a second classifier with a
+    // different vocabulary is filtered by its own thresholds and lists, not by
+    // a geomodel that has never heard of its labels.
+    let allowed_species =
+        species_filter.filter_species(lat.zip(lon), week, registry.primary().model.labels())?;
     if let Some(observer) = filter_observer {
         observer.report(
             species_filter.has_model(),

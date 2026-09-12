@@ -207,11 +207,21 @@ impl ClassifierRegistry {
                 id: spec.id.clone(),
                 why: format!("labels: {e}"),
             })?;
-            let model = BirdNetModel::load(&spec.model_path, labels, model_config.clone())
-                .map_err(|e| RegistryError::Load {
+            // A per-classifier threshold is applied to its own config here,
+            // once, rather than swapped in around every inference call. Two
+            // models are not calibrated alike: forcing the station's single
+            // number on both means the stricter one is effectively off or the
+            // looser one floods the log.
+            let mut config = model_config.clone();
+            if let Some(threshold) = spec.threshold {
+                config.confidence_threshold = threshold;
+            }
+            let model = BirdNetModel::load(&spec.model_path, labels, config).map_err(|e| {
+                RegistryError::Load {
                     id: spec.id.clone(),
                     why: e.to_string(),
-                })?;
+                }
+            })?;
             models.push(RegisteredModel {
                 id: spec.id.clone(),
                 model,
@@ -247,6 +257,25 @@ impl ClassifierRegistry {
             models,
             routes: resolved,
         })
+    }
+
+    /// A registry wrapping one already-loaded classifier.
+    ///
+    /// For callers that have a [`BirdNetModel`] in hand and no configuration
+    /// to resolve — the end-to-end tests that load the real model directly,
+    /// and anything embedding the pipeline. It skips the checks [`Self::load`]
+    /// performs because there is nothing to check: one classifier, no routes,
+    /// and the id is the caller's own.
+    #[must_use]
+    pub fn single(id: impl Into<String>, model: BirdNetModel) -> Self {
+        Self {
+            models: vec![RegisteredModel {
+                id: id.into(),
+                model,
+                threshold: None,
+            }],
+            routes: HashMap::new(),
+        }
     }
 
     /// The classifier every station has, and the one any ambiguity falls back

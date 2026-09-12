@@ -954,6 +954,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let row = |file_name: &'static str, time: &'static str, offset: f64| DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-05-19",
             time,
             sci_name: "Turdus merula",
@@ -999,6 +1001,8 @@ mod tests {
     /// vary: the wall clock, the species, and the instant.
     fn insert_at(conn: &Connection, date: &str, time: &str, sci: &str, utc: Option<i64>) {
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date,
             time,
             sci_name: sci,
@@ -1145,6 +1149,8 @@ mod tests {
             )
             .unwrap();
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: &date,
             time: &time,
             sci_name: "Pica pica",
@@ -1328,6 +1334,8 @@ mod tests {
         let conn = open_or_create(tmp.path()).unwrap();
         let insert = |time: &str, sci: &str, src: Option<&str>, conf: f64| {
             let r = DetectionRecord {
+                model_id: None,
+                model_agreement: None,
                 date: "2026-05-19",
                 time,
                 sci_name: sci,
@@ -1662,6 +1670,8 @@ mod tests {
         let conn = open_or_create(&dir.path().join("t.db")).unwrap();
         let insert = |date: &str, time: &str, sci: &str, com: &str, conf: f64| {
             let record = DetectionRecord {
+                model_id: None,
+                model_agreement: None,
                 date,
                 time,
                 sci_name: sci,
@@ -1776,6 +1786,8 @@ mod tests {
         let conn = open_or_create(&dir.path().join("t.db")).unwrap();
         let insert = |date: &str, time: &str, sci: &str, com: &str, conf: f64, file: &str| {
             let record = DetectionRecord {
+                model_id: None,
+                model_agreement: None,
                 date,
                 time,
                 sci_name: sci,
@@ -1919,6 +1931,8 @@ mod tests {
         let conn = open_or_create(&dir.path().join("t.db")).unwrap();
         let insert = |time: &str, sci: &str, source: Option<&str>| {
             let record = DetectionRecord {
+                model_id: None,
+                model_agreement: None,
                 date: "2026-06-13",
                 time,
                 sci_name: sci,

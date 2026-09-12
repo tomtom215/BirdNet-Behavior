@@ -684,6 +684,13 @@ pub(super) fn event_processor(
             sci_name: &detection.scientific_name,
             com_name: &detection.common_name,
             confidence: f64::from(detection.confidence),
+            // Classifier provenance (`G-10` Stage 3): which model reported
+            // this, and how many independently agreed. Both carried through
+            // from the merge rather than assumed here — a station running one
+            // classifier records that one and an agreement of 1, which is a
+            // different claim from the NULL a pre-migration-50 row carries.
+            model_id: detection.model_id.as_deref(),
+            model_agreement: detection.agreeing_models.map(i64::from),
             // Station and run provenance (R-2 / UP-1): the coordinates the
             // station resolved at start (NULL when it has none — never 0,0),
             // the threshold this row actually cleared, and the inference
@@ -1613,6 +1620,8 @@ mod tests {
                     stop: 3.0,
                     week: 20,
                     file_name_extr: None,
+                    model_id: None,
+                    agreeing_models: None,
                 },
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
@@ -1706,6 +1715,8 @@ mod tests {
             stop: 3.0,
             week: 20,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         };
         event_tx
             .send(DetectionEvent {
@@ -1792,6 +1803,8 @@ mod tests {
                     stop: 3.0,
                     week: 19,
                     file_name_extr: None,
+                    model_id: None,
+                    agreeing_models: None,
                 },
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
@@ -1892,6 +1905,8 @@ mod tests {
                     stop: 3.0,
                     week: 19,
                     file_name_extr: None,
+                    model_id: None,
+                    agreeing_models: None,
                 },
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
@@ -2476,6 +2491,8 @@ mod tests {
                 stop: 3.0,
                 week: 20,
                 file_name_extr: None,
+                model_id: None,
+                agreeing_models: None,
             },
             source_file,
             latency_ms: 100,

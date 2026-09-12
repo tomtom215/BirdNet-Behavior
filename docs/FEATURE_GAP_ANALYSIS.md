@@ -218,7 +218,7 @@ within each group by how much they change what a station can do.
 
 ### 2.2 Classification and detection quality
 
-#### G‑10 · Multiple classifier models — IN PROGRESS (Stage 1 shipped)
+#### G‑10 · Multiple classifier models — IN PROGRESS (Stages 1–3 shipped)
 
 | | |
 |---|---|
@@ -232,6 +232,10 @@ within each group by how much they change what a station can do.
 | **Why nothing caught it** | Two reasons, both worth keeping in mind elsewhere. CI fetches a **V3.0** model (`ci.yml`, tag `models-v3.0-preview3`), which is 32 kHz and therefore takes the waveform branch — so the mel branch, the code default and what any 48 kHz model selects, had no real-model coverage at all. And the one unit test of the routing, `loaded_v24_model_does_not_expect_raw_audio`, asserted the implementation restated: *"expects_raw_audio is `infer_sample_rate() == 32_000`. V2.4 is 48 kHz, so this must be false."* It agreed with the rule by construction and would have passed for any rule of that shape. It has been replaced by one that names the property (a declared length equal to `sample_rate × 3` is a sample count) and that fails against the old rule. |
 | **What remains unverified** | No real BirdNET V2.4 ONNX exists to test against — this repository publishes only the V3.0 release — so *that a real V2.4 declares `[1, 144_000]`* is inference from the committed fixture plus the exact arithmetic, not a measurement. The fix holds either way. A CI job fetching a 2.4 model would close this, and is the gap that let the defect sit. |
 | **Verified** | Against the real 11 K-species model (sha256 `2a0f9efb…b7d743`, the artifact CI pins): it reports a dynamic `[1, 1]` shape resolving to 32 kHz / 144 000 samples / waveform / 4.5 s, and `expects_raw_audio` is `true` both before and after, so a station on the shipped model is unaffected. The four model-gated e2e suites pass under `BIRDNET_REQUIRE_MODEL=1` (34 tests), which makes a silent skip a hard failure. |
+
+| **Resolution (Stage 2)** | `ClassifierRegistry` (`crates/birdnet-core/src/inference/registry.rs`) loads up to three classifiers and resolves a per-source routing table; `src/helpers/models.rs` decides which the machine can afford. Three invariants, each gated, all chosen for a station nobody is watching: a registry with **no** classifier is refused (a station that detects nothing is not a degraded station); an unknown route target **stops startup** rather than leaving one microphone silently unjudged for months; and a source with no route gets the **primary**, never nothing — silence must not be reachable by omission. Memory policy lives in the application layer beside `G-33`'s: all classifiers together may use at most half the effective ceiling, counting file size plus a 256 MiB working-set allowance, and a machine that will not report its memory gets one classifier because "unknown" must not read as "plenty". The fraction is a judgement, not a Pi measurement, and the module header says so. |
+| **Resolution (Stage 3)** | `crates/birdnet-core/src/detection/merge.rs` and migration 50 (`model_id`, `model_agreement` — nullable, `ALTER TABLE`, no rewrite of a multi-year `detections`). Union with per-model thresholds; agreement counted per species across *distinct* classifiers; the reported confidence is the winning classifier's own output. **Agreement is never folded into the confidence** — an averaged or bonused number would have no calibration behind it while occupying the same column as a real one, silently changing the meaning of every threshold and every historical comparison. `NULL` agreement is a third state (the row predates the migration) and is not `1` (one classifier asked, one answered). The human score that drives the privacy gate is the maximum across classifiers, because publishing a conversation is not recoverable. |
+| **Plan (what remains)** | Stage 4 — Perch v2 as the second concrete classifier, which is the real test of whether Stages 1–3 are right. Stage 5 — a model catalog and downloader with checksum verification. Stage 6 — the bat classifier, which additionally needs the ≥192 kHz capture path and `G-14`. No second model is shipped yet, so the merge is exercised by construction and by gates rather than by two real classifiers disagreeing on real audio; that is the honest limit of what Stage 3 is verified to do. |
 
 #### G‑11 · Inference backends beyond ONNX Runtime CPU — GAP
 
@@ -565,7 +569,7 @@ against the code it was written for, per `CLAUDE.md`.
 
 | # | Item | Finding | Shape |
 |---|---|---|---|
-| 26 | Multi-model classifier stack | G‑10 | **Stage 1 shipped** (trait + `InputSpec`, and the V2.4 mel misrouting it exposed). Stages 2–3 (registry, merge policy) next; 4–6 follow |
+| 26 | Multi-model classifier stack | G‑10 | **Stages 1–3 shipped**: the trait and `InputSpec` (and the V2.4 mel misrouting they exposed), the registry with memory gating and per-source routing, and the merge policy with an agreement count. Stage 4 (Perch v2) is the real test of whether they are right |
 | 27 | Inference backends (OpenVINO / XNNPACK) | G‑11 | Gated on Stage 1 of #26 |
 | 28 | OAuth2 / OIDC | G‑20 | One generic OIDC implementation; named providers are configuration |
 | 29 | HLS live streaming | G‑21 | Shares the encode seam with #10 |

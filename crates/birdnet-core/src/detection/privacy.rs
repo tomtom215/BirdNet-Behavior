@@ -121,6 +121,8 @@ mod tests {
             stop: 3.0,
             week: 11,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 

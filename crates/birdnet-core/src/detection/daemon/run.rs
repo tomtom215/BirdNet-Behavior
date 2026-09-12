@@ -12,7 +12,7 @@ use crate::detection::privacy::PrivacyFilter;
 use crate::detection::{ChunkFilters, noise::NoiseFilter};
 use crate::file_settle::{FILE_SETTLE, PendingFiles};
 use crate::inference::labels::LabelSet;
-use crate::inference::model::BirdNetModel;
+use crate::inference::registry::ClassifierRegistry;
 use crate::inference::species_filter::SpeciesFilter;
 use crate::inference::vocabulary::parse_alias_file;
 
@@ -373,12 +373,12 @@ pub fn run_daemon(
         let _alive = running_guard;
         tracing::info!("detection daemon started");
 
-        // The registry moved in with this closure; the mutable borrow of the
-        // primary is taken here, on the thread that does the inference.
-        let model = &mut registry
-            .model_mut(0)
-            .expect("a registry always has a primary")
-            .model;
+        // The registry moved in with this closure. Files arriving through the
+        // watch directory carry no audio-source id, so they are judged by the
+        // default route — the primary classifier — exactly as before Stage 2.
+        // Per-source routing applies where a source is known; this path is the
+        // file watcher, which only knows a path.
+        let route = ClassifierRegistry::default_route();
 
         // Process any pre-existing backlog here, on the loop thread, rather
         // than before signalling readiness. The event consumer is already
@@ -389,7 +389,8 @@ pub fn run_daemon(
             process_existing_files(
                 &watch_dir,
                 &pipeline_config,
-                model,
+                &mut registry,
+                &route,
                 &chunk_filters,
                 &mut species_filter,
                 filter_observer.as_ref(),
@@ -537,7 +538,8 @@ pub fn run_daemon(
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
-                    model,
+                    &mut registry,
+                    &route,
                     &chunk_filters,
                     &mut species_filter,
                     filter_observer.as_ref(),
@@ -605,7 +607,8 @@ pub fn run_daemon(
 fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
-    model: &mut BirdNetModel,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
     chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&super::SpeciesFilterObserver>,
@@ -641,7 +644,8 @@ fn process_existing_files(
         match process_and_infer_filtered(
             &path,
             pipeline_config,
-            model,
+            registry,
+            route,
             chunk_filters,
             species_filter,
             filter_observer,

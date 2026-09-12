@@ -105,6 +105,8 @@ mod tests {
             stop: 6.0,
             week: 11,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 
@@ -235,6 +237,8 @@ mod tests {
             stop: 3.0,
             week: 11,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         };
 
         let result = extractor.extract_detection(&source_path, &det);

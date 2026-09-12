@@ -53,6 +53,8 @@ const fn at(
     confidence: f64,
 ) -> DetectionRecord<'static> {
     DetectionRecord {
+        model_id: None,
+        model_agreement: None,
         date: "2026-03-16",
         time,
         sci_name: "Turdus merula",
@@ -281,6 +283,8 @@ fn detections_stranded_in_the_future_are_still_counted() {
 
     // "Now" is 2026-03-16; this row was written before the clock stepped back.
     let future = DetectionRecord {
+        model_id: None,
+        model_agreement: None,
         date: "2027-01-01",
         ..at("08:30:00", "2027-01-01-birdnet-08:30:00.wav", 0.88)
     };

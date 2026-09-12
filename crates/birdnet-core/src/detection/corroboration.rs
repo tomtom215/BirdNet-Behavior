@@ -292,6 +292,8 @@ mod tests {
             stop: start + 3.0,
             week: 18,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 

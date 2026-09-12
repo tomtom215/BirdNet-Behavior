@@ -97,6 +97,18 @@ pub struct DetectionRecord<'a> {
     /// window). With `clip_offset_secs` it is the selection a Raven table or
     /// an Audacity label names.
     pub detection_secs: Option<f64>,
+    /// Which classifier reported this (`G-10` Stage 3). `None` on a row from
+    /// a station that records no provenance — an import, or anything written
+    /// before migration 50.
+    pub model_id: Option<&'a str>,
+    /// How many classifiers independently reported this species in this
+    /// chunk.
+    ///
+    /// `None` is a third state, not the same as `Some(1)`: it means nobody was
+    /// counting, where `Some(1)` means one classifier was asked and one
+    /// answered. A reader that collapses them claims corroboration data it
+    /// does not have.
+    pub model_agreement: Option<i64>,
 }
 
 /// A detection row read from the database.
@@ -418,6 +430,8 @@ mod drift_gate_tests {
         )
         .unwrap();
         let record = super::DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-05-19",
             time: "09:00:00",
             sci_name: "Pica pica",

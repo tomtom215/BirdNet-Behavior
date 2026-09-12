@@ -916,6 +916,8 @@ mod tests {
                 stop: 4.5,
                 week: 20,
                 file_name_extr: None,
+                model_id: None,
+                agreeing_models: None,
             },
             source_file: PathBuf::from("/tmp/x.wav"),
             latency_ms: 42,

@@ -265,7 +265,7 @@ fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
     use birdnet_core::detection::privacy::PrivacyFilter;
     use birdnet_core::detection::{ChunkFilters, noise::NoiseFilter};
 
-    let mut model = load_model()?;
+    let model = load_model()?;
     let pipeline = pipeline_for(&model);
     let chunk_filters = ChunkFilters {
         privacy: PrivacyFilter::new(0.0),
@@ -280,10 +280,18 @@ fn detect_with_exclusions(exclude: Vec<String>) -> Option<Vec<String>> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = staged_recording(dir.path());
 
+    // The pipeline runs classifiers through the registry (`G-10` Stage 2), so
+    // the one loaded here is wrapped in a single-classifier registry — which
+    // is exactly what a station with one model has.
+    let mut registry =
+        birdnet_core::inference::registry::ClassifierRegistry::single("birdnet", model);
+    let route = birdnet_core::inference::registry::ClassifierRegistry::default_route();
+
     let events = process_and_infer_filtered(
         &path,
         &pipeline,
-        &mut model,
+        &mut registry,
+        &route,
         &chunk_filters,
         &mut filter,
         None,

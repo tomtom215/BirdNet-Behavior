@@ -448,6 +448,8 @@ mod tests {
             stop,
             week: 20,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 
@@ -776,6 +778,8 @@ mod tests {
             time: "02:30:00".to_owned(),
             week: 43,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         };
 
         let first = extractor
@@ -1062,6 +1066,8 @@ mod tests {
             stop: 3.0,
             week: 20,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 
@@ -1402,6 +1408,8 @@ mod tests {
                     stop: 13.0,
                     week: 20,
                     file_name_extr: None,
+                    model_id: None,
+                    agreeing_models: None,
                 },
             )
             .expect("WAV extraction succeeds");

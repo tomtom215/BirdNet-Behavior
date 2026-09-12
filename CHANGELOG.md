@@ -38,6 +38,54 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — two classifiers agreeing is recorded as what it is
+
+**A merge policy and an agreement count** (`G-10` Stage 3). Every classifier
+routed to a chunk now runs on it, and what they say is combined: union, each
+model judged against its own threshold, one row per species carrying the
+highest confidence any classifier gave it, which classifier gave it, and how
+many reported the species at all. Migration 50 adds `model_id` and
+`model_agreement` to `detections` — two nullable columns, added with `ALTER
+TABLE`, which SQLite does in constant time without rewriting a table that on
+the station this project is for holds three years of rows on an SD card.
+
+**Agreement is counted, never folded into the confidence**, and the temptation
+to is worth naming. A combined number — an average, a maximum with a bonus, a
+noisy-or — would have no calibration behind it while sitting in the same
+column, on the same scale, as a model's real output. Every threshold an
+operator has set, every historical comparison and every export would silently
+change meaning. The reported confidence stays the winning classifier's actual
+output; the corroboration is a separate integer a reader can weigh themselves.
+A gate fails if the merge turns 0.8 and 0.6 into 0.7.
+
+**Union, not intersection.** A bat classifier and BirdNET share almost no
+labels, so requiring both to agree would report nothing at all. A species only
+one classifier heard is still a detection — with an agreement of one, which is
+a weaker claim than two and is recorded as such.
+
+**One classifier repeating itself is not corroboration.** A duplicated row in a
+label file must not manufacture agreement out of one opinion, so the count is
+of distinct classifiers.
+
+**`NULL` is a third state** and readers must not collapse it: it means the row
+predates this migration, when there was one classifier and nothing recorded
+which. `1` means one classifier was asked and one answered.
+
+**The human score is the highest any classifier reported**, not the primary's.
+It drives the privacy gate, and if any model heard speech the safe reading is
+that there was speech — suppressing a bird is recoverable, publishing somebody's
+conversation is not.
+
+A single-classifier station — every station in the field today — gets the same
+detections in the same order, plus provenance: `model_id` naming its one
+classifier and an agreement of one. That is worth having on its own; a station
+whose model was swapped last March can now tell which of its detections came
+from which.
+
+Verified: `birdnet-core` and `birdnet-db` 19 suites / 1 346 tests, and the
+three model-gated end-to-end suites 15 tests under `BIRDNET_REQUIRE_MODEL=1`
+against the real 11 K-species model.
+
 ### Added — a station can run more than one classifier, and refuses to run more than it can hold
 
 **A classifier registry and per-source routing** (`G-10` Stage 2). A station

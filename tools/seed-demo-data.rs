@@ -229,6 +229,8 @@ fn run(args: &Args) -> Result<usize, String> {
         let week = iso_week(year, month, day);
 
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: &date_str,
             time: &time_str,
             sci_name: sci,

@@ -385,6 +385,12 @@ impl BirdNetModel {
                     stop: end_secs,
                     week,
                     file_name_extr: None,
+                    // Stamped by the merge, which is the only place that knows
+                    // which classifier this pass belongs to and whether any
+                    // other one agreed. A single-model station's merge fills
+                    // both in with one classifier and an agreement of one.
+                    model_id: None,
+                    agreeing_models: None,
                 });
             }
         }

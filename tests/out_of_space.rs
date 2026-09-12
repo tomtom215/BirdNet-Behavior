@@ -91,6 +91,8 @@ fn detection(i: usize) -> DetectionRecord<'static> {
     );
     let file_name: &'static str = Box::leak(format!("full-{i:08}.wav").into_boxed_str());
     DetectionRecord {
+        model_id: None,
+        model_agreement: None,
         date: "2026-03-16",
         time,
         sci_name: "Turdus merula",

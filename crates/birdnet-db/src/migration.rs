@@ -2109,6 +2109,34 @@ pub const MIGRATIONS: &[Migration] = &[
             SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
         END;",
     },
+    Migration {
+        version: 50,
+        description: "Record which classifier found a detection, and whether another agreed",
+        // ## Why (G-10 Stage 3)
+        //
+        // A station can now run more than one classifier. Two of them
+        // independently reporting the same species in the same three seconds
+        // is far stronger evidence than one being confident — it is the honest
+        // attack on false positives that `corroboration.rs` can only approach
+        // through repetition, which cannot tell a real repeated call from a
+        // repeatedly-misheard gate hinge.
+        //
+        // Both columns are NULLABLE and added with ALTER TABLE, which SQLite
+        // does in constant time without rewriting the table. That matters
+        // here more than usual: `detections` is the big table, and the station
+        // this project is for has three years of it on an SD card. A migration
+        // that copied it would take the station off the air for the duration
+        // and need twice the free space to do it.
+        //
+        // NULL is a third state and is not the same as 1. It means the row
+        // predates this migration — written when there was only ever one
+        // classifier and nothing recorded which. `Some(1)` says one classifier
+        // was asked and one answered; `NULL` says nobody was counting. A
+        // reader that collapses them would claim corroboration data it does
+        // not have for every row written before today.
+        up_sql: "ALTER TABLE detections ADD COLUMN model_id TEXT;
+                 ALTER TABLE detections ADD COLUMN model_agreement INTEGER;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

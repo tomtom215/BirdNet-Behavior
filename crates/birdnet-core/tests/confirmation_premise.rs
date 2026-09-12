@@ -233,5 +233,7 @@ fn det(sci: &str, start: f32, chunk_secs: f32) -> Detection {
         stop: start + chunk_secs,
         week: 20,
         file_name_extr: None,
+        model_id: None,
+        agreeing_models: None,
     }
 }

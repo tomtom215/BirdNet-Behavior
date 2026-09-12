@@ -62,6 +62,8 @@ fn detection(start: f32) -> Detection {
         stop: start + 3.0,
         week: 18,
         file_name_extr: None,
+        model_id: None,
+        agreeing_models: None,
     }
 }
 

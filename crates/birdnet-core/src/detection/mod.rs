@@ -5,6 +5,7 @@
 pub mod corroboration;
 pub mod daemon;
 pub mod dynamic_threshold;
+pub mod merge;
 pub mod nocturnal;
 pub mod noise;
 pub mod pipeline;
@@ -99,6 +100,8 @@ mod chunk_filter_tests {
             stop: 3.0,
             week: 11,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 
