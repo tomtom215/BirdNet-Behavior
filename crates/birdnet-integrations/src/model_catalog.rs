@@ -137,9 +137,11 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_sha256: None,
         sample_rate: 32_000,
         notes: "Materially better than BirdNET in the tropics. Wants 5 s windows \
-                at 32 kHz, which differs from BirdNET's 4.5 s — the two cannot yet \
-                run together (see G-10 Stage 4). No labels file ships with the ONNX \
-                conversion; supply one with 14 795 rows.",
+                at 32 kHz where BirdNET wants 4.5 s; the two run together, the chunk \
+                cut to the longer window and stepped by the shorter. Set \
+                MODEL_n_SAMPLE_RATE=32000 — its tensor shape alone cannot say. No \
+                labels file ships with the ONNX conversion; supply one with 14 795 \
+                rows.",
     },
 ];
 

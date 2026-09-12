@@ -33,6 +33,7 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 # Station (Administration)
 
 - [Settings & Detection](./admin/settings.md)
+- [Running More Than One Classifier](./admin/classifiers.md)
 - [Audio & Microphones](./admin/audio.md)
 - [Recording & Retention](./admin/recording.md)
 - [Notifications & Integrations](./admin/notifications.md)

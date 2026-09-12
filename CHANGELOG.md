@@ -95,6 +95,30 @@ fix rather than an equivalence. Both halves are gated, the second as the
 counterpart that stops the first passing against an `input_spec_from_shape`
 that had simply delegated every shape.
 
+### Documentation — the multi-classifier feature had no operator-facing page
+
+`docs/book/admin/classifiers.md`, **Running More Than One Classifier**, linked
+from the manual's Station section. `.env.example` documented the keys
+thoroughly and nothing else did: an operator had no page explaining what a
+second classifier buys, what it costs, how routing resolves, what agreement
+means on a detection row, or why the chunk arithmetic is shaped the way it is.
+The page states the limits alongside the features — `model_id` and
+`model_agreement` are written on every detection and read back by nothing yet;
+the memory gate skips a second classifier on a 1 GB board; bats are still not
+supported and why.
+
+**A catalogue note that this branch made false.** The `perch-v2` entry said
+Perch and BirdNET "cannot yet run together (see G-10 Stage 4)". That text is
+printed by `--install-model list` and served by `GET /api/v2/models/catalog`,
+and Stage 4 is what made it wrong. It now says they do run together and that
+`MODEL_n_SAMPLE_RATE=32000` is required, which is the part an operator will
+otherwise get wrong.
+
+**The committed CLI reference was stale.** `docs/book/_generated/cli-help.txt`
+predated both `--install-model` and `--species-aliases`, so the manual's CLI
+page was missing two flags and CI's drift gate would have failed on this
+branch. Regenerated with `scripts/gen-cli-help.sh`.
+
 ### Fixed — four gaps this branch's own gates found once nothing else was failing ahead of them
 
 Each of these sat behind an earlier failure in the same test binary, so the
