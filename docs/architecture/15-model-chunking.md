@@ -111,6 +111,52 @@ Pica bottanensis  Black-rumped Magpie  50.1
 The 19-point absolute confidence gain on the target species is the
 single biggest accuracy improvement of this branch.
 
+## Amendment: more than one classifier (`G-10` Stage 4)
+
+The decision above assumes one classifier, where the chunk length and
+the window length are the same number. With a second classifier they
+need not be, and the two become separate decisions.
+
+**The chunk is cut to the longest window; the step is the shortest.**
+`ClassifierRegistry::window_bounds()` reports both, and `run_daemon`
+takes the chunk length from the longest — which for one classifier is
+exactly `recommended_chunk_secs()`, so point 3 above is unchanged for
+every station running one model.
+
+Stepping by the *longest* window, the obvious reading of "align on the
+coarsest window", is wrong. Perch v2 wants 160 000 samples where
+BirdNET+ V3.0 wants 144 000, both at 32 kHz. Cut at 160 000 and step
+160 000 and BirdNET reads the first 144 000 of every chunk and never
+the last 16 000 — half a second per chunk that no classifier hears and
+nothing reports, recurring for the life of the station. Stepping by the
+shortest window removes it: the shortest-window classifier gets the
+chunk starts it would have had alone, and longer-window classifiers get
+overlapping chunks instead of gaps.
+
+The cost is borne by the longer-window classifiers, which run
+`max(window) / min(window)` more inferences — 160 000 / 144 000 ≈ 1.11
+for Perch beside BirdNET. `run_daemon` logs it at startup as
+`extra_inference_ratio` beside both window lengths.
+
+`PipelineConfig::chunk_step_secs` carries the step. `None` — every
+one-classifier station, and the default from
+`build_pipeline_config` — keeps `chunk_duration_secs -
+chunk_overlap_secs`, the rule points 1–4 describe.
+
+Two consequences worth stating:
+
+* **Agreement is exact rather than approximate.** Every classifier
+  reads its own window from the same chunk start, so "two classifiers
+  agreed" means they judged audio beginning at the same instant. The
+  alternative once considered — merging by overlapping interval —
+  would have needed a tolerance with nothing behind it.
+* **A detection carries the chunk's span, not its classifier's.** A
+  shorter-window classifier's detection can therefore show an end time
+  up to `max(window) - min(window)` later than the audio it read. The
+  span always contains that audio, and stamping per-model spans would
+  give one merged species two different end times depending on which
+  classifier won the confidence.
+
 ## Related issue: unique-key constraint loses duplicate-species chunks
 
 **Fixed.** The detections schema originally declared
@@ -133,3 +179,7 @@ NULL filename cannot slip past the constraint.
   — `recommended_chunk_samples` and `recommended_chunk_secs`
 - [`crates/birdnet-core/src/detection/daemon/`](../../crates/birdnet-core/src/detection/daemon)
   — pipeline auto-adjustment
+- [`crates/birdnet-core/src/detection/pipeline.rs`](../../crates/birdnet-core/src/detection/pipeline.rs)
+  — `PipelineConfig::chunk_step_secs` and `chunk_step_samples`
+- [`crates/birdnet-core/src/inference/registry.rs`](../../crates/birdnet-core/src/inference/registry.rs)
+  — `ClassifierRegistry::window_bounds`

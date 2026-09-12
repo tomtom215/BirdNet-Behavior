@@ -303,17 +303,14 @@ impl BirdNetModel {
         week: u32,
     ) -> Result<ChunkPrediction, InferenceError> {
         let input_tensor = self.build_input_tensor(audio)?;
+        // Resolved before the session is borrowed mutably to run.
+        let output_idx = self.class_output();
 
         let outputs = self
             .session
             .run(ort::inputs![input_tensor])
             .map_err(|e| InferenceError::Runtime(e.to_string()))?;
 
-        // BirdNET+ V3.0 has two outputs:
-        //   [0] "embeddings"   → [batch, 1280]   (internal representation)
-        //   [1] "predictions"  → [batch, 11560]  (species classification logits)
-        // Use "predictions" if it exists (V3.0), else fall back to output 0 (V2.4).
-        let output_idx = usize::from(outputs.len() > 1);
         let (_shape, flat_logits) = outputs[output_idx]
             .try_extract_tensor::<f32>()
             .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
@@ -385,6 +382,12 @@ impl BirdNetModel {
                     stop: end_secs,
                     week,
                     file_name_extr: None,
+                    // Stamped by the merge, which is the only place that knows
+                    // which classifier this pass belongs to and whether any
+                    // other one agreed. A single-model station's merge fills
+                    // both in with one classifier and an agreement of one.
+                    model_id: None,
+                    agreeing_models: None,
                 });
             }
         }
@@ -449,6 +452,26 @@ impl BirdNetModel {
             ))
         })?;
 
+        // Padding is for a ragged edge — the last chunk of a recording that
+        // ran out of audio — and that is a few per cent at most. A slice less
+        // than half the expected width is not a short chunk; it is different
+        // data, and filling the rest with silence turns a category error into
+        // a confident wrong answer.
+        //
+        // This is exactly how the V2.4 mel misrouting stayed invisible: a
+        // 36 096-value mel spectrogram was padded to 144 000 and inferred on,
+        // with no error, no warning, and three-quarters of the tensor zero.
+        if audio.len() * 2 < expected_len {
+            return Err(InferenceError::Shape(format!(
+                "input is {} values but this model takes {expected_len} ({:?}); \
+                 that is too far short to be a partial window, so it is most likely \
+                 the wrong kind of data — check whether the pipeline is sending a \
+                 mel spectrogram to a waveform model",
+                audio.len(),
+                self.input_shape
+            )));
+        }
+
         let mut padded = vec![0.0_f32; expected_len];
         let copy_len = audio.len().min(expected_len);
         padded[..copy_len].copy_from_slice(&audio[..copy_len]);
@@ -509,19 +532,116 @@ impl BirdNetModel {
         result
     }
 
-    /// Returns `true` if this model expects raw audio samples as input.
+    /// What this model needs fed to it (`G-10` Stage 1).
     ///
-    /// `BirdNET`+ V3.0 models perform internal feature extraction from the raw
-    /// waveform (`infer_sample_rate() == 32_000`).  V2.4 models require a
-    /// pre-computed mel spectrogram.
+    /// Derived from the ONNX input shape, so sample rate, window length and
+    /// input format are three separate declared facts rather than one guess
+    /// standing in for the other two.
+    #[must_use]
+    pub fn input_spec(&self) -> InputSpec {
+        input_spec_from_shape(&self.input_shape)
+    }
+
+    /// Returns `true` if this model is fed the waveform directly.
+    ///
+    /// # What this used to be, and why it was wrong
+    ///
+    /// This was `infer_sample_rate() == 32_000`: V3.0 is 32 kHz and takes the
+    /// waveform, so 32 kHz was read as meaning "waveform". The two are
+    /// unrelated, and the consequence was not academic. BirdNET V2.4 declares
+    /// `[1, 144_000]` — exactly 48 kHz × 3 s, a **sample count** — so it is a
+    /// waveform model too, but being 48 kHz it was routed down the mel branch:
+    /// the pipeline computed a 128 × 282 = 36 096-value mel spectrogram and
+    /// `BirdNetModel::build_input_tensor` zero-filled the remaining 107 904
+    /// slots of a 144 000-wide tensor. Three-quarters of every V2.4 inference
+    /// was zeros, and nothing reported it.
+    ///
+    /// The format now comes from the shape's rank and middle dimension, which
+    /// is a property of the model file rather than a coincidence between the
+    /// two models that happened to ship first.
     #[must_use]
     pub fn expects_raw_audio(&self) -> bool {
-        self.infer_sample_rate() == 32_000
+        self.input_spec().is_waveform()
     }
 
     /// Get the label set.
     pub const fn labels(&self) -> &LabelSet {
         &self.labels
+    }
+
+    /// The width of this classifier's embedding output, or `None` when it
+    /// exposes none.
+    ///
+    /// A chained head declares the width it consumes — `BattyBirdNET` wants
+    /// 1024, which is BirdNET **v2.4**'s. BirdNET+ V3.0 emits 1280 and Perch
+    /// v2 emits 1536, so the widths are how a mispaired chain is caught before
+    /// it produces confident nonsense from a tensor of the wrong shape.
+    #[must_use]
+    pub fn embedding_width(&self) -> Option<usize> {
+        let descriptors = self.output_descriptors();
+        let idx = embedding_output_index(&descriptors)?;
+        descriptors.get(idx).and_then(|(_, width)| *width)
+    }
+
+    /// Run inference and return the embedding rather than the class scores.
+    ///
+    /// For a chained classifier — see [`embedding_output_index`]. The window
+    /// is prepared exactly as [`Self::predict_chunk`] prepares it, including
+    /// the too-short refusal, because a chained head is no less sensitive to
+    /// being handed the wrong kind of data than a class head is.
+    ///
+    /// # Errors
+    ///
+    /// [`InferenceError::Shape`] when this classifier exposes no embedding
+    /// output, or when the window cannot be made into its input tensor;
+    /// [`InferenceError::Runtime`] if the session fails.
+    pub fn embed(&mut self, window: &[f32]) -> Result<Vec<f32>, InferenceError> {
+        let descriptors = self.output_descriptors();
+        let idx = embedding_output_index(&descriptors).ok_or_else(|| {
+            InferenceError::Shape(format!(
+                "this classifier exposes no embedding output (it has: {}), so it cannot \
+                 feed a chained classifier",
+                descriptors
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+        let input_tensor = self.build_input_tensor(window)?;
+        let outputs = self
+            .session
+            .run(ort::inputs![input_tensor])
+            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
+        let (_shape, flat) = outputs[idx]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| InferenceError::Runtime(format!("cannot extract embedding: {e}")))?;
+        Ok(flat.to_vec())
+    }
+
+    /// Each output's name and trailing dimension, for
+    /// [`class_output_index`].
+    fn output_descriptors(&self) -> Vec<(String, Option<usize>)> {
+        self.session
+            .outputs()
+            .iter()
+            .map(|o| {
+                let width = match o.dtype() {
+                    ValueType::Tensor { shape, .. } => shape
+                        .last()
+                        .copied()
+                        .and_then(|d| usize::try_from(d).ok())
+                        .filter(|d| *d >= 1),
+                    _ => None,
+                };
+                (o.name().to_owned(), width)
+            })
+            .collect()
+    }
+
+    /// Which output carries the class scores. See [`class_output_index`].
+    fn class_output(&self) -> usize {
+        class_output_index(&self.output_descriptors(), self.labels.len())
     }
 
     /// The width of the model's class output — how many classes it scores —
@@ -536,8 +656,9 @@ impl BirdNetModel {
     /// station runs on it (ON-9).
     #[must_use]
     pub fn output_dimension(&self) -> Option<usize> {
+        let idx = self.class_output();
         let outputs = self.session.outputs();
-        let output = outputs.get(usize::from(outputs.len() > 1))?;
+        let output = outputs.get(idx)?;
         match output.dtype() {
             ValueType::Tensor { shape, .. } => shape
                 .last()
@@ -600,6 +721,215 @@ const fn output_is_probability(input_shape: &[usize]) -> bool {
     }
 }
 
+/// What kind of data a model's input tensor holds (`G-10` Stage 1).
+///
+/// # Why this is not a boolean derived from the sample rate
+///
+/// Until Stage 1 the pipeline decided this with `infer_sample_rate() ==
+/// 32_000`. Sample rate and input format are independent properties that
+/// happened to correlate across the two models shipped at the time, and the
+/// coincidence was load-bearing: a 48 kHz model took the mel branch because it
+/// was 48 kHz, not because it wanted mel. Perch v2 — the next model planned —
+/// is 32 kHz, so it would have taken the waveform branch by luck rather than
+/// by declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputFormat {
+    /// A flat window of audio samples.
+    Waveform,
+    /// A mel spectrogram of `n_mels × n_frames`, flattened row-major.
+    MelSpectrogram {
+        /// Mel bands (rows).
+        n_mels: usize,
+        /// Time frames (columns).
+        n_frames: usize,
+    },
+}
+
+/// Everything the pipeline needs to know to feed one classifier.
+///
+/// Read from the model's own ONNX input shape rather than assumed, so the
+/// pipeline stops carrying the hardcoded 48 kHz / 3 s / mel assumptions that
+/// only ever held for one model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputSpec {
+    /// Sample rate the audio must be resampled to, in Hz.
+    pub sample_rate: u32,
+    /// How many audio samples one inference window covers.
+    ///
+    /// For a mel model this is still the *audio* window, not the number of
+    /// values in the tensor — the pipeline chunks audio, and the transform to
+    /// mel happens afterwards.
+    pub window_samples: usize,
+    /// What the tensor holds.
+    pub format: InputFormat,
+}
+
+impl InputSpec {
+    /// Whether this model is fed the waveform directly.
+    #[must_use]
+    pub const fn is_waveform(&self) -> bool {
+        matches!(self.format, InputFormat::Waveform)
+    }
+
+    /// The window length in seconds.
+    #[must_use]
+    pub fn window_secs(&self) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let secs = self.window_samples as f32 / self.sample_rate as f32;
+        secs
+    }
+
+    /// How many floats the input tensor holds.
+    ///
+    /// The same as [`Self::window_samples`] for a waveform model, and
+    /// `n_mels × n_frames` for a mel one — which is the number the tensor
+    /// builder must check the supplied slice against.
+    #[must_use]
+    pub const fn tensor_len(&self) -> usize {
+        match self.format {
+            InputFormat::Waveform => self.window_samples,
+            InputFormat::MelSpectrogram { n_mels, n_frames } => n_mels * n_frames,
+        }
+    }
+}
+
+/// Derive the input spec from an ONNX input shape.
+///
+/// The rank and the *middle* dimension are what separate the two formats, and
+/// they are available from the model file itself:
+///
+/// | Shape | Reading |
+/// |---|---|
+/// | `[1, N]` | a flat window of `N` samples |
+/// | `[1, 1, N]` | the same, rank-3 |
+/// | `[1, M, F]`, `M > 1` | a mel spectrogram, `M` bands × `F` frames |
+/// | all-dynamic | V3.0 preview: waveform, 144 000 samples at 32 kHz |
+///
+/// Both BirdNET V2.4 (`[1, 144_000]` = 48 kHz × 3 s) and BirdNET+ V3.0
+/// (`[1, 96_000]` = 32 kHz × 3 s) are **waveform** models: each declared
+/// length is exactly its sample rate times its window, which is a sample count
+/// and not a mel layout. That is the fact the old sample-rate heuristic got
+/// wrong for V2.4.
+#[must_use]
+pub const fn input_spec_from_shape(input_shape: &[usize]) -> InputSpec {
+    let sample_rate = infer_sample_rate_from_shape(input_shape);
+    match input_shape {
+        // A rank-3 shape whose middle dimension is greater than one is the
+        // only shape here that cannot be a flat window.
+        [_, n_mels, n_frames] if *n_mels > 1 && *n_frames > 1 => InputSpec {
+            sample_rate,
+            // NOT read from the mel shape. `n_frames` is a count of spectrogram
+            // columns, and taking it as a sample count would claim a 282-sample
+            // window — six milliseconds — for a model wanting three seconds.
+            // The audio window a mel model covers depends on its hop length and
+            // FFT size, which the tensor shape does not carry, so this is the
+            // dynamic-shape default until a real mel classifier exists to
+            // declare one. No model in this project takes mel input today.
+            window_samples: DYNAMIC_WINDOW_SAMPLES,
+            format: InputFormat::MelSpectrogram {
+                n_mels: *n_mels,
+                n_frames: *n_frames,
+            },
+        },
+        _ => InputSpec {
+            sample_rate,
+            window_samples: recommended_chunk_samples_from_shape(input_shape),
+            format: InputFormat::Waveform,
+        },
+    }
+}
+
+/// Which output of a classifier carries the class scores.
+///
+/// # Why this is not "the second one" (`G-10` Stage 4)
+///
+/// It was `usize::from(outputs.len() > 1)` — output 1 when a model has more
+/// than one, which is right for BirdNET+ V3.0 (`embeddings`, then
+/// `predictions`) and right for V2.4 (one output) and wrong for anything else.
+///
+/// Google's Perch v2 is the anything else, and it is the model this project
+/// planned to add next. Measured on the real file (sha256 `bf0c8467…cefa1f`),
+/// it declares **four** outputs:
+///
+/// ```text
+/// [0] embedding          [-1, 1536]
+/// [1] spatial_embedding  [-1, 16, 4, 1536]
+/// [2] spectrogram        [-1, 500, 128]
+/// [3] label              [-1, 14795]
+/// ```
+///
+/// Index 1 is `spatial_embedding`: 98 304 numbers of internal representation.
+/// Read as class scores they would have produced confident detections of
+/// whatever species the arithmetic happened to land on, with nothing to say
+/// anything was wrong.
+///
+/// So the head is found by what actually identifies it — an output whose
+/// trailing dimension is the number of labels. That is the definition of the
+/// class head, it is checkable against the file, and it is what
+/// [`BirdNetModel::output_dimension`] already compares. A name match is the
+/// fallback for a model whose labels are mispaired, so that case still reaches
+/// the doctor's existing width check rather than failing here first.
+#[must_use]
+pub fn class_output_index(outputs: &[(String, Option<usize>)], label_count: usize) -> usize {
+    /// Names a classification head conventionally carries, for the fallback
+    /// below when the label file is mispaired and the width test cannot fire.
+    const HEAD_NAMES: &[&str] = &["label", "labels", "predictions", "prediction", "logits"];
+
+    // The width test first: unambiguous, and true of every model this runs.
+    if label_count > 0
+        && let Some(idx) = outputs
+            .iter()
+            .position(|(_, width)| *width == Some(label_count))
+    {
+        return idx;
+    }
+    // Then the conventional names, for a model whose labels are mispaired —
+    // that is a real condition the doctor reports on, and it should report on
+    // it rather than being pre-empted by a wrong head here.
+    if let Some(idx) = outputs
+        .iter()
+        .position(|(name, _)| HEAD_NAMES.contains(&name.to_ascii_lowercase().as_str()))
+    {
+        return idx;
+    }
+    // Last resort: the historical behaviour, so a model that matches neither
+    // test behaves exactly as it did before this function existed.
+    usize::from(outputs.len() > 1)
+}
+
+/// Which output of a classifier carries its embedding, if any (`G-10` Stage 6
+/// groundwork).
+///
+/// # Why a chained classifier needs this
+///
+/// The bat classifier this project plans to add is not a peer of BirdNET. Its
+/// input is `[batch, 1024]` — **BirdNET v2.4's embeddings** — and it maps them
+/// to bat species. 256 kHz recordings are fed to BirdNET without resampling,
+/// deliberately: 144 000 samples is 0.5625 s at 256 kHz, which BirdNET treats
+/// as the 3 s at 48 kHz it was trained on, aliasing ultrasound down into the
+/// audible band. The bat head then reads the embedding that comes out.
+///
+/// So a station that runs one needs to get an embedding *out* of a classifier,
+/// which nothing before this could do.
+///
+/// # Why only an exact name
+///
+/// By name, and only the conventional one. BirdNET+ V3.0 names it
+/// `embeddings`; Perch v2 names one `embedding` and a second
+/// `spatial_embedding`, which is a 16 × 4 × 1536 feature map and not the
+/// pooled vector a downstream head expects. Guessing — "the output that is not
+/// the class head" — would pick that map for Perch and something arbitrary for
+/// a model with three. A classifier that does not name its embedding
+/// conventionally is one this cannot use, and saying so is better than
+/// returning the wrong tensor.
+#[must_use]
+pub fn embedding_output_index(outputs: &[(String, Option<usize>)]) -> Option<usize> {
+    outputs.iter().position(|(name, _)| {
+        let lower = name.to_ascii_lowercase();
+        lower == "embedding" || lower == "embeddings"
+    })
+}
+
 /// Pure helper: derive sample rate from any ONNX input shape.
 ///
 /// V2.4 fixed `[1, 144_000]` → 48 kHz × 3 s. V3.0 fixed `[1, 96_000]` → 32 kHz × 3 s.
@@ -617,6 +947,13 @@ pub const fn infer_sample_rate_from_shape(input_shape: &[usize]) -> u32 {
         _ => 48_000,      // BirdNET   V2.4 (48 kHz × 3 s) or unknown
     }
 }
+
+/// Window length assumed for a model whose tensor shape does not state one.
+///
+/// 144 000 samples: 4.5 s at 32 kHz, the empirical optimum from the
+/// chunk-length sweep in `docs/architecture/15-model-chunking.md`, and the
+/// same number V2.4 used at 48 kHz.
+pub const DYNAMIC_WINDOW_SAMPLES: usize = 144_000;
 
 /// Pure helper: derive the recommended chunk length in samples from any ONNX input shape.
 ///
@@ -681,6 +1018,33 @@ fn human_indices(labels: &LabelSet) -> Vec<usize> {
 /// Apply sigmoid function: `1 / (1 + exp(-x))`.
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
+}
+
+impl crate::inference::classifier::Classifier for BirdNetModel {
+    fn labels(&self) -> &LabelSet {
+        &self.labels
+    }
+
+    fn input_spec(&self) -> InputSpec {
+        input_spec_from_shape(&self.input_shape)
+    }
+
+    fn infer(&mut self, window: &[f32]) -> Result<Vec<f32>, InferenceError> {
+        let input_tensor = self.build_input_tensor(window)?;
+        let output_idx = self.class_output();
+        let outputs = self
+            .session
+            .run(ort::inputs![input_tensor])
+            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
+        // V3.0 exposes `embeddings` then `predictions`; V2.4 has one output.
+        // The same selection `predict_chunk` makes, and for the same reason:
+        // scoring the embeddings would silently return 1 280 meaningless
+        // numbers that still look like a prediction vector.
+        let (_shape, flat) = outputs[output_idx]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
+        Ok(flat.to_vec())
+    }
 }
 
 #[cfg(test)]
@@ -901,12 +1265,68 @@ mod tests {
         assert!((secs - 3.0).abs() < 1e-6, "got {secs}");
     }
 
+    /// V2.4 declares `[1, 144_000]`, and 144 000 is exactly 48 000 × 3 — a
+    /// count of audio samples. So it is a waveform model, like V3.0.
+    ///
+    /// # What this test used to say, and why it was changed
+    ///
+    /// It asserted the opposite, and its reason was: *"`expects_raw_audio` is
+    /// `infer_sample_rate() == 32_000`. V2.4 is 48 kHz, so this must be
+    /// false."* That restates the implementation rather than a fact about the
+    /// model — it would have held for any rule of that shape, including the
+    /// wrong one it was pinning. It is why nothing caught a 48 kHz model being
+    /// sent a mel spectrogram zero-padded across three-quarters of its input
+    /// tensor: the only test of the routing agreed with the routing by
+    /// construction.
+    ///
+    /// The assertion now names the property — a declared length that is a
+    /// sample count means a waveform model — so it would fail if the
+    /// derivation regressed to a sample-rate comparison, which is exactly the
+    /// mutation run against it.
     #[test]
-    fn loaded_v24_model_does_not_expect_raw_audio() {
-        // expects_raw_audio is `infer_sample_rate() == 32_000`. V2.4 is 48 kHz,
-        // so this must be false.
+    fn loaded_v24_model_expects_raw_audio_because_its_input_is_a_sample_count() {
         let m = load_tiny_v24();
-        assert!(!m.expects_raw_audio());
+        let spec = m.input_spec();
+        assert_eq!(
+            spec.window_samples,
+            spec.sample_rate as usize * 3,
+            "144 000 at 48 kHz is three seconds of samples, not a mel layout"
+        );
+        assert!(
+            m.expects_raw_audio(),
+            "a model whose declared input is a sample count takes the waveform"
+        );
+    }
+
+    /// **The `Classifier` trait's `infer` had no test at all.** Every
+    /// inference assertion in this file goes through `predict`/`predict_chunk`
+    /// — the concrete path — so the trait method Stage 1 extracted could have
+    /// returned any constant vector and nothing would have said otherwise.
+    /// `cargo-mutants` reported exactly that: four surviving mutants replacing
+    /// its body with `Ok(vec![])`, `Ok(vec![0.0])`, `Ok(vec![1.0])` and
+    /// `Ok(vec![-1.0])`.
+    ///
+    /// `tiny_v30_test.onnx` returns `audio[i]` at output `i`, so the scores
+    /// are checkable rather than merely countable — the assertion names the
+    /// values, not just the length, and each of the four constants fails it.
+    #[test]
+    fn the_classifier_trait_returns_this_model_s_own_scores() {
+        use crate::inference::classifier::Classifier;
+        let mut m = load_tiny_v30();
+        let window: Vec<f32> = (0..96_000).map(|i| (i % 13) as f32 * 0.25).collect();
+        let scores = Classifier::infer(&mut m, &window).expect("the tiny V3.0 model infers");
+        assert_eq!(
+            scores.len(),
+            11,
+            "one score per label, not a constant vector"
+        );
+        for (i, score) in scores.iter().enumerate() {
+            assert!(
+                (score - window[i]).abs() < 1e-6,
+                "score {i} is {score}, expected the fixture's own {}",
+                window[i]
+            );
+        }
     }
 
     #[test]
@@ -914,6 +1334,66 @@ mod tests {
         // V3.0 is 32 kHz → raw audio path.
         let m = load_tiny_v30();
         assert!(m.expects_raw_audio());
+    }
+
+    /// **The counterpart the other two could not provide.** Both models this
+    /// project ships take the waveform, so every assertion on
+    /// `expects_raw_audio` was `assert!(…)` and the method could have been the
+    /// constant `true` without a single test noticing — which is what
+    /// `cargo-mutants` reported: `replace BirdNetModel::expects_raw_audio ->
+    /// bool with true`, surviving.
+    ///
+    /// `tiny_mel_test.onnx` exists for this: a 179-byte classifier that
+    /// *declares* a mel input, `[1, 128, 4]`. It is built to be **loaded**, not
+    /// inferred against — no mel classifier exists in this project yet, so
+    /// there is nothing to feed it — and loading is all this predicate reads.
+    /// Regenerate it with:
+    ///
+    /// ```text
+    /// import onnx, numpy as np
+    /// from onnx import helper, TensorProto, numpy_helper
+    /// inp = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 128, 4])
+    /// out = helper.make_tensor_value_info("predictions", TensorProto.FLOAT, [1, 4])
+    /// node = helper.make_node("ReduceMax", ["input", "axes"], ["predictions"], keepdims=0)
+    /// axes = numpy_helper.from_array(np.array([1], dtype=np.int64), name="axes")
+    /// g = helper.make_graph([node], "tiny_mel_test", [inp], [out], initializer=[axes])
+    /// m = helper.make_model(g, producer_name="birdnet-test",
+    ///                       opset_imports=[helper.make_opsetid("", 18)])
+    /// m.ir_version = 8
+    /// onnx.checker.check_model(m)
+    /// onnx.save(m, "crates/birdnet-core/src/testdata/tiny_mel_test.onnx")
+    /// ```
+    ///
+    /// Observed failing with `expects_raw_audio` replaced by the constant
+    /// `true`, which is the reported mutant: the assertion below went red while
+    /// the two above stayed green.
+    #[test]
+    fn a_model_declaring_a_mel_input_does_not_expect_raw_audio() {
+        let labels: Vec<String> = (0..4).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        let set = super::LabelSet::parse(&labels.join("\n")).expect("labels");
+        let m = super::BirdNetModel::load_from_bytes(
+            include_bytes!("../testdata/tiny_mel_test.onnx"),
+            set,
+            super::ModelConfig::default(),
+        )
+        .expect("the mel fixture must load");
+
+        assert_eq!(m.input_shape(), [1, 128, 4], "the declared mel shape");
+        assert!(
+            matches!(
+                m.input_spec().format,
+                super::InputFormat::MelSpectrogram {
+                    n_mels: 128,
+                    n_frames: 4
+                }
+            ),
+            "got {:?}",
+            m.input_spec().format
+        );
+        assert!(
+            !m.expects_raw_audio(),
+            "a model declaring a mel input must not be sent the waveform"
+        );
     }
 
     #[test]
@@ -1566,5 +2046,548 @@ mod tests {
             Some(short.labels().len()),
             "a one-label file does not match an eleven-class model"
         );
+    }
+}
+
+#[cfg(test)]
+mod embedding_tests {
+    use super::{BirdNetModel, LabelSet, ModelConfig, embedding_output_index};
+
+    const TINY_V30: &[u8] = include_bytes!("../testdata/tiny_v30_test.onnx");
+    const TINY_V24: &[u8] = include_bytes!("../testdata/tiny_v24_test.onnx");
+
+    fn outs(v: &[(&str, Option<usize>)]) -> Vec<(String, Option<usize>)> {
+        v.iter().map(|(n, w)| ((*n).to_owned(), *w)).collect()
+    }
+
+    fn load(bytes: &[u8]) -> BirdNetModel {
+        let labels: Vec<String> = (0..11).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        let set = LabelSet::parse(&labels.join("\n")).expect("labels");
+        BirdNetModel::load_from_bytes(bytes, set, ModelConfig::default()).expect("loads")
+    }
+
+    /// BirdNET+ V3.0 names its embedding `embeddings`; Perch v2 names one
+    /// `embedding`. Both are found.
+    #[test]
+    fn the_conventional_embedding_names_are_found() {
+        let v30 = outs(&[("embeddings", Some(1280)), ("predictions", Some(11560))]);
+        assert_eq!(embedding_output_index(&v30), Some(0));
+
+        let perch = outs(&[
+            ("embedding", Some(1536)),
+            ("spatial_embedding", Some(1536)),
+            ("spectrogram", Some(128)),
+            ("label", Some(14795)),
+        ]);
+        assert_eq!(embedding_output_index(&perch), Some(0));
+    }
+
+    /// **Perch's `spatial_embedding` must never be mistaken for its
+    /// embedding.** It is a 16 × 4 × 1536 feature map, not the pooled vector a
+    /// chained head consumes, and a downstream classifier handed it would read
+    /// 98 304 numbers as though they were 1 536.
+    ///
+    /// Observed failing with the exact-name test relaxed to `contains`:
+    /// `spatial_embedding` matched and, on a model listing it first, was
+    /// returned instead of the pooled one.
+    #[test]
+    fn a_spatial_feature_map_is_not_an_embedding() {
+        let reordered = outs(&[
+            ("spatial_embedding", Some(1536)),
+            ("embedding", Some(1536)),
+            ("label", Some(14795)),
+        ]);
+        assert_eq!(
+            embedding_output_index(&reordered),
+            Some(1),
+            "the pooled `embedding` must win even when the feature map comes first"
+        );
+    }
+
+    /// A classifier with no embedding output reports none rather than
+    /// offering its class head, which a chained classifier would consume as
+    /// though it were a feature vector.
+    ///
+    /// Observed failing with the `position` replaced by `Some(0)`: a V2.4
+    /// model with only `predictions` claimed output 0 was its embedding.
+    #[test]
+    fn a_model_without_an_embedding_output_reports_none() {
+        let v24 = outs(&[("predictions", Some(6522))]);
+        assert_eq!(embedding_output_index(&v24), None);
+        assert_eq!(embedding_output_index(&[]), None);
+    }
+
+    /// Against the real fixtures: V3.0 exposes a 1 280-wide embedding, V2.4
+    /// exposes none. Measured from the ONNX files, not assumed.
+    #[test]
+    fn the_fixtures_report_the_embedding_widths_they_actually_have() {
+        assert_eq!(load(TINY_V30).embedding_width(), Some(1280));
+        assert_eq!(
+            load(TINY_V24).embedding_width(),
+            None,
+            "the V2.4 fixture has only `predictions`"
+        );
+    }
+
+    /// **The extraction itself**, run against a real ONNX session: the
+    /// embedding comes back at its declared width, and is not the class
+    /// scores.
+    ///
+    /// Observed failing with `embed` reading `outputs[0]` unconditionally on
+    /// a model whose embedding is not first — it returned 11 values, the
+    /// class head's width, instead of 1 280.
+    #[test]
+    fn embedding_extraction_returns_the_embedding_not_the_scores() {
+        let mut model = load(TINY_V30);
+        let window = vec![0.1_f32; model.recommended_chunk_samples()];
+        let embedding = model.embed(&window).expect("the V3.0 fixture embeds");
+        assert_eq!(embedding.len(), 1280, "the declared embedding width");
+        assert_ne!(embedding.len(), 11, "that is the class head's width");
+    }
+
+    /// Asking a classifier that has none for an embedding is an error naming
+    /// what it does have — a chained station misconfigured this way must be
+    /// told, not handed the wrong tensor.
+    #[test]
+    fn embedding_extraction_refuses_a_model_that_has_none() {
+        let mut model = load(TINY_V24);
+        let window = vec![0.1_f32; model.recommended_chunk_samples()];
+        let err = model
+            .embed(&window)
+            .expect_err("a model with no embedding output must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("no embedding output"), "{msg}");
+        assert!(
+            msg.contains("predictions"),
+            "it must name what it does have: {msg}"
+        );
+    }
+
+    /// The too-short refusal applies to the embedding path too: a chained head
+    /// is no less sensitive to the wrong kind of data than a class head.
+    #[test]
+    fn embedding_extraction_refuses_a_window_that_is_far_too_short() {
+        let mut model = load(TINY_V30);
+        assert!(
+            model.embed(&[0.0_f32; 10]).is_err(),
+            "a ten-sample window is not a partial window"
+        );
+    }
+}
+
+#[cfg(test)]
+mod class_output_tests {
+    use super::class_output_index;
+
+    fn outs(v: &[(&str, Option<usize>)]) -> Vec<(String, Option<usize>)> {
+        v.iter().map(|(n, w)| ((*n).to_owned(), *w)).collect()
+    }
+
+    /// **The gate Stage 4 exists for.** The real Perch v2 declares four
+    /// outputs and its class head is the last. Taken from the actual file
+    /// (sha256 `bf0c8467…cefa1f`), not from its model card.
+    ///
+    /// Observed failing with the selector restored to
+    /// `usize::from(outputs.len() > 1)`: it returned 1, `spatial_embedding` —
+    /// 98 304 numbers of internal representation, read as though they were
+    /// 14 795 class scores.
+    #[test]
+    fn the_perch_class_head_is_found_among_its_four_outputs() {
+        let perch = outs(&[
+            ("embedding", Some(1536)),
+            ("spatial_embedding", Some(1536)),
+            ("spectrogram", Some(128)),
+            ("label", Some(14795)),
+        ]);
+        assert_eq!(class_output_index(&perch, 14_795), 3);
+    }
+
+    /// **A zero label count must not be matched by a zero-width output.**
+    /// `label_count > 0` guards the width test because "no labels loaded" is
+    /// not a width to search for; without it, an output that declares width 0
+    /// — a placeholder, or a shape the runtime could not resolve — would be
+    /// selected as the class head and the model would be scored against
+    /// nothing.
+    ///
+    /// Observed failing with the guard relaxed to `label_count >= 0`, which is
+    /// vacuously true for a `usize`: the width test ran, matched `Some(0)` at
+    /// index 0, and returned it instead of falling through to the name test.
+    /// That is the mutant `cargo-mutants` reported surviving on this line.
+    #[test]
+    fn a_zero_label_count_does_not_match_a_zero_width_output() {
+        let with_placeholder = outs(&[("zeros", Some(0)), ("predictions", Some(11))]);
+        assert_eq!(
+            class_output_index(&with_placeholder, 0),
+            1,
+            "with no labels to match on, the conventional name decides"
+        );
+        // Its counterpart: a real label count still selects by width, so the
+        // gate above cannot pass against a width test that never runs.
+        assert_eq!(class_output_index(&with_placeholder, 11), 1);
+    }
+
+    /// BirdNET+ V3.0 must keep working: two outputs, the head second.
+    #[test]
+    fn the_v30_class_head_is_still_the_second_output() {
+        let v30 = outs(&[("embeddings", Some(1280)), ("predictions", Some(11560))]);
+        assert_eq!(class_output_index(&v30, 11_560), 1);
+    }
+
+    /// And V2.4: one output, which is the head.
+    #[test]
+    fn a_single_output_model_uses_its_only_output() {
+        let v24 = outs(&[("output", Some(6522))]);
+        assert_eq!(class_output_index(&v24, 6_522), 0);
+    }
+
+    /// Two outputs of the same width would make the width test ambiguous, so
+    /// the first match wins and the name test never runs. Pinned because the
+    /// alternative — preferring the name — would change which head V3.0 uses
+    /// if its embedding width ever equalled its label count.
+    #[test]
+    fn the_first_output_matching_the_label_count_wins() {
+        let ambiguous = outs(&[("a", Some(10)), ("b", Some(10))]);
+        assert_eq!(class_output_index(&ambiguous, 10), 0);
+    }
+
+    /// **Mispaired labels must not be hidden here.** When no output is the
+    /// label count, the model is paired with the wrong labels file — a real
+    /// condition the doctor reports by comparing those two numbers. Falling
+    /// back to the conventional name keeps that check reachable instead of
+    /// pre-empting it with a wrong head.
+    ///
+    /// Observed failing with the name fallback removed: the selector returned
+    /// 1 (`spatial_embedding`) for a Perch model whose labels file had the
+    /// wrong number of rows, so the doctor would have compared the width of an
+    /// embedding against the label count and reported a nonsense mismatch.
+    #[test]
+    fn a_mispaired_label_file_still_finds_the_head_by_name() {
+        let perch = outs(&[
+            ("embedding", Some(1536)),
+            ("spatial_embedding", Some(1536)),
+            ("spectrogram", Some(128)),
+            ("label", Some(14795)),
+        ]);
+        // The operator supplied a label file with the wrong row count.
+        assert_eq!(class_output_index(&perch, 11_560), 3, "found by name");
+    }
+
+    /// A model matching neither test behaves exactly as it did before this
+    /// function existed, so nothing that worked can regress.
+    #[test]
+    fn an_unrecognisable_model_keeps_the_historical_behaviour() {
+        let odd = outs(&[("alpha", Some(7)), ("beta", Some(9))]);
+        assert_eq!(class_output_index(&odd, 0), 1, "len > 1 → index 1");
+        assert_eq!(class_output_index(&outs(&[("solo", Some(7))]), 0), 0);
+    }
+
+    /// A zero label count must not match an output whose width is unknown.
+    #[test]
+    fn an_unknown_width_never_matches() {
+        let unknown = outs(&[("a", None), ("label", Some(5))]);
+        assert_eq!(class_output_index(&unknown, 5), 1);
+    }
+}
+
+#[cfg(test)]
+mod input_spec_tests {
+    use super::{
+        DYNAMIC_WINDOW_SAMPLES, InputFormat, InputSpec, infer_sample_rate_from_shape,
+        input_spec_from_shape, recommended_chunk_samples_from_shape,
+    };
+
+    /// **The gate this whole change exists for.** BirdNET V2.4 declares
+    /// `[1, 144_000]` — exactly 48 kHz × 3 s, which is a *sample count*. It is
+    /// a waveform model, and the old rule (`sample_rate == 32_000`) called it a
+    /// mel model because it is 48 kHz.
+    ///
+    /// Observed failing with the derivation restored to the sample-rate
+    /// comparison: V2.4 came back `MelSpectrogram` and `is_waveform()` false.
+    #[test]
+    fn a_48khz_birdnet_model_is_a_waveform_model_not_a_mel_one() {
+        let spec = input_spec_from_shape(&[1, 144_000]);
+        assert_eq!(spec.sample_rate, 48_000);
+        assert_eq!(spec.window_samples, 144_000);
+        assert_eq!(
+            spec.format,
+            InputFormat::Waveform,
+            "V2.4 takes the waveform"
+        );
+        assert!(spec.is_waveform());
+        assert!(
+            (spec.window_secs() - 3.0).abs() < 1e-6,
+            "{}",
+            spec.window_secs()
+        );
+    }
+
+    /// Its counterpart: the 32 kHz model was already right, and must stay
+    /// right. Without this, a derivation that called *everything* a waveform
+    /// would pass the gate above while proving nothing.
+    #[test]
+    fn a_32khz_model_is_still_a_waveform_model() {
+        let spec = input_spec_from_shape(&[1, 96_000]);
+        assert_eq!(spec.sample_rate, 32_000);
+        assert_eq!(spec.window_samples, 96_000);
+        assert_eq!(spec.format, InputFormat::Waveform);
+        assert!((spec.window_secs() - 3.0).abs() < 1e-6);
+    }
+
+    /// The real V3.0 model reports a fully-dynamic shape. Verified against the
+    /// genuine 541 MB artifact (sha256 2a0f9efb…b7d743): `[1, 1]` → 32 kHz,
+    /// 144 000 samples, waveform, 4.5 s.
+    #[test]
+    fn the_dynamic_shape_the_real_v30_model_reports_is_a_waveform_window() {
+        for shape in [vec![1usize], vec![1, 1], vec![1, 1, 1]] {
+            let spec = input_spec_from_shape(&shape);
+            assert_eq!(spec.sample_rate, 32_000, "{shape:?}");
+            assert_eq!(spec.window_samples, DYNAMIC_WINDOW_SAMPLES, "{shape:?}");
+            assert_eq!(spec.format, InputFormat::Waveform, "{shape:?}");
+            assert!((spec.window_secs() - 4.5).abs() < 1e-6, "{shape:?}");
+        }
+    }
+
+    /// Rank alone does not make a mel: `[1, 1, N]` is a waveform with a
+    /// leading batch and channel. Only a middle dimension above one can be a
+    /// band count.
+    #[test]
+    fn a_rank_three_shape_with_one_channel_is_still_a_waveform() {
+        let spec = input_spec_from_shape(&[1, 1, 144_000]);
+        assert_eq!(spec.format, InputFormat::Waveform);
+        assert_eq!(spec.window_samples, 144_000);
+    }
+
+    /// A genuine mel shape is recognised as one — and its window is **not**
+    /// read off the frame count.
+    ///
+    /// Observed failing with `window_samples` taken from the shape: it came
+    /// back 282, claiming a six-millisecond window for a model wanting
+    /// seconds.
+    #[test]
+    fn a_mel_shape_is_recognised_without_mistaking_frames_for_samples() {
+        let spec = input_spec_from_shape(&[1, 128, 282]);
+        assert_eq!(
+            spec.format,
+            InputFormat::MelSpectrogram {
+                n_mels: 128,
+                n_frames: 282
+            }
+        );
+        assert!(!spec.is_waveform());
+        assert_ne!(
+            spec.window_samples, 282,
+            "a frame count is not a sample count"
+        );
+        assert_eq!(spec.window_samples, DYNAMIC_WINDOW_SAMPLES);
+        assert_eq!(
+            spec.tensor_len(),
+            128 * 282,
+            "the tensor holds every mel cell"
+        );
+    }
+
+    /// **The guard that would have caught the V2.4 misrouting on day one.**
+    /// A slice under half the expected width is not a short final chunk; it is
+    /// different data. Silently zero-filling it turns a category error into a
+    /// confident wrong answer, which is exactly what happened: a 36 096-value
+    /// mel padded into a 144 000-wide waveform tensor, 75 % zeros, no error.
+    ///
+    /// Observed failing with the length check removed: the call returned a
+    /// tensor instead of an error.
+    #[test]
+    fn a_slice_far_too_short_to_be_a_partial_window_is_refused() {
+        let labels: Vec<String> = (0..11).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        let set = super::LabelSet::parse(&labels.join("\n")).expect("labels");
+        let model = super::BirdNetModel::load_from_bytes(
+            include_bytes!("../testdata/tiny_v24_test.onnx"),
+            set,
+            super::ModelConfig::default(),
+        )
+        .expect("tiny V2.4 loads");
+
+        // The exact size the default mel produced for this model.
+        let mel_sized = vec![0.0_f32; 36_096];
+        let err = model
+            .build_input_tensor(&mel_sized)
+            .expect_err("a quarter-width slice must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("36096"), "{msg}");
+        assert!(msg.contains("144000"), "{msg}");
+        assert!(
+            msg.contains("mel spectrogram"),
+            "the error must name the likely cause: {msg}"
+        );
+
+        // A genuinely ragged final chunk is still padded, not refused — the
+        // guard must not break the case padding exists for.
+        let short_tail = vec![0.0_f32; 140_000];
+        assert!(
+            model.build_input_tensor(&short_tail).is_ok(),
+            "a short final chunk must still pad"
+        );
+        // And an exact window is fine.
+        let exact = vec![0.0_f32; 144_000];
+        assert!(model.build_input_tensor(&exact).is_ok());
+
+        // Both sides of the boundary itself, because the rule is `len * 2 <
+        // expected` and a test that only ever asks about a quarter-width slice
+        // and a nearly-full one never says which way *exactly half* falls.
+        // Half is the last accepted width: 1.5 s of a 3 s window is a short
+        // chunk, not a different kind of data.
+        //
+        // Observed failing with `<` relaxed to `<=`: the 72 000-sample call
+        // came back an error, which is the mutant `cargo-mutants` reported
+        // surviving on this line.
+        let exactly_half = vec![0.0_f32; 72_000];
+        assert!(
+            model.build_input_tensor(&exactly_half).is_ok(),
+            "exactly half the window is the widest slice still treated as ragged"
+        );
+        let one_under_half = vec![0.0_f32; 71_999];
+        assert!(
+            model.build_input_tensor(&one_under_half).is_err(),
+            "one sample below half must fall on the refusing side"
+        );
+    }
+
+    /// `tensor_len` is what a caller must size its slice against, and it
+    /// differs from the audio window for a mel model — which is precisely the
+    /// distinction whose absence let a 36 096-value mel be padded into a
+    /// 144 000-wide waveform tensor.
+    #[test]
+    fn the_tensor_width_and_the_audio_window_are_separate_numbers() {
+        let wave = input_spec_from_shape(&[1, 144_000]);
+        assert_eq!(wave.tensor_len(), wave.window_samples);
+
+        let mel = InputSpec {
+            sample_rate: 48_000,
+            window_samples: 144_000,
+            format: InputFormat::MelSpectrogram {
+                n_mels: 128,
+                n_frames: 282,
+            },
+        };
+        assert_eq!(mel.tensor_len(), 36_096);
+        assert_ne!(
+            mel.tensor_len(),
+            mel.window_samples,
+            "collapsing these two is the bug this type exists to prevent"
+        );
+    }
+
+    /// **Stage 4 did not change what a one-classifier station chunks to.**
+    /// `run_daemon` used to set the chunk length from
+    /// `recommended_chunk_secs()`; it now sets it from the registry's longest
+    /// window, which is `input_spec().window_samples` over the same rate. For
+    /// every waveform shape this project loads those are the same two numbers,
+    /// so a station that has not asked for a second opinion — every station
+    /// today — cuts exactly the chunks it cut before.
+    ///
+    /// Observed failing with `input_spec_from_shape`'s waveform arm returning
+    /// `DYNAMIC_WINDOW_SAMPLES` in place of the shape's own length: `[1,
+    /// 96_000]` reported a 144 000-sample window against a recommendation of
+    /// 96 000, so a V3.0 station would have started chunking 4.5 s where it had
+    /// chunked 3.0 s.
+    #[test]
+    fn the_window_and_the_chunk_recommendation_agree_on_every_waveform_shape() {
+        let shapes: [&[usize]; 8] = [
+            &[1, 144_000],    // V2.4, fixed
+            &[1, 96_000],     // V3.0, fixed
+            &[1, 160_000],    // Perch v2, 5 s at 32 kHz
+            &[1, 1, 144_000], // rank-3 waveform
+            &[1],             // fully dynamic
+            &[1, 1],
+            &[1, 1, 1],
+            &[1, 1024], // BattyBirdNET, fed v2.4 embeddings
+        ];
+        for shape in shapes {
+            let spec = input_spec_from_shape(shape);
+            assert_eq!(
+                spec.format,
+                InputFormat::Waveform,
+                "{shape:?} belongs in this list only if it is a waveform shape"
+            );
+            assert_eq!(
+                spec.window_samples,
+                recommended_chunk_samples_from_shape(shape),
+                "{shape:?}: the registry's window and the chunk recommendation must agree"
+            );
+            assert_eq!(
+                spec.sample_rate,
+                infer_sample_rate_from_shape(shape),
+                "{shape:?}: and so must the rate each is divided by"
+            );
+        }
+    }
+
+    /// Its counterpart, without which the gate above would pass against an
+    /// `input_spec_from_shape` that had simply delegated every shape to
+    /// `recommended_chunk_samples_from_shape`.
+    ///
+    /// A mel shape is the one place the two deliberately disagree.
+    /// `recommended_chunk_samples_from_shape` reads the trailing dimension,
+    /// which for `[1, 128, 282]` counts spectrogram *columns* and would claim a
+    /// 282-sample — six millisecond — window. `input_spec_from_shape` refuses
+    /// that reading and reports the dynamic default. No model in this project
+    /// takes mel input today; this pins which of the two the daemon gets when
+    /// one does.
+    ///
+    /// Observed failing with the mel arm delegating to
+    /// `recommended_chunk_samples_from_shape`: the window became 282 samples
+    /// while the waveform gate above stayed green, which is the blind spot this
+    /// counterpart exists to close.
+    /// **A single spectrogram column is not a spectrogram.** The mel arm asks
+    /// for `n_mels > 1 && n_frames > 1`, and the `n_frames` half of that had
+    /// nothing asserting it: every mel case in these tests has many frames, and
+    /// every waveform case has `n_mels == 1`, so a shape with real mel bands
+    /// and exactly one frame was covered by neither.
+    ///
+    /// `[1, 128, 1]` is degenerate either way, and what matters is which way it
+    /// resolves: as a waveform shape it gets the dynamic default, and as a mel
+    /// shape it would claim a one-column spectrogram, which nothing in this
+    /// pipeline can produce or consume.
+    ///
+    /// Observed failing with `*n_frames > 1` relaxed to `>= 1`: `[1, 128, 1]`
+    /// came back `MelSpectrogram { n_mels: 128, n_frames: 1 }`. That is the
+    /// mutant `cargo-mutants` reported surviving at column 59 of this arm; its
+    /// `n_mels` counterpart already dies to the `[1, 1, 144_000]` row above.
+    #[test]
+    fn a_single_frame_is_not_a_mel_shape() {
+        for shape in [&[1_usize, 128, 1][..], &[1, 64, 1]] {
+            let spec = input_spec_from_shape(shape);
+            assert_eq!(
+                spec.format,
+                InputFormat::Waveform,
+                "{shape:?} has one frame, so the mel arm must not claim it"
+            );
+        }
+        // Its counterpart, so this gate cannot pass against a mel arm that
+        // never matches anything: two real frames still resolve to mel.
+        assert!(matches!(
+            input_spec_from_shape(&[1, 128, 2]).format,
+            InputFormat::MelSpectrogram { .. }
+        ));
+    }
+
+    #[test]
+    fn a_mel_shape_is_where_the_window_and_the_chunk_recommendation_part() {
+        let cases: [(&[usize], usize); 2] = [(&[1, 128, 282], 282), (&[1, 64, 511], 511)];
+        for (shape, frames) in cases {
+            let spec = input_spec_from_shape(shape);
+            assert!(
+                matches!(spec.format, InputFormat::MelSpectrogram { .. }),
+                "{shape:?} is meant to be a mel shape, got {:?}",
+                spec.format
+            );
+            assert_eq!(
+                recommended_chunk_samples_from_shape(shape),
+                frames,
+                "{shape:?}: the chunk recommendation reads the trailing dimension"
+            );
+            assert_eq!(
+                spec.window_samples, DYNAMIC_WINDOW_SAMPLES,
+                "{shape:?}: the window must not be a column count"
+            );
+        }
     }
 }

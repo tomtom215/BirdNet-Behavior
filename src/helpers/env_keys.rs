@@ -20,17 +20,21 @@ use crate::cli::Cli;
 const DIRECT_ENV_KEYS: &[&str] = &[
     "BIRDNET_BASE_PATH",
     "BIRDNET_BIRDWEATHER_URL",
+    "BIRDNET_CLIP_PEAK_CEILING_DBFS",
+    "BIRDNET_CLIP_TARGET_LUFS",
     "BIRDNET_CORS_ALLOWED_ORIGINS",
     "BIRDNET_DUCKDB_MEMORY_LIMIT",
     "BIRDNET_DYNAMIC_THRESHOLD",
     "BIRDNET_DYNAMIC_THRESHOLD_HOURS",
     "BIRDNET_DYNAMIC_THRESHOLD_MIN",
     "BIRDNET_DYNAMIC_THRESHOLD_TRIGGER",
+    "BIRDNET_MODEL_DIR",
     "BIRDNET_REQUIRE_LIVE_EXTENSION",
     "BIRDNET_SITENAME",
     "BIRDNET_SPL_CALIBRATION_DB",
     "BIRDNET_TRUSTED_PROXIES",
     "BNB_BASE_URL",
+    "BNB_EBIRD_BASE_URL",
     "BNB_HELP_DIR",
     "BNB_INSTANCE_LOCK_GRACE_SECS",
     "BNB_PUBLIC_URL",
@@ -63,6 +67,23 @@ pub fn known_env_names() -> BTreeSet<String> {
             .iter()
             .filter(|k| k.starts_with("OFFSITE_"))
             .map(|k| format!("BIRDNET_{k}")),
+    );
+    // Each credential that can be supplied as a mounted file reads a
+    // `BIRDNET_<KEY>_FILE` variable, built from the key rather than written out
+    // — so the list here cannot fall behind the list that is actually read.
+    out.extend(birdnet_core::config::secret_file::file_env_names());
+    // The capture watchdog's knobs are read through a table, so their names
+    // never appear as `env::var("…")` literals for the scan below to find.
+    out.extend(
+        crate::capture::watchdog::WATCHDOG_ENV_KEYS
+            .iter()
+            .map(|k| (*k).to_owned()),
+    );
+    // The extra-classifier settings are read the same way (`G-10` Stage 2).
+    out.extend(
+        crate::helpers::models::MODEL_ENV_KEYS
+            .iter()
+            .map(|k| (*k).to_owned()),
     );
     out
 }

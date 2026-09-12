@@ -205,15 +205,50 @@ fn quarantine_verdict(found: &[PathBuf]) -> Check {
     )
 }
 
+/// What the analytics engine will be allowed to use, and whether that is
+/// enough (`G-33`).
+///
+/// Reported here because the decision is otherwise invisible: it is made once
+/// at startup, written to the journal, and an operator diagnosing an
+/// OOM-killed station months later is looking at `--doctor`, not at the boot
+/// they no longer have.
+fn memory_verdict(budget: &birdnet_behavioral::memory::Budget) -> Check {
+    use birdnet_behavioral::memory::Budget;
+
+    const NAME: &str = "Analytics memory";
+    match budget {
+        Budget::TooSmall { .. } => Check::warn(
+            NAME,
+            budget.explain(),
+            "Analytics is off on this machine. Give the process more memory — raise \
+             MemoryMax= in the systemd unit, or the container's memory limit — or accept \
+             that this station records and classifies without the behavioural dashboards.",
+        ),
+        Budget::Undetected => Check::warn(
+            NAME,
+            budget.explain(),
+            "Neither /proc/meminfo nor a cgroup limit could be read, so the buffer pool \
+             could not be sized to this machine. Set BIRDNET_DUCKDB_MEMORY_LIMIT \
+             explicitly if analytics queries are being killed.",
+        ),
+        Budget::Configured { .. } | Budget::Sized { .. } => Check::pass(NAME, budget.explain()),
+    }
+}
+
 /// The analytics preflight checks.
 pub(super) fn check_analytics(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     let dir = analytics_dir(cli, config);
+    let budget = birdnet_behavioral::memory::decide(
+        std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref(),
+        birdnet_behavioral::memory::detect_ceiling(),
+    );
     vec![
         verdict(
             cfg!(feature = "analytics"),
             analytics_request(cli),
             dir.as_deref(),
         ),
+        memory_verdict(&budget),
         quarantine_verdict(&quarantined_files(dir.as_deref())),
     ]
 }
@@ -400,13 +435,52 @@ mod tests {
     }
 
     #[test]
-    fn check_analytics_returns_both_verdicts() {
-        // Whatever the build's feature set, the check yields its two Checks —
-        // the capability verdict and the quarantine scan — and never panics (it
-        // opens no DuckDB).
+    fn check_analytics_returns_every_verdict() {
+        // Whatever the build's feature set, the check yields its three Checks —
+        // the capability verdict, the memory budget and the quarantine scan —
+        // and never panics (it opens no DuckDB).
         let checks = check_analytics(&cli(), None);
-        assert_eq!(checks.len(), 2);
+        assert_eq!(checks.len(), 3, "{checks:?}");
         assert_eq!(checks[0].name, NAME);
-        assert_eq!(checks[1].name, QUARANTINE_NAME);
+        assert_eq!(checks[1].name, "Analytics memory");
+        assert_eq!(checks[2].name, QUARANTINE_NAME);
+    }
+
+    /// The memory verdict says something an operator can act on, whichever
+    /// case this machine lands in.
+    ///
+    /// The *values* depend on the machine the tests run on, so what is asserted
+    /// is the shape: a refusal and an undetectable machine both warn and both
+    /// carry a remediation, and a sized or configured pool passes and names a
+    /// number.
+    #[test]
+    fn the_memory_verdict_is_actionable_in_every_case() {
+        use birdnet_behavioral::memory::{Budget, CeilingSource};
+
+        let refused = memory_verdict(&Budget::TooSmall {
+            ceiling_mib: 200,
+            source: CeilingSource::PhysicalRam,
+        });
+        assert_eq!(refused.status, Status::Warn);
+        assert!(refused.remediation.is_some());
+        assert!(refused.message.contains("analytics is off"), "{refused:?}");
+
+        let undetected = memory_verdict(&Budget::Undetected);
+        assert_eq!(undetected.status, Status::Warn);
+        assert!(undetected.remediation.is_some());
+
+        let sized = memory_verdict(&Budget::Sized {
+            pool_mib: 256,
+            ceiling_mib: 1024,
+            source: CeilingSource::Cgroup,
+        });
+        assert_eq!(sized.status, Status::Pass);
+        assert!(sized.message.contains("256"), "{sized:?}");
+
+        let configured = memory_verdict(&Budget::Configured {
+            limit: "2GB".to_owned(),
+        });
+        assert_eq!(configured.status, Status::Pass);
+        assert!(configured.message.contains("2GB"), "{configured:?}");
     }
 }

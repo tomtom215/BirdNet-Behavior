@@ -236,6 +236,7 @@ fn filter_test_body(
             // `matches_species` only ever reads the two names.
             class: None,
             species_code: None,
+            order: None,
         };
         let in_exclude = exclude.iter().any(|e| matches_species(e, &label));
         let in_include = include.iter().any(|i| matches_species(i, &label));

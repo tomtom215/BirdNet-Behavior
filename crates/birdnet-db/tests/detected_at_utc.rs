@@ -288,6 +288,8 @@ fn the_write_path_carries_an_explicit_instant_through_to_the_row() {
     // `CEST_READING` is local 02:30 on its *first* pass, while Berlin is still
     // +2. The trigger's tz lookup resolves the same wall clock to `CET_READING`.
     let record = birdnet_db::sqlite::DetectionRecord {
+        model_id: None,
+        model_agreement: None,
         date: "2026-10-25",
         time: "02:30:00",
         sci_name: "Turdus merula",

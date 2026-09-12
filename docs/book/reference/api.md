@@ -291,6 +291,9 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `POST` | `/api/v2/detections/unlock` | Return it to the ordinary purge rules |
 | `POST` | `/api/v2/detections/delete` | Remove the detection row |
 | `POST` | `/api/v2/detections/batch` | Apply one of the four above to up to 500 detections |
+| `GET` | `/api/v2/detections/comments` | Read one detection's comment thread, oldest first |
+| `POST` | `/api/v2/detections/comments` | Add a comment (1–2000 characters) |
+| `POST` | `/api/v2/detections/comments/delete` | Withdraw one comment by `id` |
 | `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
 | `PUT` | `/api/v2/settings` | Change one or more settings |
 | `POST` | `/api/v2/control/restart` | Restart the station |
@@ -307,6 +310,36 @@ curl -X POST http://localhost:8502/api/v2/detections/lock \
   -H "Authorization: Bearer $BNB_API_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Erithacus rubecula"}'
+```
+
+### Comments
+
+A verdict records *what* the station decided; a comment records *why*. Many
+comments per detection — that is the difference from a review's `notes`, which
+is keyed on the detection and replaces whatever was there.
+
+A comment is **never edited**: a database trigger aborts any attempt to rewrite
+its text, author or timestamp. It can be withdrawn, which is what a note with a
+mistake or somebody's name in it needs; the audit row then carries the id and
+the author and never the body.
+
+```bash
+curl -X POST http://localhost:8502/api/v2/detections/comments \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"date":"2026-09-03","time":"06:12:44","sci_name":"Dryobates villosus",
+       "body":"Call length says Downy, but the spectrogram is Hairy."}'
+```
+
+There is **no `author` field**, deliberately. A bearer token is not a person —
+the same reason every audit row this API writes has a null user — so comments
+written here are attributed to `api`. A name the caller supplies would be a name
+the caller chose; a script with something to say about who is speaking says it
+in the body. Comments written from the web UI carry the signed-in username.
+
+```bash
+curl "http://localhost:8502/api/v2/detections/comments?date=2026-09-03&time=06:12:44&sci_name=Dryobates%20villosus" \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
 ```
 
 ### Batches
@@ -438,12 +471,172 @@ Outside systemd — a bare `cargo run`, a container without an init — nothing
 would bring the station back, so the endpoint answers `503` and signals nothing
 rather than reporting a restart that would in fact be a shutdown.
 
+### Restarting one source
+
+Restarting the station to recover a single wedged RTSP camera takes every other
+microphone down with it, and loses the audio in flight. This restarts one:
+
+```bash
+curl -X POST http://localhost:8502/api/v2/control/restart-source \
+  -H "Authorization: Bearer $BNB_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source_id": "src_rtsp_1"}'
+```
+
+```json
+{
+  "restart_requested": true,
+  "source": "src_rtsp_1",
+  "state": "stalled",
+  "already_pending": false,
+  "note": "the supervisor stops and restarts this source on its next tick; every other source keeps recording"
+}
+```
+
+`202`, not `200`: nothing has restarted yet when the response is written. The
+capture supervisor drains the request on its next reconcile tick, a couple of
+seconds later. Asking twice before that happens still restarts the source once —
+the second call answers `"already_pending": true`.
+
+The restart goes through the supervisor's own start path, so the recording
+schedule and the source's quiet window still hold. A source that is `paused`
+when the request arrives stays paused, and the `note` says so rather than
+reporting a restart that will not happen.
+
+This recovers a wedged source; it does **not** reload that source's settings.
+The supervisor builds each source's capture configuration once, when the service
+starts, and a restarted process comes back with that same configuration. Editing
+a source on `/admin/audio` still needs a service restart to take effect.
+
+`source_id` is the supervisor's label for the source, which is the
+`audio_sources` row id on any station whose sources are managed from
+`/admin/audio`. An unknown label answers `404` and lists the labels that do
+exist; a process with no capture supervisor at all answers `503`.
+
+The same action is a **Restart** button beside each source on `/admin/audio`.
+
+To read the labels — and to see whether the restart took — ask for the capture
+status. It is bearer-gated rather than public, because a station's source labels
+and per-source fault history are operational detail about someone's home:
+
+```bash
+curl http://localhost:8502/api/v2/system/capture \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+```json
+{
+  "supervised": true,
+  "published_unix": 1789000000,
+  "sources": [
+    {
+      "label": "src_rtsp_1",
+      "state": "connected",
+      "uptime_secs": 512,
+      "last_audio_age_secs": 1,
+      "restart_attempts": 0,
+      "restarts_last_hour": 1,
+      "flapping": false,
+      "next_retry_in_secs": null,
+      "uptime_24h": ["up", "up", "…"]
+    }
+  ]
+}
+```
+
+`state` is one of `connected`, `stalled`, `backing_off`, `paused`;
+`uptime_24h` is 48 half-hour cells, oldest first, each `up`, `down` or `out`
+(no data — before the source was first seen, or intentionally paused).
+`supervised` is `false`, with an empty list, when nothing in this process is
+supervising capture: web-only mode, or tooling. That is an answer, not an error.
+
+Restarts an operator asked for are deliberately **not** counted in
+`restarts_last_hour`, and so never raise `flapping`. That number exists to spot
+a source that cannot stay up on its own; clicking Restart three times while
+debugging a camera is not that.
+
+### Scheduled maintenance jobs
+
+`GET /api/v2/system/jobs` reports every job the maintenance loop schedules —
+the integrity check, the backup and VACUUM, the offsite upload, the recording
+cap, the log retention pass, the summary drift check and the session prune —
+with when each last completed, whether it passed, and whether it is due now.
+Bearer-gated, for the same reason as `/system/capture`: when a station's
+backups run, and whether they are failing, is operational detail about
+someone's home.
+
+```bash
+curl http://localhost:8502/api/v2/system/jobs \
+  -H "Authorization: Bearer $BNB_API_TOKEN"
+```
+
+```json
+{
+  "now_unix": 1789000000,
+  "jobs": [
+    {
+      "job": "integrity_check",
+      "title": "Database integrity check",
+      "interval_secs": 86400,
+      "last_run_unix": 1788950000,
+      "next_due_unix": 1789036400,
+      "ok": true,
+      "reports_verdict": true,
+      "due": false,
+      "due_reason": null
+    },
+    {
+      "job": "backup_vacuum",
+      "title": "Backup and VACUUM",
+      "interval_secs": 604800,
+      "last_run_unix": null,
+      "next_due_unix": null,
+      "ok": null,
+      "reports_verdict": true,
+      "due": true,
+      "due_reason": "never_run"
+    }
+  ]
+}
+```
+
+**The list is every job, not every job that has run.** `maintenance_runs`
+holds a row per job that has completed at least once, so an endpoint built by
+listing rows would answer with a short, clean list that omitted exactly the
+jobs worth asking about — a station whose backup has never run once would
+simply not mention it. The second entry above is that case.
+
+**`ok` is tri-state; do not collapse it.** `null` means either *never run* or
+*this job has no pass/fail to report*, and `reports_verdict` separates those
+from a recorded `false`. A session prune that succeeded and an integrity check
+that failed both have falsy verdicts and mean opposite things.
+
+`due_reason` is `never_run`, `interval_elapsed`, or `clock_went_backwards` —
+the last meaning the recorded run is in the future, which happens on a Pi with
+no real-time clock that boots at the epoch and then has NTP land. The job runs
+and re-anchors its schedule rather than waiting years for real time to catch
+up.
+
+The backup's `interval_secs` follows `BACKUP_SCHEDULE`, the one cadence an
+operator sets, so a station on `daily` is reported on a daily cadence rather
+than told it is not due for another six days. Every other job's interval is
+fixed — including the space reclaim, which stays weekly whatever the backup is
+set to.
+
+`due` is the scheduler's own rule, shared with the loop that runs the jobs
+rather than re-implemented here. One thing it cannot see is that loop's
+in-process floor, which stops a station with a full disk re-running a weekly
+VACUUM every half hour; it only ever delays a job within one process lifetime,
+so a job reported as due may already have run since its last recorded
+completion. That is the honest answer from persisted state, which is the only
+state you can inspect.
+
 ### The audit log
 
 Every change is written to the [audit log](../admin/system.md) as
 `detection.review` / `detection.lock` / `detection.unlock` / `detection.delete`
-/ `settings.update` / `system.restart`, with no user and `via=api` in the
-metadata — a batch writes one such row per detection it changed, under the same
+/ `settings.update` / `system.restart` / `audio.source.restart`, with no user
+and `via=api` in the metadata — a batch writes one such row per detection it changed, under the same
 names — a token is not a person, and the log says so rather than inventing
 one. A settings change records the key *names* only: an entry reading
 `birdweather_token=…` would put a credential on the page that renders the log.

@@ -466,6 +466,39 @@ pub(super) fn build_extraction_config(
         .unwrap_or(0.0)
         .clamp(0.0, 30.0);
 
+    // Loudness normalisation of the exported clip (G-5). Off unless the
+    // operator asks: a clip is an archival record as well as something to
+    // listen to, and changing what is in it is their decision. Any value
+    // outside the range is treated as "not configured" rather than clamped —
+    // a mistyped target should not quietly normalise every clip to something
+    // nobody chose.
+    //
+    // No CLI flag, for the same reason `pre_capture_secs` has none: it is a
+    // per-station preference, not something flipped per run.
+    // Environment first, then the config file — the precedence every other
+    // input here uses, and what makes a container station configurable without
+    // a config file. The settings page writes the config key, so an operator
+    // who sets both gets the environment one, as the notifications page already
+    // documents for its own keys.
+    // The environment variables are read as literals rather than through a
+    // helper taking the name: `helpers::env_keys` finds a station's readable
+    // variables by scanning the source for `env::var("…")`, and a name that
+    // arrives as an argument is invisible to it — so the station would call a
+    // real variable unknown.
+    let target_lufs = parse_decimal(
+        std::env::var("BIRDNET_CLIP_TARGET_LUFS")
+            .ok()
+            .or_else(|| config.and_then(|c| c.get("CLIP_TARGET_LUFS").map(str::to_owned))),
+    )
+    .filter(|v| (MIN_TARGET_LUFS..=MAX_TARGET_LUFS).contains(v));
+    let peak_ceiling_dbfs = parse_decimal(
+        std::env::var("BIRDNET_CLIP_PEAK_CEILING_DBFS")
+            .ok()
+            .or_else(|| config.and_then(|c| c.get("CLIP_PEAK_CEILING_DBFS").map(str::to_owned))),
+    )
+    .filter(|v| (MIN_CEILING_DBFS..MAX_CEILING_DBFS).contains(v))
+    .unwrap_or(birdnet_core::audio::extraction::DEFAULT_PEAK_CEILING_DBFS);
+
     ExtractionConfig {
         extraction_length,
         target_format: AudioFormat::parse(&cli.audio_format),
@@ -474,8 +507,41 @@ pub(super) fn build_extraction_config(
         recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz,
         pre_capture_secs,
+        target_lufs,
+        peak_ceiling_dbfs,
     }
 }
+
+/// A finite `f64` from a raw setting value, or `None`.
+///
+/// Blank is "not configured" rather than zero: every surface that can supply
+/// one of these produces a blank when the operator declines the feature.
+fn parse_decimal(raw: Option<String>) -> Option<f64> {
+    raw.map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v: &f64| v.is_finite())
+}
+
+/// Quietest loudness target worth honouring, in LUFS.
+///
+/// Below this the gain needed would be so large that a clip's noise floor
+/// becomes its content. −40 is already far quieter than any listening target.
+const MIN_TARGET_LUFS: f64 = -40.0;
+
+/// Loudest loudness target worth honouring, in LUFS.
+///
+/// Above −6 the peak ceiling decides the gain for almost every clip, so the
+/// target stops meaning anything; refusing it is more honest than accepting a
+/// number that will not be reached.
+const MAX_TARGET_LUFS: f64 = -6.0;
+
+/// Lowest sample-peak ceiling worth honouring, in dBFS.
+const MIN_CEILING_DBFS: f64 = -12.0;
+
+/// The ceiling is a *sample* peak on a 16-bit write, so it must stay below
+/// full scale — a sample at exactly 0 dBFS has nowhere to round to.
+const MAX_CEILING_DBFS: f64 = 0.0;
 
 /// Resolve the three "must be configured for the daemon to run" paths.
 ///
@@ -826,6 +892,88 @@ mod tests {
         assert_eq!(resolve_i64_with_default(15, 60, None), 15);
     }
 
+    // ── loudness settings (G-5) ─────────────────────────────────────────
+    //
+    // `parse_decimal` and the four bounds it is filtered against had no direct
+    // tests: they were exercised only through `build_extraction_config`, which
+    // reads them from the environment, and every mutant `cargo-mutants`
+    // generated for them on this PR's changed lines survived. The two gates
+    // below are what those numbers actually promise.
+
+    /// **Blank is "not configured", not zero.** Every surface that supplies
+    /// one of these writes a blank when the operator declines the feature, so
+    /// a parser that read blank as `0.0` would silently turn "no loudness
+    /// target" into "target 0 LUFS" — the loudest setting there is.
+    ///
+    /// Observed failing against each mutant reported on this line: the body
+    /// replaced by `None` (the first assertion), by `Some(0.0)`, `Some(1.0)`
+    /// and `Some(-1.0)` (the `None` and blank assertions), and with the `!`
+    /// deleted from the emptiness filter, which inverts it so that only an
+    /// empty string survives and `"-18.5"` comes back `None`.
+    #[test]
+    fn parse_decimal_reads_a_number_and_treats_everything_else_as_unset() {
+        assert_eq!(parse_decimal(Some("-18.5".to_owned())), Some(-18.5));
+        assert_eq!(
+            parse_decimal(Some("  -23  ".to_owned())),
+            Some(-23.0),
+            "an operator's stray whitespace is not a parse failure"
+        );
+        assert_eq!(parse_decimal(None), None, "nothing configured is not zero");
+        assert_eq!(
+            parse_decimal(Some(String::new())),
+            None,
+            "a blank setting is not zero"
+        );
+        assert_eq!(parse_decimal(Some("   ".to_owned())), None);
+        assert_eq!(parse_decimal(Some("loud".to_owned())), None);
+        assert_eq!(
+            parse_decimal(Some("nan".to_owned())),
+            None,
+            "NaN parses as an f64 and must still be refused"
+        );
+        assert_eq!(parse_decimal(Some("inf".to_owned())), None);
+    }
+
+    /// **The bounds are negative decibel values, in order.** They are the
+    /// filters `build_extraction_config` applies, so a sign lost from any of
+    /// them does not fail loudly: the range simply stops containing anything
+    /// an operator would write, and the setting silently reverts to unset or
+    /// to its default.
+    ///
+    /// Observed failing against each `delete -` mutant reported on these three
+    /// constants: `MIN_TARGET_LUFS` as `40.0` and `MIN_CEILING_DBFS` as `12.0`
+    /// each empty their range, so it stops containing the ordinary value;
+    /// `MAX_TARGET_LUFS` as `6.0` widens the target range to admit 0 LUFS,
+    /// which the assertion after it refuses.
+    #[test]
+    fn the_loudness_bounds_are_negative_decibels_in_order() {
+        // Asserted through `contains` rather than by comparing the constants
+        // directly: `MIN_TARGET_LUFS < MAX_TARGET_LUFS` is a constant
+        // expression, which `clippy::assertions_on_constants` refuses and
+        // which CI denies. Each range answering correctly about a real value
+        // covers the same ground — a lost sign empties the range or widens it,
+        // and both show up below.
+        let target = MIN_TARGET_LUFS..=MAX_TARGET_LUFS;
+        assert!(
+            target.contains(&-23.0),
+            "-23 LUFS is the EBU R128 broadcast target and must be accepted"
+        );
+        assert!(
+            !target.contains(&0.0),
+            "0 LUFS is not a loudness target, and admitting it means a sign was lost"
+        );
+
+        let ceiling = MIN_CEILING_DBFS..MAX_CEILING_DBFS;
+        assert!(
+            ceiling.contains(&-1.0),
+            "-1 dBFS is an ordinary peak ceiling and must be accepted"
+        );
+        assert!(
+            !ceiling.contains(&0.0),
+            "a sample at full scale has nowhere to round to"
+        );
+    }
+
     // ── build_pipeline_config ───────────────────────────────────────────
     //
     // The struct-literal field-source mutations cargo-mutants surfaces on
@@ -844,6 +992,13 @@ mod tests {
         assert!((cfg.chunk_duration_secs - default.chunk_duration_secs).abs() < f32::EPSILON);
         assert!((cfg.confidence_threshold - default.confidence_threshold).abs() < f32::EPSILON);
         assert_eq!(cfg.raw_audio_input, default.raw_audio_input);
+        // `None` is load-bearing rather than incidental: `run_daemon` sets the
+        // chunk step only when the loaded classifiers want different windows,
+        // so a step arriving from this builder would regrid every station that
+        // runs one classifier — silently, since nothing downstream can tell a
+        // derived step from a configured one.
+        assert_eq!(cfg.chunk_step_secs, None);
+        assert_eq!(cfg.chunk_step_secs, default.chunk_step_secs);
     }
 
     #[test]

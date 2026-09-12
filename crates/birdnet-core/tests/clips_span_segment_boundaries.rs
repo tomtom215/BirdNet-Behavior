@@ -62,6 +62,8 @@ fn detection(start: f32) -> Detection {
         stop: start + 3.0,
         week: 18,
         file_name_extr: None,
+        model_id: None,
+        agreeing_models: None,
     }
 }
 
@@ -74,6 +76,7 @@ fn config(out: std::path::PathBuf, pre_capture_secs: f32) -> ExtractionConfig {
         recording_length: 15.0,
         freq_shift_hz: 0,
         pre_capture_secs,
+        ..ExtractionConfig::default()
     }
 }
 

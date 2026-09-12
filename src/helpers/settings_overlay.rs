@@ -131,6 +131,25 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         Wiring::Bridged("FREQ_SHIFT"),
         SettingsCategory::Audio,
     ),
+    (
+        "clip_target_lufs",
+        Wiring::Bridged("CLIP_TARGET_LUFS"),
+        SettingsCategory::Audio,
+    ),
+    (
+        "livestream_source",
+        Wiring::OwnedBy("birdnet_web::routes::livestream (the station's default /stream source)"),
+        SettingsCategory::Audio,
+    ),
+    (
+        // `birdnet_behavioral::queries::EXCLUDE_IMPORTS_SETTING`, written from
+        // `/admin/migration` and read by both analytics engines to decide
+        // whether detections imported from a BirdNET-Pi count as this
+        // station's own data.
+        "analytics_exclude_imports",
+        Wiring::OwnedBy("birdnet_behavioral::queries and the SQLite analytics reader"),
+        SettingsCategory::System,
+    ),
     // ── Station / location ─────────────────────────────────────────────────
     (
         "latitude",
@@ -485,6 +504,7 @@ pub fn overlay_db_settings(config: Option<Config>, state: &AppState) -> Option<C
 fn settings_to_seed(
     config: &Config,
     existing: &HashSet<String>,
+    from_secret_file: &[&str],
 ) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut out = Vec::new();
     for &(ui_key, wiring, category) in SETTING_SPECS {
@@ -497,6 +517,14 @@ fn settings_to_seed(
         let Wiring::Bridged(config_key) = wiring else {
             continue;
         };
+        // A value that came from a mounted secret file is in the config only
+        // because `resolve_secret_files` put it there. Copying it into the
+        // settings table would write the credential into the database — and so
+        // into every backup of it — which is the precise thing an operator
+        // choosing `BIRDNET_<KEY>_FILE` was avoiding.
+        if from_secret_file.contains(&config_key) {
+            continue;
+        }
         if let Some(value) = config.get(config_key) {
             let value = value.trim();
             if !value.is_empty() {
@@ -562,7 +590,12 @@ fn cli_station_settings(cli: &Cli) -> Vec<(&'static str, String, SettingsCategor
 /// row is left untouched, so this never clobbers a setting the operator changed
 /// in the UI, and it is safe to call on every startup. Returns the number of
 /// rows seeded.
-pub fn seed_db_settings_from_config(config: Option<&Config>, cli: &Cli, state: &AppState) -> usize {
+pub fn seed_db_settings_from_config(
+    config: Option<&Config>,
+    cli: &Cli,
+    state: &AppState,
+    from_secret_file: &[&str],
+) -> usize {
     state.with_db(|conn| {
         // The table may not exist yet on a brand-new database; treat that (and
         // any read error) as "nothing already present" rather than failing.
@@ -576,7 +609,7 @@ pub fn seed_db_settings_from_config(config: Option<&Config>, cli: &Cli, state: &
         // seed order (and the logged count) deterministic.
         let mut merged: BTreeMap<&'static str, (String, SettingsCategory)> = BTreeMap::new();
         if let Some(config) = config {
-            for (key, value, category) in settings_to_seed(config, &existing) {
+            for (key, value, category) in settings_to_seed(config, &existing, from_secret_file) {
                 merged.insert(key, (value, category));
             }
         }
@@ -606,7 +639,7 @@ pub fn seed_db_settings_from_config(config: Option<&Config>, cli: &Cli, state: &
 mod tests {
     use super::*;
     use birdnet_web::routes::admin::settings::form::SETTINGS_FORM_KEYS;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// Bridge keys that are deliberately *not* settings-form fields.
     ///
@@ -618,7 +651,20 @@ mod tests {
     /// The onboarding wizard's keys live here too: it persists settings the
     /// admin form does not expose (the first-run completion flag, the detected
     /// timezone), and they are legitimate rather than orphaned.
-    const NON_FORM_BRIDGE_KEYS: &[&str] = &["alsa_devices", "timezone", "onboarding_complete"];
+    const NON_FORM_BRIDGE_KEYS: &[&str] = &[
+        "alsa_devices",
+        "timezone",
+        "onboarding_complete",
+        // Written from `/admin/audio`, where the source it names is chosen from
+        // a list of real rows rather than typed as an id. Covered by
+        // `audio_admin_keys_are_all_classified` below.
+        "livestream_source",
+        // Written from `/admin/migration`, a page with its own controls rather
+        // than a settings form. Found by
+        // `every_settings_key_written_anywhere_is_classified`, which is the
+        // gate that exists because a per-writer list keeps missing writers.
+        "analytics_exclude_imports",
+    ];
 
     #[test]
     fn settings_form_keys_are_all_classified() {
@@ -667,6 +713,394 @@ mod tests {
              to SETTING_SPECS as Wiring::Bridged(config key) or \
              Wiring::OwnedBy(subsystem), or stop writing it."
         );
+    }
+
+    /// And for the third place settings get written.
+    ///
+    /// `/admin/audio` writes `livestream_source` — the source `/stream` serves
+    /// when the listener has not chosen one — because the value is an
+    /// `audio_sources` row id, which belongs beside the rows and not in a text
+    /// field on the settings page. That made the audio page a settings writer
+    /// with no membership of the guard the other two writers have, which is
+    /// how a key nothing reads gets shipped.
+    #[test]
+    fn audio_admin_keys_are_all_classified() {
+        use birdnet_web::routes::admin::audio::AUDIO_ADMIN_SETTING_KEYS;
+
+        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let unclassified: Vec<&str> = AUDIO_ADMIN_SETTING_KEYS
+            .iter()
+            .copied()
+            .filter(|key| !classified.contains(key))
+            .collect();
+
+        assert!(
+            unclassified.is_empty(),
+            "audio-admin keys with no wiring classification: {unclassified:?}\n\
+             Add each to SETTING_SPECS as Wiring::Bridged(config key) or \
+             Wiring::OwnedBy(subsystem), or stop writing it."
+        );
+    }
+
+    // ── the general form of the same guard (G-34) ───────────────────────────
+    //
+    // The three gates above each cover one *writer*, by name, from a list
+    // maintained by hand — the admin form, the wizard, the audio page. A fourth
+    // writer is outside all of them, which is what happened:
+    // `routes/admin/migration.rs` writes `exclude_imports` and nothing was
+    // checking that anything read it.
+    //
+    // These two read the source instead, so a new writer anywhere in the
+    // workspace is covered the moment it is added, and a subsystem that stops
+    // reading a key it claims to own is caught from the other side.
+
+    use std::path::{Path, PathBuf};
+
+    /// Every `.rs` file under the workspace's production source trees.
+    fn production_sources() -> Vec<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut roots = vec![root.join("src")];
+        for entry in std::fs::read_dir(root.join("crates")).expect("crates/") {
+            let dir = entry.expect("entry").path();
+            if dir.join("src").is_dir() {
+                roots.push(dir.join("src"));
+            }
+        }
+        let mut files = Vec::new();
+        for r in roots {
+            walk_rs(&r, &mut files);
+        }
+        files.sort();
+        files
+    }
+
+    fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("read_dir") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                walk_rs(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path.file_name().is_none_or(|n| n != "tests.rs")
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The source with every `#[cfg(test)]` item removed by brace depth, and
+    /// comment lines dropped so prose about a write is not a write.
+    ///
+    /// Without it the scan reads every fixture's
+    /// `settings::set(conn, "latitude", "51.5074", …)` as a production writer.
+    fn production_half(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut lines = src.lines();
+        while let Some(line) = lines.next() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.trim_start().starts_with("#[cfg(test)]") {
+                let mut depth: i32 = 0;
+                let mut seen_open = false;
+                for l in lines.by_ref() {
+                    depth += i32::try_from(l.matches('{').count()).unwrap_or(0);
+                    depth -= i32::try_from(l.matches('}').count()).unwrap_or(0);
+                    if l.contains('{') {
+                        seen_open = true;
+                    }
+                    if l.trim_start().starts_with('#') && !seen_open {
+                        continue;
+                    }
+                    if (seen_open && depth <= 0) || (!seen_open && l.trim_end().ends_with(';')) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
+    }
+
+    /// `const NAME: &str = "value";` across the workspace, so a key written as
+    /// a named constant resolves to the string it holds.
+    fn string_constants(sources: &[(PathBuf, String)]) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        for (_, src) in sources {
+            for line in src.lines() {
+                let line = line.trim();
+                let Some(rest) = line
+                    .strip_prefix("pub const ")
+                    .or_else(|| line.strip_prefix("const "))
+                    .or_else(|| line.strip_prefix("pub(crate) const "))
+                    .or_else(|| line.strip_prefix("pub(super) const "))
+                else {
+                    continue;
+                };
+                let Some((name, tail)) = rest.split_once(':') else {
+                    continue;
+                };
+                if !tail.trim_start().starts_with("&str") {
+                    continue;
+                }
+                let Some(open) = tail.find('"') else { continue };
+                let after = &tail[open + 1..];
+                let Some(close) = after.find('"') else {
+                    continue;
+                };
+                out.insert(name.trim().to_owned(), after[..close].to_owned());
+            }
+        }
+        out
+    }
+
+    /// The argument after the connection in a `settings::` call: a string
+    /// literal, or a path ending in a constant's name.
+    ///
+    /// `rest` starts immediately after the opening parenthesis. `None` means
+    /// the key is a runtime value, which the caller reports rather than drops.
+    fn key_after_conn(rest: &str, consts: &BTreeMap<String, String>) -> Option<String> {
+        // Calls are formatted across lines; a bounded window keeps a failed
+        // match from running into the next call.
+        let window = &rest[..rest.len().min(400)];
+        let comma = window.find(',')?;
+        let tail = window[comma + 1..].trim_start();
+        if let Some(quoted) = tail.strip_prefix('"') {
+            let end = quoted.find('"')?;
+            return Some(quoted[..end].to_owned());
+        }
+        let ident: String = tail
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+            .collect();
+        let last = ident.rsplit("::").next()?.to_owned();
+        consts.get(&last).cloned()
+    }
+
+    /// Keys written through `settings::set`, and the sites whose key is built
+    /// at runtime.
+    fn keys_written(
+        sources: &[(PathBuf, String)],
+        consts: &BTreeMap<String, String>,
+    ) -> (BTreeSet<String>, Vec<String>) {
+        let mut keys = BTreeSet::new();
+        let mut unresolved = Vec::new();
+        for (path, src) in sources {
+            for (idx, _) in src.match_indices("settings::set(") {
+                let rest = &src[idx + "settings::set(".len()..];
+                match key_after_conn(rest, consts) {
+                    Some(key) => {
+                        keys.insert(key);
+                    }
+                    None => unresolved.push(path.display().to_string()),
+                }
+            }
+            // `set_many` takes a slice built at runtime; its keys are bounded
+            // where the slice is built, and DYNAMIC_WRITE_SITES names where.
+            if src.contains("settings::set_many(") {
+                unresolved.push(format!("{} (set_many)", path.display()));
+            }
+        }
+        unresolved.sort();
+        unresolved.dedup();
+        (keys, unresolved)
+    }
+
+    /// Keys read in production code, through any shape this scan knows.
+    fn keys_read(
+        sources: &[(PathBuf, String)],
+        consts: &BTreeMap<String, String>,
+    ) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        for (_, src) in sources {
+            for shape in [
+                "settings::get(",
+                "settings::get_or(",
+                "settings::get_parsed(",
+            ] {
+                for (idx, _) in src.match_indices(shape) {
+                    if let Some(key) = key_after_conn(&src[idx + shape.len()..], consts) {
+                        out.insert(key);
+                    }
+                }
+            }
+            // `get_parsed::<T>(conn, "KEY")` — the turbofish sits between the
+            // name and the parenthesis.
+            for (idx, _) in src.match_indices("settings::get_parsed::<") {
+                let rest = &src[idx..];
+                if let Some(open) = rest.find('(')
+                    && let Some(key) = key_after_conn(&rest[open + 1..], consts)
+                {
+                    out.insert(key);
+                }
+            }
+            // `--doctor` opens its own read-only connection and reads through
+            // a helper of its own, so the key is the second argument there too
+            // but the receiver is a `Config`, not a connection.
+            for (idx, _) in src.match_indices("setting_from_db(config, \"") {
+                let rest = &src[idx + "setting_from_db(config, \"".len()..];
+                if let Some(end) = rest.find('"') {
+                    out.insert(rest[..end].to_owned());
+                }
+            }
+            // The admin pages read an already-loaded map, so the key is the
+            // first argument after it rather than after a connection.
+            for (idx, _) in src.match_indices("get_setting(s, \"") {
+                let rest = &src[idx + "get_setting(s, \"".len()..];
+                if let Some(end) = rest.find('"') {
+                    out.insert(rest[..end].to_owned());
+                }
+            }
+        }
+        out
+    }
+
+    /// Call sites whose settings keys are bounded elsewhere, with where.
+    ///
+    /// Each builds a `(key, value, category)` slice at runtime, so the keys
+    /// cannot be read out of the call — and re-deriving them here would only
+    /// duplicate a check that already exists. A *new* file using `set_many`
+    /// trips the gate and has to be added deliberately.
+    const DYNAMIC_WRITE_SITES: &[&str] = &[
+        // Validated against `SETTINGS_FORM_KEYS` before the write; an unknown
+        // key is refused with a 400.
+        "routes/api_write.rs",
+        // The wizard's own keys, pinned by `ONBOARDING_SETTING_KEYS` and the
+        // gate above.
+        "routes/pages/onboarding.rs",
+        // The admin settings form's own keys, pinned by `SETTINGS_FORM_KEYS`
+        // and the two gates in `routes/admin/settings/`.
+        "routes/admin/settings/handler.rs",
+    ];
+
+    fn scanned_sources() -> Vec<(PathBuf, String)> {
+        production_sources()
+            .into_iter()
+            .map(|p| {
+                let src = std::fs::read_to_string(&p).expect("read");
+                let half = production_half(&src);
+                (p, half)
+            })
+            .collect()
+    }
+
+    /// Every settings key production code writes is classified in
+    /// [`SETTING_SPECS`].
+    #[test]
+    fn every_settings_key_written_anywhere_is_classified() {
+        let sources = scanned_sources();
+        let consts = string_constants(&sources);
+        let (written, unresolved) = keys_written(&sources, &consts);
+
+        assert!(
+            written.len() >= 3,
+            "the scan found only {written:?} — it has stopped recognising the write \
+             shape and would pass vacuously"
+        );
+
+        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let unwired: Vec<&String> = written
+            .iter()
+            .filter(|k| !classified.contains(k.as_str()))
+            .collect();
+        assert!(
+            unwired.is_empty(),
+            "these settings keys are written by production code and classified nowhere, \
+             so nothing says what reads them: {unwired:?}\n\
+             Add each to SETTING_SPECS as Wiring::Bridged(config key) or \
+             Wiring::OwnedBy(subsystem), or stop writing it."
+        );
+
+        let unexpected: Vec<&String> = unresolved
+            .iter()
+            .filter(|site| !DYNAMIC_WRITE_SITES.iter().any(|a| site.contains(a)))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "these call sites write a settings key this scan cannot resolve to a \
+             literal, and are not on the allowlist: {unexpected:?}\n\
+             Write the key as a literal or a `const NAME: &str`, or add the site to \
+             DYNAMIC_WRITE_SITES naming what bounds its keys."
+        );
+    }
+
+    /// The other direction: a key classified as read straight out of the
+    /// settings table by a named subsystem is read somewhere.
+    ///
+    /// `Wiring::Bridged` keys are excluded — those are read through the
+    /// *config*, which `tests/every_config_key_is_known.rs` checks.
+    #[test]
+    fn every_subsystem_owned_setting_is_read_somewhere() {
+        let sources = scanned_sources();
+        let consts = string_constants(&sources);
+        let read = keys_read(&sources, &consts);
+
+        assert!(
+            read.len() >= 5,
+            "the scan found only {read:?} — it has stopped recognising the read shapes"
+        );
+
+        let unread: Vec<&str> = SETTING_SPECS
+            .iter()
+            .filter(|(_, wiring, _)| matches!(wiring, Wiring::OwnedBy(_)))
+            .map(|(ui, _, _)| *ui)
+            .filter(|k| !read.contains(*k))
+            .collect();
+        assert!(
+            unread.is_empty(),
+            "these keys are classified as read straight out of the settings table by a \
+             named subsystem, and no read of them appears in the source: {unread:?}\n\
+             Either the subsystem stopped reading it — in which case the control is \
+             inert, which is the bug this classification exists to prevent — or it \
+             reads it through a shape this scan does not know, in which case teach the \
+             scan."
+        );
+    }
+
+    /// The scan itself, against a synthetic source.
+    ///
+    /// Without this, a scan that had stopped matching anything would satisfy
+    /// both gates above by finding nothing to complain about.
+    #[test]
+    fn the_settings_scan_recognises_the_shapes() {
+        let src = concat!(
+            "pub const A_KEY: &str = \"from_a_const\";\n",
+            "fn w(conn: &C) {\n",
+            "    settings::set(conn, \"a_literal\", \"v\", Cat::System);\n",
+            "    birdnet_db::settings::set(\n        conn,\n        A_KEY,\n        \"v\",\n    );\n",
+            "}\n",
+            "fn r(conn: &C) {\n",
+            "    let _ = settings::get_or(conn, \"read_or\", \"d\");\n",
+            "    let _ = settings::get(conn, A_KEY);\n",
+            "    let _ = get_setting(s, \"read_map\", \"d\");\n",
+            "}\n",
+            "#[cfg(test)]\nmod tests {\n    fn t(conn: &C) {\n",
+            "        settings::set(conn, \"test_only\", \"v\", Cat::System);\n    }\n}\n",
+        );
+        let sources = vec![(PathBuf::from("synthetic.rs"), production_half(src))];
+        let consts = string_constants(&sources);
+        assert_eq!(
+            consts.get("A_KEY").map(String::as_str),
+            Some("from_a_const")
+        );
+
+        let (written, unresolved) = keys_written(&sources, &consts);
+        assert!(written.contains("a_literal"), "{written:?}");
+        assert!(
+            written.contains("from_a_const"),
+            "a key given as a constant must resolve: {written:?}"
+        );
+        assert!(
+            !written.contains("test_only"),
+            "a write inside #[cfg(test)] is a fixture, not a production writer: {written:?}"
+        );
+        assert!(unresolved.is_empty(), "{unresolved:?}");
+
+        let read = keys_read(&sources, &consts);
+        assert!(read.contains("read_or"), "{read:?}");
+        assert!(read.contains("from_a_const"), "{read:?}");
+        assert!(read.contains("read_map"), "{read:?}");
     }
 
     #[test]
@@ -901,7 +1335,7 @@ mod tests {
         // under the UI keys + categories the admin form reads.
         let config =
             Config::parse("LATITUDE=42.36\nRTSP_URL=rtsp://cam/stream\nCONFIDENCE=0.7").unwrap();
-        let seed = settings_to_seed(&config, &HashSet::new());
+        let seed = settings_to_seed(&config, &HashSet::new(), &[]);
 
         let lat = seed
             .iter()
@@ -932,7 +1366,7 @@ mod tests {
         let config = Config::parse("LATITUDE=42.36\nLONGITUDE=-71.06").unwrap();
         let mut existing = HashSet::new();
         existing.insert("latitude".to_string());
-        let seed = settings_to_seed(&config, &existing);
+        let seed = settings_to_seed(&config, &existing, &[]);
         assert!(!seed.iter().any(|(k, _, _)| *k == "latitude"));
         assert!(seed.iter().any(|(k, _, _)| *k == "longitude"));
     }
@@ -943,11 +1377,43 @@ mod tests {
         config.set("ALSA_CARD", ""); // installer skipped → empty, must not seed
         config.set("SOME_UNMAPPED_KEY", "x"); // not a bridge key → never seeded
         config.set("LATITUDE", "51.5");
-        let seed = settings_to_seed(&config, &HashSet::new());
+        let seed = settings_to_seed(&config, &HashSet::new(), &[]);
         assert!(!seed.iter().any(|(k, _, _)| *k == "alsa_device"));
         assert!(seed.iter().any(|(k, _, _)| *k == "latitude"));
         // Only mapped UI keys are ever produced.
         assert!(seed.iter().all(|(k, _, _)| config_key_for(k).is_some()));
+    }
+
+    /// A credential that came from a mounted file is not copied into the
+    /// settings table.
+    ///
+    /// The seed's whole job is to make an installed value editable in the web
+    /// UI, and for every ordinary setting that is right. For a secret the
+    /// operator deliberately mounted as a file it is the opposite: writing it
+    /// into the `settings` table puts it in the database, and so in every
+    /// backup, restore bundle and support archive taken from it — which is the
+    /// exact exposure `BIRDNET_<KEY>_FILE` exists to avoid.
+    #[test]
+    fn a_credential_read_from_a_file_is_not_seeded_into_the_database() {
+        let config = Config::parse("NOTIFY_URLS=ntfy://ntfy.sh/garden\nLATITUDE=51.5").unwrap();
+
+        let seeded_normally = settings_to_seed(&config, &HashSet::new(), &[]);
+        assert!(
+            seeded_normally.iter().any(|(k, _, _)| *k == "notify_urls"),
+            "the counterpart: a value that did NOT come from a file is still seeded, so \
+             the assertion below is about the exclusion and not about the key having \
+             stopped being seeded at all"
+        );
+
+        let seeded_from_file = settings_to_seed(&config, &HashSet::new(), &["NOTIFY_URLS"]);
+        assert!(
+            !seeded_from_file.iter().any(|(k, _, _)| *k == "notify_urls"),
+            "a file-supplied credential must not reach the settings table"
+        );
+        assert!(
+            seeded_from_file.iter().any(|(k, _, _)| *k == "latitude"),
+            "and the exclusion must be per key, not a switch that stops seeding"
+        );
     }
 
     #[test]
@@ -955,7 +1421,7 @@ mod tests {
         // Round-trip invariant: a value seeded under a UI key overlays back onto
         // exactly the config key it was read from.
         let config = Config::parse("LATITUDE=12.34").unwrap();
-        let seed = settings_to_seed(&config, &HashSet::new());
+        let seed = settings_to_seed(&config, &HashSet::new(), &[]);
         let (ui_key, value, _) = seed
             .iter()
             .find(|(k, _, _)| *k == "latitude")

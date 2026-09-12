@@ -2,6 +2,121 @@
 
 Wiring BirdNet-Behavior into the rest of your stack — MQTT, Home Assistant, Prometheus, BirdWeather and webhooks.
 
+## Weather
+
+Off by default — a fresh install contacts no weather service until
+`BNB_WEATHER_ENABLED=1`. Once on, a background task polls every 30 minutes,
+stores hourly rows, and paints them as a signal-context band behind the
+day-strip and dawn-chorus charts.
+
+Three upstreams, chosen with the `WEATHER_PROVIDER` key in `birdnet.conf`:
+
+| `WEATHER_PROVIDER` | What it is | Needs |
+|---|---|---|
+| `open-meteo` *(default)* | Free gridded forecast, no key, and self-hostable — point `BNB_WEATHER_BASE_URL` at your own instance | nothing |
+| `met-no` | The Norwegian Meteorological Institute's Locationforecast. Keyless, and a better model over Europe | nothing |
+| `wunderground` | **Your own personal weather station's** current observations | `WEATHER_STATION_ID` and `WEATHER_API_KEY` |
+
+```dotenv
+# birdnet.conf — read the anemometer in the garden, not a forecast for the county
+WEATHER_PROVIDER=wunderground
+WEATHER_STATION_ID=KMAHANOV10
+WEATHER_API_KEY=…
+```
+
+The last one is the interesting one. A gridded forecast is a model's opinion
+about a cell several kilometres across; a personal weather station is an
+instrument ten metres from the microphone. For asking *why the birds were quiet
+on Tuesday*, the instrument wins.
+
+The API key can be mounted from a file rather than written into the config, the
+same way the other credentials can:
+`BIRDNET_WEATHER_API_KEY_FILE=/run/secrets/weather_api_key`.
+
+## eBird
+
+*"Has anybody else seen this bird around here lately?"*
+
+The station already has a geographic opinion about which species are plausible
+— the BirdNET range model. That opinion is climatological: it knows a Common
+Swift is expected here in July, and it has no idea the first one of the year
+arrived last Tuesday. eBird's recent observations are the other kind of
+evidence entirely: a person stood near here within the last fortnight and
+wrote down what they saw.
+
+Off unless you give it a key. There is no enable flag — eBird requires an API
+key for every endpoint, so the key *is* the opt-in, and a station without one
+never contacts eBird. Free keys: <https://ebird.org/api/keygen>.
+
+```dotenv
+# birdnet.conf
+EBIRD_API_KEY=…
+```
+
+| Key | What it does | Default |
+|---|---|---|
+| `EBIRD_API_KEY` | Your eBird token. Absent ⇒ the whole feature is off | *(none)* |
+| `EBIRD_REGION` | An eBird region code (`US-MA`, `GB-ENG-CAM`). Empty ⇒ use the station's own coordinates | *(empty)* |
+| `EBIRD_DIST_KM` | Search radius when using coordinates, 0–50 | `25` |
+| `EBIRD_BACK_DAYS` | Days of history to ask about, 1–30 | `14` |
+
+Leaving `EBIRD_REGION` empty is usually right: *"reported within 25 km"* says
+far more than *"reported somewhere in this state"*, and the station already
+knows where it is. Set a region only if your area genuinely has no eBird
+observers within 50 km — a county or state will find some.
+
+Your coordinates are sent rounded to two decimal places, roughly a kilometre.
+That is all eBird documents that it accepts, and all it needs.
+
+The key can be mounted from a file like the other credentials:
+`BIRDNET_EBIRD_API_KEY_FILE=/run/secrets/ebird_api_key`. `BNB_EBIRD_BASE_URL`
+points the client at a caching proxy instead of `api.ebird.org`.
+
+### Where it shows up
+
+Two places, both of them corroboration rather than filtering:
+
+- **A detection's detail page** gains a *Reported nearby* card when somebody
+  reported that species in the station's neighbourhood recently.
+- **The suspect-species report** (Station → Data) marks a flagged species that
+  somebody reported nearby, and its *Exclude* confirmation says so — because
+  that is a strong reason not to exclude it.
+
+### What it will never do
+
+**eBird's silence is not evidence against a species, and the station never
+treats it as such.** eBird coverage follows birdwatchers, not birds: a
+well-watched county produces hundreds of checklists a week and a quiet valley
+produces none, ever, for anything. If absence from eBird counted against a
+species, the station with nobody nearby to confirm anything — the one that most
+needs an automated check — would have its entire list flagged.
+
+So corroboration only ever argues *for* a species. A species eBird says nothing
+about is displayed exactly as it was before you configured this, and no verdict
+anywhere changes.
+
+### When eBird is unreachable
+
+The last answer is cached to disk and survives a restart. A station whose
+uplink is down keeps showing the corroboration it had, and pages label an
+answer older than a day as the last one eBird gave rather than hiding it or
+passing it off as current. The snapshot refreshes every six hours.
+
+A `WEATHER_PROVIDER` nobody implements **does not start the poll**. That is
+deliberate: a station configured to read its own anemometer and quietly served a
+county forecast instead looks exactly like a station that is working.
+
+Two things to know about what each provider can and cannot fill in:
+
+- **MET Norway reports no weather code.** It describes the sky with a symbol
+  string (`partlycloudy_day`) rather than a WMO number, and mapping one onto the
+  other would be a table of guesses sitting in a column that reads as fact. The
+  column stays empty.
+- **A personal weather station reports no cloud cover**, because it measures the
+  air rather than the sky. Its precipitation is the hourly *rate* — not
+  Wunderground's `precipTotal`, which accumulates since local midnight and would
+  read as a downpour by evening after one morning shower.
+
 ## MQTT
 
 A pure-Rust MQTT 3.1.1 client publishes detections to any broker (Mosquitto, EMQX, Node-RED, …). Enable it with at least:

@@ -46,6 +46,41 @@ widget with the same Confirm / Reject buttons and a badge showing the current
 verdict, so you can judge a clip the moment you're looking at it — spectrogram,
 audio and all.
 
+## Comments: why, not just what
+
+A verdict says *what* the station decided. Six months later the question is
+*why* — and "call length says Downy, but the spectrogram is Hairy" is the
+sentence that makes a record defensible to somebody who was not there.
+
+Under the review widget, every detection-detail page carries a **Comments**
+thread. Write a note, it appears with your username and the time, and it stays
+that way: a comment is **never edited**. The database refuses it — there is a
+trigger on the table that aborts any attempt to rewrite a comment's text,
+author or timestamp — so what you read is what was written.
+
+Two things follow from that, and both are deliberate:
+
+- **Many comments per detection.** Two observers disagreeing is the point. This
+  is the difference from the review widget's own notes field, which is keyed on
+  the detection and *replaces* whatever was there: a second reviewer's note
+  silently erased the first one's reasoning, and neither of them was named.
+- **A comment can be withdrawn, not rewritten.** *Remove* deletes it outright —
+  which is what a note containing a typo, or a neighbour's name, needs. The
+  audit log records the removal, its author and its id, and never the text: a
+  comment deleted because of what it said must not survive in the log that
+  recorded its deletion.
+
+Comments are up to 2 000 characters, and writing one needs an admin sign-in —
+the same gate as confirming or rejecting. Anyone who can see the detection can
+read the thread.
+
+Scripts can join in through the API: `GET`, `POST` and
+`POST …/delete` on `/api/v2/detections/comments` (see the
+[API reference](../reference/api.md)). Those comments are attributed to `api`
+rather than to a name the caller supplies — a bearer token is not a person, and
+a name the caller chose is not attribution. A script with something to say
+about who is speaking says it in the comment.
+
 ## Sharing a detection for a second opinion
 
 Not sure about a call? Both the detection-detail page and every row in the

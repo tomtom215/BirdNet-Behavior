@@ -204,6 +204,21 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Install a classifier from the built-in catalogue, then exit (`G-10`).
+    ///
+    /// `--install-model perch-v2`. Pass `list` to print the catalogue without
+    /// installing anything.
+    ///
+    /// In the foreground rather than behind an API call, deliberately: this is
+    /// a 400 MB download that takes hours on the uplink a field station has,
+    /// and an operator should be able to watch it, interrupt it, and see it
+    /// fail. The download is checked against a sha256 compiled into this
+    /// binary — a file that does not match is deleted rather than installed,
+    /// and nothing lands under a name the station would load until it has
+    /// verified.
+    #[arg(long, value_name = "ID")]
+    pub install_model: Option<String>,
+
     /// Seconds of audio saved around each detection (default 6).
     ///
     /// BirdNET-Pi's `EXTRACTION_LENGTH`. Longer clips are easier to verify by
@@ -634,6 +649,20 @@ pub struct Cli {
     /// not shown.
     #[arg(long, env = "BIRDNET_METADATA_LABELS")]
     pub metadata_labels: Option<PathBuf>,
+
+    /// Extra scientific-name aliases for the occurrence filter: a
+    /// tab-separated `legacy<TAB>canonical` file.
+    ///
+    /// The geomodel and the classifier were frozen at different points in a
+    /// moving taxonomy and do not always spell a species the same way. Most of
+    /// those the station reconciles by itself, on the common name and the
+    /// specific epithet; this file is for the pairs that share neither.
+    ///
+    /// Blank lines and `#` comments are skipped, and a malformed line is
+    /// skipped rather than fatal — a typo here must not take the occurrence
+    /// filter off a running station.
+    #[arg(long, env = "BIRDNET_SPECIES_ALIASES")]
+    pub species_aliases: Option<PathBuf>,
 
     /// Species frequency threshold for the metadata model filter (0.0-1.0).
     ///

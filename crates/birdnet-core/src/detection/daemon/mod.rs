@@ -575,6 +575,33 @@ pub struct DaemonConfig {
     /// a metadata model indexed identically to the classifier — a matched
     /// BirdNET pair — which the loader verifies rather than assumes.
     pub metadata_labels_path: Option<PathBuf>,
+    /// Optional path to an operator's scientific-name alias file.
+    ///
+    /// Tab-separated `legacy<TAB>canonical` lines, `#` comments skipped. It
+    /// exists because the automatic alignment between the two label files
+    /// cannot place every reclassified species by itself, and a station that
+    /// hits one has no other way to say "these two names are the same bird".
+    /// No table ships: see
+    /// [`crate::inference::vocabulary`] for why the obvious one is neither
+    /// usable here nor useful on the pinned model pair.
+    pub species_aliases_path: Option<PathBuf>,
+    /// Extra classifiers beyond the primary, in declaration order (`G-10`
+    /// Stage 2).
+    ///
+    /// Empty on every station that has not asked for a second opinion, which
+    /// is the default and loads exactly one classifier — the behaviour this
+    /// project has always had. The application layer decides what goes here;
+    /// it refuses a classifier it cannot show will fit in memory, because an
+    /// unattended station being OOM-killed at three in the morning is a worse
+    /// outcome than running with one model and saying so.
+    pub extra_models: Vec<crate::inference::registry::ModelSpec>,
+    /// Which classifiers judge which audio source, by source id.
+    ///
+    /// A source absent from this map is judged by the primary classifier —
+    /// never by none. A route naming a classifier that is not configured stops
+    /// the daemon at startup rather than leaving that microphone silently
+    /// unjudged.
+    pub model_routes: std::collections::HashMap<String, Vec<String>>,
     /// Species filter configuration (threshold, whitelist, include/exclude).
     pub species_filter: crate::inference::species_filter::SpeciesFilterConfig,
     /// Optional callback re-read on a short TTL to refresh the operator's
@@ -615,6 +642,9 @@ pub struct DaemonConfig {
     pub noise_threshold: f32,
     /// Non-bird label names the noise filter watches.
     pub noise_classes: Vec<String>,
+    /// How long a noise-suppressed chunk's species stay suppressed, in seconds
+    /// (`G-17`). `0.0` — the default — is no window at all.
+    pub noise_remember_secs: f32,
     /// How much corroboration from neighbouring windows a species needs before
     /// it is recorded ([`ConfirmationLevel::Off`] = disabled).
     ///
@@ -748,11 +778,14 @@ mod tests {
             watch_dir: PathBuf::from("/tmp/StreamData"),
             model_path: PathBuf::from("/opt/birdnet/model.onnx"),
             labels_path: PathBuf::from("/opt/birdnet/labels.txt"),
+            extra_models: Vec::new(),
+            model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
             process_existing: false,
             metadata_model_path: None,
             metadata_labels_path: None,
+            species_aliases_path: None,
             on_species_filter_state: None,
             on_file_analysed: None,
             in_flight: None,
@@ -762,6 +795,7 @@ mod tests {
             privacy_threshold: 0.0,
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
+            noise_remember_secs: 0.0,
             confirmation: ConfirmationLevel::Off,
             latitude: None,
             longitude: None,
@@ -882,6 +916,8 @@ mod tests {
                 stop: 4.5,
                 week: 20,
                 file_name_extr: None,
+                model_id: None,
+                agreeing_models: None,
             },
             source_file: PathBuf::from("/tmp/x.wav"),
             latency_ms: 42,

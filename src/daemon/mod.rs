@@ -233,6 +233,11 @@ pub fn start_detection_daemon(
         .clone()
         .or_else(|| config.and_then(|c| c.get("METADATA_LABELS_PATH").map(PathBuf::from)));
 
+    // No CLI flag: this is a file an operator curates over months, not
+    // something worth typing at a one-off invocation.
+    let species_aliases_path =
+        config.and_then(|c| c.get("SPECIES_ALIASES_PATH").map(PathBuf::from));
+
     let sf_thresh = resolve_f32_with_default(
         cli.sf_thresh,
         0.03,
@@ -264,6 +269,12 @@ pub fn start_detection_daemon(
         cli.noise_classes.as_deref(),
         config.and_then(|c| c.get("NOISE_CLASSES")),
     );
+    // Off unless asked for: the window removes real detections whenever a real
+    // bird happens to be the species a dog resembles, and that is a trade an
+    // operator should make knowingly.
+    let noise_remember_secs = config
+        .and_then(|c| c.get_parsed::<f32>("NOISE_REMEMBER_SECS").ok())
+        .unwrap_or(0.0);
 
     let (confirmation, confirmation_warning) = resolve_confirmation_level(
         &cli.confirmation_level,
@@ -308,15 +319,35 @@ pub fn start_detection_daemon(
 
     let daylight = config::build_daylight_filter(cli, config, latitude, longitude);
 
+    // Which classifiers this machine can actually afford (`G-10` Stage 2).
+    // The primary is always in the plan; extras are admitted only while they
+    // demonstrably fit, and every refusal is logged with its arithmetic —
+    // an unattended station must say why it is running one model, not just
+    // quietly run one.
+    let model_plan = crate::helpers::models::plan(
+        config,
+        model_path.clone(),
+        labels_path.clone(),
+        birdnet_behavioral::memory::detect_ceiling().map(|(mib, _)| mib),
+    );
+    for note in &model_plan.notes {
+        tracing::info!("{note}");
+    }
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
         labels_path,
+        // The primary is built by the daemon from `model_path`/`labels_path`
+        // above, so only what the plan added beyond it travels here.
+        extra_models: model_plan.specs.into_iter().skip(1).collect(),
+        model_routes: model_plan.routes,
         pipeline: build_pipeline_config(watch_dir, overlap),
         model: build_model_config(sensitivity, model_confidence),
         process_existing: cli.process_existing,
         metadata_model_path,
         metadata_labels_path,
+        species_aliases_path,
         // Publish the occurrence filter's real state to Prometheus. This is
         // the number that would have made the inert-filter defect visible from
         // a dashboard instead of from reading the code: 0 means every species
@@ -346,6 +377,7 @@ pub fn start_detection_daemon(
         privacy_threshold,
         noise_threshold,
         noise_classes,
+        noise_remember_secs,
         confirmation,
         latitude,
         longitude,

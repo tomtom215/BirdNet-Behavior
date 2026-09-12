@@ -14,8 +14,10 @@
 //! | POST   | /admin/species/include/add | Add to allow-list |
 //! | POST   | /admin/species/include/remove | Remove from allow-list |
 //! | GET    | /admin/species/partial | HTMX partial re-render |
+//! | GET    | /admin/species/manage | Per-species storage and bulk actions (`N-4`) |
 
 pub mod handler;
+pub mod manage;
 pub mod render;
 
 use axum::{Router, routing::get};
@@ -25,6 +27,7 @@ use crate::state::AppState;
 /// Mount the species list management admin routes.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(manage::router())
         .route("/admin/species", get(handler::species_page))
         .route("/admin/species/test", get(handler::filter_test_page))
         .route("/admin/species/partial", get(handler::species_partial))

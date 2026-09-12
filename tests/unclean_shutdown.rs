@@ -109,6 +109,8 @@ fn writer_child(db_path: &str, journal_mode: &str) -> ! {
             ("Parus major", "Great Tit")
         };
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-03-16",
             time: &time,
             sci_name: sci,
@@ -343,6 +345,8 @@ fn a_killed_station_can_keep_recording() {
     let db = dir.path().join("birds.db");
     let conn = birdnet_db::sqlite::open_connection(&db).expect("reopen as the service does");
     let record = DetectionRecord {
+        model_id: None,
+        model_agreement: None,
         date: "2026-03-17",
         time: "07:15:00",
         sci_name: "Erithacus rubecula",

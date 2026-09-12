@@ -195,6 +195,315 @@
         }
       }
     },
+    "/system/capture": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Per-source capture health",
+        "description": "What the Station Health page draws, as JSON: one entry per source the capture supervisor is actually running, with its lifecycle state, uptime, restart history and rolling 24-hour strip.\n\nThis is the discovery half of `POST /control/restart-source`: `label` here is what that endpoint takes as `source_id`, and re-reading this is how a caller sees whether the restart took.\n\n`supervised` is `false`, with an empty list, when no capture supervisor is running in this process — web-only mode or tooling. That is an answer, not an error.",
+        "operationId": "captureStatus",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current per-source capture health.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "supervised",
+                    "sources",
+                    "published_unix"
+                  ],
+                  "properties": {
+                    "supervised": {
+                      "type": "boolean"
+                    },
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "label",
+                          "state",
+                          "restart_attempts",
+                          "restarts_last_hour",
+                          "flapping",
+                          "uptime_24h"
+                        ],
+                        "properties": {
+                          "label": {
+                            "type": "string",
+                            "description": "The supervisor's label — the `audio_sources` row id on a station whose sources are managed from `/admin/audio`. This is what `POST /control/restart-source` takes as `source_id`."
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "connected",
+                              "stalled",
+                              "backing_off",
+                              "paused"
+                            ]
+                          },
+                          "uptime_secs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Seconds the current process has been running, when connected."
+                          },
+                          "last_audio_age_secs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Seconds since this source last delivered fresh audio, if ever observed."
+                          },
+                          "restart_attempts": {
+                            "type": "integer",
+                            "description": "Consecutive (re)start attempts not yet healthy; `0` when connected."
+                          },
+                          "restarts_last_hour": {
+                            "type": "integer",
+                            "description": "Restarts in the last hour whatever the state now — the number that shows a source which keeps coming back."
+                          },
+                          "flapping": {
+                            "type": "boolean"
+                          },
+                          "next_retry_in_secs": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "uptime_24h": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "up",
+                                "down",
+                                "out"
+                              ]
+                            },
+                            "description": "Rolling 24 hours, oldest first, one entry per half hour."
+                          }
+                        }
+                      }
+                    },
+                    "published_unix": {
+                      "type": "integer",
+                      "description": "When the supervisor last published this snapshot; `0` if never."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, so the gated API does not exist."
+          }
+        }
+      }
+    },
+    "/system/jobs": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Scheduled maintenance jobs and their state",
+        "description": "Every job the maintenance loop schedules, with when it last completed, whether it passed, and whether it is due now.\n\nThe list is driven by the job catalogue, **not** by the `maintenance_runs` table. That table holds a row per job that has completed at least once, so a listing built from rows would omit exactly the jobs worth asking about — a station whose backup has never run once would show a short, clean list with the problem absent. A job that has never run appears here with `last_run_unix: null` and `due: true`.\n\n`ok` is tri-state and must not be collapsed. `null` means either “never run” or “this job has no pass/fail to report”; `reports_verdict` separates those from a recorded `false`. A session prune that succeeded and an integrity check that failed both have falsy verdicts and mean opposite things.\n\n`due` is the scheduler's own rule, shared with the loop that runs the jobs rather than re-implemented here. It does not account for the loop's in-process floor, which can only delay a job within one process lifetime, so a job reported as due may already have run since its last recorded completion.",
+        "operationId": "systemJobs",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every scheduled maintenance job and its current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "now_unix",
+                    "jobs"
+                  ],
+                  "properties": {
+                    "now_unix": {
+                      "type": "integer",
+                      "format": "int64",
+                      "description": "The clock the `due` flags were computed against."
+                    },
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "job",
+                          "title",
+                          "interval_secs",
+                          "last_run_unix",
+                          "next_due_unix",
+                          "ok",
+                          "reports_verdict",
+                          "due",
+                          "due_reason"
+                        ],
+                        "properties": {
+                          "job": {
+                            "type": "string",
+                            "description": "Its key in `maintenance_runs`."
+                          },
+                          "title": {
+                            "type": "string",
+                            "description": "What it does."
+                          },
+                          "interval_secs": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "How often it should run."
+                          },
+                          "last_run_unix": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "description": "When it last completed; null if it never has."
+                          },
+                          "next_due_unix": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "format": "int64",
+                            "description": "When it next falls due; null if it has never run."
+                          },
+                          "ok": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "Its last verdict. Null means never run, or no verdict to report — see `reports_verdict`."
+                          },
+                          "reports_verdict": {
+                            "type": "boolean",
+                            "description": "Whether this job records a pass/fail at all. When false, a null `ok` is not a failure."
+                          },
+                          "due": {
+                            "type": "boolean",
+                            "description": "Whether it is due to run."
+                          },
+                          "due_reason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "enum": [
+                              "never_run",
+                              "clock_went_backwards",
+                              "interval_elapsed",
+                              null
+                            ],
+                            "description": "Why it is due, or null when it is not."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/catalog": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Classifiers this build can install",
+        "description": "The classifiers this build knows how to install, each with the sha256 it will be checked against.\n\nThe catalogue is **compiled in**, not fetched. A fetched catalogue is a remote document that decides which URL a station downloads hundreds of megabytes from and which digest it checks them against; pinning both in the binary makes the checksum a promise this repository makes, verifiable by anyone reading the source.\n\nThere is no install endpoint. Installing is a 400 MB download taking hours on the uplink a field station has — a request handler is the wrong place for it, with nowhere to report progress and a retry that would start a second download beside the first. Use `birdnet-behavior --install-model <id>`, which runs in the foreground where failing is visible.\n\n`ships_labels` is false where no labels file accompanies the model; the operator supplies one, and its row count must match the model's output width or species are reported under other species' names.",
+        "operationId": "modelsCatalog",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The installable classifiers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "models"
+                  ],
+                  "properties": {
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name",
+                          "sha256",
+                          "bytes",
+                          "sample_rate",
+                          "ships_labels",
+                          "notes"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Stable id; also the installed filename and a routing target."
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "description": "Lowercase hex digest the download is verified against. A mismatch is deleted, never installed."
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Size, used for the free-space check before downloading."
+                          },
+                          "sample_rate": {
+                            "type": "integer",
+                            "description": "What MODEL_n_SAMPLE_RATE must be set to. Not derivable from the tensor — see G-10 Stage 4."
+                          },
+                          "ships_labels": {
+                            "type": "boolean",
+                            "description": "Whether a verified labels file is installed alongside."
+                          },
+                          "notes": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [
@@ -1062,6 +1371,115 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/control/restart-source": {
+      "post": {
+        "tags": [
+          "control"
+        ],
+        "summary": "Restart one capture source",
+        "description": "Stops and restarts a single capture source, leaving every other source recording. On a multi-source station `POST /control/restart` is a blunt instrument: one wedged RTSP camera costs every other microphone its in-flight audio.\n\nThe restart goes through the supervisor's own start path, so the recording schedule and the source's quiet window still hold — a source that is `paused` when the request arrives stays paused, and the response says so rather than reporting a restart that will not happen.\n\n`source_id` is the supervisor's label for the source, which is the `audio_sources` row id on any station whose sources are managed from `/admin/audio`. The labels currently supervised are returned with the `404`.",
+        "operationId": "restartCaptureSource",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source_id"
+                ],
+                "properties": {
+                  "source_id": {
+                    "type": "string",
+                    "description": "The supervised source's label."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Request recorded; the supervisor applies it on its next tick.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "restart_requested",
+                    "source",
+                    "state"
+                  ],
+                  "properties": {
+                    "restart_requested": {
+                      "type": "boolean"
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "connected",
+                        "stalled",
+                        "backing_off",
+                        "paused"
+                      ],
+                      "description": "The source's last published state. `paused` means the request is spent without a restart."
+                    },
+                    "already_pending": {
+                      "type": "boolean",
+                      "description": "A restart was already queued for this source and had not been applied yet."
+                    },
+                    "note": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No `Authorization: Bearer` header, or the token does not match."
+          },
+          "404": {
+            "description": "This station has no `BNB_API_TOKEN`, or no supervised source carries that label.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "restart_requested": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "known_sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is not an object with a `source_id` string."
+          },
+          "503": {
+            "description": "No capture supervisor is running in this process, so nothing would drain the request."
           }
         }
       }
@@ -2410,6 +2828,277 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/detections/comments": {
+      "get": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "List a detection's comments",
+        "description": "Every comment on one detection, oldest first, so a reply follows what it answers. Comments are append-only: the database refuses to rewrite one.",
+        "operationId": "listDetectionComments",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "2026-09-03"
+          },
+          {
+            "name": "time",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "06:12:44"
+          },
+          {
+            "name": "sci_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "example": "Dryobates villosus"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thread, oldest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detection": {
+                      "type": "string",
+                      "example": "2026-09-03 06:12:44 Dryobates villosus"
+                    },
+                    "comments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "example": 42
+                          },
+                          "date": {
+                            "type": "string",
+                            "example": "2026-09-03"
+                          },
+                          "time": {
+                            "type": "string",
+                            "example": "06:12:44"
+                          },
+                          "sci_name": {
+                            "type": "string",
+                            "example": "Dryobates villosus"
+                          },
+                          "author": {
+                            "type": "string",
+                            "example": "api",
+                            "description": "The name recorded when the comment was written. Comments posted through this API are always attributed to `api`: a bearer token is not a person, and a caller-supplied name would be a name the caller chose."
+                          },
+                          "body": {
+                            "type": "string",
+                            "example": "Call length says Downy, but the spectrogram is Hairy."
+                          },
+                          "at": {
+                            "type": "string",
+                            "example": "2026-09-03 06:20:11",
+                            "description": "UTC, whole seconds."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed."
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Comment on a detection",
+        "description": "Adds one comment. Many comments per detection are the point — unlike a review's `notes`, which is keyed on the detection and replaces whatever was there. The body is trimmed and must be 1 to 2000 characters after trimming.",
+        "operationId": "addDetectionComment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "date",
+                  "time",
+                  "sci_name",
+                  "body"
+                ],
+                "properties": {
+                  "date": {
+                    "type": "string",
+                    "example": "2026-09-03",
+                    "description": "Local calendar date of the detection, `YYYY-MM-DD`."
+                  },
+                  "time": {
+                    "type": "string",
+                    "example": "06:12:44",
+                    "description": "Local time of the detection, `HH:MM:SS`."
+                  },
+                  "sci_name": {
+                    "type": "string",
+                    "example": "Dryobates villosus",
+                    "description": "Scientific name exactly as the detection was recorded."
+                  },
+                  "body": {
+                    "type": "string",
+                    "example": "Call length says Downy, but the spectrogram is Hairy.",
+                    "description": "1 to 2000 characters after trimming. There is no `author` field: comments written here are attributed to `api`."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The comment as stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "integer",
+                      "format": "int64",
+                      "example": 42
+                    },
+                    "date": {
+                      "type": "string",
+                      "example": "2026-09-03"
+                    },
+                    "time": {
+                      "type": "string",
+                      "example": "06:12:44"
+                    },
+                    "sci_name": {
+                      "type": "string",
+                      "example": "Dryobates villosus"
+                    },
+                    "author": {
+                      "type": "string",
+                      "example": "api",
+                      "description": "The name recorded when the comment was written. Comments posted through this API are always attributed to `api`: a bearer token is not a person, and a caller-supplied name would be a name the caller chose."
+                    },
+                    "body": {
+                      "type": "string",
+                      "example": "Call length says Downy, but the spectrogram is Hairy."
+                    },
+                    "at": {
+                      "type": "string",
+                      "example": "2026-09-03 06:20:11",
+                      "description": "UTC, whole seconds."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The key is malformed, or the body is empty or over 2000 characters."
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          }
+        }
+      }
+    },
+    "/detections/comments/delete": {
+      "post": {
+        "tags": [
+          "detections"
+        ],
+        "summary": "Remove a comment",
+        "description": "Deletes one comment by id. A comment is never edited — the database refuses that — but it can be withdrawn, which is what a note containing a mistake or a person's name needs. The audit row records the id and the author, never the body.",
+        "operationId": "deleteDetectionComment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "format": "int64",
+                    "example": 42
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The comment was removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "author": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "404": {
+            "description": "No comment has that id."
           }
         }
       }

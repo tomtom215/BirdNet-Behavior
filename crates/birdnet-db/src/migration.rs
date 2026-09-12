@@ -2012,6 +2012,131 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "ALTER TABLE detections ADD COLUMN clip_offset_secs REAL;
         ALTER TABLE detections ADD COLUMN detection_secs REAL;",
     },
+    Migration {
+        version: 48,
+        description: "Operator-defined alerts on the station's own measurements",
+        // ## Why (G-29)
+        //
+        // The station failure that actually loses a season is silent: the disk
+        // fills, or one microphone of three dies, and nobody notices for weeks.
+        // `station_health` already alerts on a fixed set of conditions with
+        // thresholds compiled in — 85% disk, 80 °C, and so on — and those are
+        // the right defaults, but they are not everyone's. The rule that
+        // catches a dying microphone at a particular station is "tell me when
+        // the hourly detection count drops below what it normally is *here*",
+        // and no compiled-in number can be that.
+        //
+        // A separate table rather than columns on `alert_rules`, deliberately.
+        // The two are different mechanisms that share a word: an `alert_rules`
+        // row matches one *detection* as it arrives and fires an action
+        // (webhook, log, suppress); one of these is a *sampled measurement*
+        // compared against a threshold every five minutes, and it produces a
+        // station-health condition — which is how it inherits the debounce, the
+        // episode latching, the recovery notice and the outbox that path
+        // already has. Bolting a discriminant onto `alert_rules` would have
+        // made every detection-rule read carry columns that are always NULL and
+        // given neither mechanism the other's machinery.
+        up_sql: "CREATE TABLE IF NOT EXISTS metric_rules (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT    NOT NULL,
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            metric       TEXT    NOT NULL,
+            comparison   TEXT    NOT NULL,
+            threshold    REAL    NOT NULL,
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_metric_rules_enabled
+            ON metric_rules(enabled);",
+    },
+    Migration {
+        version: 49,
+        description: "Free-text, attributed, append-only comments on a detection",
+        // ## Why (G-23)
+        //
+        // The verification loop is where a station's data becomes usable to
+        // anyone else, and "why did I mark this one wrong" is the note that
+        // makes a review defensible six months later.
+        //
+        // `detection_reviews.notes` could not carry that and was never meant
+        // to. Migration 13 puts that table under UNIQUE(date, time, sci_name)
+        // and writes it with INSERT … ON CONFLICT, so a second reviewer's note
+        // **overwrites** the first — erasing their reasoning without either of
+        // them knowing — and the table has no user column, so there was never
+        // a name against the note that survived.
+        //
+        // Three things this table does that that field cannot:
+        //
+        //  * **Many per detection.** No UNIQUE on the triple. A disagreement
+        //    between two observers is the point, not a conflict to resolve.
+        //  * **Attributed twice over.** `user_id` for the live join, and
+        //    `author` for the name as it was *when the comment was written*.
+        //    The FK is ON DELETE SET NULL rather than CASCADE, so removing an
+        //    account does not quietly delete its reasoning, and the
+        //    denormalised name keeps the comment readable afterwards.
+        //  * **Append-only at the database, not by convention.** The trigger
+        //    below refuses to let a comment's *content* be rewritten — its id,
+        //    the detection it is about, the author, the body, the timestamp. A
+        //    no-update rule that lives only in the absence of an update
+        //    function is one `conn.execute` away from being untrue; this one is
+        //    enforced where the rows are. Deletion stays possible — a comment
+        //    with a mistake or a person's name in it needs a way out — and is
+        //    audited.
+        //
+        // The trigger names its columns (`BEFORE UPDATE OF …`) rather than
+        // covering the whole row, and `user_id` is deliberately not among them.
+        // A whole-row trigger was written first and made **users undeletable**:
+        // `ON DELETE SET NULL` is an UPDATE of the child row, so removing an
+        // account that had ever commented aborted with the append-only message.
+        // A test caught it. Leaving `user_id` writable costs nothing that
+        // matters — it is the join, not the record; `author` holds the name and
+        // is locked.
+        up_sql: "CREATE TABLE IF NOT EXISTS detection_comments (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            date       TEXT    NOT NULL,
+            time       TEXT    NOT NULL,
+            sci_name   TEXT    NOT NULL,
+            user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            author     TEXT    NOT NULL,
+            body       TEXT    NOT NULL,
+            at         TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_detection_comments_on
+            ON detection_comments(date, time, sci_name, id);
+        CREATE TRIGGER IF NOT EXISTS detection_comments_are_append_only
+            BEFORE UPDATE OF id, date, time, sci_name, author, body, at
+            ON detection_comments
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
+        END;",
+    },
+    Migration {
+        version: 50,
+        description: "Record which classifier found a detection, and whether another agreed",
+        // ## Why (G-10 Stage 3)
+        //
+        // A station can now run more than one classifier. Two of them
+        // independently reporting the same species in the same three seconds
+        // is far stronger evidence than one being confident — it is the honest
+        // attack on false positives that `corroboration.rs` can only approach
+        // through repetition, which cannot tell a real repeated call from a
+        // repeatedly-misheard gate hinge.
+        //
+        // Both columns are NULLABLE and added with ALTER TABLE, which SQLite
+        // does in constant time without rewriting the table. That matters
+        // here more than usual: `detections` is the big table, and the station
+        // this project is for has three years of it on an SD card. A migration
+        // that copied it would take the station off the air for the duration
+        // and need twice the free space to do it.
+        //
+        // NULL is a third state and is not the same as 1. It means the row
+        // predates this migration — written when there was only ever one
+        // classifier and nothing recorded which. `Some(1)` says one classifier
+        // was asked and one answered; `NULL` says nobody was counting. A
+        // reader that collapses them would claim corroboration data it does
+        // not have for every row written before today.
+        up_sql: "ALTER TABLE detections ADD COLUMN model_id TEXT;
+                 ALTER TABLE detections ADD COLUMN model_agreement INTEGER;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

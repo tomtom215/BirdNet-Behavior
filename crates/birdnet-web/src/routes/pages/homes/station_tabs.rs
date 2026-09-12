@@ -149,6 +149,7 @@ fn build_data(state: &AppState) -> String {
         quality = crate::routes::admin::quality::quality_body(state),
         phantoms = crate::routes::admin::quality::render_phantoms(
             &crate::routes::admin::quality::load_phantoms(state),
+            state.nearby().as_deref(),
         ),
     )
 }

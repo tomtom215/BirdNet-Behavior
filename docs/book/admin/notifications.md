@@ -35,6 +35,55 @@ on the next restart.
 The **Send Test Push Notification** button under **Station → Alerts** (`/station/alerts`) uses the values saved on the
 Settings page, so a successful test means live detections will notify too.
 
+### Keeping the credential out of the environment
+
+A notification URL carries its bot token *inside* the URL, and an environment
+variable is readable by `docker inspect`, by anything with the process's
+`/proc/<pid>/environ`, and by anything that logs its own environment. Docker and
+Kubernetes both solve this by mounting the secret as a file; this station accepts
+that convention:
+
+| Instead of | Set | To the path of a file holding the value |
+|---|---|---|
+| `BIRDNET_NOTIFY_URLS` | `BIRDNET_NOTIFY_URLS_FILE` | e.g. `/run/secrets/birdnet_notify_urls` |
+| `BIRDNET_APPRISE_URL` | `BIRDNET_APPRISE_URL_FILE` | |
+| `BIRDNET_BIRDWEATHER_TOKEN` | `BIRDNET_BIRDWEATHER_TOKEN_FILE` | |
+| `BIRDNET_MQTT_PASSWORD` | `BIRDNET_MQTT_PASSWORD_FILE` | |
+| `BIRDNET_HEARTBEAT_URL` | `BIRDNET_HEARTBEAT_URL_FILE` | |
+
+```yaml
+services:
+  birdnet:
+    environment:
+      BIRDNET_NOTIFY_URLS_FILE: /run/secrets/birdnet_notify_urls
+    secrets:
+      - birdnet_notify_urls
+secrets:
+  birdnet_notify_urls:
+    file: ./secrets/notify_urls.txt
+```
+
+Four things worth knowing, each reported in the journal at startup:
+
+- **The direct value wins.** Set both and the file is not read; the station says
+  so at warning level rather than silently choosing one.
+- **A file that cannot be read, or that is empty, leaves the feature off** — and
+  says so at *error* level. A station that sends no notifications because a
+  mount path had a typo looks exactly like one that was told to be quiet, so
+  this is the one case worth an error line.
+- **Surrounding whitespace is trimmed**, so the trailing newline every secret
+  file has is harmless; inner newlines are kept, so a `NOTIFY_URLS` file may
+  list one URL per line.
+- **A value read from a file is not copied into the settings table**, so it
+  stays out of the database and out of every backup, restore bundle and support
+  archive taken from it. It will not appear on the Settings page either — which
+  is the point.
+
+`BIRDNET_APPRISE_CONFIG` has no `_FILE` form, because `APPRISE_CONFIG_FILE`
+already exists and means something different: the path of an `apprise`
+configuration file, which `apprise` itself reads. The SMTP password has none
+either — it lives only in the settings table, set from the admin UI.
+
 ## MQTT & Home Assistant
 
 A pure-Rust MQTT 3.1.1 client publishes detections to any broker (Mosquitto, Node-RED, EMQX, …) — no external broker library required.
@@ -82,6 +131,48 @@ Add `-addext basicConstraints=critical,CA:FALSE` when generating it.
 
 With `--mqtt-ha-discovery`, the station registers itself in Home Assistant automatically, so the latest detection, species count and confidence appear as entities you can put on a dashboard or trigger automations from.
 
+## Alerts on the station itself
+
+The rules below watch **detections**. A second kind, on the same page
+(**Station → Alerts**), watches the **station**: a measurement it already takes,
+compared against a threshold you choose.
+
+The station alerts on a fixed set of conditions already — disk over 85 %, a
+source flapping, the clock adrift, the analytics copy falling behind. Those are
+good defaults and they are not everyone's. The rule that catches a dying
+microphone at a particular station is *"tell me when the hourly detection count
+drops below what it normally is here"*, and no number chosen in this project can
+be that.
+
+Seven measurements are available: disk in use (%), memory in use (%), CPU
+temperature (°C), detections in the last hour, seconds since the last detection,
+capture restarts in the last hour (the worst source), and uploads waiting to be
+sent. Each rule is a measurement, a direction (**above** or **below**), and a
+threshold.
+
+Two things follow from where these live:
+
+- **A rule that trips has to stay tripped for three polls — fifteen minutes —
+  before it alerts**, and you get a notice when it recovers. That is the same
+  debounce and the same episode handling the built-in conditions use, so a
+  momentary spike does not wake anybody and a long fault is not announced every
+  five minutes. There is no per-rule cooldown to set, because that is what the
+  episode is.
+- **A firing rule appears on `/api/v2/health/conditions`** alongside the
+  built-in ones, and is delivered through the same notifier, logged in the same
+  notification log, and parked in the same store-and-forward outbox if the
+  destination is unreachable.
+
+A measurement the station cannot read right now — CPU temperature on a board
+with no sensor, capture restarts with no capture supervisor — produces no
+alert. "Cannot tell" is not "fine", but it is not a fault to wake somebody for
+either, and treating a missing reading as zero would make every *below* rule
+fire for ever.
+
+A rule that could never stop firing is refused when you create it: a percentage
+is never below zero or above 100, so "disk above −1" is a notification, not an
+alert.
+
 ## Alert rules
 
 The **Rules** engine (**Station → Alerts**, `/station/alerts#rules`; the old `/admin/rules` redirects there) fires conditional actions on detections — for example, a webhook only when an owl is heard at night above 0.7 confidence, or a rule that suppresses a noisy false-positive species. Each rule matches on species pattern, confidence range, hour-of-day and day-of-week.
@@ -112,3 +203,19 @@ is a secret. **Import** adds the rules in a pasted set — it never replaces wha
 is already there — and names any rule whose credential arrived redacted, since
 those will fire unauthenticated until one is entered. One unusable entry is
 reported and skipped rather than discarding the rest of the paste.
+
+The file carries **both kinds of rule**: the detection rules above and the
+[station alerts](#alerts-on-the-station-itself) that watch disk, memory,
+temperature and the rest. They are different mechanisms — one matches a detection as it arrives,
+the other compares a measurement every five minutes — but an operator moving a
+station or asking for help wants one file, not two. Metric rules have no
+credential, so the redaction question does not apply to them.
+
+The file records a format version. A rule set written before metric rules
+existed still imports, as a set with none; a set from a *newer* station is
+refused with a message naming both versions rather than being read as a set of
+rules with fields missing. A metric this station does not implement is named
+and skipped, not silently dropped — otherwise a file from a newer station would
+import looking complete while missing the rules that mattered. Import applies
+the same validation the form does, so a rule that could never stop firing
+("disk above −1") is refused either way.

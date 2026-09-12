@@ -26,6 +26,15 @@ pub struct SpeciesLabel {
     /// the geomodel file carry a numeric identifier here instead; it is kept
     /// verbatim, and whether eBird has a page for it is eBird's to answer.
     pub species_code: Option<String>,
+    /// Taxonomic order from the V3 CSV's `order` column (e.g.
+    /// `"Piciformes"`), or `None` for a format or a row without one.
+    ///
+    /// It is the only rank above genus the shipped label file carries — the
+    /// header is `idx;id;sci_name;com_name;class;order`, with **no family
+    /// column** — so it is what browsing by higher rank can honestly offer.
+    /// 11 555 of the pinned file's 11 560 rows have one, across 75 distinct
+    /// values.
+    pub order: Option<String>,
     /// Taxonomic class from the V3 CSV's `class` column (e.g. `"Aves"`,
     /// `"Insecta"`), or `None` for the V2.4 text format, which has no such
     /// column.
@@ -38,6 +47,29 @@ pub struct SpeciesLabel {
     /// CSV answers that in a column the parser used to drop on the floor;
     /// keeping it lets a caller label or filter non-birds rather than guess.
     pub class: Option<String>,
+}
+
+impl SpeciesLabel {
+    /// The genus: the first word of a binomial scientific name.
+    ///
+    /// `None` for a single-word label, which names a rank above species and
+    /// whose rank the name alone does not settle — the pinned classifier file
+    /// has 55 of them, 14 family names ending `-idae` (*Acrididae*) beside 41
+    /// bare genera (*Alouatta*) and a handful of higher ranks (*Cetacea*).
+    /// Guessing which is which from a suffix would put families in a genus
+    /// list, so a one-word label simply has no genus here.
+    ///
+    /// A name with *more* than two words still has one: the file carries
+    /// trinomials (*Arctocephalus pusillus pusillus*), hybrids
+    /// (*Dryophytes chrysoscelis x femoralis*) and domestic-type annotations
+    /// (*Bos taurus (Domestic type)*), and the first word is the genus in
+    /// every case.
+    #[must_use]
+    pub fn genus(&self) -> Option<&str> {
+        let mut words = self.scientific_name.split_whitespace();
+        let first = words.next()?;
+        words.next().map(|_| first)
+    }
 }
 
 /// A collection of species labels.
@@ -161,6 +193,7 @@ impl LabelSet {
                 common_name: com.to_string(),
                 // The V2.4 text format carries no taxonomy and no code.
                 class: None,
+                order: None,
                 species_code: None,
             });
         }
@@ -225,9 +258,10 @@ impl LabelSet {
                 index: labels.len(),
                 scientific_name: sci.to_string(),
                 common_name: com.to_string(),
-                // The geomodel's label file carries no taxonomic class column;
-                // the classifier's CSV is where that comes from.
+                // The geomodel's label file carries no taxonomic columns; the
+                // classifier's CSV is where those come from.
                 class: None,
+                order: None,
                 species_code: code.map(str::to_string),
             });
         }
@@ -277,6 +311,9 @@ impl LabelSet {
 
         // Optional — the V3.0 Zenodo export has it, other exports may not.
         let class_col = headers.iter().position(|h| *h == "class");
+        // Optional too, and the highest rank the file offers: there is no
+        // family column to find.
+        let order_col = headers.iter().position(|h| *h == "order");
         // Optional too: the eBird species code, where an export carries one.
         let code_col = headers.iter().position(|h| *h == "species_code");
 
@@ -312,12 +349,18 @@ impl LabelSet {
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .map(ToString::to_string);
+            let order = order_col
+                .and_then(|c| fields.get(c))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
 
             labels.push(SpeciesLabel {
                 index: labels.len(),
                 scientific_name: sci.to_string(),
                 common_name: com.to_string(),
                 class,
+                order,
                 species_code,
             });
         }
@@ -339,6 +382,7 @@ impl LabelSet {
                 scientific_name,
                 common_name,
                 class: None,
+                order: None,
                 species_code: None,
             })
             .collect();

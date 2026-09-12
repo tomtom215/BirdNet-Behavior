@@ -22,8 +22,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc, run_id, clip_offset_secs, detection_secs) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc, run_id, clip_offset_secs, detection_secs, model_id, model_agreement) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             record.date,
             record.time,
@@ -50,6 +50,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.run_id,
             record.clip_offset_secs,
             record.detection_secs,
+            record.model_id,
+            record.model_agreement,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -133,6 +135,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-03-11",
             time: "08:30:00",
             sci_name: "Turdus merula",
@@ -158,6 +162,8 @@ mod tests {
         let second = insert_detection(
             &conn,
             &DetectionRecord {
+                model_id: None,
+                model_agreement: None,
                 time: "08:31:00",
                 ..record.clone()
             },
@@ -181,6 +187,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-03-11",
             time: "08:30:00",
             sci_name: "Turdus merula",
@@ -214,6 +222,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let tagged = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-05-19",
             time: "06:00:00",
             sci_name: "Pica pica",
@@ -238,6 +248,8 @@ mod tests {
         // A second row at a different second with no source = the historical
         // shape (e.g. an imported BirdNET-Pi row).
         let untagged = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             time: "06:00:01",
             source: None,
             duration_secs: None,
@@ -321,6 +333,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-03-11",
             time: "08:30:00",
             sci_name: "Turdus merula",
@@ -377,6 +391,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let base = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-05-19",
             time: "09:00:00",
             sci_name: "Pica pica",
@@ -400,11 +416,15 @@ mod tests {
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             chunk_offset_secs: Some(4.5),
             ..base.clone()
         };
         insert_detection(&conn, &chunk2).unwrap();
         let chunk3 = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             chunk_offset_secs: Some(9.0),
             ..base.clone()
         };
@@ -418,6 +438,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-05-19",
             time: "09:00:00",
             sci_name: "Pica pica",
@@ -472,6 +494,8 @@ mod tests {
             (Some(cid_b), 0.0),
         ] {
             let r = DetectionRecord {
+                model_id: None,
+                model_agreement: None,
                 date: "2026-05-19",
                 time: "09:00:00",
                 sci_name: "Pica pica",
@@ -515,6 +539,8 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-05-19",
             time: "09:00:00",
             sci_name: "Pica pica",

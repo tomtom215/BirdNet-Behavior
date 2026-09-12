@@ -27,6 +27,7 @@ pub(crate) mod confirm;
 pub mod correlation;
 pub mod dashboard;
 pub mod dawn_chorus;
+pub mod detection_comments;
 pub mod detection_detail;
 pub mod detection_reviews;
 pub mod empty_states;
@@ -112,6 +113,7 @@ pub fn router() -> Router<AppState> {
         .merge(health::router())
         .merge(detection_detail::router())
         .merge(detection_reviews::router())
+        .merge(detection_comments::router())
         .merge(species_pages::router())
         .merge(behavioral::router())
         .merge(timeseries_dash::router())
@@ -152,6 +154,7 @@ pub fn router() -> Router<AppState> {
 pub fn mutating_router() -> Router<AppState> {
     today::mutating_router()
         .merge(detection_reviews::mutating_router())
+        .merge(detection_comments::mutating_router())
         .merge(recordings::mutating_router())
         .merge(quarantine::mutating_router())
         .merge(onboarding::gated_router())

@@ -32,7 +32,25 @@ pub fn build_state_with_analytics(
         .or_else(|| config.and_then(|c| c.get("ANALYTICS_DB_PATH").map(PathBuf::from)))
         .unwrap_or_else(|| default_analytics_path(&server_config.db_path));
 
+    // Whether this machine can carry the analytics engine at all (`G-33`).
+    // DuckDB treats its memory limit as permission to use that much, and the
+    // flat 256 MiB default is half of physical RAM on a 512 MB board — the
+    // standing invitation to be OOM-killed mid-query at three in the morning
+    // that this check exists to withdraw.
+    let budget = birdnet_behavioral::memory::decide(
+        std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref(),
+        birdnet_behavioral::memory::detect_ceiling(),
+    );
+    if matches!(budget, birdnet_behavioral::memory::Budget::TooSmall { .. }) {
+        // Refused, not crippled: a station that cannot run analytics is still a
+        // station that records and classifies birds, and taking the whole
+        // process down over an optional subsystem would be the worse failure.
+        tracing::warn!("{}", budget.explain());
+        return birdnet_web::state::AppState::new(server_config.db_path.clone())
+            .map_err(|e| format!("database error: {e}").into());
+    }
     tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
+    tracing::info!("{}", budget.explain());
     birdnet_web::state::AppState::new_with_analytics(server_config.db_path.clone(), &analytics_path)
         .map_err(|e| format!("database error: {e}").into())
 }
@@ -242,6 +260,67 @@ pub fn init_species_codes(
                 path = %path.display(),
                 error = %e,
                 "metadata label file could not be read: species pages will not link to eBird"
+            );
+            state
+        }
+    }
+}
+
+/// Load the taxonomy the species pages browse by (`G-15`), from the
+/// *classifier's* label file.
+///
+/// A different file from [`init_species_codes`]'s, and for a different reason.
+/// The geomodel's label file carries the eBird species code; the classifier's
+/// carries the `class` and `order` columns, and it is the classifier's names
+/// the stored detections are keyed on. Resolved exactly as the daemon resolves
+/// it (`--labels`, else `LABELS_PATH`).
+///
+/// A file that will not parse is reported and skipped: the daemon refuses to
+/// start on it with its own message, and the web layer's only stake is a
+/// browsing control.
+pub fn init_taxonomy(
+    state: birdnet_web::state::AppState,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_web::state::AppState {
+    let path = cli
+        .labels
+        .clone()
+        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
+    let Some(path) = path else {
+        tracing::info!(
+            "no classifier label file configured: the species pages will not offer browsing by order or genus"
+        );
+        return state;
+    };
+    match birdnet_core::inference::labels::LabelSet::load(&path) {
+        Ok(labels) => {
+            let taxa: Vec<(String, birdnet_web::state::Taxon)> = labels
+                .iter()
+                .map(|l| {
+                    (
+                        l.scientific_name.clone(),
+                        birdnet_web::state::Taxon {
+                            class: l.class.clone(),
+                            order: l.order.clone(),
+                            genus: l.genus().map(ToOwned::to_owned),
+                        },
+                    )
+                })
+                .filter(|(_, t)| !t.is_empty())
+                .collect();
+            tracing::info!(
+                path = %path.display(),
+                species_with_taxonomy = taxa.len(),
+                "taxonomy loaded for the species pages"
+            );
+            state.with_taxonomy(taxa)
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "classifier label file could not be read: the species pages will not offer browsing by order or genus"
             );
             state
         }

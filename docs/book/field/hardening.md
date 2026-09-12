@@ -209,6 +209,18 @@ The station listens to a live microphone, so audio handling is privacy-relevant.
 
 ---
 
+### Credentials as mounted files
+
+Every outbound credential — the notification URLs (whose bot token is *inside*
+the URL), the BirdWeather token, the MQTT password, the heartbeat URL whose path
+is the secret — can be supplied as the contents of a file rather than as an
+environment variable, using the `BIRDNET_<KEY>_FILE` convention Docker and
+Kubernetes both use. That keeps it out of `docker inspect`, out of
+`/proc/<pid>/environ`, and out of the settings table (and so out of every backup
+taken from the database). See
+[Notifications](../admin/notifications.md#keeping-the-credential-out-of-the-environment)
+for the list and the compose snippet.
+
 ## 5. A bad configuration edit cannot take the station down
 
 The daemon validates its configuration at startup. An invalid setting (a

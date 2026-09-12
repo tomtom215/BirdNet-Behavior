@@ -95,6 +95,8 @@ async fn detection_persists_and_surfaces_on_web_api() {
     let today = sqlite_today(&state);
 
     let record = DetectionRecord {
+        model_id: None,
+        model_agreement: None,
         date: &today,
         time: "06:30:00",
         sci_name: "Pica pica",
@@ -208,6 +210,8 @@ async fn full_pipeline_audio_to_web_model_gated() {
 
         for d in &detections {
             let record = DetectionRecord {
+                model_id: None,
+                model_agreement: None,
                 date: &d.date,
                 time: &d.time,
                 sci_name: &d.scientific_name,

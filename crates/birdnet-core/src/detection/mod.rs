@@ -5,6 +5,7 @@
 pub mod corroboration;
 pub mod daemon;
 pub mod dynamic_threshold;
+pub mod merge;
 pub mod nocturnal;
 pub mod noise;
 pub mod pipeline;
@@ -50,7 +51,7 @@ impl ChunkFilters {
         chunks: &[types::ChunkPrediction],
     ) -> Vec<Vec<types::Detection>> {
         let after_privacy = self.privacy.filter_predictions(chunks);
-        let after_noise = self.noise.filter_predictions(&after_privacy);
+        let after_noise = self.noise.filter_predictions(starts, &after_privacy);
         corroboration::corroborate(self.confirmation, starts, &after_noise)
     }
 
@@ -99,6 +100,8 @@ mod chunk_filter_tests {
             stop: 3.0,
             week: 11,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 

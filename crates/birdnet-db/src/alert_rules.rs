@@ -55,7 +55,11 @@ pub const REDACTED: &str = "***REDACTED***";
 ///
 /// Written so a future change of shape is detectable rather than being read as
 /// a set of rules with every field missing.
-pub const EXPORT_VERSION: u32 = 1;
+/// Version 2 added `metric_rules` (`G-29`). A version-1 file still imports —
+/// the field carries a serde default — and a version-2 file is refused by an
+/// older station with a message naming both versions, which is what the
+/// version exists for.
+pub const EXPORT_VERSION: u32 = 2;
 
 /// One rule in its portable, flat form.
 ///
@@ -120,14 +124,28 @@ const fn default_one() -> f64 {
 }
 
 /// An exported rule set, with its format version.
+///
+/// Carries both kinds of rule. They are different mechanisms sharing a word —
+/// a detection rule matches one detection as it arrives, a metric rule
+/// compares a sampled measurement every five minutes — but an operator moving
+/// a station or asking for help wants one file, not two.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RuleSet {
     /// [`EXPORT_VERSION`] at the time of writing.
     pub version: u32,
     /// Whether credentials were replaced with [`REDACTED`].
+    ///
+    /// About the detection rules only. Metric rules have no credential to
+    /// redact, so this says nothing about them either way.
     pub redacted: bool,
-    /// The rules.
+    /// The detection rules.
     pub rules: Vec<RuleExport>,
+    /// The metric rules (`G-29`).
+    ///
+    /// Defaulted, so a version-1 file — which has no such field — imports as a
+    /// set with no metric rules rather than failing to parse at all.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub metric_rules: Vec<crate::metric_rules::MetricRuleExport>,
 }
 
 /// Convert a stored rule to its portable form.

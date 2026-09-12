@@ -88,6 +88,45 @@ pub struct PipelineConfig {
     pub chunk_duration_secs: f32,
     /// Overlap between chunks in seconds.
     pub chunk_overlap_secs: f32,
+    /// How far apart consecutive chunks start, in seconds, when that is not
+    /// simply `chunk_duration_secs - chunk_overlap_secs` (`G-10` Stage 4).
+    ///
+    /// # Why the step has to be separable from the length
+    ///
+    /// With more than one classifier the chunk is cut to the **longest**
+    /// window any of them wants, and each takes its own window from the chunk
+    /// start — `build_input_tensor` copies `min(len, expected)`, so a
+    /// shorter-window model reads a prefix.
+    ///
+    /// If the step were then derived from that longest window, every model
+    /// with a shorter one would acquire a blind spot. BirdNET+ V3.0 wants
+    /// 4.5 s where Perch v2 wants 5.0 s: cut at 5.0 s and step 5.0 s, and the
+    /// half-second tail of every chunk is audio BirdNET never sees — a gap it
+    /// would not have had running alone, and one nothing would report.
+    ///
+    /// So the step is the **shortest** window instead. The shortest-window
+    /// model then behaves exactly as it does alone, every longer-window model
+    /// gets overlapping chunks rather than gaps, and no classifier sees less
+    /// than it would by itself. The cost is that those longer-window models
+    /// run `max(window) / min(window)` more inferences — about 11 % for Perch
+    /// beside BirdNET — which the daemon logs at startup because on a Pi that
+    /// is a real number.
+    ///
+    /// `None` keeps `chunk_duration_secs - chunk_overlap_secs`, which is what
+    /// a single-classifier station has always done.
+    ///
+    /// # What a detection's end time then means
+    ///
+    /// A detection is stamped with the **chunk's** span, not the span its own
+    /// classifier heard, so a shorter-window model's detection can carry an
+    /// `end_secs` up to `max(window) - min(window)` later than the audio it
+    /// actually read — half a second for BirdNET beside Perch. That is
+    /// deliberate: the chunk is the unit two classifiers are judged to agree
+    /// on, and stamping per-model spans would give the same merged species two
+    /// different end times depending on which classifier won the confidence.
+    /// The recorded span always *contains* the audio heard, so a clip cut from
+    /// it contains the detection. With one classifier the two are identical.
+    pub chunk_step_secs: Option<f32>,
     /// Minimum confidence threshold for reporting.
     pub confidence_threshold: f32,
     /// Feed raw audio samples directly to the model instead of a mel spectrogram.
@@ -107,6 +146,7 @@ impl Default for PipelineConfig {
             mel_config: MelConfig::default(),
             chunk_duration_secs: 3.0,
             chunk_overlap_secs: 0.0,
+            chunk_step_secs: None,
             confidence_threshold: 0.25,
             raw_audio_input: false,
         }
@@ -158,8 +198,7 @@ pub fn process_file(
 
     // Split into chunks
     let chunk_samples = (config.chunk_duration_secs * config.target_sample_rate as f32) as usize;
-    let overlap_samples = (config.chunk_overlap_secs * config.target_sample_rate as f32) as usize;
-    let step = chunk_samples.saturating_sub(overlap_samples).max(1);
+    let step = chunk_step_samples(config);
 
     let mut chunks = Vec::new();
     let mut pos = 0;
@@ -210,6 +249,29 @@ pub fn process_file(
     }
 
     Ok(chunks)
+}
+
+/// How far apart consecutive chunks start, in samples.
+///
+/// [`PipelineConfig::chunk_step_secs`] when it is set — see there for why the
+/// step is the shortest classifier window rather than the chunk length — and
+/// otherwise the single-classifier rule this has always used.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+pub fn chunk_step_samples(config: &PipelineConfig) -> usize {
+    let rate = config.target_sample_rate as f32;
+    if let Some(step_secs) = config.chunk_step_secs
+        && step_secs > 0.0
+    {
+        return ((step_secs * rate) as usize).max(1);
+    }
+    let chunk_samples = (config.chunk_duration_secs * rate) as usize;
+    let overlap_samples = (config.chunk_overlap_secs * rate) as usize;
+    chunk_samples.saturating_sub(overlap_samples).max(1)
 }
 
 /// Create a file watcher for a directory.
@@ -286,5 +348,176 @@ mod tests {
             &config,
         );
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod chunk_step_tests {
+    use super::{PipelineConfig, chunk_step_samples};
+
+    /// Which spans of audio a classifier with `window` samples actually sees,
+    /// given a chunk grid — the thing the whole step decision is about.
+    fn covered(total: usize, step: usize, window: usize) -> Vec<(usize, usize)> {
+        let mut spans = Vec::new();
+        let mut pos = 0;
+        while pos < total {
+            spans.push((pos, (pos + window).min(total)));
+            pos += step;
+        }
+        spans
+    }
+
+    /// True when `spans` leave no audio unheard between the first and last.
+    fn has_no_gap(spans: &[(usize, usize)]) -> bool {
+        spans.windows(2).all(|w| w[1].0 <= w[0].1)
+    }
+
+    /// A single classifier keeps exactly the arithmetic it always had.
+    #[test]
+    fn one_classifier_steps_by_chunk_minus_overlap() {
+        let config = PipelineConfig {
+            target_sample_rate: 32_000,
+            chunk_duration_secs: 4.5,
+            chunk_overlap_secs: 0.0,
+            chunk_step_secs: None,
+            ..PipelineConfig::default()
+        };
+        assert_eq!(chunk_step_samples(&config), 144_000);
+
+        let overlapped = PipelineConfig {
+            chunk_overlap_secs: 1.5,
+            ..config
+        };
+        assert_eq!(chunk_step_samples(&overlapped), 96_000);
+    }
+
+    /// **The gap this design exists to prevent.** Chunk at the longest window
+    /// and step by it, and the shorter-window classifier never hears the tail
+    /// of any chunk — a blind spot it would not have had alone, and one
+    /// nothing reports.
+    ///
+    /// This asserts the *problem*, so the fix below has something to be
+    /// measured against.
+    #[test]
+    fn stepping_by_the_longest_window_would_blind_the_shorter_classifier() {
+        // Perch 160 000, BirdNET 144 000, at 32 kHz.
+        let naive = covered(1_600_000, 160_000, 144_000);
+        assert!(
+            !has_no_gap(&naive),
+            "stepping by the longest window must leave the shorter one a gap, or this test \
+             is not describing the problem"
+        );
+        // The specific hole: 16 000 samples (half a second) per chunk.
+        assert_eq!(naive[0].1, 144_000);
+        assert_eq!(naive[1].0, 160_000);
+    }
+
+    /// **The fix.** Step by the shortest window and every classifier's
+    /// coverage is contiguous — the shorter one exactly as if it ran alone,
+    /// the longer one overlapping.
+    ///
+    /// Observed failing with `chunk_step_secs` ignored (the `if let` arm
+    /// removed from `chunk_step_samples`): the step fell back to the chunk
+    /// length and the gap assertion went red.
+    #[test]
+    fn stepping_by_the_shortest_window_leaves_no_classifier_a_gap() {
+        let config = PipelineConfig {
+            target_sample_rate: 32_000,
+            chunk_duration_secs: 5.0, // the longest window
+            chunk_overlap_secs: 0.0,
+            chunk_step_secs: Some(4.5), // the shortest
+            ..PipelineConfig::default()
+        };
+        let step = chunk_step_samples(&config);
+        assert_eq!(step, 144_000, "the step is the shortest window");
+
+        for window in [144_000_usize, 160_000] {
+            let spans = covered(1_600_000, step, window);
+            assert!(
+                has_no_gap(&spans),
+                "a {window}-sample classifier must have contiguous coverage"
+            );
+        }
+    }
+
+    /// The shortest-window classifier is not merely gap-free but **identical**
+    /// to running alone: same starts, same length. Anything less would be a
+    /// regression for the station's existing model.
+    #[test]
+    fn the_shortest_window_classifier_is_unchanged_from_running_alone() {
+        let alone = PipelineConfig {
+            target_sample_rate: 32_000,
+            chunk_duration_secs: 4.5,
+            chunk_overlap_secs: 0.0,
+            chunk_step_secs: None,
+            ..PipelineConfig::default()
+        };
+        let beside_perch = PipelineConfig {
+            chunk_duration_secs: 5.0,
+            chunk_step_secs: Some(4.5),
+            ..alone.clone()
+        };
+        assert_eq!(
+            chunk_step_samples(&alone),
+            chunk_step_samples(&beside_perch),
+            "adding a longer-window classifier must not move the existing one's chunks"
+        );
+        assert_eq!(
+            covered(1_600_000, chunk_step_samples(&alone), 144_000),
+            covered(1_600_000, chunk_step_samples(&beside_perch), 144_000)
+        );
+    }
+
+    /// The longer-window classifier gains coverage rather than losing it, and
+    /// pays for it in inferences — the cost the daemon logs.
+    #[test]
+    fn the_longer_window_classifier_gains_coverage_and_pays_in_inferences() {
+        let alone = covered(1_600_000, 160_000, 160_000);
+        let beside = covered(1_600_000, 144_000, 160_000);
+        assert!(
+            beside.len() > alone.len(),
+            "more chunks: {} vs {}",
+            beside.len(),
+            alone.len()
+        );
+        // 160 000 / 144 000 ≈ 1.11, the ~11 % the daemon reports.
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = beside.len() as f64 / alone.len() as f64;
+        assert!((1.05..=1.2).contains(&ratio), "ratio was {ratio}");
+        assert!(has_no_gap(&beside));
+    }
+
+    /// A step of zero or a negative one would loop forever or step backwards;
+    /// both fall back rather than wedging the daemon on a bad number.
+    #[test]
+    fn a_nonsense_step_falls_back_instead_of_wedging() {
+        for bad in [0.0_f32, -1.0] {
+            let config = PipelineConfig {
+                target_sample_rate: 32_000,
+                chunk_duration_secs: 3.0,
+                chunk_overlap_secs: 0.0,
+                chunk_step_secs: Some(bad),
+                ..PipelineConfig::default()
+            };
+            assert_eq!(
+                chunk_step_samples(&config),
+                96_000,
+                "a {bad} step must fall back to the chunk arithmetic"
+            );
+        }
+    }
+
+    /// An overlap at or beyond the chunk length must still advance, or the
+    /// chunker never reaches the end of a recording.
+    #[test]
+    fn the_step_is_never_zero() {
+        let config = PipelineConfig {
+            target_sample_rate: 32_000,
+            chunk_duration_secs: 3.0,
+            chunk_overlap_secs: 10.0,
+            chunk_step_secs: None,
+            ..PipelineConfig::default()
+        };
+        assert!(chunk_step_samples(&config) >= 1);
     }
 }

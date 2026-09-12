@@ -130,7 +130,54 @@ impl Extractor {
             )));
         }
 
-        let clip_samples = window.samples.as_slice();
+        // Normalise the *export* only, and only when the operator asked for
+        // it. The analysis input is long gone by here — this is the clip that
+        // goes on disk and into the web player — so a gain applied to it
+        // cannot move a confidence score.
+        //
+        // `None` from `plan` means there is nothing to normalise: silence, or a
+        // clip shorter than one 400 ms measurement block. Either way the clip
+        // is written as captured rather than being dropped or scaled by a
+        // number derived from nothing.
+        let mut normalised: Option<Vec<f32>> = None;
+        let mut measured_lufs: Option<f64> = None;
+        if let Some(target) = self.config.target_lufs {
+            match super::loudness::plan(
+                &window.samples,
+                audio.sample_rate,
+                target,
+                self.config.peak_ceiling_dbfs,
+            ) {
+                Ok(Some(n)) => {
+                    let mut out = window.samples.clone();
+                    super::loudness::apply_gain(&mut out, n.gain);
+                    if n.peak_limited {
+                        tracing::debug!(
+                            gain_db = 20.0 * f64::from(n.gain).log10(),
+                            measured_lufs = n.measured_lufs,
+                            target_lufs = target,
+                            "clip could not reach the loudness target without passing the \
+                             peak ceiling; turned up as far as the ceiling allows"
+                        );
+                    }
+                    measured_lufs = Some(n.measured_lufs);
+                    normalised = Some(out);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    // A sample rate the K-weighting cannot be built at. Write
+                    // the clip as captured and say so once, rather than losing
+                    // it to a measurement that is not the point of the file.
+                    tracing::warn!(
+                        error = %e,
+                        sample_rate = audio.sample_rate,
+                        "loudness normalisation is not available at this sample rate; \
+                         writing the clip at capture level"
+                    );
+                }
+            }
+        }
+        let clip_samples = normalised.as_deref().unwrap_or(&window.samples);
 
         // 4. Write the clip FLAT in the output dir (the persistent recordings
         //    dir the web serves from). The filename already encodes species,
@@ -217,6 +264,14 @@ impl Extractor {
                 confidence: detection.confidence,
                 date: detection.date.clone(),
                 time: detection.time.clone(),
+                loudness: measured_lufs.and_then(|measured_lufs| {
+                    self.config
+                        .target_lufs
+                        .map(|target_lufs| super::metadata::ClipLoudness {
+                            measured_lufs,
+                            target_lufs,
+                        })
+                }),
             };
             if let Err(e) = embed_wav_metadata(&output_path, &meta) {
                 tracing::debug!(
@@ -393,7 +448,146 @@ mod tests {
             stop,
             week: 20,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
+    }
+
+    // ---- loudness normalisation of the export (G-5) -----------------------
+
+    /// A tone at `dbfs`, `secs` long, written as a 16-bit WAV.
+    fn write_tone_wav(path: &Path, secs: f32, sample_rate: u32, dbfs: f64) {
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut w = WavWriter::create(path, spec).expect("create wav");
+        let amp = 10.0_f64.powf(dbfs / 20.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = (f64::from(secs) * f64::from(sample_rate)) as usize;
+        for i in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let t = i as f64 / f64::from(sample_rate);
+            let v = amp * (2.0 * std::f64::consts::PI * 1_000.0 * t).sin();
+            #[allow(clippy::cast_possible_truncation)]
+            w.write_sample((v * f64::from(i16::MAX)) as i16)
+                .expect("write sample");
+        }
+        w.finalize().expect("finalize");
+    }
+
+    /// The integrated loudness of a written WAV, in LUFS.
+    fn clip_lufs(path: &Path) -> f64 {
+        let mut reader = hound::WavReader::open(path).expect("open clip");
+        let rate = reader.spec().sample_rate;
+        let samples: Vec<f32> = reader
+            .samples::<i16>()
+            .map(|s| f32::from(s.expect("sample")) / f32::from(i16::MAX))
+            .collect();
+        super::super::loudness::integrated_lufs(&samples, rate)
+            .expect("filter")
+            .expect("the clip has a level")
+    }
+
+    fn loudness_cfg(out: PathBuf, target_lufs: Option<f64>) -> ExtractionConfig {
+        ExtractionConfig {
+            output_dir: out,
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+            pre_capture_secs: 0.0,
+            target_lufs,
+            ..ExtractionConfig::default()
+        }
+    }
+
+    /// The feature, end to end: a quiet source produces a clip at the target.
+    ///
+    /// The unit tests in `loudness` prove the meter and the gain; this proves
+    /// the *wiring* — that the config field reaches the extractor, that the
+    /// gain is applied to the samples that get written, and not to some copy
+    /// that is then discarded.
+    #[test]
+    fn a_quiet_clip_is_written_at_the_configured_loudness() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_tone_wav(&src, 30.0, 48_000, -40.0);
+
+        let extractor = Extractor::new(loudness_cfg(tmp.path().join("out"), Some(-18.0)));
+        let clip = extractor
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let measured = clip_lufs(&clip);
+        assert!(
+            (measured - -18.0).abs() < 0.5,
+            "the written clip measures {measured:.2} LUFS, not the -18 that was asked for"
+        );
+    }
+
+    /// The counterpart, and the default: with normalisation off the clip keeps
+    /// the level it was captured at.
+    ///
+    /// Without this the test above would pass just as happily for an extractor
+    /// that normalised every clip whatever the configuration said, which is
+    /// exactly the change an operator who left the feature off would not want.
+    #[test]
+    fn with_normalisation_off_the_clip_keeps_its_capture_level() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_tone_wav(&src, 30.0, 48_000, -40.0);
+
+        let extractor = Extractor::new(loudness_cfg(tmp.path().join("out"), None));
+        let clip = extractor
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        // A -40 dBFS mono 1 kHz tone measures -40 - 10*log10(2) = -43.01 LUFS.
+        let measured = clip_lufs(&clip);
+        assert!(
+            (measured - -43.01).abs() < 0.5,
+            "with normalisation off the clip measures {measured:.2} LUFS; the source is \
+             -43.01, so something changed it"
+        );
+    }
+
+    /// The clip says what was done to it.
+    ///
+    /// The gain is invisible in the samples — a normalised quiet clip and a
+    /// clip that was simply recorded louder are the same file — so the record
+    /// of it has to be in the metadata or nowhere.
+    #[test]
+    fn a_normalised_clip_records_what_it_was_normalised_from() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_tone_wav(&src, 30.0, 48_000, -40.0);
+
+        let extractor = Extractor::new(loudness_cfg(tmp.path().join("out"), Some(-18.0)));
+        let clip = extractor
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let bytes = std::fs::read(&clip).expect("read clip");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("Normalised to -18.0 LUFS from -43."),
+            "the RIFF INFO comment does not record the normalisation"
+        );
+
+        // Counterpart: an un-normalised clip says nothing, rather than saying
+        // it was normalised to the level it happens to be at.
+        let plain = Extractor::new(loudness_cfg(tmp.path().join("plain"), None))
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+        let bytes = std::fs::read(&plain).expect("read clip");
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("Normalised"),
+            "a clip written at capture level must not claim to have been normalised"
+        );
     }
 
     /// Regression: a detection past the configured `recording_length` used to
@@ -413,6 +607,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
 
@@ -440,6 +635,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
 
@@ -475,6 +671,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
 
@@ -581,6 +778,8 @@ mod tests {
             time: "02:30:00".to_owned(),
             week: 43,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         };
 
         let first = extractor
@@ -630,6 +829,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -661,6 +861,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -710,6 +911,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -789,6 +991,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 1.0,
+            ..ExtractionConfig::default()
         };
         let out = Extractor::new(cfg)
             .extract_detection(&src, &det(10.0, 13.0))
@@ -836,6 +1039,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: -2.0,
+            ..ExtractionConfig::default()
         };
         let out = Extractor::new(cfg)
             .extract_detection(&src, &det(10.0, 13.0))
@@ -862,6 +1066,8 @@ mod tests {
             stop: 3.0,
             week: 20,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         }
     }
 
@@ -943,6 +1149,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         });
 
         let clip = extractor
@@ -980,6 +1187,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         });
 
         // want_start = 0.5 - 1.5 = -1.0: one second comes from the predecessor.
@@ -1019,6 +1227,7 @@ mod tests {
             target_format: AudioFormat::Flac,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         });
 
         let clip = extractor
@@ -1058,6 +1267,7 @@ mod tests {
             target_format: AudioFormat::Mp3, // needs_conversion = true
             freq_shift_hz: 0,                // no freq shift
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -1130,6 +1340,7 @@ mod tests {
             target_format: AudioFormat::Mp3,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor_base = Extractor::new(cfg_base);
         let base = extractor_base
@@ -1146,6 +1357,7 @@ mod tests {
             target_format: AudioFormat::Mp3,
             freq_shift_hz: 500,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor_shift = Extractor::new(cfg_shift);
         let shifted = extractor_shift
@@ -1180,6 +1392,7 @@ mod tests {
             target_format: AudioFormat::Wav,
             freq_shift_hz: 0,
             pre_capture_secs: 0.0,
+            ..ExtractionConfig::default()
         };
         let extractor = Extractor::new(cfg);
         let out = extractor
@@ -1195,6 +1408,8 @@ mod tests {
                     stop: 13.0,
                     week: 20,
                     file_name_extr: None,
+                    model_id: None,
+                    agreeing_models: None,
                 },
             )
             .expect("WAV extraction succeeds");

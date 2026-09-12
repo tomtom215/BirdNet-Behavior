@@ -406,6 +406,12 @@ mod tests {
                 "Species Filter Preview",
             ),
             (
+                "/admin/species/manage",
+                "/admin/species",
+                "Species storage",
+                "Every species this station has recorded",
+            ),
+            (
                 "/admin/notifications/test",
                 "/admin/notifications",
                 "Test",

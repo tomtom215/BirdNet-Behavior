@@ -19,6 +19,8 @@ const fn record<'a>(
     len: Option<f64>,
 ) -> DetectionRecord<'a> {
     DetectionRecord {
+        model_id: None,
+        model_agreement: None,
         date: "2026-09-08",
         time,
         sci_name: "Turdus merula",

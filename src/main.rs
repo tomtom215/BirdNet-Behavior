@@ -59,6 +59,9 @@ enum Action {
     /// `--rebuild-species-summary`: recompute the maintained per-species
     /// totals from the detections and exit.
     RebuildSpeciesSummary,
+    /// `--install-model`: fetch and verify a classifier from the catalogue,
+    /// then exit.
+    InstallModel,
     /// `--doctor` / `--doctor-json`: print diagnostics and exit with a
     /// status-derived code. Carries the chosen render format.
     Doctor(doctor::Format),
@@ -102,6 +105,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::DecryptBackup
     } else if cli.support_bundle.is_some() {
         Action::SupportBundle
+    } else if cli.install_model.is_some() {
+        Action::InstallModel
     } else if cli.doctor || cli.doctor_json || cli.fix {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
@@ -261,6 +266,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Action::DecryptBackup => {
             let code = helpers::offsite::run_decrypt(&cli, config.as_ref());
+            std::process::exit(code);
+        }
+        Action::InstallModel => {
+            let id = cli.install_model.clone().unwrap_or_default();
+            // `spawn_blocking` because the installer builds a
+            // `reqwest::blocking` client, and that panics when constructed
+            // inside a tokio runtime — which this is. `birdnet-integrations`
+            // says so in its own header ("callers should wrap in
+            // `tokio::task::spawn_blocking`"); running the command is what
+            // caught it not being done.
+            let dest = helpers::models::model_dir(config.as_ref());
+            let code = tokio::task::spawn_blocking(move || {
+                helpers::models::install_from_catalogue(&id, &dest)
+            })
+            .await
+            .unwrap_or(1);
             std::process::exit(code);
         }
         Action::SupportBundle => {

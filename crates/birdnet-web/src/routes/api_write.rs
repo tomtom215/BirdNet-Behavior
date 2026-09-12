@@ -32,7 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::{
     Json, Router,
@@ -60,17 +60,31 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v2/detections/batch"),
     ("PUT", "/api/v2/settings"),
     ("POST", "/api/v2/control/restart"),
+    ("POST", "/api/v2/control/restart-source"),
+    ("POST", "/api/v2/detections/comments"),
+    ("POST", "/api/v2/detections/comments/delete"),
 ];
 
 /// Read endpoints that live behind the same bearer gate.
 ///
-/// `GET /api/v2/settings` is a read, so it is not in [`WRITE_ROUTES`] — the
-/// CSRF guard has no interest in a `GET`. It is here rather than in
-/// `public_routes()` because a station's settings are not public: the values
-/// are redacted (by `redacted_settings`, private to this module, so it is
-/// named rather than linked), but the *shape* of a station's configuration is
-/// still not something to hand an anonymous visitor.
-pub const READ_ROUTES: &[(&str, &str)] = &[("GET", "/api/v2/settings")];
+/// These are reads, so they are not in [`WRITE_ROUTES`] — the CSRF guard has no
+/// interest in a `GET`. They are here rather than in `public_routes()` because
+/// neither is public:
+///
+/// * `GET /api/v2/settings` — the values are redacted (by `redacted_settings`,
+///   private to this module, so it is named rather than linked), but the
+///   *shape* of a station's configuration is still not something to hand an
+///   anonymous visitor.
+/// * `GET /api/v2/system/capture` — source labels are `audio_sources` row ids
+///   and the payload is per-source fault history: operational detail about
+///   someone's home, not a public detection count.
+pub const READ_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/v2/settings"),
+    ("GET", "/api/v2/system/capture"),
+    ("GET", "/api/v2/system/jobs"),
+    ("GET", "/api/v2/models/catalog"),
+    ("GET", "/api/v2/detections/comments"),
+];
 
 /// Whether `path` is one of the mutating API endpoints.
 ///
@@ -96,6 +110,156 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/detections/batch", post(batch))
         .route("/api/v2/settings", get(read_settings).put(write_settings))
         .route("/api/v2/control/restart", post(restart))
+        .route("/api/v2/control/restart-source", post(restart_source))
+        .route("/api/v2/system/capture", get(capture_status))
+        .route("/api/v2/system/jobs", get(system_jobs))
+        .route("/api/v2/models/catalog", get(models_catalog))
+        .route(
+            "/api/v2/detections/comments",
+            get(list_comments).post(add_comment),
+        )
+        .route("/api/v2/detections/comments/delete", post(delete_comment))
+}
+
+/// The comment to write.
+///
+/// No `author` field, deliberately. A bearer token is not a person — the same
+/// reason every audit row this module writes has `user_id: None` — and a name
+/// the caller supplies is a name the caller chose. Comments written through the
+/// API are attributed to [`API_AUTHOR`], which is unforgeable in the only sense
+/// that matters here: a reader can tell a script's note from a person's. A
+/// script with something to say about *who* says it in the body.
+#[derive(Debug, Deserialize)]
+struct CommentBody {
+    date: String,
+    time: String,
+    sci_name: String,
+    body: String,
+}
+
+/// The comment to remove.
+#[derive(Debug, Deserialize)]
+struct CommentId {
+    id: i64,
+}
+
+/// What a comment written through this API is attributed to.
+const API_AUTHOR: &str = "api";
+
+async fn list_comments(
+    State(state): State<AppState>,
+    Query(key): Query<Key>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
+        return e;
+    }
+    let comments = state.with_db(|conn| {
+        birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
+    });
+    match comments {
+        Ok(comments) => (
+            StatusCode::OK,
+            Json(json!({
+                "detection": target_of(&key.date, &key.time, &key.sci_name),
+                "comments": comments.iter().map(comment_json).collect::<Vec<_>>(),
+            })),
+        ),
+        Err(e) => comment_error(&e),
+    }
+}
+
+async fn add_comment(
+    State(state): State<AppState>,
+    Json(body): Json<CommentBody>,
+) -> (StatusCode, Json<Value>) {
+    if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
+        return e;
+    }
+    let written = state.with_db(|conn| {
+        birdnet_db::detection_comments::insert(
+            conn,
+            &birdnet_db::detection_comments::NewComment {
+                date: &body.date,
+                time: &body.time,
+                sci_name: &body.sci_name,
+                user_id: None,
+                author: API_AUTHOR,
+                body: &body.body,
+            },
+        )
+    });
+    match written {
+        Ok(comment) => {
+            crate::audit::audit(
+                &state,
+                None,
+                "detection.comment.add",
+                Some(&target_of(&body.date, &body.time, &body.sci_name)),
+                Some(&format!("{VIA_API} id={}", comment.id)),
+            );
+            (StatusCode::CREATED, Json(comment_json(&comment)))
+        }
+        Err(e) => comment_error(&e),
+    }
+}
+
+async fn delete_comment(
+    State(state): State<AppState>,
+    Json(key): Json<CommentId>,
+) -> (StatusCode, Json<Value>) {
+    match state.with_db(|conn| birdnet_db::detection_comments::delete(conn, key.id)) {
+        Ok(Some(comment)) => {
+            crate::audit::audit(
+                &state,
+                None,
+                "detection.comment.delete",
+                Some(&target_of(&comment.date, &comment.time, &comment.sci_name)),
+                // Never the body: a comment removed because it named somebody
+                // must not survive in the log that recorded its removal.
+                Some(&format!(
+                    "{VIA_API} id={} author={}",
+                    comment.id, comment.author
+                )),
+            );
+            (
+                StatusCode::OK,
+                Json(json!({ "deleted": comment.id, "author": comment.author })),
+            )
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no comment has that id" })),
+        ),
+        Err(e) => comment_error(&e),
+    }
+}
+
+fn comment_json(c: &birdnet_db::detection_comments::DetectionComment) -> Value {
+    json!({
+        "id": c.id,
+        "date": c.date,
+        "time": c.time,
+        "sci_name": c.sci_name,
+        "author": c.author,
+        "body": c.body,
+        "at": c.at,
+    })
+}
+
+/// A refused comment is the caller's mistake, not the server's, and the
+/// database's own message says which — an empty body and a body 40 characters
+/// too long need different fixes.
+fn comment_error(e: &birdnet_db::detection_comments::CommentError) -> (StatusCode, Json<Value>) {
+    match e {
+        birdnet_db::detection_comments::CommentError::Invalid(m) => bad_request(m),
+        birdnet_db::detection_comments::CommentError::Sqlite(_) => {
+            tracing::warn!(error = %e, "comment API request failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "the database refused the change" })),
+            )
+        }
+    }
 }
 
 /// The composite key that identifies a detection.
@@ -800,6 +964,271 @@ async fn restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
             })),
         ),
     }
+}
+
+/// Per-source capture health: what the Station Health page draws, as JSON.
+///
+/// This is the discovery half of `POST /api/v2/control/restart-source` — it
+/// names every source the supervisor is actually running, which is what that
+/// endpoint's `source_id` has to match, and it is how a caller sees whether the
+/// restart it asked for took.
+///
+/// Bearer-gated rather than public: a station's source labels are its
+/// `audio_sources` row ids and its per-source fault history, which is
+/// operational detail about someone's home, not a public detection count.
+///
+/// `supervised` is `false` — with an empty source list — when no capture
+/// supervisor is running in this process (web-only mode, or tooling). That is
+/// reported rather than erroring, because "nothing is supervising capture" is a
+/// true and useful answer to the question.
+async fn capture_status(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    use birdnet_core::audio::capture::read_capture_status;
+
+    let Some(status) = state.capture_status().map(|h| read_capture_status(&h)) else {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "supervised": false,
+                "sources": [],
+                "published_unix": 0,
+            })),
+        );
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "supervised": true,
+            "sources": status.sources,
+            "published_unix": status.published_unix,
+        })),
+    )
+}
+
+/// `GET /api/v2/system/jobs` — every scheduled maintenance job and its state.
+///
+/// # Why this is driven by a catalogue and not by the table
+///
+/// `maintenance_runs` holds a row per job that has **completed at least
+/// once**, so enumerating it answers a different question from the one an
+/// operator is asking. A station whose backup job has never run once — the
+/// case most worth knowing about — has no row for it, and a listing built
+/// from rows would show a clean, short list with the problem simply absent.
+/// `birdnet_db::sqlite::job_statuses` walks `JOBS` and looks each row up, so
+/// a job that has never run appears with `last_run` null and `due` set.
+///
+/// `ok` is tri-state and callers must not collapse it: `null` means either
+/// "never run" or "this job has no verdict to report", and `reports_verdict`
+/// is what separates those from a recorded `false`. A session prune that
+/// succeeded and an integrity check that failed both have falsy verdicts and
+/// mean opposite things.
+///
+/// Bearer-gated like its neighbour: a station's maintenance history says when
+/// its backups run and whether they are failing, which is operational detail
+/// about someone's home.
+async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let now = now_unix_secs();
+    let statuses = tokio::task::spawn_blocking(move || {
+        // The backup is the one job whose cadence the operator sets, so the
+        // config file is read for it rather than the default assumed — a
+        // station on `daily` told it is not due for six more days would be
+        // worse than no answer. `routes::admin::doctor` reads the config the
+        // same way, for the same reason: it is the only place the truth is.
+        let schedule = read_backup_schedule(&state);
+        state.with_db(|conn| {
+            birdnet_db::sqlite::job_statuses(conn, now, schedule).unwrap_or_default()
+        })
+    })
+    .await
+    .unwrap_or_default();
+
+    let jobs: Vec<Value> = statuses
+        .iter()
+        .map(|s| {
+            let spec = birdnet_db::sqlite::JOBS.iter().find(|j| j.job == s.job);
+            json!({
+                "job": s.job,
+                "title": s.title,
+                "interval_secs": s.interval_secs,
+                "last_run_unix": s.last_run_unix,
+                "next_due_unix": s.next_due_unix,
+                "ok": s.ok,
+                "reports_verdict": spec.is_some_and(|j| j.reports_verdict),
+                "due": s.due.is_some(),
+                "due_reason": s.due.map(|r| match r {
+                    birdnet_db::sqlite::DueReason::NeverRun => "never_run",
+                    birdnet_db::sqlite::DueReason::ClockWentBackwards => "clock_went_backwards",
+                    birdnet_db::sqlite::DueReason::IntervalElapsed => "interval_elapsed",
+                }),
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(json!({ "now_unix": now, "jobs": jobs })),
+    )
+}
+
+/// `GET /api/v2/models/catalog` — the classifiers this build can install.
+///
+/// # Why there is no install endpoint beside it
+///
+/// Upstream pairs its catalogue with `POST /models/install/:id`. Installing is
+/// a 400 MB download that takes hours on the uplink a field station has, and a
+/// request handler is the wrong place for it: the connection outlives nothing,
+/// a retry starts a second download beside the first, and there is nowhere to
+/// report progress to. The catalogue is a read, so it is here; installing is
+/// `birdnet-behavior --install-model <id>`, which runs in the foreground where
+/// an operator can watch it and where failing is visible.
+///
+/// Bearer-gated with its neighbours: which classifiers a station could install
+/// says what it is running, which is operational detail about someone's home.
+async fn models_catalog() -> (StatusCode, Json<Value>) {
+    let models: Vec<Value> = birdnet_integrations::model_catalog::CATALOG
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "name": e.name,
+                "sha256": e.model_sha256,
+                "bytes": e.model_bytes,
+                "sample_rate": e.sample_rate,
+                "ships_labels": e.labels_url.is_some(),
+                "notes": e.notes,
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(json!({ "models": models })))
+}
+
+/// The station's configured backup cadence, or the default when it has none.
+///
+/// A station with no config file, an unreadable one, or a `BACKUP_SCHEDULE`
+/// nobody implements falls back to the default rather than failing the
+/// request: this endpoint reports the schedule, it does not enforce it, and an
+/// unreadable config is the scheduler's problem to complain about (it does).
+fn read_backup_schedule(state: &AppState) -> birdnet_db::sqlite::BackupSchedule {
+    use birdnet_db::sqlite::BackupSchedule;
+
+    state
+        .config_path()
+        .and_then(|path| birdnet_core::config::Config::load_from(path).ok())
+        .and_then(|cfg| {
+            cfg.get("BACKUP_SCHEDULE")
+                .map(std::borrow::ToOwned::to_owned)
+        })
+        .and_then(|raw| BackupSchedule::parse(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Seconds since the Unix epoch, saturating rather than wrapping.
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// The body of `POST /api/v2/control/restart-source`.
+#[derive(Debug, Deserialize)]
+struct SourceRef {
+    /// The supervisor's label for the source — for a station whose sources are
+    /// managed in `/admin/audio` (every station that has ever saved one) this
+    /// is the `audio_sources` row id. `GET /api/v2/system/capture` lists the
+    /// labels actually being supervised, and a `404` from this endpoint returns
+    /// them too.
+    source_id: String,
+}
+
+/// Restart one capture source, leaving every other source recording.
+///
+/// The path an operator has without this is `POST /api/v2/control/restart`,
+/// which takes the whole station down: on a multi-source station that means one
+/// wedged RTSP camera costs every other microphone its in-flight audio and its
+/// analysis queue. This stops and restarts exactly the named source, through
+/// the supervisor's own start path — so the recording schedule and the source's
+/// quiet window still hold, and a restart asked for while the source is paused
+/// does not override them.
+///
+/// It recovers a wedged source; it does **not** reload that source's settings.
+/// The supervisor builds each source's capture config once, when it starts, so
+/// the restarted process comes up with the configuration the *service* started
+/// with. An edit made on `/admin/audio` still needs a service restart to take
+/// effect — the same as before this endpoint existed.
+///
+/// Answers:
+/// * `202` — the request is recorded; the supervisor applies it on its next
+///   tick, within a couple of seconds. The last known state is echoed back so a
+///   caller can see it was `paused` (and so nothing will happen) rather than
+///   guessing from a bare acknowledgement.
+/// * `404` — no supervised source carries that label, with the labels that do.
+/// * `503` — nothing is supervising capture in this process, so a request would
+///   be recorded and never drained.
+async fn restart_source(
+    State(state): State<AppState>,
+    Json(body): Json<SourceRef>,
+) -> (StatusCode, Json<Value>) {
+    use birdnet_core::audio::capture::{read_capture_status, request_source_restart};
+
+    let Some(control) = state.capture_control() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "restart_requested": false,
+                "error": "no capture supervisor is running in this process, so there is \
+                          nothing to restart"
+            })),
+        );
+    };
+
+    // The supervisor's published status is the authoritative list of what is
+    // being supervised right now — more so than the `audio_sources` table,
+    // which can hold a row added since the supervisor last read it.
+    let known = state.capture_status().map(|h| read_capture_status(&h));
+    let Some(source) = known
+        .as_ref()
+        .and_then(|s| s.sources.iter().find(|src| src.label == body.source_id))
+    else {
+        let labels: Vec<&str> = known
+            .as_ref()
+            .map(|s| s.sources.iter().map(|src| src.label.as_str()).collect())
+            .unwrap_or_default();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "restart_requested": false,
+                "error": format!("no supervised capture source is labelled {:?}", body.source_id),
+                "known_sources": labels,
+            })),
+        );
+    };
+    let state_now = source.state;
+
+    crate::audit::audit(
+        &state,
+        None,
+        "audio.source.restart",
+        Some(&body.source_id),
+        Some(VIA_API),
+    );
+
+    let newly = request_source_restart(&control, &body.source_id);
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "restart_requested": true,
+            "source": body.source_id,
+            "state": state_now,
+            "already_pending": !newly,
+            "note": if state_now == birdnet_core::audio::capture::SourceState::Paused {
+                "this source is paused by its recording schedule or quiet window; the \
+                 request is spent without restarting it, because starting it would \
+                 override the schedule"
+            } else {
+                "the supervisor stops and restarts this source on its next tick; every \
+                 other source keeps recording"
+            },
+        })),
+    )
 }
 
 #[cfg(test)]

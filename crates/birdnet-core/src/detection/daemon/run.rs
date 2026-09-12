@@ -12,8 +12,9 @@ use crate::detection::privacy::PrivacyFilter;
 use crate::detection::{ChunkFilters, noise::NoiseFilter};
 use crate::file_settle::{FILE_SETTLE, PendingFiles};
 use crate::inference::labels::LabelSet;
-use crate::inference::model::BirdNetModel;
+use crate::inference::registry::ClassifierRegistry;
 use crate::inference::species_filter::SpeciesFilter;
+use crate::inference::vocabulary::parse_alias_file;
 
 use super::process::process_and_infer_filtered;
 use super::{
@@ -40,24 +41,84 @@ const SPECIES_LISTS_TTL: Duration = Duration::from_secs(30);
 ///
 /// # Errors
 ///
-/// Returns `DaemonError` if the model cannot be loaded or the watcher fails.
+/// Returns `DaemonError` if no classifier is configured, if one cannot be
+/// loaded, if a route names a classifier that does not exist, or if the
+/// watcher fails. Every one of those is refused here at startup rather than
+/// at the first audio file, because an unattended station must fail where
+/// somebody can see it.
+///
+/// # Panics
+///
+/// Does not panic in practice: the `expect` on the primary classifier is
+/// guaranteed by [`crate::inference::registry::ClassifierRegistry::load`],
+/// which refuses to build a registry with no classifiers in it.
 #[allow(clippy::too_many_lines)]
 pub fn run_daemon(
     config: &DaemonConfig,
     event_tx: mpsc::SyncSender<DetectionEvent>,
 ) -> Result<DaemonHandle, DaemonError> {
-    // Load labels
-    let labels = LabelSet::load(&config.labels_path)
-        .map_err(|e| DaemonError::Model(format!("labels: {e}")))?;
+    // Every classifier this station runs, primary first (`G-10` Stage 2).
+    //
+    // One entry on a station that has not asked for a second opinion, which is
+    // every station today: the registry is then exactly the single model this
+    // loaded before, reached through `primary()`.
+    //
+    // Built here, before anything else, because every way it can fail —
+    // nothing configured, a route naming a classifier that does not exist, a
+    // model that will not load — must stop the daemon at startup where the
+    // journal and `--doctor` will show it. An unattended station that starts
+    // with a microphone routed to nothing looks identical to one having a
+    // quiet month.
+    let mut specs = Vec::with_capacity(1 + config.extra_models.len());
+    specs.push(crate::inference::registry::ModelSpec {
+        id: "birdnet".to_owned(),
+        model_path: config.model_path.clone(),
+        labels_path: config.labels_path.clone(),
+        threshold: None,
+        // The primary's rate is derived from its shape, which is right for
+        // the BirdNET shapes that derivation was built from.
+        sample_rate: None,
+    });
+    specs.extend(config.extra_models.iter().cloned());
+
+    let mut registry = crate::inference::registry::ClassifierRegistry::load(
+        &specs,
+        &config.model_routes,
+        &config.model,
+    )
+    .map_err(|e| DaemonError::Model(e.to_string()))?;
+
+    for (id, spec) in registry.specs() {
+        tracing::info!(
+            classifier = id,
+            sample_rate = spec.sample_rate,
+            window_secs = spec.window_secs(),
+            waveform = spec.is_waveform(),
+            "classifier loaded"
+        );
+    }
+    if registry.len() > 1 {
+        tracing::info!(
+            classifiers = ?registry.ids(),
+            routes = ?config.model_routes,
+            "running more than one classifier"
+        );
+    }
+
+    // The primary is what the pipeline below runs on, so this is byte-for-byte
+    // the model that was loaded here before Stage 2. Borrowed immutably for
+    // the setup that follows; the registry itself moves into the loop thread,
+    // where the mutable borrow is taken.
+    let model = &registry
+        .model(0)
+        .expect("a registry always has a primary")
+        .model;
 
     tracing::info!(
-        species_count = labels.len(),
+        species_count = model.labels().len(),
         labels_path = %config.labels_path.display(),
         "labels loaded"
     );
-
-    // Load model
-    let mut model = BirdNetModel::load(&config.model_path, labels, config.model.clone())?;
 
     // Auto-detect the sample rate the model expects from its input shape.
     // V2.4 → [1, 144_000] = 48 kHz × 3 s; V3.0 → [1, 96_000] = 32 kHz × 3 s.
@@ -80,8 +141,13 @@ pub fn run_daemon(
         );
         pipeline_config.target_sample_rate = model_sample_rate;
     }
-    // V3.0 models expect raw audio; V2.4 models expect a mel spectrogram.
-    let raw_mode = model.infer_sample_rate() == 32_000;
+    // Asked of the model rather than guessed from its sample rate (`G-10`
+    // Stage 1). The guess here was `infer_sample_rate() == 32_000`, which read
+    // "32 kHz" as "waveform" — true of V3.0 by coincidence, and false of V2.4,
+    // which is a 48 kHz waveform model that was therefore sent a mel
+    // spectrogram zero-padded to three-quarters of its input tensor.
+    let spec = model.input_spec();
+    let raw_mode = spec.is_waveform();
     if raw_mode != pipeline_config.raw_audio_input {
         tracing::info!(
             raw_audio_input = raw_mode,
@@ -97,7 +163,41 @@ pub fn run_daemon(
     // 144 000 samples it rises to ~0.72. The model accepts variable length
     // so this is purely a per-chunk accuracy tuning. Fixed-shape V2.4 keeps
     // its trained 3.0 s window.
-    let model_chunk_secs = model.recommended_chunk_secs();
+    //
+    // With more than one classifier the chunk is cut to the longest window
+    // and stepped by the shortest (`G-10` Stage 4). One classifier leaves both
+    // equal, so this is the single-model arithmetic unchanged.
+    let (longest, shortest) = registry.window_bounds();
+    #[allow(clippy::cast_precision_loss)]
+    let longest_secs = longest as f32 / spec.sample_rate as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let shortest_secs = shortest as f32 / spec.sample_rate as f32;
+    if longest != shortest {
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = longest as f32 / shortest as f32;
+        tracing::info!(
+            longest_window_secs = longest_secs,
+            shortest_window_secs = shortest_secs,
+            extra_inference_ratio = ratio,
+            "classifiers want different windows: chunking to the longest and stepping by the \
+             shortest, so no classifier sees less than it would alone. Classifiers with the \
+             longer window run proportionally more inferences"
+        );
+        pipeline_config.chunk_step_secs = Some(shortest_secs);
+    }
+
+    // The longest window across the loaded classifiers. For the one classifier
+    // every station runs today this is exactly `model.recommended_chunk_secs()`
+    // — the call this line made before Stage 4 — on any waveform shape,
+    // because `input_spec`'s window and `recommended_chunk_samples` derive the
+    // same number from the same shape. Gated by
+    // `the_window_and_the_chunk_recommendation_agree_on_every_waveform_shape`.
+    //
+    // A mel shape is the one place the two part, and there the window is the
+    // right of them: `recommended_chunk_samples` would read a count of
+    // spectrogram columns as a sample count and ask for a six-millisecond
+    // chunk. No model here takes mel input today.
+    let model_chunk_secs = longest_secs;
     let configured_chunk_secs = pipeline_config.chunk_duration_secs;
     if (model_chunk_secs - configured_chunk_secs).abs() > 0.01 {
         tracing::info!(
@@ -140,10 +240,38 @@ pub fn run_daemon(
                     }
                 },
             };
+            // An unreadable alias file is a warning, not a failure: the
+            // alignment works without it, and taking the occurrence filter off
+            // a station over a typo'd path would admit every species the
+            // classifier knows, wherever it is.
+            let aliases = config.species_aliases_path.as_ref().map_or_else(
+                std::collections::HashMap::new,
+                |p| match std::fs::read_to_string(p) {
+                    Ok(text) => {
+                        let (map, skipped) = parse_alias_file(&text);
+                        tracing::info!(
+                            path = %p.display(),
+                            aliases = map.len(),
+                            skipped_lines = skipped,
+                            "species alias file loaded"
+                        );
+                        map
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %p.display(),
+                            error = %e,
+                            "species alias file could not be read; continuing without it"
+                        );
+                        std::collections::HashMap::new()
+                    }
+                },
+            );
             match SpeciesFilter::load_with_vocabulary(
                 mdata_path,
                 meta_labels,
-                model.labels().len(),
+                model.labels(),
+                &aliases,
                 config.species_filter.clone(),
             ) {
                 Ok(sf) => sf,
@@ -172,7 +300,8 @@ pub fn run_daemon(
     // Create the whole-chunk filters.
     let chunk_filters = ChunkFilters {
         privacy: PrivacyFilter::new(config.privacy_threshold),
-        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone()),
+        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
+            .remembering(config.noise_remember_secs),
         confirmation: config.confirmation,
     };
 
@@ -192,7 +321,18 @@ pub fn run_daemon(
         tracing::info!(
             threshold = config.noise_threshold,
             classes = ?chunk_filters.noise.classes(),
+            remember_secs = chunk_filters.noise.remember_secs(),
             "noise filter enabled"
+        );
+    } else if config.noise_remember_secs > 0.0 {
+        // The window is a rider on the chunk filter and does nothing without
+        // it. Said out loud, because an operator who set only the window has
+        // configured a protection that cannot fire, and silence here would
+        // look exactly like one that is working.
+        tracing::warn!(
+            remember_secs = config.noise_remember_secs,
+            "NOISE_REMEMBER_SECS is set but the noise filter is off; set \
+             NOISE_THRESHOLD above 0 and name at least one class for it to do anything"
         );
     }
     if chunk_filters.confirmation.enabled() {
@@ -270,6 +410,13 @@ pub fn run_daemon(
         let _alive = running_guard;
         tracing::info!("detection daemon started");
 
+        // The registry moved in with this closure. Files arriving through the
+        // watch directory carry no audio-source id, so they are judged by the
+        // default route — the primary classifier — exactly as before Stage 2.
+        // Per-source routing applies where a source is known; this path is the
+        // file watcher, which only knows a path.
+        let route = ClassifierRegistry::default_route();
+
         // Process any pre-existing backlog here, on the loop thread, rather
         // than before signalling readiness. The event consumer is already
         // draining by now, so a large backlog cannot block startup past the
@@ -279,7 +426,8 @@ pub fn run_daemon(
             process_existing_files(
                 &watch_dir,
                 &pipeline_config,
-                &mut model,
+                &mut registry,
+                &route,
                 &chunk_filters,
                 &mut species_filter,
                 filter_observer.as_ref(),
@@ -427,7 +575,8 @@ pub fn run_daemon(
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
-                    &mut model,
+                    &mut registry,
+                    &route,
                     &chunk_filters,
                     &mut species_filter,
                     filter_observer.as_ref(),
@@ -495,7 +644,8 @@ pub fn run_daemon(
 fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
-    model: &mut BirdNetModel,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
     chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&super::SpeciesFilterObserver>,
@@ -531,7 +681,8 @@ fn process_existing_files(
         match process_and_infer_filtered(
             &path,
             pipeline_config,
-            model,
+            registry,
+            route,
             chunk_filters,
             species_filter,
             filter_observer,
@@ -602,11 +753,14 @@ mod tests {
             watch_dir,
             model_path,
             labels_path,
+            extra_models: Vec::new(),
+            model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
             process_existing: false,
             metadata_model_path: None,
             metadata_labels_path: None,
+            species_aliases_path: None,
             on_species_filter_state: None,
             on_file_analysed: None,
             in_flight: None,
@@ -615,6 +769,7 @@ mod tests {
             species_lists_provider: None,
             privacy_threshold: 0.0,
             noise_threshold: 0.0,
+            noise_remember_secs: 0.0,
             noise_classes: Vec::new(),
             confirmation: crate::detection::corroboration::ConfirmationLevel::Off,
             latitude: None,

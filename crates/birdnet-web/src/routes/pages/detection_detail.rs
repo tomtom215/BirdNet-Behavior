@@ -14,6 +14,8 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
+use birdnet_integrations::ebird;
+
 use super::atoms::conf_bar;
 use super::{escape_html, simple_url_encode};
 use crate::state::AppState;
@@ -50,6 +52,10 @@ async fn detection_detail_page(
     let date2 = date.clone();
     let time2 = time.clone();
     let com2 = com_name.clone();
+
+    // An in-memory read, so it happens here rather than on the blocking pool,
+    // and before `state` is moved into the closure below.
+    let nearby = state.nearby();
 
     let found = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -88,6 +94,7 @@ async fn detection_detail_page(
         &det,
         verdict.as_deref(),
         &corroboration,
+        nearby.as_deref(),
         &headers,
     ))
 }
@@ -121,6 +128,7 @@ fn render_detail_page(
     det: &birdnet_db::sqlite::DetectionRow,
     verdict: Option<&str>,
     corroboration: &[birdnet_db::sqlite::ConcurrentDetection],
+    nearby: Option<&birdnet_integrations::ebird::Snapshot>,
     headers: &HeaderMap,
 ) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
@@ -134,6 +142,7 @@ fn render_detail_page(
     let meta = build_meta_rows(det);
     let correlation_section = build_correlation_section(det);
     let corroboration_section = build_corroboration_section(corroboration);
+    let nearby_section = build_nearby_section(nearby, &det.sci_name, ebird::now_unix());
     let conf = conf_bar(det.confidence);
     let review_widget = super::detection_reviews::render_review_widget(
         &det.date,
@@ -145,6 +154,11 @@ fn render_detail_page(
 
     // Public, HMAC-signed share link for this detection (O-07). The button
     // copies an absolute `/r/<token>` URL built from the page's own origin.
+    // The thread is a database read the page need not block on, and it is
+    // loaded the same way the page's other panels are.
+    let comments =
+        super::detection_comments::thread_placeholder(&det.date, &det.time, &det.sci_name);
+
     let token = crate::routes::share::issue_token_for(&det.date, &det.time, &det.com_name);
     let share_path = format!("/r/{token}");
     let share_button = format!(
@@ -176,7 +190,9 @@ fn render_detail_page(
       </table>
     </div>
     {corroboration_section}
+    {nearby_section}
     {review_widget}
+    {comments}
     {correlation_section}
   </div>
   <div class="bnb-card pad">
@@ -255,6 +271,54 @@ fn build_corroboration_section(hits: &[birdnet_db::sqlite::ConcurrentDetection])
   </table>
 </div>"#,
         n = hits.len(),
+    )
+}
+
+/// The "somebody else saw this here recently" card (`G-27`).
+///
+/// Renders **only** when eBird has a report of this species in the station's
+/// own neighbourhood. A species eBird does not list produces an empty string
+/// and no card, because eBird's silence is evidence of nothing: its coverage
+/// tracks how many birders are nearby, not which birds are. Rendering "not
+/// reported nearby" would read as a verdict on the detection, and it is not
+/// one — see `birdnet_integrations::ebird` for the full argument.
+fn build_nearby_section(
+    nearby: Option<&birdnet_integrations::ebird::Snapshot>,
+    sci_name: &str,
+    now: u64,
+) -> String {
+    let Some(snapshot) = nearby else {
+        return String::new();
+    };
+    let Some(seen) = snapshot.reported(sci_name) else {
+        return String::new();
+    };
+    let where_ = if seen.locality.is_empty() {
+        String::new()
+    } else {
+        format!(" at {}", escape_html(&seen.locality))
+    };
+    let count = match seen.how_many {
+        Some(n) if n > 1 => format!("{n} were"),
+        _ => "It was".to_owned(),
+    };
+    // An old snapshot still corroborates — a checklist from last week does not
+    // stop being true because the station lost its uplink — but the reader is
+    // told how old the answer is rather than left to assume it is current.
+    let age = if snapshot.is_stale(now) {
+        r#" <span class="bnb-pill">eBird unreachable recently; this is the last answer it gave</span>"#
+    } else {
+        ""
+    };
+    format!(
+        r#"<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">eBird</div><h3>Reported nearby</h3></div><span class="bnb-pill moss">{scope}</span></div>
+  <p class="bnb-meta">{count} reported{where_} on {date}, {scope}, within the last {back} days.{age}</p>
+  <p class="bnb-meta">Somebody else recording their own sightings had this species here recently, which is independent support for this detection. eBird saying nothing about a species is not evidence against it.</p>
+</div>"#,
+        scope = escape_html(&snapshot.scope_label),
+        date = escape_html(&seen.last_seen),
+        back = snapshot.back_days,
     )
 }
 
@@ -431,5 +495,126 @@ mod tests {
             html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
             "expected HTML-encoded id"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G-27: the eBird "reported nearby" card
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod nearby_tests {
+    use super::build_nearby_section;
+    use birdnet_integrations::ebird::{NearbySpecies, Snapshot};
+
+    const NOW: u64 = 1_800_000_000;
+
+    fn snapshot(species: Vec<NearbySpecies>) -> Snapshot {
+        Snapshot {
+            fetched_at: NOW,
+            scope: "geo:42.45,-76.48:25".to_owned(),
+            scope_label: "within 25 km".to_owned(),
+            back_days: 14,
+            species,
+        }
+    }
+
+    fn blackbird(locality: &str) -> NearbySpecies {
+        NearbySpecies {
+            // Stored normalised, the way `Snapshot::from_raw` writes it.
+            sci_name: "turdus merula".to_owned(),
+            com_name: "Eurasian Blackbird".to_owned(),
+            last_seen: "2026-09-07".to_owned(),
+            locality: locality.to_owned(),
+            how_many: Some(3),
+        }
+    }
+
+    /// A species somebody reported nearby gets a card saying who, where and
+    /// when — that is the whole point of the integration.
+    ///
+    /// Observed failing with `build_nearby_section` returning `String::new()`
+    /// unconditionally: the card was absent.
+    #[test]
+    fn a_species_reported_nearby_gets_a_card_with_the_date_and_place() {
+        let snap = snapshot(vec![blackbird("Hanshaw Rd. fields")]);
+        let html = build_nearby_section(Some(&snap), "Turdus merula", NOW);
+        assert!(html.contains("Reported nearby"), "{html}");
+        assert!(html.contains("2026-09-07"), "{html}");
+        assert!(html.contains("Hanshaw Rd. fields"), "{html}");
+        assert!(html.contains("within 25 km"), "{html}");
+        assert!(html.contains("3 were"), "the count is missing: {html}");
+    }
+
+    /// The load-bearing gate. eBird's silence about a species is **not**
+    /// evidence against it — its coverage follows birdwatchers, not birds —
+    /// so it must render nothing at all rather than a "not reported nearby"
+    /// line that would read as a verdict on the detection.
+    ///
+    /// Observed failing with the `reported(...)` guard replaced by an
+    /// `unwrap_or` rendering "not reported nearby": the card appeared.
+    #[test]
+    fn a_species_ebird_says_nothing_about_gets_no_card_at_all() {
+        let snap = snapshot(vec![blackbird("Hanshaw Rd. fields")]);
+        let html = build_nearby_section(Some(&snap), "Parus major", NOW);
+        assert!(
+            html.is_empty(),
+            "eBird's silence rendered a verdict: {html}"
+        );
+    }
+
+    /// The default station has no eBird key, so there is no snapshot and the
+    /// page must be exactly what it was before this existed.
+    #[test]
+    fn a_station_with_no_ebird_key_renders_nothing() {
+        assert!(build_nearby_section(None, "Turdus merula", NOW).is_empty());
+    }
+
+    /// An old snapshot still corroborates — a checklist from last week does
+    /// not stop being true because the station lost its uplink — but the
+    /// reader is told the answer is old rather than left to assume it is
+    /// current.
+    ///
+    /// Observed failing with `is_stale` ignored: the stale banner was absent
+    /// and a week-old answer read as today's.
+    #[test]
+    fn a_stale_snapshot_still_corroborates_and_says_that_it_is_old() {
+        let snap = snapshot(vec![blackbird("Hanshaw Rd. fields")]);
+        let much_later = NOW + birdnet_integrations::ebird::STALE_AFTER.as_secs() + 1;
+        let html = build_nearby_section(Some(&snap), "Turdus merula", much_later);
+        assert!(html.contains("2026-09-07"), "{html}");
+        assert!(html.contains("last answer it gave"), "{html}");
+
+        // The counterpart: a fresh snapshot must not carry the banner, or the
+        // banner means nothing.
+        let fresh = build_nearby_section(Some(&snap), "Turdus merula", NOW);
+        assert!(!fresh.contains("last answer it gave"), "{fresh}");
+    }
+
+    /// A locality is free text typed by a member of the public into their own
+    /// eBird checklist, and it lands in this station's HTML. It is the one
+    /// genuinely attacker-influenced string on this card.
+    ///
+    /// Observed failing with `escape_html` removed from the locality: the raw
+    /// `<script>` tag was in the page.
+    #[test]
+    fn a_locality_typed_by_a_stranger_is_escaped() {
+        let snap = snapshot(vec![blackbird(r"<script>alert(1)</script>")]);
+        let html = build_nearby_section(Some(&snap), "Turdus merula", NOW);
+        assert!(!html.contains("<script>alert(1)"), "{html}");
+        assert!(html.contains("&lt;script&gt;"), "{html}");
+    }
+
+    /// A count of one reads as "It was reported", not "1 were reported", and
+    /// an unrecorded count reads the same way rather than as "0 were".
+    #[test]
+    fn one_bird_and_an_uncounted_bird_both_read_as_a_sentence() {
+        for how_many in [Some(1), None] {
+            let mut bird = blackbird("A hedge");
+            bird.how_many = how_many;
+            let html = build_nearby_section(Some(&snapshot(vec![bird])), "Turdus merula", NOW);
+            assert!(html.contains("It was reported"), "{how_many:?}: {html}");
+            assert!(!html.contains("0 were"), "{how_many:?}: {html}");
+        }
     }
 }

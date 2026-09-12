@@ -108,6 +108,20 @@ const READ_SHAPES: &[&str] = &[
     "check_positive_int(config, \"",
     // The API token is read through a named constant.
     "pub const API_TOKEN_KEY: &str = \"",
+    // The capture watchdog's knobs carry both their names in one table
+    // (`src/capture/watchdog.rs`), so the file key is a literal this can see
+    // rather than a prefix stripped at runtime.
+    "config_key: \"",
+    // The extra-classifier settings do the same (`src/helpers/models.rs`):
+    // written out as literals in one table rather than assembled with
+    // `format!("MODEL_{n}_PATH")`, precisely so this scan can prove each one
+    // is read. The field names are distinctive on purpose — a bare `path: "`
+    // would match unrelated code and invent reads that are not there.
+    "path_key: \"",
+    "labels_key: \"",
+    "id_key: \"",
+    "threshold_key: \"",
+    "sample_rate_key: \"",
 ];
 
 /// Keys read in `src`, by shape. `get_parsed::<T>("KEY")` is matched

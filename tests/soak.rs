@@ -109,6 +109,8 @@ async fn soak_insertions_stay_bounded() {
         let time = format!("{:02}:{:02}:{:02}", (i / 3600) % 24, (i / 60) % 60, i % 60);
         let file_name = format!("soak-{i:08}.wav");
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-03-15",
             time: &time,
             sci_name: "Turdus merula",
@@ -195,6 +197,8 @@ fn insert_n(conn: &rusqlite::Connection, base: usize, count: usize) {
         let time = format!("{:02}:{:02}:{:02}", (i / 3600) % 24, (i / 60) % 60, i % 60);
         let file_name = format!("fault-{i:08}.wav");
         let record = DetectionRecord {
+            model_id: None,
+            model_agreement: None,
             date: "2026-03-16",
             time: &time,
             sci_name: "Turdus merula",

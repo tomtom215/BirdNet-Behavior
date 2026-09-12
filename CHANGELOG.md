@@ -38,6 +38,1237 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Changed — two classifiers with different windows now run together, and neither loses coverage
+
+**The chunk is cut to the longest window and stepped by the shortest** (`G-10`
+Stage 4, finishing the half that was recorded below as an open question). The
+registry used to refuse a classifier whose window differed from the primary's,
+because Stage 3's agreement count means "both reported this species in this
+chunk" and that sentence has no meaning when the two judged different spans of
+time. The refusal has narrowed to what genuinely cannot be reconciled — a
+**differing sample rate**, since the pipeline resamples a recording once and no
+rate is right for both.
+
+The obvious alignment, the coarsest window, is wrong in a way that is invisible
+from the code. Cut chunks at Perch's 5.0 s and step 5.0 s, and BirdNET+ V3.0 —
+4.5 s — hears the first 4.5 s of every chunk and never the last 0.5 s. That is
+a blind spot it would not have had running alone, it recurs on every chunk for
+the life of the station, and nothing reports it: the detections that would have
+been there simply are not there.
+
+Stepping by the **shortest** window keeps every classifier's coverage at least
+what it would be alone. The shortest-window model gets chunk starts identical
+to running by itself, which matters most in the pairing this project actually
+has: BirdNET+ V3.0's 4.5 s is the shorter of the two, so the model a station
+was already running is the one whose timeline does not move. Longer-window
+models get overlapping chunks instead of gaps and pay
+`max(window) / min(window)` more inferences — about 11 % for Perch beside
+BirdNET — which `run_daemon` logs at startup as `extra_inference_ratio`,
+because on a Pi 4 that is a real number and not a rounding error.
+
+`PipelineConfig::chunk_step_secs` carries the step. `None` keeps
+`chunk_duration_secs - chunk_overlap_secs`, which is what a one-classifier
+station has always done, and the daemon sets it only when the windows differ.
+
+**What agreement means, now that it can be said precisely.** Every classifier
+reads its own window from the same chunk start, so agreement is "two
+classifiers reported this species from audio beginning at the same instant" —
+not "within some overlapping interval", the other option the gap analysis
+listed, which would have needed a tolerance nobody could justify.
+
+The price, stated because it is not obvious: a detection is stamped with the
+**chunk's** span, so a shorter-window classifier's detection can carry an end
+time up to `max(window) - min(window)` later than the audio it read — half a
+second for BirdNET beside Perch. Stamping per-model spans instead would give
+the same merged species two different end times depending on which classifier
+won the confidence, which is worse; the recorded span always contains the audio
+heard, and with one classifier the two are identical.
+
+**A comment that was wrong before it was committed.** `run_daemon` took the
+chunk length from `model.recommended_chunk_secs()` and now takes it from the
+registry's longest window; the comment claimed the two were "exactly" the same
+number. They are on every waveform shape, and they are not on a mel shape,
+where `recommended_chunk_samples_from_shape` reads a count of spectrogram
+columns as a sample count and would ask for a six-millisecond chunk.
+`input_spec` refuses that reading, so in the case where they differ this is a
+fix rather than an equivalence. Both halves are gated, the second as the
+counterpart that stops the first passing against an `input_spec_from_shape`
+that had simply delegated every shape.
+
+### Documentation — the multi-classifier feature had no operator-facing page
+
+`docs/book/admin/classifiers.md`, **Running More Than One Classifier**, linked
+from the manual's Station section. `.env.example` documented the keys
+thoroughly and nothing else did: an operator had no page explaining what a
+second classifier buys, what it costs, how routing resolves, what agreement
+means on a detection row, or why the chunk arithmetic is shaped the way it is.
+The page states the limits alongside the features — `model_id` and
+`model_agreement` are written on every detection and read back by nothing yet;
+the memory gate skips a second classifier on a 1 GB board; bats are still not
+supported and why.
+
+**A catalogue note that this branch made false.** The `perch-v2` entry said
+Perch and BirdNET "cannot yet run together (see G-10 Stage 4)". That text is
+printed by `--install-model list` and served by `GET /api/v2/models/catalog`,
+and Stage 4 is what made it wrong. It now says they do run together and that
+`MODEL_n_SAMPLE_RATE=32000` is required, which is the part an operator will
+otherwise get wrong.
+
+**The committed CLI reference was stale.** `docs/book/_generated/cli-help.txt`
+predated both `--install-model` and `--species-aliases`, so the manual's CLI
+page was missing two flags and CI's drift gate would have failed on this
+branch. Regenerated with `scripts/gen-cli-help.sh`.
+
+### Fixed — four gaps this branch's own gates found once nothing else was failing ahead of them
+
+Each of these sat behind an earlier failure in the same test binary, so the
+target carrying it never ran. Running the suite with `--no-fail-fast` after the
+first fix surfaced the next, three times over.
+
+**The container could not have run `rsync`.** `OFFSITE_BACKUP=rsync` spawns the
+real `rsync`, and the runtime image installed no such package — so an operator
+who configured the rsync target, and whose settings page accepted it, would
+have got a failure at the spawn. `rsync` is now classified in the container
+gate's `TOOLS` registry as `Package("rsync")`, installed by the Dockerfile's
+runtime stage, and resolved by `docker.yml` inside the built image alongside
+`sftp`, which that loop had also never checked.
+
+**A free-space probe could hang the installer.** `model_catalog::free_space_bytes`
+shelled out to `df` and waited with a bare `.output()`. `df` on a path under a
+dead network mount blocks in `statfs` for as long as the mount does, and this
+call runs immediately before a several-hundred-megabyte download — so the
+station would have stopped with nothing logged. It now delegates to
+`birdnet_core::audio::capture::disk_usage`, which already asks the same
+question behind `run_with_timeout`, and which also passes `--` to `df`: the
+copy here did not, so a model directory whose name began with `-` was being
+read as a flag.
+
+**`MODEL_DIR` was a key the station would have called a typo.** `--install-model`
+reads it from `birdnet.conf`, and it was missing from `KNOWN_CONFIG_KEYS`.
+
+**A glob in the manual read as a stale key.** The backups page sends the rsync
+reader back to the `OFFSITE_SFTP_*` family rather than restating seven keys,
+and the documentation gate's scanner trimmed that to `OFFSITE_SFTP` — a name
+nothing implements — and reported the manual as telling operators to set it.
+The scanner now skips a match terminated by `*`, the same shape of fix as the
+two false positives already recorded on its counterpart. Checked both ways
+afterwards: a fabricated key added to the page, and a real key removed from it,
+each still fail the gate.
+
+### Added — getting an embedding out of a classifier, and what that revealed about the bat stage
+
+**Embedding extraction** (`G-10`, groundwork for Stage 6):
+`embedding_output_index`, `BirdNetModel::embedding_width` and
+`BirdNetModel::embed`. A classifier can now be asked for its embedding rather
+than its class scores.
+
+This exists because **Stage 6 is not the shape the plan described.** The plan
+called the bat classifier "the bat classifier, which additionally needs the
+≥192 kHz capture path and the ultrasonic validation filter". Checked against
+the model itself, `BattyBirdNET` is not a peer classifier at all: its input is
+`[batch, 1024]` — BirdNET **v2.4** embeddings — and 256 kHz recordings are fed
+to BirdNET *without resampling*, deliberately, so that 144 000 samples reads as
+the 3 s at 48 kHz BirdNET was trained on and ultrasound aliases down into the
+audible band. It is a **chained second stage**.
+
+That changes three things the plan did not capture. Stage 3's **agreement count
+must not apply to it** — "two classifiers agreed" is false when one is reading
+the other's intermediate output, and counting it would manufacture
+corroboration from a single model's opinion. The pipeline needs a **deliberate
+no-resample path**, the opposite of what it does. And it needs **BirdNET v2.4
+specifically**: V3.0 emits 1280-wide embeddings, Perch 1536, `BattyBirdNET`
+wants 1024 — and this repository ships V3.0 and has no real v2.4.
+
+The extraction finds the embedding **by exact name only**. Perch v2 exposes
+both `embedding` (a 1536-wide pooled vector) and `spatial_embedding` (a
+16 × 4 × 1536 feature map); a `contains` match would hand a chained head 98 304
+numbers where it expected 1 536, which is the Stage 4 output-head defect one
+layer down. A classifier with no embedding output reports `None` rather than
+offering its class head, which a chained head would consume as though it were a
+feature vector.
+
+Verified against the real BirdNET+ V3.0 (`embeddings [-1, 1280]`) and both
+committed fixtures — the V3.0 one exposes a 1280-wide embedding, the V2.4 one
+exposes none.
+
+**Stage 6 itself remains blocked**, and on things that are decisions or missing
+artifacts rather than unwritten code: the no-resample path, a real BirdNET
+v2.4, `audio_sources`'s sample-rate `CHECK` (which permits nothing above
+48 kHz), `G-14`'s ultrasonic filter, and Stage 4's unfinished half — a 256 kHz
+chained head differs from the primary's spec, and the registry refuses that.
+
+### Added — installing a classifier, without ever installing the wrong one
+
+**A model catalogue and a verified installer** (`G-10` Stage 5).
+`birdnet-behavior --install-model perch-v2` fetches a classifier, checks it
+against a sha256 compiled into the binary, and installs it atomically;
+`--install-model list` prints what is available. `GET /api/v2/models/catalog`
+is the same list as JSON.
+
+Every digest in the catalogue was **measured from the file this session**, not
+copied from a model card: BirdNET+ V3.0 preview3 at
+`2a0f9efb…b7d743` (541 391 777 bytes) and Perch v2 at `bf0c8467…cefa1f`
+(409 148 616 bytes).
+
+**The catalogue is compiled in, not fetched.** Upstream fetches one from
+Hugging Face with a configurable endpoint. That is a remote document deciding
+which URL a station downloads hundreds of megabytes from *and* which digest it
+checks them against; pinning both here makes the checksum a promise this
+repository makes, verifiable by anyone reading the source. The cost is that a
+new model needs a release, which is the right cost.
+
+**It streams rather than buffers.** `auto_update` reads an asset into memory
+and verifies before touching disk — correct for a 20 MB binary, and an
+out-of-memory kill for a 541 MB model on a 1 GB board, which is the failure
+`G-33`'s memory policy exists to prevent. The bytes stream to disk with the
+digest computed as they arrive, and the safety property is kept by other means:
+what lands unverified has a name the station cannot load, and only a verified
+file is ever given the real one. A mismatch deletes both.
+
+**Free space is checked before the network.** 400 MB onto a card with 300 MB
+free does not fail cleanly — it fills the card, and a station whose disk is
+full stops recording birds. Refused, with a 512 MiB margin, and a filesystem
+that will not report its free space counts as none rather than plenty.
+
+**There is no install API endpoint**, though upstream has one. A 400 MB
+download takes hours on a field station's uplink: a request handler has nowhere
+to report progress, and a retry starts a second download beside the first. It
+is a foreground command where an operator can watch it fail.
+
+Two things were found by running the command rather than testing it. It
+**panicked on first invocation** — `reqwest::blocking` cannot build a client
+inside a tokio runtime, and `main` is `#[tokio::main]`; the thirteen unit tests
+passed because they are plain sync functions that never enter one, and
+`birdnet-integrations` says in its own header that callers must use
+`spawn_blocking`. And `MODEL_DIR` was read from the config file only, ignoring
+the `BIRDNET_MODEL_DIR` the shipped compose file sets.
+
+Two gates were also found to be green for the wrong reason, by mutating them:
+the free-space refusal accepted an unrelated `Io` error as success, so it
+passed with the check deleted, and the "unknown is not plenty" test only ever
+exercised the measurement, never the decision. The decision is now a pure
+`fits()` that both test directly — the same separation `plan_with` needed in
+Stage 2, for the same reason.
+
+### Fixed — a real second model found two defects the first one could not
+
+**Stage 4 of `G-10`** is meant to be the test of whether Stages 1–3 are right.
+Run against the real Google Perch v2 ONNX (409 148 616 bytes, sha256
+`bf0c8467…cefa1f`), it answered: not quite, in two specific ways. Both were
+confirmed against the file rather than its model card.
+
+**The class scores were read from the wrong output.** Perch declares four:
+
+```text
+[0] embedding          [-1, 1536]
+[1] spatial_embedding  [-1, 16, 4, 1536]
+[2] spectrogram        [-1, 500, 128]
+[3] label              [-1, 14795]
+```
+
+The selector was `usize::from(outputs.len() > 1)` — index 1 when a model has
+more than one output, which is right for BirdNET+ V3.0 (`embeddings`, then
+`predictions`) and picks `spatial_embedding` here: 98 304 numbers of internal
+representation, read as though they were 14 795 species scores. It would have
+produced confident detections of whatever the arithmetic landed on. The head is
+now found by the thing that identifies it — an output whose trailing dimension
+is the label count — with a name match as the fallback so a **mispaired label
+file still reaches the doctor's existing width check** instead of being
+pre-empted here. Loading the real model through the real loader afterwards
+gives `output_dimension = Some(14795)`, exactly the label count.
+
+**The sample rate was a guess wearing the word "declared".** Stage 1 said
+`InputSpec` carries the rate; it still derived it from a lookup over two
+BirdNET shapes with 48 kHz as the default. Perch declares `[-1, 160_000]`,
+which is 5 s at 32 kHz — and is equally 3⅓ s at 48 kHz. Nothing in the tensor
+distinguishes them. `MODEL_SAMPLE_RATE` / `MODEL_n_SAMPLE_RATE` now declare it,
+with the derivation kept for the shapes it was actually built from.
+
+**And a question, which was recorded rather than guessed at — and is now
+answered.** The pipeline decodes, resamples and chunks a recording **once**,
+from the primary's spec. Perch wants 5 s windows where BirdNET+ V3.0 wants
+4.5 s, so running both means deciding what a merged detection *means* when two
+classifiers judged different spans of time — which Stage 3's agreement count
+assumes they did not. While that was open the registry **refused** a classifier
+whose spec differed from the primary's, at startup, naming both specs: Perch
+was configurable and validated, and never silently fed windows it was not
+trained on. The answer is the chunk arithmetic in the first entry above, and
+the refusal now covers the sample rate alone.
+
+### Added — two classifiers agreeing is recorded as what it is
+
+**A merge policy and an agreement count** (`G-10` Stage 3). Every classifier
+routed to a chunk now runs on it, and what they say is combined: union, each
+model judged against its own threshold, one row per species carrying the
+highest confidence any classifier gave it, which classifier gave it, and how
+many reported the species at all. Migration 50 adds `model_id` and
+`model_agreement` to `detections` — two nullable columns, added with `ALTER
+TABLE`, which SQLite does in constant time without rewriting a table that on
+the station this project is for holds three years of rows on an SD card.
+
+**Agreement is counted, never folded into the confidence**, and the temptation
+to is worth naming. A combined number — an average, a maximum with a bonus, a
+noisy-or — would have no calibration behind it while sitting in the same
+column, on the same scale, as a model's real output. Every threshold an
+operator has set, every historical comparison and every export would silently
+change meaning. The reported confidence stays the winning classifier's actual
+output; the corroboration is a separate integer a reader can weigh themselves.
+A gate fails if the merge turns 0.8 and 0.6 into 0.7.
+
+**Union, not intersection.** A bat classifier and BirdNET share almost no
+labels, so requiring both to agree would report nothing at all. A species only
+one classifier heard is still a detection — with an agreement of one, which is
+a weaker claim than two and is recorded as such.
+
+**One classifier repeating itself is not corroboration.** A duplicated row in a
+label file must not manufacture agreement out of one opinion, so the count is
+of distinct classifiers.
+
+**`NULL` is a third state** and readers must not collapse it: it means the row
+predates this migration, when there was one classifier and nothing recorded
+which. `1` means one classifier was asked and one answered.
+
+**The human score is the highest any classifier reported**, not the primary's.
+It drives the privacy gate, and if any model heard speech the safe reading is
+that there was speech — suppressing a bird is recoverable, publishing somebody's
+conversation is not.
+
+A single-classifier station — every station in the field today — gets the same
+detections in the same order, plus provenance: `model_id` naming its one
+classifier and an agreement of one. That is worth having on its own; a station
+whose model was swapped last March can now tell which of its detections came
+from which.
+
+Verified: `birdnet-core` and `birdnet-db` 19 suites / 1 346 tests, and the
+three model-gated end-to-end suites 15 tests under `BIRDNET_REQUIRE_MODEL=1`
+against the real 11 K-species model.
+
+### Added — a station can run more than one classifier, and refuses to run more than it can hold
+
+**A classifier registry and per-source routing** (`G-10` Stage 2). A station
+may declare up to three classifiers (`MODEL_2_PATH` / `MODEL_2_LABELS` /
+`MODEL_2_ID` / `MODEL_2_THRESHOLD`, and the same at `_3_`) and route audio
+sources to them with `MODEL_ROUTES=pond:perch,garden:birdnet+perch`. A station
+that declares none loads exactly one classifier, as it always has.
+
+Every decision here is shaped by one question: what happens at three in the
+morning, four months in, with nobody on site.
+
+**It refuses more memory than the machine has.** All classifiers together may
+use at most **half** the effective ceiling — the smaller of physical RAM and
+any cgroup limit, the same number `G-33` uses for the analytics pool —
+counting each model's file size plus a 256 MiB working-set allowance. On a 1 GB
+board that budget is 512 MiB, which one BirdNET model already fills, so a
+second is skipped and the arithmetic goes in the journal. A machine that does
+not report its memory gets one classifier: **"unknown" must not read as
+"plenty"**, because that reading is what gets a station OOM-killed unattended.
+The fraction is a judgement, not a measurement on a Pi — nobody here has one —
+and the module header says so, with what would falsify it.
+
+**Every misconfiguration fails at startup.** No classifier at all, two under
+one name, a model that will not load, or a route naming a classifier that does
+not exist: each stops the daemon before it starts, where the journal and
+`--doctor` will show it. The route case is the one that matters most —
+`MODEL_ROUTES=front-door:pecrh` accepted and discovered at runtime would leave
+that microphone unjudged for months, and the loss would be invisible: the
+station stays up, the other sources keep detecting, and nothing says the front
+door went quiet.
+
+**Silence is unreachable by omission.** A source nobody routed is judged by the
+primary classifier, never by none. Not by *all* of them either — a station that
+adds a bat classifier has not asked for every microphone to be run through it,
+and quietly doubling an unrouted source's inference cost is how a Pi that was
+keeping up stops keeping up.
+
+Two drift gates shaped the implementation rather than being worked around. The
+config-key scanner proves each key in `KNOWN_CONFIG_KEYS` is really read by
+scanning for literals, which `format!("MODEL_{n}_PATH")` defeats — so the keys
+are a literal table with field names distinctive enough for the scan to verify
+(`path_key`, not `path`, which would match unrelated code and invent reads).
+And `.env.example` is checked against what the binary reads, so the names are
+exported as `MODEL_ENV_KEYS` — listed rather than derived by prefix, because
+`MODEL` and `MODEL_PATH` are also config keys and are *not* read that way;
+deriving would have invented two reads that do not happen.
+
+Verified against the real 11 K-species model: `birdnet-core` 5 suites / 846
+tests, and the three model-gated end-to-end suites 15 tests under
+`BIRDNET_REQUIRE_MODEL=1` — the evidence that a single-classifier station,
+which is every station in the field today, behaves exactly as it did.
+
+### Fixed — a 48 kHz model was being fed three-quarters silence
+
+**BirdNET V2.4 received a mel spectrogram zero-padded into a waveform tensor**
+(`G-10` Stage 1). Measured, on the committed V2.4 fixture with the pipeline's
+own default configuration:
+
+| | |
+|---|---|
+| what the model declares | 144 000 values — exactly 48 kHz × 3 s, a sample count |
+| what the pipeline computed | a 128 × 282 mel spectrogram: 36 096 values |
+| what the tensor builder did | padded it with **107 904 zeros** and inferred on it |
+
+Three things had to line up for this to be invisible. The pipeline decided
+input *format* from *sample rate* — `expects_raw_audio()` was literally
+`infer_sample_rate() == 32_000` — so "32 kHz" stood in for "waveform", which is
+true of V3.0 by coincidence and false of V2.4. The tensor builder padded any
+short slice without complaint, so a four-fold mismatch looked like a ragged
+final chunk. And CI fetches a V3.0 model, so every real-model end-to-end run
+took the waveform branch; the mel branch, which is the code default and what
+any 48 kHz model selects, had no real-model coverage at all.
+
+**`InputSpec`** now carries sample rate, window length and format as three
+declared facts, derived from the ONNX shape's rank and middle dimension — a
+property of the model file rather than a coincidence between the two models
+that happened to ship first. `[1, N]` and `[1, 1, N]` are waveform windows;
+only `[1, M, F]` with `M > 1` can be a mel. Both BirdNET V2.4 and V3.0 are
+waveform models, which is what the old rule got wrong.
+
+**The tensor builder now refuses** a slice under half the expected width,
+naming both lengths and the likely cause, instead of filling the difference
+with silence. Padding is for a recording that ran out of audio — a few per
+cent. At 75 % it is hiding a category error.
+
+**`Classifier`** (`inference/classifier.rs`) is the seam the rest of `G-10`
+needs: `labels`, `input_spec`, `infer`. One divergence from the plan's sketch —
+`infer` takes `&mut self`, because the ONNX session does, and interior
+mutability for a signature nobody needs is a worse trade.
+
+Verified against the **real** 11 K-species model (sha256 2a0f9efb…b7d743, the
+same artifact CI pins), not only the fixture: it reports a fully-dynamic
+`[1, 1]` shape resolving to 32 kHz, 144 000 samples, waveform, 4.5 s — and
+`expects_raw_audio` is `true` both before and after this change, so nothing
+moves for a station running the shipped model. The four model-gated end-to-end
+suites pass with `BIRDNET_REQUIRE_MODEL=1`, which turns a silent skip into a
+hard failure; their non-zero elapsed times are what distinguishes real
+inference from a skip that would otherwise report `ok`.
+
+Still unverified, and stated rather than implied: no real BirdNET V2.4 ONNX
+exists to test against here — this repository publishes only the V3.0 release —
+so *that a real V2.4 declares `[1, 144_000]`* remains inference from the
+committed fixture and from 144 000 being exactly 48 000 × 3. The fix is correct
+either way: a waveform model now reaches the waveform path, and a model that
+genuinely wants mel declares it by its shape instead of being guessed at.
+
+### Added — both kinds of rule travel in one file
+
+**Metric-rule export and import** (`G-29`, completing it). `/admin/rules/export`
+now carries the station alerts — disk, memory, temperature, detection rate,
+queue depth — alongside the detection rules, and the import reads both. They are
+different mechanisms sharing a word, but an operator moving a station or asking
+for help wants one file, not two.
+
+`EXPORT_VERSION` goes to 2, which is only safe because the files already in
+operators' hands still import: a version-1 file has no `metric_rules` field at
+all, and that has to read as "no metric rules" rather than a parse failure that
+would take the detection rules down with it. A gate removes the serde default
+to prove it catches that. A file from a *newer* station is still refused with a
+message naming both versions — which is what the version is for.
+
+Metric rules carry no credential, so the `?secrets=1` question does not apply
+to them; the `redacted` flag says nothing about them either way, and the
+documentation says so rather than leaving it ambiguous.
+
+Two things an import deliberately does not do. A metric this station has never
+heard of is **named and skipped**, not silently dropped — a file from a newer
+station would otherwise import looking complete while missing the rules that
+mattered. And an import applies the same validation the form does, so a rule
+that could never stop firing ("disk above −1", which fires on every poll of
+every station for ever) is refused on both paths; an import is not a way around
+the check.
+
+### Added — the gaps between the barks
+
+**`NOISE_REMEMBER_SECS`** (`G-17`). The noise filter discards a chunk a dog
+barked in, and its doc comment argues — correctly — against spreading that to
+neighbouring chunks: a bark is a few hundred milliseconds and the chunks
+overlap.
+
+That is right about a *bark* and leaves something uncovered. A dog that barks
+for a minute is not one bark; it is a bark, a gap, a bark, a gap. In the gaps
+there is no `Dog` above threshold, so the chunk filter has nothing to fire on —
+and the classifier, still hearing the tail and the room, produces the same
+phantom species it produced during the bark. The filter silences the barks and
+lets the gaps through, which is exactly backwards for the record.
+
+After a chunk is suppressed, the species that were **in that chunk with the
+noise** now stay suppressed for `NOISE_REMEMBER_SECS`.
+
+**Those species, not every species.** A blanket window would be a mute button:
+a dog barking through the dawn chorus would erase the chorus, trading one
+phantom wren for every real bird in the minute. What a bark produces is a
+*specific* wrong answer — the species its spectrum most resembles, the same one
+each time — so that is what the window suppresses. A gate asserts a blackbird
+singing in the same gap is still recorded.
+
+Off by default, because it does remove real detections whenever a real bird
+happens to be the species a dog resembles, and that is a trade an operator
+should make knowingly. Setting it without `NOISE_THRESHOLD` logs a warning
+rather than doing nothing quietly.
+
+It reaches to the end of the recording being analysed and no further. Carrying
+it across segments would mean state on a filter every audio source shares, so a
+bark on the garden microphone could silence a species on the pond one — a worse
+error than the one being fixed, and an invisible one. The boundary is stated in
+the module header rather than left to be discovered.
+
+### Added — one page for "this species has cost me four thousand detections"
+
+**Species storage** (`N-4`), at `/admin/species/manage`. One row per species
+this station has ever recorded: detections, clips still on disk, how many are
+locked, when it was last heard. Three actions, each confirmed and each written
+to the audit log — exclude it from now on, delete its detections, or reclaim
+its audio while keeping the rows.
+
+The recurring situation is a squeaky gate that has produced four thousand
+Eurasian Wrens. Doing anything about it previously meant three screens, and
+there was no screen at all for the detections themselves.
+
+**Locked detections are never touched.** A single-row delete does not check the
+lock, because there the operator is looking at the row they named; a bulk
+action is issued against a *species* and sweeps up rows nobody is thinking
+about — including the one locked last spring because it was a county first. So
+every bulk action here skips locked rows, the table shows the locked count
+**before** the button is pressed, and the result says how many were kept. An
+operator not told would find two detections of a species they believe they
+deleted and reasonably conclude the button is broken.
+
+Deleting clips keeps the rows and their filenames, which is migration 22's
+point: the name records that audio existed and what it was called, and that is
+provenance an analysis may need long after the space was recovered. The rows
+are marked reclaimed *before* the files are unlinked — a row marked pruned
+whose file survives wastes disk, while a file removed without the mark offers a
+player for audio that is gone, and the first is the cheaper thing to be wrong
+about.
+
+`File_Name` comes from the database, which on a migrated station holds whatever
+BirdNET-Pi wrote there, and this page **unlinks** what it resolves. Every path
+is canonicalised and checked to be inside the recordings directory first; a
+gate puts a file outside the tree and asserts it survives a `../` filename.
+
+Byte totals are a per-row **Measure** action rather than a column, because they
+are `stat` per clip — thousands of syscalls for the species this page exists
+for, and a page that took twenty seconds to open on an SD card would not be
+worth the number.
+
+One gate in this change was green for the wrong reason and was found by
+mutating it: the "worst first" ordering test used a fixture where detection
+order and alphabetical order coincided, so replacing `ORDER BY count DESC` with
+`ORDER BY name` changed nothing. The fixture now makes the two disagree, and
+the repaired gate catches a second mutation it could not have caught before.
+
+### Added — a daily backup, without a daily rewrite of the database
+
+**`BACKUP_SCHEDULE=daily`** (`G-30`, the schedule half). Weekly stays the
+default, because switching an existing station to daily would multiply its
+offsite upload by seven and that is not a change to make underneath somebody.
+
+The interesting half is what `daily` deliberately does **not** make daily. The
+weekly job was four steps — local snapshot, offsite upload, prune, then a
+**space reclaim** that checkpoints the write-ahead log and returns free pages
+to the filesystem. Shortening that job's interval would have rewritten parts of
+the database file every day, and on the SD card this project targets that is
+write endurance spent for space nobody asked to have back. An operator who
+wants a daily backup is not asking for that.
+
+So the reclaim is now its own job on its own weekly cadence, under the new key
+`space_reclaim`, and `BACKUP_SCHEDULE` moves only the backup. The catalogue
+drift gate from `G-32` is what made this cheap: adding the job to the scheduler
+without adding it to the catalogue fails a test that scans the source for `pub
+const JOB_` declarations.
+
+`GET /api/v2/system/jobs` reports the configured cadence rather than the
+default, so a daily station is not told its backup is not due for another six
+days. That took one parameter rather than a second copy of the schedule: the
+`BackupSchedule` type lives in `birdnet-db` beside the job keys, the scheduler
+reads it, and the API reads the config file the way `routes::admin::doctor`
+already does — a gate asserts the reclaim keeps its weekly interval under both
+schedules, which is what would catch the cadence being applied to every job
+instead of the one that is configurable.
+
+`spawn_database_maintenance` took its ninth positional parameter with this
+change, two of them `u32` and three of them paths — a transposed pair would
+have compiled and shown up as a station pruning the wrong directory. It takes a
+`MaintenancePlan` now.
+
+### Added — a backup that survives a bad uplink
+
+**`OFFSITE_BACKUP=rsync`** (`G-30`, the target half). The same backup, to the
+same SSH server, with the same `OFFSITE_SFTP_*` settings — only the program
+moving the bytes changes, so switching is one word and switching back is one
+word.
+
+It is here for one reason: **it resumes.** A station on a rural link that drops
+at 90 % of a 1.3 GB backup continues from there next time; over SFTP the same
+backup starts again from zero, and on a link bad enough to matter it may never
+finish at all. `OFFSITE_RSYNC_BWLIMIT` is the second reason — a backup that
+saturates a shared connection for an hour is its own kind of failure.
+
+**It is not here because rsync is incremental, and the row that asked for it
+was wrong about that.** The gap analysis justified rsync as "it is
+incremental". Backups are encrypted before they leave under a fresh random
+argon2 salt and nonce prefix, so every run derives a different key. Measured on
+a 1 MiB file at rsync's 700-byte block size, counting matches at every offset:
+1496/1497 blocks reusable in plaintext with one region changed, **0/1498**
+encrypted, and **0/1498** encrypted with byte-identical plaintext. The last
+figure is the one that settles it — with nothing changed at all, the salt alone
+leaves no block in common. rsync sends the whole file every time. The module
+says so in its own header rather than repeating the claim.
+
+rsync moves the bytes; `sftp` still creates the directory, lists it and deletes
+what retention drops. That is not a shortcut: rsync has no command that removes
+one named remote file, and its nearest idiom — an empty source directory with
+`--delete` and an include filter — removes everything the filter does not name.
+Adding a second way to lose every offsite backup, in exchange for nothing, was
+not a trade worth making.
+
+The SSH policy is now written once. `SftpTarget::ssh_policy_options` is shared
+by the `sftp` client and by the `ssh` transport rsync is handed, because a
+copied list is the obvious way for host-key checking to be enforced on one path
+and quietly missing from the other — and neither path's own tests would have
+noticed. A gate asserts the two carry the same policy.
+
+One asymmetry the gates pinned: the remote-path allowlist permits a space,
+because `sftp` quotes its batch arguments and can carry one. rsync splits its
+own arguments and cannot, so the rsync target refuses a remote directory its
+sibling accepts.
+
+### Added — the station can say which of its own jobs have never run
+
+**`GET /api/v2/system/jobs`** (`G-32`, completing it). Seven background jobs
+keep a station healthy — the integrity check, the backup and VACUUM, the
+offsite upload, the recording cap, the log retention pass, the summary drift
+check, the session prune — and until now there was no way to ask about them
+except to read the journal.
+
+The design point is what the list is built from. `maintenance_runs` holds a
+row per job that has **completed at least once**, so an endpoint written the
+obvious way — enumerate the table — answers a different question from the one
+being asked, and answers it reassuringly: a station whose backup has never run
+would return a short, clean list with the problem simply absent. Migration 28's
+own note already said this ("a third state the badge must not confuse with a
+failure") about the same table. So the endpoint walks a job *catalogue* and
+looks each row up, and a job that has never run appears with `last_run_unix:
+null` and `due_reason: "never_run"`. A unit test scans the source for `pub
+const JOB_` declarations and fails if one is missing from the catalogue, so a
+job cannot be added to the scheduler and stay invisible here.
+
+`ok` is tri-state and the response says so: `null` means either *never run* or
+*this job has no pass/fail to report*, and a `reports_verdict` flag separates
+those from a recorded `false`. A session prune that succeeded and an integrity
+check that failed both have falsy verdicts and mean opposite things.
+
+**The due rule now has one definition instead of two.** It moved into
+`birdnet-db` beside the job keys as `due_state`, and `src/maintenance.rs::due`
+calls it for the decision, keeping only what a pure function cannot do: read
+the timestamp off disk and apply its in-process floor. Before this the loop
+that runs a job and anything reporting it as overdue were separate copies of
+three branches — never run, clock moved backwards, interval elapsed — and the
+third of those had no test at all. It has one now, in the crate both callers
+share.
+
+### Added — eBird says whether anybody else has seen it lately
+
+**eBird recent observations** (`G-27`). The station already had a geographic
+opinion about which species are plausible: the BirdNET range model. That
+opinion is climatological. It knows a Common Swift belongs here in July, and it
+has no idea the first one of the year arrived last Tuesday. eBird's recent
+observations are the opposite kind of evidence — a person stood near here
+within the last fortnight and wrote down what they saw — and that is the better
+answer to *is this bird around right now*.
+
+Two places use it, both as corroboration and neither as a filter. A detection's
+detail page gains a **Reported nearby** card when somebody reported that species
+in the station's neighbourhood recently. The suspect-species report under
+Station → Data marks a flagged species somebody reported nearby, and its
+*Exclude* confirmation says so — a human birder standing near the microphone is
+about the strongest argument there is against excluding a species.
+
+**What it deliberately does not do is treat eBird's silence as evidence.**
+eBird coverage follows birdwatchers, not birds: a well-watched county produces
+hundreds of checklists a week, and a quiet valley produces none, ever, for
+anything. Had absence from eBird been allowed to count against a species, the
+station with nobody nearby to confirm anything — the one that most needs an
+automated check — would have had its whole list flagged. So a species eBird
+says nothing about renders exactly as it did before, and no verdict anywhere
+changes.
+
+Off unless `EBIRD_API_KEY` is set. There is no second enable flag: eBird needs
+a key for every endpoint, so the key is the opt-in and a station without one
+never contacts eBird. By default it asks about a 25 km circle around the
+station's own coordinates rather than an administrative region — *reported
+within 25 km* says far more than *reported somewhere in this state* — and
+`EBIRD_REGION` overrides that for the genuinely remote station whose radius
+contains no observers. Coordinates are sent rounded to two decimal places,
+which is all eBird documents that it accepts and about a kilometre of
+precision. The key is mountable from a file (`BIRDNET_EBIRD_API_KEY_FILE`) and
+travels in eBird's `x-ebirdapitoken` header, never in a URL where a proxy log
+would keep it.
+
+The snapshot is cached to disk and read back before the first fetch, so a
+station restarting at 03:00 can answer immediately and a station whose uplink
+is down keeps the last answer it got — labelled as old rather than passed off
+as current — instead of losing the feature.
+
+The decoder is written against eBird's published API documentation rather than
+against live bytes: every `/v2/` endpoint answers `403` without a key this
+repository does not have, confirmed against four of them. Its fixtures are that
+documentation's own example bodies, and its doc comment says so rather than
+implying a verification that did not happen.
+
+### Added — the species pages browse by taxonomic rank
+
+**Class, order and genus** (`G-15`, second half). A flat list of every bird a
+station has heard cannot answer "show me the woodpeckers". The classifier's
+label file states two ranks — its header is
+`idx;id;sci_name;com_name;class;order` — and the genus is the first word of the
+binomial, so three ranks are available without inventing anything.
+
+The List and Photos views gain a row of **order chips** with each order's
+species count, built from the species *this station* has recorded rather than
+the classifier's 11 560: a garden with forty birds gets a handful of orders, not
+seventy-five, and every chip leads somewhere. Chips, search and the view
+switcher compose — each one's links carry the others, which is how a filter
+control usually breaks. Each species' detail page gains a `class · order ·
+genus` line, every rank a link back to the list narrowed to it, so "the other
+*Dryobates* I've heard" is one click from a woodpecker.
+
+**No family rank**, and that is the whole of the design decision. The label file
+has no family column; a family inferred from a genus would be a guess sitting
+beside two stated facts. Genus gets no chip row either — 2 907 genera is not a
+control — only the detail-page link, where the question is about one bird.
+
+A station whose label file carries no taxonomy (the V2.4 text format has no
+columns at all) gets no chips and pages identical to before; so does one where
+every species falls in a single order, because a control offering the only
+choice there is is furniture. `labels.rs` now parses the `order` column
+alongside `class`, and `SpeciesLabel::genus()` returns `None` for a one-word
+label rather than guessing its rank — the pinned file has 55, of which 14 are
+family names ending `-idae` and the rest bare genera.
+
+### Added — the weather can come from the anemometer in your own garden
+
+**Three weather providers** (`G-26`). Open-Meteo stays the default and nothing
+about an existing station changes. Two more are selectable with
+`WEATHER_PROVIDER` in `birdnet.conf`:
+
+- **`met-no`** — the Norwegian Meteorological Institute's Locationforecast.
+  Keyless, and a better model over Europe. Its terms require a User-Agent that
+  identifies the application and gives a contact address; a generic one is
+  answered with `403`, so the client sends a real one.
+- **`wunderground`** — a **personal weather station's** own current
+  observations, with `WEATHER_STATION_ID` and `WEATHER_API_KEY`. This is the one
+  worth having: a gridded forecast is a model's opinion about a cell several
+  kilometres across, and a personal weather station is an instrument ten metres
+  from the microphone. For asking why the birds were quiet on Tuesday, the
+  instrument wins.
+
+An enum rather than the trait the finding proposed. The set is closed,
+`birdnet-integrations` carries no `async-trait` and constructs no runtime, so a
+trait here would be either dyn-incompatible or a boxed-future dance for no gain
+— and an exhaustive `match` is what makes a fourth provider *fail to compile*
+until every site handles it.
+
+A `WEATHER_PROVIDER` nobody implements does not start the poll, rather than
+falling back to the default. A station configured to read its own anemometer
+and quietly served a county forecast instead looks exactly like a station that
+is working. Wunderground without both credentials is refused the same way, at
+startup, rather than discovered as a `401` every half hour in a log nobody
+reads. The API key joins the mountable credentials from `G-28`
+(`BIRDNET_WEATHER_API_KEY_FILE`), and the error path never logs the request URL
+— Wunderground's carries the key in its query string.
+
+Two things each provider honestly cannot fill in, left empty rather than
+invented:
+
+- **MET Norway reports no weather code.** It describes the sky with a symbol
+  string (`partlycloudy_day`), not a WMO number. A mapping table would be
+  guesses in a column that reads as fact.
+- **A personal weather station reports no cloud cover**, because it measures
+  the air rather than the sky. Its precipitation is the hourly *rate* —
+  deliberately not `precipTotal`, which accumulates since local midnight and
+  would read as a downpour by evening after one morning shower.
+
+Which provider is asked is gated by a test that stands up a listener and reads
+the request line off the socket. Every other gate here exercises a decoder or a
+struct field, and a `fetch_hourly` whose `match` sent all three providers to the
+same endpoint would have passed all of them — which is exactly what a mutation
+of that `match` showed before the gate existed.
+
+The MET Norway decoder is written against a **live response**, captured from
+`api.met.no` on 2026-09-11 and committed as the test fixture; its units come
+from that response's own `properties.meta.units` block rather than from memory.
+The Wunderground decoder is **not** verified that way and says so in its own
+doc comment: that endpoint needs a station owner's API key, which this
+repository does not have, so it is written against the published shape and
+pinned to a documented sample.
+
+### Added — a detection can carry more than one person's reasoning
+
+**Detection comments** (`G-23`). A verdict says what the station decided; six
+months later the question is why. "Call length says Downy, but the spectrogram
+is Hairy" is the sentence that makes a record defensible to somebody who was not
+there, and there was nowhere to put it.
+
+`detection_reviews.notes` looked like that field and could not be it. Migration
+13 puts that table under `UNIQUE(date, time, sci_name)` and writes it with
+`INSERT … ON CONFLICT`, so a second reviewer's note **replaced** the first —
+silently, and with no user column, so neither of them was named.
+
+Migration 49 adds `detection_comments`: many rows per detection, each with the
+account that wrote it *and* the username as it was at the time, so removing an
+account (`ON DELETE SET NULL`, never `CASCADE`) does not delete the reasoning or
+make it anonymous.
+
+**Append-only at the database, not by convention.** A trigger aborts any UPDATE
+of a comment's id, detection, author, body or timestamp. A no-rewrite rule that
+lives only in the absence of an update function is one `conn.execute` away from
+being untrue.
+
+That trigger was written to cover the whole row first, and a test caught what
+that does: `ON DELETE SET NULL` *is* an UPDATE of the child row, so deleting any
+account that had ever commented aborted with the append-only message — **users
+became undeletable**. The trigger now names its columns and leaves `user_id` out
+of them. It is the join, not the record; `author` holds the name and is locked.
+
+Deleting a comment stays possible, because a note with a typo or a neighbour's
+name in it needs a way out. The audit log records the id and the author and
+never the body — a comment removed because of what it said must not survive in
+the log that recorded its removal.
+
+On the page: a thread under the review widget on every detection-detail page,
+oldest first so a reply follows what it answers, lazily loaded like the page's
+other panels. Writing needs the same admin sign-in as confirming or rejecting;
+reading needs nothing. Over the API: `GET`/`POST` on
+`/api/v2/detections/comments` and `POST /api/v2/detections/comments/delete`,
+with comments attributed to `api` rather than to a name the caller supplies —
+a bearer token is not a person, the same reason every audit row this API writes
+has a null user.
+
+The batch half of this finding shipped earlier, in PR #234; nothing here was
+blocked on it.
+
+### Fixed — 41 birds the range filter could never admit
+
+**Vocabulary alignment between the two models** (`G-15`, first half). The
+classifier says what it heard; the geomodel says which species plausibly occur
+at this latitude in this week. They are two models with two label files, frozen
+at different points in a moving taxonomy, and they do not always spell a species
+the same way. A geomodel name the classifier does not carry verbatim was
+dropped, in silence.
+
+Measured on the pair the installer pins — geomodel labels `sha256 c15818db…`,
+12 012 rows; classifier labels `sha256 8124b0ea…`, 11 560 rows, both downloaded
+and hash-verified rather than described from memory — **1 679 geomodel rows have
+no exact scientific-name counterpart**. Most of those the classifier genuinely
+cannot emit. **Sixty-two are the same taxon under a reclassified genus**, and
+forty-one of those are birds: the geomodel writes *Leuconotopicus villosus*
+where the classifier writes *Dryobates villosus*, and both mean Hairy
+Woodpecker. Every one of the 41 was **permanently undetectable at every station
+running the range filter** — Hairy Woodpecker, Red-cockaded Woodpecker,
+White-headed Woodpecker, Evening Grosbeak, Arizona Woodpecker and fifteen more
+woodpeckers among them (nineteen of the forty-one are woodpeckers, the
+*Veniliornis* and *Leuconotopicus* the classifier files under *Dryobates*) — and
+nothing reported it.
+
+`crates/birdnet-core/src/inference/vocabulary.rs` resolves the two vocabularies
+once at load: exact scientific name first, then the **common name and the
+specific epithet together**, the common name compared on its letters alone
+(`Fruit-Dove` = `Fruit Dove`) and the epithet required to agree exactly or
+modulo its Latin gender ending (*gymnocerca* / *gymnocercus*). A match returns
+the **classifier's** spelling, because that is what a detection carries and what
+the passing set is tested against.
+
+The epithet is a veto, not decoration. Three rows match by common name and
+disagree on the epithet, and two are plainly wrong: the classifier's own label
+file calls *Lama glama* — the llama — "Guanaco", and calls *Scapteriscus
+borellii* "Southern Mole Cricket" for a geomodel row that is *Gryllotalpa
+australis*. The third, *Physeter macrocephalus* against *Physeter catodon*, is a
+real synonym the guard costs us; it is not a bird, and one lost whale against
+two wrong admissions is the trade.
+
+Two departures from the finding's original plan, both forced by evidence:
+
+- **No alias table ships.** The plan was to vendor OpenFauna's `aliases.json`,
+  which `tphakala/birdnet-go` embeds. It is CC BY-SA 4.0 and this project is CC
+  BY-NC-SA 4.0 — ShareAlike does not permit adding the NonCommercial
+  restriction. And it does not work: applied to the pinned pair, **all 237 of
+  its entries recover 0 of the 1 679**, because its reclassifications
+  (*Accipiter* → *Tachyspiza* and the like) are ones both of our files already
+  agree on. `SPECIES_ALIASES_PATH` takes an operator's own tab-separated map for
+  the pairs no automatic rule can reach; an unreadable file is a warning, never
+  a reason to take the filter off a running station.
+- **No normalisation on write, and no migration.** The plan called for
+  rewriting stored detections to a canonical name. The names disagree *between
+  two label files*, not between a detection and its own model — a detection
+  already carries the classifier's spelling — so there is nothing in
+  `detections` to collapse, and rewriting it would have broken every join back
+  to the label file the row came from.
+
+`--doctor` now reports both residues, which is the half of the defect that was
+"nothing says so": how many metadata species map onto the classifier and by
+which rule, how many do not, and — read differently — how many *classifier*
+species no metadata row resolves to, and so cannot pass at all while the filter
+runs (1 165 of 11 560 on the pinned pair).
+
+Building the map at load also replaced a linear scan of the classifier's labels
+per passing species per inference, which on the pinned pair is up to 12 012 ×
+11 560 lowercasing comparisons behind one cache miss. The whole alignment takes
+52 ms once (debug build, this machine); no claim is made about the end-to-end
+saving, which was not measured.
+
+### Added — an operator can write their own alerts on the station's measurements
+
+**Metric rules** (`G-29`). The station failure that loses a season is silent:
+the disk fills, or one microphone of three dies, and nothing says so until
+somebody looks at a chart weeks later. The station alerts on a fixed set of
+conditions already — 85 % disk, a flapping source, a drifting clock — and those
+are the right defaults and not everyone's. The rule that catches a dying
+microphone at a particular station is *"tell me when the hourly detection count
+drops below what it normally is here"*, and no number chosen in this repository
+can be that.
+
+Seven measurements, on the same **Station → Alerts** page as the detection
+rules: disk in use, memory in use, CPU temperature, detections in the last hour,
+seconds since the last detection, capture restarts in the last hour (the worst
+source), and uploads waiting to be sent. A rule is a measurement, a direction
+(`above`/`below`) and a threshold.
+
+Three departures from the finding's original plan, each for a reason that only
+became clear on reading the code:
+
+- **A separate table, not a discriminant on `alert_rules`.** The two are
+  different mechanisms sharing a word: an `alert_rules` row matches one
+  *detection* as it arrives and fires an action of its own; one of these is a
+  *sampled measurement*. A discriminant would have made every detection-rule
+  read carry columns that are always NULL, and given neither mechanism the
+  other's machinery.
+- **Evaluated by the station-health poll, not the maintenance loop.** The
+  maintenance loop is daily and weekly, which is the wrong cadence for "tell me
+  when the disk passes 85 %". More to the point, a firing rule becomes an
+  ordinary station-health `Condition` — so it inherits the three-poll (fifteen
+  minute) debounce, the episode latching, the recovery notice, the notification
+  log, the store-and-forward outbox, and a place on
+  `/api/v2/health/conditions`. A parallel engine would have had none of that.
+- **No per-rule cooldown, and no export-format bump.** The episode *is* the
+  cooldown. Nothing was added to the `alert_rules` export, so its version is
+  untouched; export/import for metric rules is still to come.
+
+Two decisions the tests exist to hold. A metric the station cannot read right
+now produces **no** alert — a board with no temperature sensor is not cold, and
+treating a missing reading as zero would make every `below` rule fire for ever.
+That mutation *survived* the first version of the gate, because an `above` rule
+cannot tell zero from missing; the gate now uses a `below` rule, which is also
+the shape the feature exists for. And a rule that could never stop firing —
+"disk above −1" — is refused when it is created, rather than becoming a
+notification that arrives for ever.
+
+### Added — the analytics engine's memory is sized to the machine, not assumed
+
+**A memory budget for DuckDB** (`G-33`). The buffer-pool cap was a flat 256 MiB
+whatever the machine. On the hardware the shipped systemd unit is written for —
+`MemoryMax=1G` — that is a quarter of the budget and reasonable. On a 512 MB
+board it is **half of physical RAM** for one subsystem, alongside the model, the
+web server and the OS. DuckDB treats the limit as permission to use that much,
+so the flat default was a standing invitation to be OOM-killed mid-query at
+three in the morning.
+
+`crates/birdnet-behavioral/src/memory.rs` sizes the pool to a quarter of the
+*effective ceiling* — the smaller of `/proc/meminfo`'s `MemTotal` and any cgroup
+limit the process is under — capped at 256 MiB and floored at 64 MiB. Below the
+floor the station starts **without** analytics and says why: it still records,
+classifies and serves, it just has no behavioural dashboards. Refusing is the
+point; the alternative is starting something that will be killed.
+
+Both numbers are anchored rather than chosen, and the source says which is
+which:
+
+- **A quarter** is the proportion the shipped unit already implies (`MemoryMax=1G`
+  with a 256 MB pool), so a station on that unit gets exactly the limit it got
+  before. That derivation is a `const` assertion, because the unit test that
+  looks like it covers it is satisfied by the cap alone — measured: halving the
+  fraction still passed that test, and only the assertion catches it.
+- **64 MiB** was measured. A sessionisation shaped like the behavioural
+  queries — `lag` and a running sum over 1.5 million detections partitioned by
+  species, then aggregated — ran out of memory at 8, 16 and 32 MiB and succeeded
+  from 48 MiB up on DuckDB 1.5.
+
+What is deliberately *not* claimed: the rest of the process's footprint on a
+Raspberry Pi is not measured, because that needs a Pi. So this sizes a
+proportion, not a budget. The module header says so, and says what would
+falsify the fraction.
+
+`--doctor` reports the decision under **Analytics memory** — the choice is made
+once at startup, and an operator diagnosing an OOM-killed station months later
+is looking at `--doctor`, not at a boot they no longer have.
+
+One defect found while doing this: `.env.example` shipped
+`BIRDNET_DUCKDB_MEMORY_LIMIT=256MB` **uncommented**, so any container using that
+file as its `.env` pinned 256 MiB on every board — including the small ones the
+sizing exists for. Now commented, with the sizing explained in its place.
+
+### Added — the capture watchdog's timings are the operator's
+
+**`WatchdogConfig`** (`G-9`). Every number the capture supervisor decides with
+was a `const`: how often it looks, how much missing output makes a live process
+stalled, how fast the restart backoff grows, how long down before the loud
+warning and how often to repeat it. Defensible defaults, but a station with slow
+storage, long segments or a camera that legitimately pauses had no way to say so
+short of rebuilding.
+
+Seven knobs, each read from `BIRDNET_WATCHDOG_*` or the unprefixed
+`birdnet.conf` key, each clamped to a documented range — and every adjustment
+logged, because a clamped watchdog running on timings its config file does not
+describe is worse than a refused one. The defaults are exactly the constants the
+supervisor used before, and a test asserts that, since a tuning feature that
+changes the default behaviour is worthless.
+
+Two knobs deliberately absent. **A maximum retry count**, which upstream
+BirdNET-Go has: a field sensor unreachable for six hours must still be reachable
+on hour seven, and a supervisor that has given up is a station that is silently
+not recording — offering it would be offering a way to break the property the
+supervisor exists to provide. And **the flapping threshold and window**, which
+live in `birdnet-core` because the web layer renders against them too; a
+per-station value would have to reach both, and half-wiring it is worse than
+leaving it fixed.
+
+The finding's own rationale turned out to be misattributed, which is worth
+recording. It read *"the right silence threshold at a busy feeder is not the
+right one for an arctic winter station where 30 s of silence is normal and 6 h
+is not"*. That describes `BIRDNET_DEADMAN_HOURS`, which is already a settings
+field. The stall threshold is not about silence: it ages the newest *recording
+segment*, and a microphone writes segments through hours of quiet. The real case
+for tuning is narrower and still real. `docs/FEATURE_GAP_ANALYSIS.md` carries
+the correction.
+
+### Added — saved clips can be normalised to an even loudness
+
+**ITU-R BS.1770 integrated loudness, and one gain per clip** (`G-5`). Clips
+were written at capture level, so a gallery of them recorded across a season is
+not level: the listener rides the volume control between every one, and a quiet
+clip at the end of a playlist gets missed.
+
+`crates/birdnet-core/src/audio/extraction/loudness.rs` implements the
+measurement: the two-stage K-weighting filter, 400 ms blocks at 75 % overlap,
+the `-0.691` offset, the absolute gate at −70 LUFS and the relative gate at
+10 LU below the absolutely-gated mean. Mono, which is what every clip this
+station writes is. The filter is built from BS.1770's analogue prototype rather
+than transcribed from the standard's 48 kHz table, so a station capturing at
+44.1 kHz is measured through a filter designed for 44.1 kHz.
+
+Off by default — a clip is an archival record as well as something to listen to
+— and set from **Settings → Audio Capture** or `BIRDNET_CLIP_TARGET_LUFS`.
+−18 LUFS is the recommended value; −14 and −23 are offered.
+
+It is applied at clip-write time only. The samples the mel spectrogram and the
+classifier see are untouched: a per-clip gain there would move every confidence
+score and make two stations' thresholds mean different things. The module lives
+under `extraction/` rather than beside `audio::soundlevel` so the module tree
+says that too.
+
+The peak ceiling (−1 dBFS by default) wins over the target: a clip that is
+quiet but peaky — one loud wing-beat over a distant song — is turned up only as
+far as the ceiling allows. That ceiling is a **sample** peak, not an ITU true
+peak, and the module says so rather than glossing it: BS.1770's true peak needs
+4× oversampling through a specified interpolation filter, which this does not
+do. The default leaves about a decibel of headroom for inter-sample peaks.
+
+A normalised clip's RIFF INFO comment carries
+`Normalised to -18.0 LUFS from -31.4`, appended to the existing comment rather
+than given a tag of its own — RIFF INFO has no identifier for loudness, and
+inventing a four-letter one would put a field in the file that no player can
+read.
+
+Two things the verification turned up, both worth recording because they change
+what the tests are worth:
+
+- The first version of the coefficient test carried a "published table" typed
+  from memory and **failed against a correct implementation** — the derivation
+  produced `1.53512485958697` where the recalled value read `1.535123299202456`.
+  The construction was then checked line by line against libebur128's
+  `ebur128_init_filter`, the implementation ffmpeg and most loudness tooling
+  use: prototype constants, `Vb` exponent, and the RLB stage's un-normalised
+  `1, -2, 1` numerator all agree.
+- That pinned-coefficient test turned out to be the *more* sensitive of the
+  two, which was not the expectation. Replacing the shelf `Q` with `1/√2` — the
+  plausible value anyone would write from habit, one part in ten thousand from
+  the specified `0.7071752369554196` — moves the 1 kHz gain by less than the
+  relationship test's tolerance and passes it. Only the pin catches it. The
+  test's own comment now says so instead of describing the pin as the weaker
+  check.
+
+### Added — the settings-key guard is now general, and it found a key outside it
+
+**A source-scanning drift gate for the `settings` table** (`G-34`, the part
+worth having). The `settings` table is a bag of strings, so a key written under
+a name nothing reads is indistinguishable, from the operator's side, from one
+that works: the control saves, the page redraws, the value is in the database,
+and nothing happens. This project has shipped that twice — twenty admin-form
+fields that were editable and inert, and a first-run wizard field
+(`notification_mode`, a four-way choice of how often to be alerted) that a
+non-technical operator picked on their first day and which governed nothing.
+
+Each fix added a guard for *that writer*, from a list maintained by hand:
+`SETTINGS_FORM_KEYS`, then `ONBOARDING_SETTING_KEYS`, then
+`AUDIO_ADMIN_SETTING_KEYS`. Three lists, and a fourth writer outside all of
+them.
+
+The new gates read the source instead. `every_settings_key_written_anywhere_is_classified`
+finds every `settings::set` in production code — resolving a key given as a
+named constant, and excluding `#[cfg(test)]` fixtures, both of which the scan's
+own self-test pins — and fails when one is not classified in `SETTING_SPECS`.
+`every_subsystem_owned_setting_is_read_somewhere` is the other direction: a key
+classified as read straight out of the settings table by a named subsystem must
+have a read somewhere in the source, so a subsystem that stops reading a key it
+owns is caught rather than leaving an inert control behind. Call sites that
+build their keys at runtime (`set_many`) are allowlisted by file with a note
+saying what bounds their keys, so a *new* dynamic writer trips the gate.
+
+It found one on its first run: **`analytics_exclude_imports`**, written from
+`/admin/migration` and read by both analytics engines, was classified nowhere —
+so nothing was checking that the "exclude imported detections" control did
+anything. It does; it is now classified, and would have been caught the day it
+stopped.
+
+It also reported `timezone` as owned-but-never-read, which was the gate's own
+message coming true from the other side: `--doctor` reads it through
+`setting_from_db(config, "timezone")`, a shape the scan did not know. Taught.
+
+Not done, with a reason rather than an omission: the JSON Schema artifact the
+finding also asks for. `SETTING_SPECS` records a key, its wiring and its
+category — no types, defaults or descriptions — so a schema derived from it
+today would say `"type": "string"` about every setting and assert nothing.
+Adding that metadata to ~50 specs is a separate piece of work, and the drift it
+would catch between `.env.example`, the config keys and the readers is already
+gated from the env-variable side by `helpers::env_keys` and from the config-key
+side by `tests/every_config_key_is_known.rs`.
+
+### Added — a credential can be mounted as a file instead of set in the environment
+
+**`BIRDNET_<KEY>_FILE` for every outbound credential** (`G-28`, first half).
+A notification URL carries its bot token *inside* the URL, and an environment
+variable is readable by `docker inspect`, by anything holding the process's
+`/proc/<pid>/environ`, and by anything that logs its own environment. Docker
+(`secrets:` → `/run/secrets/<name>`) and Kubernetes (a projected secret volume)
+both solve this by mounting the secret as a file, with a `<VAR>_FILE` variable
+naming the path. This station had no way to accept that.
+
+Five keys take it: `NOTIFY_URLS`, `APPRISE_URL`, `BIRDWEATHER_TOKEN`,
+`MQTT_PASSWORD` and `HEARTBEAT_URL` — every credential that leaves the station,
+which is to say every value where knowing it is enough to post as this station.
+
+Four decisions, each gated:
+
+- **The direct value wins**, and the file is reported rather than read. The rest
+  of startup resolves the direct value first anyway, so a resolver that
+  preferred the file would be describing a station other than the one running.
+- **An unreadable or empty file leaves the feature off, at *error* level.** A
+  projected volume that has not been populated yet reads as a zero-length file,
+  and accepting that as "the password is the empty string" sends the station off
+  to authenticate with nothing. More to the point, a station that sends no
+  notifications because a mount path had a typo looks exactly like one that was
+  told to be quiet.
+- **Surrounding whitespace is trimmed, inner newlines are kept.** Secret files
+  end with a newline; a bot token with `\n` glued to it fails at the far end,
+  which is far harder to diagnose than an empty one. A `NOTIFY_URLS` file may
+  still list one URL per line.
+- **A file-supplied value is never seeded into the `settings` table.** That
+  table is in the database, and the database is in every backup, restore bundle
+  and support archive — which is the exposure the mount exists to avoid. The
+  first-run seed now takes the list of file-resolved keys and skips them.
+
+The other half of `G-28` — parking a notification in `outbound_queue` while a
+destination's circuit is open — was **not** implemented, because reading the
+code showed the gap analysis was wrong about the consequence. An alert about the
+station is not lost when a circuit is open: `src/integrations/announce.rs` holds
+it in an outbox keyed by episode and retries at every poll until it goes out,
+and `Alert::body_at` already appends "(Raised N minutes ago; earlier attempts to
+send this did not reach a destination.)" so a late alert says so. The finding,
+and the two narrow things that really are left, are recorded in
+`docs/FEATURE_GAP_ANALYSIS.md`.
+
+Environment only, deliberately: this is a container-deployment facility, and a
+station editing `birdnet.conf` by hand can put the secret in the file it is
+already editing. `APPRISE_CONFIG` is excluded because `APPRISE_CONFIG_FILE`
+already exists and means the path of an Apprise *configuration* file; giving one
+variable name two meanings is how an operator's config gets read as a
+credential, and a gate now asserts no indirect key can collide that way. The
+SMTP password is excluded because it lives only in the settings table.
+
+### Added — a station can say which source Listen plays
+
+**A station-wide default live-stream source** (`N-3`). `?source_id=` has let a
+*listener* pick a source since it shipped, and the Recordings picker builds it —
+but a station could not say once, for everyone, which of its microphones people
+actually want to hear. A two-microphone station (feeder and nest box) has one of
+each, and every visitor pressing Listen got whichever row happened to be oldest.
+
+`livestream_source` names the default `audio_sources` row. `/stream` with no
+`?source_id=` serves it if it is still enabled, and otherwise falls back to the
+first working source — deliberately, because this is the path a visitor reaches
+by pressing Listen with no choice of their own, and a station whose named
+default was unplugged last week should keep streaming the microphone it still
+has rather than answering with silence or a 503. The journal says when the
+fallback fires.
+
+It is set with a **Make listen default** button on each row of `/admin/audio`,
+not a field on the settings page: the value is an `audio_sources` row id, which
+belongs beside the rows rather than typed into a text box. The POST answers with
+*both* source lists as out-of-band swaps, because the row losing the pill is
+usually in the other one — making an RTSP camera the default takes the pill off
+a microphone. A disabled source is neither offered the choice nor accepted if
+asked for it, since `/stream` skips disabled rows and the setting would then
+name a default that is not the default. Audited as
+`audio.source.listen_default`.
+
+That made `/admin/audio` a **third writer of the settings table**, and the guard
+that fails when a settings key nothing reads is shipped covered only the admin
+form and the first-run wizard — the two writers whose past mistakes created it
+(twenty inert form fields, and one wizard field governing nothing).
+`AUDIO_ADMIN_SETTING_KEYS` and a third classification gate extend it to this
+one. `routes/admin/migration.rs` writes `exclude_imports` and is still outside
+that guard; closing that properly is G-34's drift gate, which is still open.
+
+### Added — one capture source can be restarted without restarting the station
+
+**A per-source restart** (`G-32`). The only remedy a station had for one
+wedged RTSP camera was `POST /api/v2/control/restart` or the Restart button on
+`/admin/system` — both of which stop the whole process, taking every *other*
+microphone down with it and losing the audio in flight on each. On a
+multi-source station that is a blunt instrument for a fault in one source.
+
+The capture supervisor owns its source list privately on its own thread, so
+this is a new seam in the direction that did not exist:
+`birdnet-core`'s `audio::capture::control` carries a set of pending restart
+requests the web layer writes and the supervisor drains once per reconcile
+tick — the mirror of the `status` module that carries per-source health the
+other way. A drained request stops the named source and clears its fault
+state, so the reconcile in that same tick starts it again immediately rather
+than waiting out a backoff the operator can neither see nor shorten. Asking
+twice before a tick still restarts it once.
+
+The restart goes through the supervisor's own start path, deliberately: the
+recording schedule and the source's quiet window still hold, so a request for
+a paused source is spent without overriding the schedule the operator
+configured, and the response says so instead of reporting a restart that will
+not happen. It recovers a wedged source; it does **not** reload that source's
+settings, because the supervisor builds each source's capture config once at
+start-up — an edit still needs a service restart, as it always did.
+
+Three surfaces: a **Restart** button on each row of `/admin/audio`,
+`POST /api/v2/control/restart-source` for automation, and
+`GET /api/v2/system/capture` to read the labels it takes and see whether the
+restart took. The capture read is bearer-gated rather than public — a
+station's source labels and per-source fault history are operational detail
+about someone's home, not a public detection count. Every restart is written
+to the audit log as `audio.source.restart`.
+
+One diagnostic subtlety, gated in both directions: a restart an *operator*
+asked for is not counted toward `restarts_last_hour` and so never raises the
+`flapping` verdict. That number exists to spot a source that cannot stay up on
+its own, and three clicks while debugging a camera is not that — but a source
+that keeps dying still reads as flapping, which is the counterpart the gate
+asserts so the discrimination cannot decay into "stopped counting".
+
 ### Added — the target-sensitive crates' tests run natively on aarch64
 
 **A `test-aarch64` CI job** (`ARM-1`). No `cargo test` had ever executed on

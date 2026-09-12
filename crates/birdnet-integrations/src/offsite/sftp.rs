@@ -272,13 +272,32 @@ impl SftpTarget {
     /// option could go missing.
     #[must_use]
     pub fn ssh_options(&self) -> Vec<String> {
-        vec![
+        let mut out = vec![
             "-b".to_owned(),
             "-".to_owned(),
+            // `sftp` spells the port `-P`; `ssh` spells it `-p`. That is the
+            // only difference between this and the transport rsync is handed,
+            // which is why the policy below is shared rather than copied.
             "-P".to_owned(),
             self.port.to_string(),
             "-i".to_owned(),
             self.identity_file.display().to_string(),
+        ];
+        out.extend(self.ssh_policy_options());
+        out
+    }
+
+    /// The `-o` policy this target connects under, without the options whose
+    /// spelling differs between `sftp` and `ssh`.
+    ///
+    /// One list, used by [`SftpTarget::ssh_options`] and by the `ssh`
+    /// transport [`super::rsync::RsyncTarget`] hands to `rsync`. Copying it
+    /// would be the obvious way for a security option to be present in one
+    /// path and quietly missing from the other, and a test of either would not
+    /// see it: a gate asserts the two carry the same policy.
+    #[must_use]
+    pub fn ssh_policy_options(&self) -> Vec<String> {
+        vec![
             "-o".to_owned(),
             // Never prompt: a batch upload that stops for a passphrase hangs
             // until the maintenance loop is killed, and nothing is watching.

@@ -23,6 +23,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "segment_duration",
     "audio_format",
     "freq_shift_hz",
+    "clip_target_lufs",
     // Location
     "latitude",
     "longitude",
@@ -108,6 +109,12 @@ pub struct SettingsForm {
     pub audio_format: Option<String>,
     /// Frequency shift applied before inference, in Hz. Use `0` to disable.
     pub freq_shift_hz: Option<String>,
+    /// Loudness to normalise exported clips to, in LUFS, or `""` for off.
+    ///
+    /// A select rather than a free number: the useful values are a short list,
+    /// and a typed one that lands outside the accepted range would be dropped
+    /// by the daemon with only a log line to say why.
+    pub clip_target_lufs: Option<String>,
     // Location
     /// Station latitude in decimal degrees (e.g. `51.5074`). Used for solar scheduling.
     pub latitude: Option<String>,

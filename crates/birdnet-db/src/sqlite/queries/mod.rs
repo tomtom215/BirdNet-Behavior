@@ -54,8 +54,9 @@ pub use images::{
 };
 pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches};
 pub use maintenance::{
-    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,
+    BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM,
+    JOB_INTEGRITY_CHECK, JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOBS, JobSpec,
+    JobStatus, due_state, job_statuses, last_run_result, last_run_unix, record_run,
     record_run_result,
 };
 pub use quarantine::{
@@ -65,8 +66,10 @@ pub use quarantine::{
     quarantine_stats, reject_quarantine,
 };
 pub use species::{
-    SpeciesThreshold, delete_species_threshold, get_species_threshold_map, get_species_thresholds,
-    recent_by_species, search_species, set_species_threshold, species_count, species_daily_counts,
+    BulkOutcome, SpeciesThreshold, SpeciesUsage, delete_species_detections,
+    delete_species_threshold, get_species_threshold_map, get_species_thresholds,
+    prune_species_clips, recent_by_species, search_species, set_species_threshold,
+    species_clip_files, species_count, species_daily_counts, species_disk_usage,
     species_first_detection, species_first_seen, species_hourly_activity,
     species_hourly_activity_batch, species_sparklines, species_summary, top_species,
 };

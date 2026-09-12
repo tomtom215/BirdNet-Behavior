@@ -27,6 +27,23 @@ pub struct Detection {
     pub week: u32,
     /// Path to the extracted audio clip (set after extraction).
     pub file_name_extr: Option<String>,
+    /// Which classifier reported this (`G-10` Stage 3).
+    ///
+    /// `None` on a row written before this existed. On a station running one
+    /// classifier it is that classifier's id, which is provenance worth having
+    /// even then: a station whose model was swapped last March can tell which
+    /// of its detections came from which.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// How many classifiers independently reported this species in this chunk.
+    ///
+    /// `1` when only one ran or only one agreed; `2` or more means independent
+    /// corroboration, which is a different and much stronger claim than one
+    /// model being confident. `None` on a row written before this existed —
+    /// distinct from `Some(1)`, which says one model was asked and one
+    /// answered.
+    #[serde(default)]
+    pub agreeing_models: Option<u8>,
 }
 
 /// What one inference pass says about one chunk of audio.
@@ -191,6 +208,8 @@ mod tests {
             stop: 6.0,
             week: 10,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         };
         assert_eq!(det.confidence_pct(), 88);
         assert_eq!(det.common_name_safe(), "Eurasian_Blackbird");
@@ -239,6 +258,8 @@ mod tests {
             stop: 6.0,
             week: 10,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         };
         let display = format!("{det}");
         assert!(display.contains("Eurasian Blackbird"));
@@ -257,6 +278,8 @@ mod tests {
             stop: 6.0,
             week: 10,
             file_name_extr: None,
+            model_id: None,
+            agreeing_models: None,
         };
         assert_eq!(det.species(), "Turdus merula_Eurasian Blackbird");
     }

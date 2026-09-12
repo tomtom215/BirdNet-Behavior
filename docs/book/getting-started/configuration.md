@@ -32,10 +32,19 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
 | `BIRDNET_METADATA_MODEL` | `--metadata-model` | `METADATA_MODEL_PATH` | set by the installer / entrypoint |
 | `BIRDNET_METADATA_LABELS` | `--metadata-labels` | `METADATA_LABELS_PATH` | set by the installer / entrypoint |
+| `BIRDNET_SPECIES_ALIASES` | `--species-aliases` | `SPECIES_ALIASES_PATH` | — (a tab-separated `legacy<TAB>canonical` scientific-name map, for species the geomodel and the classifier name differently and the automatic rules cannot connect &mdash; see [tuning](../guides/tuning.md#when-the-two-files-disagree-about-a-name)) |
+| — | — | `WEATHER_PROVIDER` | `open-meteo`; also `met-no` (MET Norway, keyless) and `wunderground` (your own personal weather station). An unimplemented name does not start the poll — see [the weather overlay](../guide/analytics.md) |
+| — | — | `WEATHER_STATION_ID` | — (`wunderground` only: the station's Weather Underground id) |
+| `BIRDNET_WEATHER_API_KEY_FILE` | — | `WEATHER_API_KEY` | — (`wunderground` only; mountable from a file like the other credentials) |
+| `BIRDNET_EBIRD_API_KEY_FILE` | — | `EBIRD_API_KEY` | — (absent ⇒ eBird corroboration is off entirely; mountable from a file like the other credentials — see [eBird](../reference/integrations.md#ebird)) |
+| — | — | `EBIRD_REGION` | — (empty ⇒ the station's own `LATITUDE`/`LONGITUDE` are used, which is usually better) |
+| — | — | `EBIRD_DIST_KM` | `25` (0–50; the radius asked about when using coordinates) |
+| — | — | `EBIRD_BACK_DAYS` | `14` (1–30; days of eBird history to ask about) |
 | `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` (no effect without a metadata model) |
 | `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
+| — | — | `NOISE_REMEMBER_SECS` | `0.0` (off; keeps suppressing the species a bark produced for this long after it — see [tuning](../guides/tuning.md#7-barking-dogs-and-other-non-birds)) |
 | `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (needs `OVERLAP`) |
 | `BIRDNET_OFFSITE_BACKUP` | `--offsite-backup` | `OFFSITE_BACKUP` | `off` |
 | `BIRDNET_OFFSITE_PASSPHRASE` | — (deliberately no flag) | `OFFSITE_PASSPHRASE` | — |

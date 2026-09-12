@@ -54,6 +54,19 @@ pub fn router() -> Router<AppState> {
         .route("/admin/rules/export", get(export_rules))
         .route("/admin/rules/import", axum::routing::post(import_rules))
         .route("/admin/rules/{id}/test", axum::routing::post(test_rule))
+        .route(
+            "/admin/metric-rules",
+            axum::routing::post(create_metric_rule),
+        )
+        .route("/admin/metric-rules/list", get(metric_rules_list_partial))
+        .route(
+            "/admin/metric-rules/{id}",
+            axum::routing::delete(delete_metric_rule_handler),
+        )
+        .route(
+            "/admin/metric-rules/{id}/toggle",
+            axum::routing::post(toggle_metric_rule_handler),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -79,8 +92,13 @@ async fn export_rules(
     axum::extract::Query(q): axum::extract::Query<ExportQuery>,
 ) -> Result<axum::response::Response, StatusCode> {
     let include_secrets = matches!(q.secrets.as_deref(), Some("1" | "true" | "yes" | "on"));
-    let rules = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| list_rules(conn).unwrap_or_default())
+    let (rules, metric_rules) = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            (
+                list_rules(conn).unwrap_or_default(),
+                birdnet_db::metric_rules::list(conn).unwrap_or_default(),
+            )
+        })
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -92,6 +110,12 @@ async fn export_rules(
             .iter()
             .map(|r| to_export(r, include_secrets))
             .collect(),
+        // No `include_secrets` here: a metric rule is a measurement, a
+        // direction and a number, with no credential to withhold.
+        metric_rules: metric_rules
+            .iter()
+            .map(birdnet_db::metric_rules::to_export)
+            .collect(),
     };
     let body = serde_json::to_string_pretty(&set).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -101,6 +125,12 @@ async fn export_rules(
             "alert rules exported *with* credentials"
         );
     }
+    tracing::info!(
+        rules = set.rules.len(),
+        metric_rules = set.metric_rules.len(),
+        version = set.version,
+        "rule set exported"
+    );
 
     axum::response::Response::builder()
         .header("Content-Type", "application/json; charset=utf-8")
@@ -125,8 +155,10 @@ struct ImportForm {
 /// What an import did, in a form the handler can render and a test can assert.
 #[derive(Debug, PartialEq, Eq)]
 struct ImportOutcome {
-    /// Rules inserted.
+    /// Detection rules inserted.
     added: usize,
+    /// Metric rules inserted (`G-29`).
+    metric_added: usize,
     /// Rules whose credential arrived redacted and was dropped.
     needs_credential: Vec<String>,
     /// Entries that could not be used, with the reason.
@@ -138,7 +170,16 @@ struct ImportOutcome {
 /// Separated from the handler so the partial-success behaviour — some rules in,
 /// some rejected, some needing their credential re-entered — is assertable
 /// without a request.
-fn plan_import(json: &str) -> Result<(Vec<Imported>, ImportOutcome), String> {
+fn plan_import(
+    json: &str,
+) -> Result<
+    (
+        Vec<Imported>,
+        Vec<birdnet_db::metric_rules::NewMetricRule>,
+        ImportOutcome,
+    ),
+    String,
+> {
     let set: RuleSet = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if set.version > EXPORT_VERSION {
         return Err(format!(
@@ -148,8 +189,10 @@ fn plan_import(json: &str) -> Result<(Vec<Imported>, ImportOutcome), String> {
     }
 
     let mut ready = Vec::new();
+    let mut metric_ready = Vec::new();
     let mut outcome = ImportOutcome {
         added: 0,
+        metric_added: 0,
         needs_credential: Vec::new(),
         rejected: Vec::new(),
     };
@@ -167,8 +210,17 @@ fn plan_import(json: &str) -> Result<(Vec<Imported>, ImportOutcome), String> {
             Err(e) => outcome.rejected.push(e.to_string()),
         }
     }
+    for entry in &set.metric_rules {
+        // Same partial-success rule as above: one unusable metric rule must
+        // not cost the operator the rest of the file.
+        match birdnet_db::metric_rules::from_export(entry) {
+            Ok(rule) => metric_ready.push(rule),
+            Err(e) => outcome.rejected.push(e.to_string()),
+        }
+    }
     outcome.added = ready.len();
-    Ok((ready, outcome))
+    outcome.metric_added = metric_ready.len();
+    Ok((ready, metric_ready, outcome))
 }
 
 /// `POST /admin/rules/import` — add the rules in a pasted rule set.
@@ -180,7 +232,7 @@ async fn import_rules(
     request_user: RequestUser,
     Form(form): Form<ImportForm>,
 ) -> Result<Html<String>, StatusCode> {
-    let (ready, outcome) = match plan_import(&form.rules_json) {
+    let (ready, metric_ready, outcome) = match plan_import(&form.rules_json) {
         Ok(v) => v,
         Err(e) => {
             return Ok(Html(format!(
@@ -191,7 +243,7 @@ async fn import_rules(
     };
 
     let audit_state = state.clone();
-    let inserted = tokio::task::spawn_blocking(move || {
+    let (inserted, metric_inserted) = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let mut n = 0;
             for i in &ready {
@@ -199,7 +251,13 @@ async fn import_rules(
                     n += 1;
                 }
             }
-            n
+            let mut m = 0;
+            for rule in &metric_ready {
+                if birdnet_db::metric_rules::insert(conn, rule).is_ok() {
+                    m += 1;
+                }
+            }
+            (n, m)
         })
     })
     .await
@@ -208,22 +266,39 @@ async fn import_rules(
     // The count, because an import is a bulk change: one row saying "12 rules
     // arrived" beats twelve rows and is what an operator compares against the
     // file they pasted.
-    if inserted > 0 {
+    if inserted > 0 || metric_inserted > 0 {
         crate::audit::audit(
             &audit_state,
             Some(&request_user),
             "rule.import",
             None,
-            Some(&format!("inserted={inserted}")),
+            Some(&format!(
+                "inserted={inserted} metric_inserted={metric_inserted}"
+            )),
         );
     }
 
-    Ok(Html(render_import_outcome(inserted, &outcome)))
+    Ok(Html(render_import_outcome(
+        inserted,
+        metric_inserted,
+        &outcome,
+    )))
 }
 
 /// Render what an import did.
-fn render_import_outcome(inserted: usize, outcome: &ImportOutcome) -> String {
-    let mut html = format!("<div class=\"rule-success\">Imported {inserted} rule(s).</div>");
+fn render_import_outcome(
+    inserted: usize,
+    metric_inserted: usize,
+    outcome: &ImportOutcome,
+) -> String {
+    let mut html = if metric_inserted > 0 {
+        format!(
+            "<div class=\"rule-success\">Imported {inserted} detection rule(s) and \
+             {metric_inserted} metric rule(s).</div>"
+        )
+    } else {
+        format!("<div class=\"rule-success\">Imported {inserted} rule(s).</div>")
+    };
     if !outcome.needs_credential.is_empty() {
         let names = outcome
             .needs_credential
@@ -609,6 +684,216 @@ async fn toggle_rule_handler(
 }
 
 // ---------------------------------------------------------------------------
+// Metric rules (G-29)
+// ---------------------------------------------------------------------------
+
+/// The create form for a rule on one of the station's own measurements.
+#[derive(Debug, serde::Deserialize)]
+struct MetricRuleForm {
+    /// What the operator called it; becomes the alert title.
+    name: String,
+    /// The metric's stored key.
+    metric: String,
+    /// `above` or `below`.
+    comparison: String,
+    /// The threshold, as typed.
+    threshold: String,
+}
+
+async fn metric_rules_list_partial(State(state): State<AppState>) -> Html<String> {
+    let rules = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::metric_rules::list(conn).unwrap_or_default())
+    })
+    .await
+    .unwrap_or_default();
+    Html(render_metric_rules_table(&rules))
+}
+
+async fn create_metric_rule(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+    Form(form): Form<MetricRuleForm>,
+) -> Html<String> {
+    use birdnet_db::metric_rules::{Comparison, Metric, NewMetricRule};
+
+    // Each of these is a select or a typed number that the browser has already
+    // constrained, so a rejection here means a hand-made request or a stale
+    // page — worth a message rather than a 500, because the operator can see
+    // which field it was.
+    let Some(metric) = Metric::parse(form.metric.trim()) else {
+        return metric_form_problem("that is not a measurement this station takes");
+    };
+    let Some(comparison) = Comparison::parse(form.comparison.trim()) else {
+        return metric_form_problem("choose whether to alert above or below the threshold");
+    };
+    let Ok(threshold) = form.threshold.trim().replace(',', ".").parse::<f64>() else {
+        return metric_form_problem("the threshold is not a number");
+    };
+
+    let rule = NewMetricRule {
+        name: form.name.trim().to_owned(),
+        enabled: true,
+        metric,
+        comparison,
+        threshold,
+    };
+    if let Err(e) = rule.validate() {
+        return metric_form_problem(&e.to_string());
+    }
+
+    let name = rule.name.clone();
+    let audit_state = state.clone();
+    let stored = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::metric_rules::insert(conn, &rule))
+    })
+    .await;
+    match stored {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => return metric_form_problem(&e.to_string()),
+        Err(_) => return metric_form_problem("could not store the rule"),
+    }
+
+    // A rule that alerts on the station's own health is one an operator will
+    // later ask "who set this, and when" about — the same question the
+    // detection rules are audited for.
+    crate::audit::audit(
+        &audit_state,
+        Some(&request_user),
+        "rule.create",
+        Some(&name),
+        Some("kind=metric"),
+    );
+
+    let body = Html(String::from(
+        "<div class=\"rule-success\">Rule created.</div>\
+         <div hx-get=\"/admin/metric-rules/list\" hx-trigger=\"load\" \
+          hx-target=\"#metric-rules-table-container\" hx-swap=\"innerHTML\"></div>",
+    ));
+    toast::with(body, Toast::success(format!("Rule '{name}' enabled.")))
+}
+
+/// A rejected submission, shown in the form rather than as a status code.
+fn metric_form_problem(message: &str) -> Html<String> {
+    Html(format!(
+        "<div class=\"rule-error\">{}</div>",
+        escape_html(message)
+    ))
+}
+
+async fn delete_metric_rule_handler(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+    Path(id): Path<i64>,
+) -> Html<String> {
+    let audit_state = state.clone();
+    let removed = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::metric_rules::delete(conn, id))
+    })
+    .await;
+    if matches!(removed, Ok(Ok(true))) {
+        crate::audit::audit(
+            &audit_state,
+            Some(&request_user),
+            "rule.delete",
+            Some(&id.to_string()),
+            Some("kind=metric"),
+        );
+    }
+    let body = Html(String::from(
+        "<div hx-get=\"/admin/metric-rules/list\" hx-trigger=\"load\" \
+          hx-target=\"#metric-rules-table-container\" hx-swap=\"innerHTML\"></div>",
+    ));
+    toast::with(body, Toast::success("Rule removed."))
+}
+
+async fn toggle_metric_rule_handler(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+    Path(id): Path<i64>,
+) -> Html<String> {
+    let audit_state = state.clone();
+    let now = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::metric_rules::toggle(conn, id))
+    })
+    .await;
+    let enabled = matches!(now, Ok(Ok(Some(true))));
+    if matches!(now, Ok(Ok(Some(_)))) {
+        crate::audit::audit(
+            &audit_state,
+            Some(&request_user),
+            "rule.toggle",
+            Some(&id.to_string()),
+            Some(if enabled {
+                "kind=metric enabled"
+            } else {
+                "kind=metric disabled"
+            }),
+        );
+    }
+    let body = Html(String::from(
+        "<div hx-get=\"/admin/metric-rules/list\" hx-trigger=\"load\" \
+          hx-target=\"#metric-rules-table-container\" hx-swap=\"innerHTML\"></div>",
+    ));
+    toast::with(
+        body,
+        Toast::success(if enabled {
+            "Rule enabled."
+        } else {
+            "Rule disabled."
+        }),
+    )
+}
+
+/// The stored metric rules, as a table.
+fn render_metric_rules_table(rules: &[birdnet_db::metric_rules::MetricRule]) -> String {
+    use std::fmt::Write as _;
+
+    if rules.is_empty() {
+        return r#"<p class="tbl-empty">
+            No rules on the station's own measurements yet. The built-in conditions still
+            apply — these are for thresholds particular to where this station is.
+        </p>"#
+            .to_owned();
+    }
+
+    let mut html = String::with_capacity(1024);
+    html.push_str(
+        "<table class=\"tbl\"><thead><tr>\
+         <th>Name</th><th>Watches</th><th>Alerts when</th><th>State</th><th></th>\
+         </tr></thead><tbody>",
+    );
+    for r in rules {
+        let unit = r.metric.unit();
+        let threshold = if (r.threshold.fract()).abs() < f64::EPSILON {
+            format!("{:.0}", r.threshold)
+        } else {
+            format!("{:.1}", r.threshold)
+        };
+        let _ = write!(
+            html,
+            "<tr><td>{name}</td><td>{metric}</td><td>{cmp} {threshold}{unit}</td>\
+             <td>{state}</td><td>\
+             <button class=\"btn btn-sm\" hx-post=\"/admin/metric-rules/{id}/toggle\" \
+              hx-target=\"#metric-form-result\" hx-swap=\"innerHTML\">{toggle}</button> \
+             <button class=\"btn btn-sm btn-danger\" hx-delete=\"/admin/metric-rules/{id}\" \
+              hx-target=\"#metric-form-result\" hx-swap=\"innerHTML\" \
+              hx-confirm=\"Remove this rule?\">Remove</button>\
+             </td></tr>",
+            name = escape_html(&r.name),
+            metric = escape_html(r.metric.label()),
+            cmp = escape_html(r.comparison.describe()),
+            threshold = escape_html(&threshold),
+            unit = escape_html(unit),
+            state = if r.enabled { "enabled" } else { "disabled" },
+            id = r.id,
+            toggle = if r.enabled { "Disable" } else { "Enable" },
+        );
+    }
+    html.push_str("</tbody></table>");
+    html
+}
+
+// ---------------------------------------------------------------------------
 // HTML rendering
 // ---------------------------------------------------------------------------
 
@@ -619,8 +904,14 @@ async fn toggle_rule_handler(
 /// shell owns layout + nav. Shared with the Station **Alerts** tab
 /// (`crate::routes::pages::homes::station_tabs`), which renders it in the main
 /// shell — the rule list HTMX-loads from `/admin/rules/list` either way.
-pub(crate) fn rules_body() -> String {
-    r##"<style>
+/// The page's scoped stylesheet.
+///
+/// Split out of [`rules_body`] because that function had grown past the length
+/// the workspace's lints allow — and because a stylesheet and a form are two
+/// things, which is the same reason the settings page keeps its own CSS in a
+/// `const`. (A `<style>` block carries no CSP nonce burden; the inline-style
+/// guard forbids `style="` attributes, not stylesheets.)
+const RULES_CSS: &str = r"<style>
       h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }
       .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
@@ -664,7 +955,10 @@ pub(crate) fn rules_body() -> String {
       .toggle-state { font-weight:600; }
       .toggle-state.on { color:var(--moss); }
       .toggle-state.off { color:var(--fg-3); }
-    </style>
+    </style>";
+
+pub(crate) fn rules_body() -> String {
+    [RULES_CSS, r##"
 
   <h1>Alert Rules</h1>
   <p class="subtitle">
@@ -794,6 +1088,7 @@ pub(crate) fn rules_body() -> String {
     <div id="rule-test-result"></div>
   </div>
 
+  {METRIC_RULES_CARD}
   <!-- Export / import -->
   <div class="card">
     <h2>Move rules between stations</h2>
@@ -834,8 +1129,107 @@ pub(crate) fn rules_body() -> String {
   }
   authKind.addEventListener('change', syncHeaderNameField);
   syncHeaderNameField();
-</script>"##
-    .to_owned()
+</script>"##]
+    .concat()
+    .replace("{METRIC_RULES_CARD}", &metric_rules_card())
+}
+
+/// The card for rules on the station's own measurements.
+///
+/// Its own function rather than more of the page's raw string: `rules_body`
+/// was already at the length clippy stops at, and this section is separable —
+/// it is a different mechanism from the detection rules above it, sharing the
+/// page only because an operator looking for "alerts" should find both in one
+/// place.
+fn metric_rules_card() -> String {
+    METRIC_RULES_CARD.replace("{METRIC_OPTIONS}", &metric_options())
+}
+
+/// The card's markup, with the measurement picker left as a placeholder.
+const METRIC_RULES_CARD: &str = r##"  <!-- Metric rules (G-29) -->
+  <div class="card">
+    <h2 id="metric-rules">Alerts on the station itself</h2>
+    <p class="hint">
+      The rules above watch <b>detections</b>. These watch the <b>station</b> — the
+      measurement, not the bird. The station already alerts on a fixed set of conditions
+      (disk over 85&nbsp;%, a source flapping, the clock adrift); these are yours, for the
+      thresholds that are particular to where this station is. The one that catches a dying
+      microphone is usually <i>“detections in the last hour, below what it normally is
+      here”</i>.
+    </p>
+    <p class="hint">
+      A rule that trips has to stay tripped for three polls — fifteen minutes — before it
+      alerts, and you get a notice when it recovers. That is the same debounce the built-in
+      conditions use, so a momentary spike does not wake anybody.
+    </p>
+    <form hx-post="/admin/metric-rules"
+          hx-target="#metric-form-result"
+          hx-swap="innerHTML">
+      <div class="grid-2">
+        <div>
+          <label for="metric_name">Name</label>
+          <input id="metric_name" name="name" type="text" required maxlength="80"
+                 placeholder="Feeder mic has gone quiet">
+          <div class="hint">This is what the alert will be titled.</div>
+        </div>
+        <div>
+          <label for="metric_metric">Measurement</label>
+          <select id="metric_metric" name="metric" class="bnb-w-select">
+{METRIC_OPTIONS}
+          </select>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div>
+          <label for="metric_comparison">Alert when it is</label>
+          <select id="metric_comparison" name="comparison" class="bnb-w-select">
+            <option value="above">above</option>
+            <option value="below">below</option>
+          </select>
+        </div>
+        <div>
+          <label for="metric_threshold">Threshold</label>
+          <input id="metric_threshold" name="threshold" type="number" step="any" required
+                 placeholder="85">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">Create Rule</button>
+      </div>
+      <div id="metric-form-result"></div>
+    </form>
+
+    <div id="metric-rules-table-container"
+         hx-get="/admin/metric-rules/list"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+      <p class="tbl-loading">Loading…</p>
+    </div>
+  </div>"##;
+
+/// The measurement picker's options, built from the metric vocabulary rather
+/// than written out.
+///
+/// A metric added to `birdnet_db::metric_rules::Metric` appears here without
+/// anyone remembering to add it — and, more to the point, a metric *removed*
+/// cannot be left behind as an option that stores a rule nothing evaluates.
+fn metric_options() -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(512);
+    for m in birdnet_db::metric_rules::Metric::ALL {
+        let unit = match m.unit() {
+            "" => String::new(),
+            u => format!(" ({u})"),
+        };
+        let _ = writeln!(
+            out,
+            "            <option value=\"{}\">{}{unit}</option>",
+            escape_html(m.key()),
+            escape_html(m.label()),
+        );
+    }
+    out
 }
 
 /// Shorten a webhook URL for the rules-table badge to at most 30 characters,
@@ -1145,7 +1539,7 @@ mod tests {
                {"name":"broken","action":"webhook"},
                {"name":"keep me too","action":"suppress"}"#,
         );
-        let (ready, outcome) = plan_import(&json).expect("the set itself parses");
+        let (ready, _metrics, outcome) = plan_import(&json).expect("the set itself parses");
         assert_eq!(outcome.added, 2);
         assert_eq!(ready.len(), 2);
         assert_eq!(outcome.rejected.len(), 2);
@@ -1178,7 +1572,7 @@ mod tests {
     fn the_current_version_is_accepted() {
         // Counterpart, so "refuse everything" would not pass the gate above.
         let json = rule_set_json(r#"{"name":"x","action":"log"}"#);
-        assert_eq!(plan_import(&json).expect("accepted").1.added, 1);
+        assert_eq!(plan_import(&json).expect("accepted").2.added, 1);
     }
 
     #[test]
@@ -1190,7 +1584,7 @@ mod tests {
                 "webhook_auth_kind":"bearer","webhook_auth_value":"***REDACTED***"},
                {"name":"open","action":"webhook","webhook_url":"https://x/z"}"#,
         );
-        let (_, outcome) = plan_import(&json).expect("parses");
+        let (_, _metrics, outcome) = plan_import(&json).expect("parses");
         assert_eq!(outcome.added, 2);
         assert_eq!(outcome.needs_credential, ["authed"]);
     }
@@ -1199,10 +1593,11 @@ mod tests {
     fn the_import_summary_names_every_rule_that_needs_a_credential() {
         let outcome = ImportOutcome {
             added: 2,
+            metric_added: 0,
             needs_credential: vec!["Owls at night".into(), "Kites".into()],
             rejected: vec!["rule \"x\" has unknown action \"y\"".into()],
         };
-        let html = render_import_outcome(2, &outcome);
+        let html = render_import_outcome(2, 0, &outcome);
         assert!(html.contains("Imported 2 rule(s)"), "{html}");
         assert!(html.contains("Owls at night"), "{html}");
         assert!(html.contains("Kites"), "{html}");
@@ -1261,5 +1656,190 @@ mod tests {
             body, None,
             "an absent template must not become a rendered one"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G-29: metric rules travel in the same file
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod metric_export_tests {
+    use super::{ImportOutcome, plan_import, render_import_outcome};
+    use birdnet_db::alert_rules::EXPORT_VERSION;
+
+    /// A version-1 file, exactly as a station running the previous release
+    /// wrote it: no `metric_rules` field at all.
+    const VERSION_ONE: &str = r#"{
+      "version": 1,
+      "redacted": true,
+      "rules": [
+        {"name": "Owl at night", "action": "log", "confidence_min": 0.7, "confidence_max": 1.0}
+      ]
+    }"#;
+
+    /// **The compatibility gate.** Bumping the version is only safe if the
+    /// files already in operators' hands still import. A missing
+    /// `metric_rules` has to read as "no metric rules", not as a parse
+    /// failure that loses the detection rules too.
+    ///
+    /// Observed failing with `#[serde(default)]` removed from
+    /// `RuleSet::metric_rules`: the whole file was rejected with
+    /// "missing field `metric_rules`", taking the owl rule with it.
+    #[test]
+    fn a_file_written_before_metric_rules_existed_still_imports() {
+        let (ready, metrics, outcome) =
+            plan_import(VERSION_ONE).expect("a version-1 file must still parse");
+        assert_eq!(ready.len(), 1, "the detection rule survives");
+        assert!(metrics.is_empty(), "and there are simply no metric rules");
+        assert_eq!(outcome.added, 1);
+        assert_eq!(outcome.metric_added, 0);
+        assert!(outcome.rejected.is_empty(), "{:?}", outcome.rejected);
+    }
+
+    /// The version exists so a newer file is refused with a message naming
+    /// both numbers, rather than read as a set of rules with fields missing.
+    #[test]
+    fn a_file_from_a_newer_station_is_refused_by_version() {
+        let json = format!(
+            r#"{{"version": {}, "redacted": true, "rules": [], "metric_rules": []}}"#,
+            EXPORT_VERSION + 1
+        );
+        let err = plan_import(&json).expect_err("a newer version must be refused");
+        assert!(err.contains(&(EXPORT_VERSION + 1).to_string()), "{err}");
+        assert!(err.contains(&EXPORT_VERSION.to_string()), "{err}");
+    }
+
+    /// The round trip that matters: a metric rule written out and read back is
+    /// the same rule.
+    ///
+    /// Observed failing with `metric` serialised as the enum's `label()`
+    /// instead of its `key()`: "Disk in use" came back as
+    /// "not a measurement this station knows how to take".
+    #[test]
+    fn a_metric_rule_survives_the_round_trip() {
+        let rule = birdnet_db::metric_rules::MetricRule {
+            id: 7,
+            name: "Disk filling".to_owned(),
+            enabled: true,
+            metric: birdnet_db::metric_rules::Metric::DiskPercent,
+            comparison: birdnet_db::metric_rules::Comparison::Above,
+            threshold: 85.0,
+        };
+        let set = birdnet_db::alert_rules::RuleSet {
+            version: EXPORT_VERSION,
+            redacted: true,
+            rules: Vec::new(),
+            metric_rules: vec![birdnet_db::metric_rules::to_export(&rule)],
+        };
+        let json = serde_json::to_string(&set).expect("serialise");
+        let (_, metrics, outcome) = plan_import(&json).expect("parses");
+        assert_eq!(metrics.len(), 1, "{:?}", outcome.rejected);
+        let back = &metrics[0];
+        assert_eq!(back.name, "Disk filling");
+        assert_eq!(back.metric, birdnet_db::metric_rules::Metric::DiskPercent);
+        assert_eq!(back.comparison, birdnet_db::metric_rules::Comparison::Above);
+        assert!((back.threshold - 85.0).abs() < f64::EPSILON);
+        assert!(back.enabled);
+    }
+
+    /// A metric this station does not implement is named, not silently
+    /// dropped: a file from a newer station would otherwise import looking
+    /// complete while missing the rules that mattered.
+    ///
+    /// Observed failing with `from_export` returning `Ok` on an unknown
+    /// metric with a fallback: nothing was rejected and the rule count was
+    /// wrong.
+    #[test]
+    fn an_unknown_metric_is_named_rather_than_dropped() {
+        let json = r#"{
+          "version": 2, "redacted": true, "rules": [],
+          "metric_rules": [
+            {"name": "From the future", "metric": "quantum_flux", "comparison": "above",
+             "threshold": 1.0}
+          ]
+        }"#;
+        let (_, metrics, outcome) = plan_import(json).expect("the set itself parses");
+        assert!(metrics.is_empty());
+        assert_eq!(outcome.metric_added, 0);
+        assert_eq!(outcome.rejected.len(), 1, "{:?}", outcome.rejected);
+        assert!(
+            outcome.rejected[0].contains("quantum_flux"),
+            "{:?}",
+            outcome.rejected
+        );
+    }
+
+    /// Partial success, the same rule the detection rules already follow: one
+    /// unusable entry must not cost the operator the rest of the file.
+    #[test]
+    fn one_bad_metric_rule_does_not_discard_the_good_ones() {
+        let json = r#"{
+          "version": 2, "redacted": true,
+          "rules": [{"name": "Owl", "action": "log", "confidence_min": 0.7, "confidence_max": 1.0}],
+          "metric_rules": [
+            {"name": "Good", "metric": "disk_pct", "comparison": "above", "threshold": 85.0},
+            {"name": "Bad", "metric": "disk_pct", "comparison": "sideways", "threshold": 1.0},
+            {"name": "Also good", "metric": "mem_pct", "comparison": "above",
+             "threshold": 90.0}
+          ]
+        }"#;
+        let (ready, metrics, outcome) = plan_import(json).expect("parses");
+        assert_eq!(ready.len(), 1, "the detection rule is unaffected");
+        assert_eq!(metrics.len(), 2, "both usable metric rules survive");
+        assert_eq!(outcome.metric_added, 2);
+        assert_eq!(outcome.rejected.len(), 1);
+        assert!(
+            outcome.rejected[0].contains("sideways"),
+            "{:?}",
+            outcome.rejected
+        );
+    }
+
+    /// A rule that could never stop firing is refused on import exactly as it
+    /// is on the form — an import must not be a way around validation.
+    ///
+    /// Observed failing with the `rule.validate()?` call removed from
+    /// `from_export`: "disk above -1" was accepted.
+    #[test]
+    fn an_import_cannot_smuggle_past_validation() {
+        let json = r#"{
+          "version": 2, "redacted": true, "rules": [],
+          "metric_rules": [
+            {"name": "Fires for ever", "metric": "disk_pct", "comparison": "above",
+             "threshold": -1.0}
+          ]
+        }"#;
+        let (_, metrics, outcome) = plan_import(json).expect("parses");
+        assert!(
+            metrics.is_empty(),
+            "a rule that never stops firing must not import"
+        );
+        assert_eq!(outcome.rejected.len(), 1, "{:?}", outcome.rejected);
+        assert!(
+            outcome.rejected[0].contains("for ever"),
+            "{:?}",
+            outcome.rejected
+        );
+    }
+
+    /// The operator is told about both kinds, because they pasted one file and
+    /// want to compare the counts against it.
+    #[test]
+    fn the_result_counts_both_kinds_when_there_are_both() {
+        let outcome = ImportOutcome {
+            added: 2,
+            metric_added: 3,
+            needs_credential: Vec::new(),
+            rejected: Vec::new(),
+        };
+        let html = render_import_outcome(2, 3, &outcome);
+        assert!(html.contains("2 detection rule(s)"), "{html}");
+        assert!(html.contains("3 metric rule(s)"), "{html}");
+
+        // With none, the sentence stays the one it always was.
+        let plain = render_import_outcome(2, 0, &outcome);
+        assert!(plain.contains("Imported 2 rule(s)"), "{plain}");
+        assert!(!plain.contains("metric rule(s)"), "{plain}");
     }
 }

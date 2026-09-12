@@ -125,6 +125,14 @@ async fn serve(
         }
         helpers::startup_config::choose(config, &cli.config)
     };
+
+    // Credentials mounted as files (`BIRDNET_<KEY>_FILE`), the way Docker and
+    // Kubernetes hand a secret to a process without putting it in the
+    // environment. Resolved here — after the config is chosen, before anything
+    // reads a credential out of it — and the keys that came from a file are
+    // carried to the settings seed below, which must not copy them into the
+    // database.
+    let (config, secret_files) = helpers::resolve_secret_files(config);
     match &config_decision {
         helpers::startup_config::ConfigDecision::Loaded => {}
         helpers::startup_config::ConfigDecision::Reverted { errors, last_good } => {
@@ -348,7 +356,7 @@ async fn serve(
     // configured station is not bounced back through the onboarding wizard.
     // Insert-only, so it never overwrites a setting the operator later changed
     // in the UI.
-    helpers::seed_db_settings_from_config(config.as_ref(), &cli, &state);
+    helpers::seed_db_settings_from_config(config.as_ref(), &cli, &state, &secret_files.resolved());
 
     // Overlay the admin-UI settings (SQLite `settings` table) on top of the
     // file config so settings saved in the web UI actually take effect. Without
@@ -391,6 +399,7 @@ async fn serve(
         state.with_info_site(cli.info_site.clone())
     };
     let state = helpers::init_species_codes(state, &cli, config.as_ref());
+    let state = helpers::init_taxonomy(state, &cli, config.as_ref());
     let state = helpers::init_i18n(state, &cli, config.as_ref());
     let state = helpers::init_private_mode(state, &cli, config.as_ref());
 
@@ -400,6 +409,14 @@ async fn serve(
     // thread below.
     let capture_status = birdnet_core::audio::capture::new_capture_status();
     let state = state.with_capture_status(capture_status.clone());
+
+    // The reverse direction of the same seam: the web layer records a
+    // restart request for one source here, and the supervisor drains it on its
+    // next tick. Without this an operator's only remedy for one wedged RTSP
+    // camera is restarting the whole service, which drops every other source
+    // and the audio in flight with them.
+    let capture_control = birdnet_core::audio::capture::new_capture_control();
+    let state = state.with_capture_control(capture_control.clone());
 
     // Teed capture sources publish their live PCM here, and `/stream` reads it
     // instead of opening the audio device a second time — which an ALSA
@@ -549,6 +566,7 @@ async fn serve(
         Some(&state),
         state.metrics(),
         capture_status,
+        capture_control,
         Some(&live_audio),
     );
 
@@ -650,6 +668,13 @@ async fn serve(
     // The handle is kept in scope so a future `--no-weather` toggle can
     // abort it; today the loop runs for the lifetime of the process.
     let _weather_poll_handle = integrations::spawn_weather_poll(config.as_ref(), state.clone());
+
+    // G-27 eBird corroboration. Off unless `EBIRD_API_KEY` is configured —
+    // eBird needs a key for every endpoint, so the key is the opt-in and there
+    // is no second switch. Publishes what other people reported near the
+    // station into `AppState`, where the suspect-species report and the
+    // detection detail page consult it.
+    let _ebird_poll_handle = integrations::spawn_ebird_poll(config.as_ref(), state.clone());
 
     // Pre-warm the heavy-analytics fragment cache so the first visit to the
     // Heatmap / phenology / co-occurrence / time-series pages is instant, then
@@ -824,13 +849,32 @@ async fn serve(
         }
     };
 
+    // The one cadence an operator chooses. A name nobody implements is
+    // reported and the default kept, rather than stopping the station: a
+    // typo in a schedule must not cost it its backups entirely.
+    let backup_schedule = config
+        .as_ref()
+        .and_then(|c| c.get("BACKUP_SCHEDULE"))
+        .map_or_else(birdnet_db::sqlite::BackupSchedule::default, |raw| {
+            match birdnet_db::sqlite::BackupSchedule::parse(raw) {
+                Ok(s) => s,
+                Err(why) => {
+                    tracing::warn!(%why, "keeping the default weekly backup schedule");
+                    birdnet_db::sqlite::BackupSchedule::default()
+                }
+            }
+        });
+
     maintenance::spawn_database_maintenance(
-        db_path.clone(),
-        backup_dir.clone(),
-        recordings_dir_for_maintenance,
-        species_cap,
-        clip_retention_days,
-        offsite,
+        maintenance::MaintenancePlan {
+            db_path: db_path.clone(),
+            backup_dir: backup_dir.clone(),
+            recordings_dir: recordings_dir_for_maintenance,
+            species_cap,
+            clip_retention_days,
+            offsite,
+            backup_schedule,
+        },
         ingest_halt_for_maintenance,
         Some(metrics_for_maintenance),
     );

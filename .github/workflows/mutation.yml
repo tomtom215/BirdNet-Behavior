@@ -130,7 +130,7 @@ jobs:
   config:
     name: CI config (paths, shards, timeouts)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15  # observed 1m05s
+    timeout-minutes: 15  # observed 1m08s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-mutants
@@ -319,23 +319,55 @@ jobs:
           # at 0 missed so a future regression of the same shape lights up
           # immediately.
           #
-          # Four shards, and the reason is measured rather than assumed: the
-          # glob now yields 109 mutants, and unsharded it did not fit the
-          # 45-minute default — it was cancelled at 45m on three separate full
-          # mutant runs (the v0.14.0-era push, and twice more, the second on a
-          # completely idle runner pool, which rules out contention). A
-          # timeout renders as "cancelled", which reads as benign, so this row
-          # had never once completed a full run and its gate had never
-          # actually gated. Splitting is the fix rather than a bigger budget:
-          # 109/4 is 28 28 28 25 (measured, not derived), in the same range as
-          # src/daemon/*.rs at 20/shard, which finishes comfortably. Shard
-          # counts here must also satisfy `(n-1)*ceil(total/n) < total` or the
-          # tail shard is empty by construction — see src/capture/schedule.rs
-          # below; at n=4 that is 84 < 109.
-          - { label: "sqlite/queries/detections/*.rs [1/4]", slug: sqlite-queries-detections-1, shard: "0/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
-          - { label: "sqlite/queries/detections/*.rs [2/4]", slug: sqlite-queries-detections-2, shard: "1/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
-          - { label: "sqlite/queries/detections/*.rs [3/4]", slug: sqlite-queries-detections-3, shard: "2/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
-          - { label: "sqlite/queries/detections/*.rs [4/4]", slug: sqlite-queries-detections-4, shard: "3/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          # Eight shards, and the reason is measured rather than assumed.
+          #
+          # This row was split in the first place because unsharded it did not
+          # fit the 45-minute default — it was cancelled at 45m on three
+          # separate full mutant runs (the v0.14.0-era push, and twice more,
+          # the second on a completely idle runner pool, which rules out
+          # contention). A timeout renders as "cancelled", which reads as
+          # benign, so the row had never once completed a full run and its gate
+          # had never actually gated. Four shards of 28 28 28 25 fixed that.
+          #
+          # It has since doubled. `cargo mutants --list --package birdnet-db
+          # --file 'crates/birdnet-db/src/sqlite/queries/detections/*.rs'`
+          # counts 203 today, against the 109 the four-way split was sized for,
+          # and `check_duration_headroom` said so: shard [2/4] reached 34m53s of
+          # its 45m budget — 78%, against a 75% line — on the v0.14.0+ push run
+          # that merged #239. The same run measured [1/4] at 30m35s, [3/4] at
+          # 25m16s and [4/4] at 27m41s, so a ±20% spread on an identical slice
+          # size is normal here and the budget has to hold for the bad end of it.
+          #
+          # Splitting again rather than raising the budget, for the reason this
+          # file has given since the first split: a bigger budget defers the
+          # question to the next doubling and switches off the alarm meanwhile.
+          # 203/8 is 26 26 26 26 26 26 26 21 — counted with `--list --shard`
+          # on 0/8, 6/8 and 7/8, not derived — which restores the ~28-per-shard
+          # slice the row was designed at. Projected worst case from the
+          # measured numbers — 26/51 of 34m53s, with the ~7m baseline the
+          # `--in-diff` PR runs floor at held constant — is about 21m, near half
+          # the budget, with room for the row to grow again before anyone has to
+          # look.
+          #
+          # Shard counts here must also satisfy `(n-1)*ceil(total/n) < total` or
+          # the tail shard is empty by construction — see src/capture/schedule.rs
+          # below; at n=8 that is 7*26 = 182 < 203, and it still holds at 160 and
+          # at 250 mutants.
+          #
+          # Renaming these rows starts each of them cold, because the build-tree
+          # cache is keyed per `matrix.label` and deliberately never falls back
+          # to another row's. That is the price the cache comment below calls
+          # "the honest price of renaming it", and it is one dependency build
+          # per row — not the eight-rows-at-45-minutes incident, which was a
+          # *different* fault (rows restoring each other's trees) and is fixed.
+          - { label: "sqlite/queries/detections/*.rs [1/8]", slug: sqlite-queries-detections-1, shard: "0/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [2/8]", slug: sqlite-queries-detections-2, shard: "1/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [3/8]", slug: sqlite-queries-detections-3, shard: "2/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [4/8]", slug: sqlite-queries-detections-4, shard: "3/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [5/8]", slug: sqlite-queries-detections-5, shard: "4/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [6/8]", slug: sqlite-queries-detections-6, shard: "5/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [7/8]", slug: sqlite-queries-detections-7, shard: "6/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [8/8]", slug: sqlite-queries-detections-8, shard: "7/8", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
           # Two shards. 56 mutants unsharded took 23m13s — the longest job in
           # the matrix and the next one that would have hit the 45-minute wall
           # as it grew, which is exactly how the detections row went unnoticed.

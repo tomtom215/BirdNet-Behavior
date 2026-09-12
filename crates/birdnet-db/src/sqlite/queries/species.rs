@@ -3,6 +3,7 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
+use crate::sqlite::queries::detections::CLIP_AVAILABLE;
 use crate::sqlite::types::{
     DETECTION_COLS, DailyCount, DetectionRow, HourlyCount, SpeciesCount, SpeciesSummary,
     map_detection_row,
@@ -537,6 +538,174 @@ pub fn rebuild_species_summary(conn: &Connection) -> Result<usize, DbError> {
 }
 
 // ---------------------------------------------------------------------------
+// The station's per-species footprint, and the bulk actions over it (`N-4`)
+// ---------------------------------------------------------------------------
+
+/// One species' footprint on this station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeciesUsage {
+    /// Common name, as the classifier labels it.
+    pub com_name: String,
+    /// Scientific name — the key every list and threshold is stored under.
+    pub sci_name: String,
+    /// Detections that count: rejected reviews excluded, the way every other
+    /// number an operator is shown excludes them.
+    pub detections: i64,
+    /// How many still have a playable clip on disk.
+    pub clips: i64,
+    /// How many are locked. Locked rows are never touched by the bulk actions,
+    /// so this is what an operator needs to see *before* pressing one —
+    /// otherwise the count that comes back is a surprise.
+    pub locked: i64,
+    /// The most recent date it was detected, `YYYY-MM-DD`.
+    pub last_seen: String,
+}
+
+/// Every species this station has recorded, with its footprint.
+///
+/// Ordered by detection count descending: the species costing the most is the
+/// one the operator came to this page about.
+///
+/// Rejected detections are excluded from `detections`, so the number agrees
+/// with every other species count in the product. They are **not** excluded
+/// from `clips`: a rejected detection's clip is still a file taking up space,
+/// and a page about disk usage that hid it would answer a different question
+/// from the one being asked.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_disk_usage(conn: &Connection) -> Result<Vec<SpeciesUsage>, DbError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT Com_Name, Sci_Name,
+                SUM(CASE WHEN review_verdict IS NOT 'rejected' THEN 1 ELSE 0 END),
+                SUM(CASE WHEN {CLIP_AVAILABLE} THEN 1 ELSE 0 END),
+                SUM(CASE WHEN is_locked = 1 THEN 1 ELSE 0 END),
+                MAX(Date)
+           FROM detections
+          GROUP BY Sci_Name, Com_Name
+          ORDER BY 3 DESC, Com_Name ASC"
+    ))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SpeciesUsage {
+                com_name: row.get(0)?,
+                sci_name: row.get(1)?,
+                detections: row.get(2)?,
+                clips: row.get(3)?,
+                locked: row.get(4)?,
+                last_seen: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// The clip files one species still has on disk, relative to the recordings
+/// directory.
+///
+/// Locked detections are excluded: their clips are the evidence the lock
+/// exists to protect, and the only caller is the bulk clip removal.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_clip_files(conn: &Connection, sci_name: &str) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT File_Name FROM detections
+          WHERE Sci_Name = ?1 AND is_locked = 0 AND {CLIP_AVAILABLE}"
+    ))?;
+    let rows = stmt
+        .query_map(params![sci_name], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// What one bulk action did, and what it deliberately left alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BulkOutcome {
+    /// Rows changed.
+    pub affected: usize,
+    /// Rows skipped because the operator had locked them.
+    ///
+    /// Reported rather than swallowed. A bulk action is issued against a
+    /// species, not against rows the operator is looking at, so "3 998 of your
+    /// 4 000, and the two you locked are still here" is the answer — and an
+    /// operator not told would later find detections of a species they believe
+    /// they removed.
+    pub locked_skipped: usize,
+}
+
+/// Delete every **unlocked** detection of one species.
+///
+/// Locked rows survive. [`crate::sqlite::delete_detection`] does not check the
+/// lock, because there the operator is looking at the row they named; a bulk
+/// delete is issued against a species and will sweep up rows nobody is
+/// thinking about.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn delete_species_detections(
+    conn: &Connection,
+    sci_name: &str,
+) -> Result<BulkOutcome, DbError> {
+    let locked: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM detections WHERE Sci_Name = ?1 AND is_locked = 1",
+        params![sci_name],
+        |row| row.get(0),
+    )?;
+    let affected = conn.execute(
+        "DELETE FROM detections WHERE Sci_Name = ?1 AND is_locked = 0",
+        params![sci_name],
+    )?;
+    Ok(BulkOutcome {
+        affected,
+        locked_skipped: usize::try_from(locked).unwrap_or(usize::MAX),
+    })
+}
+
+/// Mark every **unlocked** clip of one species as reclaimed.
+///
+/// The row and its `File_Name` are kept — see migration 22: the name records
+/// that audio existed and what it was called, which is provenance an analysis
+/// may need long after the space was recovered. Only `Clip_Pruned_At` is set.
+///
+/// Marked **before** the files are removed, deliberately. A row marked pruned
+/// whose file still exists wastes disk; a file removed without the mark offers
+/// an operator a player for audio that is gone. The first is the cheaper thing
+/// to be wrong about.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn prune_species_clips(
+    conn: &Connection,
+    sci_name: &str,
+    now_unix: i64,
+) -> Result<BulkOutcome, DbError> {
+    let locked: i64 = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM detections
+              WHERE Sci_Name = ?1 AND is_locked = 1 AND {CLIP_AVAILABLE}"
+        ),
+        params![sci_name],
+        |row| row.get(0),
+    )?;
+    let affected = conn.execute(
+        &format!(
+            "UPDATE detections SET Clip_Pruned_At = ?2
+              WHERE Sci_Name = ?1 AND is_locked = 0 AND {CLIP_AVAILABLE}"
+        ),
+        params![sci_name, now_unix],
+    )?;
+    Ok(BulkOutcome {
+        affected,
+        locked_skipped: usize::try_from(locked).unwrap_or(usize::MAX),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Per-species confidence thresholds
 // ---------------------------------------------------------------------------
 
@@ -783,5 +952,274 @@ mod tests {
         assert_eq!(hours.len(), 2);
         assert_eq!(hours[0].hour, "06");
         assert_eq!(hours[1].hour, "07");
+    }
+}
+
+#[cfg(test)]
+mod footprint_tests {
+    use super::{
+        BulkOutcome, delete_species_detections, prune_species_clips, species_clip_files,
+        species_disk_usage,
+    };
+    use rusqlite::Connection;
+
+    /// A station with three species: a resident, a phantom with many clips,
+    /// and one whose only detection the operator has locked.
+    fn station() -> Connection {
+        let conn = Connection::open_in_memory().expect("memory db");
+        crate::migration::migrate(&conn).expect("migrate");
+        let add = |date: &str,
+                   time: &str,
+                   sci: &str,
+                   com: &str,
+                   file: Option<&str>,
+                   locked: i64,
+                   verdict: Option<&str>| {
+            conn.execute(
+                "INSERT INTO detections
+                     (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens, Overlap,
+                      File_Name, chunk_offset_secs, is_locked, review_verdict)
+                 VALUES (?1, ?2, ?3, ?4, 0.9, 0.7, 36, 1.25, 0.0, ?5, 0, ?6, ?7)",
+                rusqlite::params![date, time, sci, com, file, locked, verdict],
+            )
+            .expect("insert");
+        };
+        add(
+            "2026-09-01",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+            Some("a.wav"),
+            0,
+            None,
+        );
+        add(
+            "2026-09-02",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+            Some("b.wav"),
+            0,
+            None,
+        );
+        // The phantom. Deliberately MORE detections than the blackbird, and a
+        // name that sorts after it, so "worst first" and "alphabetical" give
+        // different answers. The first version of this fixture had the two tie,
+        // which let a mutation replacing the ordering pass unnoticed.
+        add(
+            "2026-09-03",
+            "07:00:00",
+            "Phantomus fictus",
+            "Not A Bird",
+            Some("p1.wav"),
+            0,
+            None,
+        );
+        add(
+            "2026-09-04",
+            "07:00:00",
+            "Phantomus fictus",
+            "Not A Bird",
+            Some("p2.wav"),
+            0,
+            None,
+        );
+        // One with no clip at all: a detection can exist without audio.
+        add(
+            "2026-09-04",
+            "07:30:00",
+            "Phantomus fictus",
+            "Not A Bird",
+            None,
+            0,
+            None,
+        );
+        add(
+            "2026-09-05",
+            "07:00:00",
+            "Phantomus fictus",
+            "Not A Bird",
+            Some("p3.wav"),
+            0,
+            Some("rejected"),
+        );
+        // The locked one.
+        add(
+            "2026-09-06",
+            "08:00:00",
+            "Rara avis",
+            "Rare Bird",
+            Some("r.wav"),
+            1,
+            None,
+        );
+        conn
+    }
+
+    /// The table an operator reads before acting, worst first — the species
+    /// costing the most is the one they came to this page about.
+    ///
+    /// The fixture makes the phantom the most-detected species *and* gives it
+    /// a name sorting after the blackbird, so count order and alphabetical
+    /// order disagree. An earlier fixture had them tie, and a mutation
+    /// replacing the ordering with `ORDER BY Com_Name` passed against it: the
+    /// gate was green for a reason that had nothing to do with its name.
+    ///
+    /// Observed failing, after that fix, with the ordering changed to
+    /// `ORDER BY Com_Name ASC` — the blackbird came first.
+    #[test]
+    fn the_footprint_lists_every_species_worst_first() {
+        let rows = species_disk_usage(&station()).expect("usage");
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert_eq!(
+            rows[0].com_name, "Not A Bird",
+            "the most-detected species comes first, not the first alphabetically: {rows:?}"
+        );
+        assert_eq!(
+            rows[0].detections, 3,
+            "one of its four rows is a rejected review and must not count"
+        );
+        assert_eq!(
+            rows[0].clips, 3,
+            "a rejected detection's clip is still a file; the clipless row has none"
+        );
+        assert_eq!(rows[0].last_seen, "2026-09-05");
+
+        let blackbird = rows
+            .iter()
+            .find(|r| r.sci_name == "Turdus merula")
+            .expect("b");
+        assert_eq!(blackbird.detections, 2);
+        assert_eq!(blackbird.clips, 2);
+        assert_eq!(blackbird.last_seen, "2026-09-02");
+    }
+
+    /// The locked count is shown *before* the operator acts, because it is
+    /// what makes the number that comes back afterwards unsurprising.
+    #[test]
+    fn a_locked_detection_is_counted_and_shown() {
+        let rows = species_disk_usage(&station()).expect("usage");
+        let rare = rows.iter().find(|r| r.sci_name == "Rara avis").expect("r");
+        assert_eq!(rare.locked, 1);
+        assert_eq!(rare.detections, 1);
+    }
+
+    /// **The safety gate.** A bulk delete is issued against a species, not
+    /// against rows the operator is looking at, so it must not sweep up one
+    /// they deliberately locked.
+    ///
+    /// Observed failing with `is_locked = 0` removed from the DELETE: the
+    /// locked row was gone and the surviving-row assertion went red.
+    #[test]
+    fn a_bulk_delete_leaves_locked_detections_alone_and_says_so() {
+        let conn = station();
+        let outcome = delete_species_detections(&conn, "Rara avis").expect("delete");
+        assert_eq!(
+            outcome,
+            BulkOutcome {
+                affected: 0,
+                locked_skipped: 1
+            },
+            "the only row is locked, so nothing is deleted and the operator is told why"
+        );
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Sci_Name = 'Rara avis'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(left, 1, "a locked detection survived a bulk delete");
+    }
+
+    /// The counterpart: unlocked rows really are deleted, or the gate above
+    /// would pass against a delete that does nothing at all.
+    #[test]
+    fn a_bulk_delete_removes_the_unlocked_rows() {
+        let conn = station();
+        let outcome = delete_species_detections(&conn, "Phantomus fictus").expect("delete");
+        assert_eq!(
+            outcome.affected, 4,
+            "including the rejected review and the row with no clip"
+        );
+        assert_eq!(outcome.locked_skipped, 0);
+        let left: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Sci_Name = 'Phantomus fictus'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(left, 0);
+        // And it touched nothing else.
+        let others: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(others, 3, "a species delete must not reach other species");
+    }
+
+    /// Pruning clips keeps the row and the filename — migration 22's point —
+    /// and only sets the reclaim stamp.
+    ///
+    /// Observed failing with the UPDATE replaced by a DELETE: the row count
+    /// dropped and the surviving-name assertion went red.
+    #[test]
+    fn pruning_clips_keeps_the_row_and_the_name() {
+        let conn = station();
+        let outcome = prune_species_clips(&conn, "Phantomus fictus", 1_800_000_000).expect("prune");
+        assert_eq!(outcome.affected, 3);
+
+        let (rows, named, pruned): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*),
+                        SUM(CASE WHEN File_Name IS NOT NULL THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN Clip_Pruned_At IS NOT NULL THEN 1 ELSE 0 END)
+                   FROM detections WHERE Sci_Name = 'Phantomus fictus'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("row");
+        assert_eq!(rows, 4, "the detections themselves are not deleted");
+        assert_eq!(named, 3, "the filename is provenance and is kept");
+        assert_eq!(pruned, 3, "every clip is marked; the clipless row has none");
+
+        // And it is idempotent: a second pass finds nothing left to do.
+        let again = prune_species_clips(&conn, "Phantomus fictus", 1_800_000_001).expect("again");
+        assert_eq!(again.affected, 0);
+    }
+
+    /// A locked detection's clip is the evidence the lock protects, so it is
+    /// neither listed for removal nor marked.
+    #[test]
+    fn a_locked_clip_is_never_listed_or_pruned() {
+        let conn = station();
+        assert!(
+            species_clip_files(&conn, "Rara avis")
+                .expect("files")
+                .is_empty(),
+            "a locked clip must not be offered for deletion"
+        );
+        let outcome = prune_species_clips(&conn, "Rara avis", 1_800_000_000).expect("prune");
+        assert_eq!(outcome.affected, 0);
+        assert_eq!(outcome.locked_skipped, 1);
+    }
+
+    /// The files handed to the caller are exactly the unlocked, still-present
+    /// clips — no more, so nothing outside the species is ever unlinked.
+    #[test]
+    fn the_clip_list_is_exactly_this_species_unlocked_files() {
+        let conn = station();
+        let mut files = species_clip_files(&conn, "Phantomus fictus").expect("files");
+        files.sort();
+        assert_eq!(files, ["p1.wav", "p2.wav", "p3.wav"]);
+
+        // After pruning they are gone from the list: `CLIP_AVAILABLE` is false
+        // once the stamp is set, so a second removal pass unlinks nothing.
+        prune_species_clips(&conn, "Phantomus fictus", 1_800_000_000).expect("prune");
+        assert!(
+            species_clip_files(&conn, "Phantomus fictus")
+                .expect("f")
+                .is_empty()
+        );
     }
 }

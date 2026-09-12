@@ -44,6 +44,17 @@ use crate::state::AppState;
 const PAGE_TPL: &str = include_str!("../../../templates/admin_audio_sources.html");
 const ROW_TPL: &str = include_str!("../../../templates/_partial_audio_source_row.html");
 
+/// Every `settings` key this page can persist.
+///
+/// The admin settings form and the first-run wizard each have a list like this
+/// one, and `src/helpers/settings_overlay.rs` fails if a key on either is not
+/// classified — because twenty settings-form fields, and one wizard field,
+/// once shipped as editable controls that nothing read. This page is a third
+/// writer of the settings table and had no such list, so it was outside that
+/// guard entirely.
+pub const AUDIO_ADMIN_SETTING_KEYS: &[&str] =
+    &[crate::routes::livestream::LIVESTREAM_SOURCE_SETTING];
+
 /// Mount the audio sources CRUD admin routes.
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -54,6 +65,11 @@ pub fn router() -> Router<AppState> {
             get(row).delete(remove).patch(update),
         )
         .route("/admin/audio/sources/{id}/edit", get(edit_form))
+        .route("/admin/audio/sources/{id}/restart", post(restart))
+        .route(
+            "/admin/audio/sources/{id}/listen-default",
+            post(listen_default),
+        )
         .route("/admin/audio/sources/{id}/probe", get(probe))
         .route("/admin/audio/sources/{id}/eq-preview", get(eq_preview))
 }
@@ -139,7 +155,21 @@ pub(crate) fn sources_body(state: &AppState) -> String {
         tracing::error!(error = %err, "audio_sources list failed");
         Vec::new()
     });
-    render_body(&sources, |row| daemon_status(row, state))
+    let listen_default = listen_default_id(state);
+    render_body(&sources, |row| daemon_status(row, state), &listen_default)
+}
+
+/// The `audio_sources` id `/stream` serves when the listener has not chosen
+/// one, or `""` when the station has never picked a default.
+fn listen_default_id(state: &AppState) -> String {
+    state.with_db(|conn| {
+        birdnet_db::settings::get_or(
+            conn,
+            crate::routes::livestream::LIVESTREAM_SOURCE_SETTING,
+            "",
+        )
+        .unwrap_or_default()
+    })
 }
 
 #[derive(Deserialize)]
@@ -427,7 +457,11 @@ async fn create(
                 Some(&row.device_id),
                 Some(&format!("kind={}", row.kind)),
             );
-            let mut body = render_row(&row, daemon_status(&row, &state));
+            let mut body = render_row(
+                &row,
+                daemon_status(&row, &state),
+                &listen_default_id(&state),
+            );
             // Refresh the section totals so adding the first (or Nth) source
             // visibly updates the "N mics / N streams" header, not just the list.
             body.push_str(&count_oobs(&state));
@@ -487,6 +521,135 @@ async fn remove(
             internal_response("Could not remove the source.")
         }
     }
+}
+
+/// Restart one capture source, leaving every other source recording.
+///
+/// The button beside it on `/admin/audio` is the point: an operator whose one
+/// RTSP camera has wedged should not have to restart the station — which takes
+/// down every other microphone with it, along with the audio in flight — nor
+/// reach for `curl` and the API token to avoid that.
+///
+/// The request is recorded for the capture supervisor, which applies it on its
+/// next reconcile tick, and the row is re-rendered so the status pill's poll
+/// picks the change up from there.
+///
+/// This recovers a wedged source; it does **not** reload the source's settings.
+/// The supervisor builds each source's `RecordingConfig` once, at start-up, and
+/// `CaptureManager::start` respawns from that stored config — so a restarted
+/// process comes back with the configuration the service started with. Editing
+/// a source still needs a service restart, which is what the edit form already
+/// says.
+async fn restart(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Path(id): Path<String>,
+) -> Response {
+    use birdnet_core::audio::capture::request_source_restart;
+
+    // Confirm the source exists before claiming anything happened: an id from a
+    // stale page must not answer "restarting" for a source that was removed.
+    let row = match state.with_db(|conn| conn.get(&id)) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found_row(&id),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source get failed");
+            return internal_response("Could not load that source.");
+        }
+    };
+
+    let Some(control) = state.capture_control() else {
+        // Web-only mode, or the daemon is not supervising capture in this
+        // process. Saying so beats a success toast for a restart that no
+        // thread exists to perform.
+        return toast::oob_only(Toast::warn(
+            "Capture is not being supervised by this process, so there is nothing to restart.",
+        ))
+        .into_response();
+    };
+
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "audio.source.restart",
+        Some(&id),
+        None,
+    );
+    request_source_restart(&control, &id);
+
+    let mut body = render_row(
+        &row,
+        daemon_status(&row, &state),
+        &listen_default_id(&state),
+    );
+    body.push_str(&Toast::success("Restarting this source…").render_oob());
+    Html(body).into_response()
+}
+
+/// Make one source the station's default for `/stream` (N-3).
+///
+/// `?source_id=` has always let a *listener* choose a source, and the Recordings
+/// page's picker builds it — but a station could not say once, for everyone,
+/// which of its microphones is the one people actually want to hear. A
+/// two-microphone station (feeder and nest box) has one of each.
+///
+/// Answers with **both** source lists as out-of-band swaps rather than the one
+/// row that changed: the row losing the pill is very often in the other list —
+/// making an RTSP camera the default takes the pill off a microphone — and a
+/// single-row swap would leave two rows both claiming to be the default until
+/// the next page load.
+async fn listen_default(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    Path(id): Path<String>,
+) -> Response {
+    let row = match state.with_db(|conn| conn.get(&id)) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found_row(&id),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source get failed");
+            return internal_response("Could not load that source.");
+        }
+    };
+    if row.disabled_at.is_some() {
+        // `/stream` skips disabled rows, so accepting this would leave the
+        // setting naming a source the resolver silently falls back off — a
+        // default that is not the default.
+        return validation_response("That source is disabled, so it cannot serve the live stream.");
+    }
+
+    let stored = state.with_db(|conn| {
+        birdnet_db::settings::set(
+            conn,
+            crate::routes::livestream::LIVESTREAM_SOURCE_SETTING,
+            &row.id,
+            birdnet_db::settings::SettingsCategory::Audio,
+        )
+    });
+    if let Err(e) = stored {
+        tracing::error!(error = %e, "storing the live-stream default failed");
+        return internal_response("Could not save the listen default.");
+    }
+    crate::audit::audit(
+        &state,
+        Some(&request_user),
+        "audio.source.listen_default",
+        Some(&row.id),
+        None,
+    );
+
+    let sources = state.with_db(AudioSourceStore::list).unwrap_or_default();
+    let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
+        .iter()
+        .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
+    let (rows_local, rows_rtsp) =
+        render_lists(&local, &rtsp, &|row| daemon_status(row, &state), &row.id);
+    let mut body = format!(
+        r#"<ul id="local-list" role="list" class="audio-sources" hx-swap-oob="true">{rows_local}</ul>
+<ul id="rtsp-list" role="list" class="audio-sources" hx-swap-oob="true">{rows_rtsp}</ul>"#
+    );
+    body.push_str(&Toast::success("Listen now plays this source by default.").render_oob());
+    Html(body).into_response()
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<String>) -> Response {
@@ -580,7 +743,11 @@ async fn update(
     let result = state.with_db(|conn| conn.update(&id, &patch));
     match result {
         Ok(row) => {
-            let mut body = render_row(&row, daemon_status(&row, &state));
+            let mut body = render_row(
+                &row,
+                daemon_status(&row, &state),
+                &listen_default_id(&state),
+            );
             body.push_str(
                 &Toast::success("Source updated.")
                     .with_action("/admin/system/restart", "Restart to apply")
@@ -680,7 +847,12 @@ async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Respons
 /// the edit form stuck open — Cancel appeared to do nothing.)
 async fn row(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.with_db(|conn| conn.get(&id)) {
-        Ok(Some(src)) => Html(render_row(&src, daemon_status(&src, &state))).into_response(),
+        Ok(Some(src)) => Html(render_row(
+            &src,
+            daemon_status(&src, &state),
+            &listen_default_id(&state),
+        ))
+        .into_response(),
         Ok(None) => not_found_row(&id),
         Err(e) => {
             tracing::error!(error = %e, "audio source get failed");
@@ -748,19 +920,38 @@ fn count_oobs(state: &AppState) -> String {
     )
 }
 
-fn render_body(sources: &[AudioSource], status_for: impl Fn(&AudioSource) -> Status) -> String {
+/// Both source lists, rendered: `(local, rtsp)`.
+///
+/// Shared by the whole-page render and by the out-of-band refresh the
+/// listen-default POST returns, which has to redraw *both* lists because the
+/// row losing the pill may be in the other one.
+fn render_lists(
+    local: &[&AudioSource],
+    rtsp: &[&AudioSource],
+    status_for: &impl Fn(&AudioSource) -> Status,
+    listen_default: &str,
+) -> (String, String) {
+    let mut rows_local = String::new();
+    for s in local {
+        rows_local.push_str(&render_row(s, status_for(s), listen_default));
+    }
+    let mut rows_rtsp = String::new();
+    for s in rtsp {
+        rows_rtsp.push_str(&render_row(s, status_for(s), listen_default));
+    }
+    (rows_local, rows_rtsp)
+}
+
+fn render_body(
+    sources: &[AudioSource],
+    status_for: impl Fn(&AudioSource) -> Status,
+    listen_default: &str,
+) -> String {
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
 
-    let mut rows_local = String::new();
-    for s in &local {
-        rows_local.push_str(&render_row(s, status_for(s)));
-    }
-    let mut rows_rtsp = String::new();
-    for s in &rtsp {
-        rows_rtsp.push_str(&render_row(s, status_for(s)));
-    }
+    let (rows_local, rows_rtsp) = render_lists(&local, &rtsp, &status_for, listen_default);
 
     // Both sections are always rendered (never hidden): hiding a section when
     // its kind was empty stranded operators who had a mic but no stream — the
@@ -780,7 +971,28 @@ fn render_body(sources: &[AudioSource], status_for: impl Fn(&AudioSource) -> Sta
         .replace("{{pending_changes}}", "")
 }
 
-fn render_row(s: &AudioSource, status: Status) -> String {
+/// The `{{listen_default}}` slot: a pill when this source *is* the station's
+/// default for `/stream`, otherwise the button that makes it one.
+fn listen_default_control(s: &AudioSource, is_default: bool) -> String {
+    if is_default {
+        return r#"<span class="bnb-pill" title="Listen plays this source when no other is chosen">Listen default</span>"#
+            .to_owned();
+    }
+    // A disabled source cannot serve the stream, so offering to make it the
+    // default would be offering to break Listen.
+    if s.disabled_at.is_some() {
+        return String::new();
+    }
+    format!(
+        r#"<button class="bnb-btn ghost"
+              hx-post="/admin/audio/sources/{id}/listen-default"
+              hx-swap="none"
+              title="Play this source when Listen is opened without a choice">Make listen default</button>"#,
+        id = escape_html(&s.id)
+    )
+}
+
+fn render_row(s: &AudioSource, status: Status, listen_default: &str) -> String {
     let (label_class, label_text) = match s.label.as_deref() {
         Some(l) if !l.is_empty() => ("", l.to_string()),
         _ => ("untitled", "— no friendly label —".to_string()),
@@ -801,6 +1013,10 @@ fn render_row(s: &AudioSource, status: Status) -> String {
         .replace("{{status_class}}", status.css())
         .replace("{{status_label}}", status.label())
         .replace("{{meta_line}}", &escape_html(&meta_for(s)))
+        .replace(
+            "{{listen_default}}",
+            &listen_default_control(s, !listen_default.is_empty() && listen_default == s.id),
+        )
 }
 
 /// The replacement pill returned by `/probe`, and therefore the one that keeps
@@ -1088,7 +1304,7 @@ mod tests {
 
     #[test]
     fn render_body_empty_shows_both_add_sections() {
-        let html = render_body(&[], |_| Status::Down);
+        let html = render_body(&[], |_| Status::Down, "");
         // Both add-affordances are always present, even from a blank slate, so an
         // operator can add either a mic or a stream (the old layout hid the RTSP
         // section until one existed, stranding anyone who had only a mic).
@@ -1107,7 +1323,7 @@ mod tests {
         insert_one(&state, "src_u", SourceKind::UsbAlsa, "hw:1,0");
         insert_one(&state, "src_r", SourceKind::Rtsp, "rtsp://x/y");
         let sources = state.with_db(AudioSourceStore::list).unwrap();
-        let html = render_body(&sources, |_| Status::Down);
+        let html = render_body(&sources, |_| Status::Down, "");
         assert!(!html.contains("{{"));
         assert!(html.contains("hw:1,0"));
         assert!(html.contains("rtsp://x/y"));
@@ -1522,7 +1738,7 @@ mod tests {
         state.metrics().set_source_up("src_live", true);
         state.metrics().set_source_up("src_dead", false);
         let sources = state.with_db(AudioSourceStore::list).unwrap();
-        let html = render_body(&sources, |row| daemon_status(row, &state));
+        let html = render_body(&sources, |row| daemon_status(row, &state), "");
         assert!(
             html.contains("Capturing"),
             "live row should paint Capturing"
@@ -1549,7 +1765,7 @@ mod tests {
             created_at: "2026-05-28 12:00:00".to_string(),
             updated_at: "2026-05-28 12:00:00".to_string(),
         };
-        let html = render_row(&source, Status::Down);
+        let html = render_row(&source, Status::Down, "");
         assert!(
             !html.contains("{{"),
             "unsubstituted placeholder in:\n{html}"
@@ -1579,7 +1795,7 @@ mod tests {
             created_at: "2026-05-28".to_string(),
             updated_at: "2026-05-28".to_string(),
         };
-        let html = render_row(&source, Status::Capturing);
+        let html = render_row(&source, Status::Capturing, "");
         assert!(html.contains("Backyard feeder"));
         // The "untitled" class is only added in the no-label case. The
         // template's doc comment mentions the word, so match on the
@@ -1633,7 +1849,7 @@ mod tests {
             created_at: "2026-08-10".to_string(),
             updated_at: "2026-08-10".to_string(),
         };
-        let row = render_row(&source, Status::Down);
+        let row = render_row(&source, Status::Down, "");
         let pill_start = row
             .find(r#"<span class="bnb-pill"#)
             .expect("row renders a status pill");
@@ -1888,6 +2104,228 @@ mod tests {
     fn synth_id_uses_kind_prefix() {
         let id = synth_id(SourceKind::Rtsp);
         assert!(id.starts_with("src_rtsp_"));
+    }
+
+    // ---- the station's listen default (N-3) --------------------------------
+
+    fn stored_listen_default(state: &AppState) -> String {
+        state.with_db(|conn| {
+            birdnet_db::settings::get_or(
+                conn,
+                crate::routes::livestream::LIVESTREAM_SOURCE_SETTING,
+                "",
+            )
+            .unwrap_or_default()
+        })
+    }
+
+    /// The setting is written, and both lists come back with the pill on the
+    /// new default — including the list the *old* default was in.
+    #[tokio::test]
+    async fn choosing_a_listen_default_stores_it_and_redraws_both_lists() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_feeder", SourceKind::UsbAlsa, "plughw:1,0");
+        insert_one(&state, "src_nestbox", SourceKind::Rtsp, "rtsp://box/feed");
+
+        let res = listen_default(
+            State(state.clone()),
+            actor(&state),
+            Path("src_nestbox".to_owned()),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(stored_listen_default(&state), "src_nestbox");
+
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains(r#"<ul id="local-list""#) && html.contains(r#"<ul id="rtsp-list""#),
+            "both lists must be redrawn — the row losing the pill is usually in \
+             the other one: {html}"
+        );
+        assert_eq!(
+            html.matches("Listen default</span>").count(),
+            1,
+            "exactly one row may claim to be the default: {html}"
+        );
+        assert!(
+            html.contains(r#"hx-post="/admin/audio/sources/src_feeder/listen-default""#),
+            "the row that is no longer the default must offer to become it again: {html}"
+        );
+    }
+
+    /// End to end across the seam: what the page stores is what `/stream`'s
+    /// resolver picks.
+    ///
+    /// The two halves are in different modules and neither test alone would
+    /// notice them disagreeing about the key's spelling — which is exactly how
+    /// a setting comes to be written and never read.
+    #[tokio::test]
+    async fn what_the_page_stores_is_what_the_stream_resolver_picks() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_feeder", SourceKind::UsbAlsa, "plughw:1,0");
+        insert_one(&state, "src_nestbox", SourceKind::Rtsp, "rtsp://box/feed");
+
+        let sources = state
+            .with_db(AudioSourceStore::list)
+            .expect("the two rows just inserted");
+        assert_eq!(
+            crate::routes::livestream::default_source_id(&state).as_deref(),
+            Some("src_feeder"),
+            "before a choice is made the first row serves, as it always has"
+        );
+
+        let res = listen_default(
+            State(state.clone()),
+            actor(&state),
+            Path("src_nestbox".to_owned()),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            crate::routes::livestream::default_source_id(&state).as_deref(),
+            Some("src_nestbox"),
+            "the resolver must read the key the page writes"
+        );
+        assert_eq!(sources.len(), 2, "neither row was touched");
+    }
+
+    /// A disabled source cannot be made the default: `/stream` skips disabled
+    /// rows, so the setting would name a source the resolver silently falls
+    /// back off — a default that is not the default.
+    #[tokio::test]
+    async fn a_disabled_source_cannot_be_made_the_listen_default() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_feeder", SourceKind::UsbAlsa, "plughw:1,0");
+        insert_one(&state, "src_old", SourceKind::Rtsp, "rtsp://old/feed");
+        state
+            .with_db(|conn| conn.soft_delete("src_old"))
+            .expect("soft delete");
+
+        let res = listen_default(
+            State(state.clone()),
+            actor(&state),
+            Path("src_old".to_owned()),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            stored_listen_default(&state),
+            "",
+            "a refused choice must not have been stored"
+        );
+    }
+
+    /// And a disabled row is not offered the choice in the first place.
+    #[test]
+    fn a_disabled_row_offers_no_listen_default_button() {
+        let (_d, state) = fixture();
+        let mut row = insert_one(&state, "src_old", SourceKind::Rtsp, "rtsp://old/feed");
+        row.disabled_at = Some("2026-09-01".to_owned());
+        let html = render_row(&row, Status::Down, "");
+        assert!(
+            !html.contains("listen-default"),
+            "offering it would be offering to break Listen: {html}"
+        );
+
+        // Counterpart: an enabled row does offer it, so the assertion above is
+        // about `disabled_at` and not about the markup having vanished.
+        let live = insert_one(&state, "src_feeder", SourceKind::UsbAlsa, "plughw:1,0");
+        assert!(render_row(&live, Status::Capturing, "").contains("listen-default"));
+    }
+
+    // ---- per-source restart (G-32) ----------------------------------------
+
+    /// The button does what it says: the named source is queued for the
+    /// supervisor, and no other source is.
+    ///
+    /// The second half is the feature. The remedy this replaces is
+    /// `/admin/system/restart`, which takes every source down.
+    #[tokio::test]
+    async fn restarting_one_source_queues_only_that_source() {
+        use birdnet_core::audio::capture::{is_restart_pending, new_capture_control};
+
+        let (_d, state) = fixture();
+        insert_one(&state, "src_cam", SourceKind::Rtsp, "rtsp://cam/1");
+        insert_one(&state, "src_mic", SourceKind::UsbAlsa, "plughw:1,0");
+        let control = new_capture_control();
+        let state = state.with_capture_control(control.clone());
+
+        let res = restart(
+            State(state.clone()),
+            actor(&state),
+            Path("src_cam".to_owned()),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(is_restart_pending(&control, "src_cam"));
+        assert!(
+            !is_restart_pending(&control, "src_mic"),
+            "restarting one source must not disturb the others"
+        );
+    }
+
+    /// A row that is gone answers 404 rather than queueing a restart for an id
+    /// nothing will ever match — which would look, from the page, like success.
+    #[tokio::test]
+    async fn restarting_a_removed_source_is_not_reported_as_success() {
+        use birdnet_core::audio::capture::{is_restart_pending, new_capture_control};
+
+        let (_d, state) = fixture();
+        let control = new_capture_control();
+        let state = state.with_capture_control(control.clone());
+
+        let res = restart(
+            State(state.clone()),
+            actor(&state),
+            Path("src_ghost".to_owned()),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert!(!is_restart_pending(&control, "src_ghost"));
+    }
+
+    /// With no supervisor in the process the page says so rather than showing a
+    /// success toast for a restart nothing will perform.
+    #[tokio::test]
+    async fn restarting_without_a_supervisor_says_so() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_cam", SourceKind::Rtsp, "rtsp://cam/1");
+
+        let res = restart(
+            State(state.clone()),
+            actor(&state),
+            Path("src_cam".to_owned()),
+        )
+        .await;
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains("not being supervised"),
+            "the operator has to be told nothing will happen: {html}"
+        );
+    }
+
+    /// The row markup offers the action at all — the handler is unreachable
+    /// from the page without it.
+    #[test]
+    fn the_row_offers_a_per_source_restart() {
+        let (_d, state) = fixture();
+        let row = insert_one(&state, "src_cam", SourceKind::Rtsp, "rtsp://cam/1");
+        let html = render_row(&row, Status::Capturing, "");
+        assert!(
+            html.contains(r#"hx-post="/admin/audio/sources/src_cam/restart""#),
+            "the Restart button must post to the per-source route: {html}"
+        );
+        assert!(
+            !html.contains(r#"hx-post="/admin/system/restart""#),
+            "and must not be wired to the station-wide restart, which is the \
+             blunt remedy this replaces"
+        );
     }
 }
 

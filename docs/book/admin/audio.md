@@ -18,6 +18,32 @@ Every source is supervised on its own, which is what makes a multi-camera statio
 - **Silent stalls are caught too.** A source whose process is still *alive* but has stopped delivering audio — a wedged RTSP session, a mic hung after a USB re-enumeration — is detected by watching its segment output: no fresh recording for several segment-durations and it is restarted exactly like a crash. A plain "is the process running?" check can't see this; it's the failure mode that quietly loses a whole night otherwise. (It fails open while the system clock is unsynced, so a wrong boot-time clock never triggers a false restart.)
 - **A source that keeps dying and coming back is caught as well.** A marginal USB connection or an under-powered hub gives a source that dies every few minutes and restarts in seconds: it is live at every glance, its backoff never grows, and its uptime strip stays green, but every restart loses the audio around it. Restarts are counted over the last hour, and five or more make the source *flapping*: a line on its Station Health card, an issue in the banner, a warning in the log, and the `flapping` station-health condition for the notifier.
 - **You can see it.** The per-source `birdnet_audio_source_up{source="…"}` Prometheus gauge reflects real liveness, and a source that has been down a couple of minutes logs a loud, rate-limited warning to the journal.
+- **You can say which source Listen plays.** Each row carries **Make listen default**; the source you pick is what `/stream` serves — and so what the Listen button plays — when the listener has not chosen one of their own. A two-microphone station (feeder and nest box) has one that people actually want to hear, and this is where it says so. If that source is later disabled or removed, Listen falls back to the first working source rather than going silent.
+- **You can restart one source by hand.** Each row carries a **Restart** button that stops and starts that source alone, within a couple of seconds; every other source keeps recording, and nothing in flight elsewhere is lost. It is the right remedy for one camera that has wedged in a way the supervisor has not yet called stalled. Restarts you ask for are deliberately not counted towards the *flapping* verdict — that number is there to spot a source failing on its own. The same action is `POST /api/v2/control/restart-source` for automation, and `GET /api/v2/system/capture` reads the state back; both are in the [API reference](../reference/api.md). Note that a per-source restart **re-launches the source with the settings the service started with** — it does not pick up an edit, which still needs a service restart.
+
+### Tuning the watchdog (expert)
+
+The supervisor's own timings are settable, and the defaults are what the station
+has always used — leave them alone unless a specific site misbehaves. The knobs
+are `BIRDNET_WATCHDOG_CHECK_SECS` (how often every source is reconciled),
+`…_STALL_SEGMENTS` and `…_STALL_FLOOR_SECS` (how much missing output makes a
+live process stalled), `…_BACKOFF_BASE_SECS` and `…_BACKOFF_CAP_SECS` (the
+restart delay and its ceiling), and `…_DOWN_WARN_AFTER_SECS` and
+`…_DOWN_WARN_EVERY_SECS` (how long down before the loud journal warning, and how
+often to repeat it). Each is documented with its range in `.env.example`; a
+value outside it is clamped and the adjustment is logged, so a station never
+runs on timings its config file does not describe.
+
+Two things that are deliberately *not* knobs:
+
+- **There is no maximum retry count.** A field sensor unreachable for six hours
+  must still be reachable on hour seven, and a supervisor that has given up is a
+  station that is silently not recording. Upstream BirdNET-Go has one; this is a
+  considered divergence, not an omission.
+- **None of these is "how long may the station go without a detection".** That
+  is `BIRDNET_DEADMAN_HOURS`. A microphone writes segments through hours of
+  silence, so no amount of quiet trips the stall threshold — the threshold is
+  about segments arriving, not about birds calling.
 
 ## Tuning a source
 
@@ -248,6 +274,14 @@ Two things follow from this that are worth knowing:
   the source is not recording rather than playing silence. Station Health will
   say why.
 
+The source picker on the Live view chooses what *you* hear. What everyone else
+hears when they arrive without choosing — and what `/api/v2/stream` serves with
+no `?source_id=` — is the station's **listen default**, set with the **Make
+listen default** button on a source's row on this page. Unset, the first
+working source serves, which is the whole story on a one-microphone station.
+If the chosen source is later disabled or removed, the stream falls back to the
+first working source rather than going silent; the journal says so when it does.
+
 Live audio still needs `ffmpeg` installed: the station uses it to encode the
 stream as MP3 for the browser. `--doctor` warns if it is missing.
 
@@ -274,6 +308,40 @@ For **saved clips** the equivalent is `--freq-shift-hz` (config key
 > Releases before this one documented that setting backwards, saying a positive
 > value helped high-frequency hearing loss. It does the opposite. If you set a
 > positive value on that advice, negate it.
+
+## Evening out the level of saved clips
+
+Clips are written at whatever level the microphone delivered, and a gallery of
+them recorded across a season is not level: the listener rides the volume
+control between every one, and a quiet clip at the end of a playlist gets
+missed. **Settings → Audio Capture → Normalise Clip Loudness** fixes that. It
+measures each saved clip's integrated loudness (ITU-R BS.1770, the measurement
+behind EBU R128) and applies a single gain.
+
+Off by default, because a clip is an archival record as well as something to
+listen to and changing what is in it should be your decision. The choices are
+−14 LUFS (loud, the streaming convention), **−18 LUFS (recommended)** and
+−23 LUFS (the EBU R128 broadcast reference, noticeably quiet on a phone).
+`BIRDNET_CLIP_TARGET_LUFS` sets the same thing from the environment, and wins
+over the settings page when both are set.
+
+Four things worth knowing:
+
+- **It never touches the audio the classifier hears.** The gain is applied when
+  the clip is written, long after the analysis window has been scored. A gain
+  applied before inference would move every confidence score and make two
+  stations' thresholds mean different things.
+- **A quiet, peaky clip will not reach the target.** One loud wing-beat over a
+  distant song cannot be brought up by a single gain without a sample clipping,
+  so the clip is turned up only as far as the ceiling allows and no further —
+  `BIRDNET_CLIP_PEAK_CEILING_DBFS`, −1 dBFS by default.
+- **That ceiling is a *sample* peak, not an ITU true peak.** The station does
+  not oversample to find inter-sample peaks; the default leaves about a decibel
+  of headroom for them, which is the usual allowance for ordinary material.
+- **The clip says what was done to it.** A normalised WAV's RIFF INFO comment
+  carries `Normalised to -18.0 LUFS from -31.4`, so the change is visible from
+  the file rather than only from the setting. Re-normalising is a no-op:
+  measuring an already-normalised clip returns the target.
 
 ## Common pitfalls
 
