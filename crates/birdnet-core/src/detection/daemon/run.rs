@@ -81,8 +81,13 @@ pub fn run_daemon(
         );
         pipeline_config.target_sample_rate = model_sample_rate;
     }
-    // V3.0 models expect raw audio; V2.4 models expect a mel spectrogram.
-    let raw_mode = model.infer_sample_rate() == 32_000;
+    // Asked of the model rather than guessed from its sample rate (`G-10`
+    // Stage 1). The guess here was `infer_sample_rate() == 32_000`, which read
+    // "32 kHz" as "waveform" — true of V3.0 by coincidence, and false of V2.4,
+    // which is a 48 kHz waveform model that was therefore sent a mel
+    // spectrogram zero-padded to three-quarters of its input tensor.
+    let spec = model.input_spec();
+    let raw_mode = spec.is_waveform();
     if raw_mode != pipeline_config.raw_audio_input {
         tracing::info!(
             raw_audio_input = raw_mode,

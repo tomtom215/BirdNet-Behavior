@@ -449,6 +449,26 @@ impl BirdNetModel {
             ))
         })?;
 
+        // Padding is for a ragged edge — the last chunk of a recording that
+        // ran out of audio — and that is a few per cent at most. A slice less
+        // than half the expected width is not a short chunk; it is different
+        // data, and filling the rest with silence turns a category error into
+        // a confident wrong answer.
+        //
+        // This is exactly how the V2.4 mel misrouting stayed invisible: a
+        // 36 096-value mel spectrogram was padded to 144 000 and inferred on,
+        // with no error, no warning, and three-quarters of the tensor zero.
+        if audio.len() * 2 < expected_len {
+            return Err(InferenceError::Shape(format!(
+                "input is {} values but this model takes {expected_len} ({:?}); \
+                 that is too far short to be a partial window, so it is most likely \
+                 the wrong kind of data — check whether the pipeline is sending a \
+                 mel spectrogram to a waveform model",
+                audio.len(),
+                self.input_shape
+            )));
+        }
+
         let mut padded = vec![0.0_f32; expected_len];
         let copy_len = audio.len().min(expected_len);
         padded[..copy_len].copy_from_slice(&audio[..copy_len]);
@@ -509,14 +529,36 @@ impl BirdNetModel {
         result
     }
 
-    /// Returns `true` if this model expects raw audio samples as input.
+    /// What this model needs fed to it (`G-10` Stage 1).
     ///
-    /// `BirdNET`+ V3.0 models perform internal feature extraction from the raw
-    /// waveform (`infer_sample_rate() == 32_000`).  V2.4 models require a
-    /// pre-computed mel spectrogram.
+    /// Derived from the ONNX input shape, so sample rate, window length and
+    /// input format are three separate declared facts rather than one guess
+    /// standing in for the other two.
+    #[must_use]
+    pub fn input_spec(&self) -> InputSpec {
+        input_spec_from_shape(&self.input_shape)
+    }
+
+    /// Returns `true` if this model is fed the waveform directly.
+    ///
+    /// # What this used to be, and why it was wrong
+    ///
+    /// This was `infer_sample_rate() == 32_000`: V3.0 is 32 kHz and takes the
+    /// waveform, so 32 kHz was read as meaning "waveform". The two are
+    /// unrelated, and the consequence was not academic. BirdNET V2.4 declares
+    /// `[1, 144_000]` — exactly 48 kHz × 3 s, a **sample count** — so it is a
+    /// waveform model too, but being 48 kHz it was routed down the mel branch:
+    /// the pipeline computed a 128 × 282 = 36 096-value mel spectrogram and
+    /// [`BirdNetModel::build_input_tensor`] zero-filled the remaining 107 904
+    /// slots of a 144 000-wide tensor. Three-quarters of every V2.4 inference
+    /// was zeros, and nothing reported it.
+    ///
+    /// The format now comes from the shape's rank and middle dimension, which
+    /// is a property of the model file rather than a coincidence between the
+    /// two models that happened to ship first.
     #[must_use]
     pub fn expects_raw_audio(&self) -> bool {
-        self.infer_sample_rate() == 32_000
+        self.input_spec().is_waveform()
     }
 
     /// Get the label set.
@@ -600,6 +642,124 @@ const fn output_is_probability(input_shape: &[usize]) -> bool {
     }
 }
 
+/// What kind of data a model's input tensor holds (`G-10` Stage 1).
+///
+/// # Why this is not a boolean derived from the sample rate
+///
+/// Until Stage 1 the pipeline decided this with `infer_sample_rate() ==
+/// 32_000`. Sample rate and input format are independent properties that
+/// happened to correlate across the two models shipped at the time, and the
+/// coincidence was load-bearing: a 48 kHz model took the mel branch because it
+/// was 48 kHz, not because it wanted mel. Perch v2 — the next model planned —
+/// is 32 kHz, so it would have taken the waveform branch by luck rather than
+/// by declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputFormat {
+    /// A flat window of audio samples.
+    Waveform,
+    /// A mel spectrogram of `n_mels × n_frames`, flattened row-major.
+    MelSpectrogram {
+        /// Mel bands (rows).
+        n_mels: usize,
+        /// Time frames (columns).
+        n_frames: usize,
+    },
+}
+
+/// Everything the pipeline needs to know to feed one classifier.
+///
+/// Read from the model's own ONNX input shape rather than assumed, so the
+/// pipeline stops carrying the hardcoded 48 kHz / 3 s / mel assumptions that
+/// only ever held for one model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputSpec {
+    /// Sample rate the audio must be resampled to, in Hz.
+    pub sample_rate: u32,
+    /// How many audio samples one inference window covers.
+    ///
+    /// For a mel model this is still the *audio* window, not the number of
+    /// values in the tensor — the pipeline chunks audio, and the transform to
+    /// mel happens afterwards.
+    pub window_samples: usize,
+    /// What the tensor holds.
+    pub format: InputFormat,
+}
+
+impl InputSpec {
+    /// Whether this model is fed the waveform directly.
+    #[must_use]
+    pub const fn is_waveform(&self) -> bool {
+        matches!(self.format, InputFormat::Waveform)
+    }
+
+    /// The window length in seconds.
+    #[must_use]
+    pub fn window_secs(&self) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        let secs = self.window_samples as f32 / self.sample_rate as f32;
+        secs
+    }
+
+    /// How many floats the input tensor holds.
+    ///
+    /// The same as [`Self::window_samples`] for a waveform model, and
+    /// `n_mels × n_frames` for a mel one — which is the number the tensor
+    /// builder must check the supplied slice against.
+    #[must_use]
+    pub const fn tensor_len(&self) -> usize {
+        match self.format {
+            InputFormat::Waveform => self.window_samples,
+            InputFormat::MelSpectrogram { n_mels, n_frames } => n_mels * n_frames,
+        }
+    }
+}
+
+/// Derive the input spec from an ONNX input shape.
+///
+/// The rank and the *middle* dimension are what separate the two formats, and
+/// they are available from the model file itself:
+///
+/// | Shape | Reading |
+/// |---|---|
+/// | `[1, N]` | a flat window of `N` samples |
+/// | `[1, 1, N]` | the same, rank-3 |
+/// | `[1, M, F]`, `M > 1` | a mel spectrogram, `M` bands × `F` frames |
+/// | all-dynamic | V3.0 preview: waveform, 144 000 samples at 32 kHz |
+///
+/// Both BirdNET V2.4 (`[1, 144_000]` = 48 kHz × 3 s) and BirdNET+ V3.0
+/// (`[1, 96_000]` = 32 kHz × 3 s) are **waveform** models: each declared
+/// length is exactly its sample rate times its window, which is a sample count
+/// and not a mel layout. That is the fact the old sample-rate heuristic got
+/// wrong for V2.4.
+#[must_use]
+pub const fn input_spec_from_shape(input_shape: &[usize]) -> InputSpec {
+    let sample_rate = infer_sample_rate_from_shape(input_shape);
+    match input_shape {
+        // A rank-3 shape whose middle dimension is greater than one is the
+        // only shape here that cannot be a flat window.
+        [_, n_mels, n_frames] if *n_mels > 1 && *n_frames > 1 => InputSpec {
+            sample_rate,
+            // NOT read from the mel shape. `n_frames` is a count of spectrogram
+            // columns, and taking it as a sample count would claim a 282-sample
+            // window — six milliseconds — for a model wanting three seconds.
+            // The audio window a mel model covers depends on its hop length and
+            // FFT size, which the tensor shape does not carry, so this is the
+            // dynamic-shape default until a real mel classifier exists to
+            // declare one. No model in this project takes mel input today.
+            window_samples: DYNAMIC_WINDOW_SAMPLES,
+            format: InputFormat::MelSpectrogram {
+                n_mels: *n_mels,
+                n_frames: *n_frames,
+            },
+        },
+        _ => InputSpec {
+            sample_rate,
+            window_samples: recommended_chunk_samples_from_shape(input_shape),
+            format: InputFormat::Waveform,
+        },
+    }
+}
+
 /// Pure helper: derive sample rate from any ONNX input shape.
 ///
 /// V2.4 fixed `[1, 144_000]` → 48 kHz × 3 s. V3.0 fixed `[1, 96_000]` → 32 kHz × 3 s.
@@ -617,6 +777,13 @@ pub const fn infer_sample_rate_from_shape(input_shape: &[usize]) -> u32 {
         _ => 48_000,      // BirdNET   V2.4 (48 kHz × 3 s) or unknown
     }
 }
+
+/// Window length assumed for a model whose tensor shape does not state one.
+///
+/// 144 000 samples: 4.5 s at 32 kHz, the empirical optimum from the
+/// chunk-length sweep in `docs/architecture/15-model-chunking.md`, and the
+/// same number V2.4 used at 48 kHz.
+pub const DYNAMIC_WINDOW_SAMPLES: usize = 144_000;
 
 /// Pure helper: derive the recommended chunk length in samples from any ONNX input shape.
 ///
@@ -681,6 +848,33 @@ fn human_indices(labels: &LabelSet) -> Vec<usize> {
 /// Apply sigmoid function: `1 / (1 + exp(-x))`.
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
+}
+
+impl crate::inference::classifier::Classifier for BirdNetModel {
+    fn labels(&self) -> &LabelSet {
+        &self.labels
+    }
+
+    fn input_spec(&self) -> InputSpec {
+        input_spec_from_shape(&self.input_shape)
+    }
+
+    fn infer(&mut self, window: &[f32]) -> Result<Vec<f32>, InferenceError> {
+        let input_tensor = self.build_input_tensor(window)?;
+        let outputs = self
+            .session
+            .run(ort::inputs![input_tensor])
+            .map_err(|e| InferenceError::Runtime(e.to_string()))?;
+        // V3.0 exposes `embeddings` then `predictions`; V2.4 has one output.
+        // The same selection `predict_chunk` makes, and for the same reason:
+        // scoring the embeddings would silently return 1 280 meaningless
+        // numbers that still look like a prediction vector.
+        let output_idx = usize::from(outputs.len() > 1);
+        let (_shape, flat) = outputs[output_idx]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
+        Ok(flat.to_vec())
+    }
 }
 
 #[cfg(test)]
@@ -901,12 +1095,37 @@ mod tests {
         assert!((secs - 3.0).abs() < 1e-6, "got {secs}");
     }
 
+    /// V2.4 declares `[1, 144_000]`, and 144 000 is exactly 48 000 × 3 — a
+    /// count of audio samples. So it is a waveform model, like V3.0.
+    ///
+    /// # What this test used to say, and why it was changed
+    ///
+    /// It asserted the opposite, and its reason was: *"expects_raw_audio is
+    /// `infer_sample_rate() == 32_000`. V2.4 is 48 kHz, so this must be
+    /// false."* That restates the implementation rather than a fact about the
+    /// model — it would have held for any rule of that shape, including the
+    /// wrong one it was pinning. It is why nothing caught a 48 kHz model being
+    /// sent a mel spectrogram zero-padded across three-quarters of its input
+    /// tensor: the only test of the routing agreed with the routing by
+    /// construction.
+    ///
+    /// The assertion now names the property — a declared length that is a
+    /// sample count means a waveform model — so it would fail if the
+    /// derivation regressed to a sample-rate comparison, which is exactly the
+    /// mutation run against it.
     #[test]
-    fn loaded_v24_model_does_not_expect_raw_audio() {
-        // expects_raw_audio is `infer_sample_rate() == 32_000`. V2.4 is 48 kHz,
-        // so this must be false.
+    fn loaded_v24_model_expects_raw_audio_because_its_input_is_a_sample_count() {
         let m = load_tiny_v24();
-        assert!(!m.expects_raw_audio());
+        let spec = m.input_spec();
+        assert_eq!(
+            spec.window_samples,
+            spec.sample_rate as usize * 3,
+            "144 000 at 48 kHz is three seconds of samples, not a mel layout"
+        );
+        assert!(
+            m.expects_raw_audio(),
+            "a model whose declared input is a sample count takes the waveform"
+        );
     }
 
     #[test]
@@ -1565,6 +1784,170 @@ mod tests {
             short.output_dimension(),
             Some(short.labels().len()),
             "a one-label file does not match an eleven-class model"
+        );
+    }
+}
+
+#[cfg(test)]
+mod input_spec_tests {
+    use super::{DYNAMIC_WINDOW_SAMPLES, InputFormat, InputSpec, input_spec_from_shape};
+
+    /// **The gate this whole change exists for.** BirdNET V2.4 declares
+    /// `[1, 144_000]` — exactly 48 kHz × 3 s, which is a *sample count*. It is
+    /// a waveform model, and the old rule (`sample_rate == 32_000`) called it a
+    /// mel model because it is 48 kHz.
+    ///
+    /// Observed failing with the derivation restored to the sample-rate
+    /// comparison: V2.4 came back `MelSpectrogram` and `is_waveform()` false.
+    #[test]
+    fn a_48khz_birdnet_model_is_a_waveform_model_not_a_mel_one() {
+        let spec = input_spec_from_shape(&[1, 144_000]);
+        assert_eq!(spec.sample_rate, 48_000);
+        assert_eq!(spec.window_samples, 144_000);
+        assert_eq!(
+            spec.format,
+            InputFormat::Waveform,
+            "V2.4 takes the waveform"
+        );
+        assert!(spec.is_waveform());
+        assert!(
+            (spec.window_secs() - 3.0).abs() < 1e-6,
+            "{}",
+            spec.window_secs()
+        );
+    }
+
+    /// Its counterpart: the 32 kHz model was already right, and must stay
+    /// right. Without this, a derivation that called *everything* a waveform
+    /// would pass the gate above while proving nothing.
+    #[test]
+    fn a_32khz_model_is_still_a_waveform_model() {
+        let spec = input_spec_from_shape(&[1, 96_000]);
+        assert_eq!(spec.sample_rate, 32_000);
+        assert_eq!(spec.window_samples, 96_000);
+        assert_eq!(spec.format, InputFormat::Waveform);
+        assert!((spec.window_secs() - 3.0).abs() < 1e-6);
+    }
+
+    /// The real V3.0 model reports a fully-dynamic shape. Verified against the
+    /// genuine 541 MB artifact (sha256 2a0f9efb…b7d743): `[1, 1]` → 32 kHz,
+    /// 144 000 samples, waveform, 4.5 s.
+    #[test]
+    fn the_dynamic_shape_the_real_v30_model_reports_is_a_waveform_window() {
+        for shape in [vec![1usize], vec![1, 1], vec![1, 1, 1]] {
+            let spec = input_spec_from_shape(&shape);
+            assert_eq!(spec.sample_rate, 32_000, "{shape:?}");
+            assert_eq!(spec.window_samples, DYNAMIC_WINDOW_SAMPLES, "{shape:?}");
+            assert_eq!(spec.format, InputFormat::Waveform, "{shape:?}");
+            assert!((spec.window_secs() - 4.5).abs() < 1e-6, "{shape:?}");
+        }
+    }
+
+    /// Rank alone does not make a mel: `[1, 1, N]` is a waveform with a
+    /// leading batch and channel. Only a middle dimension above one can be a
+    /// band count.
+    #[test]
+    fn a_rank_three_shape_with_one_channel_is_still_a_waveform() {
+        let spec = input_spec_from_shape(&[1, 1, 144_000]);
+        assert_eq!(spec.format, InputFormat::Waveform);
+        assert_eq!(spec.window_samples, 144_000);
+    }
+
+    /// A genuine mel shape is recognised as one — and its window is **not**
+    /// read off the frame count.
+    ///
+    /// Observed failing with `window_samples` taken from the shape: it came
+    /// back 282, claiming a six-millisecond window for a model wanting
+    /// seconds.
+    #[test]
+    fn a_mel_shape_is_recognised_without_mistaking_frames_for_samples() {
+        let spec = input_spec_from_shape(&[1, 128, 282]);
+        assert_eq!(
+            spec.format,
+            InputFormat::MelSpectrogram {
+                n_mels: 128,
+                n_frames: 282
+            }
+        );
+        assert!(!spec.is_waveform());
+        assert_ne!(
+            spec.window_samples, 282,
+            "a frame count is not a sample count"
+        );
+        assert_eq!(spec.window_samples, DYNAMIC_WINDOW_SAMPLES);
+        assert_eq!(
+            spec.tensor_len(),
+            128 * 282,
+            "the tensor holds every mel cell"
+        );
+    }
+
+    /// **The guard that would have caught the V2.4 misrouting on day one.**
+    /// A slice under half the expected width is not a short final chunk; it is
+    /// different data. Silently zero-filling it turns a category error into a
+    /// confident wrong answer, which is exactly what happened: a 36 096-value
+    /// mel padded into a 144 000-wide waveform tensor, 75 % zeros, no error.
+    ///
+    /// Observed failing with the length check removed: the call returned a
+    /// tensor instead of an error.
+    #[test]
+    fn a_slice_far_too_short_to_be_a_partial_window_is_refused() {
+        let labels: Vec<String> = (0..11).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        let set = super::LabelSet::parse(&labels.join("\n")).expect("labels");
+        let model = super::BirdNetModel::load_from_bytes(
+            include_bytes!("../testdata/tiny_v24_test.onnx"),
+            set,
+            super::ModelConfig::default(),
+        )
+        .expect("tiny V2.4 loads");
+
+        // The exact size the default mel produced for this model.
+        let mel_sized = vec![0.0_f32; 36_096];
+        let err = model
+            .build_input_tensor(&mel_sized)
+            .expect_err("a quarter-width slice must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("36096"), "{msg}");
+        assert!(msg.contains("144000"), "{msg}");
+        assert!(
+            msg.contains("mel spectrogram"),
+            "the error must name the likely cause: {msg}"
+        );
+
+        // A genuinely ragged final chunk is still padded, not refused — the
+        // guard must not break the case padding exists for.
+        let short_tail = vec![0.0_f32; 140_000];
+        assert!(
+            model.build_input_tensor(&short_tail).is_ok(),
+            "a short final chunk must still pad"
+        );
+        // And an exact window is fine.
+        let exact = vec![0.0_f32; 144_000];
+        assert!(model.build_input_tensor(&exact).is_ok());
+    }
+
+    /// `tensor_len` is what a caller must size its slice against, and it
+    /// differs from the audio window for a mel model — which is precisely the
+    /// distinction whose absence let a 36 096-value mel be padded into a
+    /// 144 000-wide waveform tensor.
+    #[test]
+    fn the_tensor_width_and_the_audio_window_are_separate_numbers() {
+        let wave = input_spec_from_shape(&[1, 144_000]);
+        assert_eq!(wave.tensor_len(), wave.window_samples);
+
+        let mel = InputSpec {
+            sample_rate: 48_000,
+            window_samples: 144_000,
+            format: InputFormat::MelSpectrogram {
+                n_mels: 128,
+                n_frames: 282,
+            },
+        };
+        assert_eq!(mel.tensor_len(), 36_096);
+        assert_ne!(
+            mel.tensor_len(),
+            mel.window_samples,
+            "collapsing these two is the bug this type exists to prevent"
         );
     }
 }

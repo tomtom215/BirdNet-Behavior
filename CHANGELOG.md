@@ -38,6 +38,60 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a 48 kHz model was being fed three-quarters silence
+
+**BirdNET V2.4 received a mel spectrogram zero-padded into a waveform tensor**
+(`G-10` Stage 1). Measured, on the committed V2.4 fixture with the pipeline's
+own default configuration:
+
+| | |
+|---|---|
+| what the model declares | 144 000 values — exactly 48 kHz × 3 s, a sample count |
+| what the pipeline computed | a 128 × 282 mel spectrogram: 36 096 values |
+| what the tensor builder did | padded it with **107 904 zeros** and inferred on it |
+
+Three things had to line up for this to be invisible. The pipeline decided
+input *format* from *sample rate* — `expects_raw_audio()` was literally
+`infer_sample_rate() == 32_000` — so "32 kHz" stood in for "waveform", which is
+true of V3.0 by coincidence and false of V2.4. The tensor builder padded any
+short slice without complaint, so a four-fold mismatch looked like a ragged
+final chunk. And CI fetches a V3.0 model, so every real-model end-to-end run
+took the waveform branch; the mel branch, which is the code default and what
+any 48 kHz model selects, had no real-model coverage at all.
+
+**`InputSpec`** now carries sample rate, window length and format as three
+declared facts, derived from the ONNX shape's rank and middle dimension — a
+property of the model file rather than a coincidence between the two models
+that happened to ship first. `[1, N]` and `[1, 1, N]` are waveform windows;
+only `[1, M, F]` with `M > 1` can be a mel. Both BirdNET V2.4 and V3.0 are
+waveform models, which is what the old rule got wrong.
+
+**The tensor builder now refuses** a slice under half the expected width,
+naming both lengths and the likely cause, instead of filling the difference
+with silence. Padding is for a recording that ran out of audio — a few per
+cent. At 75 % it is hiding a category error.
+
+**`Classifier`** (`inference/classifier.rs`) is the seam the rest of `G-10`
+needs: `labels`, `input_spec`, `infer`. One divergence from the plan's sketch —
+`infer` takes `&mut self`, because the ONNX session does, and interior
+mutability for a signature nobody needs is a worse trade.
+
+Verified against the **real** 11 K-species model (sha256 2a0f9efb…b7d743, the
+same artifact CI pins), not only the fixture: it reports a fully-dynamic
+`[1, 1]` shape resolving to 32 kHz, 144 000 samples, waveform, 4.5 s — and
+`expects_raw_audio` is `true` both before and after this change, so nothing
+moves for a station running the shipped model. The four model-gated end-to-end
+suites pass with `BIRDNET_REQUIRE_MODEL=1`, which turns a silent skip into a
+hard failure; their non-zero elapsed times are what distinguishes real
+inference from a skip that would otherwise report `ok`.
+
+Still unverified, and stated rather than implied: no real BirdNET V2.4 ONNX
+exists to test against here — this repository publishes only the V3.0 release —
+so *that a real V2.4 declares `[1, 144_000]`* remains inference from the
+committed fixture and from 144 000 being exactly 48 000 × 3. The fix is correct
+either way: a waveform model now reaches the waveform path, and a model that
+genuinely wants mel declares it by its shape instead of being guessed at.
+
 ### Added — both kinds of rule travel in one file
 
 **Metric-rule export and import** (`G-29`, completing it). `/admin/rules/export`
