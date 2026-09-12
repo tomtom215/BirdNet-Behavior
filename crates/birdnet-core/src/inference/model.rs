@@ -2176,7 +2176,10 @@ mod class_output_tests {
 
 #[cfg(test)]
 mod input_spec_tests {
-    use super::{DYNAMIC_WINDOW_SAMPLES, InputFormat, InputSpec, input_spec_from_shape};
+    use super::{
+        DYNAMIC_WINDOW_SAMPLES, InputFormat, InputSpec, infer_sample_rate_from_shape,
+        input_spec_from_shape, recommended_chunk_samples_from_shape,
+    };
 
     /// **The gate this whole change exists for.** BirdNET V2.4 declares
     /// `[1, 144_000]` — exactly 48 kHz × 3 s, which is a *sample count*. It is
@@ -2335,5 +2338,88 @@ mod input_spec_tests {
             mel.window_samples,
             "collapsing these two is the bug this type exists to prevent"
         );
+    }
+
+    /// **Stage 4 did not change what a one-classifier station chunks to.**
+    /// `run_daemon` used to set the chunk length from
+    /// `recommended_chunk_secs()`; it now sets it from the registry's longest
+    /// window, which is `input_spec().window_samples` over the same rate. For
+    /// every waveform shape this project loads those are the same two numbers,
+    /// so a station that has not asked for a second opinion — every station
+    /// today — cuts exactly the chunks it cut before.
+    ///
+    /// Observed failing with `input_spec_from_shape`'s waveform arm returning
+    /// `DYNAMIC_WINDOW_SAMPLES` in place of the shape's own length: `[1,
+    /// 96_000]` reported a 144 000-sample window against a recommendation of
+    /// 96 000, so a V3.0 station would have started chunking 4.5 s where it had
+    /// chunked 3.0 s.
+    #[test]
+    fn the_window_and_the_chunk_recommendation_agree_on_every_waveform_shape() {
+        let shapes: [&[usize]; 8] = [
+            &[1, 144_000],    // V2.4, fixed
+            &[1, 96_000],     // V3.0, fixed
+            &[1, 160_000],    // Perch v2, 5 s at 32 kHz
+            &[1, 1, 144_000], // rank-3 waveform
+            &[1],             // fully dynamic
+            &[1, 1],
+            &[1, 1, 1],
+            &[1, 1024], // BattyBirdNET, fed v2.4 embeddings
+        ];
+        for shape in shapes {
+            let spec = input_spec_from_shape(shape);
+            assert_eq!(
+                spec.format,
+                InputFormat::Waveform,
+                "{shape:?} belongs in this list only if it is a waveform shape"
+            );
+            assert_eq!(
+                spec.window_samples,
+                recommended_chunk_samples_from_shape(shape),
+                "{shape:?}: the registry's window and the chunk recommendation must agree"
+            );
+            assert_eq!(
+                spec.sample_rate,
+                infer_sample_rate_from_shape(shape),
+                "{shape:?}: and so must the rate each is divided by"
+            );
+        }
+    }
+
+    /// Its counterpart, without which the gate above would pass against an
+    /// `input_spec_from_shape` that had simply delegated every shape to
+    /// `recommended_chunk_samples_from_shape`.
+    ///
+    /// A mel shape is the one place the two deliberately disagree.
+    /// `recommended_chunk_samples_from_shape` reads the trailing dimension,
+    /// which for `[1, 128, 282]` counts spectrogram *columns* and would claim a
+    /// 282-sample — six millisecond — window. `input_spec_from_shape` refuses
+    /// that reading and reports the dynamic default. No model in this project
+    /// takes mel input today; this pins which of the two the daemon gets when
+    /// one does.
+    ///
+    /// Observed failing with the mel arm delegating to
+    /// `recommended_chunk_samples_from_shape`: the window became 282 samples
+    /// while the waveform gate above stayed green, which is the blind spot this
+    /// counterpart exists to close.
+    #[test]
+    fn a_mel_shape_is_where_the_window_and_the_chunk_recommendation_part() {
+        let cases: [(&[usize], usize); 2] = [(&[1, 128, 282], 282), (&[1, 64, 511], 511)];
+        for (shape, frames) in cases {
+            let spec = input_spec_from_shape(shape);
+            assert!(
+                matches!(spec.format, InputFormat::MelSpectrogram { .. }),
+                "{shape:?} is meant to be a mel shape, got {:?}",
+                spec.format
+            );
+            assert_eq!(
+                recommended_chunk_samples_from_shape(shape),
+                frames,
+                "{shape:?}: the chunk recommendation reads the trailing dimension"
+            );
+            assert_eq!(
+                spec.window_samples, DYNAMIC_WINDOW_SAMPLES,
+                "{shape:?}: the window must not be a column count"
+            );
+        }
     }
 }

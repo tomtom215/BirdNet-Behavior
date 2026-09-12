@@ -910,6 +910,13 @@ mod tests {
         assert!((cfg.chunk_duration_secs - default.chunk_duration_secs).abs() < f32::EPSILON);
         assert!((cfg.confidence_threshold - default.confidence_threshold).abs() < f32::EPSILON);
         assert_eq!(cfg.raw_audio_input, default.raw_audio_input);
+        // `None` is load-bearing rather than incidental: `run_daemon` sets the
+        // chunk step only when the loaded classifiers want different windows,
+        // so a step arriving from this builder would regrid every station that
+        // runs one classifier — silently, since nothing downstream can tell a
+        // derived step from a configured one.
+        assert_eq!(cfg.chunk_step_secs, None);
+        assert_eq!(cfg.chunk_step_secs, default.chunk_step_secs);
     }
 
     #[test]

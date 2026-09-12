@@ -292,17 +292,19 @@ pub fn fits(model_bytes: u64, available: Option<u64>) -> Result<(), InstallError
 /// unknown memory ceiling, for the same reason.
 #[must_use]
 pub fn free_space_bytes(dir: &Path) -> Option<u64> {
-    // `statvfs` through the `libc`-free route: read what the shell would.
-    // Deliberately not a new dependency for one number.
-    let out = std::process::Command::new("df")
-        .arg("-kP")
-        .arg(dir)
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.lines().nth(1)?;
-    let available_kib: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
-    Some(available_kib * 1024)
+    // Delegated rather than re-spawned. This shelled out to `df -kP` and
+    // parsed the second line itself until `every_child_process_has_a_deadline`
+    // caught the `.output()`: a bare wait on `df` blocks for as long as a dead
+    // network mount does, and this one runs immediately before a multi-hundred
+    // megabyte download, so the station would have hung with nothing logged.
+    //
+    // The core helper already answers exactly this question behind
+    // `run_with_timeout`, and it also passes `--`, which the copy here did not:
+    // a model directory whose name begins with `-` was being read by `df` as a
+    // flag.
+    birdnet_core::audio::capture::disk_usage(dir)
+        .ok()
+        .map(|usage| usage.available_bytes)
 }
 
 /// Download one file, hashing as it streams, and rename it into place only

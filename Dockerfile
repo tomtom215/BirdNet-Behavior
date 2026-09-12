@@ -307,6 +307,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libstdc++6 \
         openssh-client \
         procps \
+        rsync \
         sox \
         tini \
         tzdata \

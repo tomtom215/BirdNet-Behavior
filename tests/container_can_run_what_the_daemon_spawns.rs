@@ -86,6 +86,16 @@ const TOOLS: &[(&str, Provenance)] = &[
              given /dev/snd directly",
         ),
     ),
+    (
+        "rsync",
+        // The second offsite backup target, beside `sftp`, and the same trade
+        // for the same reason: it drives the real `rsync` rather than carrying
+        // an in-process implementation of its delta protocol. That only holds
+        // if the binary is there. Without it the target fails at the spawn on
+        // a station whose operator configured it and watched the settings page
+        // accept it — the shape of failure this whole file exists to stop.
+        Provenance::Package("rsync"),
+    ),
     ("sox", Provenance::Package("sox")),
     (
         "systemctl",

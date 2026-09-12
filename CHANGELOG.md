@@ -38,6 +38,99 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Changed — two classifiers with different windows now run together, and neither loses coverage
+
+**The chunk is cut to the longest window and stepped by the shortest** (`G-10`
+Stage 4, finishing the half that was recorded below as an open question). The
+registry used to refuse a classifier whose window differed from the primary's,
+because Stage 3's agreement count means "both reported this species in this
+chunk" and that sentence has no meaning when the two judged different spans of
+time. The refusal has narrowed to what genuinely cannot be reconciled — a
+**differing sample rate**, since the pipeline resamples a recording once and no
+rate is right for both.
+
+The obvious alignment, the coarsest window, is wrong in a way that is invisible
+from the code. Cut chunks at Perch's 5.0 s and step 5.0 s, and BirdNET+ V3.0 —
+4.5 s — hears the first 4.5 s of every chunk and never the last 0.5 s. That is
+a blind spot it would not have had running alone, it recurs on every chunk for
+the life of the station, and nothing reports it: the detections that would have
+been there simply are not there.
+
+Stepping by the **shortest** window keeps every classifier's coverage at least
+what it would be alone. The shortest-window model gets chunk starts identical
+to running by itself, which matters most in the pairing this project actually
+has: BirdNET+ V3.0's 4.5 s is the shorter of the two, so the model a station
+was already running is the one whose timeline does not move. Longer-window
+models get overlapping chunks instead of gaps and pay
+`max(window) / min(window)` more inferences — about 11 % for Perch beside
+BirdNET — which `run_daemon` logs at startup as `extra_inference_ratio`,
+because on a Pi 4 that is a real number and not a rounding error.
+
+`PipelineConfig::chunk_step_secs` carries the step. `None` keeps
+`chunk_duration_secs - chunk_overlap_secs`, which is what a one-classifier
+station has always done, and the daemon sets it only when the windows differ.
+
+**What agreement means, now that it can be said precisely.** Every classifier
+reads its own window from the same chunk start, so agreement is "two
+classifiers reported this species from audio beginning at the same instant" —
+not "within some overlapping interval", the other option the gap analysis
+listed, which would have needed a tolerance nobody could justify.
+
+The price, stated because it is not obvious: a detection is stamped with the
+**chunk's** span, so a shorter-window classifier's detection can carry an end
+time up to `max(window) - min(window)` later than the audio it read — half a
+second for BirdNET beside Perch. Stamping per-model spans instead would give
+the same merged species two different end times depending on which classifier
+won the confidence, which is worse; the recorded span always contains the audio
+heard, and with one classifier the two are identical.
+
+**A comment that was wrong before it was committed.** `run_daemon` took the
+chunk length from `model.recommended_chunk_secs()` and now takes it from the
+registry's longest window; the comment claimed the two were "exactly" the same
+number. They are on every waveform shape, and they are not on a mel shape,
+where `recommended_chunk_samples_from_shape` reads a count of spectrogram
+columns as a sample count and would ask for a six-millisecond chunk.
+`input_spec` refuses that reading, so in the case where they differ this is a
+fix rather than an equivalence. Both halves are gated, the second as the
+counterpart that stops the first passing against an `input_spec_from_shape`
+that had simply delegated every shape.
+
+### Fixed — four gaps this branch's own gates found once nothing else was failing ahead of them
+
+Each of these sat behind an earlier failure in the same test binary, so the
+target carrying it never ran. Running the suite with `--no-fail-fast` after the
+first fix surfaced the next, three times over.
+
+**The container could not have run `rsync`.** `OFFSITE_BACKUP=rsync` spawns the
+real `rsync`, and the runtime image installed no such package — so an operator
+who configured the rsync target, and whose settings page accepted it, would
+have got a failure at the spawn. `rsync` is now classified in the container
+gate's `TOOLS` registry as `Package("rsync")`, installed by the Dockerfile's
+runtime stage, and resolved by `docker.yml` inside the built image alongside
+`sftp`, which that loop had also never checked.
+
+**A free-space probe could hang the installer.** `model_catalog::free_space_bytes`
+shelled out to `df` and waited with a bare `.output()`. `df` on a path under a
+dead network mount blocks in `statfs` for as long as the mount does, and this
+call runs immediately before a several-hundred-megabyte download — so the
+station would have stopped with nothing logged. It now delegates to
+`birdnet_core::audio::capture::disk_usage`, which already asks the same
+question behind `run_with_timeout`, and which also passes `--` to `df`: the
+copy here did not, so a model directory whose name began with `-` was being
+read as a flag.
+
+**`MODEL_DIR` was a key the station would have called a typo.** `--install-model`
+reads it from `birdnet.conf`, and it was missing from `KNOWN_CONFIG_KEYS`.
+
+**A glob in the manual read as a stale key.** The backups page sends the rsync
+reader back to the `OFFSITE_SFTP_*` family rather than restating seven keys,
+and the documentation gate's scanner trimmed that to `OFFSITE_SFTP` — a name
+nothing implements — and reported the manual as telling operators to set it.
+The scanner now skips a match terminated by `*`, the same shape of fix as the
+two false positives already recorded on its counterpart. Checked both ways
+afterwards: a fabricated key added to the page, and a real key removed from it,
+each still fail the gate.
+
 ### Added — getting an embedding out of a classifier, and what that revealed about the bat stage
 
 **Embedding extraction** (`G-10`, groundwork for Stage 6):
@@ -167,14 +260,16 @@ which is 5 s at 32 kHz — and is equally 3⅓ s at 48 kHz. Nothing in the tenso
 distinguishes them. `MODEL_SAMPLE_RATE` / `MODEL_n_SAMPLE_RATE` now declare it,
 with the derivation kept for the shapes it was actually built from.
 
-**And a question, which is recorded rather than guessed at.** The pipeline
-decodes, resamples and chunks a recording **once**, from the primary's spec.
-Perch wants 5 s windows where BirdNET+ V3.0 wants 4.5 s, so running both means
-deciding what a merged detection *means* when two classifiers judged different
-spans of time — which Stage 3's agreement count assumes they did not. Until
-that has an answer, the registry **refuses** a classifier whose spec differs
-from the primary's, at startup, naming both specs. Perch is configurable and
-validated; it is not silently fed windows it was never trained on.
+**And a question, which was recorded rather than guessed at — and is now
+answered.** The pipeline decodes, resamples and chunks a recording **once**,
+from the primary's spec. Perch wants 5 s windows where BirdNET+ V3.0 wants
+4.5 s, so running both means deciding what a merged detection *means* when two
+classifiers judged different spans of time — which Stage 3's agreement count
+assumes they did not. While that was open the registry **refused** a classifier
+whose spec differed from the primary's, at startup, naming both specs: Perch
+was configurable and validated, and never silently fed windows it was not
+trained on. The answer is the chunk arithmetic in the first entry above, and
+the refusal now covers the sample rate alone.
 
 ### Added — two classifiers agreeing is recorded as what it is
 

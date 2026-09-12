@@ -82,6 +82,7 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "MODEL_3_PATH",
     "MODEL_3_SAMPLE_RATE",
     "MODEL_3_THRESHOLD",
+    "MODEL_DIR",
     "MODEL_ID",
     "MODEL_PATH",
     "MODEL_ROUTES",

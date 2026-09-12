@@ -172,16 +172,12 @@ impl fmt::Display for RegistryError {
             Self::Load { id, why } => write!(f, "classifier `{id}` could not be loaded: {why}"),
             Self::IncompatibleInput { id, wants, primary } => write!(
                 f,
-                "classifier `{id}` wants {} Hz in {:.2} s windows and the primary wants {} Hz in \
-                 {:.2} s. Refusing to start. The pipeline decodes and resamples a recording once \
-                 and cuts it into chunks once, so a second classifier needing different audio \
-                 would be fed the primary's chunks — silently, and wrongly. Running both also \
-                 needs an answer to what a merge *means* when two models judged different spans \
-                 of time, which is a question rather than an oversight; see `G-10` Stage 4",
-                wants.sample_rate,
-                wants.window_secs(),
-                primary.sample_rate,
-                primary.window_secs(),
+                "classifier `{id}` wants {} Hz and the primary wants {} Hz. Refusing to start. \
+                 A recording is decoded and resampled once, and resampling it twice would \
+                 double the most expensive step in the pipeline on the boards this runs on — \
+                 with no rate that is correct for both. Differing *window lengths* are fine; \
+                 it is the rate that cannot be reconciled",
+                wants.sample_rate, primary.sample_rate,
             ),
             Self::UnknownRouteTarget {
                 source,
@@ -280,23 +276,22 @@ impl ClassifierRegistry {
             });
         }
 
-        // Every classifier must want the audio the pipeline actually prepares.
+        // Every classifier must want audio at the **same rate**. Differing
+        // window lengths are fine and handled by the chunk arithmetic (see
+        // `window_bounds`); differing rates are not, because the pipeline
+        // resamples a recording once and doing it twice would double that work
+        // on a board where it is already the expensive part — and there is no
+        // principled rate to pick that is right for both.
         //
-        // This is the wall Stage 4 hit with a real second model. The pipeline
-        // decodes, resamples and chunks a recording **once**, from the
-        // primary's spec. Perch v2 wants 5 s at 32 kHz where BirdNET+ V3.0
-        // wants 4.5 s at the same rate, and handing Perch the shorter chunk
-        // would be feeding it a window it was not trained on, with no error.
-        //
-        // Refused rather than approximated, and refused at startup. The
-        // remaining work is not a bug fix: it is deciding what a merged
-        // detection means when two classifiers judged different spans of time,
-        // which the agreement count in Stage 3 assumes they did not.
+        // Window differences used to be refused here too, while Stage 4's
+        // question — what a merged detection means when two classifiers judged
+        // different spans — was open. It is answered now: the chunk is cut to
+        // the longest window, the step is the shortest, each classifier reads
+        // its own window from the shared chunk start, and agreement means both
+        // reported a species from audio beginning at the same instant.
         let primary_spec = models[0].spec;
         for m in models.iter().skip(1) {
-            if m.spec.sample_rate != primary_spec.sample_rate
-                || m.spec.window_samples != primary_spec.window_samples
-            {
+            if m.spec.sample_rate != primary_spec.sample_rate {
                 return Err(RegistryError::IncompatibleInput {
                     id: m.id.clone(),
                     wants: m.spec,
@@ -409,6 +404,25 @@ impl ClassifierRegistry {
             .and_then(|id| self.routes.get(id))
             .filter(|idxs| !idxs.is_empty())
             .map_or_else(|| Self::default_route().to_vec(), Clone::clone)
+    }
+
+    /// The longest and shortest window any loaded classifier wants, in
+    /// samples (`G-10` Stage 4).
+    ///
+    /// The chunk is cut to the longest and stepped by the shortest. That pair
+    /// is what keeps every classifier's coverage at least what it would be
+    /// running alone: stepping by the longest would leave a shorter-window
+    /// model a blind spot at the tail of every chunk, which nothing would
+    /// report — see [`crate::detection::pipeline::PipelineConfig::chunk_step_secs`].
+    #[must_use]
+    pub fn window_bounds(&self) -> (usize, usize) {
+        let mut longest = self.models[0].spec.window_samples;
+        let mut shortest = longest;
+        for m in &self.models {
+            longest = longest.max(m.spec.window_samples);
+            shortest = shortest.min(m.spec.window_samples);
+        }
+        (longest, shortest)
     }
 
     /// Every classifier's id, in load order.
@@ -683,41 +697,104 @@ mod tests {
         assert_eq!(reg.specs().len(), 1);
     }
 
-    /// **The wall Stage 4 hit with a real second model.** The pipeline
-    /// decodes, resamples and chunks a recording once, from the primary's
-    /// spec. A classifier wanting a different window would be handed the
-    /// primary's chunks — silently, and wrongly.
+    /// **A differing sample rate is the one thing that cannot be
+    /// reconciled.** A recording is decoded and resampled once; resampling it
+    /// twice would double the most expensive step in the pipeline on the
+    /// boards this runs on, and there is no rate that is right for both.
     ///
-    /// Observed failing with the compatibility check removed: the registry
-    /// loaded both, and the second classifier would have been fed 3 s windows
-    /// it was never trained on.
+    /// This gate used to cover differing *windows* as well. It no longer
+    /// does, because the chunk arithmetic answers that case — the chunk is cut
+    /// to the longest window and stepped by the shortest, so every classifier
+    /// reads its own window from a shared start with no coverage gap. The
+    /// refusal narrowed to what actually cannot be handled.
+    ///
+    /// Observed failing with the rate comparison removed from `load`: the
+    /// registry accepted a 48 kHz classifier beside a 32 kHz one, and one of
+    /// them would have been fed audio resampled for the other.
     #[test]
-    fn a_classifier_wanting_different_audio_is_refused_at_startup() {
+    fn a_classifier_wanting_a_different_sample_rate_is_refused_at_startup() {
         let dir = tempfile::tempdir().expect("tempdir");
         let primary = spec(dir.path(), "birdnet", TINY_V30, None);
-        // The tiny V2.4 fixture is 48 kHz / 144 000 where V3.0 is 32 kHz /
-        // 96 000 — the same mismatch Perch v2 has against BirdNET, in the
-        // shapes this crate can test without a 409 MB download.
+        // The tiny V2.4 fixture is 48 kHz where V3.0 is 32 kHz.
         let other = spec(dir.path(), "perch", TINY_V24, None);
 
         let err =
             ClassifierRegistry::load(&[primary, other], &no_routes(), &ModelConfig::default())
-                .expect_err("a classifier needing different audio must be refused");
+                .expect_err("a classifier needing a different rate must be refused");
         match &err {
             RegistryError::IncompatibleInput { id, wants, primary } => {
                 assert_eq!(id, "perch");
-                assert_ne!(
-                    (wants.sample_rate, wants.window_samples),
-                    (primary.sample_rate, primary.window_samples)
-                );
+                assert_ne!(wants.sample_rate, primary.sample_rate);
             }
             other => panic!("wrong error: {other:?}"),
         }
         let msg = err.to_string();
         assert!(msg.contains("Refusing to start"), "{msg}");
         assert!(
-            msg.contains("silently"),
+            msg.contains("resampling it twice"),
             "the reason must be legible: {msg}"
+        );
+        assert!(
+            msg.contains("window lengths* are fine"),
+            "it must not imply windows are the problem: {msg}"
+        );
+    }
+
+    /// **Differing windows at the same rate are accepted**, which is the whole
+    /// point of the chunk arithmetic. Perch v2 wants 5 s where BirdNET+ V3.0
+    /// wants 4.5 s, at 32 kHz both.
+    ///
+    /// Observed failing with the window comparison restored to `load`: the
+    /// two were refused and no station could run them together.
+    #[test]
+    fn classifiers_wanting_different_windows_at_one_rate_load_together() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Genuinely different windows at one rate, which is the case under
+        // test: the V3.0 fixture is 96 000 samples and the V2.4 fixture is
+        // 144 000, and declaring the second at 32 kHz puts them on the same
+        // rate. That is Perch-beside-BirdNET in the shapes this crate has.
+        //
+        // An earlier version used the same fixture twice, so both windows were
+        // 96 000 and restoring the window comparison refused nothing — the
+        // gate passed while proving nothing about its own name.
+        let a = spec(dir.path(), "birdnet", TINY_V30, None);
+        let mut b = spec(dir.path(), "longer", TINY_V24, None);
+        b.sample_rate = Some(32_000);
+
+        let reg = ClassifierRegistry::load(&[a, b], &no_routes(), &ModelConfig::default())
+            .expect("one rate, two windows, must load");
+        let (longest, shortest) = reg.window_bounds();
+        assert_eq!(longest, 144_000, "the V2.4 fixture's window");
+        assert_eq!(shortest, 96_000, "the V3.0 fixture's window");
+        assert_ne!(longest, shortest, "this gate needs them to differ");
+    }
+
+    /// `window_bounds` is what the chunk arithmetic reads, so it must report
+    /// the extremes rather than the primary's or the first one's — including
+    /// when the longer window belongs to the *second* classifier, which is the
+    /// ordering that catches a `bounds` that just returns the primary's.
+    #[test]
+    fn window_bounds_reports_the_longest_and_shortest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let only = spec(dir.path(), "birdnet", TINY_V30, None);
+        let reg = ClassifierRegistry::load(&[only], &no_routes(), &ModelConfig::default())
+            .expect("loads");
+        assert_eq!(
+            reg.window_bounds(),
+            (96_000, 96_000),
+            "one classifier makes both bounds its own window"
+        );
+
+        // Two, with the longer one second.
+        let a = spec(dir.path(), "short", TINY_V30, None);
+        let mut b = spec(dir.path(), "long", TINY_V24, None);
+        b.sample_rate = Some(32_000);
+        let reg = ClassifierRegistry::load(&[a, b], &no_routes(), &ModelConfig::default())
+            .expect("loads");
+        assert_eq!(
+            reg.window_bounds(),
+            (144_000, 96_000),
+            "the longest must be found even when it is not the primary"
         );
     }
 

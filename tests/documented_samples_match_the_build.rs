@@ -271,6 +271,14 @@ fn the_tuning_guides_confirmation_table_matches_the_filter() {
 const BACKUPS_DOC: &str = include_str!("../docs/book/admin/backups.md");
 
 /// Every `OFFSITE_*` key the manual mentions.
+///
+/// A glob is not a key. The rsync section refers the reader back to the
+/// `OFFSITE_SFTP_*` family rather than restating seven keys, and without the
+/// skip below that run of characters trims to `OFFSITE_SFTP` — a name nothing
+/// implements — and the gate reports the manual as telling operators to set a
+/// key that does not exist. The same shape of false positive as the two
+/// recorded on `implemented_offsite_keys`, and the same fix: require the match
+/// to end the way a key ends.
 fn documented_offsite_keys() -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     for (idx, _) in BACKUPS_DOC.match_indices("OFFSITE_") {
@@ -279,6 +287,9 @@ fn documented_offsite_keys() -> std::collections::BTreeSet<String> {
             .char_indices()
             .position(|(_, c)| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
             .unwrap_or(rest.len());
+        if rest[end..].starts_with('*') {
+            continue;
+        }
         out.insert(rest[..end].trim_end_matches('_').to_string());
     }
     out

@@ -163,7 +163,41 @@ pub fn run_daemon(
     // 144 000 samples it rises to ~0.72. The model accepts variable length
     // so this is purely a per-chunk accuracy tuning. Fixed-shape V2.4 keeps
     // its trained 3.0 s window.
-    let model_chunk_secs = model.recommended_chunk_secs();
+    //
+    // With more than one classifier the chunk is cut to the longest window
+    // and stepped by the shortest (`G-10` Stage 4). One classifier leaves both
+    // equal, so this is the single-model arithmetic unchanged.
+    let (longest, shortest) = registry.window_bounds();
+    #[allow(clippy::cast_precision_loss)]
+    let longest_secs = longest as f32 / spec.sample_rate as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let shortest_secs = shortest as f32 / spec.sample_rate as f32;
+    if longest != shortest {
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = longest as f32 / shortest as f32;
+        tracing::info!(
+            longest_window_secs = longest_secs,
+            shortest_window_secs = shortest_secs,
+            extra_inference_ratio = ratio,
+            "classifiers want different windows: chunking to the longest and stepping by the \
+             shortest, so no classifier sees less than it would alone. Classifiers with the \
+             longer window run proportionally more inferences"
+        );
+        pipeline_config.chunk_step_secs = Some(shortest_secs);
+    }
+
+    // The longest window across the loaded classifiers. For the one classifier
+    // every station runs today this is exactly `model.recommended_chunk_secs()`
+    // — the call this line made before Stage 4 — on any waveform shape,
+    // because `input_spec`'s window and `recommended_chunk_samples` derive the
+    // same number from the same shape. Gated by
+    // `the_window_and_the_chunk_recommendation_agree_on_every_waveform_shape`.
+    //
+    // A mel shape is the one place the two part, and there the window is the
+    // right of them: `recommended_chunk_samples` would read a count of
+    // spectrogram columns as a sample count and ask for a six-millisecond
+    // chunk. No model here takes mel input today.
+    let model_chunk_secs = longest_secs;
     let configured_chunk_secs = pipeline_config.chunk_duration_secs;
     if (model_chunk_secs - configured_chunk_secs).abs() > 0.01 {
         tracing::info!(

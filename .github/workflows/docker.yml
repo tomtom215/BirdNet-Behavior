@@ -270,7 +270,7 @@ jobs:
                 return 1
               }
               missing=""
-              for tool in arecord ffmpeg sox kill df tar getconf; do
+              for tool in arecord ffmpeg sox kill df tar getconf rsync sftp; do
                 if path=$(find_on_path "$tool"); then
                   echo "ok      $tool -> $path"
                 else
