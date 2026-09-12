@@ -25,6 +25,7 @@ pub mod diagnostics;
 pub mod egress;
 pub mod env_keys;
 pub mod instance_lock;
+pub mod models;
 pub mod offsite;
 pub mod private_mode;
 pub mod resolve;

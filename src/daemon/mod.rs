@@ -319,10 +319,29 @@ pub fn start_detection_daemon(
 
     let daylight = config::build_daylight_filter(cli, config, latitude, longitude);
 
+    // Which classifiers this machine can actually afford (`G-10` Stage 2).
+    // The primary is always in the plan; extras are admitted only while they
+    // demonstrably fit, and every refusal is logged with its arithmetic —
+    // an unattended station must say why it is running one model, not just
+    // quietly run one.
+    let model_plan = crate::helpers::models::plan(
+        config,
+        model_path.clone(),
+        labels_path.clone(),
+        birdnet_behavioral::memory::detect_ceiling().map(|(mib, _)| mib),
+    );
+    for note in &model_plan.notes {
+        tracing::info!("{note}");
+    }
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
         labels_path,
+        // The primary is built by the daemon from `model_path`/`labels_path`
+        // above, so only what the plan added beyond it travels here.
+        extra_models: model_plan.specs.into_iter().skip(1).collect(),
+        model_routes: model_plan.routes,
         pipeline: build_pipeline_config(watch_dir, overlap),
         model: build_model_config(sensitivity, model_confidence),
         process_existing: cli.process_existing,

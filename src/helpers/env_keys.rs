@@ -78,6 +78,12 @@ pub fn known_env_names() -> BTreeSet<String> {
             .iter()
             .map(|k| (*k).to_owned()),
     );
+    // The extra-classifier settings are read the same way (`G-10` Stage 2).
+    out.extend(
+        crate::helpers::models::MODEL_ENV_KEYS
+            .iter()
+            .map(|k| (*k).to_owned()),
+    );
     out
 }
 

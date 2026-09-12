@@ -1100,7 +1100,7 @@ mod tests {
     ///
     /// # What this test used to say, and why it was changed
     ///
-    /// It asserted the opposite, and its reason was: *"expects_raw_audio is
+    /// It asserted the opposite, and its reason was: *"`expects_raw_audio` is
     /// `infer_sample_rate() == 32_000`. V2.4 is 48 kHz, so this must be
     /// false."* That restates the implementation rather than a fact about the
     /// model — it would have held for any rule of that shape, including the

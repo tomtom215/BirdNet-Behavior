@@ -585,6 +585,23 @@ pub struct DaemonConfig {
     /// [`crate::inference::vocabulary`] for why the obvious one is neither
     /// usable here nor useful on the pinned model pair.
     pub species_aliases_path: Option<PathBuf>,
+    /// Extra classifiers beyond the primary, in declaration order (`G-10`
+    /// Stage 2).
+    ///
+    /// Empty on every station that has not asked for a second opinion, which
+    /// is the default and loads exactly one classifier — the behaviour this
+    /// project has always had. The application layer decides what goes here;
+    /// it refuses a classifier it cannot show will fit in memory, because an
+    /// unattended station being OOM-killed at three in the morning is a worse
+    /// outcome than running with one model and saying so.
+    pub extra_models: Vec<crate::inference::registry::ModelSpec>,
+    /// Which classifiers judge which audio source, by source id.
+    ///
+    /// A source absent from this map is judged by the primary classifier —
+    /// never by none. A route naming a classifier that is not configured stops
+    /// the daemon at startup rather than leaving that microphone silently
+    /// unjudged.
+    pub model_routes: std::collections::HashMap<String, Vec<String>>,
     /// Species filter configuration (threshold, whitelist, include/exclude).
     pub species_filter: crate::inference::species_filter::SpeciesFilterConfig,
     /// Optional callback re-read on a short TTL to refresh the operator's
@@ -761,6 +778,8 @@ mod tests {
             watch_dir: PathBuf::from("/tmp/StreamData"),
             model_path: PathBuf::from("/opt/birdnet/model.onnx"),
             labels_path: PathBuf::from("/opt/birdnet/labels.txt"),
+            extra_models: Vec::new(),
+            model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
             process_existing: false,

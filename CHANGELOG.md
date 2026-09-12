@@ -38,6 +38,58 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — a station can run more than one classifier, and refuses to run more than it can hold
+
+**A classifier registry and per-source routing** (`G-10` Stage 2). A station
+may declare up to three classifiers (`MODEL_2_PATH` / `MODEL_2_LABELS` /
+`MODEL_2_ID` / `MODEL_2_THRESHOLD`, and the same at `_3_`) and route audio
+sources to them with `MODEL_ROUTES=pond:perch,garden:birdnet+perch`. A station
+that declares none loads exactly one classifier, as it always has.
+
+Every decision here is shaped by one question: what happens at three in the
+morning, four months in, with nobody on site.
+
+**It refuses more memory than the machine has.** All classifiers together may
+use at most **half** the effective ceiling — the smaller of physical RAM and
+any cgroup limit, the same number `G-33` uses for the analytics pool —
+counting each model's file size plus a 256 MiB working-set allowance. On a 1 GB
+board that budget is 512 MiB, which one BirdNET model already fills, so a
+second is skipped and the arithmetic goes in the journal. A machine that does
+not report its memory gets one classifier: **"unknown" must not read as
+"plenty"**, because that reading is what gets a station OOM-killed unattended.
+The fraction is a judgement, not a measurement on a Pi — nobody here has one —
+and the module header says so, with what would falsify it.
+
+**Every misconfiguration fails at startup.** No classifier at all, two under
+one name, a model that will not load, or a route naming a classifier that does
+not exist: each stops the daemon before it starts, where the journal and
+`--doctor` will show it. The route case is the one that matters most —
+`MODEL_ROUTES=front-door:pecrh` accepted and discovered at runtime would leave
+that microphone unjudged for months, and the loss would be invisible: the
+station stays up, the other sources keep detecting, and nothing says the front
+door went quiet.
+
+**Silence is unreachable by omission.** A source nobody routed is judged by the
+primary classifier, never by none. Not by *all* of them either — a station that
+adds a bat classifier has not asked for every microphone to be run through it,
+and quietly doubling an unrouted source's inference cost is how a Pi that was
+keeping up stops keeping up.
+
+Two drift gates shaped the implementation rather than being worked around. The
+config-key scanner proves each key in `KNOWN_CONFIG_KEYS` is really read by
+scanning for literals, which `format!("MODEL_{n}_PATH")` defeats — so the keys
+are a literal table with field names distinctive enough for the scan to verify
+(`path_key`, not `path`, which would match unrelated code and invent reads).
+And `.env.example` is checked against what the binary reads, so the names are
+exported as `MODEL_ENV_KEYS` — listed rather than derived by prefix, because
+`MODEL` and `MODEL_PATH` are also config keys and are *not* read that way;
+deriving would have invented two reads that do not happen.
+
+Verified against the real 11 K-species model: `birdnet-core` 5 suites / 846
+tests, and the three model-gated end-to-end suites 15 tests under
+`BIRDNET_REQUIRE_MODEL=1` — the evidence that a single-classifier station,
+which is every station in the field today, behaves exactly as it did.
+
 ### Fixed — a 48 kHz model was being fed three-quarters silence
 
 **BirdNET V2.4 received a mel spectrogram zero-padded into a waveform tensor**

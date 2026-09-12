@@ -41,24 +41,81 @@ const SPECIES_LISTS_TTL: Duration = Duration::from_secs(30);
 ///
 /// # Errors
 ///
-/// Returns `DaemonError` if the model cannot be loaded or the watcher fails.
+/// Returns `DaemonError` if no classifier is configured, if one cannot be
+/// loaded, if a route names a classifier that does not exist, or if the
+/// watcher fails. Every one of those is refused here at startup rather than
+/// at the first audio file, because an unattended station must fail where
+/// somebody can see it.
+///
+/// # Panics
+///
+/// Does not panic in practice: the `expect` on the primary classifier is
+/// guaranteed by [`crate::inference::registry::ClassifierRegistry::load`],
+/// which refuses to build a registry with no classifiers in it.
 #[allow(clippy::too_many_lines)]
 pub fn run_daemon(
     config: &DaemonConfig,
     event_tx: mpsc::SyncSender<DetectionEvent>,
 ) -> Result<DaemonHandle, DaemonError> {
-    // Load labels
-    let labels = LabelSet::load(&config.labels_path)
-        .map_err(|e| DaemonError::Model(format!("labels: {e}")))?;
+    // Every classifier this station runs, primary first (`G-10` Stage 2).
+    //
+    // One entry on a station that has not asked for a second opinion, which is
+    // every station today: the registry is then exactly the single model this
+    // loaded before, reached through `primary()`.
+    //
+    // Built here, before anything else, because every way it can fail —
+    // nothing configured, a route naming a classifier that does not exist, a
+    // model that will not load — must stop the daemon at startup where the
+    // journal and `--doctor` will show it. An unattended station that starts
+    // with a microphone routed to nothing looks identical to one having a
+    // quiet month.
+    let mut specs = Vec::with_capacity(1 + config.extra_models.len());
+    specs.push(crate::inference::registry::ModelSpec {
+        id: "birdnet".to_owned(),
+        model_path: config.model_path.clone(),
+        labels_path: config.labels_path.clone(),
+        threshold: None,
+    });
+    specs.extend(config.extra_models.iter().cloned());
+
+    let mut registry = crate::inference::registry::ClassifierRegistry::load(
+        &specs,
+        &config.model_routes,
+        &config.model,
+    )
+    .map_err(|e| DaemonError::Model(e.to_string()))?;
+
+    for (id, spec) in registry.specs() {
+        tracing::info!(
+            classifier = id,
+            sample_rate = spec.sample_rate,
+            window_secs = spec.window_secs(),
+            waveform = spec.is_waveform(),
+            "classifier loaded"
+        );
+    }
+    if registry.len() > 1 {
+        tracing::info!(
+            classifiers = ?registry.ids(),
+            routes = ?config.model_routes,
+            "running more than one classifier"
+        );
+    }
+
+    // The primary is what the pipeline below runs on, so this is byte-for-byte
+    // the model that was loaded here before Stage 2. Borrowed immutably for
+    // the setup that follows; the registry itself moves into the loop thread,
+    // where the mutable borrow is taken.
+    let model = &registry
+        .model(0)
+        .expect("a registry always has a primary")
+        .model;
 
     tracing::info!(
-        species_count = labels.len(),
+        species_count = model.labels().len(),
         labels_path = %config.labels_path.display(),
         "labels loaded"
     );
-
-    // Load model
-    let mut model = BirdNetModel::load(&config.model_path, labels, config.model.clone())?;
 
     // Auto-detect the sample rate the model expects from its input shape.
     // V2.4 → [1, 144_000] = 48 kHz × 3 s; V3.0 → [1, 96_000] = 32 kHz × 3 s.
@@ -316,6 +373,13 @@ pub fn run_daemon(
         let _alive = running_guard;
         tracing::info!("detection daemon started");
 
+        // The registry moved in with this closure; the mutable borrow of the
+        // primary is taken here, on the thread that does the inference.
+        let model = &mut registry
+            .model_mut(0)
+            .expect("a registry always has a primary")
+            .model;
+
         // Process any pre-existing backlog here, on the loop thread, rather
         // than before signalling readiness. The event consumer is already
         // draining by now, so a large backlog cannot block startup past the
@@ -325,7 +389,7 @@ pub fn run_daemon(
             process_existing_files(
                 &watch_dir,
                 &pipeline_config,
-                &mut model,
+                model,
                 &chunk_filters,
                 &mut species_filter,
                 filter_observer.as_ref(),
@@ -473,7 +537,7 @@ pub fn run_daemon(
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
-                    &mut model,
+                    model,
                     &chunk_filters,
                     &mut species_filter,
                     filter_observer.as_ref(),
@@ -648,6 +712,8 @@ mod tests {
             watch_dir,
             model_path,
             labels_path,
+            extra_models: Vec::new(),
+            model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
             process_existing: false,

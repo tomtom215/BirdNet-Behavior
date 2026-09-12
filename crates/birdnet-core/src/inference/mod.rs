@@ -8,5 +8,6 @@ pub mod classifier;
 pub mod identity;
 pub mod labels;
 pub mod model;
+pub mod registry;
 pub mod species_filter;
 pub mod vocabulary;
