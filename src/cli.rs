@@ -204,6 +204,21 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Install a classifier from the built-in catalogue, then exit (`G-10`).
+    ///
+    /// `--install-model perch-v2`. Pass `list` to print the catalogue without
+    /// installing anything.
+    ///
+    /// In the foreground rather than behind an API call, deliberately: this is
+    /// a 400 MB download that takes hours on the uplink a field station has,
+    /// and an operator should be able to watch it, interrupt it, and see it
+    /// fail. The download is checked against a sha256 compiled into this
+    /// binary — a file that does not match is deleted rather than installed,
+    /// and nothing lands under a name the station would load until it has
+    /// verified.
+    #[arg(long, value_name = "ID")]
+    pub install_model: Option<String>,
+
     /// Seconds of audio saved around each detection (default 6).
     ///
     /// BirdNET-Pi's `EXTRACTION_LENGTH`. Longer clips are easier to verify by

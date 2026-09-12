@@ -82,6 +82,7 @@ pub const READ_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v2/settings"),
     ("GET", "/api/v2/system/capture"),
     ("GET", "/api/v2/system/jobs"),
+    ("GET", "/api/v2/models/catalog"),
     ("GET", "/api/v2/detections/comments"),
 ];
 
@@ -112,6 +113,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/control/restart-source", post(restart_source))
         .route("/api/v2/system/capture", get(capture_status))
         .route("/api/v2/system/jobs", get(system_jobs))
+        .route("/api/v2/models/catalog", get(models_catalog))
         .route(
             "/api/v2/detections/comments",
             get(list_comments).post(add_comment),
@@ -1065,6 +1067,38 @@ async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>)
         StatusCode::OK,
         Json(json!({ "now_unix": now, "jobs": jobs })),
     )
+}
+
+/// `GET /api/v2/models/catalog` — the classifiers this build can install.
+///
+/// # Why there is no install endpoint beside it
+///
+/// Upstream pairs its catalogue with `POST /models/install/:id`. Installing is
+/// a 400 MB download that takes hours on the uplink a field station has, and a
+/// request handler is the wrong place for it: the connection outlives nothing,
+/// a retry starts a second download beside the first, and there is nowhere to
+/// report progress to. The catalogue is a read, so it is here; installing is
+/// `birdnet-behavior --install-model <id>`, which runs in the foreground where
+/// an operator can watch it and where failing is visible.
+///
+/// Bearer-gated with its neighbours: which classifiers a station could install
+/// says what it is running, which is operational detail about someone's home.
+async fn models_catalog() -> (StatusCode, Json<Value>) {
+    let models: Vec<Value> = birdnet_integrations::model_catalog::CATALOG
+        .iter()
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "name": e.name,
+                "sha256": e.model_sha256,
+                "bytes": e.model_bytes,
+                "sample_rate": e.sample_rate,
+                "ships_labels": e.labels_url.is_some(),
+                "notes": e.notes,
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(json!({ "models": models })))
 }
 
 /// The station's configured backup cadence, or the default when it has none.

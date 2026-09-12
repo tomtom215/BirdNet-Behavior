@@ -428,6 +428,82 @@
         }
       }
     },
+    "/models/catalog": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Classifiers this build can install",
+        "description": "The classifiers this build knows how to install, each with the sha256 it will be checked against.\n\nThe catalogue is **compiled in**, not fetched. A fetched catalogue is a remote document that decides which URL a station downloads hundreds of megabytes from and which digest it checks them against; pinning both in the binary makes the checksum a promise this repository makes, verifiable by anyone reading the source.\n\nThere is no install endpoint. Installing is a 400 MB download taking hours on the uplink a field station has — a request handler is the wrong place for it, with nowhere to report progress and a retry that would start a second download beside the first. Use `birdnet-behavior --install-model <id>`, which runs in the foreground where failing is visible.\n\n`ships_labels` is false where no labels file accompanies the model; the operator supplies one, and its row count must match the model's output width or species are reported under other species' names.",
+        "operationId": "modelsCatalog",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The installable classifiers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "models"
+                  ],
+                  "properties": {
+                    "models": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name",
+                          "sha256",
+                          "bytes",
+                          "sample_rate",
+                          "ships_labels",
+                          "notes"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "Stable id; also the installed filename and a routing target."
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "description": "Lowercase hex digest the download is verified against. A mismatch is deleted, never installed."
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "Size, used for the free-space check before downloading."
+                          },
+                          "sample_rate": {
+                            "type": "integer",
+                            "description": "What MODEL_n_SAMPLE_RATE must be set to. Not derivable from the tensor — see G-10 Stage 4."
+                          },
+                          "ships_labels": {
+                            "type": "boolean",
+                            "description": "Whether a verified labels file is installed alongside."
+                          },
+                          "notes": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/metrics": {
       "get": {
         "tags": [

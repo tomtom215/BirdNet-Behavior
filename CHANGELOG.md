@@ -38,6 +38,59 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Added — installing a classifier, without ever installing the wrong one
+
+**A model catalogue and a verified installer** (`G-10` Stage 5).
+`birdnet-behavior --install-model perch-v2` fetches a classifier, checks it
+against a sha256 compiled into the binary, and installs it atomically;
+`--install-model list` prints what is available. `GET /api/v2/models/catalog`
+is the same list as JSON.
+
+Every digest in the catalogue was **measured from the file this session**, not
+copied from a model card: BirdNET+ V3.0 preview3 at
+`2a0f9efb…b7d743` (541 391 777 bytes) and Perch v2 at `bf0c8467…cefa1f`
+(409 148 616 bytes).
+
+**The catalogue is compiled in, not fetched.** Upstream fetches one from
+Hugging Face with a configurable endpoint. That is a remote document deciding
+which URL a station downloads hundreds of megabytes from *and* which digest it
+checks them against; pinning both here makes the checksum a promise this
+repository makes, verifiable by anyone reading the source. The cost is that a
+new model needs a release, which is the right cost.
+
+**It streams rather than buffers.** `auto_update` reads an asset into memory
+and verifies before touching disk — correct for a 20 MB binary, and an
+out-of-memory kill for a 541 MB model on a 1 GB board, which is the failure
+`G-33`'s memory policy exists to prevent. The bytes stream to disk with the
+digest computed as they arrive, and the safety property is kept by other means:
+what lands unverified has a name the station cannot load, and only a verified
+file is ever given the real one. A mismatch deletes both.
+
+**Free space is checked before the network.** 400 MB onto a card with 300 MB
+free does not fail cleanly — it fills the card, and a station whose disk is
+full stops recording birds. Refused, with a 512 MiB margin, and a filesystem
+that will not report its free space counts as none rather than plenty.
+
+**There is no install API endpoint**, though upstream has one. A 400 MB
+download takes hours on a field station's uplink: a request handler has nowhere
+to report progress, and a retry starts a second download beside the first. It
+is a foreground command where an operator can watch it fail.
+
+Two things were found by running the command rather than testing it. It
+**panicked on first invocation** — `reqwest::blocking` cannot build a client
+inside a tokio runtime, and `main` is `#[tokio::main]`; the thirteen unit tests
+passed because they are plain sync functions that never enter one, and
+`birdnet-integrations` says in its own header that callers must use
+`spawn_blocking`. And `MODEL_DIR` was read from the config file only, ignoring
+the `BIRDNET_MODEL_DIR` the shipped compose file sets.
+
+Two gates were also found to be green for the wrong reason, by mutating them:
+the free-space refusal accepted an unrelated `Io` error as success, so it
+passed with the check deleted, and the "unknown is not plenty" test only ever
+exercised the measurement, never the decision. The decision is now a pure
+`fits()` that both test directly — the same separation `plan_with` needed in
+Stage 2, for the same reason.
+
 ### Fixed — a real second model found two defects the first one could not
 
 **Stage 4 of `G-10`** is meant to be the test of whether Stages 1–3 are right.

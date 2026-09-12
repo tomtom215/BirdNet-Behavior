@@ -272,6 +272,88 @@ pub fn plan_with(
     }
 }
 
+/// Where `--install-model` puts what it installs.
+///
+/// Env first, then the config file — the order `plan` reads its settings in
+/// and the order `.env.example` documents. Reading only the config file would
+/// have ignored `BIRDNET_MODEL_DIR`, which is the name the shipped compose
+/// file sets.
+#[must_use]
+pub fn model_dir(config: Option<&Config>) -> PathBuf {
+    std::env::var("BIRDNET_MODEL_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config.and_then(|c| c.get("MODEL_DIR").map(str::to_owned)))
+        .map_or_else(|| PathBuf::from("/data/model"), PathBuf::from)
+}
+
+/// `--install-model <id>`: fetch and verify a classifier, or list what is
+/// available. Returns a process exit code.
+///
+/// Foreground and synchronous. A 400 MB download over a field station's uplink
+/// is measured in hours, and an operator should be able to watch it, stop it,
+/// and see it fail — none of which a background task or an API call offers.
+///
+/// **Blocking.** It builds a `reqwest::blocking` client, which panics if
+/// constructed inside a tokio runtime — and `main` is `#[tokio::main]`, so the
+/// caller must reach this through `spawn_blocking`. Found by running the
+/// command rather than by reading it: every unit test here is a plain sync
+/// function and none of them entered a runtime.
+#[must_use]
+pub fn install_from_catalogue(id: &str, dest: &std::path::Path) -> i32 {
+    use birdnet_integrations::model_catalog::{CATALOG, install};
+
+    if id.trim().is_empty() || id.trim().eq_ignore_ascii_case("list") {
+        println!("Classifiers this build can install:\n");
+        for entry in CATALOG {
+            println!("  {}", entry.id);
+            println!("    {}", entry.name);
+            println!(
+                "    {} MiB, sha256 {}",
+                entry.model_bytes / (1024 * 1024),
+                entry.model_sha256
+            );
+            println!("    needs MODEL_n_SAMPLE_RATE={}", entry.sample_rate);
+            println!(
+                "    labels: {}",
+                if entry.labels_url.is_some() {
+                    "installed alongside, verified"
+                } else {
+                    "not shipped — supply your own"
+                }
+            );
+            println!("    {}\n", entry.notes);
+        }
+        println!("Install one with:  birdnet-behavior --install-model <id>");
+        return 0;
+    }
+
+    println!("Installing `{id}` into {}", dest.display());
+    match install(id, dest) {
+        Ok(installed) => {
+            println!("\nInstalled and verified.");
+            println!("  model:  {}", installed.model_path.display());
+            match &installed.labels_path {
+                Some(p) => println!("  labels: {}", p.display()),
+                None => println!(
+                    "  labels: not shipped with this model — supply your own, with one row \
+                     per class, or species are reported under other species' names"
+                ),
+            }
+            println!("\nTo run it as a second classifier, set:");
+            println!("  BIRDNET_MODEL_2_PATH={}", installed.model_path.display());
+            println!("  BIRDNET_MODEL_2_LABELS=<your labels file>");
+            println!("  BIRDNET_MODEL_2_ID={id}");
+            println!("  BIRDNET_MODEL_2_SAMPLE_RATE={}", installed.sample_rate);
+            0
+        }
+        Err(e) => {
+            eprintln!("\nInstall failed: {e}");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CLASSIFIER_SHARE_DENOMINATOR, PER_MODEL_WORKING_SET_MIB, plan_with};

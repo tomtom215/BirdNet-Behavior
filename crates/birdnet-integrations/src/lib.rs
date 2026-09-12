@@ -14,6 +14,7 @@ pub mod dispatch;
 pub mod ebird;
 pub mod email;
 pub mod heartbeat;
+pub mod model_catalog;
 pub mod mqtt;
 pub mod notification;
 pub mod offsite;
