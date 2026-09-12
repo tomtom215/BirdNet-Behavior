@@ -50,6 +50,8 @@ struct ExtraModelKeys {
     id_key: &'static str,
     /// Its own confidence threshold.
     threshold_key: &'static str,
+    /// The sample rate it wants, when the shape cannot say.
+    sample_rate_key: &'static str,
     /// The name used when `id` is not given.
     default_id: &'static str,
 }
@@ -68,6 +70,7 @@ const EXTRA_MODEL_KEYS: &[ExtraModelKeys] = &[
         labels_key: "MODEL_2_LABELS",
         id_key: "MODEL_2_ID",
         threshold_key: "MODEL_2_THRESHOLD",
+        sample_rate_key: "MODEL_2_SAMPLE_RATE",
         default_id: "model2",
     },
     ExtraModelKeys {
@@ -75,6 +78,7 @@ const EXTRA_MODEL_KEYS: &[ExtraModelKeys] = &[
         labels_key: "MODEL_3_LABELS",
         id_key: "MODEL_3_ID",
         threshold_key: "MODEL_3_THRESHOLD",
+        sample_rate_key: "MODEL_3_SAMPLE_RATE",
         default_id: "model3",
     },
 ];
@@ -95,13 +99,16 @@ pub const MODEL_ENV_KEYS: &[&str] = &[
     "BIRDNET_MODEL_2_ID",
     "BIRDNET_MODEL_2_LABELS",
     "BIRDNET_MODEL_2_PATH",
+    "BIRDNET_MODEL_2_SAMPLE_RATE",
     "BIRDNET_MODEL_2_THRESHOLD",
     "BIRDNET_MODEL_3_ID",
     "BIRDNET_MODEL_3_LABELS",
     "BIRDNET_MODEL_3_PATH",
+    "BIRDNET_MODEL_3_SAMPLE_RATE",
     "BIRDNET_MODEL_3_THRESHOLD",
     "BIRDNET_MODEL_ID",
     "BIRDNET_MODEL_ROUTES",
+    "BIRDNET_MODEL_SAMPLE_RATE",
     "BIRDNET_MODEL_THRESHOLD",
 ];
 
@@ -180,6 +187,7 @@ pub fn plan_with(
         model_path: primary_model,
         labels_path: primary_labels,
         threshold: get("MODEL_THRESHOLD").and_then(|v| v.parse().ok()),
+        sample_rate: get("MODEL_SAMPLE_RATE").and_then(|v| v.parse().ok()),
     }];
 
     // Budget in MiB for every classifier together, or `None` when the machine
@@ -242,6 +250,7 @@ pub fn plan_with(
                     model_path: path,
                     labels_path: PathBuf::from(labels),
                     threshold: get(keys.threshold_key).and_then(|v| v.parse().ok()),
+                    sample_rate: get(keys.sample_rate_key).and_then(|v| v.parse().ok()),
                 });
             }
         }
@@ -496,9 +505,16 @@ mod tests {
             "BIRDNET_MODEL_ID".to_owned(),
             "BIRDNET_MODEL_THRESHOLD".to_owned(),
             "BIRDNET_MODEL_ROUTES".to_owned(),
+            "BIRDNET_MODEL_SAMPLE_RATE".to_owned(),
         ];
         for k in EXTRA_MODEL_KEYS {
-            for name in [k.path_key, k.labels_key, k.id_key, k.threshold_key] {
+            for name in [
+                k.path_key,
+                k.labels_key,
+                k.id_key,
+                k.threshold_key,
+                k.sample_rate_key,
+            ] {
                 expected.push(format!("BIRDNET_{name}"));
             }
         }

@@ -121,6 +121,7 @@ const READ_SHAPES: &[&str] = &[
     "labels_key: \"",
     "id_key: \"",
     "threshold_key: \"",
+    "sample_rate_key: \"",
 ];
 
 /// Keys read in `src`, by shape. `get_parsed::<T>("KEY")` is matched

@@ -38,6 +38,49 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a real second model found two defects the first one could not
+
+**Stage 4 of `G-10`** is meant to be the test of whether Stages 1–3 are right.
+Run against the real Google Perch v2 ONNX (409 148 616 bytes, sha256
+`bf0c8467…cefa1f`), it answered: not quite, in two specific ways. Both were
+confirmed against the file rather than its model card.
+
+**The class scores were read from the wrong output.** Perch declares four:
+
+```text
+[0] embedding          [-1, 1536]
+[1] spatial_embedding  [-1, 16, 4, 1536]
+[2] spectrogram        [-1, 500, 128]
+[3] label              [-1, 14795]
+```
+
+The selector was `usize::from(outputs.len() > 1)` — index 1 when a model has
+more than one output, which is right for BirdNET+ V3.0 (`embeddings`, then
+`predictions`) and picks `spatial_embedding` here: 98 304 numbers of internal
+representation, read as though they were 14 795 species scores. It would have
+produced confident detections of whatever the arithmetic landed on. The head is
+now found by the thing that identifies it — an output whose trailing dimension
+is the label count — with a name match as the fallback so a **mispaired label
+file still reaches the doctor's existing width check** instead of being
+pre-empted here. Loading the real model through the real loader afterwards
+gives `output_dimension = Some(14795)`, exactly the label count.
+
+**The sample rate was a guess wearing the word "declared".** Stage 1 said
+`InputSpec` carries the rate; it still derived it from a lookup over two
+BirdNET shapes with 48 kHz as the default. Perch declares `[-1, 160_000]`,
+which is 5 s at 32 kHz — and is equally 3⅓ s at 48 kHz. Nothing in the tensor
+distinguishes them. `MODEL_SAMPLE_RATE` / `MODEL_n_SAMPLE_RATE` now declare it,
+with the derivation kept for the shapes it was actually built from.
+
+**And a question, which is recorded rather than guessed at.** The pipeline
+decodes, resamples and chunks a recording **once**, from the primary's spec.
+Perch wants 5 s windows where BirdNET+ V3.0 wants 4.5 s, so running both means
+deciding what a merged detection *means* when two classifiers judged different
+spans of time — which Stage 3's agreement count assumes they did not. Until
+that has an answer, the registry **refuses** a classifier whose spec differs
+from the primary's, at startup, naming both specs. Perch is configurable and
+validated; it is not silently fed windows it was never trained on.
+
 ### Added — two classifiers agreeing is recorded as what it is
 
 **A merge policy and an agreement count** (`G-10` Stage 3). Every classifier

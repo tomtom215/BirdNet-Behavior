@@ -75,6 +75,9 @@ pub fn run_daemon(
         model_path: config.model_path.clone(),
         labels_path: config.labels_path.clone(),
         threshold: None,
+        // The primary's rate is derived from its shape, which is right for
+        // the BirdNET shapes that derivation was built from.
+        sample_rate: None,
     });
     specs.extend(config.extra_models.iter().cloned());
 

@@ -67,6 +67,22 @@ pub struct ModelSpec {
     /// on both means the stricter model is effectively off or the looser one
     /// floods the log.
     pub threshold: Option<f32>,
+    /// The sample rate this classifier wants, when it must be declared.
+    ///
+    /// # Why this cannot be derived (`G-10` Stage 4)
+    ///
+    /// [`crate::inference::model::infer_sample_rate_from_shape`] reads the
+    /// rate off the input shape, which works only because it is a lookup over
+    /// two known BirdNET shapes with 48 kHz as the default. It is not
+    /// derivable in general, and Perch v2 is the proof: it declares
+    /// `[-1, 160_000]`, which is 5 s at 32 kHz — and is equally 3⅓ s at
+    /// 48 kHz. Nothing in the tensor distinguishes them, so the lookup
+    /// silently called it a 48 kHz model and would have resampled every
+    /// recording to the wrong rate.
+    ///
+    /// `None` keeps the derivation, which remains right for the BirdNET
+    /// shapes it was built from.
+    pub sample_rate: Option<u32>,
 }
 
 /// A loaded classifier and what was declared about it.
@@ -77,6 +93,12 @@ pub struct RegisteredModel {
     pub model: BirdNetModel,
     /// Its own threshold, if it was given one.
     pub threshold: Option<f32>,
+    /// What it needs fed to it, after any declared sample rate is applied.
+    ///
+    /// This and not [`BirdNetModel::input_spec`] is what the pipeline reads:
+    /// the model can only derive its rate from the shape, and for anything
+    /// but the two BirdNET shapes that derivation is a guess.
+    pub spec: InputSpec,
 }
 
 impl fmt::Debug for RegisteredModel {
@@ -111,6 +133,15 @@ pub enum RegistryError {
         /// Why.
         why: String,
     },
+    /// A classifier needs audio prepared differently from the primary.
+    IncompatibleInput {
+        /// Which classifier.
+        id: String,
+        /// What it needs.
+        wants: InputSpec,
+        /// What the primary needs, and therefore what the pipeline prepares.
+        primary: InputSpec,
+    },
     /// A route names a classifier that was never declared.
     UnknownRouteTarget {
         /// The source whose route is wrong.
@@ -139,6 +170,19 @@ impl fmt::Display for RegistryError {
                 "two classifiers are both called `{id}`; a route naming it could mean either"
             ),
             Self::Load { id, why } => write!(f, "classifier `{id}` could not be loaded: {why}"),
+            Self::IncompatibleInput { id, wants, primary } => write!(
+                f,
+                "classifier `{id}` wants {} Hz in {:.2} s windows and the primary wants {} Hz in \
+                 {:.2} s. Refusing to start. The pipeline decodes and resamples a recording once \
+                 and cuts it into chunks once, so a second classifier needing different audio \
+                 would be fed the primary's chunks — silently, and wrongly. Running both also \
+                 needs an answer to what a merge *means* when two models judged different spans \
+                 of time, which is a question rather than an oversight; see `G-10` Stage 4",
+                wants.sample_rate,
+                wants.window_secs(),
+                primary.sample_rate,
+                primary.window_secs(),
+            ),
             Self::UnknownRouteTarget {
                 source,
                 target,
@@ -222,11 +266,43 @@ impl ClassifierRegistry {
                     why: e.to_string(),
                 }
             })?;
+            // Declared rate wins over the shape-derived guess; the window in
+            // samples still comes from the tensor, which does state it.
+            let mut effective = model.input_spec();
+            if let Some(rate) = spec.sample_rate {
+                effective.sample_rate = rate;
+            }
             models.push(RegisteredModel {
                 id: spec.id.clone(),
                 model,
                 threshold: spec.threshold,
+                spec: effective,
             });
+        }
+
+        // Every classifier must want the audio the pipeline actually prepares.
+        //
+        // This is the wall Stage 4 hit with a real second model. The pipeline
+        // decodes, resamples and chunks a recording **once**, from the
+        // primary's spec. Perch v2 wants 5 s at 32 kHz where BirdNET+ V3.0
+        // wants 4.5 s at the same rate, and handing Perch the shorter chunk
+        // would be feeding it a window it was not trained on, with no error.
+        //
+        // Refused rather than approximated, and refused at startup. The
+        // remaining work is not a bug fix: it is deciding what a merged
+        // detection means when two classifiers judged different spans of time,
+        // which the agreement count in Stage 3 assumes they did not.
+        let primary_spec = models[0].spec;
+        for m in models.iter().skip(1) {
+            if m.spec.sample_rate != primary_spec.sample_rate
+                || m.spec.window_samples != primary_spec.window_samples
+            {
+                return Err(RegistryError::IncompatibleInput {
+                    id: m.id.clone(),
+                    wants: m.spec,
+                    primary: primary_spec,
+                });
+            }
         }
 
         // Resolved here, once, so a typo cannot survive into the loop.
@@ -270,6 +346,7 @@ impl ClassifierRegistry {
     pub fn single(id: impl Into<String>, model: BirdNetModel) -> Self {
         Self {
             models: vec![RegisteredModel {
+                spec: model.input_spec(),
                 id: id.into(),
                 model,
                 threshold: None,
@@ -346,7 +423,7 @@ impl ClassifierRegistry {
     pub fn specs(&self) -> Vec<(&str, InputSpec)> {
         self.models
             .iter()
-            .map(|m| (m.id.as_str(), m.model.input_spec()))
+            .map(|m| (m.id.as_str(), m.spec))
             .collect()
     }
 }
@@ -427,6 +504,7 @@ mod tests {
             model_path,
             labels_path,
             threshold,
+            sample_rate: None,
         }
     }
 
@@ -502,8 +580,11 @@ mod tests {
     #[test]
     fn a_source_with_no_route_gets_the_primary_not_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // Both V3.0-shaped: these test *routing*, and two classifiers that
+        // want different audio are refused before routing is even resolved
+        // (see `a_classifier_wanting_different_audio_is_refused_at_startup`).
         let specs = [
-            spec(dir.path(), "birdnet", TINY_V24, None),
+            spec(dir.path(), "birdnet", TINY_V30, None),
             spec(dir.path(), "perch", TINY_V30, None),
         ];
         let reg = ClassifierRegistry::load(&specs, &no_routes(), &ModelConfig::default())
@@ -524,7 +605,7 @@ mod tests {
     fn a_routed_source_reaches_exactly_its_classifiers() {
         let dir = tempfile::tempdir().expect("tempdir");
         let specs = [
-            spec(dir.path(), "birdnet", TINY_V24, None),
+            spec(dir.path(), "birdnet", TINY_V30, None),
             spec(dir.path(), "perch", TINY_V30, None),
         ];
         let mut routes = HashMap::new();
@@ -600,6 +681,88 @@ mod tests {
         assert_eq!(reg.route_for(None), vec![0]);
         assert_eq!(reg.ids(), vec!["birdnet"]);
         assert_eq!(reg.specs().len(), 1);
+    }
+
+    /// **The wall Stage 4 hit with a real second model.** The pipeline
+    /// decodes, resamples and chunks a recording once, from the primary's
+    /// spec. A classifier wanting a different window would be handed the
+    /// primary's chunks — silently, and wrongly.
+    ///
+    /// Observed failing with the compatibility check removed: the registry
+    /// loaded both, and the second classifier would have been fed 3 s windows
+    /// it was never trained on.
+    #[test]
+    fn a_classifier_wanting_different_audio_is_refused_at_startup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let primary = spec(dir.path(), "birdnet", TINY_V30, None);
+        // The tiny V2.4 fixture is 48 kHz / 144 000 where V3.0 is 32 kHz /
+        // 96 000 — the same mismatch Perch v2 has against BirdNET, in the
+        // shapes this crate can test without a 409 MB download.
+        let other = spec(dir.path(), "perch", TINY_V24, None);
+
+        let err =
+            ClassifierRegistry::load(&[primary, other], &no_routes(), &ModelConfig::default())
+                .expect_err("a classifier needing different audio must be refused");
+        match &err {
+            RegistryError::IncompatibleInput { id, wants, primary } => {
+                assert_eq!(id, "perch");
+                assert_ne!(
+                    (wants.sample_rate, wants.window_samples),
+                    (primary.sample_rate, primary.window_samples)
+                );
+            }
+            other => panic!("wrong error: {other:?}"),
+        }
+        let msg = err.to_string();
+        assert!(msg.contains("Refusing to start"), "{msg}");
+        assert!(
+            msg.contains("silently"),
+            "the reason must be legible: {msg}"
+        );
+    }
+
+    /// Its counterpart: two classifiers wanting the *same* audio load fine, or
+    /// the gate above would pass against a registry that refused every second
+    /// classifier.
+    #[test]
+    fn two_classifiers_wanting_the_same_audio_load_together() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let a = spec(dir.path(), "birdnet", TINY_V30, None);
+        let b = spec(dir.path(), "second", TINY_V30, None);
+        let reg = ClassifierRegistry::load(&[a, b], &no_routes(), &ModelConfig::default())
+            .expect("matching specs load");
+        assert_eq!(reg.len(), 2);
+    }
+
+    /// **A declared sample rate overrides the shape-derived guess.** Perch v2
+    /// declares `[-1, 160_000]`, which the derivation reads as 48 kHz because
+    /// 48 kHz is its default for an unrecognised length. It is 32 kHz, and
+    /// only the operator can say so.
+    ///
+    /// Observed failing with the `spec.sample_rate` override dropped from
+    /// `load`: the classifier came back at the derived rate and its window
+    /// read as 3 s rather than 4.5 s.
+    #[test]
+    fn a_declared_sample_rate_beats_the_shape_derived_guess() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // The V2.4 fixture is [1, 144_000], derived as 48 kHz / 3.0 s.
+        let mut s = spec(dir.path(), "birdnet", TINY_V24, None);
+        assert_eq!(s.sample_rate, None);
+        let derived = ClassifierRegistry::load(&[s.clone()], &no_routes(), &ModelConfig::default())
+            .expect("loads");
+        assert_eq!(derived.primary().spec.sample_rate, 48_000);
+        assert!((derived.primary().spec.window_secs() - 3.0).abs() < 1e-6);
+
+        // Declared as 32 kHz, the same 144 000 samples are 4.5 seconds.
+        s.sample_rate = Some(32_000);
+        let declared =
+            ClassifierRegistry::load(&[s], &no_routes(), &ModelConfig::default()).expect("loads");
+        assert_eq!(declared.primary().spec.sample_rate, 32_000);
+        assert!(
+            (declared.primary().spec.window_secs() - 4.5).abs() < 1e-6,
+            "got {}",
+            declared.primary().spec.window_secs()
+        );
     }
 
     // ── route parsing ───────────────────────────────────────────────────

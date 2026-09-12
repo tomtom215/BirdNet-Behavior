@@ -303,17 +303,14 @@ impl BirdNetModel {
         week: u32,
     ) -> Result<ChunkPrediction, InferenceError> {
         let input_tensor = self.build_input_tensor(audio)?;
+        // Resolved before the session is borrowed mutably to run.
+        let output_idx = self.class_output();
 
         let outputs = self
             .session
             .run(ort::inputs![input_tensor])
             .map_err(|e| InferenceError::Runtime(e.to_string()))?;
 
-        // BirdNET+ V3.0 has two outputs:
-        //   [0] "embeddings"   → [batch, 1280]   (internal representation)
-        //   [1] "predictions"  → [batch, 11560]  (species classification logits)
-        // Use "predictions" if it exists (V3.0), else fall back to output 0 (V2.4).
-        let output_idx = usize::from(outputs.len() > 1);
         let (_shape, flat_logits) = outputs[output_idx]
             .try_extract_tensor::<f32>()
             .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
@@ -572,6 +569,31 @@ impl BirdNetModel {
         &self.labels
     }
 
+    /// Each output's name and trailing dimension, for
+    /// [`class_output_index`].
+    fn output_descriptors(&self) -> Vec<(String, Option<usize>)> {
+        self.session
+            .outputs()
+            .iter()
+            .map(|o| {
+                let width = match o.dtype() {
+                    ValueType::Tensor { shape, .. } => shape
+                        .last()
+                        .copied()
+                        .and_then(|d| usize::try_from(d).ok())
+                        .filter(|d| *d >= 1),
+                    _ => None,
+                };
+                (o.name().to_owned(), width)
+            })
+            .collect()
+    }
+
+    /// Which output carries the class scores. See [`class_output_index`].
+    fn class_output(&self) -> usize {
+        class_output_index(&self.output_descriptors(), self.labels.len())
+    }
+
     /// The width of the model's class output — how many classes it scores —
     /// or `None` when the output's last dimension is dynamic.
     ///
@@ -584,8 +606,9 @@ impl BirdNetModel {
     /// station runs on it (ON-9).
     #[must_use]
     pub fn output_dimension(&self) -> Option<usize> {
+        let idx = self.class_output();
         let outputs = self.session.outputs();
-        let output = outputs.get(usize::from(outputs.len() > 1))?;
+        let output = outputs.get(idx)?;
         match output.dtype() {
             ValueType::Tensor { shape, .. } => shape
                 .last()
@@ -766,6 +789,64 @@ pub const fn input_spec_from_shape(input_shape: &[usize]) -> InputSpec {
     }
 }
 
+/// Which output of a classifier carries the class scores.
+///
+/// # Why this is not "the second one" (`G-10` Stage 4)
+///
+/// It was `usize::from(outputs.len() > 1)` — output 1 when a model has more
+/// than one, which is right for BirdNET+ V3.0 (`embeddings`, then
+/// `predictions`) and right for V2.4 (one output) and wrong for anything else.
+///
+/// Google's Perch v2 is the anything else, and it is the model this project
+/// planned to add next. Measured on the real file (sha256 `bf0c8467…cefa1f`),
+/// it declares **four** outputs:
+///
+/// ```text
+/// [0] embedding          [-1, 1536]
+/// [1] spatial_embedding  [-1, 16, 4, 1536]
+/// [2] spectrogram        [-1, 500, 128]
+/// [3] label              [-1, 14795]
+/// ```
+///
+/// Index 1 is `spatial_embedding`: 98 304 numbers of internal representation.
+/// Read as class scores they would have produced confident detections of
+/// whatever species the arithmetic happened to land on, with nothing to say
+/// anything was wrong.
+///
+/// So the head is found by what actually identifies it — an output whose
+/// trailing dimension is the number of labels. That is the definition of the
+/// class head, it is checkable against the file, and it is what
+/// [`BirdNetModel::output_dimension`] already compares. A name match is the
+/// fallback for a model whose labels are mispaired, so that case still reaches
+/// the doctor's existing width check rather than failing here first.
+#[must_use]
+pub fn class_output_index(outputs: &[(String, Option<usize>)], label_count: usize) -> usize {
+    /// Names a classification head conventionally carries, for the fallback
+    /// below when the label file is mispaired and the width test cannot fire.
+    const HEAD_NAMES: &[&str] = &["label", "labels", "predictions", "prediction", "logits"];
+
+    // The width test first: unambiguous, and true of every model this runs.
+    if label_count > 0
+        && let Some(idx) = outputs
+            .iter()
+            .position(|(_, width)| *width == Some(label_count))
+    {
+        return idx;
+    }
+    // Then the conventional names, for a model whose labels are mispaired —
+    // that is a real condition the doctor reports on, and it should report on
+    // it rather than being pre-empted by a wrong head here.
+    if let Some(idx) = outputs
+        .iter()
+        .position(|(name, _)| HEAD_NAMES.contains(&name.to_ascii_lowercase().as_str()))
+    {
+        return idx;
+    }
+    // Last resort: the historical behaviour, so a model that matches neither
+    // test behaves exactly as it did before this function existed.
+    usize::from(outputs.len() > 1)
+}
+
 /// Pure helper: derive sample rate from any ONNX input shape.
 ///
 /// V2.4 fixed `[1, 144_000]` → 48 kHz × 3 s. V3.0 fixed `[1, 96_000]` → 32 kHz × 3 s.
@@ -867,6 +948,7 @@ impl crate::inference::classifier::Classifier for BirdNetModel {
 
     fn infer(&mut self, window: &[f32]) -> Result<Vec<f32>, InferenceError> {
         let input_tensor = self.build_input_tensor(window)?;
+        let output_idx = self.class_output();
         let outputs = self
             .session
             .run(ort::inputs![input_tensor])
@@ -875,7 +957,6 @@ impl crate::inference::classifier::Classifier for BirdNetModel {
         // The same selection `predict_chunk` makes, and for the same reason:
         // scoring the embeddings would silently return 1 280 meaningless
         // numbers that still look like a prediction vector.
-        let output_idx = usize::from(outputs.len() > 1);
         let (_shape, flat) = outputs[output_idx]
             .try_extract_tensor::<f32>()
             .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
@@ -1791,6 +1872,96 @@ mod tests {
             Some(short.labels().len()),
             "a one-label file does not match an eleven-class model"
         );
+    }
+}
+
+#[cfg(test)]
+mod class_output_tests {
+    use super::class_output_index;
+
+    fn outs(v: &[(&str, Option<usize>)]) -> Vec<(String, Option<usize>)> {
+        v.iter().map(|(n, w)| ((*n).to_owned(), *w)).collect()
+    }
+
+    /// **The gate Stage 4 exists for.** The real Perch v2 declares four
+    /// outputs and its class head is the last. Taken from the actual file
+    /// (sha256 `bf0c8467…cefa1f`), not from its model card.
+    ///
+    /// Observed failing with the selector restored to
+    /// `usize::from(outputs.len() > 1)`: it returned 1, `spatial_embedding` —
+    /// 98 304 numbers of internal representation, read as though they were
+    /// 14 795 class scores.
+    #[test]
+    fn the_perch_class_head_is_found_among_its_four_outputs() {
+        let perch = outs(&[
+            ("embedding", Some(1536)),
+            ("spatial_embedding", Some(1536)),
+            ("spectrogram", Some(128)),
+            ("label", Some(14795)),
+        ]);
+        assert_eq!(class_output_index(&perch, 14_795), 3);
+    }
+
+    /// BirdNET+ V3.0 must keep working: two outputs, the head second.
+    #[test]
+    fn the_v30_class_head_is_still_the_second_output() {
+        let v30 = outs(&[("embeddings", Some(1280)), ("predictions", Some(11560))]);
+        assert_eq!(class_output_index(&v30, 11_560), 1);
+    }
+
+    /// And V2.4: one output, which is the head.
+    #[test]
+    fn a_single_output_model_uses_its_only_output() {
+        let v24 = outs(&[("output", Some(6522))]);
+        assert_eq!(class_output_index(&v24, 6_522), 0);
+    }
+
+    /// Two outputs of the same width would make the width test ambiguous, so
+    /// the first match wins and the name test never runs. Pinned because the
+    /// alternative — preferring the name — would change which head V3.0 uses
+    /// if its embedding width ever equalled its label count.
+    #[test]
+    fn the_first_output_matching_the_label_count_wins() {
+        let ambiguous = outs(&[("a", Some(10)), ("b", Some(10))]);
+        assert_eq!(class_output_index(&ambiguous, 10), 0);
+    }
+
+    /// **Mispaired labels must not be hidden here.** When no output is the
+    /// label count, the model is paired with the wrong labels file — a real
+    /// condition the doctor reports by comparing those two numbers. Falling
+    /// back to the conventional name keeps that check reachable instead of
+    /// pre-empting it with a wrong head.
+    ///
+    /// Observed failing with the name fallback removed: the selector returned
+    /// 1 (`spatial_embedding`) for a Perch model whose labels file had the
+    /// wrong number of rows, so the doctor would have compared the width of an
+    /// embedding against the label count and reported a nonsense mismatch.
+    #[test]
+    fn a_mispaired_label_file_still_finds_the_head_by_name() {
+        let perch = outs(&[
+            ("embedding", Some(1536)),
+            ("spatial_embedding", Some(1536)),
+            ("spectrogram", Some(128)),
+            ("label", Some(14795)),
+        ]);
+        // The operator supplied a label file with the wrong row count.
+        assert_eq!(class_output_index(&perch, 11_560), 3, "found by name");
+    }
+
+    /// A model matching neither test behaves exactly as it did before this
+    /// function existed, so nothing that worked can regress.
+    #[test]
+    fn an_unrecognisable_model_keeps_the_historical_behaviour() {
+        let odd = outs(&[("alpha", Some(7)), ("beta", Some(9))]);
+        assert_eq!(class_output_index(&odd, 0), 1, "len > 1 → index 1");
+        assert_eq!(class_output_index(&outs(&[("solo", Some(7))]), 0), 0);
+    }
+
+    /// A zero label count must not match an output whose width is unknown.
+    #[test]
+    fn an_unknown_width_never_matches() {
+        let unknown = outs(&[("a", None), ("label", Some(5))]);
+        assert_eq!(class_output_index(&unknown, 5), 1);
     }
 }
 
