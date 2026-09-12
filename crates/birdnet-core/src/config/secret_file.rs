@@ -234,7 +234,7 @@ impl super::Config {
 
 /// Read a file from disk, returning the OS reason as a string.
 ///
-/// The default `read` for [`Config::resolve_secret_files`]. Separate so the
+/// The default `read` for [`super::Config::resolve_secret_files`]. Separate so the
 /// caller injects it and the tests do not touch the filesystem.
 ///
 /// # Errors

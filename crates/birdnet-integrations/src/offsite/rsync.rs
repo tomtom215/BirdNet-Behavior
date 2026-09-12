@@ -226,7 +226,7 @@ impl RsyncTarget {
     ///
     /// [`SftpError::NotInstalled`] if `rsync` is absent, [`SftpError::Spawn`]
     /// if it cannot be started, [`SftpError::Failed`] if it exits non-zero or
-    /// runs past [`TRANSFER_TIMEOUT`], and anything
+    /// runs past `TRANSFER_TIMEOUT`, and anything
     /// [`RsyncTarget::argv`] refuses.
     pub async fn put(&self, name: &str, local: &Path) -> Result<(), SftpError> {
         // `-mkdir` is non-fatal in the batch, so an existing directory is not

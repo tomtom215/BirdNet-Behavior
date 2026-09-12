@@ -107,7 +107,7 @@ pub(super) fn source_gauge_label(source: &CaptureSource) -> String {
 /// consecutive start attempts that have not yet produced a healthy process.
 ///
 /// `0` attempts → no delay (the first attempt fires immediately); then
-/// `2s, 4s, 8s, …` doubling up to [`BACKOFF_CAP`].
+/// `2s, 4s, 8s, …` doubling up to `BACKOFF_CAP`.
 #[must_use]
 fn backoff_delay(attempts_since_healthy: u32, watchdog: &WatchdogConfig) -> Duration {
     if attempts_since_healthy == 0 {
@@ -397,7 +397,7 @@ impl<S: Source> SupervisedSource<S> {
         u32::try_from(self.restarts.len()).unwrap_or(u32::MAX)
     }
 
-    /// Warn, at most once per [`wd().down_warn_every`], while the source is
+    /// Warn, at most once per `wd().down_warn_every`, while the source is
     /// flapping: the "still down" warning cannot fire for a source that is
     /// never down for long, so this is the log line such a source gets.
     fn maybe_warn_flapping(&mut self, now: Instant, watchdog: &WatchdogConfig) {

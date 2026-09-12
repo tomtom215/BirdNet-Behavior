@@ -552,7 +552,7 @@ impl BirdNetModel {
     /// `[1, 144_000]` — exactly 48 kHz × 3 s, a **sample count** — so it is a
     /// waveform model too, but being 48 kHz it was routed down the mel branch:
     /// the pipeline computed a 128 × 282 = 36 096-value mel spectrogram and
-    /// [`BirdNetModel::build_input_tensor`] zero-filled the remaining 107 904
+    /// `BirdNetModel::build_input_tensor` zero-filled the remaining 107 904
     /// slots of a 144 000-wide tensor. Three-quarters of every V2.4 inference
     /// was zeros, and nothing reported it.
     ///
@@ -1303,6 +1303,66 @@ mod tests {
         // V3.0 is 32 kHz → raw audio path.
         let m = load_tiny_v30();
         assert!(m.expects_raw_audio());
+    }
+
+    /// **The counterpart the other two could not provide.** Both models this
+    /// project ships take the waveform, so every assertion on
+    /// `expects_raw_audio` was `assert!(…)` and the method could have been the
+    /// constant `true` without a single test noticing — which is what
+    /// `cargo-mutants` reported: `replace BirdNetModel::expects_raw_audio ->
+    /// bool with true`, surviving.
+    ///
+    /// `tiny_mel_test.onnx` exists for this: a 179-byte classifier that
+    /// *declares* a mel input, `[1, 128, 4]`. It is built to be **loaded**, not
+    /// inferred against — no mel classifier exists in this project yet, so
+    /// there is nothing to feed it — and loading is all this predicate reads.
+    /// Regenerate it with:
+    ///
+    /// ```text
+    /// import onnx, numpy as np
+    /// from onnx import helper, TensorProto, numpy_helper
+    /// inp = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 128, 4])
+    /// out = helper.make_tensor_value_info("predictions", TensorProto.FLOAT, [1, 4])
+    /// node = helper.make_node("ReduceMax", ["input", "axes"], ["predictions"], keepdims=0)
+    /// axes = numpy_helper.from_array(np.array([1], dtype=np.int64), name="axes")
+    /// g = helper.make_graph([node], "tiny_mel_test", [inp], [out], initializer=[axes])
+    /// m = helper.make_model(g, producer_name="birdnet-test",
+    ///                       opset_imports=[helper.make_opsetid("", 18)])
+    /// m.ir_version = 8
+    /// onnx.checker.check_model(m)
+    /// onnx.save(m, "crates/birdnet-core/src/testdata/tiny_mel_test.onnx")
+    /// ```
+    ///
+    /// Observed failing with `expects_raw_audio` replaced by the constant
+    /// `true`, which is the reported mutant: the assertion below went red while
+    /// the two above stayed green.
+    #[test]
+    fn a_model_declaring_a_mel_input_does_not_expect_raw_audio() {
+        let labels: Vec<String> = (0..4).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        let set = super::LabelSet::parse(&labels.join("\n")).expect("labels");
+        let m = super::BirdNetModel::load_from_bytes(
+            include_bytes!("../testdata/tiny_mel_test.onnx"),
+            set,
+            super::ModelConfig::default(),
+        )
+        .expect("the mel fixture must load");
+
+        assert_eq!(m.input_shape(), [1, 128, 4], "the declared mel shape");
+        assert!(
+            matches!(
+                m.input_spec().format,
+                super::InputFormat::MelSpectrogram {
+                    n_mels: 128,
+                    n_frames: 4
+                }
+            ),
+            "got {:?}",
+            m.input_spec().format
+        );
+        assert!(
+            !m.expects_raw_audio(),
+            "a model declaring a mel input must not be sent the waveform"
+        );
     }
 
     #[test]
@@ -2313,6 +2373,26 @@ mod input_spec_tests {
         // And an exact window is fine.
         let exact = vec![0.0_f32; 144_000];
         assert!(model.build_input_tensor(&exact).is_ok());
+
+        // Both sides of the boundary itself, because the rule is `len * 2 <
+        // expected` and a test that only ever asks about a quarter-width slice
+        // and a nearly-full one never says which way *exactly half* falls.
+        // Half is the last accepted width: 1.5 s of a 3 s window is a short
+        // chunk, not a different kind of data.
+        //
+        // Observed failing with `<` relaxed to `<=`: the 72 000-sample call
+        // came back an error, which is the mutant `cargo-mutants` reported
+        // surviving on this line.
+        let exactly_half = vec![0.0_f32; 72_000];
+        assert!(
+            model.build_input_tensor(&exactly_half).is_ok(),
+            "exactly half the window is the widest slice still treated as ragged"
+        );
+        let one_under_half = vec![0.0_f32; 71_999];
+        assert!(
+            model.build_input_tensor(&one_under_half).is_err(),
+            "one sample below half must fall on the refusing side"
+        );
     }
 
     /// `tensor_len` is what a caller must size its slice against, and it
@@ -2401,6 +2481,39 @@ mod input_spec_tests {
     /// `recommended_chunk_samples_from_shape`: the window became 282 samples
     /// while the waveform gate above stayed green, which is the blind spot this
     /// counterpart exists to close.
+    /// **A single spectrogram column is not a spectrogram.** The mel arm asks
+    /// for `n_mels > 1 && n_frames > 1`, and the `n_frames` half of that had
+    /// nothing asserting it: every mel case in these tests has many frames, and
+    /// every waveform case has `n_mels == 1`, so a shape with real mel bands
+    /// and exactly one frame was covered by neither.
+    ///
+    /// `[1, 128, 1]` is degenerate either way, and what matters is which way it
+    /// resolves: as a waveform shape it gets the dynamic default, and as a mel
+    /// shape it would claim a one-column spectrogram, which nothing in this
+    /// pipeline can produce or consume.
+    ///
+    /// Observed failing with `*n_frames > 1` relaxed to `>= 1`: `[1, 128, 1]`
+    /// came back `MelSpectrogram { n_mels: 128, n_frames: 1 }`. That is the
+    /// mutant `cargo-mutants` reported surviving at column 59 of this arm; its
+    /// `n_mels` counterpart already dies to the `[1, 1, 144_000]` row above.
+    #[test]
+    fn a_single_frame_is_not_a_mel_shape() {
+        for shape in [&[1_usize, 128, 1][..], &[1, 64, 1]] {
+            let spec = input_spec_from_shape(shape);
+            assert_eq!(
+                spec.format,
+                InputFormat::Waveform,
+                "{shape:?} has one frame, so the mel arm must not claim it"
+            );
+        }
+        // Its counterpart, so this gate cannot pass against a mel arm that
+        // never matches anything: two real frames still resolve to mel.
+        assert!(matches!(
+            input_spec_from_shape(&[1, 128, 2]).format,
+            InputFormat::MelSpectrogram { .. }
+        ));
+    }
+
     #[test]
     fn a_mel_shape_is_where_the_window_and_the_chunk_recommendation_part() {
         let cases: [(&[usize], usize); 2] = [(&[1, 128, 282], 282), (&[1, 64, 511], 511)];

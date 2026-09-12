@@ -1,6 +1,6 @@
 //! eBird recent-observations poll (`G-27`).
 //!
-//! Asks eBird once every [`REFRESH_INTERVAL`] what other people have reported
+//! Asks eBird once every `REFRESH_INTERVAL` what other people have reported
 //! near the station, caches the answer to disk, and publishes it into
 //! [`AppState`] where the suspect-species report and the detection detail page
 //! consult it.

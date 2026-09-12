@@ -892,6 +892,88 @@ mod tests {
         assert_eq!(resolve_i64_with_default(15, 60, None), 15);
     }
 
+    // ── loudness settings (G-5) ─────────────────────────────────────────
+    //
+    // `parse_decimal` and the four bounds it is filtered against had no direct
+    // tests: they were exercised only through `build_extraction_config`, which
+    // reads them from the environment, and every mutant `cargo-mutants`
+    // generated for them on this PR's changed lines survived. The two gates
+    // below are what those numbers actually promise.
+
+    /// **Blank is "not configured", not zero.** Every surface that supplies
+    /// one of these writes a blank when the operator declines the feature, so
+    /// a parser that read blank as `0.0` would silently turn "no loudness
+    /// target" into "target 0 LUFS" — the loudest setting there is.
+    ///
+    /// Observed failing against each mutant reported on this line: the body
+    /// replaced by `None` (the first assertion), by `Some(0.0)`, `Some(1.0)`
+    /// and `Some(-1.0)` (the `None` and blank assertions), and with the `!`
+    /// deleted from the emptiness filter, which inverts it so that only an
+    /// empty string survives and `"-18.5"` comes back `None`.
+    #[test]
+    fn parse_decimal_reads_a_number_and_treats_everything_else_as_unset() {
+        assert_eq!(parse_decimal(Some("-18.5".to_owned())), Some(-18.5));
+        assert_eq!(
+            parse_decimal(Some("  -23  ".to_owned())),
+            Some(-23.0),
+            "an operator's stray whitespace is not a parse failure"
+        );
+        assert_eq!(parse_decimal(None), None, "nothing configured is not zero");
+        assert_eq!(
+            parse_decimal(Some(String::new())),
+            None,
+            "a blank setting is not zero"
+        );
+        assert_eq!(parse_decimal(Some("   ".to_owned())), None);
+        assert_eq!(parse_decimal(Some("loud".to_owned())), None);
+        assert_eq!(
+            parse_decimal(Some("nan".to_owned())),
+            None,
+            "NaN parses as an f64 and must still be refused"
+        );
+        assert_eq!(parse_decimal(Some("inf".to_owned())), None);
+    }
+
+    /// **The bounds are negative decibel values, in order.** They are the
+    /// filters `build_extraction_config` applies, so a sign lost from any of
+    /// them does not fail loudly: the range simply stops containing anything
+    /// an operator would write, and the setting silently reverts to unset or
+    /// to its default.
+    ///
+    /// Observed failing against each `delete -` mutant reported on these three
+    /// constants: `MIN_TARGET_LUFS` as `40.0` and `MIN_CEILING_DBFS` as `12.0`
+    /// each empty their range, so it stops containing the ordinary value;
+    /// `MAX_TARGET_LUFS` as `6.0` widens the target range to admit 0 LUFS,
+    /// which the assertion after it refuses.
+    #[test]
+    fn the_loudness_bounds_are_negative_decibels_in_order() {
+        // Asserted through `contains` rather than by comparing the constants
+        // directly: `MIN_TARGET_LUFS < MAX_TARGET_LUFS` is a constant
+        // expression, which `clippy::assertions_on_constants` refuses and
+        // which CI denies. Each range answering correctly about a real value
+        // covers the same ground — a lost sign empties the range or widens it,
+        // and both show up below.
+        let target = MIN_TARGET_LUFS..=MAX_TARGET_LUFS;
+        assert!(
+            target.contains(&-23.0),
+            "-23 LUFS is the EBU R128 broadcast target and must be accepted"
+        );
+        assert!(
+            !target.contains(&0.0),
+            "0 LUFS is not a loudness target, and admitting it means a sign was lost"
+        );
+
+        let ceiling = MIN_CEILING_DBFS..MAX_CEILING_DBFS;
+        assert!(
+            ceiling.contains(&-1.0),
+            "-1 dBFS is an ordinary peak ceiling and must be accepted"
+        );
+        assert!(
+            !ceiling.contains(&0.0),
+            "a sample at full scale has nowhere to round to"
+        );
+    }
+
     // ── build_pipeline_config ───────────────────────────────────────────
     //
     // The struct-literal field-source mutations cargo-mutants surfaces on
