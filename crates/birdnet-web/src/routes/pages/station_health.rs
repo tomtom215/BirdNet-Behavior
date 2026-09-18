@@ -161,7 +161,14 @@ async fn gather(state: &AppState) -> Snapshot {
         last_detection: None,
         queued_uploads: 0,
         total_detections: 0,
-        integrity_ok: true,
+        // Fail-unsafe until this line: a snapshot we could not take asserted
+        // that the database integrity check had *passed*. Every other field
+        // here reads as "nothing to report", which is at worst uninformative;
+        // this one manufactured a clean bill of health for the one page an
+        // operator opens when they suspect something is wrong. `quick_check`
+        // inside the closure above is already `unwrap_or(false)` for the same
+        // reason, so the two directions no longer contradict each other.
+        integrity_ok: false,
         disk_low: false,
         disk_critical: false,
         scratch_low: false,
@@ -558,7 +565,7 @@ fn pipeline_row(s: &Snapshot) -> String {
          <div><div class=\"lab\">Total detections</div><div class=\"v\"><span class=\"mono\">{total}</span></div></div>\
          <div><div class=\"lab\">Species filter</div><div class=\"v\">{filter}</div></div>\
          </div>",
-        total = s.total_detections,
+        total = super::group_thousands(s.total_detections),
         filter = occurrence_cell(s.occurrence),
     )
 }
@@ -647,11 +654,32 @@ fn diagnostics(s: &Snapshot) -> String {
             d = escape_html(detail),
         )
     };
-    let sources_detail = format!(
-        "{} configured · {} active today",
-        s.sources_configured,
-        s.activity.len()
-    );
+    // The supervisor's own verdict, not merely "is anything configured".
+    // This row used to ask `sources_configured > 0` alone, which ticked green
+    // on the same screen as a warning banner reading "an audio source is down"
+    // and two source cards chipped Stalled / Backing off. When a supervisor is
+    // publishing, its faults decide this row; without one, the old question is
+    // still the only one we can answer.
+    let faulted = s.capture.iter().filter(|c| c.state.is_fault()).count();
+    let flapping = s.capture.iter().filter(|c| c.flapping).count();
+    let sources_ok = s.sources_configured > 0 && faulted == 0 && flapping == 0;
+    let sources_detail = if faulted > 0 {
+        format!(
+            "{} configured · {faulted} not reporting",
+            s.sources_configured
+        )
+    } else if flapping > 0 {
+        format!(
+            "{} configured · {flapping} keeps dropping and reconnecting",
+            s.sources_configured
+        )
+    } else {
+        format!(
+            "{} configured · {} active today",
+            s.sources_configured,
+            s.activity.len()
+        )
+    };
     let disk_detail = if s.disk_critical {
         "critically low — recordings may stop"
     } else if s.disk_low {
@@ -663,7 +691,7 @@ fn diagnostics(s: &Snapshot) -> String {
         "<div class=\"st-check\">{a}{b}{c}</div>\
          <p class=\"bnb-meta st-doctor-link\">Configuration checks live in \
          <a href=\"/admin/doctor\">Diagnostics</a> (sign-in required).</p>",
-        a = row(s.sources_configured > 0, "Audio sources", &sources_detail),
+        a = row(sources_ok, "Audio sources", &sources_detail),
         b = row(
             !s.disk_low && !s.disk_critical,
             "Disk headroom",
@@ -957,6 +985,65 @@ mod tests {
         // leading article ("…An audio source is down").
         assert!(banner.contains("audio source is down"));
         assert!(banner.contains("st-status warn"));
+    }
+
+    /// The Diagnostics checklist must not contradict the banner above it.
+    ///
+    /// Observed failing against the pre-fix `diagnostics()`, whose Audio
+    /// sources row asked only `s.sources_configured > 0`. On the seeded demo
+    /// station that produced, on one screen: a warning banner reading "Needs
+    /// attention — an audio source is down", two of three source cards chipped
+    /// "Backing off" and "Stalled", and underneath them a green "Audio sources
+    /// ✓ OK · 3 configured · 3 active today". An operator checking from the
+    /// field got a tick from the one list that is meant to be the summary.
+    #[test]
+    fn diagnostics_audio_row_agrees_with_the_banner() {
+        let mut s = snap(false, true, 3, 0);
+        s.capture = vec![
+            cap_source("local", SourceState::Connected, 0, None),
+            cap_source("RTSP_1", SourceState::BackingOff, 3, Some(12)),
+            cap_source("RTSP_2", SourceState::Stalled, 1, None),
+        ];
+        let banner = status_banner(&s);
+        let checks = diagnostics(&s);
+        assert!(
+            banner.contains("audio source is down"),
+            "precondition: the banner sees the fault: {banner}"
+        );
+        let audio_row = checks
+            .split("<div class=\"st-check-row\">")
+            .find(|r| r.contains("Audio sources"))
+            .expect("there is an Audio sources row");
+        assert!(
+            audio_row.contains("mk warn"),
+            "the banner reports a source down but Diagnostics ticks it green: {audio_row}"
+        );
+        assert!(
+            audio_row.contains("2 not reporting"),
+            "the row should say how many are faulted: {audio_row}"
+        );
+    }
+
+    /// Counterpart to the gate above: a station whose sources are all healthy
+    /// must still get its green tick, so the check discriminates rather than
+    /// warning unconditionally.
+    #[test]
+    fn diagnostics_audio_row_stays_green_when_every_source_is_up() {
+        let mut s = snap(false, true, 2, 0);
+        s.capture = vec![
+            cap_source("local", SourceState::Connected, 0, None),
+            cap_source("RTSP_1", SourceState::Connected, 0, None),
+        ];
+        let audio_row = diagnostics(&s)
+            .split("<div class=\"st-check-row\">")
+            .find(|r| r.contains("Audio sources"))
+            .expect("there is an Audio sources row")
+            .to_string();
+        assert!(
+            !audio_row.contains("mk warn"),
+            "all sources up must stay green: {audio_row}"
+        );
+        assert!(status_banner(&s).contains("All systems healthy"));
     }
 
     #[test]

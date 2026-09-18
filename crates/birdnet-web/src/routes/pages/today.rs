@@ -164,7 +164,9 @@ fn signal_card(
         <span class="bnb-eyebrow">Live signal · last 30 s</span>
         <span class="bnb-pill db-live-pill"><span class="bnb-dot"></span> idle</span>
       </div>
-      <canvas id="hero-pulse" height="80" class="db-pulse"></canvas>
+      <canvas id="hero-pulse" height="80" class="db-pulse" role="img"
+              aria-label="Live audio spectrogram for the selected source"></canvas>
+      <p class="bnb-meta db-signal-note" id="hero-pulse-note" aria-live="polite">Waiting for the first audio segment…</p>
       <div class="db-signal-foot">
         <span class="mono bnb-meta">{input_label}</span>
         <span class="mono bnb-meta">{rate}</span>

@@ -370,7 +370,7 @@ fn list_view(
             av = avatar(&s.com_name, ""),
             name = escape_html(&s.com_name),
             sci = escape_html(&s.sci_name),
-            count = format_count(s.count),
+            count = super::group_thousands(s.count),
             conf = conf_bar(s.avg_confidence),
         );
     }
@@ -418,7 +418,7 @@ fn photos_view(
             cards,
             r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
             name = escape_html(&s.com_name),
-            count = format_count(s.count),
+            count = super::group_thousands(s.count),
         );
     }
     let count_line = format!(
@@ -497,7 +497,7 @@ fn lifelist_view(state: &AppState) -> String {
   <div class="bnb-card pad"><div class="bnb-eyebrow">Your growing list</div><div class="sd-viz">{curve}</div></div>
 </div>
 <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most recent</div><h3>New to the list</h3></div></div><div class="sp-firsts">{firsts_html}</div></div>"#,
-        det = format_count(det_total),
+        det = super::group_thousands(det_total),
     )
 }
 
@@ -551,7 +551,7 @@ fn species_count_line(n: usize, filter: &str, total: i64) -> String {
     };
     format!(
         r#"<div class="sp-count"><b>{n}</b> species{scope} · {total} detections all-time</div>"#,
-        total = format_count(total),
+        total = super::group_thousands(total),
     )
 }
 
@@ -562,20 +562,6 @@ fn empty_note(search: Option<&str>) -> String {
         |q| format!("No species match “{}”.", escape_html(q)),
     );
     format!(r#"<div class="bnb-card pad bnb-meta">{what}</div>"#)
-}
-
-/// Group a count with thousands separators (e.g. `3142` → `3,142`).
-fn format_count(n: i64) -> String {
-    let s = n.abs().to_string();
-    let mut out = String::new();
-    let bytes = s.as_bytes();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(char::from(*b));
-    }
-    if n < 0 { format!("-{out}") } else { out }
 }
 
 async fn species_detail_page(
@@ -977,7 +963,7 @@ async fn species_status_partial(
 <span class="bnb-pill">First heard {first}</span>
 <span class="bnb-pill">Last heard {last}</span>
 <span class="bnb-pill">avg {conf_pct:.0}% confidence</span>"#,
-                count = s.count,
+                count = super::group_thousands(s.count),
                 first = escape_html(&s.first_seen),
                 last = escape_html(&s.last_seen),
             )

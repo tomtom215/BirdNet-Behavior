@@ -31,6 +31,7 @@ pub mod detection_comments;
 pub mod detection_detail;
 pub mod detection_reviews;
 pub mod empty_states;
+pub mod error_states;
 pub mod health;
 pub mod heatmap;
 pub(crate) mod help;

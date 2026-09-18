@@ -552,7 +552,7 @@ fn render_page(p: &SearchParams, sources: &[String]) -> String {
 
     format!(
         "<div class=\"sr-head\">\
-  <h1 class=\"sr-h1\">Search detections</h1>\
+  <h1 class=\"sr-title\">Search detections</h1>\
   <p class=\"sr-lede\">Every record this station has kept, narrowed by any \
    combination below. The address bar carries the search, so a useful one can be \
    bookmarked or sent to somebody.</p>\
@@ -640,7 +640,8 @@ fn render_results(
          <div class=\"sr-bulkbar\">\
            <label class=\"sr-selall\"><input type=\"checkbox\" \
              data-sr-toggle-all=\"1\"> Select all on this page</label>\
-           <select name=\"action\" class=\"sr-bulkaction\">\
+           <label class=\"sr-only\" for=\"sr-bulk-action\">Action to apply to the selected detections</label>\
+           <select id=\"sr-bulk-action\" name=\"action\" class=\"sr-bulkaction\">\
              <option value=\"confirm\">Confirm</option>\
              <option value=\"reject\">Reject</option>\
              <option value=\"lock\">Lock clip</option>\

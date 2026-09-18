@@ -185,24 +185,58 @@ pub(crate) fn waveform(seed: u64, bars: usize) -> String {
     out
 }
 
-/// Line + area sparkline SVG (max-normalised), styled via `.bnb-spark`.
+/// Line + area sparkline SVG (zero-baselined), styled via `.bnb-spark`.
+///
+/// Two degenerate shapes are handled explicitly, because the arithmetic that
+/// serves the general case renders both of them as nothing useful:
+///
+/// * **One sample.** Stepping `x` by `width / (n - 1)` is undefined at `n == 1`,
+///   and the loop emitted a bare `M0,y` — a moveto with no segment after it,
+///   which paints no pixels. `dashboard::stats` substitutes `vec![0]` for an
+///   empty trend, so a station on its first day shipped an empty box. One
+///   sample now draws a flat line across the full width, which is what a single
+///   reading looks like.
+/// * **No variation at all.** With every sample equal and non-zero,
+///   `v / max == 1` puts the whole line at `y = 1`, hard against the top edge,
+///   where it reads as a border rather than as data — the Today Top-species
+///   rail is mostly flat series and looked like a stack of hairlines. A flat
+///   non-zero series is drawn through the middle instead. A flat *zero* series
+///   keeps its baseline at the bottom, which is the honest place for it.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub(crate) fn sparkline(data: &[i64], width: f64, height: f64, accent: Option<&str>) -> String {
     if data.is_empty() {
         return String::new();
     }
-    let max = data.iter().copied().max().unwrap_or(1).max(1) as f64;
+    let lo = data.iter().copied().min().unwrap_or(0);
+    let hi = data.iter().copied().max().unwrap_or(0);
+    let flat_non_zero = hi == lo && hi > 0;
+    let max = hi.max(1) as f64;
     let n = data.len();
     let step = if n > 1 { width / (n - 1) as f64 } else { width };
+    let y_of = |v: i64| -> f64 {
+        if flat_non_zero {
+            height / 2.0
+        } else {
+            (v as f64 / max).mul_add(-(height - 2.0), height) - 1.0
+        }
+    };
 
     let mut path = String::new();
     for (i, &v) in data.iter().enumerate() {
         let x = i as f64 * step;
-        let y = (v as f64 / max).mul_add(-(height - 2.0), height) - 1.0;
+        let y = y_of(v);
         let _ = write!(path, "{}{x:.1},{y:.1}", if i == 0 { "M" } else { "L" });
     }
-    let last_x = (n.saturating_sub(1)) as f64 * step;
+    // A single sample has no second point to draw to, so give it one at the
+    // right edge; the area below then has a non-zero width to close against.
+    let last_x = if n > 1 {
+        (n - 1) as f64 * step
+    } else {
+        let y = y_of(data[0]);
+        let _ = write!(path, "L{width:.1},{y:.1}");
+        width
+    };
     let area = format!("{path} L{last_x:.1},{height} L0,{height} Z");
     let stroke = accent.unwrap_or("var(--moss)");
 
@@ -329,5 +363,94 @@ mod tests {
         assert!(sparkline(&[], 56.0, 16.0, None).is_empty());
         let s = sparkline(&[1, 3, 2, 5], 56.0, 16.0, None);
         assert!(s.contains("<svg") && s.contains("class=\"line\""));
+    }
+
+    /// Pull the `d` attribute of the `class="line"` path.
+    fn line_path(svg: &str) -> String {
+        let after = svg
+            .split_once("class=\"line\" d=\"")
+            .expect("sparkline draws a line path")
+            .1;
+        after
+            .split_once('"')
+            .expect("d is terminated")
+            .0
+            .to_string()
+    }
+
+    /// A sparkline handed one sample must draw something.
+    ///
+    /// Observed failing against the pre-fix renderer: with `n == 1` the loop
+    /// emitted a single `M0.0,y` — a moveto with no drawing command after it,
+    /// which paints nothing — and the area closed to `M0.0,y L0.0,h L0,h Z`,
+    /// a zero-width triangle. `dashboard::stats` deliberately constructs this
+    /// case (`if trend.is_empty() { trend = vec![0] }`), so a station on its
+    /// first day shipped an empty 200x26 box where its Detections trend should
+    /// be, and every species with exactly one day of history did the same in
+    /// the Top-species rail.
+    #[test]
+    fn single_sample_sparkline_is_visible() {
+        for v in [0_i64, 1, 4, 900] {
+            let svg = sparkline(&[v], 200.0, 26.0, None);
+            let d = line_path(&svg);
+            assert!(
+                d.contains('L'),
+                "one sample (v = {v}) drew no line segment: d = {d:?}"
+            );
+            // The segment must span the box, not collapse onto x = 0.
+            assert!(
+                d.contains("200.0"),
+                "one sample (v = {v}) did not reach the full width: d = {d:?}"
+            );
+        }
+    }
+
+    /// A series with no variation must not be pinned to the top of its box.
+    ///
+    /// Observed failing against the pre-fix renderer, whose normalisation put
+    /// every sample of a perfectly flat series at `v / max == 1`, i.e. `y = 1`
+    /// — hard against the top edge, where a 1.4px stroke reads as a rule or a
+    /// border rather than as data. The Today Top-species rail is mostly flat
+    /// series (4, 4, 4, 4), and in a screenshot they were indistinguishable
+    /// from hairlines.
+    #[test]
+    fn flat_series_sits_off_the_top_edge() {
+        let h = 26.0_f64;
+        for v in [1_i64, 4, 4096] {
+            let d = line_path(&sparkline(&[v, v, v, v], 200.0, h, None));
+            for y in d
+                .split(['M', 'L'])
+                .filter(|s| !s.is_empty())
+                .filter_map(|pt| pt.split(',').nth(1))
+                .filter_map(|y| y.trim().parse::<f64>().ok())
+            {
+                assert!(
+                    y > 2.0 && y < h - 2.0,
+                    "flat series at v = {v} drew y = {y}, which is against an edge of the {h}-high box"
+                );
+            }
+        }
+    }
+
+    /// The counterpart: a series that genuinely varies must still use the full
+    /// height, so the fix above cannot be satisfied by flattening everything
+    /// into the middle.
+    #[test]
+    fn varying_series_still_spans_the_box() {
+        let h = 26.0_f64;
+        let d = line_path(&sparkline(&[0, 5, 0, 5], 200.0, h, None));
+        let ys: Vec<f64> = d
+            .split(['M', 'L'])
+            .filter(|s| !s.is_empty())
+            .filter_map(|pt| pt.split(',').nth(1))
+            .filter_map(|y| y.trim().parse::<f64>().ok())
+            .collect();
+        let lo = ys.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            hi - lo > h * 0.7,
+            "a 0..5..0..5 series only spanned {:.1} of {h}px",
+            hi - lo
+        );
     }
 }

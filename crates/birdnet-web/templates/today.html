@@ -89,11 +89,18 @@
       {{skel_detections}}
     </div>
     <div class="x-expander">
+      <!-- The label is one <span>, deliberately. `.bnb-btn` is
+           `display: inline-flex; gap: 6px`, so leaving the text bare made
+           "Show the full day (", the count, and ") — search, filter, lock &
+           delete" three separate flex items: on a phone they wrapped as three
+           independently-centred blocks with the number stranded on a line of
+           its own between two halves of the sentence. One flex item wraps as
+           ordinary text. -->
       <button type="button" class="bnb-btn ghost" id="log-toggle"
               aria-expanded="false" aria-controls="today-full">
-        Show the full day (<span id="td-total"
+        <span class="x-expander-label">Show the full day (<span id="td-total"
           hx-get="/pages/today-count?bare=1" hx-trigger="load, every 60s"
-          hx-swap="innerHTML">…</span>) — search, filter, lock &amp; delete ▾
+          hx-swap="innerHTML">…</span>) — search, filter, lock &amp; delete ▾</span>
       </button>
     </div>
     <div id="today-full" class="td-full" hidden
@@ -270,25 +277,51 @@
     // (no daemon, --web-only, or capture stopped) crosses it quickly.
     var IDLE_AFTER_MS = 30000;
     var pill = document.querySelector('.db-live-pill');
+    var note = document.getElementById('hero-pulse-note');
     var pillState = '';
-    // Reflect REAL liveness: "live" only while genuine spectrogram frames are
-    // arriving from the capture device, "idle" otherwise. Never animate a fake
-    // signal that could be mistaken for live audio.
-    function setLive(isLive) {
-        if (!pill) return;
-        var next = isLive ? 'live' : 'idle';
+    // Reflect REAL liveness. Three states, not two: "live" only while genuine
+    // spectrogram frames are arriving, "idle" when the stream is reachable but
+    // quiet, and "no signal" when we could not reach the stream at all.
+    //
+    // The third state used to be folded into "idle": `ws.onerror` and
+    // `ws.onclose` both fell through to the idle baseline, so a station whose
+    // WebSocket is blocked by a reverse proxy — or a `--web-only` process with
+    // no capture at all — drew exactly the same flat line as a quiet yard, and
+    // the card said "idle" either way. Those are opposite facts for an
+    // operator: one means wait, the other means the picture is not being
+    // delivered and tells you nothing about the microphone.
+    //
+    // Never animate a fake signal that could be mistaken for live audio.
+    var STATES = {
+        live: {
+            cls: 'bnb-dot live', label: 'live',
+            title: 'Live audio from the capture device',
+            note: 'Audio is arriving from this source right now.'
+        },
+        idle: {
+            cls: 'bnb-dot', label: 'idle',
+            title: 'No audio captured recently — the signal updates as new audio is recorded',
+            note: 'No audio in the last 30 seconds. The flat line is the real signal, not a placeholder.'
+        },
+        nosignal: {
+            cls: 'bnb-dot', label: 'no signal',
+            title: 'This browser could not reach the live stream',
+            note: 'This browser cannot reach the live stream, so there is nothing to draw. The station may still be recording — check Station health.'
+        }
+    };
+    function setState(next) {
         if (pillState === next) return;
         pillState = next;
-        if (isLive) {
-            pill.classList.add('moss');
-            pill.innerHTML = '<span class="bnb-dot live"></span> live';
-            pill.title = 'Live audio from the capture device';
-        } else {
-            pill.classList.remove('moss');
-            pill.innerHTML = '<span class="bnb-dot"></span> idle';
-            pill.title = 'No audio captured recently — the signal updates as new audio is recorded';
+        var s = STATES[next] || STATES.idle;
+        if (pill) {
+            pill.classList.toggle('moss', next === 'live');
+            pill.classList.toggle('rare', next === 'nosignal');
+            pill.innerHTML = '<span class="' + s.cls + '"></span> ' + s.label;
+            pill.title = s.title;
         }
+        if (note) note.textContent = s.note;
     }
+    function setLive(isLive) { setState(isLive ? 'live' : 'idle'); }
 
     function dark() {
         return document.documentElement.getAttribute('data-theme') === 'dark';
@@ -307,19 +340,28 @@
         cnv.height = H;
     }
     resize();
-    window.addEventListener('resize', resize);
+    // Assigning `canvas.width` resets the bitmap, so a resize wiped whatever was
+    // drawn and left the card blank until the next idle tick (up to a second).
+    window.addEventListener('resize', function () { resize(); drawIdle(); });
 
     // Honest "no signal" baseline: a flat, static line — NOT an animated
     // waveform that could be mistaken for live audio.
     function drawIdle() {
         ctx.clearRect(0, 0, W, H);
+        // `moveTo(0, H / 2)` with `lineWidth = 1` straddles the pixel boundary
+        // at y = 40, so the stroke was anti-aliased across two rows at half
+        // intensity each: measured max alpha 35/255 on a baseline declared at
+        // 0.28 opacity. On a white card that is invisible, and the "honest flat
+        // line" the card is built around read to the operator as a blank box.
+        // A half-pixel offset lands the stroke inside one device row.
+        var y = Math.round(H / 2) + 0.5;
         ctx.strokeStyle = dark()
-            ? 'oklch(60% 0.02 150 / 0.35)'
-            : 'oklch(55% 0.02 150 / 0.28)';
+            ? 'oklch(68% 0.03 150 / 0.75)'
+            : 'oklch(48% 0.03 150 / 0.60)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(0, H / 2);
-        ctx.lineTo(W, H / 2);
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
         ctx.stroke();
     }
 
@@ -375,8 +417,10 @@
                 if (msg.event === 'spectrogram') drawFrame(msg);
             } catch (_) { /* ignore non-JSON */ }
         };
-        ws.onerror = function () { /* idle baseline keeps drawing */ };
-        ws.onclose = function () { /* could retry; idle baseline is fine */ };
-    } catch (_) { /* no WS support → idle baseline */ }
+        // A stream we cannot reach is not a quiet yard — say so rather than
+        // drawing the same flat line under the word "idle".
+        ws.onerror = function () { setState('nosignal'); drawIdle(); };
+        ws.onclose = function () { setState('nosignal'); drawIdle(); };
+    } catch (_) { setState('nosignal'); drawIdle(); }
 })();
 </script>

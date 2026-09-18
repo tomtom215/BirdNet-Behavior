@@ -203,6 +203,13 @@ struct ClipsData {
     /// same gate the play button effectively has). Loaded once per page like
     /// `locked`, so there is no per-row filesystem stat.
     present: HashSet<String>,
+    /// The clip query itself failed, as opposed to returning no rows.
+    ///
+    /// Every query in `fetch_clips` used to be `unwrap_or_default`-ed, so a
+    /// database error produced `rows: []`, `total: 0` and the empty state —
+    /// which on this page reads *"No saved clips yet"*, i.e. exactly what an
+    /// operator would see if the auto-purge had deleted their recordings.
+    failed: bool,
 }
 
 /// Run the clip query, count, and per-page lookups on the blocking pool.
@@ -216,14 +223,18 @@ async fn fetch_clips(
     let present = recording_basenames(&state.recording_dir());
     tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let rows = birdnet_db::sqlite::recent_clips(
+            let clips = birdnet_db::sqlite::recent_clips(
                 conn,
                 filter,
                 search.as_deref(),
                 CLIP_PAGE,
                 offset,
-            )
-            .unwrap_or_default();
+            );
+            let failed = clips.is_err();
+            if let Err(e) = &clips {
+                tracing::warn!(error = %e, "recordings: recent_clips failed");
+            }
+            let rows = clips.unwrap_or_default();
             let total = birdnet_db::sqlite::recent_clips_count(conn, filter, search.as_deref())
                 .unwrap_or(0);
             let locked = birdnet_db::sqlite::locked_file_names(conn)
@@ -240,6 +251,7 @@ async fn fetch_clips(
                 locked,
                 first_seen,
                 present,
+                failed,
             }
         })
     })
@@ -273,6 +285,9 @@ fn render_clips_block(
     let rows = &data.rows;
     let total = data.total;
     let today = super::today_date_string();
+    if data.failed {
+        return super::error_states::could_not_load("your recordings");
+    }
     if rows.is_empty() {
         // An empty *first* page distinguishes "no clips yet" from "filter has
         // no matches"; a later empty page just means we reached the end.
@@ -680,7 +695,30 @@ mod tests {
             locked: HashSet::new(),
             first_seen,
             present,
+            failed: false,
         }
+    }
+
+    /// A failed clip query must not render as "No saved clips yet".
+    ///
+    /// Observed failing against the pre-fix renderer, where every query in
+    /// `fetch_clips` was `unwrap_or_default`-ed: a database error produced the
+    /// identical `rows: []` / `total: 0` shape as a genuinely empty station, so
+    /// this assertion could not even be written — there was no `failed` flag to
+    /// set. With it hard-coded to `false` (as `data_with` still does for the
+    /// empty-state tests below) this test renders the empty copy and fails on
+    /// the first assertion.
+    #[test]
+    fn a_failed_query_is_not_reported_as_an_empty_shelf() {
+        let mut d = data_with(vec![], 0, HashMap::new(), HashSet::new());
+        d.failed = true;
+        let html = render_clips_block(&d, RecordingsFilter::All, None, 0);
+        assert!(
+            !html.contains("No saved clips yet"),
+            "a database error told the operator their recordings were gone: {html}"
+        );
+        assert!(html.contains("couldn't load"), "{html}");
+        assert!(html.contains(r#"role="alert""#), "{html}");
     }
 
     #[test]

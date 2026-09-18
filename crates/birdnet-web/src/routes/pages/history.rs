@@ -81,11 +81,33 @@ pub(super) async fn content(state: AppState) -> String {
         state.with_read_db(birdnet_db::sqlite::detections_per_day)
     })
     .await;
+    // A failed read is not an empty history. Collapsing both into `Vec::new()`
+    // made `render_history` tell a station with three years of data that it had
+    // never recorded anything — the same file already gets this right for the
+    // calendar partial below ("Failed to load calendar.").
     let days = match days {
         Ok(Ok(d)) => d,
-        _ => Vec::new(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "history: detections_per_day failed");
+            return history_error();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "history: detections_per_day task failed");
+            return history_error();
+        }
     };
     render_history(&days)
+}
+
+/// The hero, then an honest failure card in place of the calendar.
+///
+/// Keeps the page's own heading so the operator still knows where they are.
+fn history_error() -> String {
+    let help_link = super::help::help_link(super::help::Topic::Reports);
+    format!(
+        r#"<div class="rp-hero"><div class="eyebrow">History {help_link}</div><h1>Browse past days</h1></div>{}"#,
+        super::error_states::could_not_load("your detection history"),
+    )
 }
 
 /// Editorial hero + the calendar / day-detail two-column layout.

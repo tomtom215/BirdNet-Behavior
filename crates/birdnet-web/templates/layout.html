@@ -48,7 +48,14 @@
 </head>
 <body>
     <a href="#main-content" class="skip-link">Skip to content</a>
-    <header class="topnav" role="navigation" aria-label="Main navigation">
+    <!-- No `role="navigation"` here. A <header> that is a direct child of
+         <body> is already the page's `banner` landmark; re-roling it as
+         navigation removed the banner entirely AND announced the search form,
+         live pill, health badge, help and theme buttons as if they were part of
+         the site navigation. The inner <nav class="topnav-links"> below is the
+         real navigation landmark. (templates/login.html already did this
+         correctly with role="banner"; the two shells disagreed.) -->
+    <header class="topnav">
         <a href="/" class="topnav-brand" aria-label="BirdNet-Behavior home">
             <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="lay-logo"></circle>

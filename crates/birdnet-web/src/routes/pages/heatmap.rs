@@ -358,7 +358,8 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
 
     let mut svg = format!(
         r#"<div class="hm-scroll">
-<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}"
+     width="{svg_w}" height="{svg_h}" preserveAspectRatio="xMinYMin meet"
      class="hm-svg">
   <!-- Background -->
   <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
@@ -494,7 +495,9 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
     let svg_h = chart_h + label_h + 10;
 
     let mut svg = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"
+        r#"<div class="hm-scroll">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}"
+             width="{svg_w}" height="{svg_h}" preserveAspectRatio="xMinYMin meet"
              class="hm-svg-block">
   <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
 "#
@@ -541,7 +544,7 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
         );
     }
 
-    svg.push_str("</svg>");
+    svg.push_str("</svg></div>");
     svg
 }
 

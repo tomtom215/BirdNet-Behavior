@@ -371,7 +371,7 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   background: var(--surface); color: var(--fg); font-size: 12.5px; width: 150px;
   transition: width .2s ease, border-color .2s ease; font-family: var(--font-ui);
 }
-.nav-search input:focus { width: 210px; outline: none; border-color: var(--moss); }
+.nav-search input:focus { width: 210px; border-color: var(--moss); }
 
 /* ── Layout ───────────────────────────────────────────────────────────── */
 main {
@@ -492,7 +492,19 @@ input[type="text"], input[type="search"], input[type="date"], input[type="number
   padding: 6px 10px; border: 0.5px solid var(--border-2); border-radius: var(--r-sm);
   background: var(--surface); color: var(--fg); font-size: 13px; font-family: var(--font-ui);
 }
-input:focus, select:focus, textarea:focus { outline: none; border-color: var(--moss); box-shadow: 0 0 0 2px color-mix(in oklch, var(--moss) 25%, transparent); }
+/* Focus. `outline: none` used to live here, at (0,1,1) — higher than the
+   `:focus-visible` rule further down at (0,1,0) — so the 2px indicator that
+   rule declares had never once applied to an input, select or textarea. What
+   replaced it was a 25%-alpha ring measuring 1.41:1 against `--surface` in
+   light and 1.70:1 in dark, well under the 3:1 that WCAG 2.1 SC 1.4.11 asks of
+   a focus indicator.
+   The outline is now left alone so `:focus-visible` does its job, and the ring
+   is kept as a mouse-focus affordance only. The two-stop shadow gives the
+   indicator a `--surface` gap so it stays visible on the tinted cards. */
+input:focus, select:focus, textarea:focus { border-color: var(--moss); box-shadow: 0 0 0 2px color-mix(in oklch, var(--moss) 25%, transparent); }
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--moss);
+}
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
 .badge-success { background: var(--moss-soft); color: var(--moss-ink); }
@@ -504,6 +516,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--m
 
 .empty-state { text-align: center; padding: 48px 24px; color: var(--fg-3); }
 .empty-state svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: .5; }
+/* Failure, not emptiness (see routes/pages/error_states.rs). Reuses the
+   empty-state shell so the two never disagree on spacing, and re-tones it into
+   the --rare family so an operator can tell at a glance which of the two they
+   are looking at. The illustration is not dimmed the way an empty state's is:
+   this one is meant to be noticed. */
+.error-state { color: var(--fg-2); }
+.error-state svg { opacity: 1; }
+.error-state .es-h { color: var(--rare); }
 
 /* Inline data-bar + linkable species name + tag (co-occurrence, companions) */
 .bar { height: 8px; background: var(--moss); border-radius: 4px; min-width: 4px; }
@@ -813,7 +833,12 @@ footer a:hover { color: var(--moss-ink); }
   color: oklch(20% 0.04 60);
   border-color: transparent;
 }
-.bnb-btn.dawn:hover { background: var(--dawn-ink); color: oklch(100% 0 0); }
+/* `color` here was a literal white, which is right in light (`--dawn-ink` is a
+   dark brown, 8.4:1) and unreadable in dark, where `--dawn-ink` is a bright
+   yellow: white on it measures 1.52:1, so the button's label vanished on
+   hover. `--on-fill` is the token that already solves this — white in light,
+   near-black in dark — and gives 10.1:1 on the dark hover fill. */
+.bnb-btn.dawn:hover { background: var(--dawn-ink); color: var(--on-fill); }
 /* Append to crates/birdnet-web/static/css/app.css — purely additive.
    Toast / snackbar region (O-18). */
 
@@ -1826,11 +1851,22 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 }
 .bnb-cmdk__icon { color: var(--fg-3); font-size: 18px; line-height: 1; }
 .bnb-cmdk__inputwrap input {
-  border: 0; background: transparent; outline: 0;
+  border: 0; background: transparent;
   font: inherit; font-size: 15px; color: var(--fg);
   padding: 6px 0;
 }
+/* The borderless input carried `outline: 0` and `box-shadow: none`, which
+   between them left the command palette — the app's one keyboard-first
+   surface — with no focus indicator whatsoever (measured 1.00:1: nothing was
+   painted). The ring now rides the wrapper, so the indicator is visible
+   without putting a box around a control that is meant to read as part of the
+   dialog chrome. */
 .bnb-cmdk__inputwrap input:focus { box-shadow: none; }
+.bnb-cmdk__inputwrap:focus-within {
+  outline: 2px solid var(--moss);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
 .bnb-cmdk__chip {
   font-size: 10.5px;
   padding: 3px 7px;
@@ -3185,9 +3221,18 @@ a.spp-inherit    { color: inherit; }
 .hm-lede      { margin-top: 4px; }
 .hm-empty     { color: var(--fg-4); text-align: center; padding: 2rem; }
 .hm-hourly-note { margin: 2px 0 12px; font-size: 12.5px; }
-.hm-scroll    { overflow-x: auto; }
-.hm-svg       { font-family: system-ui, sans-serif; }
-.hm-svg-block { font-family: system-ui, sans-serif; display: block; }
+.hm-scroll    { overflow-x: auto; overscroll-behavior-x: contain; }
+/* Both charts carry a `viewBox`, so `width: 100%` scales the coordinate system
+   instead of cropping it. Without the viewBox the attribute width (824 / 616)
+   met `.bnb-card svg { max-width: 100% }` and the SVG was *clipped*, not
+   scaled: measured at a 390px viewport, the hour-23 label of the bar chart sat
+   285px beyond the SVG's right edge and `.hm-scroll` never scrolled, because
+   the element it wraps had already been forced to fit.
+   `min-width` beats `max-width` in CSS, so the floor below is what keeps the
+   axis labels legible; `.hm-scroll` then does the job it was written for. */
+.hm-svg, .hm-svg-block { font-family: system-ui, sans-serif; width: 100%; height: auto; }
+.hm-svg       { min-width: 560px; }
+.hm-svg-block { min-width: 420px; display: block; }
 
 /* ── Notification center (/notifications) — legacy tokens preserved. ──────── */
 .nc-eyebrow   { display: flex; align-items: center; gap: 10px; }
@@ -3799,13 +3844,6 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
   scroll-snap-type: x proximity;
 }
 .bnb-subtab { scroll-snap-align: start; }
-@media (max-width: 720px) {
-  /* On a phone the fade is doing real work, so make it unmistakable and keep
-     the tap targets at a comfortable size (WCAG 2.5.5 asks 44px; the desktop
-     padding gives ~38). */
-  .bnb-subtabs { padding-right: 36px; }
-  .bnb-subtab { padding-top: 12px; padding-bottom: 14px; }
-}
 .bnb-subtab {
   border: 0; background: transparent;
   padding: 9px 15px 11px;
@@ -3814,6 +3852,19 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
   font-family: var(--font-ui); text-align: left;
   color: var(--fg-3); flex: none;
   text-decoration: none;
+}
+/* On a phone the fade is doing real work, so make it unmistakable, and give
+   the tap targets more room.
+   This block used to sit *above* the base rule. A media query does not raise
+   specificity, so the unconditional `padding: 9px 15px 11px` shorthand below it
+   won at equal specificity and reset both longhands: measured at 390px, the
+   computed padding was 9px/11px, not the 12px/14px written here. Order is the
+   whole fix. (The original comment claimed the targets were ~38px without it;
+   they measure 59px, because each tab stacks a label over a sub-label — the
+   dead override was the defect, not a WCAG failure.) */
+@media (max-width: 720px) {
+  .bnb-subtabs { padding-right: 36px; }
+  .bnb-subtab { padding-top: 12px; padding-bottom: 14px; }
 }
 .bnb-subtab .l { font-size: 13.5px; font-weight: 500; display: block; }
 .bnb-subtab .q { font-size: 10.5px; color: var(--fg-4); display: block; margin-top: 1px; }
@@ -3910,6 +3961,11 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 
 /* Unified log: expander + two-column work area */
 .x-expander { display: flex; justify-content: center; padding-top: 14px; margin-top: 8px; border-top: 0.5px solid var(--hairline); }
+.x-expander-label { text-align: center; }
+/* The live-signal card's state caption. Sits between the canvas and the
+   input/rate footer; it is the accessible half of the live / idle / no-signal
+   distinction (the pill carries the same three states visually). */
+.db-signal-note { margin: 6px 0 0; line-height: 1.35; }
 .work2 { display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(300px, 1fr); gap: 20px; align-items: start; }
 .work2 .rail { display: flex; flex-direction: column; gap: 20px; }
 @media (max-width: 860px) { .work2 { grid-template-columns: 1fr; } }
@@ -3933,6 +3989,19 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 #detections-table .feed-row .who .name { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: nowrap; }
 #detections-table .feed-row .who .name > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #detections-table .feed-row .who .name .dp-badge { flex: none; }
+
+/* Phone: the six-track desktop grid above is (1,1,0) and therefore beats the
+   `@media (max-width: 720px) .feed-row` rule at the top of this sheet, which is
+   (0,1,0) — a media query does not raise specificity. The waveform and
+   confidence bar *are* hidden on a phone, but their 88px + 86px tracks are not,
+   so `minmax(0,1fr)` collapsed the species-name column to exactly 0px: every
+   row in the Today live feed rendered as time + banding-code + play button with
+   ~200px of dead air and no name at all. Measured at 390px before this rule:
+   `grid-template-columns: 50px 32px 0px 88px 86px 30px`.
+   Same specificity, later in the file, so this one wins. */
+@media (max-width: 720px) {
+  #detections-table .feed-row { grid-template-columns: 46px 30px minmax(0,1fr) 30px; gap: 9px; }
+}
 /* Fixed-size play affordance replacing native <audio> (native controls render
    at different widths per row → they never aligned) */
 .x-fplay { width: 30px; height: 30px; border-radius: 999px; border: 0.5px solid var(--border-2); background: var(--surface); color: var(--fg-2); font-size: 10px; cursor: pointer; display: grid; place-items: center; flex: none; }
@@ -4277,7 +4346,12 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
    is the page furniture and the results are the content. Tokens only — no
    literal colours — so both themes come out of the same rules. */
 .sr-head        { margin-bottom: 1.25rem; }
-.sr-h1          { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.35rem; }
+/* Renamed from `.sr-h1`. The rare-bird share permalink (`share_rare.html`)
+   defines its own `.sr-h1` at 64px earlier in this sheet; equal specificity,
+   later wins, so this 24px rule was silently shrinking the hero headline of the
+   one page in the product that strangers see. The two `sr-` families are
+   unrelated — share vs. search — and `sr-h1` was their only collision. */
+.sr-title       { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.35rem; }
 .sr-lede        { color: var(--text-muted); font-size: 0.9rem; max-width: 60ch; margin: 0; }
 
 .sr-form        { display: flex; flex-direction: column; gap: 0.75rem;
