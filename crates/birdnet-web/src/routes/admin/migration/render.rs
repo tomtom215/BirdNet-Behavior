@@ -55,7 +55,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
     .info-text {{ color:var(--fg-3); }}
     .check-ok {{ color:var(--moss); }}
     .check-err {{ color:var(--rare); }}
-    .check-warn {{ color:var(--dawn); }}
+    .check-warn {{ color:var(--warning); }}
     .check-list {{ list-style:none; padding:0; margin:0.75rem 0; }}
     .check-item {{ margin-bottom:0.4rem; }}
     .result-card.ok {{ border-color:var(--moss); }}
@@ -64,7 +64,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
     .result-title {{ font-weight:600; margin-bottom:0.75rem; }}
     .result-title.sm {{ margin-bottom:0.5rem; }}
     .result-title.ok {{ color:var(--moss); }}
-    .result-title.warn {{ color:var(--dawn); }}
+    .result-title.warn {{ color:var(--warning); }}
     .result-title.err {{ color:var(--rare); }}
     .more-note {{ color:var(--fg-4); font-size:.8rem; margin-top:.5rem; }}
     .preview-details {{ margin:1rem 0; }}
@@ -85,7 +85,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
     .bar-msg {{ margin-bottom:0.5rem; }}
     .bar-msg.ok {{ color:var(--moss); }}
     .bar-msg.err {{ color:var(--rare); }}
-    .bar-msg.warn {{ color:var(--dawn); }}
+    .bar-msg.warn {{ color:var(--warning); }}
     .bar-msg.run {{ color:var(--moss-ink); }}
     .bar-note {{ color:var(--fg-4); font-size:0.8rem; margin-top:0.25rem; }}
   </style>
