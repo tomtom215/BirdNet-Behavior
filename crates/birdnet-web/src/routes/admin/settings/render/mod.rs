@@ -188,7 +188,10 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
          inside a paragraph that is distinguishable from the surrounding
          text by colour alone, which is WCAG 1.4.1 — a reader who cannot
          separate the two hues sees no link at all. */
-      .hint a { color: var(--moss-ink); text-decoration: underline; text-underline-offset: 2px; }
+      /* The underline moved to the Prose links block in app.css: scoped here
+         it applied on /admin/settings and not on the Station tabs that render
+         the same `.hint` markup through the main shell. */
+      .hint a { color: var(--moss-ink); }
       .hint.flush { margin: -6px 0 8px; }
       .mt-sm { margin-top: 0.5rem; }
       .mt-md { margin-top: 1rem; }

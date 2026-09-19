@@ -157,12 +157,14 @@ users**, with deep analytics underneath for enthusiasts.
    four WCAG tags, so 36 of axe's rules never executed, and ran at one desktop
    viewport, so the phone layout was never graded. Both are fixed and both
    tiers are blocking; the work that surfaced is in the commit log. What
-   remains for a **design** decision rather than an implementation one:
-   `link-in-text-block` is still deferred and needs an app-wide prose-link
-   underline policy (~36 in-text link sites; `admin/settings/render/mod.rs`
-   already solves it locally for `.hint a` and cites the rule by name), and
-   the `--dawn` status dot measures 2.85:1 on `--bg` in light, which needs
-   either a token nudge or a different affordance.
+   remains for a **design** decision rather than an implementation one: the
+   `--dawn` status dot measures 2.85:1 on `--bg` in light, short of the 3:1
+   WCAG 1.4.11 asks of a meaningful graphic, and clearing it means either
+   nudging the token (which moves every amber surface) or giving the dot a
+   second cue. `link-in-text-block` — the one rule this gate deferred — is
+   now enforced: it was estimated at ~36 in-text link sites and measured at
+   **five**, because everywhere else a link sits alone in its own box. Nothing
+   is excluded from the gate any more.
 
 ## What I want from you, per screen (deliverables)
 

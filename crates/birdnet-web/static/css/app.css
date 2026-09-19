@@ -228,6 +228,39 @@ body {
 }
 a { color: var(--moss-ink); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* ── Prose links ──────────────────────────────────────────────────────────
+   A link sitting inside a block of text must be distinguishable from that
+   text by something other than hue (WCAG 1.4.1), and the global
+   `a { text-decoration: none }` above leaves hue as the only difference. The
+   `link-in-text-block` axe rule was deferred for years on the assumption this
+   needed an app-wide underline policy; measured, it fires on **five** sites,
+   because everywhere else — nav, tabs, cards, feed rows, chips, buttons,
+   footer — a link is alone in its own box and the rule never applies.
+
+   One of the five is the reason this is in app.css rather than beside the
+   markup: `.hint a` was already solved, correctly and with a comment citing
+   the rule by name, in a `<style>` block scoped to `/admin/settings`. The same
+   `.hint` markup rendered on `/station/data` through the main shell got
+   nothing, so identical HTML was compliant on one route and not on another.
+
+   Additive: every one of these containers is prose. Rows that merely reuse
+   `.bnb-meta` for layout set `text-decoration: none` at higher specificity and
+   are unaffected — checked by re-rendering, not by reasoning. */
+.hint a,
+.bnb-lede a,
+.es-sub a,
+.doc-note a,
+.login-about,
+.q-link,
+.st-doctor-link a,
+.bkr-note-mt a,
+.qz-lede a,
+a.dr-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: from-font;
+}
 h1, h2, h3, h4 { margin: 0; font-weight: 500; letter-spacing: -0.015em; }
 p { margin: 0; }
 button { font: inherit; color: inherit; }
@@ -2875,7 +2908,7 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .qz-title-row  { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 0.25rem; }
 .qz-h1         { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .qz-lede       { color: var(--text-muted); font-size: 0.9rem; }
-.qz-lede a     { color: var(--fg); text-decoration: underline; }
+.qz-lede a     { color: var(--fg); }  /* underline: see "Prose links" */
 .qz-loading    { color: var(--text-muted); }
 .qz-stats-flush { margin-bottom: 0; }
 .qz-stat.warn    { color: var(--warning); }
@@ -3413,7 +3446,7 @@ a.dp-recent-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
 .dr-head       { margin-bottom: 1.25rem; }
 .dr-h1         { font-size: 32px; margin: 0.1rem 0 0.35rem; }
 .dr-lede       { color: var(--fg-2); max-width: 60ch; margin: 0; }
-a.dr-link      { color: var(--fg); text-decoration: underline; }
+a.dr-link      { color: var(--fg); }  /* underline: see "Prose links" */
 .dr-loading    { color: var(--fg-3); padding: 2rem; text-align: center; }
 .dr-error      { color: var(--danger); }
 .dr-counts     { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }

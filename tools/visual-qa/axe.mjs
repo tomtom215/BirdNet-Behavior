@@ -12,7 +12,7 @@
 //   BASE         base url                       (default http://127.0.0.1:8502)
 //   THEMES       csv of light,dark              (default light,dark)
 //   AXE_FAIL_ON  csv impact levels that fail    (default serious,critical)
-//   AXE_DISABLE  csv rules to skip              (default link-in-text-block)
+//   AXE_DISABLE  csv rules to skip              (default: none)
 //   AXE_ADVISORY_BLOCKS  "0" demotes the WCAG 2.2 / best-practice tier
 //   VPS          csv of desktop,mobile          (default desktop,mobile)
 //   ONLY         substring filter on route name
@@ -36,16 +36,21 @@ const FAIL_ON = new Set(
 );
 const ONLY = process.env.ONLY || '';
 
-// One WCAG rule is deferred to a design pass and excluded from this gate:
-//   - link-in-text-block: distinguishing in-text links without relying on
-//     colour is an app-wide link-underline policy.
+// Nothing is deferred any more. `link-in-text-block` was the last one, excluded
+// on the stated grounds that distinguishing in-text links without relying on
+// colour needed an app-wide underline policy. Measured rather than estimated,
+// it fired on **five** sites — everywhere else in the product a link is alone
+// in its own box (nav, tabs, cards, feed rows, chips, buttons, footer) and the
+// rule does not apply. One of the five was already solved correctly in a
+// `<style>` block scoped to `/admin/settings`, so the same `.hint` markup was
+// compliant there and not on the Station tab rendering it. app.css now carries
+// one additive "Prose links" rule; every leg is clean with the rule on.
+//
 // color-contrast is enforced (DD-29): the species avatar mixes its identity
 // hue towards an ink token, the muted text tokens sit at AA on every tinted
 // surface, and the bright fills carry --on-fill. It is all-or-nothing — any
 // low-contrast node keeps the gate red — which is the point.
-// Everything else at serious/critical is enforced. Re-check the full picture
-// with AXE_DISABLE="".
-const DISABLED_RULES = (process.env.AXE_DISABLE ?? 'link-in-text-block')
+const DISABLED_RULES = (process.env.AXE_DISABLE ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
