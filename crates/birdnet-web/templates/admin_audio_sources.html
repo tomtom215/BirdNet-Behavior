@@ -25,7 +25,7 @@
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Local microphones</div>
-        <h2 class="sh-h">USB · ALSA · PipeWire</h2>
+        <h2 class="sh-h">Microphones plugged into this station</h2>
       </div>
       <div class="aas-count">
         <span class="bnb-meta mono" id="aas-count-local">{{count_local}}</span>
@@ -44,7 +44,7 @@
       <summary>
         <span class="bnb-add-form__plus" aria-hidden="true">+</span>
         <span>Add a microphone</span>
-        <span class="bnb-add-form__hint mono">USB · ALSA · PipeWire</span>
+        <span class="bnb-add-form__hint">USB or PipeWire</span>
       </summary>
       <div class="bnb-add-form__body">
         <form hx-post="/admin/audio/sources"
@@ -56,9 +56,9 @@
           <h4>Source type</h4>
           <div class="bnb-type-picker" role="radiogroup" aria-label="Source type">
             <input id="lt-usb" name="kind" type="radio" value="usb-alsa" checked>
-            <label for="lt-usb" data-kind="usb"><span class="bnb-type-dot"></span> USB · ALSA</label>
+            <label for="lt-usb" data-kind="usb"><span class="bnb-type-dot"></span> USB microphone</label>
             <input id="lt-pipe" name="kind" type="radio" value="pipewire">
-            <label for="lt-pipe" data-kind="pipe"><span class="bnb-type-dot"></span> PipeWire</label>
+            <label for="lt-pipe" data-kind="pipe"><span class="bnb-type-dot"></span> PipeWire microphone</label>
           </div>
 
           <h4 class="aas-h4-mt">Connection</h4>

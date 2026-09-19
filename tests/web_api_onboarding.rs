@@ -247,9 +247,17 @@ async fn microphone_step_shows_the_stations_real_source() {
         html.contains("plughw:CARD=PRO,DEV=0"),
         "the real device id must appear"
     );
+    // "USB microphone", not "USB · ALSA": `kind_label` now names the object on
+    // the windowsill rather than the transport it speaks. The assertion's point
+    // is unchanged and is the reason it caught this — onboarding and the
+    // Capture tab must agree, and they are rendered by different code.
     assert!(
-        html.contains("USB · ALSA"),
+        html.contains("USB microphone"),
         "the kind badge must use the same words as the Capture tab"
+    );
+    assert!(
+        !html.contains("USB · ALSA"),
+        "the transport-only label must be gone from onboarding too"
     );
     assert!(
         html.contains("48.0 kHz"),
