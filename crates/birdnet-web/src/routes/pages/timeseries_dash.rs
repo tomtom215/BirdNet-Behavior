@@ -436,15 +436,12 @@ fn render_peak_table(rows: &[birdnet_timeseries::types::results::PeakWindowRow])
 // ---------------------------------------------------------------------------
 
 fn ts_unavailable(endpoint: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
-    let msg = if cfg!(feature = "analytics") {
-        format!(
-            r#"<p class="tsd-muted">{endpoint}: start with <code>--analytics-db</code> to enable.</p>"#
-        )
-    } else {
-        format!(
-            r#"<p class="tsd-muted">{endpoint}: rebuild with <code>--features analytics</code>.</p>"#
-        )
-    };
+    // These render into cards on the Patterns page. The JSON siblings in
+    // `routes::timeseries::helpers` keep their flags — an API consumer is
+    // exactly who can act on them — but nobody reading a chart is.
+    let msg = format!(
+        r#"<p class="tsd-muted">{endpoint} isn't available on this station — the extra analytics aren't switched on. Everything else keeps recording as normal.</p>"#
+    );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], msg)
 }
 

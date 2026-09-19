@@ -229,15 +229,22 @@ pub async fn save_settings(
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
                 </svg>
                 Settings saved ({saved} values updated).
-                <span class="save-note dim">Changes apply on next restart.</span>
+                <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
             </div>"#
             ));
             // O-18: toast the success outcome via OOB, with a follow-up action
             // — settings only take effect on next restart, so surface the link.
             Ok(toast::with(
                 body,
-                Toast::success(format!("Settings saved ({saved} values updated)."))
-                    .with_action("/admin/system", "Open system →"),
+                // The action used to read "Open system", which says where to
+                // go and not why. Three places told the reader about the
+                // restart in three different ways — "Most settings require a
+                // restart", "Changes apply on next restart", and, in the most
+                // prominent of the three, nothing at all.
+                Toast::success(format!(
+                    "Settings saved ({saved} values updated). Restart to apply them."
+                ))
+                .with_action("/admin/system", "Restart →"),
             ))
         }
         Err(e) => {

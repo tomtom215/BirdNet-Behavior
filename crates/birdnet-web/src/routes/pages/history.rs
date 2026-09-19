@@ -151,7 +151,12 @@ async fn history_calendar_partial(
     })
     .await;
     let Ok(Ok(days)) = result else {
-        return axum::response::Html("<p class='error'>Failed to load calendar.</p>".to_string());
+        // These four partials all answer 200, so the layout's
+        // `htmx:responseError` fallback never runs and whatever is written
+        // here is the reader's last word. `content()` in this same file
+        // already routes its failure through the shared error state; these
+        // did not, and said only that something had failed.
+        return axum::response::Html(super::error_states::inline("this month's calendar"));
     };
     let sel = params.sel.as_deref().filter(|s| s.len() == 10);
     axum::response::Html(render_calendar(&days, params.month.as_deref(), sel))
@@ -332,7 +337,7 @@ async fn history_chart_partial(
 
     let html = match result {
         Ok(Ok((hours, total, species))) => render_chart_content(&date2, total, &species, &hours),
-        _ => "<p class='error'>Failed to load chart data.</p>".to_string(),
+        _ => super::error_states::inline("this day's hourly chart"),
     };
 
     axum::response::Html(html)
@@ -368,9 +373,10 @@ async fn day_page(
         Ok(Ok((hours, total, species, rows))) => {
             render_day_page(&date2, total, &species, &hours, &rows)
         }
-        _ => r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
-<div class="bnb-card pad"><p class="error">Failed to load this day.</p></div>"#
-            .to_string(),
+        _ => format!(
+            r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>{}"#,
+            super::error_states::could_not_load("this day")
+        ),
     };
     let title = format!("History · {date2}");
     super::render_page_for_request(&title, &content, "reports", &headers)
@@ -385,7 +391,7 @@ async fn history_dates_partial(State(state): State<AppState>) -> impl IntoRespon
 
     let html = match result {
         Ok(Ok(dates)) => render_date_list(&dates),
-        _ => "<p class='error'>Failed to load dates.</p>".to_string(),
+        _ => super::error_states::inline("the list of days"),
     };
 
     axum::response::Html(html)

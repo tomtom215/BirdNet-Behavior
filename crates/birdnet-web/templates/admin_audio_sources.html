@@ -68,10 +68,15 @@
               <input id="lt-id" class="mono" name="device_id" type="text"
                      placeholder="plughw:1,0" required>
               <span class="bnb-meta" data-hint-for="usb-alsa">
-                ALSA: run <code class="mono">arecord -l</code> to list devices.
+                The address your microphone answers to. Most USB microphones are
+                <code class="mono">plughw:1,0</code>. If that does not work, whoever
+                set the station up can list the devices with
+                <code class="mono">arecord -l</code>.
               </span>
               <span class="bnb-meta" data-hint-for="pipewire" hidden>
-                PipeWire: run <code class="mono">pw-cli list-objects | grep node.name</code>.
+                The name your microphone answers to. Whoever set the station up can
+                list the names with
+                <code class="mono">pw-cli list-objects | grep node.name</code>.
               </span>
             </div>
             <div class="bnb-field">

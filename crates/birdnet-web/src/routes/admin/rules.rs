@@ -624,16 +624,30 @@ async fn create_rule(
     ))
 }
 
+/// A failure here answers 200 with a toast rather than a 5xx.
+///
+/// htmx 2.0.4 ships `{code:"[45]..", swap:false, error:true}`, so a 5xx body is
+/// discarded, and `layout.html`'s `htmx:responseError` fallback is gated on
+/// `cfg.verb === 'get'`. Between them, a delete that failed removed nothing,
+/// said nothing, and left the operator looking at a row that is still there
+/// with no way to tell whether the click registered. The success path already
+/// speaks through a toast; the failure path now uses the same channel.
 async fn delete_rule_handler(
     State(state): State<AppState>,
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
     let audit_state = state.clone();
-    tokio::task::spawn_blocking(move || state.with_db(|conn| delete_rule(conn, id)))
+    let deleted = tokio::task::spawn_blocking(move || state.with_db(|conn| delete_rule(conn, id)))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()));
+    if let Err(e) = deleted {
+        tracing::error!(error = %e, rule = id, "delete_rule failed");
+        return Ok(toast::oob_only(Toast::error(
+            "That rule could not be deleted — nothing was changed.",
+        )));
+    }
     crate::audit::audit(
         &audit_state,
         Some(&request_user),
@@ -653,11 +667,20 @@ async fn toggle_rule_handler(
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
     let audit_state = state.clone();
-    let new_state =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| toggle_rule(conn, id)))
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Same reasoning as `delete_rule_handler`: a 5xx here is invisible.
+    let toggled = tokio::task::spawn_blocking(move || state.with_db(|conn| toggle_rule(conn, id)))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r.map_err(|e| e.to_string()));
+    let new_state = match toggled {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, rule = id, "toggle_rule failed");
+            return Ok(toast::oob_only(Toast::error(
+                "That rule could not be changed — it is still as it was.",
+            )));
+        }
+    };
 
     let enabled = new_state.unwrap_or(false);
     // The new state is the content: a rule silently disabled in October

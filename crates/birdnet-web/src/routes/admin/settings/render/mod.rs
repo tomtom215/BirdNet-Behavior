@@ -41,7 +41,7 @@ pub(crate) const SECTIONS: [(&str, &str); 8] = [
     ("species", "Species Filters"),
     ("system", "System &amp; Display"),
     ("auth", "Web Authentication"),
-    ("email", "Email Alerts (SMTP)"),
+    ("email", "Email Alerts"),
 ];
 
 /// The sticky "On this page" jump list.
@@ -248,7 +248,7 @@ pub(crate) fn render_section_form(
         r#"<div class="save-row">
     <button type="submit" class="btn btn-primary">Save settings</button>
     <span id="save-spinner" class="htmx-indicator save-note">Saving…</span>
-    <span class="save-note dim">Most settings require a restart to take effect.</span>
+    <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
   </div>
 </form>"#,
     );
@@ -276,7 +276,7 @@ pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String
       Saving…
     </span>
     <span class="save-note dim">
-      Most settings require a restart to take effect.
+      Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.
     </span>
   </div>
 </form>"#,

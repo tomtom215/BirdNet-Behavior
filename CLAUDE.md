@@ -190,6 +190,39 @@ Corollaries, each learned the same way:
   turned a mistyped notification threshold into a silent rollback of every
   other setting, so the form bounds those two itself and a test holds the two
   copies of the shared five equal.
+- **`.unwrap_or_default()` inside the closure defeats the `Err` arm outside
+  it.** Year-in-Review and Station Health each ran six queries, defaulted every
+  one *inside* `state.with_db(...)`, and returned a plain tuple — so the `else`
+  branch that looked like error handling could only ever fire on a task panic.
+  A dropped `detections` table rendered "0 detections across 1 species" as an
+  ordinary page. Where a surface's whole content is a claim about the reader's
+  data, propagate with `?` and let the caller decide; default only what is
+  decoration.
+- **htmx never swaps a 4xx/5xx body, so a 500 from a POST is invisible.**
+  `static/htmx.min.js` ships `{code:"[45]..", swap:false, error:true}`, and
+  `layout.html`'s `htmx:responseError` fallback is gated on
+  `cfg.verb === 'get'`. A failed `hx-post` therefore changes nothing on the
+  page — no error, no success, no way to tell the click registered. Answer 200
+  and carry the failure in a toast. Several handlers already did this for
+  success and used the discarded 500 for failure.
+- **Do not trade a raw error for a reassurance you cannot support.**
+  "Internal error: No space left on device (os error 28)" is bad, and
+  "nothing was changed" in its place is worse if it is not true:
+  `restore_archive_into` documents that a failure inside step 5 leaves some
+  members already placed, and the caller holds only a `String`. Say what is
+  certainly true, keep the detail where it is the only thing the reader has,
+  and put the rest in the log.
+- **A gate that reads one line will be defeated by where the line wraps.**
+  Three drafts of the command-line check missed the text it was written for: a
+  `class=` on the previous line, a phrase split between "whoever" and "set the
+  station up", and a Rust string continuation backslash landing mid-phrase.
+  Join the window and strip continuations before matching — and prefer a named
+  exemption list to a heuristic for deciding what a file is.
+- **Write the counterpart that asserts the fixture actually did something.**
+  A test driving three endpoints skipped two of them silently, because its
+  `INSERT` used column names that did not exist and it degraded to `continue`.
+  One `assert!(precondition)` turned a vacuous pass into a red line naming the
+  real schema.
 - **A filter that skips unchanged fields skips the broken station.**
   `build_settings_items` drops any field whose submitted value equals the
   stored one, so a check driven by its output waves through a bad value that

@@ -86,7 +86,10 @@ async fn weekly_partial(
             &daily,
             is_current,
         ),
-        _ => "<p class='error'>Failed to load weekly report.</p>".to_string(),
+        // 200 either way, so this string is the reader's last word — it has
+        // to carry the same "this is a fault, not an empty week" framing and
+        // the same link as every other failed surface.
+        _ => super::error_states::inline("this week's report"),
     };
 
     axum::response::Html(html)

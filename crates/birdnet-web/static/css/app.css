@@ -256,6 +256,11 @@ a:hover { text-decoration: underline; }
 .st-doctor-link a,
 .bkr-note-mt a,
 .qz-lede a,
+/* The settings page's Save footer, which now carries a Restart link inside a
+   sentence. Added because the gate caught it: the note was prose the moment it
+   stopped being a bare statement, and the list above is per-container rather
+   than app-wide, so a new prose container has to join it. */
+.save-note a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;

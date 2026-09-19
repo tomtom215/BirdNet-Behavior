@@ -58,17 +58,36 @@ pub(super) async fn check_update() -> axum::response::Response {
                     };
                     Html(html).into_response()
                 }
+                // A raw `reqwest::Error` or a serde message is the wrong
+                // answer to "is there a new version?" — especially on a Pi in
+                // a garden, where no internet is the ordinary case rather than
+                // a fault. The detail goes to the log.
                 Err(e) => {
-                    Html(format!(r#"<p class="ctl-err">Parse error: {e}</p>"#)).into_response()
+                    tracing::warn!(error = %e, "update check: could not read the release list");
+                    Html(
+                        r#"<p class="ctl-err">The update service answered something this station could not read. Nothing was changed; try again later.</p>"#
+                            .to_string(),
+                    )
+                    .into_response()
                 }
             }
         }
-        Ok(r) => Html(format!(
-            r#"<p class="ctl-err">GitHub API returned {}</p>"#,
-            r.status()
-        ))
-        .into_response(),
-        Err(e) => Html(format!(r#"<p class="ctl-err">Network error: {e}</p>"#)).into_response(),
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), "update check: unexpected status");
+            Html(
+                r#"<p class="ctl-err">The update service is not answering right now. Nothing was changed; try again later.</p>"#
+                    .to_string(),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "update check: request failed");
+            Html(
+                r#"<p class="ctl-err">This station could not reach the internet to check for updates. That is not a problem with your station — it will keep recording either way.</p>"#
+                    .to_string(),
+            )
+            .into_response()
+        }
     }
 }
 

@@ -322,9 +322,15 @@ async fn analytics_status_partial(
         "DuckDB analytics database connected. Behavioral insights (sessions, retention, \
          next-species) additionally require the duckdb-behavioral extension — see the cards below."
     } else if compiled {
-        "Start with <code>--analytics-db</code> to enable."
+        // This tile sits on the health page, which is read by the person who
+        // owns the station rather than the one who compiles it. A start-up
+        // flag and a build flag are not things they can act on, and naming
+        // them reads as a fault they have caused.
+        "The extra behaviour insights are available but not switched on. \
+         Everything else keeps recording as normal."
     } else {
-        "Rebuild with <code>--features analytics</code> to enable."
+        "This build does not include the extra behaviour insights. Everything \
+         else keeps recording as normal."
     };
 
     let html = format!(

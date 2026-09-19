@@ -30,18 +30,22 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <p class="hint flush"><a href="/recordings?view=live">▸ Listen live &amp; test your microphone →</a> — confirm the mic is picking up sound before tuning thresholds.</p>
     <div class="grid-2">
       <div>
-        <label for="alsa_device">ALSA Device</label>
+        <label for="alsa_device">Microphone address</label>
         <input id="alsa_device" name="alsa_device" value="{alsa}" placeholder="e.g. plughw:1,0">
-        <p class="hint">Leave blank to disable managed microphone capture. PulseAudio/PipeWire users: use "default" or leave blank and set ALSA_CARD env var.</p>
+        <p class="hint">Most stations set microphones up on
+        <a href="/admin/audio">Audio &amp; Microphones</a> instead and leave this
+        blank. Blank means this station manages no microphone of its own.</p>
       </div>
       <div>
-        <label for="rtsp_url">RTSP URL (single stream)</label>
+        <label for="rtsp_url">Network camera address</label>
         <input id="rtsp_url" name="rtsp_url" value="{rtsp}" placeholder="rtsp://camera.local:554/stream">
-        <p class="hint">IP camera audio stream (requires ffmpeg)</p>
+        <p class="hint">The audio stream from a network camera, which its own
+        app or manual will call an RTSP address. Needs the <code>ffmpeg</code>
+        program installed on the station.</p>
       </div>
     </div>
     <div>
-      <label for="rtsp_urls">Multiple RTSP URLs (comma-separated)</label>
+      <label for="rtsp_urls">Several network cameras (separated by commas)</label>
       <input id="rtsp_urls" name="rtsp_urls" value="{rtsp_urls}" placeholder="rtsp://cam1:554/stream,rtsp://cam2:554/stream">
       <p class="hint">Each URL becomes an independent capture pipeline (RTSP_1-, RTSP_2- prefixed filenames). Overrides single RTSP URL above when set.</p>
     </div>
@@ -71,18 +75,21 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Format for saved detection audio clips (BirdNET-Pi: AUDIOFMT)</p>
       </div>
       <div>
-        <label for="clip_target_lufs">Normalise Clip Loudness</label>
+        <label for="clip_target_lufs">Even out clip volume</label>
         <select id="clip_target_lufs" name="clip_target_lufs" class="bnb-w-select">
-          <option value=""{lufs_off}>Off — write clips at capture level</option>
-          <option value="-14"{lufs_14}>−14 LUFS (loud; streaming)</option>
-          <option value="-18"{lufs_18}>−18 LUFS (recommended)</option>
-          <option value="-23"{lufs_23}>−23 LUFS (EBU R128 broadcast)</option>
+          <option value=""{lufs_off}>Off — save clips exactly as recorded</option>
+          <option value="-14"{lufs_14}>Loud — like a podcast (−14 LUFS)</option>
+          <option value="-18"{lufs_18}>Even — recommended (−18 LUFS)</option>
+          <option value="-23"{lufs_23}>Quiet — broadcast standard (−23 LUFS)</option>
         </select>
-        <p class="hint">Measures each saved clip (ITU-R BS.1770) and applies one gain, so a
-        gallery of clips plays at an even level instead of sending you to the volume control
-        between every one. Applied to the <b>saved clip only</b> — never to the audio the
-        classifier hears, so it cannot move a confidence score. A clip that is quiet but
-        peaky is turned up only as far as the −1&nbsp;dBFS ceiling allows.</p>
+        <p class="hint">Plays every saved clip back at about the same volume, so
+        going through a morning’s recordings does not send you to the volume
+        control between each one. This changes <b>only the saved clip</b>, never
+        the sound the identifier listens to, so it cannot change how sure the
+        station was about a bird. A very quiet clip is turned up only as far as
+        it can go without distorting.</p>
+        <p class="hint">The numbers are the broadcast loudness scale (LUFS,
+        measured to ITU‑R BS.1770); −18 suits most gardens.</p>
       </div>
       <div>
         <label for="freq_shift_hz">Frequency Shift (Hz, 0 = disabled)</label>

@@ -371,7 +371,7 @@ pub(super) async fn restore_backup(
         tokio::task::spawn_blocking(|| tempfile::Builder::new().suffix(".tar.gz").tempfile()).await
     else {
         return Html(
-            r#"<p class="ctl-err">Internal error: could not allocate a temp file.</p>"#.to_string(),
+            r#"<p class="ctl-err">The station could not make room to receive the upload, and nothing was changed. Check that the disk is not full, then try again.</p>"#.to_string(),
         );
     };
     let tmp_path = tmp.path().to_path_buf();
@@ -382,29 +382,29 @@ pub(super) async fn restore_backup(
         let mut field = match multipart.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
-            Err(e) => return Html(format!(r#"<p class="ctl-err">Upload failed: {e}</p>"#)),
+            Err(e) => return fault("reading the upload", &e),
         };
         if field.name() != Some("backup") {
             continue;
         }
         let mut out = match tokio::fs::File::create(&tmp_path).await {
             Ok(f) => f,
-            Err(e) => return Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
+            Err(e) => return fault("saving the uploaded file", &e),
         };
         loop {
             match field.chunk().await {
                 Ok(Some(chunk)) => {
                     if let Err(e) = out.write_all(&chunk).await {
-                        return Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#));
+                        return fault("saving the uploaded file", &e);
                     }
                     bytes_written += chunk.len() as u64;
                 }
                 Ok(None) => break,
-                Err(e) => return Html(format!(r#"<p class="ctl-err">Upload failed: {e}</p>"#)),
+                Err(e) => return fault("reading the upload", &e),
             }
         }
         if let Err(e) = out.flush().await {
-            return Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#));
+            return fault("saving the uploaded file", &e);
         }
         found = true;
         break;
@@ -450,9 +450,43 @@ pub(super) async fn restore_backup(
                 report.message(restarted)
             ))
         }
-        Ok(Err(e)) => Html(format!(r#"<p class="ctl-err">Restore failed: {e}</p>"#)),
-        Err(e) => Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
+        Ok(Err(e)) => restore_stopped(&e),
+        Err(e) => restore_stopped(&e.to_string()),
     }
+}
+
+/// Report a fault to the operator without handing them the raw error.
+///
+/// `Internal error: No space left on device (os error 28)` was what the
+/// restore screen said when it ran out of room: the one sentence a person
+/// reads on the most consequential action in the product, in the vocabulary of
+/// a C library. The detail goes to the log, where it is useful; the page says
+/// what happened, what state the station is in, and what to do.
+///
+/// `during` completes "while <during>", so pass a phrase in the operator's
+/// terms ("saving the uploaded file"), not a function name.
+fn fault<E: std::fmt::Display>(during: &str, err: &E) -> Html<String> {
+    tracing::error!(error = %err, "restore: failed while {during}");
+    Html(format!(
+        r#"<p class="ctl-err">Something went wrong while {during}, and nothing on this station was changed. Check that the disk is not full, then try again — the details are in the station log.</p>"#
+    ))
+}
+
+/// Report a restore that stopped partway, without claiming more than
+/// [`restore_archive_into`] guarantees.
+///
+/// That function's contract is explicit: "Every refusal before step 5 leaves
+/// the live files untouched; a failure inside step 5 names the member." The
+/// caller holds only a `String` and cannot tell the two apart, so this says
+/// what is certainly true — the backup is not applied, and the station's state
+/// needs checking — rather than the comfortable "nothing was changed", which
+/// would be a lie for exactly the failure that matters most.
+fn restore_stopped(detail: &str) -> Html<String> {
+    tracing::error!(detail = %detail, "restore did not finish");
+    Html(format!(
+        r#"<p class="ctl-err">The restore did not finish, so the backup has not been applied. A restore that stops partway can leave some files replaced and others not, so check <a href="/station">Station health</a> before trying again. The station reported: {}</p>"#,
+        crate::routes::pages::escape_html(detail)
+    ))
 }
 
 /// What a finished restore placed.

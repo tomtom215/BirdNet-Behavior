@@ -100,8 +100,10 @@ pub fn migration_body(dest_db_path: &str) -> String {
   <div class="card">
     <div class="card-head">How it works</div>
     <ol class="steps">
-      <li>Optionally stop BirdNET-Pi:
-          <code>sudo systemctl stop birdnet_analysis birdnet_recording</code></li>
+      <li>If BirdNET-Pi is still running on this device, turning it off first
+          keeps the copy consistent.
+          <span class="bnb-meta">If you have a terminal:
+          <code>sudo systemctl stop birdnet_analysis birdnet_recording</code></span></li>
       <li>Find your BirdNET-Pi database (usually
           <code>~/BirdNET-Pi/scripts/BirdDB.txt</code>).</li>
       <li>Upload the file <em>or</em> enter the server-side path below.</li>
@@ -152,12 +154,11 @@ pub fn migration_body(dest_db_path: &str) -> String {
           <label for="upload-source-label">Source station name <span class="bnb-meta">(optional)</span></label>
           <input id="upload-source-label" name="source_label" type="text"
                  placeholder="e.g. Hollow Oak, north transect" class="mb-sm">
-          <label for="upload-source-utc">Source station's UTC offset, in seconds <span class="bnb-meta">(optional)</span></label>
-          <input id="upload-source-utc" name="source_utc_offset_secs" type="number"
-                 step="900" placeholder="e.g. -18000 for UTC-5" class="mb-sm">
+          <label for="upload-source-utc">Source station's time zone <span class="bnb-meta">(optional)</span></label>
+          <select id="upload-source-utc" name="source_utc_offset_secs" class="mb-sm">{utc_options}</select>
           <p class="hint">
-            Hours &times; 3600. UTC&minus;5 is <code>-18000</code>; UTC+1 is
-            <code>3600</code>. Each timestamp is converted individually onto this
+            The offset from UTC where the old station stood &mdash; New York is
+            UTC&minus;5, Berlin is UTC+1. Each timestamp is converted individually onto this
             station's clock, using the offset this station had on that date — so
             an imported winter morning and an imported summer morning land
             correctly even though they were an hour apart in real terms.
@@ -263,8 +264,38 @@ document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
   var btn = e.target.closest('button[data-tab]');
   if (btn) switchTab(btn.dataset.tab);
 }});
-</script>"##
+</script>"##,
+        utc_options = utc_offset_options(),
     )
+}
+
+/// The time-zone picker's options.
+///
+/// The field used to be a number input asking for "the source station's UTC
+/// offset, **in seconds**", with the hint "Hours × 3600. UTC−5 is `-18000`".
+/// That is the storage unit; nobody thinks about time zones in seconds, and
+/// the arithmetic is the station's job rather than the reader's. The control's
+/// `name` and the value it posts are unchanged, so the handler is untouched.
+fn utc_offset_options() -> String {
+    use std::fmt::Write as _;
+    // Whole hours, plus the offsets in real-world use that are not whole hours.
+    let mut minutes: Vec<i32> = (-12..=14).map(|h| h * 60).collect();
+    minutes.extend([-570, 210, 270, 330, 345, 390, 525, 570, 630, 765, 825]);
+    minutes.sort_unstable();
+    minutes.dedup();
+
+    let mut out = String::from(r#"<option value="">— not sure / same as this station —</option>"#);
+    for m in minutes {
+        let sign = if m < 0 { '−' } else { '+' };
+        let (h, rem) = (m.abs() / 60, m.abs() % 60);
+        let label = if rem == 0 {
+            format!("UTC{sign}{h}")
+        } else {
+            format!("UTC{sign}{h}:{rem:02}")
+        };
+        let _ = write!(out, r#"<option value="{}">{label}</option>"#, m * 60);
+    }
+    out
 }
 
 /// The imported-history list, with a remove action per batch.

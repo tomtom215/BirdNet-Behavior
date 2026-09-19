@@ -247,6 +247,98 @@ Copy, all of it verified in the rendered page:
   failure with `StatusCode::OK`, which is the one status htmx swaps, so it lost
   the layout's "reload the page" fallback and left a dead end with no link.
 
+### Fixed — the failures a station could not report, and the pages written for a sysadmin
+
+The rest of the same pass. Where the previous cluster was about words, this one
+is mostly about what happens when something breaks.
+
+**Two surfaces rendered a database error as a station that heard nothing.**
+Every query on Year-in-Review and on Station Health was `.unwrap_or_default()`-ed
+*inside* the closure that ran it, so the closure returned a plain tuple and the
+`Err` arm below could only ever fire on a task panic. Against a dropped
+`detections` table the year page renders, in full, cheerfully:
+
+```
+Your year in birdsong. 0 detections across 1 species.
+0 detections ≈ 0 a day   1 species heard   0 new to your list   0 busiest
+```
+
+— internally inconsistent, and indistinguishable from a quiet year. Health was
+worse: it reported "no microphone or camera is set up yet", "No detections yet
+today" and a total of `0`, which is a brand-new unconfigured station, shown to
+someone whose own has run for years — and Health is where every other error
+message in the app sends its reader, under a module comment promising
+"Everything shown is real". Both now say the read failed. Health keeps its
+vitals, which are measured from the system rather than the database and are
+exactly what someone diagnosing a broken database needs.
+
+**A button whose work failed did nothing at all.** htmx 2.0.4 ships
+`{code:"[45]..", swap:false, error:true}`, so a 4xx/5xx body is never swapped —
+including an out-of-band toast riding in it — and `layout.html`'s
+`htmx:responseError` fallback opens with `if (!isGet(evt)) return;`. Between
+them, a failed "Add to blacklist", "Delete rule" or "Enable rule" changed
+nothing on the page: no error, no success, no way to tell whether the click had
+registered. Each already spoke through a toast on success; they now use the same
+channel for the half that needed it. `remove_blacklist` additionally discarded
+its `Result` with `let _`, and answers three ways now — removed, already gone,
+or failed.
+
+**The restore and clear-data controls answered in C.** `Internal error: No
+space left on device (os error 28)` was the single sentence a person read after
+the most consequential action in the product; the crate's own `log_internal`
+exists for exactly this and was not used. The restore's message is deliberately
+*not* reduced to a reassurance: `restore_archive_into` documents that "Every
+refusal before step 5 leaves the live files untouched; a failure inside step 5
+names the member", and the caller holds only a `String`, so it says the backup
+is not applied and the station's state needs checking, and keeps the detail —
+rather than claiming "nothing was changed", which would be a lie for precisely
+the failure that matters most.
+
+**The behavioural cards blamed a missing extension for every failure.**
+`extension_error_html` opened with "The `duckdb-behavioral` extension is
+required for {func}" whatever went wrong, then printed the raw
+`AnalyticsError`. Three of the four variants load the extension perfectly well:
+a query error and a lock held by another process were both reported as
+something to go and install. It now branches — not switched on, busy right now,
+or the shared "this is a fault, not an empty result" state.
+
+**Pages handed the reader a command line as the whole of the advice.** The
+one-click Restart button's fallback was `sudo systemctl restart
+birdnet-behavior`; the health page's Analytics tile said "Start with
+`--analytics-db`"; the behavioural status table named
+`BIRDNET_BUNDLED_EXTENSION_FILE` and a path inside the source repository; the
+Add-a-microphone form's only hint for "Device id" was "run `arecord -l`". The
+commands stay — this is self-hosted software and the person who set it up does
+read these screens — but they no longer lead. The JSON siblings in
+`routes::timeseries` and `routes::analytics` keep theirs untouched: an API
+consumer is exactly the reader who can act on `--features analytics`.
+
+Settings, rewritten for the person who owns the station:
+
+- **Email Alerts** had ten fields and help text on two of them. No explanation
+  of what SMTP is, where the values come from, or that Gmail and Outlook refuse
+  an ordinary password — the only trace of that was a placeholder reading
+  "app-specific password", which vanishes on focus.
+- **Where to send alerts** required "Apprise URL syntax" without Apprise ever
+  being explained, and listed seven bare URL schemes.
+- The **time zone** of an imported station was asked for *in seconds*, with the
+  hint "Hours × 3600. UTC−5 is `-18000`". It is a picker now; the field name and
+  the value it posts are unchanged, so the handler is untouched.
+- Two different controls stop a species reaching you — one stops the
+  **recording**, one stops only the **alert** — in different sections, each hint
+  accurate alone and neither mentioning the other. Someone who wanted the alerts
+  stopped was one click from losing the records permanently.
+- The restart notice was in three places, in three wordings, one of which was
+  silence: a footer reading "Most settings require a restart", a banner reading
+  "Changes apply on next restart", and the most prominent of the three, the
+  toast, not mentioning it at all — with an action button reading "Open system
+  →", which says where to go and not why. One sentence now, and the button says
+  "Restart".
+- Also: "Normalise Clip Loudness" with LUFS, EBU R128, ITU-R BS.1770 and dBFS;
+  "ALSA Device"; "RTSP URL"; "Night Inhibit" not saying it silently does nothing
+  without coordinates; and the BirdWeather token not saying it publishes your
+  sightings and your location.
+
 ### Changed — two classifiers with different windows now run together, and neither loses coverage
 
 **The chunk is cut to the longest window and stepped by the shortest** (`G-10`

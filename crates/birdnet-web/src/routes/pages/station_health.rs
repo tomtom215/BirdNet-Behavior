@@ -46,6 +46,18 @@ struct Snapshot {
     vitals: Vec<Vital>,
     /// Configured audio sources (count only — the panel keys on activity).
     sources_configured: usize,
+    /// `true` when the database read behind this snapshot failed.
+    ///
+    /// Every number on this page that comes from the database used to be
+    /// `.unwrap_or_default()`-ed, so a failed read rendered a calm, ordinary
+    /// page: "no microphone or camera is set up yet", "No detections yet
+    /// today", a total of 0 — a brand-new station, shown to someone whose own
+    /// has been running for years. This is the screen every other error
+    /// message in the app sends its reader to, and the module comment above
+    /// promises "Everything shown is real", so a read that failed has to say
+    /// so rather than round down to a plausible nothing. The vitals are
+    /// measured from the system rather than the database and stay true.
+    db_read_failed: bool,
     /// `stream id -> the name its owner typed`, for the sources that have one.
     ///
     /// The supervisor publishes `SourceStatus::label`, which is the stream id
@@ -106,33 +118,48 @@ async fn gather(state: &AppState) -> Snapshot {
             .ok()
             .filter(|s| disk.as_ref().is_none_or(|d| d.total_bytes != s.total_bytes));
 
+        let read = state.with_db(|conn| {
+            let listed = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
+            let sources = listed.iter().filter(|x| x.disabled_at.is_none()).count();
+            let names: std::collections::HashMap<String, String> = listed
+                .iter()
+                .filter(|x| x.disabled_at.is_none())
+                .filter_map(|x| {
+                    let label = x.label.as_deref()?.trim();
+                    (!label.is_empty() && label != x.id).then(|| (x.id.clone(), label.to_owned()))
+                })
+                .collect();
+            let activity =
+                birdnet_db::sqlite::todays_source_activity(conn, &super::today_date_string())
+                    .map_err(|e| e.to_string())?;
+            let last = birdnet_db::sqlite::seconds_since_last_detection(conn)
+                .map_err(|e| e.to_string())?;
+            let queued = birdnet_db::outbound_queue::depth(
+                conn,
+                birdnet_integrations::birdweather::QUEUE_KIND,
+            )
+            .unwrap_or(0);
+            let total = birdnet_db::sqlite::detection_count(conn).map_err(|e| e.to_string())?;
+            // Fail-unsafe on purpose: an integrity check we could not run
+            // is not an integrity check that passed.
+            let integrity = birdnet_db::sqlite::quick_check(conn).unwrap_or(false);
+            Ok::<_, String>((sources, names, activity, last, queued, total, integrity))
+        });
+        let db_read_failed = read.is_err();
+        if let Err(ref e) = read {
+            tracing::warn!(error = %e, "station health: database read failed");
+        }
         let (sources_configured, source_names, activity, last_detection, queued, total, integrity) =
-            state.with_db(|conn| {
-                let listed = AudioSourceStore::list(conn).unwrap_or_default();
-                let sources = listed.iter().filter(|x| x.disabled_at.is_none()).count();
-                let names: std::collections::HashMap<String, String> = listed
-                    .iter()
-                    .filter(|x| x.disabled_at.is_none())
-                    .filter_map(|x| {
-                        let label = x.label.as_deref()?.trim();
-                        (!label.is_empty() && label != x.id)
-                            .then(|| (x.id.clone(), label.to_owned()))
-                    })
-                    .collect();
-                let activity =
-                    birdnet_db::sqlite::todays_source_activity(conn, &super::today_date_string())
-                        .unwrap_or_default();
-                let last = birdnet_db::sqlite::seconds_since_last_detection(conn)
-                    .ok()
-                    .flatten();
-                let queued = birdnet_db::outbound_queue::depth(
-                    conn,
-                    birdnet_integrations::birdweather::QUEUE_KIND,
+            read.unwrap_or_else(|_| {
+                (
+                    0,
+                    std::collections::HashMap::new(),
+                    Vec::new(),
+                    None,
+                    0,
+                    0,
+                    false,
                 )
-                .unwrap_or(0);
-                let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-                let integrity = birdnet_db::sqlite::quick_check(conn).unwrap_or(false);
-                (sources, names, activity, last, queued, total, integrity)
             });
 
         // Live capture-supervisor health, when a supervisor is publishing it.
@@ -145,6 +172,7 @@ async fn gather(state: &AppState) -> Snapshot {
         Snapshot {
             vitals,
             sources_configured,
+            db_read_failed,
             source_names,
             capture,
             activity,
@@ -175,6 +203,7 @@ async fn gather(state: &AppState) -> Snapshot {
     .unwrap_or_else(|_| Snapshot {
         vitals: Vec::new(),
         sources_configured: 0,
+        db_read_failed: true,
         source_names: std::collections::HashMap::new(),
         capture: Vec::new(),
         activity: Vec::new(),
@@ -336,6 +365,21 @@ fn name_sources(s: &Snapshot, faulty: &[&SourceStatus]) -> String {
 /// The overall status banner — green unless a real problem is present.
 fn status_banner(s: &Snapshot) -> String {
     let mut issues: Vec<String> = Vec::new();
+    // First, and on its own: every issue below it is derived from the read
+    // that failed, so listing them alongside would be reporting a station we
+    // could not see. The vitals are measured from the system and still show.
+    if s.db_read_failed {
+        return format!(
+            "<div class=\"st-status warn\"><span class=\"ico\" aria-hidden=\"true\">!</span><div>\
+             <div class=\"t\">Needs attention</div>\
+             <div class=\"s\">{}</div></div></div>",
+            escape_html(
+                "The station's records could not be read, so the counts and sources \
+                 below are missing rather than empty. The hardware readings are still \
+                 live. Reload; if it persists, check the disk."
+            )
+        );
+    }
     if s.disk_critical {
         issues.push("storage is critically low".to_owned());
     } else if s.disk_low {
@@ -408,6 +452,11 @@ fn status_banner(s: &Snapshot) -> String {
 fn source_panel(s: &Snapshot) -> String {
     if !s.capture.is_empty() {
         return live_source_panel(s);
+    }
+    if s.db_read_failed {
+        // Not "No detections yet today": that is a statement about the
+        // reader's birds, and we did not manage to look.
+        return super::error_states::inline("today's source activity");
     }
     if s.activity.is_empty() {
         return "<div class=\"bnb-card pad st-source-empty\">No detections yet today. Sources \
@@ -610,6 +659,22 @@ fn vitals_row(vitals: &[Vital]) -> String {
 
 /// The pipeline row: last detection · queued uploads · service uptime · total.
 fn pipeline_row(s: &Snapshot) -> String {
+    // A number we could not read prints as a dash. Printing `0` here told a
+    // three-year station it had never heard a bird.
+    if s.db_read_failed {
+        return format!(
+            "<div class=\"st-pipe\">\
+             <div><div class=\"lab\">Last detection</div><div class=\"v\">—</div></div>\
+             <div><div class=\"lab\">Queued uploads</div><div class=\"v\">—</div></div>\
+             <div><div class=\"lab\">Service uptime</div><div class=\"v\"><span class=\"mono\">{uptime}</span></div></div>\
+             <div><div class=\"lab\">Total detections</div><div class=\"v\">—</div></div>\
+             <div><div class=\"lab\">Species filter</div><div class=\"v\">—</div></div>\
+             </div>",
+            uptime = s
+                .service_uptime
+                .map_or_else(|| "—".to_string(), |u| escape_html(&format_uptime(u))),
+        );
+    }
     let last = s
         .last_detection
         .map_or_else(|| "no detections yet".to_string(), format_freshness);
@@ -804,6 +869,7 @@ mod tests {
         Snapshot {
             vitals: Vec::new(),
             sources_configured: sources,
+            db_read_failed: false,
             source_names: std::collections::HashMap::new(),
             capture: Vec::new(),
             activity: Vec::new(),
