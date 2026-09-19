@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.16.0] - 2026-09-19
+
 Seven clusters: HTTPS in the listener itself, a searchable detection log with
 bulk review, backups that leave the SD card they were written on, removing the
 Apprise dependency for the services most stations actually use, giving the
@@ -8860,7 +8864,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...v0.13.1
