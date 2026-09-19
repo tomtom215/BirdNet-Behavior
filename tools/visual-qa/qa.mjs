@@ -144,11 +144,27 @@ async function diagnose(page) {
       }
     });
     const imgs = [...document.querySelectorAll('img')];
-    const broken = imgs.filter((i) => i.complete && i.naturalWidth === 0 && (i.currentSrc || i.src)).map((i) => i.currentSrc || i.src);
+    // A species photograph is optional by design. `/api/v2/species/image/
+    // {sci}/file` answers 404 whenever the station has no picture for that
+    // bird — Wikipedia has none on the species page, the lookup failed, an
+    // admin blacklisted it, or the cache is switched off — and the avatar
+    // opts into `data-hide-on-error` so the coloured banding-code tile shows
+    // through. That is a designed state, not a broken asset, so it is counted
+    // separately rather than reported as a page defect. Counted, not
+    // discarded: `speciesImgBroken === speciesImgTotal` means the endpoint or
+    // the URL is broken, and that still fails (see the floor below).
+    const isSpeciesPhoto = (u) => /\/api\/v2\/species\/image\//.test(u || '');
+    const brokenAll = imgs
+      .filter((i) => i.complete && i.naturalWidth === 0 && (i.currentSrc || i.src))
+      .map((i) => i.currentSrc || i.src);
+    const speciesImgs = imgs.filter((i) => isSpeciesPhoto(i.currentSrc || i.src));
+    const broken = brokenAll.filter((u) => !isSpeciesPhoto(u));
     return {
       overflowX, scrollW: de.scrollWidth, clientW: de.clientWidth,
       stuck: [...new Set(stuck)].slice(0, 8),
       imgTotal: imgs.length, imgBroken: [...new Set(broken)].slice(0, 12),
+      speciesImgTotal: speciesImgs.length,
+      speciesImgBroken: [...new Set(brokenAll.filter(isSpeciesPhoto))].length,
       title: document.title,
     };
   });
@@ -211,14 +227,28 @@ async function main() {
           const consoleErrsF = expect404
             ? consoleErrs.filter((m) => !/status of 404/i.test(m))
             : consoleErrs;
+          // Optional species photos: drop their 404s from the HTTP list, and
+          // drop exactly as many 404 console lines as they produced. The
+          // console message carries no URL, so it is matched by count rather
+          // than by text — dropping every 404 line would hide a genuinely
+          // missing asset on the same page.
+          const speciesPhoto404 = bad.filter(
+            (b) => b.startsWith('404 ') && b.includes('/api/v2/species/image/'),
+          ).length;
+          let toDrop = speciesPhoto404;
+          const consoleErrsS = consoleErrsF.filter((m) => {
+            if (toDrop > 0 && /status of 404/i.test(m)) { toDrop -= 1; return false; }
+            return true;
+          });
           const badF = bad.filter(
             (b) =>
               !b.includes('favicon') &&
+              !(b.startsWith('404 ') && b.includes('/api/v2/species/image/')) &&
               !(expect404 && b.startsWith('404 ') && b.includes(route)),
           );
           report[key] = {
             route, status: resp ? resp.status() : null,
-            consoleErrs: consoleErrsF, pageErrs,
+            consoleErrs: consoleErrsS, pageErrs,
             failed: failed.filter((f) => !f.includes('favicon')),
             bad: badF,
             ...diag,
@@ -241,10 +271,15 @@ async function main() {
   await browser.close();
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
 
+  // A page where EVERY species photo failed is not "these birds have no
+  // picture" — it is a broken route or a malformed URL, and that is exactly
+  // what this sweep exists to catch. One or two missing is ordinary.
+  const allPhotosFailed = (v) =>
+    (v.speciesImgTotal || 0) > 0 && v.speciesImgBroken === v.speciesImgTotal;
   const probs = Object.entries(report).filter(([, v]) =>
     v.error || v.overflowX || (v.consoleErrs && v.consoleErrs.length) ||
     (v.pageErrs && v.pageErrs.length) || (v.imgBroken && v.imgBroken.length) ||
-    (v.stuck && v.stuck.length) || (v.bad && v.bad.length));
+    (v.stuck && v.stuck.length) || (v.bad && v.bad.length) || allPhotosFailed(v));
   console.log(`\nCaptured ${n} screenshots into ${OUT}/`);
   console.log(`\n=== ${probs.length} pages with issues ===`);
   for (const [k, v] of probs) {
@@ -255,6 +290,7 @@ async function main() {
     if (v.pageErrs?.length) parts.push(`pageerr=${JSON.stringify(v.pageErrs)}`);
     if (v.bad?.length) parts.push(`http=${JSON.stringify(v.bad)}`);
     if (v.imgBroken?.length) parts.push(`brokenImg=${JSON.stringify(v.imgBroken)}`);
+    if (allPhotosFailed(v)) parts.push(`allSpeciesPhotosFailed(${v.speciesImgBroken}/${v.speciesImgTotal})`);
     if (v.stuck?.length) parts.push(`stuck=${JSON.stringify(v.stuck)}`);
     console.log(`  ${k}: ${parts.join(' | ')}`);
   }

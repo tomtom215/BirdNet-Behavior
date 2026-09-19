@@ -69,9 +69,24 @@ const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
 /// long as it was switched on.
 ///
 /// Fifteen minutes bounds a permanent miss to four lookups an hour per
-/// species, and lets a transient failure — an offline station, a rate limit —
-/// heal without a restart.
+/// species. Only a provider that *answered*, saying it has no picture, is
+/// remembered this long — see [`TRANSIENT_MISS_TTL`].
 const MISS_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// How long a *transient* failure is remembered: a timeout, a rate limit, a
+/// station that was briefly offline.
+///
+/// Distinguishing the two matters, and the visual-QA sweep is what showed it.
+/// With one TTL for both, five species whose fetch happened to fail during a
+/// CI run were locked out of every page for the rest of it, and the sweep
+/// reported thirty-six pages of broken images — for birds whose photographs
+/// were perfectly available a minute later. A provider saying "no image on
+/// this species page" is a durable fact; an HTTP error is not, and pretending
+/// otherwise turns a blip into a quarter of an hour of letter tiles.
+///
+/// A minute is still long enough to stop a polling feed re-asking on every
+/// render, which is the whole reason either of these exists.
+const TRANSIENT_MISS_TTL: Duration = Duration::from_secs(60);
 
 /// Maximum number of remembered failed lookups.
 ///
@@ -149,7 +164,7 @@ pub struct ImageCache {
     /// Behind an `Arc` like the two fields above it, and for the same reason:
     /// the type derives `Clone`, and a clone with its own map would forget
     /// every miss the original had recorded.
-    misses: Arc<Mutex<HashMap<String, Instant>>>,
+    misses: Arc<Mutex<HashMap<String, (Instant, Duration)>>>,
 }
 
 impl fmt::Debug for ImageCache {
@@ -267,7 +282,7 @@ impl ImageCache {
         let mut img = match self.provider.fetch(scientific_name).await {
             Ok(img) => img,
             Err(e) => {
-                self.record_miss(&key);
+                self.record_miss(&key, &e);
                 return Err(e);
             }
         };
@@ -302,7 +317,7 @@ impl ImageCache {
             let bytes = match download.await {
                 Ok(bytes) => bytes,
                 Err(e) => {
-                    self.record_miss(&key);
+                    self.record_miss(&key, &e);
                     return Err(e);
                 }
             };
@@ -320,23 +335,36 @@ impl ImageCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(key)
-            .is_some_and(|at| at.elapsed() < MISS_TTL)
+            .is_some_and(|(at, ttl)| at.elapsed() < *ttl)
+    }
+
+    /// How long `error` is worth remembering.
+    ///
+    /// [`ImageError::NotFound`] is the provider answering: this species has no
+    /// picture, and it will not have one a minute from now. Everything else is
+    /// the network.
+    const fn miss_ttl(error: &ImageError) -> Duration {
+        match error {
+            ImageError::NotFound(_) => MISS_TTL,
+            _ => TRANSIENT_MISS_TTL,
+        }
     }
 
     /// Remember that this species has no image, so the provider is not asked
-    /// again for [`MISS_TTL`].
-    fn record_miss(&self, key: &str) {
+    /// again for [`MISS_TTL`] or [`TRANSIENT_MISS_TTL`].
+    fn record_miss(&self, key: &str, error: &ImageError) {
+        let ttl = Self::miss_ttl(error);
         let mut misses = self
             .misses
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if misses.len() >= MAX_MISSES && !misses.contains_key(key) {
-            misses.retain(|_, at| at.elapsed() < MISS_TTL);
+            misses.retain(|_, (at, ttl)| at.elapsed() < *ttl);
             if misses.len() >= MAX_MISSES {
                 return;
             }
         }
-        misses.insert(key.to_string(), Instant::now());
+        misses.insert(key.to_string(), (Instant::now(), ttl));
     }
 
     /// Return `true` if the species image is already cached on disk.
@@ -576,6 +604,36 @@ mod tests {
             "each new species must be looked up on its own"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A provider that answered "no picture" is remembered fifteen minutes; a
+    /// network failure, one. Checked at the unit that decides, because the
+    /// difference is only observable fourteen minutes later otherwise.
+    #[test]
+    fn a_network_failure_is_forgotten_sooner_than_a_missing_photo() {
+        assert_eq!(
+            ImageCache::miss_ttl(&ImageError::NotFound("Turdus merula".into())),
+            MISS_TTL,
+            "a provider saying the species has no picture is a durable fact"
+        );
+        for transient in [
+            ImageError::Http("timed out".into()),
+            ImageError::Api("429".into()),
+        ] {
+            assert_eq!(
+                ImageCache::miss_ttl(&transient),
+                TRANSIENT_MISS_TTL,
+                "a blip must not cost a quarter of an hour of letter tiles"
+            );
+        }
+        assert!(
+            TRANSIENT_MISS_TTL < MISS_TTL,
+            "the whole point is that one is shorter"
+        );
+        assert!(
+            TRANSIENT_MISS_TTL >= Duration::from_secs(30),
+            "still long enough that a polling feed does not re-ask per render"
+        );
     }
 
     /// Blacklisting a species evicts it so the next request re-resolves. A

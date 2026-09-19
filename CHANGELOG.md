@@ -45,6 +45,41 @@ added, found because a gate written for something else would not go green.
 And the change a reader will notice first: **the station had a photograph of
 every bird it heard, and was showing a four-letter code instead.**
 
+### Fixed — a missing bird photograph failed the visual-QA sweep
+
+Putting a photograph on every avatar meant every page now requests up to
+fifteen species images, and `/api/v2/species/image/{sci}/file` answers 404
+whenever the station has no picture for that bird. `tools/visual-qa/qa.mjs`
+counted each of those as a broken image, and CI went red on **36 page/states**
+— for birds whose photographs were fine a minute later.
+
+The sweep had the blind spot before this release: the species gallery has
+emitted the same optional `<img>` tags since it was built, and the gate passed
+only because every species it showed happened to resolve on those runs. This
+change multiplied the exposure from one page to fourteen and the luck ran out.
+
+A species photograph is optional by design — the endpoint's documented answer
+for "no picture" is 404, and the avatar's `data-hide-on-error` fallback to the
+coloured banding-code tile was verified in a browser. So the sweep now counts
+species photos separately from mandatory assets, **with a floor**: a page where
+*every* species photo failed is a broken route or a malformed URL, and still
+fails. Measured across all three states:
+
+| Station | Before | After |
+|---|---|---|
+| every photo present | pass | pass |
+| 5 of 16 missing (CI's case) | **fail, 36 pages** | pass |
+| every photo failing | fail | **fail, 22 pages, `allSpeciesPhotosFailed(15/15)`** |
+
+**And the run made a blip permanent.** The fifteen-minute memory of failed
+lookups added alongside the photographs did not distinguish a provider
+answering *"this species has no picture"* from a timeout or a rate limit, so
+five species whose fetch happened to fail early in a CI run were locked out of
+every page for the rest of it. A provider's answer is a durable fact; an HTTP
+error is not. Transient failures are now remembered for one minute — still
+long enough to stop a polling feed re-asking on every render, which is the
+only reason either memory exists.
+
 ### Fixed — twenty-four error messages no reader could ever see
 
 Every HTMX partial that failed answered `500` with a hand-written message:
