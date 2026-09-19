@@ -171,12 +171,13 @@ never implies `--fix`. Gates:
   through a PR review.
 - **Mutation testing** for the configuration validator via
   `cargo-mutants` in `.github/workflows/mutation.yml`. It is a per-file
-  matrix — `config/validate.rs` (two shards), `inference/model.rs`,
-  `audio/extraction/extractor.rs`, `audio/extraction/convert.rs`,
-  `civil.rs` (three shards), `birdnet-db`'s `migration.rs` (two) and
-  `sqlite/queries/detections/*.rs` (four), and the binary's
-  `src/capture/schedule.rs` (three), `src/capture/supervisor.rs` (three)
-  and `src/daemon/*.rs` (five) — so a survivor in one file does not tank
+  matrix of 31 rows — `config/validate.rs` (two shards),
+  `inference/model.rs` (three), `audio/extraction/extractor.rs`,
+  `audio/extraction/convert.rs`, `civil.rs` (three), `birdnet-db`'s
+  `migration.rs` (two) and `sqlite/queries/detections/*.rs` (eight), and
+  the binary's `src/capture/schedule.rs` (three),
+  `src/capture/supervisor.rs` (three) and `src/daemon/*.rs` (five) — so a
+  survivor in one file does not tank
   the whole pipeline, and each file is its own job with its own runtime
   budget. The threshold is
   `max_missed: 0` on **every** row: a surviving mutant always means an
