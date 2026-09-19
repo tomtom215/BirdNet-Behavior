@@ -129,6 +129,21 @@ extend-ignore-re = [
     # but it switches off the checker for the rest of the token for nothing.)
     'pre-empt',
     'mis-',
+    # `[s]creenshot_server` in CLAUDE.md is a shell idiom, not a word: the
+    # brackets are what stop `pgrep -f` matching its own command line, and as a
+    # regex `[s]creenshot_server` still means `screenshot_server`. typos reads
+    # the bracket as a word boundary and the tail as `creenshot`.
+    #
+    # The lesson that line records is that `pkill -x screenshot_server` silently
+    # matches nothing (pgrep will not match `-x` against a name longer than 15
+    # characters), which left a stale binary on port 8502 and answered three
+    # rounds of "verified in the browser" with the previous build's HTML.
+    # Relocating the bracket to spell the word out would still work, but the
+    # idiom as written is the one in the scripts and the one a reader will copy.
+    #
+    # Whole token, like `NoNewPrivilages` above, so a real `creenshot`
+    # elsewhere is still caught.
+    '\[s\]creenshot_server',
     # `piciFORMES` in `species_pages.rs` is a deliberately mixed-case order
     # name: its gate proves `TaxonFilter::from_params` matches a taxonomic
     # rank without regard to case, so the odd casing IS the fixture. typos
