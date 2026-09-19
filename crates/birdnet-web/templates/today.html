@@ -45,7 +45,12 @@
     <div>
       <div class="bnb-eyebrow">The day so far</div>
       <h2 class="sh-h">When you heard them</h2>
-      <div class="bnb-meta x-daymeta">Bars are detections per hour · the <span class="x-tempkey">amber line</span> is temperature <span class="mono x-moon">· {{moon_inline}}</span></div>
+      <!-- The temperature clause is swapped out-of-band by
+           `/pages/today-daystrip`, because the amber line is only drawn when
+           the station has weather samples. Written flat here, the caption told
+           every station without a weather source to look for a line that was
+           never on the chart. -->
+      <div class="bnb-meta x-daymeta">Bars are detections per hour<span id="td-tempkey"> · the <span class="x-tempkey">amber line</span> is temperature</span> <span class="mono x-moon">· {{moon_inline}}</span></div>
     </div>
     <div class="x-daystats" id="td-daystats"></div>
   </div>
@@ -213,7 +218,14 @@
   var playingBtn = null;
   function stopCurrent() {
     if (player) { player.pause(); }
-    if (playingBtn) { playingBtn.classList.remove('playing'); playingBtn.textContent = '▶'; }
+    // The label moves with the glyph: `aria-label="Play clip"` is written into
+    // the row once by the renderer and aria-label wins over text content, so a
+    // playing clip's button went on announcing "Play clip".
+    if (playingBtn) {
+      playingBtn.classList.remove('playing');
+      playingBtn.textContent = '▶';
+      playingBtn.setAttribute('aria-label', 'Play clip');
+    }
     playingBtn = null;
   }
   document.addEventListener('click', function (e) {
@@ -233,6 +245,7 @@
       playingBtn = btn;
       btn.classList.add('playing');
       btn.textContent = '⏸';
+      btn.setAttribute('aria-label', 'Pause clip');
     }).catch(stopCurrent);
   });
 
@@ -365,7 +378,50 @@
         ctx.stroke();
     }
 
+    // Reduced motion. The live paint is the one place this page actually
+    // animates, and it honoured nothing: it repainted the whole canvas on every
+    // WebSocket frame regardless of the OS query or the app's own Display
+    // preference. (The comment further down claimed the preference was
+    // honoured; it was describing the idle loop, which is static anyway.)
+    //
+    // Throttled rather than stopped, because the content is the point: a
+    // spectrogram nobody may look at is not an accessible spectrogram. At most
+    // one repaint every 1.5s, with the newest frame kept and drawn when the
+    // window opens, so the picture stays current and stops flickering.
+    var REDUCED_MS = 1500;
+    var lastPaint = 0, pending = null, pendingTimer = null;
+    function motionReduced() {
+        try {
+            if (document.documentElement.getAttribute('data-motion') === 'reduced') return true;
+        } catch (e) { /* fall through */ }
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    }
+
     function drawFrame(frame) {
+        if (motionReduced()) {
+            pending = frame;
+            var wait = REDUCED_MS - (Date.now() - lastPaint);
+            if (wait > 0) {
+                if (!pendingTimer) {
+                    pendingTimer = setTimeout(function () {
+                        pendingTimer = null;
+                        var f = pending;
+                        pending = null;
+                        if (f) paintFrame(f);
+                    }, wait);
+                }
+                // The signal is live even while a repaint is being held back.
+                lastFrameTime = Date.now();
+                setLive(true);
+                return;
+            }
+            pending = null;
+        }
+        paintFrame(frame);
+    }
+
+    function paintFrame(frame) {
+        lastPaint = Date.now();
         // frame.data is row-major: data[m * n_frames + f] is band m at frame f.
         var nMels = frame.n_mels, nFrames = frame.n_frames;
         if (!nMels || !nFrames || !frame.data) return;
@@ -388,12 +444,12 @@
         setLive(true);
     }
 
-    // Idle drawer — repaints the breathing baseline whenever no
-    // spectrogram has been received recently. Honours
-    // prefers-reduced-motion.
-    // The flat idle baseline is static, so this poll is reduced-motion-safe and
-    // runs regardless of the preference. It flips the indicator to "idle" and
-    // repaints the baseline only once a real frame gap exceeds the threshold.
+    // Idle drawer — repaints the flat baseline whenever no spectrogram has
+    // been received recently. The baseline is static, so this poll is
+    // reduced-motion-safe and runs regardless of the preference; the live
+    // paint's own handling is in `drawFrame` above. (This comment used to
+    // open by claiming the drawer "honours prefers-reduced-motion", which read
+    // as though the whole canvas did.)
     function idleLoop() {
         if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
             setLive(false);

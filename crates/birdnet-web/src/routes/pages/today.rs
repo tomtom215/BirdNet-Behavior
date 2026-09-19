@@ -927,11 +927,18 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_hour:02}:00</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
         total_fmt = super::group_thousands(total),
     );
+    // The caption's temperature clause, kept in step with whether the line is
+    // actually drawn (`day_strip` draws it only for a non-empty `temps`).
+    let tempkey_oob = if temps.is_empty() {
+        r#"<span id="td-tempkey" hx-swap-oob="true"></span>"#.to_string()
+    } else {
+        r#"<span id="td-tempkey" hx-swap-oob="true"> · the <span class="x-tempkey">amber line</span> is temperature</span>"#.to_string()
+    };
     let strip = super::viz::day_strip(&hourly, &temps, solar, super::now_hour_local());
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        format!("{stats_oob}{strip}"),
+        format!("{stats_oob}{tempkey_oob}{strip}"),
     )
 }
 

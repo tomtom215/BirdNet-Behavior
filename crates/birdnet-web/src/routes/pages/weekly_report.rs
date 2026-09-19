@@ -299,11 +299,18 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
     let bar_w = 60;
     let gap = 20;
     let left_pad = 10;
+    // Headroom for the count label above the tallest bar. Without it the
+    // busiest day of the week — the one bar that reaches `chart_h`, so `y = 0`
+    // — had its label placed at `y - 4 = -4`, above the viewBox, where the
+    // browser clips it: the number you most want to read was the only one
+    // missing. Seen in a print render of the demo fixture.
+    let top_pad = 16;
+    let baseline = top_pad + chart_h;
 
     let mut svg = format!(
         r#"<svg viewBox="0 0 {w} {h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
         w = chart_w,
-        h = chart_h + 25,
+        h = baseline + 25,
     );
 
     for (i, &count) in counts.iter().enumerate() {
@@ -316,7 +323,12 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
         )]
         let x = left_pad + i as i32 * (bar_w + gap);
         let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
-        let y = chart_h - bar_h;
+        // A zero-count day still draws a 2px stub so the day is visible as an
+        // empty slot. It used to be positioned from the unclamped `bar_h`, so
+        // `y = baseline` and the stub hung *below* the axis rather than resting
+        // on it. Clamp first, then place.
+        let drawn_h = bar_h.max(2);
+        let y = baseline - drawn_h;
         let color = if count > 0 {
             "var(--moss)"
         } else {
@@ -326,12 +338,7 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
         let _ = std::fmt::write(
             &mut svg,
             format_args!(
-                r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="3" fill="{color}"/>"#,
-                x = x,
-                y = y,
-                bar_w = bar_w,
-                bar_h = bar_h.max(2),
-                color = color,
+                r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{drawn_h}" rx="3" fill="{color}"/>"#,
             ),
         );
 
@@ -352,7 +359,7 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
             format_args!(
                 r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="11" font-family="sans-serif">{label}</text>"#,
                 tx = x + bar_w / 2,
-                ty = chart_h + 17,
+                ty = baseline + 17,
                 label = day_labels[i],
             ),
         );
@@ -457,6 +464,93 @@ mod tests {
         assert_eq!(dates.len(), 7);
         assert_eq!(dates[0], "2026-03-09");
         assert_eq!(dates[6], "2026-03-15");
+    }
+
+    /// Parse `name="value"` pairs out of every tag of one kind.
+    fn tags(svg: &str, tag: &str) -> Vec<std::collections::HashMap<String, f64>> {
+        svg.split(&format!("<{tag} "))
+            .skip(1)
+            .map(|frag| {
+                let body = frag.split('>').next().unwrap_or("");
+                body.split('"')
+                    .collect::<Vec<_>>()
+                    .chunks(2)
+                    .filter_map(|c| {
+                        let key = c.first()?.trim().trim_end_matches('=').trim();
+                        let val: f64 = c.get(1)?.parse().ok()?;
+                        Some((key.to_string(), val))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn view_box(svg: &str) -> (f64, f64) {
+        let vb = svg
+            .split_once("viewBox=\"")
+            .unwrap()
+            .1
+            .split_once('"')
+            .unwrap()
+            .0;
+        let n: Vec<f64> = vb
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        (n[2], n[3])
+    }
+
+    fn week(counts: [i64; 7]) -> Vec<birdnet_db::sqlite::DailyCount> {
+        (0..7)
+            .map(|i: usize| birdnet_db::sqlite::DailyCount {
+                date: format!("2026-03-{:02}", 9 + i),
+                count: counts[i],
+            })
+            .collect()
+    }
+
+    /// Nothing the weekly chart draws may fall outside its own viewBox.
+    ///
+    /// Observed failing against the pre-fix renderer on two counts, both
+    /// visible in a print render of the demo fixture:
+    ///
+    /// * The tallest bar reaches `bar_h == chart_h`, so `y == 0` and its count
+    ///   label is placed at `y - 4 == -4` — four units above the top of the
+    ///   viewBox, where the browser clips it. The busiest day of the week is
+    ///   the one day whose number you cannot read.
+    /// * A zero-count day computes `y = chart_h - 0 = chart_h` and then draws
+    ///   `height = bar_h.max(2)`, so its 2px stub hangs *below* the baseline
+    ///   rather than sitting on it.
+    #[test]
+    fn nothing_the_weekly_chart_draws_escapes_its_view_box() {
+        for counts in [
+            [34, 36, 33, 35, 34, 34, 0], // the fixture: a tall bar and an empty day
+            [1, 0, 0, 0, 0, 0, 0],
+            [0; 7],
+            [999_999, 1, 0, 5, 0, 2, 3],
+        ] {
+            let svg = render_weekly_chart("2026-03-09", &week(counts));
+            let (vw, vh) = view_box(&svg);
+            for (i, r) in tags(&svg, "rect").iter().enumerate() {
+                let (y, h) = (r["y"], r["height"]);
+                assert!(
+                    y >= 0.0 && y + h <= vh,
+                    "{counts:?}: bar {i} spans y {y}..{} outside the {vh}-high viewBox",
+                    y + h
+                );
+                assert!(
+                    r["x"] + r["width"] <= vw,
+                    "{counts:?}: bar {i} overflows the width"
+                );
+            }
+            for t in tags(&svg, "text") {
+                assert!(
+                    t["y"] >= 0.0 && t["y"] <= vh,
+                    "{counts:?}: a label sits at y = {} outside the {vh}-high viewBox",
+                    t["y"]
+                );
+            }
+        }
     }
 
     #[test]
