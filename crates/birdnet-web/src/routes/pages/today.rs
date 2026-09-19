@@ -153,7 +153,13 @@ fn signal_card(
         || ("input · none".to_string(), "—".to_string()),
         |s| {
             (
-                format!("input · {}", s.kind.as_str()),
+                // `as_str` is the storage form (`usb-alsa`), which has a
+                // matching `FromStr` and belongs in the database, not under a
+                // reader's eyes. `kind_label` is the display name.
+                format!(
+                    "input · {}",
+                    crate::routes::admin::audio::kind_label(s.kind)
+                ),
                 format!("{} kHz", s.sample_rate / 1000),
             )
         },
@@ -242,7 +248,11 @@ fn firstrun_checklist(
             } else {
                 String::new()
             };
-            let source = format!("{} · {}{more}", first.kind.as_str(), escape_html(&label));
+            let source = format!(
+                "{} · {}{more}",
+                crate::routes::admin::audio::kind_label(first.kind),
+                escape_html(&label)
+            );
             match capturing {
                 // Configured *and* the supervisor reports it up.
                 Some(true) => (
@@ -524,7 +534,7 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · no microphone configured</span>"#,
                 ),
                 (CaptureState::Down, _) => out.push_str(
-                    r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · capture is down</span>"#,
+                    r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · the microphone has stopped</span>"#,
                 ),
                 (_, Some((_, last))) => {
                     let _ = write!(

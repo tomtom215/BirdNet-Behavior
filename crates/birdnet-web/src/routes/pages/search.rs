@@ -276,7 +276,13 @@ async fn search_results_partial(
 
     let html = match result {
         Ok(Ok((rows, total))) => render_results(&rows, total, offset, &params),
-        _ => "<p class=\"sr-error\">Could not run that search.</p>".to_string(),
+        // Not "Could not run that search", which reads as a verdict on what was
+        // typed, and not a bare 200 with no way forward: this partial answers
+        // 200 either way, so the layout's `htmx:responseError` fallback never
+        // runs and whatever is written here is the reader's last word. The
+        // shared error state says the same thing every other failed surface in
+        // the app says, carries `role="alert"`, and links to Station health.
+        _ => super::error_states::inline("the search results"),
     };
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }

@@ -122,8 +122,17 @@ async fn health_badge_partial(State(state): State<AppState>) -> impl axum::respo
         |(db_ok, capture, disk)| grade(db_ok, capture, disk),
     );
 
+    // A link, not a span. The badge names a problem on every page of the site
+    // and, until 0.15.0, that was all it did: the reason lived in a `title`,
+    // which no phone and no tablet can show, and the one screen that explains
+    // the problem had to be found by guesswork. `/station` is the public Health
+    // tab, so this is reachable for a viewer as well as an admin.
+    //
+    // `aria-label` carries the reason too, because a `title` on a control is
+    // not a reliable accessible name and a screen-reader user was hearing the
+    // same two words with none of the explanation.
     let html = format!(
-        r#"<span class="bnb-pill {pill}" data-health="{state_token}" title="{title}"><span class="bnb-dot {dot}"></span> {label}</span>"#
+        r#"<a href="/station" class="bnb-pill {pill}" data-health="{state_token}" title="{title}" aria-label="Station health — {label}: {title}"><span class="bnb-dot {dot}"></span> {label}</a>"#
     );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
@@ -193,16 +202,18 @@ fn grade(
                 "dawn",
                 "No microphone",
                 "warn",
-                "no audio source is configured, so nothing can be detected",
+                "no microphone or camera is set up yet, so there is nothing to listen to",
             );
         }
         CaptureState::Down => {
             return (
                 "dawn",
                 "dawn",
-                "Mic down",
+                // Not "Mic down": "down" is operations vocabulary, and the
+                // dashboard hero already tells the same reader "not recording".
+                "Not recording",
                 "warn",
-                "an audio source is configured but is not capturing",
+                "a microphone is set up, but no audio is reaching the station",
             );
         }
         CaptureState::Up | CaptureState::Unknown => {}
@@ -419,7 +430,7 @@ mod tests {
     #[test]
     fn a_dead_microphone_is_not_healthy() {
         let (_, _, label, token, _) = grade(Some(true), CaptureState::Down, Some(10.0));
-        assert_eq!(label, "Mic down");
+        assert_eq!(label, "Not recording");
         assert_eq!(token, "warn");
     }
 
@@ -445,7 +456,7 @@ mod tests {
     }
 
     /// No gauge published yet is not an outage — a station that has just
-    /// started must not flash "Mic down" at its operator.
+    /// started must not flash "Not recording" at its operator.
     #[test]
     fn an_unreconciled_source_does_not_read_as_down() {
         let (_, _, label, _, _) = grade(Some(true), CaptureState::Unknown, Some(41.0));

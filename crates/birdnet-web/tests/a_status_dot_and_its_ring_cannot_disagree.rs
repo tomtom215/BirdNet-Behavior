@@ -3,7 +3,7 @@
 //! `--dawn` is an amber *fill*, and a 6px shape carrying no border is judged on
 //! its fill alone. Measured in a browser against the surfaces it actually sits
 //! on, in light mode: 2.85:1 on `--bg`, 2.97:1 on `--surface`, and **2.45:1 on
-//! the `--dawn-soft` pill fill** — the "Mic down" badge in the top nav, which
+//! the `--dawn-soft` pill fill** — the "Not recording" badge in the top nav, which
 //! is the most-seen dot in the product. WCAG 1.4.11 asks 3:1 of a meaningful
 //! graphic. Every other dot already measured 4.3–10.8 in both themes.
 //!

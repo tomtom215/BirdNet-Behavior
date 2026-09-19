@@ -140,8 +140,22 @@ pub(crate) fn avatar(common: &str, size: &str) -> String {
     )
 }
 
-/// Confidence bar (0–1) with the design's colour thresholds:
+/// Confidence bar with the design's colour thresholds:
 /// `> 0.90` moss, `> 0.75` dawn, else neutral.
+///
+/// # Why it reads `97%` and not `0.97`
+///
+/// `value` is the model's score, which is a probability, and printing it raw
+/// put a bare `0.97` beside nearly every bird in the app — the live feed, the
+/// history rows, the recordings grid, the species pages, the detail page —
+/// with nothing naming the scale or the quantity. The app already used percent
+/// everywhere a reader was likely to be a stranger (the public share page) or
+/// an analyst (`/admin/quality`), so the two most-read surfaces disagreed with
+/// each other about how to write the same number.
+///
+/// The bar is also given a name. It is `role="img"` with an `aria-label`,
+/// because the number alone — read aloud as "ninety-seven percent", next to a
+/// bird — does not say what it measures.
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(crate) fn conf_bar(value: f64) -> String {
@@ -155,7 +169,7 @@ pub(crate) fn conf_bar(value: f64) -> String {
     };
     let pct = (v * 100.0).round() as i64;
     format!(
-        r#"<span class="bnb-conf {cls}"><span class="track"><span class="fill" data-style="width:{pct}%"></span></span><span class="val">{v:.2}</span></span>"#,
+        r#"<span class="bnb-conf {cls}" role="img" aria-label="Confidence {pct}% — how sure the identifier was"><span class="track"><span class="fill" data-style="width:{pct}%"></span></span><span class="val">{pct}%</span></span>"#,
     )
 }
 
@@ -341,7 +355,39 @@ mod tests {
         assert!(conf_bar(0.95).contains("bnb-conf high"));
         assert!(conf_bar(0.80).contains("bnb-conf mid"));
         assert!(conf_bar(0.50).contains("bnb-conf "));
-        assert!(conf_bar(0.95).contains("0.95"));
+    }
+
+    /// The number beside a bird has to say what it is.
+    ///
+    /// A bare `0.95` was printed on every detection in the app, on a scale
+    /// nothing named, in a quantity nothing named. Both halves are asserted:
+    /// the visible text is a percentage, and the bar carries an accessible
+    /// name, because `95%` read aloud on its own is no better than `0.95`.
+    #[test]
+    fn a_confidence_reads_as_a_percentage_and_says_what_it_measures() {
+        let bar = conf_bar(0.95);
+        assert!(
+            bar.contains(">95%<"),
+            "the visible value must be percent: {bar}"
+        );
+        assert!(
+            !bar.contains("0.95"),
+            "the bare 0-to-1 form must be gone: {bar}"
+        );
+        assert!(
+            bar.contains(r#"role="img""#) && bar.contains("Confidence 95%"),
+            "the bar needs an accessible name: {bar}"
+        );
+    }
+
+    /// Rounding has to stay on the visible number. `0.955` reading as `96%`
+    /// while the bar fills to 95.5% would be two different answers in one
+    /// control.
+    #[test]
+    fn the_bar_and_its_number_round_together() {
+        let bar = conf_bar(0.955);
+        assert!(bar.contains("width:96%"), "{bar}");
+        assert!(bar.contains(">96%<"), "{bar}");
     }
 
     #[test]

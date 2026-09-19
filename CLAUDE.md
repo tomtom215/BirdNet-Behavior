@@ -165,6 +165,45 @@ Corollaries, each learned the same way:
   — it will cheerfully report that `new Function` works on a page where it does
   not. Test CSP behaviour by driving the real code path and listening for
   `securitypolicyviolation`.
+- **An accessibility sweep grades the state the page happened to be in.**
+  `axe.mjs` loads a route and reads it once. Any state a script reaches at
+  runtime — a socket retrying, a button mid-flight, a form after a failed
+  submit — is sampled by luck. The live-stream pill's reconnect state carried
+  `opacity: .6`, which composites text toward the page: 3.07:1 in light,
+  4.24:1 in dark, at 11px, against the 4.5:1 that WCAG 1.4.3 asks. The sweep
+  found it on exactly one route in one theme in one run, because the socket
+  happened to be retrying when that page was sampled; every other run was
+  clean, and the finding looked like noise from a server restart. When a
+  state is only reachable through JS, either drive it in the gate or check it
+  mechanically without a browser — do not let a green sweep stand for it.
+- **A value validated at startup is not a value validated.** `validate()` ran
+  on the config file at boot and `overlay_db_settings` laid the settings table
+  over the result afterwards, so nothing ever checked a number typed into
+  `/admin/settings`. `confidence_threshold=75` — the percentage slip, in a
+  field labelled "(0–1)" — stored cleanly and stopped the station detecting
+  for good, while `--doctor` reported the file as fine. Validate at the
+  boundary the value actually crosses. Where two places need the same bounds,
+  give them one table to read (`validate::NUMERIC_RANGES`) — but check what a
+  finding *does* before widening the validator: an `Error` makes `is_usable`
+  false, and `startup_config::choose` then reverts the station to its last-good
+  configuration file. Adding two alert thresholds to that list would have
+  turned a mistyped notification threshold into a silent rollback of every
+  other setting, so the form bounds those two itself and a test holds the two
+  copies of the shared five equal.
+- **A filter that skips unchanged fields skips the broken station.**
+  `build_settings_items` drops any field whose submitted value equals the
+  stored one, so a check driven by its output waves through a bad value that
+  is *already* in the database — precisely the station whose owner is on the
+  settings page because the birds stopped. Validate the submission, not the
+  diff.
+- **`page.contains("…")` can be satisfied by the template's own comment.**
+  `login.html` opens with a comment documenting its placeholders, quoting
+  "Incorrect username or password." verbatim, and that comment ships to the
+  browser. A test asserting the page did *not* contain that string failed
+  against a correct fix. Assert on the rendered region, not the document.
+- **`cargo check` does not build test cfg.** A struct field added for a page
+  render compiled clean and broke three `#[cfg(test)]` constructors in the
+  same file. Use `cargo check --all-targets`.
 - **`No space left on device` surfaces as unrelated test failures.** A full
   disk inside a `cc-rs` build script reported as four failing `birdnet-behavioral`
   ICU/extension tests, in a crate that had not been touched. `df -h /` reads

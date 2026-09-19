@@ -71,7 +71,7 @@
     <form id="search-form" class="td-logbar">
       <span class="nav-search td-search-wrap">
         <input type="search" name="search" id="today-search"
-               placeholder="Search species…  (prefix NOT to exclude)"
+               placeholder="Search species… (try NOT Robin)"
                class="td-search-input"
                hx-get="/pages/today-list"
                hx-trigger="input changed delay:300ms, search"
@@ -83,7 +83,7 @@
         <button type="button" class="btn active" data-filter="all" aria-pressed="true">All</button>
         <button type="button" class="btn" data-filter="rare" aria-pressed="false">Rare</button>
         <button type="button" class="btn" data-filter="first" aria-pressed="false">First today</button>
-        <button type="button" class="btn" data-filter="high" aria-pressed="false">High conf</button>
+        <button type="button" class="btn" data-filter="high" aria-pressed="false">Very sure</button>
       </div>
       <span class="htmx-indicator bnb-meta">Searching…</span>
     </form>

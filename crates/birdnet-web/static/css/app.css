@@ -299,6 +299,11 @@ em       { font-style: italic; }
 .bnb-pill.moss { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
 .bnb-pill.dawn { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
 .bnb-pill.rare { background: var(--rare-soft); color: var(--rare);     border-color: transparent; }
+/* A pill that is a link is a target, and WCAG 2.5.8 asks 24px of it. The
+   badge's own text sets 22.5px, so the floor is stated rather than inherited
+   from whatever the font metrics happen to give. Non-link pills keep their
+   compact height: they are labels, not targets. */
+a.bnb-pill { min-height: 24px; }
 a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 
 /* ── Status dots ──────────────────────────────────────────────────────────
@@ -645,8 +650,21 @@ footer a:hover { color: var(--moss-ink); }
 }
 
 /* Live detection-stream indicator, driven by live-detections.js. Hidden until
-   the client opens the socket; dimmed while reconnecting. */
-#live-status[data-state="reconnecting"] { opacity: .6; }
+   the client opens the socket.
+
+   Reconnecting is an amber pill, not a dimmed one. `opacity: .6` on the whole
+   pill composited its text toward the page and measured 3.07:1 in light and
+   4.24:1 in dark against the surface it sits on — 11px at weight 500, so WCAG
+   1.4.3 asks 4.5:1 and both themes failed. It failed in the one state whose
+   text the reader actually has to read; "Live" and the default state both sit
+   above 8.5:1, so the only unreadable word in the control was the one that
+   says something is wrong. The amber pair is the same one `.bnb-pill.dawn`
+   uses, and it says "attention" rather than "error", which is what a
+   reconnect is. Measured after: 7.26:1 light, 9.78:1 dark. */
+#live-status[data-state="reconnecting"] {
+  background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent;
+}
+#live-status[data-state="reconnecting"] .bnb-dot { --dot: var(--dawn); }
 #live-status[data-state="live"] .bnb-dot { --dot: var(--moss); }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -4480,8 +4498,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .sr-btn-primary:hover { background: var(--fg-2); }
 
 .sr-count       { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.5rem; }
-.sr-empty, .sr-loading, .sr-error { color: var(--text-muted); padding: 1.5rem 0; }
-.sr-error       { color: var(--danger); }
+.sr-empty, .sr-loading { color: var(--text-muted); padding: 1.5rem 0; }
 
 .sr-bulkbar     { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
                   padding: 0.5rem 0.75rem; margin-bottom: 0.5rem;

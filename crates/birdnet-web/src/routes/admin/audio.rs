@@ -127,9 +127,16 @@ const fn kind_css(kind: SourceKind) -> &'static str {
 /// its own copy that could drift.
 pub(crate) const fn kind_label(kind: SourceKind) -> &'static str {
     match kind {
-        SourceKind::UsbAlsa => "USB · ALSA",
-        SourceKind::PipeWire => "PipeWire",
-        SourceKind::Rtsp => "RTSP",
+        // Each of these leads with the thing the owner plugged in, because
+        // that is what they are looking for on this list. ALSA, PipeWire and
+        // RTSP are how the station talks to it, and naming a source purely by
+        // its transport ("USB · ALSA", "RTSP") tells a birdwatcher nothing
+        // about which of their microphones the row is. PipeWire keeps its name
+        // — the add-form makes you choose between it and ALSA, so the word has
+        // to stay recognisable here too.
+        SourceKind::UsbAlsa => "USB microphone",
+        SourceKind::PipeWire => "PipeWire microphone",
+        SourceKind::Rtsp => "Network camera",
     }
 }
 
@@ -1783,7 +1790,7 @@ mod tests {
         assert!(html.contains("rtsp://x"));
         assert!(html.contains("Down"));
         assert!(html.contains("untitled"));
-        assert!(html.contains("RTSP"));
+        assert!(html.contains("Network camera"));
     }
 
     #[test]

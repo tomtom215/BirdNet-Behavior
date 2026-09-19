@@ -145,6 +145,108 @@ used as a text colour at six sites across three admin pages, where it measures
 2.85:1; a duplicated `.sr-h1` that was shrinking the share permalink's hero —
 the one page in the product that strangers see — from 64px to 24px.
 
+### Fixed — the station read as if a Linux administrator were holding it
+
+A second pass over the front end, this one from the chair of the person the
+product is actually for: someone who bought a Raspberry Pi kit to find out
+which birds are in their garden, and who has never opened a terminal. Three
+of these are not copy problems.
+
+**A number typed into Settings could switch the station off for good, silently.**
+`birdnet_core::config::validate` has checked the detection thresholds since the
+beginning, and `--doctor` runs it from `ExecStartPre` — but only against the
+configuration *file*. `src/app.rs` validates, and then `overlay_db_settings`
+lays the settings table on top, so a value typed into `/admin/settings` arrives
+after the only check that would have caught it. The field is labelled "Minimum
+Confidence (0–1)", the score it is compared against is a probability, and the
+app's own notification templates offer `$confidencepct` beside `$confidence` —
+so `75` gets typed where `0.75` was meant. A probe against the shipped code:
+`stored CONFIDENCE = "75"; parsed = Some(75.0); validate() would say ["Error:
+CONFIDENCE=75 is outside the valid range 0 to 1"]`. The validator knew, and was
+never asked. Every three-second window then scored below 75, so the station
+recorded nothing, forever, while reporting itself healthy. The form now refuses
+the whole submission rather than writing half of it, and names the mistake:
+*"Minimum Confidence must be between 0 and 1. You entered 75 — if you meant
+75%, enter 0.75."* It validates the submission rather than the changed-values
+diff, so a bad value that is already stored is reported the next time the page
+is saved — the station whose owner is on that page looking for the reason.
+Seven fields were unbounded this way; two of them (`notify_confidence`,
+`email_min_confidence`) had no stated range at all and would have silenced
+every alert without touching detection. Those two are bounded by the form
+alone, deliberately: a `validate()` error makes `is_usable` false and
+`startup_config::choose` then reverts the whole configuration file, and a
+mistyped alert threshold must not roll back every other setting with it. The
+five that `validate()` does check read their bounds from
+`birdnet_core::config::validate::NUMERIC_RANGES`, and a test holds the form's
+copy equal to it.
+
+**The Help link in the site footer opened an unstyled wreck.** mdBook writes
+`index.html` with relative asset URLs, and the footer linked `/help` rather
+than `/help/`, so all thirteen stylesheets and scripts resolved against the site
+root, hit the application's own 404, and were refused as the wrong MIME type.
+The result was black-on-white text with the sidebar, search and table of
+contents gone and the inline SVG icons painted at intrinsic size as page-wide
+black slabs — 23 console errors. The server now redirects `/help` to `/help/`,
+so a bookmark or a typed URL works too.
+
+**A correct password was reported as a wrong one.** A `create_session` failure
+after the password had already verified redirected to the same `?error=1` as a
+genuine mismatch, which renders "Incorrect username or password." Someone who
+typed their password correctly retyped it, and five attempts tripped the login
+throttle — locked out of their own garden by a full disk, with the real cause
+in a server log they cannot read. The two outcomes now have separate messages.
+
+**Station Health named sources by their stream id while Capture named them by
+the label their owner typed.** The supervisor publishes `CaptureSource::label`,
+an identity it shares with the metrics gauge and the segment filename, so a
+station whose owner named two cameras "Front-yard" and "Pond" was told here
+that `RTSP_1` had stopped. The cards now lead with the owner's name and keep
+the id as the second line, and the banner names the source that stopped instead
+of saying "an audio source is down" and leaving three candidates.
+
+**The live-stream pill was unreadable in the one state worth reading.**
+`#live-status[data-state="reconnecting"] { opacity: .6 }` composited the whole
+pill, text included, toward the page: 3.07:1 in light and 4.24:1 in dark at
+11px, against the 4.5:1 WCAG 1.4.3 asks. "Live" measured 8.54:1 and 9.24:1, so
+the only illegible word in the control was the one saying something was wrong.
+It is now the amber pair `.bnb-pill.dawn` already uses — 7.26:1 and 9.78:1 —
+which also reads as "attention" rather than "error". The accessibility sweep
+had found this once, on one route, in one theme, because the socket happened to
+be retrying when that page was sampled; every other run was clean. A state only
+reachable through JS is graded by luck, so this one is checked mechanically.
+
+Copy, all of it verified in the rendered page:
+
+- The confidence beside every detection read `0.87` — a bare decimal on an
+  unnamed scale, printed in the live feed, the history rows, the recordings
+  grid, the species pages and the detail page. It now reads `87%`, which is
+  what the public share page and `/admin/quality` already used, and the bar
+  carries an accessible name rather than reading aloud as a naked number.
+- The top-nav health badge said "Mic down" and was a `<span>`: the reason lived
+  in a `title`, which no phone can show, and the screen that explains the
+  problem had to be found by guesswork. It is now a link to Station Health
+  reading "Not recording", with the reason in its accessible name.
+- `Backing off` on a source card, one line above its own retry line saying
+  `reconnecting` — one state, two names, one of them the retry algorithm's.
+- `input · usb-alsa` on the dashboard hero, and the same storage identifier in
+  the first-run checklist and the audio-source picker, where a display name
+  already existed. That display name was itself `USB · ALSA` / `RTSP`; sources
+  now read "USB microphone", "PipeWire microphone" and "Network camera".
+- `quick_check passed` (SQLite's pragma), `scratch space (RAM /tmp)`,
+  `capture is down`, `High conf`, and a search placeholder reading
+  `(prefix NOT to exclude)`.
+- The Audio settings section told the reader that channel count, sample rate
+  and gain are "set per source on Audio & Microphones". Neither form there has
+  a channel or a gain control, nothing in the product writes a non-mono layout
+  or a non-zero gain, and sample rate is on the add form only — so it cannot be
+  revisited once a source exists. The same file elsewhere advises picking Left
+  or Right for a spaced stereo pair, with nothing to pick with.
+- The Species **Photos** view turned a database error into "No species match
+  this filter yet." — the identical bug the same file documents having fixed in
+  the **List** view sixty lines earlier. The search results panel returned its
+  failure with `StatusCode::OK`, which is the one status htmx swaps, so it lost
+  the layout's "reload the page" fallback and left a dead end with no link.
+
 ### Changed — two classifiers with different windows now run together, and neither loses coverage
 
 **The chunk is cut to the longest window and stepped by the shortest** (`G-10`

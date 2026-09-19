@@ -51,10 +51,13 @@ use axum::Router;
 use axum::extract::Request;
 use axum::http::Uri;
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Redirect, Response};
 use tower_http::services::ServeDir;
 
 use crate::state::AppState;
+
+/// Mount point of the embedded mdBook, without a trailing slash.
+const HELP_ROOT: &str = "/help";
 
 /// Resolve the directory the `/help/*` route serves from.
 ///
@@ -80,7 +83,10 @@ fn help_dir() -> PathBuf {
 /// — to the `.html` file mdBook actually emits (`guide/today.html`).
 /// `ServeDir` never appends `.html`, so without this every deep help link would
 /// 404. `/help/` (served as `index.html`) and asset requests (`.css`, `.png`,
-/// `.woff2`, …) pass through untouched.
+/// `.woff2`, …) pass through untouched. The same middleware redirects the
+/// bare `/help` to `/help/`, without which mdBook's relative asset URLs resolve
+/// against the site root and the whole book renders unstyled — see
+/// [`rewrite_extensionless_help`].
 pub fn router() -> Router<AppState> {
     let dir = help_dir();
     Router::new()
@@ -104,9 +110,25 @@ fn help_html_rewrite(path: &str) -> Option<String> {
     Some(format!("{path}.html"))
 }
 
-/// Rewrite an extensionless `/help/…` request to the `.html` file mdBook emits
-/// before it reaches `ServeDir`. See [`router`].
+/// Redirect `/help` to `/help/`, then rewrite an extensionless `/help/…`
+/// request to the `.html` file mdBook emits. See [`router`].
+///
+/// The redirect is not cosmetic. mdBook's `index.html` references its CSS, its
+/// fonts and its JS with *relative* URLs (`css/general-….css`). Served at
+/// `/help` those resolve against `/`, so all thirteen requests land on the app's
+/// own 404 — which answers with HTML, and strict MIME checking then refuses
+/// every stylesheet and script. The page renders as unstyled text with the
+/// sidebar, the search box and the icon sizing all gone. Served at `/help/`
+/// they resolve against `/help/` and load. The site footer linked `/help`
+/// until 0.15.0, so this was what every reader of the Help link actually got.
 async fn rewrite_extensionless_help(mut req: Request, next: Next) -> Response {
+    if req.uri().path() == HELP_ROOT {
+        let query = req
+            .uri()
+            .query()
+            .map_or_else(String::new, |q| format!("?{q}"));
+        return Redirect::permanent(&format!("{HELP_ROOT}/{query}")).into_response();
+    }
     if let Some(new_path) = help_html_rewrite(req.uri().path()) {
         let query = req
             .uri()

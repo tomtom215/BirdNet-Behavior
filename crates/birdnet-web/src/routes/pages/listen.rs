@@ -71,7 +71,7 @@ fn render_options(sources: &[AudioSource], selected: Option<&str>) -> String {
                 },
                 glyph = kind_glyph,
                 label = escape_html(&label_display),
-                kind = s.kind.as_str(),
+                kind = crate::routes::admin::audio::kind_label(s.kind),
             ),
         );
     }
@@ -135,10 +135,11 @@ mod tests {
         // PipeWire row falls back to its device_id when no label.
         assert!(html.contains(r#"value="src_pw_1""#));
         assert!(html.contains("dev:src_pw_1"));
-        // Kind suffix renders for each row.
-        assert!(html.contains("(usb-alsa)"));
-        assert!(html.contains("(rtsp)"));
-        assert!(html.contains("(pipewire)"));
+        // Kind suffix renders for each row, in the words the Capture screen
+        // uses — `usb-alsa` and friends are the storage form, not a name.
+        assert!(html.contains("(USB microphone)"));
+        assert!(html.contains("(Network camera)"));
+        assert!(html.contains("(PipeWire microphone)"));
     }
 
     #[test]

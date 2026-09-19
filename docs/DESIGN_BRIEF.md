@@ -178,6 +178,48 @@ users**, with deep analytics underneath for enthusiasts.
    5.65 via its ring, with no layout change. See the "Status dots" block in
    `app.css` and `tests/a_status_dot_and_its_ring_cannot_disagree.rs`.
 
+10. **Plain language, and the reader who has never opened a terminal.** The
+    product is for someone who bought a Pi kit to find out which birds are in
+    their garden. Every string that reaches the browser is written for them.
+
+    *A first pass is done; the standing rule is the point.* Three tests, in
+    order of how much they caught:
+
+    - **Does the word name the thing, or the mechanism?** `Backing off` is the
+      retry algorithm; `Reconnecting` is what is happening. `quick_check` is
+      SQLite's pragma; "no damage found" is the finding. `usb-alsa` is the
+      storage identifier; "USB microphone" is the object on the windowsill.
+      `0.87` is the model's output; `87%` is how sure it was.
+    - **Does it name which one?** "An audio source is down" is true and
+      useless on a station with three. Name it, with the label its owner typed
+      — which means the screen showing status has to know the names the screen
+      doing configuration collects.
+    - **Can the reader act on it?** A badge that states a fault must be a link
+      to the screen that explains it. An error must distinguish "your input was
+      wrong" from "the station failed", because the reader's next action is
+      completely different — and the station must never claim the former when
+      it means the latter.
+
+    Two structural rules fall out and are enforced by gates rather than by
+    review:
+
+    - **A number a person types is validated where they type it.** Checking it
+      somewhere upstream is not checking it. `validate()` ran on the config
+      file and the settings overlay was applied afterwards, so the one field
+      most likely to be got wrong was the one field nothing checked. The five
+      ranges `validate()` enforces live in
+      `birdnet_core::config::validate::NUMERIC_RANGES`, and a test holds the
+      form's copy equal to it; the two alert thresholds are bounded by the form
+      alone, because a `validate()` error reverts the whole configuration file
+      and a mistyped notification threshold must not do that.
+    - **A message that refuses input says what to type instead.** Restating the
+      rule is not enough when the mistake is predictable: someone entering
+      `75` in a 0–1 field means 75%, and the refusal says so.
+
+    Hover is not a channel. Anything living only in a `title` attribute does
+    not exist on a phone, and a `title` on a control is not a reliable
+    accessible name.
+
 ## What I want from you, per screen (deliverables)
 
 - A short **diagnosis** of the current screen's problems.

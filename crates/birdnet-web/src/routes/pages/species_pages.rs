@@ -405,14 +405,27 @@ fn photos_view(
     search: Option<&str>,
     taxon: Option<&TaxonFilter>,
 ) -> String {
-    let (mut species, sparks) = state.with_db(|conn| {
+    // Same correction `list_view` carries, for the same reason: these two
+    // `unwrap_or_default`s reported a database error as an empty gallery, which
+    // `empty_note` then explains as "No species match this filter yet." — the
+    // browse surface telling its reader their filter matched nothing when the
+    // database is what failed. The sparklines stay defaulted: a missing
+    // sparkline costs a picture, not a fact.
+    let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
-            || birdnet_db::sqlite::top_species(conn, 200).unwrap_or_default(),
-            |q| birdnet_db::sqlite::search_species(conn, q, 200).unwrap_or_default(),
-        );
+            || birdnet_db::sqlite::top_species(conn, 200),
+            |q| birdnet_db::sqlite::search_species(conn, q, 200),
+        )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
-        (species, sparks)
+        Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
     });
+    let (mut species, sparks) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "species photos: query failed");
+            return super::error_states::could_not_load("your species list");
+        }
+    };
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
     }
