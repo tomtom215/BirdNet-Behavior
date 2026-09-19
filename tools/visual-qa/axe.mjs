@@ -12,7 +12,9 @@
 //   BASE         base url                       (default http://127.0.0.1:8502)
 //   THEMES       csv of light,dark              (default light,dark)
 //   AXE_FAIL_ON  csv impact levels that fail    (default serious,critical)
-//   AXE_DISABLE  csv rules to skip              (default link-in-text-block)
+//   AXE_DISABLE  csv rules to skip              (default: none)
+//   AXE_ADVISORY_BLOCKS  "0" demotes the WCAG 2.2 / best-practice tier
+//   VPS          csv of desktop,mobile          (default desktop,mobile)
 //   ONLY         substring filter on route name
 //
 // Run from this directory after `npm i playwright @axe-core/playwright`.
@@ -34,19 +36,58 @@ const FAIL_ON = new Set(
 );
 const ONLY = process.env.ONLY || '';
 
-// One WCAG rule is deferred to a design pass and excluded from this gate:
-//   - link-in-text-block: distinguishing in-text links without relying on
-//     colour is an app-wide link-underline policy.
+// Nothing is deferred any more. `link-in-text-block` was the last one, excluded
+// on the stated grounds that distinguishing in-text links without relying on
+// colour needed an app-wide underline policy. Measured rather than estimated,
+// it fired on **five** sites — everywhere else in the product a link is alone
+// in its own box (nav, tabs, cards, feed rows, chips, buttons, footer) and the
+// rule does not apply. One of the five was already solved correctly in a
+// `<style>` block scoped to `/admin/settings`, so the same `.hint` markup was
+// compliant there and not on the Station tab rendering it. app.css now carries
+// one additive "Prose links" rule; every leg is clean with the rule on.
+//
 // color-contrast is enforced (DD-29): the species avatar mixes its identity
 // hue towards an ink token, the muted text tokens sit at AA on every tinted
 // surface, and the bright fills carry --on-fill. It is all-or-nothing — any
 // low-contrast node keeps the gate red — which is the point.
-// Everything else at serious/critical is enforced. Re-check the full picture
-// with AXE_DISABLE="".
-const DISABLED_RULES = (process.env.AXE_DISABLE ?? 'link-in-text-block')
+const DISABLED_RULES = (process.env.AXE_DISABLE ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+
+// The tag filter, not the disable list, was the real hole in this gate.
+//
+// Gating on the four WCAG A/AA tags alone means axe runs 69 of its rules and
+// simply does not execute the other 36 — so a whole class of defect was
+// invisible here by construction rather than by decision. Not running, among
+// others: heading-order, page-has-heading-one, empty-heading, landmark-one-main,
+// landmark-no-duplicate-banner, region, focus-order-semantics, tabindex,
+// label-title-only, aria-dialog-name, skip-link, and target-size (which is
+// wcag22aa, a tag that was not in the list at all).
+//
+// They were added as an advisory tier first, which reported 40 findings on the
+// first run — landmark-one-main and region on all eight shell-less admin
+// routes, heading-order on fifteen, page-has-heading-one on three, plus
+// landmark-unique and empty-table-header. Those are fixed, all four legs
+// (light/dark x desktop/mobile) report zero in both tiers, and the tier is
+// blocking by default so the gain cannot quietly erode. Set
+// AXE_ADVISORY_BLOCKS=0 to demote it while working through a new batch.
+const BLOCKING_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
+const ADVISORY_TAGS = ['wcag22a', 'wcag22aa', 'best-practice'];
+const ADVISORY_BLOCKS = process.env.AXE_ADVISORY_BLOCKS !== '0';
+
+// Viewports. The gate ran at 1280x900 only, so the entire phone layout — the
+// bottom tab bar, the collapsed topnav, the stacked cards and every <=520px
+// override — had never been through an accessibility rule, though qa.mjs has
+// rendered it all along.
+const VP_TABLE = {
+  desktop: { viewport: { width: 1280, height: 900 }, hasTouch: false },
+  mobile: { viewport: { width: 390, height: 844 }, hasTouch: true },
+};
+const VPS = (process.env.VPS || 'desktop,mobile')
+  .split(',')
+  .map((v) => v.trim())
+  .filter((v) => VP_TABLE[v]);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -54,11 +95,14 @@ async function main() {
   const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
   let blocking = 0;
   let total = 0;
+  let advisory = 0;
   const seen = new Set(); // unique "[impact] rule" pairs, for the summary
+  const seenAdvisory = new Set();
 
   for (const theme of THEMES) {
+  for (const vp of VPS) {
     const context = await browser.newContext({
-      viewport: { width: 1280, height: 900 },
+      ...VP_TABLE[vp],
       colorScheme: theme === 'dark' ? 'dark' : 'light',
     });
     await context.addInitScript((t) => {
@@ -74,31 +118,40 @@ async function main() {
       if (ONLY && !name.includes(ONLY)) continue;
       // The deliberate 404 route is an error page, not a product surface.
       if (route.includes('does-not-exist')) continue;
-      const key = `${name}__${theme}`;
+      const key = `${name}__${theme}__${vp}`;
       try {
         await page.goto(BASE + route, { waitUntil: 'domcontentloaded', timeout: 25000 });
         await page.waitForLoadState('networkidle', { timeout: 9000 }).catch(() => {});
         await sleep(700);
         // Gate on the WCAG 2.0/2.1 A + AA success criteria — the legal/standard
-        // bar — and leave axe's "best-practice" rules as non-blocking noise.
+        // bar — and report the WCAG 2.2 and best-practice rules alongside.
         const builder = new AxeBuilder({ page }).withTags([
-          'wcag2a',
-          'wcag2aa',
-          'wcag21a',
-          'wcag21aa',
+          ...BLOCKING_TAGS,
+          ...ADVISORY_TAGS,
         ]);
         if (DISABLED_RULES.length) builder.disableRules(DISABLED_RULES);
         const results = await builder.analyze();
-        const v = results.violations;
+        const isBlockingTier = (it) =>
+          ADVISORY_BLOCKS || it.tags.some((t) => BLOCKING_TAGS.includes(t));
+        const v = results.violations.filter(isBlockingTier);
+        const adv = results.violations.filter((it) => !isBlockingTier(it));
         total += v.length;
+        advisory += adv.length;
         const blk = v.filter((it) => FAIL_ON.has(it.impact));
         blocking += blk.length;
-        if (v.length) {
+        for (const it of adv) seenAdvisory.add(`[${it.impact}] ${it.id}`);
+        if (v.length || adv.length) {
           for (const it of v) {
             const mark = FAIL_ON.has(it.impact) ? '!' : '.';
             seen.add(`[${it.impact}] ${it.id}`);
             console.log(`${mark} ${key} [${it.impact}] ${it.id}: ${it.help} (${it.nodes.length} node(s))`);
             for (const node of it.nodes.slice(0, 4)) {
+              console.log(`      ${node.target.join(' ')}`);
+            }
+          }
+          for (const it of adv) {
+            console.log(`~ ${key} [advisory ${it.impact}] ${it.id}: ${it.help} (${it.nodes.length} node(s))`);
+            for (const node of it.nodes.slice(0, 2)) {
               console.log(`      ${node.target.join(' ')}`);
             }
           }
@@ -113,6 +166,7 @@ async function main() {
     }
     await context.close();
   }
+  }
   await browser.close();
 
   console.log(`\n=== axe: ${total} total violation(s); ${blocking} at/above [${[...FAIL_ON].join(', ')}] ===`);
@@ -122,6 +176,13 @@ async function main() {
   if (seen.size) {
     console.log('distinct rules seen:');
     for (const r of [...seen].sort()) console.log(`  ${r}`);
+  }
+  console.log(
+    `--- advisory (WCAG 2.2 + best-practice): ${advisory} finding(s)` +
+      `${ADVISORY_BLOCKS ? ', PROMOTED TO BLOCKING' : ', not gated'} ---`,
+  );
+  if (seenAdvisory.size) {
+    for (const r of [...seenAdvisory].sort()) console.log(`  ~ ${r}`);
   }
   if (blocking > 0) {
     console.error(`\nFAIL: ${blocking} blocking accessibility violation(s).`);

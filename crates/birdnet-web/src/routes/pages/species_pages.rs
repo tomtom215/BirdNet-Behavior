@@ -256,7 +256,7 @@ fn controls(view: &str, filter: &str, search: Option<&str>, taxon: Option<&Taxon
             )
         });
         let form = format!(
-            r#"<span class="sp-search"><span class="ico" aria-hidden="true">⌕</span><form method="get" action="/species" role="search"><input type="hidden" name="view" value="{view}"><input type="hidden" name="filter" value="{filter}">{keep}<input type="search" name="q" value="{val}" placeholder="Find a species…" aria-label="Find a species"></form></span>"#
+            r#"<span class="sp-search"><span class="ico" aria-hidden="true">⌕</span><form method="get" action="/species" role="search" aria-label="Filter this species list"><input type="hidden" name="view" value="{view}"><input type="hidden" name="filter" value="{filter}">{keep}<input type="search" name="q" value="{val}" placeholder="Find a species…" aria-label="Find a species"></form></span>"#
         );
         (c, form)
     };
@@ -336,14 +336,27 @@ fn list_view(
     search: Option<&str>,
     taxon: Option<&TaxonFilter>,
 ) -> String {
-    let (mut species, sparks) = state.with_db(|conn| {
+    // The two `unwrap_or_default`s this replaces turned a database error into
+    // an empty species list, which `empty_note` then reports as "No species
+    // match this filter yet." — the primary browse surface telling the operator
+    // their filter matched nothing when the database is what failed. The
+    // sparklines are decoration and keep their fallback: a missing sparkline
+    // costs a picture, not a fact.
+    let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
-            || birdnet_db::sqlite::top_species(conn, 500).unwrap_or_default(),
-            |q| birdnet_db::sqlite::search_species(conn, q, 500).unwrap_or_default(),
-        );
+            || birdnet_db::sqlite::top_species(conn, 500),
+            |q| birdnet_db::sqlite::search_species(conn, q, 500),
+        )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
-        (species, sparks)
+        Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
     });
+    let (mut species, sparks) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "species list: query failed");
+            return super::error_states::could_not_load("your species list");
+        }
+    };
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
     }
@@ -367,10 +380,10 @@ fn list_view(
             rows,
             r#"<tr><td class="sp-rank">{rank}</td><td><a class="sp-cell" href="/species/detail?name={enc}"><span class="sp-cell-av">{av}</span><span class="sp-cell-tx"><span class="sp-nm">{name}</span><span class="sp-sci">{sci}</span></span></a></td><td>{spark}</td><td class="sp-num">{count}</td><td>{conf}</td></tr>"#,
             rank = i + 1,
-            av = avatar(&s.com_name, ""),
+            av = avatar(&s.com_name, &s.sci_name, ""),
             name = escape_html(&s.com_name),
             sci = escape_html(&s.sci_name),
-            count = format_count(s.count),
+            count = super::group_thousands(s.count),
             conf = conf_bar(s.avg_confidence),
         );
     }
@@ -392,14 +405,27 @@ fn photos_view(
     search: Option<&str>,
     taxon: Option<&TaxonFilter>,
 ) -> String {
-    let (mut species, sparks) = state.with_db(|conn| {
+    // Same correction `list_view` carries, for the same reason: these two
+    // `unwrap_or_default`s reported a database error as an empty gallery, which
+    // `empty_note` then explains as "No species match this filter yet." — the
+    // browse surface telling its reader their filter matched nothing when the
+    // database is what failed. The sparklines stay defaulted: a missing
+    // sparkline costs a picture, not a fact.
+    let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
-            || birdnet_db::sqlite::top_species(conn, 200).unwrap_or_default(),
-            |q| birdnet_db::sqlite::search_species(conn, q, 200).unwrap_or_default(),
-        );
+            || birdnet_db::sqlite::top_species(conn, 200),
+            |q| birdnet_db::sqlite::search_species(conn, q, 200),
+        )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
-        (species, sparks)
+        Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
     });
+    let (mut species, sparks) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "species photos: query failed");
+            return super::error_states::could_not_load("your species list");
+        }
+    };
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
     }
@@ -418,7 +444,7 @@ fn photos_view(
             cards,
             r#"<a class="sp-photo-card" href="/species/detail?name={enc}"><div class="bnb-card"><div class="bnb-photo sp-photo"><div class="ga-thumb-bg" data-style="background:color-mix(in oklch, {color} 15%, var(--surface))"><span class="display ga-code" data-style="--sp:{color}">{code}</span></div><img src="/api/v2/species/image/{enc_sci}/file" alt="{name}" loading="lazy" class="ga-img" data-hide-on-error></div><div class="sp-photo-meta"><div class="nm">{name}</div><div class="sub">{count} detections</div></div></div></a>"#,
             name = escape_html(&s.com_name),
-            count = format_count(s.count),
+            count = super::group_thousands(s.count),
         );
     }
     let count_line = format!(
@@ -439,18 +465,20 @@ fn photos_view(
 /// The **Life list** view: the big counters, the accumulation curve, and the
 /// "New to the list" recent firsts. Every species the station has ever heard.
 fn lifelist_view(state: &AppState) -> String {
-    let (species_total, det_total, active_days, points, firsts) = state.with_db(|conn| {
-        let species_total = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
-        let det_total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-        let active_days = birdnet_db::sqlite::distinct_detection_dates(conn).map_or(0, |v| v.len());
-        let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+    // The three big counters are this page's whole point, and a life list that
+    // reads "0 species · 0 detections · 0 active days" is not an empty life
+    // list — it is a lost one, shown to the person least able to shrug it off.
+    let loaded = state.with_db(|conn| {
+        let species_total = birdnet_db::sqlite::species_count(conn)?;
+        let det_total = birdnet_db::sqlite::detection_count(conn)?;
+        let active_days = birdnet_db::sqlite::distinct_detection_dates(conn)?.len();
+        let first_seen = birdnet_db::sqlite::species_first_seen(conn)?;
         let points = accumulation_points(&first_seen);
         let new_count = new_this_year(&first_seen);
         // Most-recent firsts: scientific-name keyed first-seen, joined to common
         // names via the top-species list (which carries both).
         let mut named: Vec<(String, String, String)> =
-            birdnet_db::sqlite::top_species(conn, 10_000)
-                .unwrap_or_default()
+            birdnet_db::sqlite::top_species(conn, 10_000)?
                 .into_iter()
                 .filter_map(|s| {
                     first_seen
@@ -460,14 +488,21 @@ fn lifelist_view(state: &AppState) -> String {
                 .collect();
         named.sort_by(|a, b| b.2.cmp(&a.2));
         named.truncate(6);
-        (
+        Ok::<_, birdnet_db::sqlite::DbError>((
             species_total,
             det_total,
             active_days,
             points,
             (new_count, named),
-        )
+        ))
     });
+    let (species_total, det_total, active_days, points, firsts) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "life list: query failed");
+            return super::error_states::could_not_load("your life list");
+        }
+    };
     let (new_count, named) = firsts;
 
     let curve = super::viz::accumulation_curve(&points);
@@ -477,7 +512,7 @@ fn lifelist_view(state: &AppState) -> String {
         let _ = write!(
             firsts_html,
             r#"<a class="sp-first-row" href="/species/detail?name={enc}">{av}<div class="sp-cell-tx"><div class="sp-nm">{name}</div><div class="sp-sci">{sci}</div></div><span class="when">{date}</span></a>"#,
-            av = avatar(com, ""),
+            av = avatar(com, sci, ""),
             name = escape_html(com),
             sci = escape_html(sci),
             date = escape_html(date),
@@ -496,8 +531,8 @@ fn lifelist_view(state: &AppState) -> String {
   </div>
   <div class="bnb-card pad"><div class="bnb-eyebrow">Your growing list</div><div class="sd-viz">{curve}</div></div>
 </div>
-<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most recent</div><h3>New to the list</h3></div></div><div class="sp-firsts">{firsts_html}</div></div>"#,
-        det = format_count(det_total),
+<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most recent</div><h2 class="sh-h">New to the list</h2></div></div><div class="sp-firsts">{firsts_html}</div></div>"#,
+        det = super::group_thousands(det_total),
     )
 }
 
@@ -551,7 +586,7 @@ fn species_count_line(n: usize, filter: &str, total: i64) -> String {
     };
     format!(
         r#"<div class="sp-count"><b>{n}</b> species{scope} · {total} detections all-time</div>"#,
-        total = format_count(total),
+        total = super::group_thousands(total),
     )
 }
 
@@ -562,20 +597,6 @@ fn empty_note(search: Option<&str>) -> String {
         |q| format!("No species match “{}”.", escape_html(q)),
     );
     format!(r#"<div class="bnb-card pad bnb-meta">{what}</div>"#)
-}
-
-/// Group a count with thousands separators (e.g. `3142` → `3,142`).
-fn format_count(n: i64) -> String {
-    let s = n.abs().to_string();
-    let mut out = String::new();
-    let bytes = s.as_bytes();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(char::from(*b));
-    }
-    if n < 0 { format!("-{out}") } else { out }
 }
 
 async fn species_detail_page(
@@ -661,11 +682,15 @@ async fn species_summary_partial(
             [(header::CONTENT_TYPE, "text/html")],
             r#"<p class="spp-muted">Species not found.</p>"#.to_string(),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading summary</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species summary: query failed");
+            super::error_states::failed_partial("this species' summary")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species summary: task failed");
+            super::error_states::failed_partial("this species' summary")
+        }
     }
 }
 
@@ -690,11 +715,15 @@ async fn species_hourly_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_hourly_chart(&hours),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species hourly chart: query failed");
+            super::error_states::failed_partial("this species' hourly chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species hourly chart: task failed");
+            super::error_states::failed_partial("this species' hourly chart")
+        }
     }
 }
 
@@ -719,11 +748,15 @@ async fn species_daily_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_daily_chart(&days),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species daily chart: query failed");
+            super::error_states::failed_partial("this species' daily chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species daily chart: task failed");
+            super::error_states::failed_partial("this species' daily chart")
+        }
     }
 }
 
@@ -774,11 +807,15 @@ async fn species_detections_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading detections</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species detections: query failed");
+            super::error_states::failed_partial("this species' detections")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species detections: task failed");
+            super::error_states::failed_partial("this species' detections")
+        }
     }
 }
 
@@ -977,7 +1014,7 @@ async fn species_status_partial(
 <span class="bnb-pill">First heard {first}</span>
 <span class="bnb-pill">Last heard {last}</span>
 <span class="bnb-pill">avg {conf_pct:.0}% confidence</span>"#,
-                count = s.count,
+                count = super::group_thousands(s.count),
                 first = escape_html(&s.first_seen),
                 last = escape_html(&s.last_seen),
             )
@@ -1105,11 +1142,15 @@ async fn species_companions_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading companion species</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species companions: query failed");
+            super::error_states::failed_partial("the species heard alongside this one")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species companions: task failed");
+            super::error_states::failed_partial("the species heard alongside this one")
+        }
     }
 }
 

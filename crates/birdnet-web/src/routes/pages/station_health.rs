@@ -46,6 +46,27 @@ struct Snapshot {
     vitals: Vec<Vital>,
     /// Configured audio sources (count only — the panel keys on activity).
     sources_configured: usize,
+    /// `true` when the database read behind this snapshot failed.
+    ///
+    /// Every number on this page that comes from the database used to be
+    /// `.unwrap_or_default()`-ed, so a failed read rendered a calm, ordinary
+    /// page: "no microphone or camera is set up yet", "No detections yet
+    /// today", a total of 0 — a brand-new station, shown to someone whose own
+    /// has been running for years. This is the screen every other error
+    /// message in the app sends its reader to, and the module comment above
+    /// promises "Everything shown is real", so a read that failed has to say
+    /// so rather than round down to a plausible nothing. The vitals are
+    /// measured from the system rather than the database and stay true.
+    db_read_failed: bool,
+    /// `stream id -> the name its owner typed`, for the sources that have one.
+    ///
+    /// The supervisor publishes `SourceStatus::label`, which is the stream id
+    /// (`CaptureSource::label`) — an identity shared with the gauge label and
+    /// the segment filename, and so not ours to change. But it is not what the
+    /// Capture screen shows, and a station with two cameras reading `RTSP_1`
+    /// and `RTSP_2` here and `Front-yard` and `Pond` there leaves its owner
+    /// unable to tell which camera is the one that stopped.
+    source_names: std::collections::HashMap<String, String>,
     /// Live per-source health from the capture supervisor. Empty when no
     /// supervisor is running, in which case the panel falls back to `activity`.
     capture: Vec<SourceStatus>,
@@ -97,24 +118,51 @@ async fn gather(state: &AppState) -> Snapshot {
             .ok()
             .filter(|s| disk.as_ref().is_none_or(|d| d.total_bytes != s.total_bytes));
 
-        let (sources_configured, activity, last_detection, queued, total, integrity) = state
-            .with_db(|conn| {
-                let sources = AudioSourceStore::list(conn)
-                    .map_or(0, |s| s.iter().filter(|x| x.disabled_at.is_none()).count());
-                let activity =
-                    birdnet_db::sqlite::todays_source_activity(conn, &super::today_date_string())
-                        .unwrap_or_default();
-                let last = birdnet_db::sqlite::seconds_since_last_detection(conn)
-                    .ok()
-                    .flatten();
-                let queued = birdnet_db::outbound_queue::depth(
-                    conn,
-                    birdnet_integrations::birdweather::QUEUE_KIND,
+        let read = state.with_db(|conn| {
+            let listed = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
+            let sources = listed.iter().filter(|x| x.disabled_at.is_none()).count();
+            let names: std::collections::HashMap<String, String> = listed
+                .iter()
+                .filter(|x| x.disabled_at.is_none())
+                .filter_map(|x| {
+                    let label = x.label.as_deref()?.trim();
+                    (!label.is_empty() && label != x.id).then(|| (x.id.clone(), label.to_owned()))
+                })
+                .collect();
+            let activity =
+                birdnet_db::sqlite::todays_source_activity(conn, &super::today_date_string())
+                    .map_err(|e| e.to_string())?;
+            let last = birdnet_db::sqlite::seconds_since_last_detection(conn)
+                .map_err(|e| e.to_string())?;
+            // Propagated like its siblings: "Queued uploads 0 · all delivered"
+            // is a claim, and the one reader who needs it is the one whose
+            // uploads have stopped.
+            let queued = birdnet_db::outbound_queue::depth(
+                conn,
+                birdnet_integrations::birdweather::QUEUE_KIND,
+            )
+            .map_err(|e| e.to_string())?;
+            let total = birdnet_db::sqlite::detection_count(conn).map_err(|e| e.to_string())?;
+            // Fail-unsafe on purpose: an integrity check we could not run
+            // is not an integrity check that passed.
+            let integrity = birdnet_db::sqlite::quick_check(conn).unwrap_or(false);
+            Ok::<_, String>((sources, names, activity, last, queued, total, integrity))
+        });
+        let db_read_failed = read.is_err();
+        if let Err(ref e) = read {
+            tracing::warn!(error = %e, "station health: database read failed");
+        }
+        let (sources_configured, source_names, activity, last_detection, queued, total, integrity) =
+            read.unwrap_or_else(|_| {
+                (
+                    0,
+                    std::collections::HashMap::new(),
+                    Vec::new(),
+                    None,
+                    0,
+                    0,
+                    false,
                 )
-                .unwrap_or(0);
-                let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-                let integrity = birdnet_db::sqlite::quick_check(conn).unwrap_or(false);
-                (sources, activity, last, queued, total, integrity)
             });
 
         // Live capture-supervisor health, when a supervisor is publishing it.
@@ -127,6 +175,8 @@ async fn gather(state: &AppState) -> Snapshot {
         Snapshot {
             vitals,
             sources_configured,
+            db_read_failed,
+            source_names,
             capture,
             activity,
             last_detection,
@@ -156,12 +206,21 @@ async fn gather(state: &AppState) -> Snapshot {
     .unwrap_or_else(|_| Snapshot {
         vitals: Vec::new(),
         sources_configured: 0,
+        db_read_failed: true,
+        source_names: std::collections::HashMap::new(),
         capture: Vec::new(),
         activity: Vec::new(),
         last_detection: None,
         queued_uploads: 0,
         total_detections: 0,
-        integrity_ok: true,
+        // Fail-unsafe until this line: a snapshot we could not take asserted
+        // that the database integrity check had *passed*. Every other field
+        // here reads as "nothing to report", which is at worst uninformative;
+        // this one manufactured a clean bill of health for the one page an
+        // operator opens when they suspect something is wrong. `quick_check`
+        // inside the closure above is already `unwrap_or(false)` for the same
+        // reason, so the two directions no longer contradict each other.
+        integrity_ok: false,
         disk_low: false,
         disk_critical: false,
         scratch_low: false,
@@ -284,36 +343,85 @@ fn render(s: &Snapshot) -> String {
     )
 }
 
+/// What to call a source on this screen: the name its owner gave it, else the
+/// stream id the supervisor publishes.
+fn display_name(s: &Snapshot, label: &str) -> String {
+    s.source_names
+        .get(label)
+        .map_or_else(|| label.to_owned(), Clone::clone)
+}
+
+/// Name the sources in `faulty`, or count them once there are too many to read.
+fn name_sources(s: &Snapshot, faulty: &[&SourceStatus]) -> String {
+    match faulty {
+        [] => String::new(),
+        [one] => display_name(s, &one.label),
+        [a, b] => format!(
+            "{} and {}",
+            display_name(s, &a.label),
+            display_name(s, &b.label)
+        ),
+        many => format!("{} audio sources", many.len()),
+    }
+}
+
 /// The overall status banner — green unless a real problem is present.
 fn status_banner(s: &Snapshot) -> String {
-    let mut issues: Vec<&str> = Vec::new();
-    if s.disk_critical {
-        issues.push("storage is critically low");
-    } else if s.disk_low {
-        issues.push("storage is running low");
+    let mut issues: Vec<String> = Vec::new();
+    // First, and on its own: every issue below it is derived from the read
+    // that failed, so listing them alongside would be reporting a station we
+    // could not see. The vitals are measured from the system and still show.
+    if s.db_read_failed {
+        return format!(
+            "<div class=\"st-status warn\"><span class=\"ico\" aria-hidden=\"true\">!</span><div>\
+             <div class=\"t\">Needs attention</div>\
+             <div class=\"s\">{}</div></div></div>",
+            escape_html(
+                "The station's records could not be read, so the counts and sources \
+                 below are missing rather than empty. The hardware readings are still \
+                 live. Reload; if it persists, check the disk."
+            )
+        );
     }
+    if s.disk_critical {
+        issues.push("storage is critically low".to_owned());
+    } else if s.disk_low {
+        issues.push("storage is running low".to_owned());
+    }
+    // "scratch space (RAM /tmp)" named the implementation. What the reader has
+    // is a temporary folder that recordings pass through on their way to disk.
     if s.scratch_critical {
-        issues.push("scratch space (RAM /tmp) is critically low");
+        issues.push("the temporary recording folder is critically low on space".to_owned());
     } else if s.scratch_low {
-        issues.push("scratch space (RAM /tmp) is running low");
+        issues.push("the temporary recording folder is running low on space".to_owned());
     }
     if !s.integrity_ok {
-        issues.push("the database integrity check failed");
+        issues.push("the database integrity check failed".to_owned());
     }
     if s.sources_configured == 0 {
-        issues.push("no audio sources are configured");
+        issues.push("no microphone or camera is set up yet".to_owned());
     }
     if s.queued_uploads > 0 {
-        issues.push("uploads are waiting for the network");
+        issues.push("uploads are waiting for the network".to_owned());
     }
-    if s.capture.iter().any(|c| c.state.is_fault()) {
-        issues.push("an audio source is down");
+    // Named, not counted. "An audio source is down" told the owner of two
+    // cameras that one of them had a problem and left them to work out which.
+    let faulted: Vec<&SourceStatus> = s.capture.iter().filter(|c| c.state.is_fault()).collect();
+    if !faulted.is_empty() {
+        issues.push(format!(
+            "{} stopped sending audio",
+            name_sources(s, &faulted)
+        ));
     }
-    if s.capture.iter().any(|c| c.flapping) {
-        issues.push("an audio source is flapping: it keeps dying and coming back");
+    let flapping: Vec<&SourceStatus> = s.capture.iter().filter(|c| c.flapping).collect();
+    if !flapping.is_empty() {
+        issues.push(format!(
+            "{} keeps dropping out and reconnecting",
+            name_sources(s, &flapping)
+        ));
     }
     if s.occurrence.admits_nothing() {
-        issues.push("the species filter admits no species, so nothing can be recorded");
+        issues.push("the species filter admits no species, so nothing can be recorded".to_owned());
     }
 
     let last = s
@@ -347,6 +455,11 @@ fn status_banner(s: &Snapshot) -> String {
 fn source_panel(s: &Snapshot) -> String {
     if !s.capture.is_empty() {
         return live_source_panel(s);
+    }
+    if s.db_read_failed {
+        // Not "No detections yet today": that is a statement about the
+        // reader's birds, and we did not manage to look.
+        return super::error_states::inline("today's source activity");
     }
     if s.activity.is_empty() {
         return "<div class=\"bnb-card pad st-source-empty\">No detections yet today. Sources \
@@ -392,14 +505,19 @@ fn live_source_panel(s: &Snapshot) -> String {
             .iter()
             .find(|a| a.source.as_deref() == Some(src.label.as_str()))
             .map_or(0, |a| a.count);
-        out.push_str(&source_card(src, today));
+        out.push_str(&source_card(src, today, s.source_names.get(&src.label)));
     }
     out.push_str("</div>");
     out
 }
 
 /// One live source card.
-fn source_card(src: &SourceStatus, today: i64) -> String {
+///
+/// `friendly` is the name its owner gave the source on the Capture screen, when
+/// they gave it one. It leads, and the stream id becomes the second line — the
+/// id still has to be visible, because it is what the filenames, the metrics
+/// and the logs all call this source.
+fn source_card(src: &SourceStatus, today: i64, friendly: Option<&String>) -> String {
     let stalled = if src.state == SourceState::Stalled {
         " stalled"
     } else {
@@ -408,13 +526,16 @@ fn source_card(src: &SourceStatus, today: i64) -> String {
     let last_audio = src
         .last_audio_age_secs
         .map_or_else(|| "—".to_string(), format_freshness);
+    let (name, sub) = friendly.map_or_else(
+        || (escape_html(&src.label), "audio source".to_string()),
+        |f| (escape_html(f), escape_html(&src.label)),
+    );
     format!(
         "<div class=\"bnb-card st-source{stalled}\"><div class=\"st-source-head\">\
          <div><div class=\"st-source-name\">{name}</div>\
-         <div class=\"st-source-type\">audio source</div></div>{chip}</div>\
+         <div class=\"st-source-type\">{sub}</div></div>{chip}</div>\
          {strip}<div class=\"st-source-foot\"><span><b>{last_audio}</b> · last audio</span>\
          <span><b>{today}</b> · detections today</span></div>{retry}{flap}</div>",
-        name = escape_html(&src.label),
         chip = source_chip(src.state),
         strip = uptime_strip(&src.uptime_24h),
         retry = retry_line(src),
@@ -450,8 +571,13 @@ const fn source_chip(state: SourceState) -> &'static str {
         SourceState::Stalled => {
             "<span class=\"bnb-pill rare\"><span class=\"bnb-dot rare\"></span> Stalled</span>"
         }
+        // "Reconnecting", not "Backing off". Exponential backoff is the
+        // mechanism, not what the owner of a garden microphone needs to read —
+        // and `retry_line` has always described this same state as
+        // "reconnecting", so one card named one state two ways, one of them in
+        // a vocabulary no reader of this screen shares.
         SourceState::BackingOff => {
-            "<span class=\"bnb-pill dawn\"><span class=\"bnb-dot dawn\"></span> Backing off</span>"
+            "<span class=\"bnb-pill dawn\"><span class=\"bnb-dot dawn\"></span> Reconnecting</span>"
         }
         SourceState::Paused => {
             "<span class=\"bnb-pill\"><span class=\"bnb-dot\"></span> Paused</span>"
@@ -536,6 +662,22 @@ fn vitals_row(vitals: &[Vital]) -> String {
 
 /// The pipeline row: last detection · queued uploads · service uptime · total.
 fn pipeline_row(s: &Snapshot) -> String {
+    // A number we could not read prints as a dash. Printing `0` here told a
+    // three-year station it had never heard a bird.
+    if s.db_read_failed {
+        return format!(
+            "<div class=\"st-pipe\">\
+             <div><div class=\"lab\">Last detection</div><div class=\"v\">—</div></div>\
+             <div><div class=\"lab\">Queued uploads</div><div class=\"v\">—</div></div>\
+             <div><div class=\"lab\">Service uptime</div><div class=\"v\"><span class=\"mono\">{uptime}</span></div></div>\
+             <div><div class=\"lab\">Total detections</div><div class=\"v\">—</div></div>\
+             <div><div class=\"lab\">Species filter</div><div class=\"v\">—</div></div>\
+             </div>",
+            uptime = s
+                .service_uptime
+                .map_or_else(|| "—".to_string(), |u| escape_html(&format_uptime(u))),
+        );
+    }
     let last = s
         .last_detection
         .map_or_else(|| "no detections yet".to_string(), format_freshness);
@@ -558,7 +700,7 @@ fn pipeline_row(s: &Snapshot) -> String {
          <div><div class=\"lab\">Total detections</div><div class=\"v\"><span class=\"mono\">{total}</span></div></div>\
          <div><div class=\"lab\">Species filter</div><div class=\"v\">{filter}</div></div>\
          </div>",
-        total = s.total_detections,
+        total = super::group_thousands(s.total_detections),
         filter = occurrence_cell(s.occurrence),
     )
 }
@@ -647,11 +789,32 @@ fn diagnostics(s: &Snapshot) -> String {
             d = escape_html(detail),
         )
     };
-    let sources_detail = format!(
-        "{} configured · {} active today",
-        s.sources_configured,
-        s.activity.len()
-    );
+    // The supervisor's own verdict, not merely "is anything configured".
+    // This row used to ask `sources_configured > 0` alone, which ticked green
+    // on the same screen as a warning banner reading "an audio source is down"
+    // and two source cards chipped Stalled / Backing off. When a supervisor is
+    // publishing, its faults decide this row; without one, the old question is
+    // still the only one we can answer.
+    let faulted = s.capture.iter().filter(|c| c.state.is_fault()).count();
+    let flapping = s.capture.iter().filter(|c| c.flapping).count();
+    let sources_ok = s.sources_configured > 0 && faulted == 0 && flapping == 0;
+    let sources_detail = if faulted > 0 {
+        format!(
+            "{} configured · {faulted} not reporting",
+            s.sources_configured
+        )
+    } else if flapping > 0 {
+        format!(
+            "{} configured · {flapping} keeps dropping and reconnecting",
+            s.sources_configured
+        )
+    } else {
+        format!(
+            "{} configured · {} active today",
+            s.sources_configured,
+            s.activity.len()
+        )
+    };
     let disk_detail = if s.disk_critical {
         "critically low — recordings may stop"
     } else if s.disk_low {
@@ -663,7 +826,7 @@ fn diagnostics(s: &Snapshot) -> String {
         "<div class=\"st-check\">{a}{b}{c}</div>\
          <p class=\"bnb-meta st-doctor-link\">Configuration checks live in \
          <a href=\"/admin/doctor\">Diagnostics</a> (sign-in required).</p>",
-        a = row(s.sources_configured > 0, "Audio sources", &sources_detail),
+        a = row(sources_ok, "Audio sources", &sources_detail),
         b = row(
             !s.disk_low && !s.disk_critical,
             "Disk headroom",
@@ -672,10 +835,12 @@ fn diagnostics(s: &Snapshot) -> String {
         c = row(
             s.integrity_ok,
             "Database integrity",
+            // `quick_check` is SQLite's name for the pragma this reports, not
+            // a word this screen's reader has ever met.
             if s.integrity_ok {
-                "quick_check passed"
+                "no damage found"
             } else {
-                "quick_check FAILED — restore from a backup"
+                "damage found — restore from a backup"
             }
         ),
     )
@@ -707,6 +872,8 @@ mod tests {
         Snapshot {
             vitals: Vec::new(),
             sources_configured: sources,
+            db_read_failed: false,
+            source_names: std::collections::HashMap::new(),
             capture: Vec::new(),
             activity: Vec::new(),
             last_detection: Some(30),
@@ -785,6 +952,72 @@ mod tests {
     }
 
     /// AD-3. A source that dies and comes back within seconds reads Live,
+    /// The name on this card has to be the one its owner chose.
+    ///
+    /// The supervisor publishes `SourceStatus::label`, which is the stream id
+    /// (`CaptureSource::label`) — an identity it shares with the metrics gauge
+    /// and the segment filename, so it is not ours to rename. But the Capture
+    /// screen shows the friendly label, and this screen showed the id: a
+    /// station whose owner named two cameras "Front-yard" and "Pond" was told
+    /// here that `RTSP_1` had stopped, which is not a sentence they can act
+    /// on. The id stays visible as the second line, because it is what the
+    /// filenames and the logs call this source.
+    #[test]
+    fn a_source_card_leads_with_the_name_its_owner_gave_it() {
+        let src = cap_source("RTSP_1", SourceState::Connected, 0, None);
+        let friendly = "Front-yard camera".to_string();
+        let card = source_card(&src, 3, Some(&friendly));
+        assert!(
+            card.contains(">Front-yard camera</div>"),
+            "the operator's own name must be the card's title: {card}"
+        );
+        assert!(
+            card.contains(">RTSP_1</div>"),
+            "the stream id must stay visible — it is what the filenames and \
+             the logs call this source: {card}"
+        );
+    }
+
+    /// The counterpart. Most stations never label anything, and a card that
+    /// fell back to an empty title would pass the test above.
+    #[test]
+    fn an_unlabelled_source_still_names_itself() {
+        let src = cap_source("RTSP_1", SourceState::Connected, 0, None);
+        let card = source_card(&src, 3, None);
+        assert!(
+            card.contains(">RTSP_1</div>"),
+            "an unlabelled source must still be named by its id: {card}"
+        );
+        assert!(
+            card.contains(">audio source</div>"),
+            "and keep its generic subtitle: {card}"
+        );
+    }
+
+    /// One card must not name one state two ways.
+    ///
+    /// `source_chip` said "Backing off" — the name of the retry algorithm —
+    /// while `retry_line`, one line below it in the same card, said
+    /// "reconnecting". The reader of this screen shares neither vocabulary,
+    /// and had to reconcile two words for one fact.
+    #[test]
+    fn a_reconnecting_source_is_described_the_same_way_twice() {
+        let src = cap_source("RTSP_1", SourceState::BackingOff, 3, Some(12));
+        let card = source_card(&src, 0, None);
+        assert!(
+            card.contains("Reconnecting"),
+            "the chip must say what is happening in plain words: {card}"
+        );
+        assert!(
+            card.contains("reconnecting"),
+            "the retry line must still describe the same state: {card}"
+        );
+        assert!(
+            !card.contains("Backing off"),
+            "\"backing off\" is the algorithm's name, not the station's: {card}"
+        );
+    }
+
     /// attempt 0, strip green; the restart count over the last hour is the
     /// only number that shows it, so the card carries it and the banner calls
     /// it out.
@@ -793,19 +1026,22 @@ mod tests {
         let mut src = cap_source("local", SourceState::Connected, 0, None);
         src.restarts_last_hour = 7;
         src.flapping = true;
-        let card = source_card(&src, 3);
+        let card = source_card(&src, 3, None);
         assert!(card.contains("restarted 7× in the last hour"), "{card}");
         assert!(card.contains("flapping"), "{card}");
         let mut s = snap(false, true, 2, 0);
         s.capture = vec![src];
         let banner = status_banner(&s);
         assert!(banner.contains("st-status warn"), "{banner}");
-        assert!(banner.contains("flapping"), "{banner}");
+        assert!(
+            banner.contains("keeps dropping out and reconnecting"),
+            "{banner}"
+        );
 
         // Counterpart: one restart is a line, not an issue.
         let mut once = cap_source("local", SourceState::Connected, 0, None);
         once.restarts_last_hour = 1;
-        let card = source_card(&once, 3);
+        let card = source_card(&once, 3, None);
         assert!(
             card.contains("restarted 1× in the last hour") && !card.contains("flapping"),
             "{card}"
@@ -825,7 +1061,9 @@ mod tests {
     fn banner_flags_each_real_problem() {
         assert!(status_banner(&snap(true, true, 2, 0)).contains("running low"));
         assert!(status_banner(&snap(false, false, 2, 0)).contains("integrity"));
-        assert!(status_banner(&snap(false, true, 0, 0)).contains("audio sources are configured"));
+        assert!(
+            status_banner(&snap(false, true, 0, 0)).contains("microphone or camera is set up yet")
+        );
         assert!(status_banner(&snap(false, true, 2, 3)).contains("waiting for the network"));
         // Any problem flips the banner to the warn variant.
         assert!(status_banner(&snap(true, true, 2, 0)).contains("st-status warn"));
@@ -841,7 +1079,7 @@ mod tests {
         let banner = status_banner(&s);
         // `capitalize_first` upper-cases the leading word of the issue list, so
         // assert on the distinctive mid-string text rather than the first word.
-        assert!(banner.contains("RAM /tmp"));
+        assert!(banner.contains("temporary recording folder is critically low"));
         assert!(banner.contains("st-status warn"));
     }
 
@@ -868,7 +1106,9 @@ mod tests {
         ];
         let html = source_panel(&s);
         assert!(html.contains("Live"));
-        assert!(html.contains("Backing off"));
+        // "Reconnecting", not "Backing off" — see
+        // `a_reconnecting_source_is_described_the_same_way_twice`.
+        assert!(html.contains("Reconnecting"));
         assert!(html.contains("Stalled"));
         // The 24h uptime strip and its segment classes render.
         assert!(html.contains("st-uptime"));
@@ -953,10 +1193,117 @@ mod tests {
         let mut s = snap(false, true, 2, 0);
         s.capture = vec![cap_source("RTSP_1", SourceState::BackingOff, 1, Some(4))];
         let banner = status_banner(&s);
-        // The banner capitalises the joined issue list, so match without the
-        // leading article ("…An audio source is down").
-        assert!(banner.contains("audio source is down"));
+        // The banner names the source rather than counting it, so the reader
+        // of a two-camera station knows which one to go and look at.
+        assert!(banner.contains("RTSP_1 stopped sending audio"), "{banner}");
         assert!(banner.contains("st-status warn"));
+    }
+
+    /// The banner has to say *which* source stopped.
+    ///
+    /// "An audio source is down" is a true sentence that leaves its reader no
+    /// better off: a station with a garden mic and two cameras has three
+    /// candidates and the banner named none of them. It now names the source
+    /// the way the card below it does — the owner's label when there is one.
+    #[test]
+    fn the_banner_names_the_source_that_stopped() {
+        let mut s = snap(false, true, 3, 0);
+        s.capture = vec![
+            cap_source("local", SourceState::Connected, 0, None),
+            cap_source("RTSP_1", SourceState::Stalled, 1, None),
+        ];
+        s.source_names
+            .insert("RTSP_1".to_owned(), "Pond camera".to_owned());
+        let banner = status_banner(&s);
+        assert!(
+            banner.contains("Pond camera stopped sending audio"),
+            "the banner must name the source, by its owner's name: {banner}"
+        );
+        assert!(
+            !banner.contains("an audio source"),
+            "and must not fall back to the anonymous phrasing: {banner}"
+        );
+    }
+
+    /// The counterpart: once several sources are down, naming each one would
+    /// be a list, not a banner — and the healthy source must never appear.
+    #[test]
+    fn the_banner_counts_rather_than_lists_a_wide_outage() {
+        let mut s = snap(false, true, 4, 0);
+        s.capture = vec![
+            cap_source("ok", SourceState::Connected, 0, None),
+            cap_source("a", SourceState::Stalled, 1, None),
+            cap_source("b", SourceState::Stalled, 1, None),
+            cap_source("c", SourceState::Stalled, 1, None),
+        ];
+        let banner = status_banner(&s);
+        assert!(
+            banner.contains("3 audio sources stopped sending audio"),
+            "{banner}"
+        );
+        assert!(
+            !banner.contains(">ok") && !banner.contains(" ok "),
+            "the source that is still working must not be named: {banner}"
+        );
+    }
+
+    /// The Diagnostics checklist must not contradict the banner above it.
+    ///
+    /// Observed failing against the pre-fix `diagnostics()`, whose Audio
+    /// sources row asked only `s.sources_configured > 0`. On the seeded demo
+    /// station that produced, on one screen: a warning banner reading "Needs
+    /// attention — an audio source is down", two of three source cards chipped
+    /// "Backing off" and "Stalled", and underneath them a green "Audio sources
+    /// ✓ OK · 3 configured · 3 active today". An operator checking from the
+    /// field got a tick from the one list that is meant to be the summary.
+    #[test]
+    fn diagnostics_audio_row_agrees_with_the_banner() {
+        let mut s = snap(false, true, 3, 0);
+        s.capture = vec![
+            cap_source("local", SourceState::Connected, 0, None),
+            cap_source("RTSP_1", SourceState::BackingOff, 3, Some(12)),
+            cap_source("RTSP_2", SourceState::Stalled, 1, None),
+        ];
+        let banner = status_banner(&s);
+        let checks = diagnostics(&s);
+        assert!(
+            banner.contains("stopped sending audio"),
+            "precondition: the banner sees the fault: {banner}"
+        );
+        let audio_row = checks
+            .split("<div class=\"st-check-row\">")
+            .find(|r| r.contains("Audio sources"))
+            .expect("there is an Audio sources row");
+        assert!(
+            audio_row.contains("mk warn"),
+            "the banner reports a source down but Diagnostics ticks it green: {audio_row}"
+        );
+        assert!(
+            audio_row.contains("2 not reporting"),
+            "the row should say how many are faulted: {audio_row}"
+        );
+    }
+
+    /// Counterpart to the gate above: a station whose sources are all healthy
+    /// must still get its green tick, so the check discriminates rather than
+    /// warning unconditionally.
+    #[test]
+    fn diagnostics_audio_row_stays_green_when_every_source_is_up() {
+        let mut s = snap(false, true, 2, 0);
+        s.capture = vec![
+            cap_source("local", SourceState::Connected, 0, None),
+            cap_source("RTSP_1", SourceState::Connected, 0, None),
+        ];
+        let audio_row = diagnostics(&s)
+            .split("<div class=\"st-check-row\">")
+            .find(|r| r.contains("Audio sources"))
+            .expect("there is an Audio sources row")
+            .to_string();
+        assert!(
+            !audio_row.contains("mk warn"),
+            "all sources up must stay green: {audio_row}"
+        );
+        assert!(status_banner(&s).contains("All systems healthy"));
     }
 
     #[test]

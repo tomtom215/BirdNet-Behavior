@@ -1,5 +1,7 @@
 <!--
-  Login page · GET /login (and POST /login → /admin or /login?error=1).
+  Login page · GET /login (and POST /login → /admin, or back here with
+  ?error=1 for a wrong password / ?error=session when the credentials were
+  right but the session row could not be written).
   Stand-alone HTML (no layout.html include — the login page is rendered before
   any authenticated request so the layout's "Sign out" link must not appear).
 
@@ -7,7 +9,7 @@
     {{title}}        — "Sign in"
     {{station}}      — station handle in the top-right (e.g. "station/01")
     {{error_class}}  — "" or "is-visible"
-    {{error_body}}   — "Incorrect username or password." (or rate-limit message)
+    {{error_body}}   — the sign-in error text, or the rate-limit message
     {{next_path}}    — query-string-safe `next=` value, or empty
     {{rate_limited}} — "" or " disabled" (applied to the submit button)
 -->

@@ -104,6 +104,23 @@
     --shadow-sm:   none;
     --shadow-md:   none;
     --shadow-lg:   none;
+    /* These seven also flip between light and dark in app.css, and this block
+       did not override them — so a dark-theme operator printing the weekly
+       report got their dark values on paper this sheet had already forced
+       white. The visible consequences: `--sp-ink` is near-white in dark, and
+       `.bnb-avatar` mixes the species hue 62% toward it, so every banding-code
+       avatar printed **invisible**; `--on-fill` is near-black, so the weekly
+       report's own badges printed dark-on-green; and `--accent-rgb` is a pale
+       green, which washes out the activity-heatmap cells that interpolate it.
+       `tests/print_forces_every_theme_flipped_token.rs` computes this list
+       from app.css rather than trusting the comment. */
+    --sp-ink:      #0a0a0a;
+    --on-fill:     #ffffff;
+    --on-moss:     #ffffff;
+    --accent-rgb:  46, 107, 72;
+    --night:       #21283d;
+    --paper:       #f7f1e9;
+    --warning:     var(--dawn-ink);
   }
 
   /* Force print color reproduction on browsers that flatten colors by default */

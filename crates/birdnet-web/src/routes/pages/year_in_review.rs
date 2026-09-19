@@ -29,22 +29,37 @@ pub fn router() -> Router<AppState> {
 /// ("Year in review" tab). Fully server-computed (no HTMX shell), so this is
 /// async and touches the database.
 pub(super) async fn content(state: AppState) -> String {
+    // Every one of these was `.unwrap_or(0)` / `.unwrap_or_default()` *inside*
+    // the closure, which returned a plain tuple — so the `Err` arm below only
+    // ever fired on a task panic. A database error produced a complete,
+    // ordinary-looking page reading "0 detections across 0 species", "busiest
+    // day —", for a station with three years of records. There is nothing on
+    // this page that is not a claim about the reader's own birds, so a query
+    // that fails has to say so rather than round down to nothing.
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-            let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
-            let dates = birdnet_db::sqlite::distinct_detection_dates(conn).unwrap_or_default();
+            let total = birdnet_db::sqlite::detection_count(conn)?;
+            let species = birdnet_db::sqlite::species_count(conn)?;
+            let dates = birdnet_db::sqlite::distinct_detection_dates(conn)?;
             // limit 1000 covers every species → doubles as a sci→common lookup
-            let all = birdnet_db::sqlite::top_species(conn, 1000).unwrap_or_default();
-            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
-            let daily = birdnet_db::sqlite::daily_counts(conn, 366).unwrap_or_default();
-            (total, species, dates, all, first_seen, daily)
+            let all = birdnet_db::sqlite::top_species(conn, 1000)?;
+            let first_seen = birdnet_db::sqlite::species_first_seen(conn)?;
+            let daily = birdnet_db::sqlite::daily_counts(conn, 366)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((total, species, dates, all, first_seen, daily))
         })
     })
     .await;
 
-    let Ok((total, species, dates, all, first_seen, daily)) = result else {
-        return "<p class=\"bnb-meta\">Failed to load the year in review.</p>".to_string();
+    let (total, species, dates, all, first_seen, daily) = match result {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "year in review: query failed");
+            return super::error_states::could_not_load("your year in review");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "year in review: task failed");
+            return super::error_states::could_not_load("your year in review");
+        }
     };
 
     render_content(total, species, &dates, &all, &first_seen, &daily)
@@ -135,7 +150,7 @@ fn render_content(
 
     // ── Year tape ────────────────────────────────────────────────────────
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every week</div><h3>The year in activity</h3></div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every week</div><h2 class="sh-h">The year in activity</h2></div></div>"#,
     );
     html.push_str(r#"<div class="yir-tape">"#);
     for (wk, &c) in weeks.iter().enumerate() {
@@ -179,7 +194,7 @@ fn render_content(
 
     // Leaderboard.
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most heard</div><h3>The year's leaderboard</h3></div><a class="action" href="/species">Full list →</a></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most heard</div><h2 class="sh-h">The year's leaderboard</h2></div><a class="action" href="/species">Full list →</a></div>"#,
     );
     if all.is_empty() {
         html.push_str(r#"<p class="bnb-meta">No detections yet.</p>"#);
@@ -189,7 +204,7 @@ fn render_content(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(&sp.com_name, ""),
+                av = avatar(&sp.com_name, &sp.sci_name, ""),
                 enc = simple_url_encode(&sp.com_name),
                 name = escape_html(&sp.com_name),
                 count = group_thousands(sp.count),
@@ -221,7 +236,7 @@ fn render_content(
     let leader = all.first().map(|s| (s.com_name.clone(), s.count));
 
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Milestones</div><h3>Moments that mattered</h3></div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Milestones</div><h2 class="sh-h">Moments that mattered</h2></div></div>"#,
     );
     milestone(
         &mut html,

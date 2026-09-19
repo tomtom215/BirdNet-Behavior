@@ -92,14 +92,30 @@ fn active(key: &str, current: &str) -> &'static str {
     if key == current { "active" } else { "" }
 }
 
+/// ` aria-current="page"` for the active section, else `""`.
+///
+/// The primary nav was the only tab row in the product that marked its current
+/// entry with a CSS class alone — every other row already carries
+/// `aria-current` (`homes::mod`, `homes::station`, `species_pages`,
+/// `detection_reviews`, `admin::nav`). A screen-reader user could not tell
+/// which of the six homes they were on, on any page.
+fn aria_current(key: &str, current: &str) -> &'static str {
+    if key == current {
+        r#" aria-current="page""#
+    } else {
+        ""
+    }
+}
+
 /// Desktop top-nav `<a>` links (the `.topnav-links` block).
 pub fn topnav_links(current: &str) -> String {
     let mut out = String::with_capacity(512);
     for p in PRIMARY {
         let a = active(p.key, current);
+        let ac = aria_current(p.key, current);
         let _ = write!(
             out,
-            r#"<a href="{}" class="topnav-link {a}">{}</a>"#,
+            r#"<a href="{}" class="topnav-link {a}"{ac}>{}</a>"#,
             p.path, p.label
         );
     }
@@ -111,9 +127,10 @@ pub fn tabbar_slots(current: &str) -> String {
     let mut out = String::with_capacity(1024);
     for p in PRIMARY {
         let a = active(p.key, current);
+        let ac = aria_current(p.key, current);
         let _ = write!(
             out,
-            r#"<a href="{}" class="bnb-tabbar__slot {a}" aria-label="{}"><span class="glyph" aria-hidden="true">{}</span><span class="label">{}</span></a>"#,
+            r#"<a href="{}" class="bnb-tabbar__slot {a}"{ac} aria-label="{}"><span class="glyph" aria-hidden="true">{}</span><span class="label">{}</span></a>"#,
             p.path, p.label, p.glyph, p.label
         );
     }

@@ -263,7 +263,7 @@ pub(super) fn render_thread(
     };
 
     format!(
-        r#"<div id="{ANCHOR}" class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Notes</div><h3>Comments</h3></div><span class="bnb-pill">{n}</span></div>{note}{list}{form}</div>"#,
+        r#"<div id="{ANCHOR}" class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Notes</div><h2 class="sh-h">Comments</h2></div><span class="bnb-pill">{n}</span></div>{note}{list}{form}</div>"#,
         n = comments.len(),
     )
 }

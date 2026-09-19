@@ -15,11 +15,11 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
 use axum::{Form, Router, routing::get};
 use serde::Deserialize;
 
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
 /// Mount image blacklist routes.
@@ -153,32 +153,80 @@ async fn add_blacklist(
     })
     .await;
 
+    // 200 with a toast, not 500 with a body. htmx 2.0.4 ships
+    // `{code:"[45]..", swap:false, error:true}`, so a 5xx body is never
+    // swapped; and `layout.html`'s `htmx:responseError` fallback is gated on
+    // `cfg.verb === 'get'`, so it does nothing for a form post. Between them,
+    // a failed "Add to blacklist" changed literally nothing on the page: no
+    // error, no success, no way to tell whether the click had registered.
     match result {
-        Ok(Ok(_)) => (
-            StatusCode::OK,
-            [(axum::http::header::CONTENT_TYPE, "text/html")],
-            blacklist_table_partial_redirect(),
-        ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(axum::http::header::CONTENT_TYPE, "text/html")],
-            "<table id=\"blacklist-table\"><tbody><tr><td colspan=\"5\">Error adding entry</td></tr></tbody></table>".to_string(),
-        ),
+        Ok(Ok(_)) => toast::with(
+            Html(blacklist_table_partial_redirect()),
+            Toast::success("Added to the blacklist.".to_string()),
+        )
+        .into_response(),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "add_image_blacklist failed");
+            toast::with(
+                Html(blacklist_table_partial_redirect()),
+                Toast::error(
+                    "That entry could not be added — nothing was changed. Try again.".to_string(),
+                ),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "add_image_blacklist task failed");
+            toast::with(
+                Html(blacklist_table_partial_redirect()),
+                Toast::error(
+                    "That entry could not be added — nothing was changed. Try again.".to_string(),
+                ),
+            )
+            .into_response()
+        }
     }
 }
 
 /// Remove a URL from the image blacklist.
 async fn remove_blacklist(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
-    let _ = tokio::task::spawn_blocking(move || {
+    // The result used to be discarded with `let _`, so a delete that failed
+    // reloaded the table and left the row in place with nothing said. The
+    // reader sees the row still there and cannot tell whether the click missed
+    // or the delete did.
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::remove_image_blacklist(conn, id))
     })
     .await;
 
-    (
-        StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "text/html")],
-        blacklist_table_partial_redirect(),
-    )
+    let table = Html(blacklist_table_partial_redirect());
+    match result {
+        // `remove_image_blacklist` answers whether a row actually went. A
+        // `false` is not an error, but it is not a removal either, and the
+        // reader watching the row stay put deserves to know which.
+        Ok(Ok(true)) => table.into_response(),
+        Ok(Ok(false)) => toast::with(
+            table,
+            Toast::error("That entry was already gone.".to_string()),
+        )
+        .into_response(),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "remove_image_blacklist failed");
+            toast::with(
+                table,
+                Toast::error("That entry could not be removed. Try again.".to_string()),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "remove_image_blacklist task failed");
+            toast::with(
+                table,
+                Toast::error("That entry could not be removed. Try again.".to_string()),
+            )
+            .into_response()
+        }
+    }
 }
 
 /// Return HTMX trigger to reload the blacklist table.

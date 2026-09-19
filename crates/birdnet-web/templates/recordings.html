@@ -67,8 +67,19 @@
   }
 
   function setGlyphs(symbol) {
-    document.querySelectorAll('.rc-hp-toggle').forEach(function (b) { b.textContent = symbol; });
-    if (playBtn) { playBtn.textContent = symbol === '⏸' ? '⏸' : '▶'; }
+    // The accessible name has to move with the glyph. `aria-label="Pause"` was
+    // written into the markup once, at creation, and never updated — and
+    // aria-label wins over text content — so a *paused* clip's button
+    // announced itself as "Pause", i.e. the opposite of what pressing it does.
+    var label = symbol === '⏸' ? 'Pause' : 'Play';
+    document.querySelectorAll('.rc-hp-toggle').forEach(function (b) {
+      b.textContent = symbol;
+      b.setAttribute('aria-label', label);
+    });
+    if (playBtn) {
+      playBtn.textContent = symbol === '⏸' ? '⏸' : '▶';
+      playBtn.setAttribute('aria-label', label + ' this clip');
+    }
   }
 
   function stop() {
@@ -258,10 +269,48 @@
 
   function drawIdle() {
     ctx.clearRect(0, 0, W, H);
-    ctx.strokeStyle = dark() ? 'oklch(60% 0.02 150 / 0.35)' : 'oklch(55% 0.02 150 / 0.28)';
-    ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    // Pixel-aligned and at a readable opacity, for the same reason as the
+    // Today card: a 1px stroke on an integer y straddles two device rows and
+    // is drawn at half intensity in each, which on a white card is invisible.
+    var y = Math.round(H / 2) + 0.5;
+    ctx.strokeStyle = dark() ? 'oklch(68% 0.03 150 / 0.75)' : 'oklch(48% 0.03 150 / 0.60)';
+    ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  // Reduced motion: throttle the live repaint rather than stopping it — the
+  // content is the point. Same treatment as the Today hero card.
+  var REDUCED_MS = 1500;
+  var lastPaint = 0, pending = null, pendingTimer = null;
+  function motionReduced() {
+    try {
+      if (document.documentElement.getAttribute('data-motion') === 'reduced') return true;
+    } catch (e) { /* fall through */ }
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   }
   function drawFrame(frame) {
+    if (motionReduced()) {
+      pending = frame;
+      var wait = REDUCED_MS - (Date.now() - lastPaint);
+      if (wait > 0) {
+        if (!pendingTimer) {
+          pendingTimer = setTimeout(function () {
+            pendingTimer = null;
+            var f = pending; pending = null;
+            if (f) paintFrame(f);
+          }, wait);
+        }
+        // The signal is live even while a repaint is being held back; this is
+        // the same variable `idleLoop` reads (`lastFrame`, not the Today
+        // card's `lastFrameTime` — the two files name it differently).
+        lastFrame = Date.now();
+        setLive(true);
+        return;
+      }
+      pending = null;
+    }
+    paintFrame(frame);
+  }
+  function paintFrame(frame) {
+    lastPaint = Date.now();
     var nMels = frame.n_mels, nFrames = frame.n_frames;
     if (!nMels || !nFrames || !frame.data) return;
     ctx.clearRect(0, 0, W, H);

@@ -44,17 +44,42 @@ pub(super) async fn clear_detections(
             Html(format!(r#"<p class="ctl-ok">{msg}</p>"#)),
             Toast::success(msg),
         ),
-        Ok(Err(e)) => toast::with(
-            Html(format!(
-                r#"<p class="ctl-err">Failed to clear data: {e}</p>"#
-            )),
-            Toast::error(format!("Clear data failed: {e}")),
-        ),
-        Err(e) => toast::with(
-            Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
-            Toast::error(format!("Internal error: {e}")),
-        ),
+        Ok(Err(e)) => {
+            let (body, note) = fault("Your detections", &e);
+            toast::with(body, note)
+        }
+        Err(e) => {
+            let (body, note) = fault("Your detections", &e);
+            toast::with(body, note)
+        }
     }
+}
+
+/// Report a fault without handing the operator the raw error.
+///
+/// `Internal error: <io::Error>` and `Failed: <DbError>` were what these
+/// controls said, on actions that delete the reader's records. The detail goes
+/// to the log; the page says what happened and what state the station is in.
+///
+/// It deliberately does **not** say "nothing was removed". Clearing detections
+/// is two steps — `clear_detections()` and then the notification log — and
+/// clearing clips walks a directory file by file, so a failure part way through
+/// leaves some of it gone. A comforting sentence that is false for the case the
+/// reader is actually in is worse than the raw error it replaced.
+///
+/// `what` completes "{what} could not be …", so pass the thing in the
+/// operator's words ("Your detections").
+fn fault<E: std::fmt::Display>(what: &str, err: &E) -> (Html<String>, Toast) {
+    tracing::error!(error = %err, "{what}: could not be cleared");
+    let msg = format!(
+        "{what} could not be fully cleared. Some may already have been removed, \
+         so check before trying again. If the station's disk is full, free some \
+         space first."
+    );
+    (
+        Html(format!(r#"<p class="ctl-err">{msg}</p>"#)),
+        Toast::error(msg),
+    )
 }
 
 pub(super) async fn clear_extracted(
@@ -108,13 +133,13 @@ pub(super) async fn clear_extracted(
             Html(format!(r#"<p class="ctl-ok">{msg}</p>"#)),
             Toast::success(msg),
         ),
-        Ok(Err(e)) => toast::with(
-            Html(format!(r#"<p class="ctl-err">Failed: {e}</p>"#)),
-            Toast::error(format!("Clear extracted failed: {e}")),
-        ),
-        Err(e) => toast::with(
-            Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
-            Toast::error(format!("Internal error: {e}")),
-        ),
+        Ok(Err(e)) => {
+            let (body, note) = fault("The saved clips", &e);
+            toast::with(body, note)
+        }
+        Err(e) => {
+            let (body, note) = fault("The saved clips", &e);
+            toast::with(body, note)
+        }
     }
 }

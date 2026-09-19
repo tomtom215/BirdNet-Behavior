@@ -136,6 +136,131 @@ Corollaries, each learned the same way:
 - **`pull_request`-triggered gates never see un-PR'd branches.** Open a draft PR
   early, or run the gates locally; work has sat broken on a pushed branch for
   hours because nothing was watching it.
+- **`pkill -x screenshot_server` silently matches nothing.** `pgrep`/`pkill`
+  will not match `-x` against a process name longer than 15 characters, and it
+  exits 1 rather than complaining. A restart script built on it left the old
+  binary holding port 8502 while `cargo run` rebuilt, failed to bind and
+  exited — so three rounds of "verified in the browser" were answered by the
+  *previous* build's HTML. Kill by full command line (`pgrep -f '[s]creenshot_server'`),
+  and have the restart refuse to report success when the running process
+  predates the binary it just built:
+  `ps -o lstart= -p "$PID"` against `stat -c %Y "$BIN"`.
+- **A green a11y gate can mean the rule never ran.** `axe.mjs` gates on a tag
+  list, and with only the four WCAG A/AA tags, 36 of axe's 105 rules do not
+  execute at all — `heading-order`, `landmark-one-main`, `region`,
+  `page-has-heading-one`, `target-size` and the rest. Adding them reported 40
+  findings on the first run. The same applies to *reach*: the gate ran at
+  1280x900 only, so the phone layout had never been graded, and adding it found
+  six serious violations immediately. When a gate is clean, ask what it covers
+  before believing it.
+- **A media query does not raise specificity** (CSS Cascade L4 §6.4.4). Any
+  equal-specificity rule *later* in the sheet defeats it, and an ID-scoped rule
+  defeats it wherever it sits. Three responsive overrides in `app.css` were
+  dead for one of those two reasons, including the one that left the Today
+  feed's species-name column at exactly `0px` on a phone. Confirm a responsive
+  rule with `getComputedStyle` at the target width; reading the CSS will not
+  tell you.
+- **`page.evaluate` is not subject to the page's CSP.** Playwright runs it
+  through CDP, which is exempt, so it cannot answer "is `eval` blocked here?"
+  — it will cheerfully report that `new Function` works on a page where it does
+  not. Test CSP behaviour by driving the real code path and listening for
+  `securitypolicyviolation`.
+- **An accessibility sweep grades the state the page happened to be in.**
+  `axe.mjs` loads a route and reads it once. Any state a script reaches at
+  runtime — a socket retrying, a button mid-flight, a form after a failed
+  submit — is sampled by luck. The live-stream pill's reconnect state carried
+  `opacity: .6`, which composites text toward the page: 3.07:1 in light,
+  4.24:1 in dark, at 11px, against the 4.5:1 that WCAG 1.4.3 asks. The sweep
+  found it on exactly one route in one theme in one run, because the socket
+  happened to be retrying when that page was sampled; every other run was
+  clean, and the finding looked like noise from a server restart. When a
+  state is only reachable through JS, either drive it in the gate or check it
+  mechanically without a browser — do not let a green sweep stand for it.
+- **A value validated at startup is not a value validated.** `validate()` ran
+  on the config file at boot and `overlay_db_settings` laid the settings table
+  over the result afterwards, so nothing ever checked a number typed into
+  `/admin/settings`. `confidence_threshold=75` — the percentage slip, in a
+  field labelled "(0–1)" — stored cleanly and stopped the station detecting
+  for good, while `--doctor` reported the file as fine. Validate at the
+  boundary the value actually crosses. Where two places need the same bounds,
+  give them one table to read (`validate::NUMERIC_RANGES`) — but check what a
+  finding *does* before widening the validator: an `Error` makes `is_usable`
+  false, and `startup_config::choose` then reverts the station to its last-good
+  configuration file. Adding two alert thresholds to that list would have
+  turned a mistyped notification threshold into a silent rollback of every
+  other setting, so the form bounds those two itself and a test holds the two
+  copies of the shared five equal.
+- **`.unwrap_or_default()` inside the closure defeats the `Err` arm outside
+  it.** Year-in-Review and Station Health each ran six queries, defaulted every
+  one *inside* `state.with_db(...)`, and returned a plain tuple — so the `else`
+  branch that looked like error handling could only ever fire on a task panic.
+  A dropped `detections` table rendered "0 detections across 1 species" as an
+  ordinary page. Where a surface's whole content is a claim about the reader's
+  data, propagate with `?` and let the caller decide; default only what is
+  decoration.
+- **Sweep a defect class mechanically before believing it is gone.** After
+  fixing the silent-zero read on two surfaces, a scan of every `with_db`
+  closure in `birdnet-web` for *a count defaulted to zero and then printed as
+  fact* found nine more sites, five of them real — including the dashboard, the
+  `/api/v2/stats` JSON, and the Prometheus exposition. Grep the shape, then
+  classify each hit; a crude first scan returned 67 hits that were mostly query
+  -parameter defaults, and narrowing the pattern to the actual hazard cut it to
+  nine. Stopping at "I fixed the ones I saw" is not a sweep.
+- **A defaulted count can change which page renders, not just what it says.**
+  `today.rs` computed `firstrun = total_ever == 0` from a `.unwrap_or(0)`, so a
+  failed read served the first-run setup experience to a station with years of
+  records. Look at what the number *decides*, not only where it is printed.
+- **In an exposition format, omit rather than fabricate.** `routes/health.rs`
+  already said so for acoustic drift — omitting it "rather than exporting a
+  drift of zero, which would read as measured, and unchanged" — and exported
+  `birdnet_detections_stored 0` three lines away. A counter that falls to zero
+  is what a monitoring alert is built to catch, so a fabricated zero fires for
+  the wrong reason and hides the real fault. A missing series is stale and
+  reads as such; keep the metrics that are still true so the scrape succeeds.
+- **htmx never swaps a 4xx/5xx body, so a 500 from a POST is invisible.**
+  `static/htmx.min.js` ships `{code:"[45]..", swap:false, error:true}`, and
+  `layout.html`'s `htmx:responseError` fallback is gated on
+  `cfg.verb === 'get'`. A failed `hx-post` therefore changes nothing on the
+  page — no error, no success, no way to tell the click registered. Answer 200
+  and carry the failure in a toast. Several handlers already did this for
+  success and used the discarded 500 for failure.
+- **Do not trade a raw error for a reassurance you cannot support.**
+  "Internal error: No space left on device (os error 28)" is bad, and
+  "nothing was changed" in its place is worse if it is not true:
+  `restore_archive_into` documents that a failure inside step 5 leaves some
+  members already placed, and the caller holds only a `String`. Say what is
+  certainly true, keep the detail where it is the only thing the reader has,
+  and put the rest in the log.
+- **A gate that reads one line will be defeated by where the line wraps.**
+  Three drafts of the command-line check missed the text it was written for: a
+  `class=` on the previous line, a phrase split between "whoever" and "set the
+  station up", and a Rust string continuation backslash landing mid-phrase.
+  Join the window and strip continuations before matching — and prefer a named
+  exemption list to a heuristic for deciding what a file is.
+- **Write the counterpart that asserts the fixture actually did something.**
+  A test driving three endpoints skipped two of them silently, because its
+  `INSERT` used column names that did not exist and it degraded to `continue`.
+  One `assert!(precondition)` turned a vacuous pass into a red line naming the
+  real schema.
+- **A filter that skips unchanged fields skips the broken station.**
+  `build_settings_items` drops any field whose submitted value equals the
+  stored one, so a check driven by its output waves through a bad value that
+  is *already* in the database — precisely the station whose owner is on the
+  settings page because the birds stopped. Validate the submission, not the
+  diff.
+- **`page.contains("…")` can be satisfied by the template's own comment.**
+  `login.html` opens with a comment documenting its placeholders, quoting
+  "Incorrect username or password." verbatim, and that comment ships to the
+  browser. A test asserting the page did *not* contain that string failed
+  against a correct fix. Assert on the rendered region, not the document.
+- **`cargo check` does not build test cfg.** A struct field added for a page
+  render compiled clean and broke three `#[cfg(test)]` constructors in the
+  same file. Use `cargo check --all-targets`.
+- **`No space left on device` surfaces as unrelated test failures.** A full
+  disk inside a `cc-rs` build script reported as four failing `birdnet-behavioral`
+  ICU/extension tests, in a crate that had not been touched. `df -h /` reads
+  "Avail 1.9M" with "Used 38G" — the allowance is spent, not the machine. The
+  cheapest ~3–6 GB back is `rm -rf target/debug/incremental`.
 
 ### Key Dependencies
 

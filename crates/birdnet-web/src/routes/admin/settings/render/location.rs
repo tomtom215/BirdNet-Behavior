@@ -61,7 +61,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
           <option value="true"{inh_yes}>Yes — only record near sunrise/sunset</option>
           <option value="false"{inh_no}>No — record 24h</option>
         </select>
-        <p class="hint">Requires latitude/longitude to compute sunrise/sunset</p>
+        <p class="hint">Needs the latitude and longitude above. Without them the
+        station cannot work out when sunrise is, so it keeps recording around the
+        clock and this setting does nothing.</p>
       </div>
       <div>
         <label for="pre_sunrise_offset">Extra minutes before sunrise</label>

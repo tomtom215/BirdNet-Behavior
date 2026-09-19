@@ -46,7 +46,10 @@ pub fn router() -> Router<AppState> {
 /// `GET /login` — render the branded sign-in form.
 async fn login_page(req: Request) -> Html<String> {
     let query = req.uri().query().unwrap_or_default();
-    let error = query.split('&').any(|p| p == "error=1");
+    let error = query
+        .split('&')
+        .find_map(|p| p.strip_prefix("error="))
+        .map(LoginError::from_code);
     let next = query
         .split('&')
         .find_map(|p| p.strip_prefix("next=").map(str::to_string))
@@ -157,8 +160,14 @@ async fn login_submit(
         )
     });
     if let Err(e) = create_result {
+        // Not `error=1`. The password that got this far was *correct*; the
+        // station could not write the session row (a full disk, a locked
+        // database). Reporting that as "Incorrect username or password" sends
+        // someone to retype a password that was never wrong, and enough
+        // retries trip the throttle — so the station tells them they are
+        // locked out of their own garden over a fault that is not theirs.
         tracing::error!(error = %e, "create_session failed during login");
-        let query = format!("?error=1&next={}", urlencode_path(&next));
+        let query = format!("?error=session&next={}", urlencode_path(&next));
         return Redirect::to(&format!("/login{query}")).into_response();
     }
 
@@ -413,7 +422,7 @@ struct LoginForm {
 fn throttled_response(retry_after: std::time::Duration, next: &str) -> Response {
     let secs = retry_after.as_secs().max(1);
     let html = render_login(LoginContext {
-        error: false,
+        error: None,
         retry_after: Some(retry_after),
         next,
     });
@@ -439,9 +448,47 @@ fn retry_phrase(retry_after: std::time::Duration) -> String {
     }
 }
 
+/// Why the sign-in form is showing an error.
+///
+/// Two outcomes reached the same `?error=1` until 0.15.0, and one of them was
+/// a lie: a correct password whose session row could not be written was
+/// reported as a wrong password.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LoginError {
+    /// The username or the password did not verify.
+    Credentials,
+    /// The credentials verified, but the session could not be persisted.
+    SessionWrite,
+}
+
+impl LoginError {
+    /// Read the `error=` query value. Anything unrecognised is treated as the
+    /// credentials case, which is what every older link carries.
+    fn from_code(code: &str) -> Self {
+        match code {
+            "session" => Self::SessionWrite,
+            _ => Self::Credentials,
+        }
+    }
+
+    /// What the form says. Neither message names the account that exists, and
+    /// neither tells the reader to read a log.
+    const fn message(self) -> &'static str {
+        match self {
+            Self::Credentials => "Incorrect username or password.",
+            Self::SessionWrite => {
+                "Your sign-in was correct, but the station could not start your \
+                 session. Wait a moment and try again — if it keeps happening, \
+                 the station may be out of disk space."
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LoginContext<'a> {
-    error: bool,
+    /// `Some` when the form is showing an error, and which one.
+    error: Option<LoginError>,
     /// `Some` when the address is throttled: the form renders disabled with
     /// the time until it may try again.
     retry_after: Option<std::time::Duration>,
@@ -453,11 +500,9 @@ fn render_login(ctx: LoginContext<'_>) -> String {
     let version = env!("CARGO_PKG_VERSION");
     let (error_class, error_body) = ctx.retry_after.map_or_else(
         || {
-            if ctx.error {
-                ("is-visible", "Incorrect username or password.".to_string())
-            } else {
-                ("", String::new())
-            }
+            ctx.error.map_or(("", String::new()), |e| {
+                ("is-visible", e.message().to_string())
+            })
         },
         |retry_after| {
             (
@@ -507,7 +552,7 @@ mod tests {
     #[test]
     fn render_login_substitutes_placeholders() {
         let html = render_login(LoginContext {
-            error: true,
+            error: Some(LoginError::Credentials),
             retry_after: None,
             next: "/admin/overview",
         });
@@ -535,7 +580,7 @@ mod tests {
     #[test]
     fn render_login_rate_limited_disables_submit() {
         let html = render_login(LoginContext {
-            error: true,
+            error: Some(LoginError::Credentials),
             retry_after: Some(std::time::Duration::from_secs(14 * 60 + 1)),
             next: "/admin/overview",
         });
@@ -559,7 +604,7 @@ mod tests {
     #[test]
     fn render_login_clean_state_hides_alert() {
         let html = render_login(LoginContext {
-            error: false,
+            error: None,
             retry_after: None,
             next: "/admin/overview",
         });

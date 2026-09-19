@@ -13,10 +13,21 @@
     </h2>
     <div class="bnb-cmdk__inputwrap">
       <span class="bnb-cmdk__icon" aria-hidden="true">⌕</span>
+      <!-- A listbox with no combobox in front of it: the input carried no
+           role, no aria-expanded, no aria-controls and no
+           aria-activedescendant, so arrow-keying through the results was
+           silent to a screen reader — focus never leaves the input, and
+           nothing told it which option was selected. Its only accessible name
+           was the placeholder, which disappears the moment you type. -->
+      <label class="bnb-cmdk__sr ck-sr" for="bnb-cmdk-input">Search species, dates and settings</label>
       <input
         id="bnb-cmdk-input"
         type="search"
         name="q"
+        role="combobox"
+        aria-expanded="true"
+        aria-controls="bnb-cmdk-results"
+        aria-autocomplete="list"
         placeholder="Search species, dates, settings…"
         autocomplete="off"
         autocapitalize="off"
@@ -64,14 +75,20 @@
   }
   function setActive(i) {
     var rs = rows();
-    if (!rs.length) { active = -1; return; }
+    if (!rs.length) { active = -1; input.removeAttribute('aria-activedescendant'); return; }
     if (i < 0) i = rs.length - 1;
     if (i >= rs.length) i = 0;
     rs.forEach(function (r, idx) {
       var on = idx === i;
+      // Options need ids for aria-activedescendant to point at them; the
+      // server does not emit any, so they are assigned here.
+      if (!r.id) r.id = 'bnb-cmdk-opt-' + idx;
       r.setAttribute('aria-selected', on ? 'true' : 'false');
       r.classList.toggle('is-active', on);
-      if (on) r.scrollIntoView({ block: 'nearest' });
+      if (on) {
+        r.scrollIntoView({ block: 'nearest' });
+        input.setAttribute('aria-activedescendant', r.id);
+      }
     });
     active = i;
   }

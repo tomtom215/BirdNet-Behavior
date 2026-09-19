@@ -41,7 +41,7 @@ pub(crate) const SECTIONS: [(&str, &str); 8] = [
     ("species", "Species Filters"),
     ("system", "System &amp; Display"),
     ("auth", "Web Authentication"),
-    ("email", "Email Alerts (SMTP)"),
+    ("email", "Email Alerts"),
 ];
 
 /// The sticky "On this page" jump list.
@@ -179,6 +179,8 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
       .alert-error { background: var(--rare-soft); border: 1px solid var(--rare-soft); color: var(--rare);
                        border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
       .alert-icon { vertical-align: -2px; margin-right: 0.4rem; }
+      .save-problems { margin: 0.4rem 0 0; padding-left: 1.1rem; }
+      .save-problems li { margin-top: 0.25rem; }
       .hint { font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }
       @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
       h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }
@@ -188,7 +190,10 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
          inside a paragraph that is distinguishable from the surrounding
          text by colour alone, which is WCAG 1.4.1 — a reader who cannot
          separate the two hues sees no link at all. */
-      .hint a { color: var(--moss-ink); text-decoration: underline; text-underline-offset: 2px; }
+      /* The underline moved to the Prose links block in app.css: scoped here
+         it applied on /admin/settings and not on the Station tabs that render
+         the same `.hint` markup through the main shell. */
+      .hint a { color: var(--moss-ink); }
       .hint.flush { margin: -6px 0 8px; }
       .mt-sm { margin-top: 0.5rem; }
       .mt-md { margin-top: 1rem; }
@@ -243,7 +248,7 @@ pub(crate) fn render_section_form(
         r#"<div class="save-row">
     <button type="submit" class="btn btn-primary">Save settings</button>
     <span id="save-spinner" class="htmx-indicator save-note">Saving…</span>
-    <span class="save-note dim">Most settings require a restart to take effect.</span>
+    <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
   </div>
 </form>"#,
     );
@@ -271,7 +276,7 @@ pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String
       Saving…
     </span>
     <span class="save-note dim">
-      Most settings require a restart to take effect.
+      Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.
     </span>
   </div>
 </form>"#,

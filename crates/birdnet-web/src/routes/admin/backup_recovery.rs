@@ -298,7 +298,7 @@ fn render_body(f: &DataFacts) -> String {
     // ── Backup / restore, both wired to real endpoints ────────────────────
     let backup_restore = r##"<div class="bkr-split">
   <div class="bnb-card pad">
-    <div class="section-header"><div><div class="bnb-eyebrow">Back up</div><h3>Take a copy now</h3></div></div>
+    <div class="section-header"><div><div class="bnb-eyebrow">Back up</div><h2 class="sh-h">Take a copy now</h2></div></div>
     <p class="bnb-meta">A <b>snapshot</b> copies the database only — small and quick, kept here on the station. A <b>full backup</b> bundles the database, recordings and config into one archive you can download and keep somewhere else.</p>
     <div class="bnb-row tight bkr-mt">
       <button class="bnb-btn"
@@ -310,7 +310,7 @@ fn render_body(f: &DataFacts) -> String {
     <div id="bkr-backup-result" class="bnb-meta bkr-note-mt"></div>
   </div>
   <div class="bnb-card pad">
-    <div class="section-header"><div><div class="bnb-eyebrow">Restore</div><h3>Upload a full backup</h3></div></div>
+    <div class="section-header"><div><div class="bnb-eyebrow">Restore</div><h2 class="sh-h">Upload a full backup</h2></div></div>
     <form hx-post="/admin/system/restore"
           hx-encoding="multipart/form-data"
           hx-target="#bkr-restore-result"
@@ -334,7 +334,7 @@ fn render_body(f: &DataFacts) -> String {
     // ── Snapshot list — the real files, or an honest empty state ──────────
     let snapshots = if f.snapshots.is_empty() {
         r#"<div class="bnb-card pad bkr-mt">
-  <div class="section-header"><div><div class="bnb-eyebrow">History</div><h3>Snapshots</h3></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">History</div><h2 class="sh-h">Snapshots</h2></div></div>
   <p class="bnb-meta">No snapshots yet. The station takes one automatically every 7 days, and keeps the most recent 14. Use <b>Snapshot the database</b> above to take one now.</p>
 </div>"#
             .to_string()
@@ -370,7 +370,7 @@ fn render_body(f: &DataFacts) -> String {
         }
         format!(
             r#"<div class="bnb-card pad bkr-mt">
-  <div class="section-header"><div><div class="bnb-eyebrow">History</div><h3>Snapshots</h3></div><span class="bnb-pill moss">automatic · every 7 days</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">History</div><h2 class="sh-h">Snapshots</h2></div><span class="bnb-pill moss">automatic · every 7 days</span></div>
   {rows}
 </div>"#
         )
@@ -450,7 +450,7 @@ fn render_body(f: &DataFacts) -> String {
     }
     let export_card = format!(
         r#"<div class="bnb-card pad bkr-mt">
-  <div class="section-header"><div><div class="bnb-eyebrow">Export</div><h3>Take your data elsewhere</h3></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Export</div><h2 class="sh-h">Take your data elsewhere</h2></div></div>
   {exports}
 </div>"#
     );
@@ -469,7 +469,7 @@ fn render_body(f: &DataFacts) -> String {
 
     // ── Danger zone — only the two destructive endpoints that exist ───────
     let danger = r##"<div class="bnb-card pad bkr-mt bkr-danger">
-  <div class="section-header"><div><div class="bnb-eyebrow">Danger zone</div><h3>Destructive actions</h3></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Danger zone</div><h2 class="sh-h">Destructive actions</h2></div></div>
   <p class="bnb-meta bkr-mb-xs">Each action asks for confirmation. There is no undo — take a full backup first.</p>
   <div class="bkr-danger-row">
     <div><div class="bkr-row-title">Clear all detections</div><div class="bnb-meta">empties the detections and notification tables; keeps settings</div></div>

@@ -20,7 +20,7 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
 <style>
   body { padding:4vh 5vw; overflow:hidden; }
   .kiosk-head { display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:4vh; }
-  .kiosk-head .title { font-family:var(--font-display); font-size:clamp(28px,4vw,52px); letter-spacing:-0.02em; }
+  .kiosk-head .title { font-family:var(--font-display); font-size:clamp(28px,4vw,52px); letter-spacing:-0.02em; margin:0; font-weight:400; }
   .stats { display:flex; gap:24px; justify-content:center; margin-bottom:4vh; flex-wrap:wrap; }
   .stat { background:var(--surface); border:0.5px solid var(--border); border-radius:var(--r-lg); padding:20px 36px; text-align:center; min-width:170px; box-shadow:var(--shadow-md); }
   .stat .value { font-family:var(--font-display); font-variant-numeric:tabular-nums; font-size:clamp(34px,5vw,64px); line-height:1; color:var(--moss); }
@@ -39,8 +39,11 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
 </style>
 </head>
 <body>
-<a class="kiosk-exit" href="/" aria-label="Exit kiosk mode">Exit&nbsp;✕</a>
-<div class="kiosk-head">
+<!-- A wall display is still a document: it had no <main>, so nothing on it
+     was inside a landmark, and no <h1>, so it had no accessible title beyond
+     the <title> element. The heading is visually the existing wordmark. -->
+<header class="kiosk-head">
+  <a class="kiosk-exit" href="/" aria-label="Exit kiosk mode">Exit&nbsp;✕</a>
   <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="ki-fg"></circle>
     <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="ki-fg">
@@ -49,14 +52,14 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
       <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
     </g>
   </svg>
-  <span class="title">BirdNet<span class="ki-fg3">Behavior</span></span>
-</div>
-<div id="kiosk-content"
+  <h1 class="title">BirdNet<span class="ki-fg3">Behavior</span></h1>
+</header>
+<main id="kiosk-content"
      hx-get="/pages/kiosk-content"
      hx-trigger="load, every 30s"
      hx-swap="innerHTML">
   <p class="ki-loading">Loading…</p>
-</div>
+</main>
 <script src="/static/htmx.min.js"></script>
 <script>
   // ESC leaves kiosk mode — the keyboard counterpart of the corner link.
@@ -75,25 +78,27 @@ pub(super) async fn kiosk_content_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
+        // A kiosk hangs on a wall and nobody is reading a log beside it, so a
+        // failed read must not paint three zeroes and an empty list. Each of
+        // these is a claim about the reader's birds; all four propagate.
         state.with_db(|conn| {
             let today = today_date_string();
-            let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
+            let total = birdnet_db::sqlite::detection_count(conn)?;
             let today_count = birdnet_db::sqlite::todays_detection_count(
                 conn,
                 &today,
                 None,
                 birdnet_db::sqlite::TodayFilter::All,
-            )
-            .unwrap_or(0);
-            let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
-            let recent = birdnet_db::sqlite::recent_detections(conn, 15).unwrap_or_default();
-            (total, today_count, species, recent)
+            )?;
+            let species = birdnet_db::sqlite::species_count(conn)?;
+            let recent = birdnet_db::sqlite::recent_detections(conn, 15)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((total, today_count, species, recent))
         })
     })
     .await;
 
     match result {
-        Ok((total, today_n, species_n, recent)) => {
+        Ok(Ok((total, today_n, species_n, recent))) => {
             let mut html = String::with_capacity(4096);
             let _ = write!(
                 html,
@@ -127,10 +132,24 @@ pub(super) async fn kiosk_content_partial(
             html.push_str("</div>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading kiosk data</p>".to_string(),
-        ),
+        // 200, not 500: this partial is polled by the kiosk page, and htmx
+        // discards a 5xx body, so a 500 leaves the wall display showing the
+        // last good numbers for ever. The error state has to be swapped in.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "kiosk: query failed");
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                crate::routes::pages::error_states::inline("the station's totals"),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "kiosk: task failed");
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                crate::routes::pages::error_states::inline("the station's totals"),
+            )
+        }
     }
 }

@@ -21,7 +21,6 @@
          hx-get="/pages/today-phrase"
          hx-trigger="load, every 5m"
          hx-swap="innerHTML"
-         aria-live="polite"
          aria-label="Day summary">
       {{hero_phrase}}
     </div>
@@ -44,8 +43,13 @@
   <div class="section-header x-dayhead">
     <div>
       <div class="bnb-eyebrow">The day so far</div>
-      <h3>When you heard them</h3>
-      <div class="bnb-meta x-daymeta">Bars are detections per hour · the <span class="x-tempkey">amber line</span> is temperature <span class="mono x-moon">· {{moon_inline}}</span></div>
+      <h2 class="sh-h">When you heard them</h2>
+      <!-- The temperature clause is swapped out-of-band by
+           `/pages/today-daystrip`, because the amber line is only drawn when
+           the station has weather samples. Written flat here, the caption told
+           every station without a weather source to look for a line that was
+           never on the chart. -->
+      <div class="bnb-meta x-daymeta">Bars are detections per hour<span id="td-tempkey"> · the <span class="x-tempkey">amber line</span> is temperature</span> <span class="mono x-moon">· {{moon_inline}}</span></div>
     </div>
     <div class="x-daystats" id="td-daystats"></div>
   </div>
@@ -60,14 +64,14 @@
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Live feed</div>
-        <h3>Detections as they happen</h3>
+        <h2 class="sh-h">Detections as they happen</h2>
       </div>
       <span class="bnb-pill moss"><span class="bnb-dot live"></span> Listening</span>
     </div>
     <form id="search-form" class="td-logbar">
       <span class="nav-search td-search-wrap">
         <input type="search" name="search" id="today-search"
-               placeholder="Search species…  (prefix NOT to exclude)"
+               placeholder="Search species… (try NOT Robin)"
                class="td-search-input"
                hx-get="/pages/today-list"
                hx-trigger="input changed delay:300ms, search"
@@ -79,21 +83,35 @@
         <button type="button" class="btn active" data-filter="all" aria-pressed="true">All</button>
         <button type="button" class="btn" data-filter="rare" aria-pressed="false">Rare</button>
         <button type="button" class="btn" data-filter="first" aria-pressed="false">First today</button>
-        <button type="button" class="btn" data-filter="high" aria-pressed="false">High conf</button>
+        <button type="button" class="btn" data-filter="high" aria-pressed="false">Very sure</button>
       </div>
       <span class="htmx-indicator bnb-meta">Searching…</span>
     </form>
+    <!-- Not a live region. With `aria-live` on this container, every 15s poll
+         replaced eight rows of species + scientific name + confidence + time
+         and a screen reader read the whole feed out again, whether or not
+         anything had changed. The announcement now rides `#td-feed-status`
+         below, which is written only when the newest detection is actually a
+         different one. -->
     <div id="detections-table" class="feed"
          hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML"
-         aria-live="polite">
+         aria-label="Detections as they happen">
       {{skel_detections}}
     </div>
+    <p class="sr-only" id="td-feed-status" aria-live="polite" role="status"></p>
     <div class="x-expander">
+      <!-- The label is one <span>, deliberately. `.bnb-btn` is
+           `display: inline-flex; gap: 6px`, so leaving the text bare made
+           "Show the full day (", the count, and ") — search, filter, lock &
+           delete" three separate flex items: on a phone they wrapped as three
+           independently-centred blocks with the number stranded on a line of
+           its own between two halves of the sentence. One flex item wraps as
+           ordinary text. -->
       <button type="button" class="bnb-btn ghost" id="log-toggle"
               aria-expanded="false" aria-controls="today-full">
-        Show the full day (<span id="td-total"
+        <span class="x-expander-label">Show the full day (<span id="td-total"
           hx-get="/pages/today-count?bare=1" hx-trigger="load, every 60s"
-          hx-swap="innerHTML">…</span>) — search, filter, lock &amp; delete ▾
+          hx-swap="innerHTML">…</span>) — search, filter, lock &amp; delete ▾</span>
       </button>
     </div>
     <div id="today-full" class="td-full" hidden
@@ -109,7 +127,7 @@
   <aside class="rail td-rail" data-screen-label="Right rail">
     <div class="bnb-card pad">
       <div class="section-header">
-        <div><div class="bnb-eyebrow">Today</div><h3>Top species</h3></div>
+        <div><div class="bnb-eyebrow">Today</div><h2 class="sh-h">Top species</h2></div>
         <a class="action" href="/species">All species →</a>
       </div>
       <div id="top-species" hx-get="/pages/top-species" hx-trigger="load, every 60s" hx-swap="innerHTML">
@@ -206,7 +224,14 @@
   var playingBtn = null;
   function stopCurrent() {
     if (player) { player.pause(); }
-    if (playingBtn) { playingBtn.classList.remove('playing'); playingBtn.textContent = '▶'; }
+    // The label moves with the glyph: `aria-label="Play clip"` is written into
+    // the row once by the renderer and aria-label wins over text content, so a
+    // playing clip's button went on announcing "Play clip".
+    if (playingBtn) {
+      playingBtn.classList.remove('playing');
+      playingBtn.textContent = '▶';
+      playingBtn.setAttribute('aria-label', 'Play clip');
+    }
     playingBtn = null;
   }
   document.addEventListener('click', function (e) {
@@ -226,6 +251,7 @@
       playingBtn = btn;
       btn.classList.add('playing');
       btn.textContent = '⏸';
+      btn.setAttribute('aria-label', 'Pause clip');
     }).catch(stopCurrent);
   });
 
@@ -270,25 +296,51 @@
     // (no daemon, --web-only, or capture stopped) crosses it quickly.
     var IDLE_AFTER_MS = 30000;
     var pill = document.querySelector('.db-live-pill');
+    var note = document.getElementById('hero-pulse-note');
     var pillState = '';
-    // Reflect REAL liveness: "live" only while genuine spectrogram frames are
-    // arriving from the capture device, "idle" otherwise. Never animate a fake
-    // signal that could be mistaken for live audio.
-    function setLive(isLive) {
-        if (!pill) return;
-        var next = isLive ? 'live' : 'idle';
+    // Reflect REAL liveness. Three states, not two: "live" only while genuine
+    // spectrogram frames are arriving, "idle" when the stream is reachable but
+    // quiet, and "no signal" when we could not reach the stream at all.
+    //
+    // The third state used to be folded into "idle": `ws.onerror` and
+    // `ws.onclose` both fell through to the idle baseline, so a station whose
+    // WebSocket is blocked by a reverse proxy — or a `--web-only` process with
+    // no capture at all — drew exactly the same flat line as a quiet yard, and
+    // the card said "idle" either way. Those are opposite facts for an
+    // operator: one means wait, the other means the picture is not being
+    // delivered and tells you nothing about the microphone.
+    //
+    // Never animate a fake signal that could be mistaken for live audio.
+    var STATES = {
+        live: {
+            cls: 'bnb-dot live', label: 'live',
+            title: 'Live audio from the capture device',
+            note: 'Audio is arriving from this source right now.'
+        },
+        idle: {
+            cls: 'bnb-dot', label: 'idle',
+            title: 'No audio captured recently — the signal updates as new audio is recorded',
+            note: 'No audio in the last 30 seconds. The flat line is the real signal, not a placeholder.'
+        },
+        nosignal: {
+            cls: 'bnb-dot', label: 'no signal',
+            title: 'This browser could not reach the live stream',
+            note: 'This browser cannot reach the live stream, so there is nothing to draw. The station may still be recording — check Station health.'
+        }
+    };
+    function setState(next) {
         if (pillState === next) return;
         pillState = next;
-        if (isLive) {
-            pill.classList.add('moss');
-            pill.innerHTML = '<span class="bnb-dot live"></span> live';
-            pill.title = 'Live audio from the capture device';
-        } else {
-            pill.classList.remove('moss');
-            pill.innerHTML = '<span class="bnb-dot"></span> idle';
-            pill.title = 'No audio captured recently — the signal updates as new audio is recorded';
+        var s = STATES[next] || STATES.idle;
+        if (pill) {
+            pill.classList.toggle('moss', next === 'live');
+            pill.classList.toggle('rare', next === 'nosignal');
+            pill.innerHTML = '<span class="' + s.cls + '"></span> ' + s.label;
+            pill.title = s.title;
         }
+        if (note) note.textContent = s.note;
     }
+    function setLive(isLive) { setState(isLive ? 'live' : 'idle'); }
 
     function dark() {
         return document.documentElement.getAttribute('data-theme') === 'dark';
@@ -307,23 +359,75 @@
         cnv.height = H;
     }
     resize();
-    window.addEventListener('resize', resize);
+    // Assigning `canvas.width` resets the bitmap, so a resize wiped whatever was
+    // drawn and left the card blank until the next idle tick (up to a second).
+    window.addEventListener('resize', function () { resize(); drawIdle(); });
 
     // Honest "no signal" baseline: a flat, static line — NOT an animated
     // waveform that could be mistaken for live audio.
     function drawIdle() {
         ctx.clearRect(0, 0, W, H);
+        // `moveTo(0, H / 2)` with `lineWidth = 1` straddles the pixel boundary
+        // at y = 40, so the stroke was anti-aliased across two rows at half
+        // intensity each: measured max alpha 35/255 on a baseline declared at
+        // 0.28 opacity. On a white card that is invisible, and the "honest flat
+        // line" the card is built around read to the operator as a blank box.
+        // A half-pixel offset lands the stroke inside one device row.
+        var y = Math.round(H / 2) + 0.5;
         ctx.strokeStyle = dark()
-            ? 'oklch(60% 0.02 150 / 0.35)'
-            : 'oklch(55% 0.02 150 / 0.28)';
+            ? 'oklch(68% 0.03 150 / 0.75)'
+            : 'oklch(48% 0.03 150 / 0.60)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(0, H / 2);
-        ctx.lineTo(W, H / 2);
+        ctx.moveTo(0, y);
+        ctx.lineTo(W, y);
         ctx.stroke();
     }
 
+    // Reduced motion. The live paint is the one place this page actually
+    // animates, and it honoured nothing: it repainted the whole canvas on every
+    // WebSocket frame regardless of the OS query or the app's own Display
+    // preference. (The comment further down claimed the preference was
+    // honoured; it was describing the idle loop, which is static anyway.)
+    //
+    // Throttled rather than stopped, because the content is the point: a
+    // spectrogram nobody may look at is not an accessible spectrogram. At most
+    // one repaint every 1.5s, with the newest frame kept and drawn when the
+    // window opens, so the picture stays current and stops flickering.
+    var REDUCED_MS = 1500;
+    var lastPaint = 0, pending = null, pendingTimer = null;
+    function motionReduced() {
+        try {
+            if (document.documentElement.getAttribute('data-motion') === 'reduced') return true;
+        } catch (e) { /* fall through */ }
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    }
+
     function drawFrame(frame) {
+        if (motionReduced()) {
+            pending = frame;
+            var wait = REDUCED_MS - (Date.now() - lastPaint);
+            if (wait > 0) {
+                if (!pendingTimer) {
+                    pendingTimer = setTimeout(function () {
+                        pendingTimer = null;
+                        var f = pending;
+                        pending = null;
+                        if (f) paintFrame(f);
+                    }, wait);
+                }
+                // The signal is live even while a repaint is being held back.
+                lastFrameTime = Date.now();
+                setLive(true);
+                return;
+            }
+            pending = null;
+        }
+        paintFrame(frame);
+    }
+
+    function paintFrame(frame) {
+        lastPaint = Date.now();
         // frame.data is row-major: data[m * n_frames + f] is band m at frame f.
         var nMels = frame.n_mels, nFrames = frame.n_frames;
         if (!nMels || !nFrames || !frame.data) return;
@@ -346,12 +450,12 @@
         setLive(true);
     }
 
-    // Idle drawer — repaints the breathing baseline whenever no
-    // spectrogram has been received recently. Honours
-    // prefers-reduced-motion.
-    // The flat idle baseline is static, so this poll is reduced-motion-safe and
-    // runs regardless of the preference. It flips the indicator to "idle" and
-    // repaints the baseline only once a real frame gap exceeds the threshold.
+    // Idle drawer — repaints the flat baseline whenever no spectrogram has
+    // been received recently. The baseline is static, so this poll is
+    // reduced-motion-safe and runs regardless of the preference; the live
+    // paint's own handling is in `drawFrame` above. (This comment used to
+    // open by claiming the drawer "honours prefers-reduced-motion", which read
+    // as though the whole canvas did.)
     function idleLoop() {
         if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
             setLive(false);
@@ -375,8 +479,10 @@
                 if (msg.event === 'spectrogram') drawFrame(msg);
             } catch (_) { /* ignore non-JSON */ }
         };
-        ws.onerror = function () { /* idle baseline keeps drawing */ };
-        ws.onclose = function () { /* could retry; idle baseline is fine */ };
-    } catch (_) { /* no WS support → idle baseline */ }
+        // A stream we cannot reach is not a quiet yard — say so rather than
+        // drawing the same flat line under the word "idle".
+        ws.onerror = function () { setState('nosignal'); drawIdle(); };
+        ws.onclose = function () { setState('nosignal'); drawIdle(); };
+    } catch (_) { setState('nosignal'); drawIdle(); }
 })();
 </script>

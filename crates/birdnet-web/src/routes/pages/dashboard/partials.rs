@@ -56,11 +56,15 @@ pub(super) async fn detections_partial(
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading detections</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "live feed: query failed");
+            crate::routes::pages::error_states::failed_partial("the live feed")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "live feed: task failed");
+            crate::routes::pages::error_states::failed_partial("the live feed")
+        }
     }
 }
 
@@ -122,7 +126,7 @@ fn render_feed_row(
     let _ = write!(
         html,
         r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
-        avatar = avatar(&d.com_name, ""),
+        avatar = avatar(&d.com_name, &d.sci_name, ""),
         name = escape_html(&d.com_name),
         sci = escape_html(&d.sci_name),
         wave = waveform(row_seed(&d.com_name, &d.time), 24),
@@ -169,11 +173,15 @@ pub(super) async fn best_detections_partial(
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading best recordings</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "best recordings: query failed");
+            crate::routes::pages::error_states::failed_partial("today's best recordings")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "best recordings: task failed");
+            crate::routes::pages::error_states::failed_partial("today's best recordings")
+        }
     }
 }
 
@@ -212,12 +220,18 @@ fn render_best_row(
             )
         })
         .unwrap_or_default();
+    // `{:.2}` here printed `0.99` on the front page, under a heading reading
+    // "Today · Highest confidence" — the bare decimal on an unnamed scale that
+    // the rest of this release replaced with a percentage everywhere else.
+    // `conf_bar` is the wrong atom for a card this compact (it draws a track),
+    // so the number is written the same way `conf_bar` writes it.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pct = (d.confidence.clamp(0.0, 1.0) * 100.0).round() as i64;
     let _ = write!(
         html,
-        r#"<div class="x-best">{avatar}<div class="x-best-main"><div class="nm"><a href="/species/detail?name={enc}" class="t dp-link">{name}</a></div><div class="mt">{time_short} · {conf:.2}{tag}</div></div>{play}</div>"#,
-        avatar = avatar(&d.com_name, ""),
+        r#"<div class="x-best">{avatar}<div class="x-best-main"><div class="nm"><a href="/species/detail?name={enc}" class="t dp-link">{name}</a></div><div class="mt">{time_short} · {pct}%{tag}</div></div>{play}</div>"#,
+        avatar = avatar(&d.com_name, &d.sci_name, ""),
         name = escape_html(&d.com_name),
-        conf = d.confidence,
     );
 }
 
@@ -283,7 +297,7 @@ pub(super) async fn top_species_partial(
                 );
             }
             let mut html = String::new();
-            for (com_name, _sci_name, count) in &species {
+            for (com_name, sci_name, count) in &species {
                 let enc = simple_url_encode(com_name);
                 let color = crate::routes::pages::atoms::species_color(com_name);
                 let spark = sparklines
@@ -295,7 +309,7 @@ pub(super) async fn top_species_partial(
                 let _ = write!(
                     html,
                     r#"<a class="x-top" href="/species/detail?name={enc}">{avatar}<div class="nm"><div class="t">{n}</div><div class="sc">{code}</div></div><span class="ct">{c}</span>{spark}</a>"#,
-                    avatar = avatar(com_name, ""),
+                    avatar = avatar(com_name, sci_name, ""),
                     n = escape_html(com_name),
                     code = crate::routes::pages::atoms::species_code(com_name),
                     c = count,
@@ -303,11 +317,15 @@ pub(super) async fn top_species_partial(
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading species</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "top species: query failed");
+            crate::routes::pages::error_states::failed_partial("today's top species")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "top species: task failed");
+            crate::routes::pages::error_states::failed_partial("today's top species")
+        }
     }
 }
 
@@ -365,7 +383,7 @@ pub(super) async fn species_list_partial(
                     html,
                     r#"<tr><td class="mono dp-rank">{rank}</td><td><div class="dp-cell">{avatar}<div class="dp-min0"><div class="dp-name-strong"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,
                     rank = i + 1,
-                    avatar = avatar(&s.com_name, ""),
+                    avatar = avatar(&s.com_name, &s.sci_name, ""),
                     n = escape_html(&s.com_name),
                     sci = escape_html(&s.sci_name),
                     c = s.count,
@@ -375,11 +393,15 @@ pub(super) async fn species_list_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading species list</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species list: query failed");
+            crate::routes::pages::error_states::failed_partial("the species list")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species list: task failed");
+            crate::routes::pages::error_states::failed_partial("the species list")
+        }
     }
 }
 
@@ -401,11 +423,15 @@ pub(super) async fn hourly_chart_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_hourly_chart(&hours),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "hourly chart: query failed");
+            crate::routes::pages::error_states::failed_partial("the hourly chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "hourly chart: task failed");
+            crate::routes::pages::error_states::failed_partial("the hourly chart")
+        }
     }
 }
 
@@ -422,11 +448,15 @@ pub(super) async fn daily_chart_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_daily_chart(&days),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "daily chart: query failed");
+            crate::routes::pages::error_states::failed_partial("the daily chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "daily chart: task failed");
+            crate::routes::pages::error_states::failed_partial("the daily chart")
+        }
     }
 }
 
@@ -443,11 +473,15 @@ pub(super) async fn confidence_chart_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_confidence_chart(&buckets),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "confidence chart: query failed");
+            crate::routes::pages::error_states::failed_partial("the confidence chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "confidence chart: task failed");
+            crate::routes::pages::error_states::failed_partial("the confidence chart")
+        }
     }
 }
 

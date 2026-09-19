@@ -31,6 +31,7 @@ pub mod detection_comments;
 pub mod detection_detail;
 pub mod detection_reviews;
 pub mod empty_states;
+pub mod error_states;
 pub mod health;
 pub mod heatmap;
 pub(crate) mod help;
@@ -486,14 +487,20 @@ pub(crate) fn date_to_epoch_days(date: &str) -> u64 {
 }
 
 /// Count detections for today's date in `SQLite`.
-pub(crate) fn today_count(conn: &rusqlite::Connection) -> i64 {
+///
+/// # Errors
+///
+/// The read failed. This used to return `0` on an error, which put "Today: 0"
+/// on the dashboard of a station whose database could not be read — a claim
+/// about the reader's birds, made without looking.
+pub(crate) fn today_count(conn: &rusqlite::Connection) -> Result<i64, birdnet_db::sqlite::DbError> {
     // `detections_analytic`, not `detections`: this is a number shown to an
     // operator, and a detection they rejected is one they have said was not
     // there. Its neighbours on the dashboard tile row ("Species", "Last hour",
     // the sparkline) have always excluded rejections, so counting every row
     // here made adjacent tiles disagree about the same day.
     let today = today_date_string();
-    birdnet_db::sqlite::analytic_detection_count_for_date(conn, &today).unwrap_or(0)
+    birdnet_db::sqlite::analytic_detection_count_for_date(conn, &today)
 }
 
 /// Format an integer with thousands separators (e.g. 9914 → "9,914").

@@ -72,14 +72,12 @@ impl Finding {
 pub fn validate(config: &Config) -> Vec<Finding> {
     let mut out = Vec::new();
     check_coords(config, &mut out);
-    check_unit_range(config, "CONFIDENCE", 0.0, 1.0, &mut out);
+    for &(key, min, max) in NUMERIC_RANGES {
+        check_bounded(config, key, min, max, &mut out);
+    }
     check_confidence_floor(config, &mut out);
     check_confidence_ceiling(config, &mut out);
-    check_unit_range(config, "SF_THRESH", 0.0, 1.0, &mut out);
     check_sf_thresh_ceiling(config, &mut out);
-    check_unit_range(config, "PRIVACY_THRESHOLD", 0.0, 1.0, &mut out);
-    check_bounded(config, "SENSITIVITY", 0.5, 1.5, &mut out);
-    check_bounded(config, "OVERLAP", 0.0, 2.9, &mut out);
     check_positive_int(config, "RECORDING_LENGTH", 3, 60, &mut out);
     check_positive_int(config, "SEGMENT_DURATION", 3, 600, &mut out);
     check_schedule(config, &mut out);
@@ -172,9 +170,35 @@ fn check_coords(config: &Config, out: &mut Vec<Finding>) {
     }
 }
 
-fn check_unit_range(config: &Config, key: &str, min: f64, max: f64, out: &mut Vec<Finding>) {
-    check_bounded(config, key, min, max, out);
-}
+/// Every numeric setting the station reads as a bare number, with the range
+/// outside which it cannot do its job.
+///
+/// # Why this is a table and not five literals
+///
+/// These bounds have two callers that must not disagree: [`validate`], which
+/// `--doctor` runs against the config *file*, and the admin settings form,
+/// which is where a value typed by a person actually arrives. Until 0.15.0
+/// only the first existed, so `CONFIDENCE=75` — the percentage slip, typed
+/// into a field labelled "Minimum Confidence (0-1)" — was saved, overlaid onto
+/// the file config at startup **after** `validate` had already run, and
+/// compared against a 0-to-1 model score for every three-second window. The
+/// station recorded nothing, forever, and said nothing about why.
+///
+/// Only the keys [`validate`] already enforced are here. The two alert
+/// thresholds the admin form also bounds (`APPRISE_MIN_CONFIDENCE`,
+/// `EMAIL_MIN_CONFIDENCE`) are deliberately absent: an `Error` finding makes
+/// `is_usable` false, and `startup_config::choose` then reverts the station to
+/// its last-good configuration file. Turning a bad *alert* threshold into a
+/// silent rollback of every setting is a far larger consequence than the
+/// mistake, so the form bounds those two on its own and this list stays what
+/// it was.
+pub const NUMERIC_RANGES: &[(&str, f64, f64)] = &[
+    ("CONFIDENCE", 0.0, 1.0),
+    ("SF_THRESH", 0.0, 1.0),
+    ("PRIVACY_THRESHOLD", 0.0, 1.0),
+    ("SENSITIVITY", 0.5, 1.5),
+    ("OVERLAP", 0.0, 2.9),
+];
 
 /// Threshold below which `CONFIDENCE` is treated as a probable mistake.
 ///
@@ -184,8 +208,10 @@ const CONFIDENCE_FLOOR: f64 = 0.1;
 
 /// Warn about a `CONFIDENCE` that is in range but implausibly low.
 ///
-/// [`check_unit_range`] already rejects the percentage mistake (`CONFIDENCE=70`)
-/// and non-numeric junk as errors. What it cannot catch is the *decimal* slip —
+/// The [`NUMERIC_RANGES`] sweep already rejects the percentage mistake
+/// (`CONFIDENCE=70`) and non-numeric junk as errors — it replaced the old
+/// `check_unit_range` helper this line used to name. What a range check cannot
+/// catch is the *decimal* slip —
 /// `0.075` for `0.75` — or a `0` copied from `SF_THRESH`, where "0 = disabled"
 /// is the documented meaning. Those parse, sit inside 0–1, validate clean,
 /// but they make the station record whatever the model's best guess was for

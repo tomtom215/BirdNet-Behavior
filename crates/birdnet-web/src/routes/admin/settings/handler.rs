@@ -47,6 +47,108 @@ pub async fn settings_partial(State(state): State<AppState>) -> Result<Html<Stri
 // POST /admin/settings — save and return feedback partial
 // ---------------------------------------------------------------------------
 
+/// Every settings field the station reads as a bare number and compares
+/// directly: the form key, the label the page shows, and the range outside
+/// which the value cannot do its job.
+///
+/// The first five mirror [`birdnet_core::config::validate::NUMERIC_RANGES`],
+/// and `the_form_bounds_match_the_validator` holds the two in step. The last
+/// two are not in that list on purpose: `validate()` findings drive
+/// `startup_config::choose`, which reverts the whole configuration file on an
+/// error, and a mistyped *alert* threshold should not roll a station's every
+/// setting back. They are bounded here, where they are typed, and nowhere
+/// else — `EMAIL_MIN_CONFIDENCE` has no config-file counterpart at all.
+const BOUNDED_FIELDS: &[(&str, &str, f64, f64)] = &[
+    ("confidence_threshold", "Minimum Confidence", 0.0, 1.0),
+    ("sensitivity", "Sensitivity", 0.5, 1.5),
+    ("overlap", "Analysis Overlap", 0.0, 2.9),
+    ("sf_thresh", "Species Frequency Threshold", 0.0, 1.0),
+    ("privacy_threshold", "Privacy Threshold", 0.0, 1.0),
+    ("notify_confidence", "Notification Min Confidence", 0.0, 1.0),
+    ("email_min_confidence", "Alert Min Confidence", 0.0, 1.0),
+];
+
+/// The form key each bounded field maps to in the runtime configuration, for
+/// the five that have one. Used only to keep the ranges above in step with
+/// `birdnet-core`'s.
+#[cfg(test)]
+const CONFIG_KEY_OF: &[(&str, &str)] = &[
+    ("confidence_threshold", "CONFIDENCE"),
+    ("sensitivity", "SENSITIVITY"),
+    ("overlap", "OVERLAP"),
+    ("sf_thresh", "SF_THRESH"),
+    ("privacy_threshold", "PRIVACY_THRESHOLD"),
+];
+
+/// Problems with the numbers in `form`, phrased for the person who typed them.
+///
+/// # Why this exists at all
+///
+/// `birdnet_core::config::validate` has checked these ranges since the
+/// beginning, and `--doctor` runs it — but only ever against the config
+/// **file**. A value typed here goes into the settings table, and the settings
+/// table is overlaid onto the config at startup *after* validation has already
+/// run (`src/app.rs`: validate, then `overlay_db_settings`). So the one field
+/// most likely to be got wrong was the one field nothing checked.
+///
+/// The mistake is not hypothetical: the field is labelled "Minimum Confidence
+/// (0–1)" and the model's score is a probability, but the app's own
+/// notification templates offer `$confidencepct` beside `$confidence`, and
+/// people think in percent. `75` parses, stores, and is then compared against a
+/// score that can never exceed `1`. Every detection is discarded, for good,
+/// and nothing anywhere says why — the station just goes quiet.
+fn range_problems(form: &SettingsForm) -> Vec<String> {
+    // Read from the submission rather than from the changed-values list.
+    // `build_settings_items` drops any field whose value already matches the
+    // database, so validating that list would wave through a bad value that is
+    // *already stored* — the case where the station has stopped recording and
+    // its owner is on this page looking for the reason.
+    // Sized by `BOUNDED_FIELDS`, so adding a bounded field without wiring it
+    // here does not compile.
+    let submitted: [(&str, Option<&String>); BOUNDED_FIELDS.len()] = [
+        ("confidence_threshold", form.confidence_threshold.as_ref()),
+        ("sensitivity", form.sensitivity.as_ref()),
+        ("overlap", form.overlap.as_ref()),
+        ("sf_thresh", form.sf_thresh.as_ref()),
+        ("privacy_threshold", form.privacy_threshold.as_ref()),
+        ("notify_confidence", form.notify_confidence.as_ref()),
+        ("email_min_confidence", form.email_min_confidence.as_ref()),
+    ];
+    let mut problems = Vec::new();
+    for (key, value) in submitted {
+        let Some(value) = value else { continue };
+        let Some(&(_, label, min, max)) = BOUNDED_FIELDS.iter().find(|(k, ..)| *k == key) else {
+            continue;
+        };
+        let normalised = birdnet_core::config::locale::normalize_decimal(value);
+        let raw = normalised.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let Ok(value) = raw.parse::<f64>() else {
+            problems.push(format!(
+                "{label} must be a number between {min} and {max}. You entered “{raw}”."
+            ));
+            continue;
+        };
+        if (min..=max).contains(&value) {
+            continue;
+        }
+        // The percentage slip, named. Anything from 1 to 100 on a 0–1 scale is
+        // almost certainly a percentage, and saying so is more use than
+        // restating the range a second time.
+        let hint = if (min, max) == (0.0, 1.0) && (1.0..=100.0).contains(&value) {
+            format!(" — if you meant {value:.0}%, enter {:.2}.", value / 100.0)
+        } else {
+            ".".to_owned()
+        };
+        problems.push(format!(
+            "{label} must be between {min} and {max}. You entered {raw}{hint}"
+        ));
+    }
+    problems
+}
+
 /// Save submitted settings and return an HTMX feedback partial.
 ///
 /// # Errors
@@ -64,6 +166,24 @@ pub async fn save_settings(
     // time *any* unrelated setting is saved.
     let existing = load_all_settings(&state);
     let items = build_settings_items(&form, &existing);
+
+    // Reject before writing, and reject the whole submission: a partial save
+    // would leave the form showing one thing and the station running another.
+    let problems = range_problems(&form);
+    if !problems.is_empty() {
+        let list = problems.iter().fold(String::new(), |mut acc, p| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "<li>{}</li>", crate::routes::pages::escape_html(p));
+            acc
+        });
+        let body = Html(format!(
+            r#"<div class="alert alert-error" id="settings-feedback" hx-swap-oob="true" role="alert">
+                Nothing was saved. Fix these and try again:
+                <ul class="save-problems">{list}</ul>
+            </div>"#
+        ));
+        return Ok(toast::with(body, Toast::error(problems.join(" "))));
+    }
 
     // The audit metadata, computed before the write and from the same `items`
     // the write uses, so the row cannot claim a key that was never submitted.
@@ -109,15 +229,22 @@ pub async fn save_settings(
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
                 </svg>
                 Settings saved ({saved} values updated).
-                <span class="save-note dim">Changes apply on next restart.</span>
+                <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
             </div>"#
             ));
             // O-18: toast the success outcome via OOB, with a follow-up action
             // — settings only take effect on next restart, so surface the link.
             Ok(toast::with(
                 body,
-                Toast::success(format!("Settings saved ({saved} values updated)."))
-                    .with_action("/admin/system", "Open system →"),
+                // The action used to read "Open system", which says where to
+                // go and not why. Three places told the reader about the
+                // restart in three different ways — "Most settings require a
+                // restart", "Changes apply on next restart", and, in the most
+                // prominent of the three, nothing at all.
+                Toast::success(format!(
+                    "Settings saved ({saved} values updated). Restart to apply them."
+                ))
+                .with_action("/admin/system", "Restart →"),
             ))
         }
         Err(e) => {
@@ -587,6 +714,50 @@ pub(crate) fn build_settings_items(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// The form's ranges and `birdnet-core`'s must not drift.
+    ///
+    /// `BOUNDED_FIELDS` carries its own numbers rather than looking them up,
+    /// because two of its seven entries have no config-file counterpart and
+    /// adding them to `validate()` would let a mistyped alert threshold revert
+    /// a station's whole configuration. That leaves five pairs of numbers in
+    /// two files, so this is what keeps them equal.
+    #[test]
+    fn the_form_bounds_match_the_validator() {
+        for &(field, config_key) in CONFIG_KEY_OF {
+            let form = BOUNDED_FIELDS
+                .iter()
+                .find(|(k, ..)| *k == field)
+                .unwrap_or_else(|| panic!("{field} is not a bounded field"));
+            let core = birdnet_core::config::validate::NUMERIC_RANGES
+                .iter()
+                .find(|(k, ..)| *k == config_key)
+                .unwrap_or_else(|| panic!("{config_key} is not a validated range"));
+            assert_eq!(
+                (form.2, form.3),
+                (core.1, core.2),
+                "{field} / {config_key}: the form would accept a value \
+                 `--doctor` rejects, or reject one it accepts"
+            );
+        }
+    }
+
+    /// The counterpart: the two alert thresholds must stay *out* of the
+    /// validator's list. Putting them in is the change this whole arrangement
+    /// exists to prevent.
+    #[test]
+    fn the_alert_thresholds_are_not_validated_against_the_config_file() {
+        for key in ["APPRISE_MIN_CONFIDENCE", "EMAIL_MIN_CONFIDENCE"] {
+            assert!(
+                !birdnet_core::config::validate::NUMERIC_RANGES
+                    .iter()
+                    .any(|(k, ..)| *k == key),
+                "{key} in NUMERIC_RANGES makes `is_usable` false for a config \
+                 file carrying a bad alert threshold, and `startup_config::choose` \
+                 then reverts every other setting with it"
+            );
+        }
+    }
 
     fn empty_form() -> SettingsForm {
         SettingsForm {

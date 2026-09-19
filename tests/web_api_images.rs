@@ -260,3 +260,84 @@ async fn species_image_file_respects_blacklist() {
         "serving a blacklisted hit should evict the cached file"
     );
 }
+
+/// Both answers from the file endpoint must tell the browser how long it may
+/// reuse them.
+///
+/// Neither used to say anything at all — no `Cache-Control`, no `ETag`, no
+/// `Last-Modified` — so there was nothing for a browser to reuse or
+/// revalidate against and every render fetched again. That was invisible
+/// while the only `<img>` tags were on the species gallery and the detail
+/// page, which a reader opens once. It stopped being invisible in 0.16.0,
+/// when the avatar beside every detection grew a photograph: the live feed
+/// re-renders on a timer, and each re-render would otherwise pull every
+/// thumbnail on screen down the wire again.
+///
+/// The 404 matters as much as the picture, and is the half that is easy to
+/// forget: a species the provider has nothing for answers 404 on every
+/// request, and that is the path that reaches through to the network.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_served_image_says_how_long_it_may_be_reused() {
+    let addr = spawn_image_server().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let app = build_router(state_with_stub_cache(format!("http://{addr}"), tmp.path()));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/image/Turdus%20merula/file")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "precondition: the image must serve, or this asserts nothing"
+    );
+    let cc = response
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        cc.contains("max-age=") && cc.contains("private"),
+        "a served photo must carry a private max-age, got {cc:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_species_with_no_photo_says_how_long_that_stays_true() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    birdnet_db::migration::migrate(&conn).unwrap();
+    let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+    let app = build_router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/image/Turdus%20merula/file")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "precondition: no cache is configured, so this must be the 404 path"
+    );
+    let cc = response
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        cc.contains("max-age="),
+        "a 404 from the image endpoint must carry a max-age too, or every \
+         photo-less bird is re-requested on every render; got {cc:?}"
+    );
+}

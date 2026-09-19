@@ -337,6 +337,18 @@ fn all_pages() -> Vec<Entry> {
             "/help",
             &["docs", "manual", "methodology", "guide"],
         ),
+        // Once `onboarding_complete` is set and the station has a detection,
+        // nothing anywhere linked to the wizard again: the only link lives in
+        // the first-run checklist, which stops rendering after the first
+        // detection. It prefills from the settings table, so re-running it is
+        // a safe way to revisit location, accuracy and alerts in one place.
+        make(
+            "✦",
+            "Run setup again",
+            "the first-run wizard",
+            "/onboarding",
+            &["onboarding", "wizard", "setup", "first run", "location"],
+        ),
     ]
 }
 

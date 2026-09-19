@@ -177,7 +177,7 @@ fn build_settings(state: &AppState) -> String {
 {form}
 <h2 class="st-h3" id="kiosk">Wall display</h2>
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Kiosk mode</div><h3>A screen for the wall</h3></div><a class="bnb-btn ghost" href="/kiosk">Launch →</a></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Kiosk mode</div><h2 class="sh-h">A screen for the wall</h2></div><a class="bnb-btn ghost" href="/kiosk">Launch →</a></div>
   <div class="st-card-lede">A full-screen, auto-refreshing display for a dedicated screen — latest detections and the live signal. Press <span class="mono">Esc</span> to exit.</div>
 </div>"#,
         tabs = station_subtabs("settings"),

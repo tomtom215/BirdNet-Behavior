@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.16.0] - 2026-09-19
+
 Seven clusters: HTTPS in the listener itself, a searchable detection log with
 bulk review, backups that leave the SD card they were written on, removing the
 Apprise dependency for the services most stations actually use, giving the
@@ -37,6 +41,534 @@ accessibility feature documented in the wrong direction for its entire life,
 found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
+
+And the change a reader will notice first: **the station had a photograph of
+every bird it heard, and was showing a four-letter code instead.**
+
+### Fixed — a missing bird photograph failed the visual-QA sweep
+
+Putting a photograph on every avatar meant every page now requests up to
+fifteen species images, and `/api/v2/species/image/{sci}/file` answers 404
+whenever the station has no picture for that bird. `tools/visual-qa/qa.mjs`
+counted each of those as a broken image, and CI went red on **36 page/states**
+— for birds whose photographs were fine a minute later.
+
+The sweep had the blind spot before this release: the species gallery has
+emitted the same optional `<img>` tags since it was built, and the gate passed
+only because every species it showed happened to resolve on those runs. This
+change multiplied the exposure from one page to fourteen and the luck ran out.
+
+A species photograph is optional by design — the endpoint's documented answer
+for "no picture" is 404, and the avatar's `data-hide-on-error` fallback to the
+coloured banding-code tile was verified in a browser. So the sweep now counts
+species photos separately from mandatory assets, **with a floor**: a page where
+*every* species photo failed is a broken route or a malformed URL, and still
+fails. Measured across all three states:
+
+| Station | Before | After |
+|---|---|---|
+| every photo present | pass | pass |
+| 5 of 16 missing (CI's case) | **fail, 36 pages** | pass |
+| every photo failing | fail | **fail, 22 pages, `allSpeciesPhotosFailed(15/15)`** |
+
+**And the run made a blip permanent.** The fifteen-minute memory of failed
+lookups added alongside the photographs did not distinguish a provider
+answering *"this species has no picture"* from a timeout or a rate limit, so
+five species whose fetch happened to fail early in a CI run were locked out of
+every page for the rest of it. A provider's answer is a durable fact; an HTTP
+error is not. Transient failures are now remembered for one minute — still
+long enough to stop a polling feed re-asking on every render, which is the
+only reason either memory exists.
+
+### Fixed — twenty-four error messages no reader could ever see
+
+Every HTMX partial that failed answered `500` with a hand-written message:
+`<p>Error loading species</p>`, `<p>Error loading chart</p>`, and twenty-two
+more. `static/htmx.min.js` ships
+`responseHandling:[…,{code:"[45]..",swap:false,error:true}]`, so **a 5xx body
+is never swapped into the page**. Every one of those messages was unreachable.
+Driving `/pages/top-species` to 500 in a browser and reading the DOM back
+confirms it: the server's body is absent.
+
+What the reader got instead was `layout.html`'s `htmx:responseError` fallback —
+*"This section could not load (HTTP 500). Reload the page"*: an HTTP status
+code shown to a birdwatcher, and advice that repeats the failure, because
+reloading a station whose database will not read fails again. Meanwhile
+nothing logged the error either. The arms were `_ =>`, which discards it, and
+`with_read_db` is a pass-through that logs nothing of its own, so the one copy
+of the real reason was thrown away as well.
+
+Those twenty-four now answer **200** carrying the shared `error_states`
+fragment, which htmx does swap — *"We couldn't load today's top species. This
+is a fault, not an empty result — check the station."* — and each logs what
+failed. The rationale is written once, on `error_states::failed_partial`. The
+JSON API is deliberately unchanged: `/api/v2/stats` still answers 500, because
+a caller there is a program that needs the status line to be true. These are
+presentation fragments.
+
+The fallback stays and still earns its place: it is the only thing that can
+speak when the station does not answer at all.
+
+Two things this turned up that were not copy:
+
+**A failure inside a `<button>` produced markup no keyboard user could
+resolve.** `/pages/today-count` fills `#td-total`, the `<span>` holding the
+number in *"Show the full day (34) — search, filter, lock & delete"*. The
+fallback put a `<div role="alert">` and an `<a href>` in there: flow content
+where only phrasing content is allowed, and an anchor nested inside a button —
+interactive content inside interactive content. Rendered, it read *"Show the
+full day (This section could not load (HTTP 500). Reload the page) — search,
+filter, lock & delete"*. The accessibility sweep never saw it, because it
+grades a page in the state it happens to be in. That slot now gets `?` and a
+screen-reader-only explanation, and the fallback asks whether its target can
+hold flow content before building an element.
+
+**The life list reported a dead database as an empty life list.**
+`life_accumulation_partial` called `species_first_seen(conn)` with
+`.unwrap_or_default()` **inside** the closure, and that was the only query it
+made — so a failed read became an empty map, an empty curve, and
+`accumulation_curve`'s *"Not enough data yet for this view."* Shown to the
+person least able to shrug it off: a life list is the one record nobody wants
+to be told is empty. It propagates with `?` now. This is the same defect the
+rest of this release removed from six other surfaces; it survived because the
+`.unwrap_or_default()` sat one level deeper than the sweep had looked.
+
+Found by the gate refusing to pass, not by reading. A first draft dropped only
+`detections` and reported `/pages/species-list` as broken when it was fine —
+that handler reads `species_summary`, the aggregate migration 30 maintains on
+write, not a view over `detections`.
+
+### Changed — every bird in the app is now the bird, not a four-letter code
+
+**The station had photographs of every species it heard, and showed them on
+two screens out of sixteen.** `/api/v2/species/image/{scientific_name}/file`
+has served Wikipedia thumbnails to the species gallery and the species-detail
+hero since the image cache was added, and image caching is on by default — so
+a station that had been running a week already had the pictures on disk. Every
+other surface drew `atoms::avatar`, a coloured circle containing a four-letter
+banding code derived from the common name: `EUBL` for a Eurasian Blackbird,
+`BCCH` for a Black-capped Chickadee. The live feed, the Today log, Recordings,
+History and its open-day recap, the weekly report, Year in Review, the life
+list, the species table and the top-species rail — fourteen call sites across
+seven modules — all showed lettering to a reader who came to look at birds.
+
+`avatar` now takes the scientific name as well as the common one and layers
+the photograph over the code chip:
+
+```html
+<span class="bnb-avatar" data-style="--sp:…" title="Blue Jay">BLJA<img
+  src="/api/v2/species/image/Cyanocitta%20cristata/file" alt="" loading="lazy"
+  decoding="async" class="bnb-avatar-img" data-hide-on-error></span>
+```
+
+The chip is unchanged and is still the fallback, reached whenever the station
+has no picture for that bird — image caching switched off with
+`--image-cache-dir ""`, no photo on the species' Wikipedia page, a failed
+lookup, or an admin blacklist. The `<img>` opts into the existing
+`data-hide-on-error` handler, so those rows look exactly as they did before.
+Verified in a browser rather than reasoned about: with every image request
+forced to 404, all 31 chips on the Today page fall back to the code tile in
+both themes, with no broken-image glyph and no layout shift.
+
+`alt` is empty because every one of the fourteen call sites prints the species'
+name in the same row; a description would make a screen reader say the bird
+twice. A detection row whose `Sci_Name` is blank — which an imported
+BirdNET-Pi database can carry — emits no `<img>` at all rather than a request
+for `/api/v2/species/image//file` that could only 404.
+
+Measured across six routes after scrolling each to the foot: **92 avatar chips,
+92 photographs loaded, 0 hidden, 0 outstanding**. The accessibility sweep is
+unchanged at 148 pages, 0 violations, 0 advisory findings.
+
+### Fixed — a species with no photograph was looked up again on every render
+
+Found while making the change above, and a blocker for it. A miss writes no
+file, so `DiskCache::get` kept returning `None` and `species_image_file` went
+back to the provider **every single time the URL was requested**. That cost
+nothing while the only `<img>` tags were on two screens a reader opens
+deliberately. With the avatar in every detection row carrying one, and the live
+feed re-rendering on a timer, a station with thirty photo-less species would
+have asked Wikipedia about all thirty on every poll, for as long as it was
+switched on.
+
+`ImageCache` now remembers a failed lookup for fifteen minutes. Measured with a
+counting provider: five requests for the same photo-less species reached it
+**five times** before the change and **once** after. The counterparts hold that
+this is not simply "never ask" — three different species still produce three
+lookups, and evicting a species (which is what blacklisting does) forgets the
+miss so the next request re-resolves. The remembered set is capped at 4,096
+entries because its key comes straight from a URL path segment.
+
+### Fixed — the species image endpoint told browsers nothing about reuse
+
+Neither the picture nor the 404 carried `Cache-Control`, and with no `ETag` or
+`Last-Modified` either there was nothing for a browser to revalidate against,
+so every render fetched again. Both now carry `private, max-age=300`. The 404
+matters as much as the image and is the half that is easy to forget: it is the
+answer for every bird the station has no picture of, and it is the path that
+reaches through to the network.
+
+### Fixed — a UI pass done by looking at the app rather than reading it
+
+Every item below was found by rendering the running station in a browser and
+measuring what came out. The pattern that recurs, as it did in the audit
+cluster below, is **a mechanism that was never connected to the thing it was
+meant to serve** — and a second one: **a check that was green because it was
+not looking**.
+
+**On a phone, the Today live feed showed no species names at all.** The feed's
+six-track grid is ID-scoped and therefore beats the phone override near the top
+of the stylesheet, which is class-scoped; a media query does not raise
+specificity. The waveform and confidence bar were hidden at that width but
+their 88px + 86px tracks were not, so the name column resolved to exactly
+`0px`: every row was a timestamp, a four-letter code, a play button and 200px
+of dead air. Measured at 390px before the fix:
+`grid-template-columns: 50px 32px 0px 88px 86px 30px`. The Recordings row had
+the same outcome from the opposite cause — its action cluster claimed 156px of
+a 320px row as `auto` min-content — and the species name measured 44px. Both
+read properly now.
+
+**Half the Patterns data was unreachable on a phone.** The hour × day-of-week
+grid and the hourly bar chart declared a pixel `width` and no `viewBox`, so the
+stylesheet's `max-width: 100%` *cropped* them rather than scaling: the hour-23
+label sat 285px beyond the SVG's right edge, and the scroll wrapper could not
+help because the element it wraps had already been forced to fit.
+
+**Other pictures that were not telling the truth.** A species heard on nine or
+more days lost its most recent week (the chart hard-coded a 280-wide viewBox
+while stepping 38 per day). A sparkline given one sample drew nothing at all —
+a case the dashboard deliberately constructs for a brand-new station — and a
+perfectly flat series was pinned to the top edge, where the Today top-species
+rail read as a stack of hairlines. The weekly report clipped the label of its
+tallest bar, which is the busiest day of the week. The live-signal card's
+"honest flat baseline" painted at alpha 35/255 and read as a blank box; a
+stream the browser could not reach drew that same line under the word "idle",
+so a blocked WebSocket was indistinguishable from a silent microphone — there
+is a third state now, and a caption saying which you are looking at.
+
+**Station Health contradicted itself**, ticking "Audio sources OK" on the same
+screen as a banner reading "an audio source is down" and two cards chipped
+Stalled and Backing off; and a snapshot it could not take reported
+`integrity_ok: true`, manufacturing a clean bill of health for the one page an
+operator opens when they suspect something is wrong.
+
+**Failures that were reported as emptiness.** History told an operator with
+three years of data "No detection history yet"; Recordings answered a failed
+query with "No saved clips yet", which reads as *the purge ate them*; the
+Migration tab reported a database error as a quiet year; the dawn-chorus polar
+did the same under a doc comment that described only the empty path. There is
+now an `error_states` vocabulary beside `empty_states`, and a gate on the
+`cached_fragment` contract that was getting this wrong.
+
+**The setup wizard told six kinds of untruth**, including one in its own doc
+comment — which claimed a single-pass template substitution "deliberately
+rather than a `.replace()` chain" directly above a seven-link `.replace()`
+chain, so an audio-source label of `{{password_step}}` spliced the password
+form into the microphone card. With JavaScript off it was a dead end the home
+page trapped you in. A signed-in viewer was walked through all six steps and
+refused at the finish line. Step 6 said "Your answers are saved" before
+anything was saved. "Skip for now" completed setup permanently, and nothing
+anywhere linked back. The Microphone step listed what was *configured* and
+said nothing about whether audio was flowing — on the demo station it now
+reads "2 of 3 sources are not sending audio right now", matching what Station
+Health says about the same station. Two things on the page were invented
+outright: a "Calibrating noise floor…" animation that calibrated nothing, and a
+"~100 km radius" that appears in no other file in the repository because there
+is no radius anywhere in the system.
+
+**The accessibility gate was running 69 of axe's 105 rules.** It gated on four
+WCAG tags, so 36 rules never executed — and adding them reported 40 findings
+immediately, in rules that had not been failing because they had not been
+running. It also ran at one desktop viewport, so the phone layout had never
+been graded; adding it found six *already-gated* serious violations on the
+spot. Both tiers now block, and CI runs both viewports. Among what this
+surfaced: no `<main>`, no skip link and no `contentinfo` on any `/admin/*` page;
+`/admin/doctor` serving no `<h1>` and a stray unmatched `</section>`; the house
+section-header pattern jumping `<h1>` to `<h3>` on fifteen routes; two
+landmarks both named "Notifications"; and six scrollable regions a keyboard
+could not reach.
+
+**The live detection feed read itself out again four times a minute.** A
+container that polls and swaps its own innerHTML is a mutation in a live
+region on every tick, so a screen reader re-read eight rows of species,
+scientific name, confidence and time every 15 seconds whether or not a bird had
+been heard. Announcements now ride a status line written only when the newest
+detection actually changes: measured, three refetches of an unchanged feed
+produce zero announcements, and a genuinely new bird produces exactly one.
+
+**Preferences that were silently dropped.** `theme-guard.js` said it mirrored
+the inline guard in `layout.html` and read two of its four keys, so Reduced
+motion and High contrast were lost on every standalone admin page. The live
+spectrogram honoured no motion preference at all, under a comment saying it
+did — it now repaints once per 1.5s when motion is reduced (measured: 640
+paints becomes 64 for the same burst of frames). `print.css` forces a light
+palette and missed seven of the twenty-nine tokens that flip between themes,
+the worst being the one the species avatars mix toward: a dark-theme operator
+printing the weekly report got invisible banding codes on every row.
+
+Also: thousands separators on the counts that lacked them; focus indicators on
+form controls, which had `outline: none` at a specificity that made the
+`:focus-visible` rule unreachable and replaced it with a 1.4:1 ring; no focus
+indicator whatsoever on the command palette input; a `.bnb-btn.dawn:hover` that
+set white on a colour that is bright yellow in dark mode (1.52:1); `--dawn`
+used as a text colour at six sites across three admin pages, where it measures
+2.85:1; a duplicated `.sr-h1` that was shrinking the share permalink's hero —
+the one page in the product that strangers see — from 64px to 24px.
+
+### Fixed — the station read as if a Linux administrator were holding it
+
+A second pass over the front end, this one from the chair of the person the
+product is actually for: someone who bought a Raspberry Pi kit to find out
+which birds are in their garden, and who has never opened a terminal. Three
+of these are not copy problems.
+
+**A number typed into Settings could switch the station off for good, silently.**
+`birdnet_core::config::validate` has checked the detection thresholds since the
+beginning, and `--doctor` runs it from `ExecStartPre` — but only against the
+configuration *file*. `src/app.rs` validates, and then `overlay_db_settings`
+lays the settings table on top, so a value typed into `/admin/settings` arrives
+after the only check that would have caught it. The field is labelled "Minimum
+Confidence (0–1)", the score it is compared against is a probability, and the
+app's own notification templates offer `$confidencepct` beside `$confidence` —
+so `75` gets typed where `0.75` was meant. A probe against the shipped code:
+`stored CONFIDENCE = "75"; parsed = Some(75.0); validate() would say ["Error:
+CONFIDENCE=75 is outside the valid range 0 to 1"]`. The validator knew, and was
+never asked. Every three-second window then scored below 75, so the station
+recorded nothing, forever, while reporting itself healthy. The form now refuses
+the whole submission rather than writing half of it, and names the mistake:
+*"Minimum Confidence must be between 0 and 1. You entered 75 — if you meant
+75%, enter 0.75."* It validates the submission rather than the changed-values
+diff, so a bad value that is already stored is reported the next time the page
+is saved — the station whose owner is on that page looking for the reason.
+Seven fields were unbounded this way; two of them (`notify_confidence`,
+`email_min_confidence`) had no stated range at all and would have silenced
+every alert without touching detection. Those two are bounded by the form
+alone, deliberately: a `validate()` error makes `is_usable` false and
+`startup_config::choose` then reverts the whole configuration file, and a
+mistyped alert threshold must not roll back every other setting with it. The
+five that `validate()` does check read their bounds from
+`birdnet_core::config::validate::NUMERIC_RANGES`, and a test holds the form's
+copy equal to it.
+
+**The Help link in the site footer opened an unstyled wreck.** mdBook writes
+`index.html` with relative asset URLs, and the footer linked `/help` rather
+than `/help/`, so all thirteen stylesheets and scripts resolved against the site
+root, hit the application's own 404, and were refused as the wrong MIME type.
+The result was black-on-white text with the sidebar, search and table of
+contents gone and the inline SVG icons painted at intrinsic size as page-wide
+black slabs — 23 console errors. The server now redirects `/help` to `/help/`,
+so a bookmark or a typed URL works too.
+
+**A correct password was reported as a wrong one.** A `create_session` failure
+after the password had already verified redirected to the same `?error=1` as a
+genuine mismatch, which renders "Incorrect username or password." Someone who
+typed their password correctly retyped it, and five attempts tripped the login
+throttle — locked out of their own garden by a full disk, with the real cause
+in a server log they cannot read. The two outcomes now have separate messages.
+
+**Station Health named sources by their stream id while Capture named them by
+the label their owner typed.** The supervisor publishes `CaptureSource::label`,
+an identity it shares with the metrics gauge and the segment filename, so a
+station whose owner named two cameras "Front-yard" and "Pond" was told here
+that `RTSP_1` had stopped. The cards now lead with the owner's name and keep
+the id as the second line, and the banner names the source that stopped instead
+of saying "an audio source is down" and leaving three candidates.
+
+**The live-stream pill was unreadable in the one state worth reading.**
+`#live-status[data-state="reconnecting"] { opacity: .6 }` composited the whole
+pill, text included, toward the page: 3.07:1 in light and 4.24:1 in dark at
+11px, against the 4.5:1 WCAG 1.4.3 asks. "Live" measured 8.54:1 and 9.24:1, so
+the only illegible word in the control was the one saying something was wrong.
+It is now the amber pair `.bnb-pill.dawn` already uses — 7.26:1 and 9.78:1 —
+which also reads as "attention" rather than "error". The accessibility sweep
+had found this once, on one route, in one theme, because the socket happened to
+be retrying when that page was sampled; every other run was clean. A state only
+reachable through JS is graded by luck, so this one is checked mechanically.
+
+Copy, all of it verified in the rendered page:
+
+- The confidence beside every detection read `0.87` — a bare decimal on an
+  unnamed scale, printed in the live feed, the history rows, the recordings
+  grid, the species pages and the detail page. It now reads `87%`, which is
+  what the public share page and `/admin/quality` already used, and the bar
+  carries an accessible name rather than reading aloud as a naked number.
+  Two surfaces were missed on the first pass and are fixed here: the Today
+  page's **Best recordings** card, which printed `06:10 · 0.99` under a
+  heading reading "Today · Highest confidence", and the **clip player's
+  now-playing strip**, whose text comes from a `data-clip-meta` attribute
+  rather than from the shared confidence atom. Neither uses `conf_bar` —
+  the card is too small for a track and the strip is plain text — which is
+  why reading that atom did not find them, and why the gate that now covers
+  them drives the two routes and looks for the decimal.
+- The top-nav health badge said "Mic down" and was a `<span>`: the reason lived
+  in a `title`, which no phone can show, and the screen that explains the
+  problem had to be found by guesswork. It is now a link to Station Health
+  reading "Not recording", with the reason in its accessible name.
+- `Backing off` on a source card, one line above its own retry line saying
+  `reconnecting` — one state, two names, one of them the retry algorithm's.
+- `input · usb-alsa` on the dashboard hero, and the same storage identifier in
+  the first-run checklist and the audio-source picker, where a display name
+  already existed. That display name was itself `USB · ALSA` / `RTSP`; sources
+  now read "USB microphone", "PipeWire microphone" and "Network camera".
+- `quick_check passed` (SQLite's pragma), `scratch space (RAM /tmp)`,
+  `capture is down`, `High conf`, and a search placeholder reading
+  `(prefix NOT to exclude)`.
+- The Audio settings section told the reader that channel count, sample rate
+  and gain are "set per source on Audio & Microphones". Neither form there has
+  a channel or a gain control, nothing in the product writes a non-mono layout
+  or a non-zero gain, and sample rate is on the add form only — so it cannot be
+  revisited once a source exists. The same file elsewhere advises picking Left
+  or Right for a spaced stereo pair, with nothing to pick with.
+- The Species **Photos** view turned a database error into "No species match
+  this filter yet." — the identical bug the same file documents having fixed in
+  the **List** view sixty lines earlier. The search results panel returned its
+  failure with `StatusCode::OK`, which is the one status htmx swaps, so it lost
+  the layout's "reload the page" fallback and left a dead end with no link.
+
+### Fixed — the rest of the zeroes nobody measured, including the ones a monitor scrapes
+
+The same defect as the two surfaces above, swept to completion rather than
+stopped at. A scan of every `with_db`/`with_read_db` closure in `birdnet-web`
+for *a count defaulted to zero and then printed as fact* found nine sites; five
+were real, and one of them is not a page at all.
+
+**The dashboard — the first screen anyone opens.** `dashboard/stats.rs` ran six
+counts, defaulted every one inside the closure, and returned a plain tuple, so
+its `else` arm could only fire on a task panic. A database that could not be
+read rendered `Detections 0 · Species 0 · Today 0 · Last hour 0` as an ordinary
+dashboard. `dashboard/kiosk.rs` did the same for a display that hangs on a wall
+with nobody reading a log beside it, and `admin/overview.rs` for the screen an
+operator opens to find out whether the station is well. The 12-day sparkline
+stays defaulted: it is decoration beside a number, not a claim of its own —
+which is the line `dashboard/partials.rs` had already drawn correctly, and the
+pattern these now follow.
+
+**The Today page did not print a wrong number — it changed which page you got.**
+`total_ever` was defaulted to `0`, and `firstrun = total_ever == 0` chooses the
+hero copy, the aside, the rail and a template flag. A failed read therefore
+replaced a station with years of records with the **first-run setup
+experience**, telling its owner to go and set up a microphone they had been
+using for years.
+
+**`/api/v2/stats` answered 200 with `total_detections: 0`.** A wrong number in
+an API is worse than one on a page: the consumer is a dashboard or a script and
+it stores what it is told. The response was internally inconsistent too —
+`{"total_detections":0,"unique_species":1}` — and nothing about it said the
+station had not been asked.
+
+**The Prometheus endpoint exported a zero it had not measured.**
+`routes/health.rs` states the rule itself, three lines below the offence: a
+source with no acoustic baseline "exports the level and omits the drift, rather
+than exporting a drift of zero, which would read as *measured, and
+unchanged*". Its own three counts exported the zero.
+`birdnet_detections_stored 0` on a station with years of records is a counter
+that fell to nothing, which is exactly what an alert is built to catch — so it
+fires for the wrong reason and hides the real fault behind it. Those series are
+now omitted when the read fails; the process metrics, measured from this
+process, still publish, so the scrape still succeeds and still says the station
+is up.
+
+**The life list**, where "0 species · 0 detections · 0 active days" is not an
+empty list but a lost one, shown to the reader least able to shrug it off.
+
+Four sites were left defaulted deliberately, each checked rather than skipped:
+a map lookup that is genuinely zero for a run with no detections
+(`analysis_runs.rs`); a pagination total on a path that already short-circuits
+through its own `failed` flag (`recordings.rs`); and the review nudge
+(`today.rs`), whose contract is to be absent when nothing waits — an error
+there produces no output, which is silence rather than a false claim.
+
+### Fixed — the failures a station could not report, and the pages written for a sysadmin
+
+The rest of the same pass. Where the previous cluster was about words, this one
+is mostly about what happens when something breaks.
+
+**Two surfaces rendered a database error as a station that heard nothing.**
+Every query on Year-in-Review and on Station Health was `.unwrap_or_default()`-ed
+*inside* the closure that ran it, so the closure returned a plain tuple and the
+`Err` arm below could only ever fire on a task panic. Against a dropped
+`detections` table the year page renders, in full, cheerfully:
+
+```
+Your year in birdsong. 0 detections across 1 species.
+0 detections ≈ 0 a day   1 species heard   0 new to your list   0 busiest
+```
+
+— internally inconsistent, and indistinguishable from a quiet year. Health was
+worse: it reported "no microphone or camera is set up yet", "No detections yet
+today" and a total of `0`, which is a brand-new unconfigured station, shown to
+someone whose own has run for years — and Health is where every other error
+message in the app sends its reader, under a module comment promising
+"Everything shown is real". Both now say the read failed. Health keeps its
+vitals, which are measured from the system rather than the database and are
+exactly what someone diagnosing a broken database needs.
+
+**A button whose work failed did nothing at all.** htmx 2.0.4 ships
+`{code:"[45]..", swap:false, error:true}`, so a 4xx/5xx body is never swapped —
+including an out-of-band toast riding in it — and `layout.html`'s
+`htmx:responseError` fallback opens with `if (!isGet(evt)) return;`. Between
+them, a failed "Add to blacklist", "Delete rule" or "Enable rule" changed
+nothing on the page: no error, no success, no way to tell whether the click had
+registered. Each already spoke through a toast on success; they now use the same
+channel for the half that needed it. `remove_blacklist` additionally discarded
+its `Result` with `let _`, and answers three ways now — removed, already gone,
+or failed.
+
+**The restore and clear-data controls answered in C.** `Internal error: No
+space left on device (os error 28)` was the single sentence a person read after
+the most consequential action in the product; the crate's own `log_internal`
+exists for exactly this and was not used. The restore's message is deliberately
+*not* reduced to a reassurance: `restore_archive_into` documents that "Every
+refusal before step 5 leaves the live files untouched; a failure inside step 5
+names the member", and the caller holds only a `String`, so it says the backup
+is not applied and the station's state needs checking, and keeps the detail —
+rather than claiming "nothing was changed", which would be a lie for precisely
+the failure that matters most.
+
+**The behavioural cards blamed a missing extension for every failure.**
+`extension_error_html` opened with "The `duckdb-behavioral` extension is
+required for {func}" whatever went wrong, then printed the raw
+`AnalyticsError`. Three of the four variants load the extension perfectly well:
+a query error and a lock held by another process were both reported as
+something to go and install. It now branches — not switched on, busy right now,
+or the shared "this is a fault, not an empty result" state.
+
+**Pages handed the reader a command line as the whole of the advice.** The
+one-click Restart button's fallback was `sudo systemctl restart
+birdnet-behavior`; the health page's Analytics tile said "Start with
+`--analytics-db`"; the behavioural status table named
+`BIRDNET_BUNDLED_EXTENSION_FILE` and a path inside the source repository; the
+Add-a-microphone form's only hint for "Device id" was "run `arecord -l`". The
+commands stay — this is self-hosted software and the person who set it up does
+read these screens — but they no longer lead. The JSON siblings in
+`routes::timeseries` and `routes::analytics` keep theirs untouched: an API
+consumer is exactly the reader who can act on `--features analytics`.
+
+Settings, rewritten for the person who owns the station:
+
+- **Email Alerts** had ten fields and help text on two of them. No explanation
+  of what SMTP is, where the values come from, or that Gmail and Outlook refuse
+  an ordinary password — the only trace of that was a placeholder reading
+  "app-specific password", which vanishes on focus.
+- **Where to send alerts** required "Apprise URL syntax" without Apprise ever
+  being explained, and listed seven bare URL schemes.
+- The **time zone** of an imported station was asked for *in seconds*, with the
+  hint "Hours × 3600. UTC−5 is `-18000`". It is a picker now; the field name and
+  the value it posts are unchanged, so the handler is untouched.
+- Two different controls stop a species reaching you — one stops the
+  **recording**, one stops only the **alert** — in different sections, each hint
+  accurate alone and neither mentioning the other. Someone who wanted the alerts
+  stopped was one click from losing the records permanently.
+- The restart notice was in three places, in three wordings, one of which was
+  silence: a footer reading "Most settings require a restart", a banner reading
+  "Changes apply on next restart", and the most prominent of the three, the
+  toast, not mentioning it at all — with an action button reading "Open system
+  →", which says where to go and not why. One sentence now, and the button says
+  "Restart".
+- Also: "Normalise Clip Loudness" with LUFS, EBU R128, ITU-R BS.1770 and dBFS;
+  "ALSA Device"; "RTSP URL"; "Night Inhibit" not saying it silently does nothing
+  without coordinates; and the BirdWeather token not saying it publishes your
+  sightings and your location.
 
 ### Changed — two classifiers with different windows now run together, and neither loses coverage
 
@@ -8506,7 +9038,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...v0.13.1

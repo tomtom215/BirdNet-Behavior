@@ -37,6 +37,7 @@ use std::fmt::Write as _;
 use crate::client_ip::ClientIp;
 use axum::extract::State;
 use axum::extract::{Extension, Request};
+use axum::http::{StatusCode, header};
 use axum::response::{Html, Redirect};
 use axum::response::{IntoResponse as _, Response};
 use axum::routing::get;
@@ -142,7 +143,23 @@ impl Prefill {
 /// has none set.
 const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
 
-async fn onboarding_page(State(state): State<AppState>, req: Request) -> Html<String> {
+async fn onboarding_page(State(state): State<AppState>, req: Request) -> Response {
+    // A signed-in *viewer* used to be walked through all six steps and then
+    // refused at the finish line. `cookie_auth_middleware` allows safe methods
+    // to any authenticated user and gates unsafe ones behind `require_admin`,
+    // so `GET /onboarding` rendered the whole wizard and `POST
+    // /onboarding/save` answered a bare "Forbidden — admin role required for
+    // this action." with every answer gone. That is the same shape as the ON-6
+    // bug this module's own doc records as fixed, for a different actor: the
+    // integration test covers the unauthenticated and open-station cases and
+    // never a viewer.
+    if let Some(user) = req
+        .extensions()
+        .get::<crate::auth_middleware::RequestUser>()
+        && !user.is_admin()
+    {
+        return not_admin_page();
+    }
     // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
     let (sources, prefill) = state
         .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
@@ -156,15 +173,50 @@ async fn onboarding_page(State(state): State<AppState>, req: Request) -> Html<St
         .query()
         .is_some_and(|q| q.split('&').any(|p| p == "error=password"));
 
-    Html(render_page(
-        &render_mic_body(&sources),
+    let body = render_page(
+        &render_mic_body(&sources, capture_verdict(&state).as_deref()),
         &escape_html(&mic_summary(&sources)),
         &prefill,
         PasswordStep {
             needed: needs_password,
             error: password_error,
         },
-    ))
+    );
+    // `no-store` because the Welcome step can carry a password form: without
+    // it the back-forward cache restores the typed fields on Back. `/login`
+    // already does this.
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        Html(body),
+    )
+        .into_response()
+}
+
+/// What a signed-in non-admin sees instead of a wizard they cannot submit.
+fn not_admin_page() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        Html(format!(
+            r#"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup · BirdNet-Behavior</title>
+<link rel="stylesheet" href="/static/css/app.css?v={v}"></head>
+<body><main id="main-content" class="ob-root"><div class="empty-state">
+<h1 class="display es-h">Setup needs an administrator.</h1>
+<p class="bnb-meta es-sub">This station has not finished its first-run setup, and your account cannot change its settings. Ask whoever administers it to sign in and complete setup — it takes about a minute.</p>
+<p class="bnb-meta es-sub"><a href="/station">Station health</a> is readable without an admin account.</p>
+</div></main></body></html>"#,
+            v = env!("CARGO_PKG_VERSION"),
+        )),
+    )
+        .into_response()
 }
 
 /// Whether the Welcome step asks for the admin password, and whether the
@@ -205,18 +257,24 @@ fn render_password_step(step: PasswordStep) -> String {
     )
 }
 
-/// Substitute the two server-filled placeholders into the wizard template.
+/// Substitute the server-filled placeholders into the wizard template.
 ///
-/// Deliberately a single pass rather than a `.replace()` chain. Both inserted
-/// values derive from operator-controlled text — a microphone's friendly label
-/// can contain any characters — and a chained replace re-scans what it just
-/// inserted, so a source labelled `{{mic_summary}}` would have had its label
-/// silently swapped for the summary line. Escaping does not prevent that:
-/// `escape_html` neutralises HTML, not the template's own brace syntax.
+/// A single pass, which is what the comment here has claimed since it was
+/// written — the code underneath it was a seven-link `.replace()` chain with
+/// `{{mic_body}}` substituted *first*. A chained replace re-scans what it just
+/// inserted, so an audio source labelled `{{password_step}}` had the whole
+/// password `<form>` spliced into the microphone card, unescaped, by the later
+/// links in the chain. `escape_html` cannot prevent that: it neutralises HTML,
+/// not the template's own brace syntax, and braces are not among the five
+/// characters it escapes. The payloads reachable this way are the app's own
+/// strings rather than arbitrary script, so this was a correctness defect and
+/// not an XSS hole — but it was exactly the defect the comment promised was
+/// impossible.
 ///
-/// Each placeholder appears exactly once. If one is ever removed from the
-/// template this degrades to dropping that value rather than panicking in a
-/// request handler; the rendering tests pin the output either way.
+/// Substituting in one pass means an inserted value is never re-read as
+/// template. An unrecognised `{{name}}` is copied through verbatim so a typo in
+/// the template shows up as a literal placeholder rather than silently
+/// swallowing the text around it.
 fn render_page(
     mic_body: &str,
     mic_summary: &str,
@@ -227,16 +285,52 @@ fn render_page(
     // `mic_summary` is pre-escaped by the caller; the `prefill` values come
     // from the database and land inside HTML attributes, so they are escaped
     // here rather than trusted.
-    ONBOARDING_HTML
-        .replace("{{mic_body}}", mic_body)
-        .replace("{{mic_summary}}", mic_summary)
-        .replace("{{latitude}}", &escape_html(&prefill.latitude))
-        .replace("{{longitude}}", &escape_html(&prefill.longitude))
-        .replace("{{confidence}}", &escape_html(&prefill.confidence))
-        .replace("{{notify_trigger}}", &escape_html(&prefill.notify_trigger))
-        .replace("{{password_step}}", &render_password_step(password))
-        // Versioned stylesheet URL — see `pages::with_asset_version`.
-        .replace("{{version}}", env!("CARGO_PKG_VERSION"))
+    let password_step = render_password_step(password);
+    let latitude = escape_html(&prefill.latitude);
+    let longitude = escape_html(&prefill.longitude);
+    let confidence = escape_html(&prefill.confidence);
+    let notify_trigger = escape_html(&prefill.notify_trigger);
+    let lookup = |name: &str| -> Option<&str> {
+        Some(match name {
+            "mic_body" => mic_body,
+            "mic_summary" => mic_summary,
+            "latitude" => &latitude,
+            "longitude" => &longitude,
+            "confidence" => &confidence,
+            "notify_trigger" => &notify_trigger,
+            "password_step" => &password_step,
+            // Versioned stylesheet URL — see `pages::with_asset_version`.
+            "version" => env!("CARGO_PKG_VERSION"),
+            _ => return None,
+        })
+    };
+
+    // One pass over the template. An unknown `{{name}}` is copied through
+    // verbatim, which keeps a typo visible in the output instead of dropping
+    // the surrounding text.
+    let mut out = String::with_capacity(ONBOARDING_HTML.len() + 2048);
+    let mut rest = ONBOARDING_HTML;
+    while let Some(open) = rest.find("{{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        let Some(close) = after.find("}}") else {
+            // An unterminated `{{` — emit it and stop scanning.
+            out.push_str("{{");
+            rest = after;
+            break;
+        };
+        let name = &after[..close];
+        if let Some(value) = lookup(name) {
+            out.push_str(value);
+        } else {
+            out.push_str("{{");
+            out.push_str(name);
+            out.push_str("}}");
+        }
+        rest = &after[close + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The microphone step, rendered from the station's actual capture sources.
@@ -254,10 +348,54 @@ fn render_page(
 /// Audio owns that, with the ALSA/RTSP handling this step cannot reproduce — so
 /// the honest version reports rather than pretends to offer a choice. The cards
 /// are therefore not selectable: nothing here writes a setting.
-fn render_mic_body(sources: &[AudioSource]) -> String {
+/// What the capture supervisor says about the station's sources right now.
+///
+/// The Microphone step listed what is *configured* and stopped there, which
+/// answers the wrong question. Being a row in `audio_sources` says nothing
+/// about audio flowing: a source whose ALSA card index moved on reboot, or
+/// whose `arecord` has died, is configured and silent — and this is the step
+/// where an operator is deciding whether their station will hear anything.
+/// `today.rs` records the identical bug being fixed for the first-run
+/// checklist one screen over.
+///
+/// Reported as one honest sentence rather than a chip per card, because the
+/// supervisor keys its sources by *gauge* label: RTSP streams keep their
+/// stream id, but every local microphone collapses to `"local"`, so a station
+/// with two local mics has no per-card mapping to render. `None` when no
+/// supervisor is publishing (`--web-only`, or the daemon not started), in
+/// which case the step says nothing rather than guessing.
+fn capture_verdict(state: &AppState) -> Option<String> {
+    let sources = state
+        .capture_status()
+        .map(|h| birdnet_core::audio::capture::read_capture_status(&h).sources)?;
     if sources.is_empty() {
+        return None;
+    }
+    let total = sources.len();
+    let faulted = sources.iter().filter(|s| s.state.is_fault()).count();
+    Some(if faulted == 0 {
+        format!(
+            r#"<p class="bnb-meta ob-mt-16" role="status"><span class="bnb-pill moss"><span class="bnb-dot live"></span> reporting</span> All {total} {noun} sending audio right now.</p>"#,
+            noun = if total == 1 {
+                "source is"
+            } else {
+                "sources are"
+            },
+        )
+    } else {
+        format!(
+            r#"<p class="bnb-meta ob-mt-16 ob-password-error" role="alert">{faulted} of {total} sources {verb} sending audio right now. Setup will still finish, but nothing will be detected from {those} until it recovers — <a href="/station">Station health</a> says which and why.</p>"#,
+            verb = if faulted == 1 { "is not" } else { "are not" },
+            those = if faulted == 1 { "it" } else { "them" },
+        )
+    })
+}
+
+fn render_mic_body(sources: &[AudioSource], verdict: Option<&str>) -> String {
+    if sources.is_empty() {
+        let _ = verdict; // nothing configured: there is nothing to report on
         return concat!(
-            r#"<div class="ob-cards"><div class="ob-card"><span class="ic">🔇</span>"#,
+            r#"<div class="ob-cards"><div class="ob-card ob-card--static"><span class="ic" aria-hidden="true">🔇</span>"#,
             r#"<div class="ob-grow"><div class="t">No audio source configured</div>"#,
             r#"<div class="s">Nothing will be detected until a microphone or RTSP stream is added. "#,
             r#"The installer normally sets this up; if it could not find your device you can add it by hand.</div>"#,
@@ -284,7 +422,7 @@ fn render_mic_body(sources: &[AudioSource]) -> String {
         let _ = write!(
             out,
             concat!(
-                r#"<div class="ob-card"><span class="ic">{icon}</span><div class="ob-grow">"#,
+                r#"<div class="ob-card ob-card--static"><span class="ic" aria-hidden="true">{icon}</span><div class="ob-grow">"#,
                 r#"<div class="t">{name} <span class="bnb-pill ob-ml-6">{kind}</span></div>"#,
                 r#"<div class="s mono">{detail}</div></div></div>"#,
             ),
@@ -295,8 +433,11 @@ fn render_mic_body(sources: &[AudioSource]) -> String {
         );
     }
     out.push_str("</div>");
+    if let Some(v) = verdict {
+        out.push_str(v);
+    }
     out.push_str(
-        r#"<p class="bnb-meta ob-mt-16">Set up by the installer. Add, remove or fine-tune sources (USB, RTSP, gain) any time in <a href="/station/capture">Settings → Capture</a>.</p>"#,
+        r#"<p class="bnb-meta ob-mt-16">Already configured on this station. Add, remove or fine-tune sources (USB, RTSP, gain) any time in <a href="/station/capture">Settings → Capture</a>.</p>"#,
     );
     out
 }
@@ -586,11 +727,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 <style>
   body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }
   .ob-root { max-width:980px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; padding:0 24px; }
-  .ob-stepper { display:flex; align-items:center; gap:8px; padding:22px 0 8px; position:sticky; top:0; background:color-mix(in oklch, var(--bg) 92%, transparent); backdrop-filter:saturate(1.4) blur(10px); z-index:5; }
+  .ob-stepper { display:flex; align-items:center; gap:8px; padding:22px 0 8px; margin:0; list-style:none; position:sticky; top:0; background:color-mix(in oklch, var(--bg) 92%, transparent); backdrop-filter:saturate(1.4) blur(10px); z-index:5; }
   .ob-pip { display:flex; align-items:center; gap:8px; }
   .ob-pip .dot { width:22px; height:22px; border-radius:999px; border:0.5px solid var(--border-2); display:flex; align-items:center; justify-content:center; font-size:11px; font-family:var(--font-mono); color:var(--fg-3); background:var(--surface); }
   .ob-pip .nm { font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:var(--fg-3); }
-  .ob-pip .bar { width:28px; height:1.5px; background:var(--hairline); }
+  .ob-stepper .bar { flex:none; width:28px; height:1.5px; background:var(--hairline); }
   .ob-pip.done .dot, .ob-pip.active .dot { background:var(--moss); color:var(--bg); border-color:transparent; }
   .ob-pip.active .nm { color:var(--fg); font-weight:500; }
   .ob-stage { flex:1; display:flex; align-items:center; padding:24px 0; }
@@ -665,29 +806,81 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   @media (max-width:520px) {
     .ob-root { padding:0 14px; }
     .ob-pip .nm { display:none; }
-    .ob-pip .bar { width:16px; }
+    .ob-stepper .bar { width:14px; }
     .ob-two { grid-template-columns:1fr; gap:18px; }
     .ob-latlon { grid-template-columns:1fr; }
     .ob-cards.cols2 { grid-template-columns:1fr; }
+    /* A 46px Instrument Serif heading ate a third of a 390px viewport; the
+       phone block adjusted five other things and never this one. */
+    .ob-h { font-size:32px; }
+    /* The nav is three controls in a row; below this width they need to stack
+       or the primary action is squeezed to an ellipsis. */
+    .ob-nav { flex-wrap:wrap; gap:10px; }
+    .ob-nav-mid { order:3; width:100%; }
   }
+  /* The only server-rendered error the wizard has was styled nowhere — it
+     rendered as ordinary body text, visually identical to the paragraph above
+     it, so a refused password looked like prose. */
+  .ob-password-error {
+    color:var(--rare); background:var(--rare-soft);
+    border:0.5px solid var(--rare); border-radius:var(--r-sm);
+    padding:8px 12px; margin:10px 0 0; font-size:13px;
+  }
+  /* The device ids and RTSP URLs `detail_for` emits have no spaces, and a flex
+     item's default `min-width:auto` will not shrink below its longest word, so
+     one such source pushed the page wider than the viewport. */
+  .ob-card, .summary-row { min-width:0; }
+  .ob-grow, .summary-row > span { min-width:0; overflow-wrap:anywhere; }
+  /* The microphone cards are deliberately not selectable; the pointer cursor
+     said otherwise. */
+  .ob-card.ob-card--static { cursor:default; }
+  .ob-nav-mid { display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .ob-stepcount { margin:0; }
+  /* Shown only by the <noscript> block above. */
+  .ob-noscript-note, .ob-nosubmit { display:none; }
 </style>
 </head>
 <body>
-<div class="ob-root">
+<!-- Without JavaScript the wizard used to be a dead end that the home page
+     trapped you in: `.ob-step { display: none }` hides steps 2-6, the only
+     controls were `href="#"` anchors, there was no submit button anywhere, so
+     `onboarding_complete` could never be set — and `/` 303s a station that has
+     not onboarded straight back here. The <noscript> block below un-hides every
+     step so the page degrades into one long form, and the nav carries a real
+     `type="submit"` that posts it. -->
+<noscript>
+  <style>
+    .ob-step { display: block !important; border-top: 0.5px solid var(--hairline); padding-top: 22px; margin-top: 22px; }
+    .ob-stage > .ob-step:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+    #ob-back, #ob-next, #ob-skip, .ob-stepcount { display: none !important; }
+    .ob-noscript-note { display: block !important; }
+    .ob-nosubmit { display: inline-flex !important; }
+  </style>
+</noscript>
+<main class="ob-root" id="main-content">
   <form id="ob-form" method="post" action="/onboarding/save">
-  <div class="ob-stepper" id="ob-stepper">
-    <div class="ob-pip" data-pip="1"><span class="dot">1</span><span class="nm">Welcome</span></div>
-    <span class="bar"></span>
-    <div class="ob-pip" data-pip="2"><span class="dot">2</span><span class="nm">Location</span></div>
-    <span class="bar"></span>
-    <div class="ob-pip" data-pip="3"><span class="dot">3</span><span class="nm">Microphone</span></div>
-    <span class="bar"></span>
-    <div class="ob-pip" data-pip="4"><span class="dot">4</span><span class="nm">Accuracy</span></div>
-    <span class="bar"></span>
-    <div class="ob-pip" data-pip="5"><span class="dot">5</span><span class="nm">Alerts</span></div>
-    <span class="bar"></span>
-    <div class="ob-pip" data-pip="6"><span class="dot">6</span><span class="nm">Done</span></div>
-  </div>
+  <p class="ob-noscript-note bnb-load-error" role="note">JavaScript is off, so every step is shown at once. Fill in what you want and press <strong>Save setup</strong> at the bottom.</p>
+  <!-- The pips are a labelled list with a current marker. They used to be six
+       bare <div>s: no role, no accessible name, no aria-current, and the
+       `@media (max-width:520px)` rule hides `.nm`, so on a phone a screen
+       reader and a sighted user both got six unlabelled digits. Each pip now
+       carries its own name, which survives that rule. -->
+  <ol class="ob-stepper" id="ob-stepper" aria-label="Setup progress">
+    <li class="ob-pip" data-pip="1" aria-current="step"><span class="dot" aria-hidden="true">1</span><span class="nm">Welcome</span><span class="sr-only">Step 1 of 6: Welcome</span></li>
+    <li class="bar" aria-hidden="true"></li>
+    <li class="ob-pip" data-pip="2"><span class="dot" aria-hidden="true">2</span><span class="nm">Location</span><span class="sr-only">Step 2 of 6: Location</span></li>
+    <li class="bar" aria-hidden="true"></li>
+    <li class="ob-pip" data-pip="3"><span class="dot" aria-hidden="true">3</span><span class="nm">Microphone</span><span class="sr-only">Step 3 of 6: Microphone</span></li>
+    <li class="bar" aria-hidden="true"></li>
+    <li class="ob-pip" data-pip="4"><span class="dot" aria-hidden="true">4</span><span class="nm">Accuracy</span><span class="sr-only">Step 4 of 6: Accuracy</span></li>
+    <li class="bar" aria-hidden="true"></li>
+    <li class="ob-pip" data-pip="5"><span class="dot" aria-hidden="true">5</span><span class="nm">Alerts</span><span class="sr-only">Step 5 of 6: Alerts</span></li>
+    <li class="bar" aria-hidden="true"></li>
+    <li class="ob-pip" data-pip="6"><span class="dot" aria-hidden="true">6</span><span class="nm">Done</span><span class="sr-only">Step 6 of 6: Done</span></li>
+  </ol>
+  <!-- Step changes were silent: content vanished and appeared with nothing
+       announced. This says which step you are now on. -->
+  <p class="sr-only" id="ob-announce" aria-live="polite" role="status"></p>
 
   <div class="ob-stage">
     <!-- Step 1 — Welcome -->
@@ -729,14 +922,15 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <h1 class="ob-h">Where is the station?</h1>
           <p class="ob-p">Your coordinates let BirdNET weight species by what's actually likely in your area, and compute sunrise / sunset for the dawn-chorus window.</p>
           <div class="ob-mt-18">
-            <button class="bnb-btn" type="button" id="ob-detect">⌖ Auto-detect my location</button>
+            <button class="bnb-btn" type="button" id="ob-detect"><span aria-hidden="true">⌖</span> Look up my approximate location</button>
+            <p class="bnb-meta ob-mt-6">This asks ip-api.com what area this station's public IP address is in. Skip it and type the coordinates yourself if you would rather not.</p>
           </div>
           <div class="ob-latlon">
             <div class="ob-field"><label for="ob-lat">Latitude</label><input id="ob-lat" name="latitude" type="text" placeholder="e.g. 42.3601" inputmode="decimal" value="{{latitude}}"></div>
             <div class="ob-field"><label for="ob-lon">Longitude</label><input id="ob-lon" name="longitude" type="text" placeholder="e.g. -71.0589" inputmode="decimal" value="{{longitude}}"></div>
           </div>
           <input type="hidden" name="timezone" id="ob-tz">
-          <div class="bnb-pill ob-mt-6" id="ob-loc-pill">Auto-detect, or type your coordinates — you can change this any time in Settings.</div>
+          <p class="bnb-meta ob-mt-6" id="ob-loc-pill" role="status">Look it up, or type your coordinates — you can change this any time in Settings.</p>
         </div>
         <div class="ob-center">
           <svg width="280" height="220" viewBox="0 0 280 220" aria-hidden="true" class="ob-map">
@@ -747,7 +941,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
             <circle cx="140" cy="110" r="86" fill="none" stroke="var(--moss)" stroke-width="1" stroke-dasharray="4 5"/>
             <circle cx="140" cy="110" r="9" fill="none" stroke="var(--moss)" stroke-width="1.5"/>
             <circle cx="140" cy="110" r="3" fill="var(--moss)"/>
-            <text x="140" y="206" text-anchor="middle" font-size="9" class="mono" fill="var(--fg-4)">~100 km radius</text>
+            <text x="140" y="206" text-anchor="middle" font-size="11" class="mono" fill="var(--fg-3)">species likely near you</text>
           </svg>
         </div>
       </div>
@@ -757,7 +951,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <section class="ob-step" data-step="3">
       <div class="ob-eyebrow">How it hears</div>
       <h1 class="ob-h">What it's listening with.</h1>
-      <p class="ob-p ob-mb-18">This is the capture source your station is actually configured to use.</p>
+      <p class="ob-p ob-mb-18">These are the capture sources your station is configured to use. Multiple microphones and RTSP streams are supported; add or change them under Settings &rarr; Capture.</p>
       {{mic_body}}
     </section>
 
@@ -773,7 +967,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <label class="ob-card" data-radio="conf" data-value="0.4"><input class="ob-pick" type="radio" name="conf_card" value="0.4" aria-labelledby="ob-conf-everything-t" aria-describedby="ob-conf-everything-s"><div class="ob-grow"><div class="t" id="ob-conf-everything-t">Everything</div><div class="s" id="ob-conf-everything-s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></label>
       </div>
       <input type="hidden" name="confidence_threshold" id="ob-conf" value="{{confidence}}">
-      <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/admin">Settings → Detection</a>, and set per-species thresholds under Species.</p>
+      <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/station/capture">Settings → Capture</a>, and set per-species thresholds under Species.</p>
     </section>
 
     <!-- Step 5 — Notifications -->
@@ -782,12 +976,12 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       <h1 class="ob-h" id="ob-notify-h">When should we ping you?</h1>
       <p class="ob-p ob-mb-18">This sets <em>how often</em> alerts go out. Nothing is sent until you add somewhere to send it — you can do that whenever you like.</p>
       <div class="ob-cards" role="radiogroup" aria-labelledby="ob-notify-h">
-        <label class="ob-card" data-radio="notify" data-value="new-species"><input class="ob-pick" type="radio" name="notify_card" value="new-species" aria-labelledby="ob-notify-weekly-t" aria-describedby="ob-notify-weekly-s"><div class="ob-grow"><div class="t" id="ob-notify-weekly-t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-notify-weekly-s">Only birds you have barely heard lately — the interesting ones.</div></div></label>
+        <label class="ob-card" data-radio="notify" data-value="new-species"><input class="ob-pick" type="radio" name="notify_card" value="new-species" aria-labelledby="ob-notify-weekly-t" aria-describedby="ob-notify-weekly-s"><div class="ob-grow"><div class="t" id="ob-notify-weekly-t">Rarely heard lately <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s" id="ob-notify-weekly-s">Only birds you have barely heard lately — the interesting ones.</div></div></label>
         <label class="ob-card" data-radio="notify" data-value="new-species-daily"><input class="ob-pick" type="radio" name="notify_card" value="new-species-daily" aria-labelledby="ob-notify-daily-t" aria-describedby="ob-notify-daily-s"><div class="ob-grow"><div class="t" id="ob-notify-daily-t">First of each species, daily</div><div class="s" id="ob-notify-daily-s">One alert per species per day. A good middle ground.</div></div></label>
         <label class="ob-card" data-radio="notify" data-value="each"><input class="ob-pick" type="radio" name="notify_card" value="each" aria-labelledby="ob-notify-each-t" aria-describedby="ob-notify-each-s"><div class="ob-grow"><div class="t" id="ob-notify-each-t">Every detection</div><div class="s" id="ob-notify-each-s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></label>
       </div>
       <input type="hidden" name="notification_mode" id="ob-notify" value="{{notify_trigger}}">
-      <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/admin/settings">Settings → Notifications</a>. Until then this setting is simply waiting.</p>
+      <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/station/alerts">Settings → Alerts</a>. Until then this setting is simply waiting.</p>
     </section>
 
     <!-- Step 6 — Done -->
@@ -796,7 +990,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <div>
           <div class="ob-eyebrow">All set</div>
           <h1 class="ob-h">You're <em>listening</em>.</h1>
-          <p class="ob-p">Your answers are saved. The location, accuracy and alert settings take effect the next time the station starts — restart it from <a href="/admin/system">Settings → System</a> (or reboot the Pi); detections then start rolling in within a minute or two.</p>
+          <p class="ob-p">Here is what you chose. Press <strong>Finish</strong> below to save it — nothing has been written yet. The location, accuracy and alert settings then take effect the next time the station starts: restart it from <a href="/station/settings">Settings → General</a>, or reboot the Pi. On Docker, restart the container instead.</p>
           <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
             <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>
@@ -806,10 +1000,20 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           </div>
         </div>
         <div>
+          <!-- What used to be here: twelve CSS-animated bars over the words
+               "Calibrating noise floor…" and a hard-coded "BirdNET+ V3.0"
+               pill. Nothing was calibrating — the bars are a @keyframes — and
+               a station running V2.4 was told it was running V3.0. Both
+               contradicted this module's own headline claim that every value
+               the page shows is real. Replaced with what the station can
+               actually promise. -->
           <div class="bnb-card pad">
-            <div class="ob-eyebrow">Warming up</div>
-            <div class="calib ob-calib-m"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="bnb-meta">Calibrating noise floor… <span class="bnb-pill moss ob-ml-4">BirdNET+ V3.0</span></div>
+            <div class="ob-eyebrow">What happens next</div>
+            <ul class="ob-bullets ob-mt-6">
+              <li><span class="tick">1</span> Press Finish; your answers are written to the station.</li>
+              <li><span class="tick">2</span> Restart the station so the new settings load.</li>
+              <li><span class="tick">3</span> Detections appear on the dashboard as birds are heard.</li>
+            </ul>
           </div>
         </div>
       </div>
@@ -818,15 +1022,32 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 
   <div class="ob-nav">
     <button class="bnb-btn ghost ob-hidden-init" id="ob-back" type="button">← Back</button>
-    <div class="bnb-meta">Step <span id="ob-cur">1</span> of 6 · <a href="#" id="ob-skip">Skip for now</a></div>
-    <a class="bnb-btn primary" id="ob-next" href="#" role="button">Continue →</a>
+    <!-- "Skip for now" was a lie: it called the same finish() as the last step,
+         which writes onboarding_complete=true, and nothing anywhere links back
+         to /onboarding afterwards. It is now labelled as what it does. It is
+         also a real .bnb-btn rather than 11.5px of link text beside the primary
+         action, so it gets the coarse-pointer target size.
+         Continue was an <a href="#" role="button">: an anchor fires click on
+         Enter but not on Space, so a keyboard user pressing Space on something
+         announced as a button scrolled the page instead. -->
+    <div class="ob-nav-mid">
+      <p class="bnb-meta ob-stepcount">Step <span id="ob-cur">1</span> of 6</p>
+      <button type="button" class="bnb-btn ghost ob-skip-btn" id="ob-skip">Use the defaults and finish</button>
+    </div>
+    <button type="button" class="bnb-btn primary" id="ob-next">Continue →</button>
+    <button type="submit" class="bnb-btn primary ob-nosubmit">Save setup</button>
   </div>
   </form>
-</div>
+</main>
 
 <script>
 (function () {
   var step = 1, total = 6;
+  // Same source of truth as live-detections.js: security.rs stamps
+  // data-base-path onto <body> precisely so scripts can build their own URLs.
+  var BASE = (document.body && document.body.dataset.basePath) || '';
+  var pillEl = document.getElementById('ob-loc-pill');
+  var PILL_DEFAULT = pillEl ? pillEl.textContent : '';
   var form = document.getElementById('ob-form');
   var stepsEls = document.querySelectorAll('.ob-step');
   var pips = document.querySelectorAll('.ob-pip');
@@ -835,46 +1056,107 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   var skip = document.getElementById('ob-skip');
   var cur = document.getElementById('ob-cur');
 
-  function render() {
-    stepsEls.forEach(function (s) { s.classList.toggle('active', +s.dataset.step === step); });
+  var announce = document.getElementById('ob-announce');
+  var NAMES = ['Welcome', 'Location', 'Microphone', 'Accuracy', 'Alerts', 'Done'];
+
+  function render(moveFocus) {
+    stepsEls.forEach(function (s) {
+      var on = +s.dataset.step === step;
+      s.classList.toggle('active', on);
+      // A hidden step's fields stayed in the tab order in browsers that keep
+      // focusability across `display:none` ancestors only when the step is
+      // shown again; `inert` also stops a stale Enter reaching them.
+      if (on) { s.removeAttribute('aria-hidden'); } else { s.setAttribute('aria-hidden', 'true'); }
+    });
     pips.forEach(function (p) {
       var n = +p.dataset.pip;
       p.classList.toggle('active', n === step);
       p.classList.toggle('done', n < step);
+      // The current step is the one thing the stepper has to convey; it was
+      // a CSS class only.
+      if (n === step) { p.setAttribute('aria-current', 'step'); }
+      else { p.removeAttribute('aria-current'); }
     });
     cur.textContent = step;
     back.style.visibility = step === 1 ? 'hidden' : 'visible';
-    next.textContent = step === total ? 'Finish & go to dashboard →' : 'Continue →';
+    next.textContent = step === total ? 'Finish & save →' : 'Continue →';
+    // Step changes were entirely silent to assistive tech: the content of the
+    // page swapped with nothing announced.
+    if (announce) { announce.textContent = 'Step ' + step + ' of ' + total + ': ' + (NAMES[step - 1] || ''); }
+    // And focus stayed where it was — on the nav, which sits *after* the stage
+    // in DOM order, so reaching the first field of the new step meant
+    // Shift+Tab backwards past everything. Move it to the step itself.
+    if (moveFocus) {
+      var active = document.querySelector('.ob-step.active');
+      if (active) {
+        active.setAttribute('tabindex', '-1');
+        // `preventScroll` matters: a step taller than the viewport gets
+        // scrolled into view by the default focus behaviour, which on a phone
+        // put the step's eyebrow at y = -6 and its <h1> at y = 18, both under
+        // the sticky stepper that occupies 0..52. A new step starts at the
+        // top of the page, which is also where its heading is.
+        active.focus({ preventScroll: true });
+      }
+    }
+    window.scrollTo(0, 0);
     // Auto-detect fills the coordinate inputs programmatically, which fires no
     // `input` event — so recompute here too, or the summary would still read
     // "Not set" for a station that just detected its location.
     refreshSummary();
   }
-  function finish() { form.requestSubmit(); }
+  // `requestSubmit` is Safari 16+; without the fallback, Finish threw a
+  // TypeError and did nothing visible on an older iPad.
+  function finish() {
+    if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+  }
 
-  back.addEventListener('click', function () { if (step > 1) { step--; render(); } });
+  back.addEventListener('click', function () { if (step > 1) { step--; render(true); } });
   // The password block is rendered only on a station that has none. Both
   // fields blank means "not now" (the station stays open and the dashboard
   // keeps saying so); anything typed must be long enough and typed twice.
+  var HINT_DEFAULT = (document.getElementById('ob-password-hint') || {}).textContent || '';
   function passwordOk() {
     var a = document.getElementById('ob-password-1');
     var b = document.getElementById('ob-password-2');
     if (!a || !b) { return true; }
     if (!a.value && !b.value) { return true; }
-    if (a.value.length < 10 || a.value !== b.value) {
-      var hint = document.getElementById('ob-password-hint');
-      if (hint) { hint.textContent = a.value.length < 10 ? 'At least 10 characters.' : 'The two passwords do not match.'; }
-      (a.value.length < 10 ? a : b).focus();
-      return false;
+    var hint = document.getElementById('ob-password-hint');
+    var bad = a.value.length < 10 || a.value !== b.value;
+    if (hint) {
+      // The useful hint used to be overwritten and never put back, and the
+      // replacement was muted meta text with no role and nothing pointing at
+      // it, so the refusal was neither seen nor announced.
+      hint.textContent = bad
+        ? (a.value.length < 10 ? 'At least 10 characters.' : 'The two passwords do not match.')
+        : HINT_DEFAULT;
+      hint.classList.toggle('ob-password-error', bad);
+      hint.setAttribute('role', bad ? 'alert' : 'note');
     }
+    a.setAttribute('aria-invalid', bad ? 'true' : 'false');
+    b.setAttribute('aria-invalid', bad ? 'true' : 'false');
+    if (bad) { (a.value.length < 10 ? a : b).focus(); return false; }
     return true;
   }
   next.addEventListener('click', function (e) {
     e.preventDefault();
     if (step === 1 && !passwordOk()) { return; }
-    if (step < total) { step++; render(); } else { finish(); }
+    // Coordinates the server will refuse used to be accepted here, echoed back
+    // in the step-6 summary, and then dropped with nothing said.
+    if (step === 2 && !markCoords()) {
+      var bad = document.getElementById('ob-lat');
+      if (bad) { bad.focus(); }
+      return;
+    }
+    if (step < total) { step++; render(true); } else { finish(); }
   });
-  skip.addEventListener('click', function (e) { e.preventDefault(); if (passwordOk()) { finish(); } });
+  // This control completes setup — it writes onboarding_complete and the
+  // wizard is not offered again — so it asks first rather than relying on its
+  // label alone.
+  skip.addEventListener('click', function (e) {
+    e.preventDefault();
+    if (!passwordOk()) { return; }
+    if (window.confirm('Finish setup now with the values shown? You can change all of them later under Settings.')) { finish(); }
+  });
 
   // Single-select radio cards; mirror the chosen value into the form's hidden
   // input for that group. Keyed by data-radio so a new group only needs an
@@ -882,7 +1164,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   var mirrors = { notify: 'ob-notify', conf: 'ob-conf' };
 
   // Select the card matching what the station already has. The `sel` class
-  // used to be baked into the "Balanced 0.75" and "New species this week"
+  // used to be baked into the "Balanced 0.75" and "Rarely heard lately"
   // cards, which told an operator with a different setting that they had
   // chosen the default — and, because the mirrored hidden input carried that
   // same hardcoded value, completing setup then wrote it over theirs. The
@@ -941,12 +1223,21 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     if (conf && sumConf) {
       var name = cardName('[data-radio="conf"]');
       var n = parseFloat(conf.value);
-      sumConf.textContent = (isNaN(n) ? conf.value : n.toFixed(2)) + (name ? ' · ' + name : '');
+      var shown = isNaN(n) ? (conf.value || '').trim() : n.toFixed(2);
+      sumConf.textContent = (shown || 'Unchanged') + (name ? ' · ' + name : '');
     }
     var sumNotify = document.getElementById('ob-sum-notify');
     if (sumNotify) {
+      // The markup's fallback used to read "Rare birds only" — a phrase that
+      // appears nowhere else in the product and describes none of the three
+      // modes. It showed whenever the stored trigger matched no card, which is
+      // reachable: TriggerMode::parse also accepts the underscore spellings, so
+      // `APPRISE_TRIGGER=new_species` in birdnet.conf selects nothing here.
+      // Fall back to the value that is actually going to be kept.
       var nm = cardName('[data-radio="notify"]');
-      if (nm) { sumNotify.textContent = nm; }
+      var notifyInput = document.getElementById('ob-notify');
+      var stored = notifyInput ? (notifyInput.value || '').trim() : '';
+      sumNotify.textContent = nm || (stored ? 'Unchanged (' + stored + ')' : 'Unchanged');
     }
     var sumLoc = document.getElementById('ob-sum-loc');
     if (sumLoc) {
@@ -955,29 +1246,59 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       la = (la || '').trim(); lo = (lo || '').trim();
       // Both halves are required — one alone disables the species filter just
       // as completely as neither, so half a location is not a location.
-      sumLoc.textContent = (la && lo) ? (la + ', ' + lo) : 'Not set — species filtering stays off';
+      sumLoc.textContent = (la && lo)
+        ? (coordsValid(la, lo) ? la + ', ' + lo : 'Not valid — this will not be saved')
+        : 'Not set — species filtering stays off';
     }
     var sumUrl = document.getElementById('ob-sum-url');
     // The address the operator actually reached this page on. The hard-coded
     // mDNS URL this replaced does not resolve on every network.
-    if (sumUrl) { sumUrl.textContent = window.location.origin + '/'; }
+    // Under BIRDNET_BASE_PATH this printed an address that 404s: the base-path
+    // rewriter only touches quoted attribute values, so a URL built in script
+    // has to read the prefix itself, the way live-detections.js and today.html
+    // already do.
+    if (sumUrl) { sumUrl.textContent = window.location.origin + BASE + '/'; }
+  }
+  // Mirrors the server's `valid_coordinate`. Without this the summary happily
+  // printed "51.48, abc" under the heading that claimed the answers were saved,
+  // and the server then dropped the pair with only a tracing::warn to show for
+  // it — the operator was never told.
+  function coordsValid(la, lo) {
+    var a = parseFloat(la), o = parseFloat(lo);
+    return isFinite(a) && isFinite(o) && Math.abs(a) <= 90 && Math.abs(o) <= 180
+        && /^[+-]?\d*\.?\d+$/.test(la) && /^[+-]?\d*\.?\d+$/.test(lo);
+  }
+  function markCoords() {
+    var la = document.getElementById('ob-lat'), lo = document.getElementById('ob-lon');
+    if (!la || !lo) { return true; }
+    var a = (la.value || '').trim(), o = (lo.value || '').trim();
+    var ok = (!a && !o) || coordsValid(a, o);
+    la.setAttribute('aria-invalid', ok ? 'false' : 'true');
+    lo.setAttribute('aria-invalid', ok ? 'false' : 'true');
+    if (pillEl) {
+      pillEl.textContent = ok
+        ? PILL_DEFAULT
+        : 'Latitude must be between -90 and 90 and longitude between -180 and 180, or leave both blank.';
+      pillEl.classList.toggle('ob-password-error', !ok);
+    }
+    return ok;
   }
   ['ob-lat', 'ob-lon'].forEach(function (id) {
     var el = document.getElementById(id);
-    if (el) { el.addEventListener('input', refreshSummary); }
+    if (el) { el.addEventListener('input', function () { markCoords(); refreshSummary(); }); }
   });
   refreshSummary();
 
   // Auto-detect coordinates + timezone via the existing settings endpoint
   // (same-origin fetch; the endpoint itself queries ip-api.com server-side).
   var detect = document.getElementById('ob-detect');
-  var pill = document.getElementById('ob-loc-pill');
+  var pill = pillEl;
   if (detect) {
     detect.addEventListener('click', function () {
       var prev = detect.textContent;
       detect.disabled = true;
       detect.textContent = 'Detecting…';
-      fetch('/admin/settings/detect-location')
+      fetch(BASE + '/admin/settings/detect-location')
         .then(function (r) { if (!r.ok) { throw new Error('lookup failed'); } return r.json(); })
         .then(function (d) {
           if (d.lat != null) { document.getElementById('ob-lat').value = d.lat; }
@@ -996,8 +1317,139 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     });
   }
 
-  render();
+  // Reduced motion. The stylesheet's `@media (prefers-reduced-motion: reduce)`
+  // block sets `animation: none` on `.sonar *`, which has no effect on the
+  // Welcome sonar: those rings are SMIL <animate> elements, not CSS
+  // animations. And the block never saw the app's own Display preference,
+  // because theme-guard.js — the only script this page loads — mirrors theme
+  // and density but not `bnb-motion`. Honour both here.
+  try {
+    var reduce = (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+      || localStorage.getItem('bnb-motion') === 'reduced';
+    if (reduce) {
+      document.documentElement.setAttribute('data-motion', 'reduced');
+      document.querySelectorAll('animate, animateTransform, animateMotion').forEach(function (a) {
+        if (a.endElement) { try { a.endElement(); } catch (_) {} }
+        a.setAttribute('dur', 'indefinite');
+      });
+    }
+  } catch (_) { /* storage blocked or no matchMedia — motion stays as declared */ }
+
+  render(false);
 })();
 </script>
 </body>
 </html>"##;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prefill() -> Prefill {
+        Prefill {
+            latitude: "51.48".into(),
+            longitude: "-0.13".into(),
+            confidence: "0.75".into(),
+            notify_trigger: "new-species".into(),
+        }
+    }
+
+    /// A value substituted into the template must never be re-read as template.
+    ///
+    /// Observed failing against the pre-fix `.replace()` chain, which
+    /// substituted `{{mic_body}}` and `{{mic_summary}}` first and therefore
+    /// re-scanned them: a source labelled `{{password_step}}` had the entire
+    /// password `<form>` spliced into the microphone card by a later link in
+    /// the chain, and a source labelled `{{latitude}}` became the station's
+    /// coordinates. Audio-source labels are operator-controlled text, so this
+    /// was reachable from the admin UI. The failure was
+    /// `assert!(body.contains("{{password_step}}"))` finding the rendered form
+    /// instead of the literal.
+    #[test]
+    fn a_placeholder_inside_a_substituted_value_is_not_re_substituted() {
+        // Every placeholder name, used as a microphone label — the one field
+        // whose text an operator controls.
+        for name in [
+            "mic_summary",
+            "password_step",
+            "latitude",
+            "longitude",
+            "confidence",
+            "notify_trigger",
+            "version",
+        ] {
+            let label = format!("{{{{{name}}}}}");
+            let html = render_page(
+                &label,
+                &label,
+                &prefill(),
+                PasswordStep {
+                    needed: true,
+                    error: false,
+                },
+            );
+            assert!(
+                html.matches(&label).count() >= 2,
+                "a label of {label} was substituted away instead of being emitted twice \
+                 (once in the body, once in the summary)"
+            );
+        }
+    }
+
+    /// The counterpart: real placeholders in the *template* must still be
+    /// filled, so the gate above cannot be satisfied by substituting nothing.
+    #[test]
+    fn every_template_placeholder_is_filled() {
+        let html = render_page(
+            "MIC",
+            "SUMMARY",
+            &prefill(),
+            PasswordStep {
+                needed: true,
+                error: false,
+            },
+        );
+        for leftover in [
+            "{{mic_body}}",
+            "{{mic_summary}}",
+            "{{latitude}}",
+            "{{longitude}}",
+            "{{confidence}}",
+            "{{notify_trigger}}",
+            "{{password_step}}",
+            "{{version}}",
+        ] {
+            assert!(
+                !html.contains(leftover),
+                "{leftover} was left unsubstituted in the rendered wizard"
+            );
+        }
+        assert!(html.contains("MIC"), "the microphone body reached the page");
+        assert!(
+            html.contains("51.48"),
+            "the stored latitude reached the page"
+        );
+        assert!(
+            html.contains(env!("CARGO_PKG_VERSION")),
+            "the asset version reached the page"
+        );
+    }
+
+    /// An unknown placeholder survives rather than eating the text around it.
+    #[test]
+    fn an_unknown_placeholder_is_passed_through() {
+        let html = render_page(
+            "{{not_a_real_key}}",
+            "S",
+            &prefill(),
+            PasswordStep {
+                needed: true,
+                error: false,
+            },
+        );
+        assert!(
+            html.contains("{{not_a_real_key}}"),
+            "unknown key was dropped"
+        );
+    }
+}

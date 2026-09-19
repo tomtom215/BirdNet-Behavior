@@ -46,7 +46,7 @@ pub fn feed_rows(n: usize) -> String {
 pub fn stat_row(n: usize) -> String {
     let n = n.clamp(2, 6);
     let mut out = format!(
-        r#"<div class="bnb-skel-stat-row" data-style="--n:{n};" aria-busy="true" aria-label="Loading statistics">"#
+        r#"<div class="bnb-skel-stat-row" data-style="--n:{n};" role="status" aria-busy="true" aria-label="Loading statistics">"#
     );
     for _ in 0..n {
         out.push_str(
@@ -64,7 +64,7 @@ pub fn stat_row(n: usize) -> String {
 /// 24h day strip — a histogram-shaped placeholder plus a dot row underneath.
 #[must_use]
 pub const fn day_strip() -> &'static str {
-    r#"<div aria-busy="true" aria-label="Loading day strip">
+    r#"<div role="status" aria-busy="true" aria-label="Loading day strip">
   <div class="bnb-skel-bars" data-style="--n:24;height:62px;">
     <span data-style="height:30%"></span><span data-style="height:42%"></span><span data-style="height:58%"></span><span data-style="height:70%"></span><span data-style="height:62%"></span><span data-style="height:48%"></span><span data-style="height:38%"></span><span data-style="height:32%"></span><span data-style="height:28%"></span><span data-style="height:26%"></span><span data-style="height:24%"></span><span data-style="height:22%"></span><span data-style="height:24%"></span><span data-style="height:28%"></span><span data-style="height:36%"></span><span data-style="height:42%"></span><span data-style="height:52%"></span><span data-style="height:60%"></span><span data-style="height:54%"></span><span data-style="height:44%"></span><span data-style="height:34%"></span><span data-style="height:26%"></span><span data-style="height:20%"></span><span data-style="height:18%"></span>
   </div>
@@ -80,7 +80,7 @@ pub const fn day_strip() -> &'static str {
 /// Polar plot square (dawn-chorus). Just a centred concentric ring.
 #[must_use]
 pub const fn polar_plot() -> &'static str {
-    r#"<div aria-busy="true" aria-label="Loading polar plot" data-style="aspect-ratio:1;max-width:480px;width:100%;margin:0 auto;position:relative;">
+    r#"<div role="status" aria-busy="true" aria-label="Loading polar plot" data-style="aspect-ratio:1;max-width:480px;width:100%;margin:0 auto;position:relative;">
   <span class="bnb-skel box" data-style="position:absolute;inset:0;border-radius:50%;"></span>
   <span class="bnb-skel box" data-style="position:absolute;inset:14%;border-radius:50%;background:var(--surface);"></span>
   <span class="bnb-skel box" data-style="position:absolute;inset:32%;border-radius:50%;"></span>
@@ -91,7 +91,7 @@ pub const fn polar_plot() -> &'static str {
 /// Ridgeline placeholder — 8 stacked horizontal "ridges".
 #[must_use]
 pub const fn ridgeline() -> &'static str {
-    r#"<div aria-busy="true" aria-label="Loading ridgeline" data-style="display:flex;flex-direction:column;gap:6px;min-height:340px;">
+    r#"<div role="status" aria-busy="true" aria-label="Loading ridgeline" data-style="display:flex;flex-direction:column;gap:6px;min-height:340px;">
   <span class="bnb-skel" data-style="height:34px;border-radius:18px 18px 4px 4px;"></span>
   <span class="bnb-skel" data-style="height:30px;border-radius:14px 14px 4px 4px;"></span>
   <span class="bnb-skel" data-style="height:38px;border-radius:18px 18px 4px 4px;"></span>
@@ -107,7 +107,7 @@ pub const fn ridgeline() -> &'static str {
 #[must_use]
 pub fn diversity_bars() -> String {
     let mut out = String::from(
-        r#"<div class="bnb-skel-bars" data-style="--n:52;height:60px;" aria-busy="true" aria-label="Loading weekly diversity">"#,
+        r#"<div class="bnb-skel-bars" data-style="--n:52;height:60px;" role="status" aria-busy="true" aria-label="Loading weekly diversity">"#,
     );
     // Pre-baked heights so it looks like a real distribution.
     let h = [
@@ -127,7 +127,7 @@ pub fn diversity_bars() -> String {
 pub fn species_ribbons(n: usize) -> String {
     let n = n.clamp(2, 12);
     let mut out = String::from(
-        r#"<div class="bnb-skel-list" aria-busy="true" aria-label="Loading species ribbons">"#,
+        r#"<div class="bnb-skel-list" role="status" aria-busy="true" aria-label="Loading species ribbons">"#,
     );
     for _ in 0..n {
         out.push_str(
@@ -148,7 +148,7 @@ pub fn species_ribbons(n: usize) -> String {
 pub fn hourly_bars(n: usize) -> String {
     let n = n.clamp(8, 96);
     let mut out = format!(
-        r#"<div class="bnb-skel-bars" data-style="--n:{n};" aria-busy="true" aria-label="Loading hourly activity">"#
+        r#"<div class="bnb-skel-bars" data-style="--n:{n};" role="status" aria-busy="true" aria-label="Loading hourly activity">"#
     );
     // Bell-curve heights.
     for i in 0..n {
@@ -163,7 +163,7 @@ pub fn hourly_bars(n: usize) -> String {
 /// 14-day trend bars (`pages/species-daily` shape).
 #[must_use]
 pub const fn trend_line() -> &'static str {
-    r#"<div aria-busy="true" aria-label="Loading trend">
+    r#"<div role="status" aria-busy="true" aria-label="Loading trend">
   <div class="bnb-skel-bars" data-style="--n:14;height:120px;">
     <span data-style="height:18%"></span><span data-style="height:32%"></span><span data-style="height:24%"></span><span data-style="height:46%"></span><span data-style="height:58%"></span><span data-style="height:72%"></span><span data-style="height:68%"></span><span data-style="height:52%"></span><span data-style="height:62%"></span><span data-style="height:78%"></span><span data-style="height:86%"></span><span data-style="height:74%"></span><span data-style="height:64%"></span><span data-style="height:56%"></span>
   </div>
@@ -174,8 +174,9 @@ pub const fn trend_line() -> &'static str {
 #[must_use]
 pub fn list_rows(n: usize) -> String {
     let n = n.clamp(1, 20);
-    let mut out =
-        String::from(r#"<div class="bnb-skel-list" aria-busy="true" aria-label="Loading list">"#);
+    let mut out = String::from(
+        r#"<div class="bnb-skel-list" role="status" aria-busy="true" aria-label="Loading list">"#,
+    );
     for _ in 0..n {
         out.push_str(
             r#"<div class="bnb-skel-list-row">
@@ -206,7 +207,7 @@ pub fn pill_row(n: usize) -> String {
 /// Hero card placeholder — photo aspect-4/3 box + caption + scrubber bar.
 #[must_use]
 pub const fn hero_card() -> &'static str {
-    r#"<div aria-busy="true" aria-label="Loading best detection">
+    r#"<div role="status" aria-busy="true" aria-label="Loading best detection">
   <span class="bnb-skel line" data-style="width:38%;"></span>
   <span class="bnb-skel box" data-style="aspect-ratio:4/3;width:100%;margin-top:10px;"></span>
   <span class="bnb-skel line" data-style="width:60%;margin-top:12px;"></span>

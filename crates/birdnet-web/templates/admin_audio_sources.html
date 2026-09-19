@@ -25,7 +25,7 @@
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Local microphones</div>
-        <h3>USB · ALSA · PipeWire</h3>
+        <h2 class="sh-h">Microphones plugged into this station</h2>
       </div>
       <div class="aas-count">
         <span class="bnb-meta mono" id="aas-count-local">{{count_local}}</span>
@@ -44,7 +44,7 @@
       <summary>
         <span class="bnb-add-form__plus" aria-hidden="true">+</span>
         <span>Add a microphone</span>
-        <span class="bnb-add-form__hint mono">USB · ALSA · PipeWire</span>
+        <span class="bnb-add-form__hint">USB or PipeWire</span>
       </summary>
       <div class="bnb-add-form__body">
         <form hx-post="/admin/audio/sources"
@@ -56,9 +56,9 @@
           <h4>Source type</h4>
           <div class="bnb-type-picker" role="radiogroup" aria-label="Source type">
             <input id="lt-usb" name="kind" type="radio" value="usb-alsa" checked>
-            <label for="lt-usb" data-kind="usb"><span class="bnb-type-dot"></span> USB · ALSA</label>
+            <label for="lt-usb" data-kind="usb"><span class="bnb-type-dot"></span> USB microphone</label>
             <input id="lt-pipe" name="kind" type="radio" value="pipewire">
-            <label for="lt-pipe" data-kind="pipe"><span class="bnb-type-dot"></span> PipeWire</label>
+            <label for="lt-pipe" data-kind="pipe"><span class="bnb-type-dot"></span> PipeWire microphone</label>
           </div>
 
           <h4 class="aas-h4-mt">Connection</h4>
@@ -68,10 +68,15 @@
               <input id="lt-id" class="mono" name="device_id" type="text"
                      placeholder="plughw:1,0" required>
               <span class="bnb-meta" data-hint-for="usb-alsa">
-                ALSA: run <code class="mono">arecord -l</code> to list devices.
+                The address your microphone answers to. Most USB microphones are
+                <code class="mono">plughw:1,0</code>. If that does not work, whoever
+                set the station up can list the devices with
+                <code class="mono">arecord -l</code>.
               </span>
               <span class="bnb-meta" data-hint-for="pipewire" hidden>
-                PipeWire: run <code class="mono">pw-cli list-objects | grep node.name</code>.
+                The name your microphone answers to. Whoever set the station up can
+                list the names with
+                <code class="mono">pw-cli list-objects | grep node.name</code>.
               </span>
             </div>
             <div class="bnb-field">
@@ -105,7 +110,7 @@
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Network streams</div>
-        <h3>RTSP cameras</h3>
+        <h2 class="sh-h">RTSP cameras</h2>
       </div>
       <div class="aas-count">
         <span class="bnb-meta mono" id="aas-count-rtsp">{{count_rtsp}}</span>

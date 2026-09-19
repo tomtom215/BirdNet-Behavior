@@ -133,10 +133,24 @@ fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> 
 </style>
 </head>
 <body>
+<!-- A `<main>` and a skip link, which this shell had neither of.
+     Consequences, all three now fixed: every /admin/* page's content sat
+     outside all landmarks (axe `region` + `landmark-one-main`, 8 routes);
+     keyboard users tabbed through ~13 nav links on every page with no bypass,
+     while `layout.html` has had a skip link all along; and a `page-head`
+     block inside an admin body became a *banner* landmark here while the same
+     fragment rendered through `layout.html` on the matching Station tab was a
+     plain generic — identical markup, different semantics, depending on the
+     route it was reached by. -->
+<!-- Single-quoted href on purpose: a double quote followed by a hash closes
+     the raw string literal this shell is written in. -->
+<a href='#main-content' class="skip-link">Skip to content</a>
 <div class="admin-wrap">
-  <nav class="admin-nav">{nav_html}</nav>
+  <nav class="admin-nav" aria-label="Admin sections">{nav_html}</nav>
+  <main id="main-content">
   {breadcrumb}
   {body}
+  </main>
 </div>
 {toast_region}
 {confirm_modal}

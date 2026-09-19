@@ -228,6 +228,44 @@ body {
 }
 a { color: var(--moss-ink); text-decoration: none; }
 a:hover { text-decoration: underline; }
+
+/* ── Prose links ──────────────────────────────────────────────────────────
+   A link sitting inside a block of text must be distinguishable from that
+   text by something other than hue (WCAG 1.4.1), and the global
+   `a { text-decoration: none }` above leaves hue as the only difference. The
+   `link-in-text-block` axe rule was deferred for years on the assumption this
+   needed an app-wide underline policy; measured, it fires on **five** sites,
+   because everywhere else — nav, tabs, cards, feed rows, chips, buttons,
+   footer — a link is alone in its own box and the rule never applies.
+
+   One of the five is the reason this is in app.css rather than beside the
+   markup: `.hint a` was already solved, correctly and with a comment citing
+   the rule by name, in a `<style>` block scoped to `/admin/settings`. The same
+   `.hint` markup rendered on `/station/data` through the main shell got
+   nothing, so identical HTML was compliant on one route and not on another.
+
+   Additive: every one of these containers is prose. Rows that merely reuse
+   `.bnb-meta` for layout set `text-decoration: none` at higher specificity and
+   are unaffected — checked by re-rendering, not by reasoning. */
+.hint a,
+.bnb-lede a,
+.es-sub a,
+.doc-note a,
+.login-about,
+.q-link,
+.st-doctor-link a,
+.bkr-note-mt a,
+.qz-lede a,
+/* The settings page's Save footer, which now carries a Restart link inside a
+   sentence. Added because the gate caught it: the note was prose the moment it
+   stopped being a bare statement, and the list above is per-container rather
+   than app-wide, so a new prose container has to join it. */
+.save-note a,
+a.dr-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: from-font;
+}
 h1, h2, h3, h4 { margin: 0; font-weight: 500; letter-spacing: -0.015em; }
 p { margin: 0; }
 button { font: inherit; color: inherit; }
@@ -266,12 +304,55 @@ em       { font-style: italic; }
 .bnb-pill.moss { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
 .bnb-pill.dawn { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
 .bnb-pill.rare { background: var(--rare-soft); color: var(--rare);     border-color: transparent; }
+/* A pill that is a link is a target, and WCAG 2.5.8 asks 24px of it. The
+   badge's own text sets 22.5px, so the floor is stated rather than inherited
+   from whatever the font metrics happen to give. Non-link pills keep their
+   compact height: they are labels, not targets. */
+a.bnb-pill { min-height: 24px; }
 a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 
-.bnb-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--fg-3); display: inline-block; flex: 0 0 auto; }
-.bnb-dot.live { background: var(--moss); animation: bnb-pulse 1.6s ease-out infinite; }
-.bnb-dot.dawn { background: var(--dawn); }
-.bnb-dot.rare { background: var(--rare); }
+/* ── Status dots ──────────────────────────────────────────────────────────
+   One custom property, `--dot`, is the single source of truth for a dot's
+   hue: the fill and the contrast ring are both derived from it, so a variant
+   sets one value and cannot make the two disagree.
+
+   The ring exists because a 6px shape carrying no border is judged on its fill
+   alone, and `--dawn` does not survive that. Measured against the surfaces it
+   actually sits on, in light mode: 2.85:1 on `--bg`, 2.97:1 on `--surface`,
+   and **2.41:1 on the `--dawn-soft` pill fill** — which is the "Mic down"
+   badge in the top nav, the single most-seen dot in the product. WCAG 1.4.11
+   asks 3:1. Every other dot is already 4.9–10.9 in both themes; only amber in
+   light fails, and only as a fill.
+
+   Ringing the whole family rather than special-casing amber is the point.
+   Recolouring `.bnb-dot.dawn` alone would fix the number and break the system:
+   the dot would stop matching `.bnb-pill.dawn`'s own text and fill, so the
+   semantic ramp would hold everywhere except its smallest member. Moving
+   `--dawn` itself would fix one 6px dot by shifting every amber surface —
+   the dawn-chorus hour bars, the day-strip temperature line, `.bnb-btn.dawn`,
+   `.meter-fill.warn`, the whole chip family — none of which is failing.
+
+   Mixing toward `--fg` adapts per theme with one declaration: it darkens the
+   ring in light and lightens it in dark. Measured at 55%: 5.57–6.59 in light,
+   10.16–13.93 in dark, across `--bg`, `--surface` and the tinted pill fills.
+
+   `outline`, not `box-shadow`: `bnb-pulse` animates `box-shadow` on
+   `.bnb-dot.live`, and a ring declared there would be overwritten on the first
+   frame. `outline` also does not reflow, so no row moves.
+
+   Note the dot is never the only cue — every one in the product is rendered
+   beside its own label ("Mic down", "Stalled", "Live", "reporting", …), so
+   WCAG 1.4.1 is carried by the text and the ring is about glanceability: the
+   dot is what an operator sees before they read the word. */
+.bnb-dot {
+  --dot: var(--fg-3);
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--dot); display: inline-block; flex: 0 0 auto;
+  outline: 1px solid color-mix(in oklch, var(--dot) 55%, var(--fg));
+}
+.bnb-dot.live { --dot: var(--moss); animation: bnb-pulse 1.6s ease-out infinite; }
+.bnb-dot.dawn { --dot: var(--dawn); }
+.bnb-dot.rare { --dot: var(--rare); }
 @keyframes bnb-pulse {
   0%   { box-shadow: 0 0 0 0 oklch(55% 0.09 150 / .6); }
   70%  { box-shadow: 0 0 0 7px oklch(55% 0.09 150 / 0); }
@@ -316,7 +397,11 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .bnb-heat-4 { background: color-mix(in oklch, var(--dawn) 72%, var(--surface-2)); }
 .bnb-heat-5 { background: var(--dawn); }
 
-/* Species avatar (4-letter code chip in species colour, set inline via --sp) */
+/* Species avatar: the bird's photograph over a 4-letter code chip in the
+   species colour (set inline via --sp). The chip is the fallback and is what
+   shows whenever there is no photo — `position`/`overflow` here are what let
+   the <img> cover it, and `border-radius: inherit` is what keeps the photo
+   round at all three sizes. */
 .bnb-avatar {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%;
@@ -325,9 +410,14 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   /* The hue keeps the species' identity; the mix towards --sp-ink is what
      makes it readable on the tint in both themes (DD-29). */
   color: color-mix(in oklch, var(--sp, var(--moss)) 62%, var(--sp-ink)); flex: 0 0 auto;
+  position: relative; overflow: hidden;
 }
 .bnb-avatar.sm { width: 24px; height: 24px; font-size: 9px; }
 .bnb-avatar.lg { width: 36px; height: 36px; font-size: 11px; }
+.bnb-avatar-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: inherit;
+}
 
 /* Confidence bar */
 .bnb-conf { display: inline-flex; align-items: center; gap: 6px; }
@@ -371,7 +461,7 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   background: var(--surface); color: var(--fg); font-size: 12.5px; width: 150px;
   transition: width .2s ease, border-color .2s ease; font-family: var(--font-ui);
 }
-.nav-search input:focus { width: 210px; outline: none; border-color: var(--moss); }
+.nav-search input:focus { width: 210px; border-color: var(--moss); }
 
 /* ── Layout ───────────────────────────────────────────────────────────── */
 main {
@@ -387,7 +477,14 @@ main {
 .pill-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
 .section-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.section-header h3 { font-family: var(--font-display); font-size: 22px; }
+/* The section heading is an <h2>, not an <h3>, and is sized by class.
+   Every page that uses this pattern puts its own <h1> above it and then jumped
+   straight to <h3>, so axe's `heading-order` fired on 15 routes: the visible
+   label of each section is the small-caps `.bnb-eyebrow` div above the
+   heading, which is not a heading at all, and nothing occupied the h2 tier.
+   `h3` is kept in the selector so an un-migrated block still renders
+   identically rather than losing its type scale. */
+.section-header h1, .section-header h2, .section-header h3 { font-family: var(--font-display); font-size: 22px; font-weight: 400; margin: 0; }
 .section-header .action { font-size: 11.5px; color: var(--fg-3); }
 
 /* Stat blocks */
@@ -467,7 +564,7 @@ tbody tr:hover { background: var(--surface-2); }
 .conf.mid  { background: var(--dawn-soft); color: var(--dawn-ink); }
 .conf.low  { background: var(--rare-soft); color: var(--rare); }
 
-.live-dot { display: inline-block; width: 7px; height: 7px; background: var(--moss); border-radius: 50%; margin-right: 4px; animation: bnb-pulse 1.6s ease-out infinite; }
+.live-dot { --dot: var(--moss); display: inline-block; width: 7px; height: 7px; background: var(--dot); border-radius: 50%; margin-right: 4px; outline: 1px solid color-mix(in oklch, var(--dot) 55%, var(--fg)); animation: bnb-pulse 1.6s ease-out infinite; }
 
 .species-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 0.5px solid var(--hairline); gap: 10px; }
 .species-item:last-child { border-bottom: none; }
@@ -492,7 +589,19 @@ input[type="text"], input[type="search"], input[type="date"], input[type="number
   padding: 6px 10px; border: 0.5px solid var(--border-2); border-radius: var(--r-sm);
   background: var(--surface); color: var(--fg); font-size: 13px; font-family: var(--font-ui);
 }
-input:focus, select:focus, textarea:focus { outline: none; border-color: var(--moss); box-shadow: 0 0 0 2px color-mix(in oklch, var(--moss) 25%, transparent); }
+/* Focus. `outline: none` used to live here, at (0,1,1) — higher than the
+   `:focus-visible` rule further down at (0,1,0) — so the 2px indicator that
+   rule declares had never once applied to an input, select or textarea. What
+   replaced it was a 25%-alpha ring measuring 1.41:1 against `--surface` in
+   light and 1.70:1 in dark, well under the 3:1 that WCAG 2.1 SC 1.4.11 asks of
+   a focus indicator.
+   The outline is now left alone so `:focus-visible` does its job, and the ring
+   is kept as a mouse-focus affordance only. The two-stop shadow gives the
+   indicator a `--surface` gap so it stays visible on the tinted cards. */
+input:focus, select:focus, textarea:focus { border-color: var(--moss); box-shadow: 0 0 0 2px color-mix(in oklch, var(--moss) 25%, transparent); }
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--moss);
+}
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
 .badge-success { background: var(--moss-soft); color: var(--moss-ink); }
@@ -504,6 +613,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--m
 
 .empty-state { text-align: center; padding: 48px 24px; color: var(--fg-3); }
 .empty-state svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: .5; }
+/* Failure, not emptiness (see routes/pages/error_states.rs). Reuses the
+   empty-state shell so the two never disagree on spacing, and re-tones it into
+   the --rare family so an operator can tell at a glance which of the two they
+   are looking at. The illustration is not dimmed the way an empty state's is:
+   this one is meant to be noticed. */
+.error-state { color: var(--fg-2); }
+.error-state svg { opacity: 1; }
+.error-state .es-h { color: var(--rare); }
 
 /* Inline data-bar + linkable species name + tag (co-occurrence, companions) */
 .bar { height: 8px; background: var(--moss); border-radius: 4px; min-width: 4px; }
@@ -547,9 +664,22 @@ footer a:hover { color: var(--moss-ink); }
 }
 
 /* Live detection-stream indicator, driven by live-detections.js. Hidden until
-   the client opens the socket; dimmed while reconnecting. */
-#live-status[data-state="reconnecting"] { opacity: .6; }
-#live-status[data-state="live"] .bnb-dot { background: var(--moss); }
+   the client opens the socket.
+
+   Reconnecting is an amber pill, not a dimmed one. `opacity: .6` on the whole
+   pill composited its text toward the page and measured 3.07:1 in light and
+   4.24:1 in dark against the surface it sits on — 11px at weight 500, so WCAG
+   1.4.3 asks 4.5:1 and both themes failed. It failed in the one state whose
+   text the reader actually has to read; "Live" and the default state both sit
+   above 8.5:1, so the only unreadable word in the control was the one that
+   says something is wrong. The amber pair is the same one `.bnb-pill.dawn`
+   uses, and it says "attention" rather than "error", which is what a
+   reconnect is. Measured after: 7.26:1 light, 9.78:1 dark. */
+#live-status[data-state="reconnecting"] {
+  background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent;
+}
+#live-status[data-state="reconnecting"] .bnb-dot { --dot: var(--dawn); }
+#live-status[data-state="live"] .bnb-dot { --dot: var(--moss); }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -813,7 +943,12 @@ footer a:hover { color: var(--moss-ink); }
   color: oklch(20% 0.04 60);
   border-color: transparent;
 }
-.bnb-btn.dawn:hover { background: var(--dawn-ink); color: oklch(100% 0 0); }
+/* `color` here was a literal white, which is right in light (`--dawn-ink` is a
+   dark brown, 8.4:1) and unreadable in dark, where `--dawn-ink` is a bright
+   yellow: white on it measures 1.52:1, so the button's label vanished on
+   hover. `--on-fill` is the token that already solves this — white in light,
+   near-black in dark — and gives 10.1:1 on the dark hover fill. */
+.bnb-btn.dawn:hover { background: var(--dawn-ink); color: var(--on-fill); }
 /* Append to crates/birdnet-web/static/css/app.css — purely additive.
    Toast / snackbar region (O-18). */
 
@@ -1659,16 +1794,16 @@ footer a:hover { color: var(--moss-ink); }
 
 /* Status pills — drive both .bnb-pill and the .bnb-dot inside it */
 .bnb-pill.live    { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
-.bnb-pill.live    .bnb-dot { background: var(--moss); }
+.bnb-pill.live    .bnb-dot { --dot: var(--moss); }
 .bnb-pill.starting { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
 .bnb-pill.starting .bnb-dot {
-  background: var(--dawn);
+  --dot: var(--dawn);
   animation: bnb-blink 1.2s ease-in-out infinite;
 }
 .bnb-pill.paused  { background: var(--surface-2); color: var(--fg-3); }
-.bnb-pill.paused  .bnb-dot { background: var(--fg-4); }
+.bnb-pill.paused  .bnb-dot { --dot: var(--fg-4); }
 .bnb-pill.down    { background: var(--rare-soft); color: var(--rare); border-color: transparent; }
-.bnb-pill.down    .bnb-dot { background: var(--rare); }
+.bnb-pill.down    .bnb-dot { --dot: var(--rare); }
 @keyframes bnb-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 :root[data-motion="reduced"] .bnb-pill.starting .bnb-dot { animation: none; }
 
@@ -1826,11 +1961,22 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 }
 .bnb-cmdk__icon { color: var(--fg-3); font-size: 18px; line-height: 1; }
 .bnb-cmdk__inputwrap input {
-  border: 0; background: transparent; outline: 0;
+  border: 0; background: transparent;
   font: inherit; font-size: 15px; color: var(--fg);
   padding: 6px 0;
 }
+/* The borderless input carried `outline: 0` and `box-shadow: none`, which
+   between them left the command palette — the app's one keyboard-first
+   surface — with no focus indicator whatsoever (measured 1.00:1: nothing was
+   painted). The ring now rides the wrapper, so the indicator is visible
+   without putting a box around a control that is meant to read as part of the
+   dialog chrome. */
 .bnb-cmdk__inputwrap input:focus { box-shadow: none; }
+.bnb-cmdk__inputwrap:focus-within {
+  outline: 2px solid var(--moss);
+  outline-offset: -2px;
+  border-radius: var(--r-sm);
+}
 .bnb-cmdk__chip {
   font-size: 10.5px;
   padding: 3px 7px;
@@ -2531,8 +2677,8 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .bkr-snap-row > * { min-width: 0; }
 .bkr-snap-row .mono { overflow-wrap: anywhere; }
 .bkr-snap-row.today { background: var(--moss-soft); }
-.bkr-dot.auto     { background: var(--moss); }
-.bkr-dot.manual   { background: var(--dawn); }
+.bkr-dot.auto     { --dot: var(--moss); }   /* --dot, not background: see "Status dots" */
+.bkr-dot.manual   { --dot: var(--dawn); }   /* --dot, not background: see "Status dots" */
 .bkr-snap-when    { font-weight: 500; font-size: 13px; }
 .bkr-btn-sm       { font-size: 12px; }
 
@@ -2832,7 +2978,7 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .qz-title-row  { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 0.25rem; }
 .qz-h1         { font-size: 1.5rem; font-weight: 700; margin: 0; }
 .qz-lede       { color: var(--text-muted); font-size: 0.9rem; }
-.qz-lede a     { color: var(--fg); text-decoration: underline; }
+.qz-lede a     { color: var(--fg); }  /* underline: see "Prose links" */
 .qz-loading    { color: var(--text-muted); }
 .qz-stats-flush { margin-bottom: 0; }
 .qz-stat.warn    { color: var(--warning); }
@@ -3112,7 +3258,7 @@ a.spp-inherit    { color: inherit; }
 
 /* History heat-calendar */
 .rp-cal-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.rp-cal-head h3 { font-family: var(--font-display); font-size: 22px; font-weight: 400; }
+.rp-cal-head h2, .rp-cal-head h3 { font-family: var(--font-display); font-size: 22px; font-weight: 400; margin: 0; }
 .rp-cal-nav { border: 0.5px solid var(--border-2); background: var(--surface); border-radius: var(--r-sm); width: 30px; height: 30px; cursor: pointer; color: var(--fg-2); text-decoration: none; display: inline-grid; place-items: center; }
 .rp-cal-nav:hover { border-color: var(--fg-4); color: var(--fg); }
 .rp-cal { display: grid; grid-template-columns: repeat(7,1fr); gap: 8px; }
@@ -3134,7 +3280,9 @@ a.spp-inherit    { color: inherit; }
 .an-status    { margin: 0; min-width: 220px; }
 .an-card-lede { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
 .an-card-lede b { color: var(--fg); font-weight: 600; }
-.an-card-h3   { font-size: 16px; margin-top: 2px; }
+/* Sized by class, not by tag: these are <h2> now. Each Behavior card sat at
+   <h3> directly under the page <h1>, with nothing in the h2 tier. */
+.an-card-h3   { font-size: 16px; margin-top: 2px; font-weight: 600; }
 .an-loading   { color: var(--text-muted); }
 
 /* ── Time series shell (/timeseries) — legacy --text-muted/--accent preserved.
@@ -3185,9 +3333,18 @@ a.spp-inherit    { color: inherit; }
 .hm-lede      { margin-top: 4px; }
 .hm-empty     { color: var(--fg-4); text-align: center; padding: 2rem; }
 .hm-hourly-note { margin: 2px 0 12px; font-size: 12.5px; }
-.hm-scroll    { overflow-x: auto; }
-.hm-svg       { font-family: system-ui, sans-serif; }
-.hm-svg-block { font-family: system-ui, sans-serif; display: block; }
+.hm-scroll    { overflow-x: auto; overscroll-behavior-x: contain; }
+/* Both charts carry a `viewBox`, so `width: 100%` scales the coordinate system
+   instead of cropping it. Without the viewBox the attribute width (824 / 616)
+   met `.bnb-card svg { max-width: 100% }` and the SVG was *clipped*, not
+   scaled: measured at a 390px viewport, the hour-23 label of the bar chart sat
+   285px beyond the SVG's right edge and `.hm-scroll` never scrolled, because
+   the element it wraps had already been forced to fit.
+   `min-width` beats `max-width` in CSS, so the floor below is what keeps the
+   axis labels legible; `.hm-scroll` then does the job it was written for. */
+.hm-svg, .hm-svg-block { font-family: system-ui, sans-serif; width: 100%; height: auto; }
+.hm-svg       { min-width: 560px; }
+.hm-svg-block { min-width: 420px; display: block; }
 
 /* ── Notification center (/notifications) — legacy tokens preserved. ──────── */
 .nc-eyebrow   { display: flex; align-items: center; gap: 10px; }
@@ -3359,7 +3516,7 @@ a.dp-recent-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
 .dr-head       { margin-bottom: 1.25rem; }
 .dr-h1         { font-size: 32px; margin: 0.1rem 0 0.35rem; }
 .dr-lede       { color: var(--fg-2); max-width: 60ch; margin: 0; }
-a.dr-link      { color: var(--fg); text-decoration: underline; }
+a.dr-link      { color: var(--fg); }  /* underline: see "Prose links" */
 .dr-loading    { color: var(--fg-3); padding: 2rem; text-align: center; }
 .dr-error      { color: var(--danger); }
 .dr-counts     { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
@@ -3799,13 +3956,6 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
   scroll-snap-type: x proximity;
 }
 .bnb-subtab { scroll-snap-align: start; }
-@media (max-width: 720px) {
-  /* On a phone the fade is doing real work, so make it unmistakable and keep
-     the tap targets at a comfortable size (WCAG 2.5.5 asks 44px; the desktop
-     padding gives ~38). */
-  .bnb-subtabs { padding-right: 36px; }
-  .bnb-subtab { padding-top: 12px; padding-bottom: 14px; }
-}
 .bnb-subtab {
   border: 0; background: transparent;
   padding: 9px 15px 11px;
@@ -3814,6 +3964,19 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
   font-family: var(--font-ui); text-align: left;
   color: var(--fg-3); flex: none;
   text-decoration: none;
+}
+/* On a phone the fade is doing real work, so make it unmistakable, and give
+   the tap targets more room.
+   This block used to sit *above* the base rule. A media query does not raise
+   specificity, so the unconditional `padding: 9px 15px 11px` shorthand below it
+   won at equal specificity and reset both longhands: measured at 390px, the
+   computed padding was 9px/11px, not the 12px/14px written here. Order is the
+   whole fix. (The original comment claimed the targets were ~38px without it;
+   they measure 59px, because each tab stacks a label over a sub-label — the
+   dead override was the defect, not a WCAG failure.) */
+@media (max-width: 720px) {
+  .bnb-subtabs { padding-right: 36px; }
+  .bnb-subtab { padding-top: 12px; padding-bottom: 14px; }
 }
 .bnb-subtab .l { font-size: 13.5px; font-weight: 500; display: block; }
 .bnb-subtab .q { font-size: 10.5px; color: var(--fg-4); display: block; margin-top: 1px; }
@@ -3910,6 +4073,11 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 
 /* Unified log: expander + two-column work area */
 .x-expander { display: flex; justify-content: center; padding-top: 14px; margin-top: 8px; border-top: 0.5px solid var(--hairline); }
+.x-expander-label { text-align: center; }
+/* The live-signal card's state caption. Sits between the canvas and the
+   input/rate footer; it is the accessible half of the live / idle / no-signal
+   distinction (the pill carries the same three states visually). */
+.db-signal-note { margin: 6px 0 0; line-height: 1.35; }
 .work2 { display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(300px, 1fr); gap: 20px; align-items: start; }
 .work2 .rail { display: flex; flex-direction: column; gap: 20px; }
 @media (max-width: 860px) { .work2 { grid-template-columns: 1fr; } }
@@ -3933,6 +4101,19 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 #detections-table .feed-row .who .name { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: nowrap; }
 #detections-table .feed-row .who .name > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #detections-table .feed-row .who .name .dp-badge { flex: none; }
+
+/* Phone: the six-track desktop grid above is (1,1,0) and therefore beats the
+   `@media (max-width: 720px) .feed-row` rule at the top of this sheet, which is
+   (0,1,0) — a media query does not raise specificity. The waveform and
+   confidence bar *are* hidden on a phone, but their 88px + 86px tracks are not,
+   so `minmax(0,1fr)` collapsed the species-name column to exactly 0px: every
+   row in the Today live feed rendered as time + banding-code + play button with
+   ~200px of dead air and no name at all. Measured at 390px before this rule:
+   `grid-template-columns: 50px 32px 0px 88px 86px 30px`.
+   Same specificity, later in the file, so this one wins. */
+@media (max-width: 720px) {
+  #detections-table .feed-row { grid-template-columns: 46px 30px minmax(0,1fr) 30px; gap: 9px; }
+}
 /* Fixed-size play affordance replacing native <audio> (native controls render
    at different widths per row → they never aligned) */
 .x-fplay { width: 30px; height: 30px; border-radius: 999px; border: 0.5px solid var(--border-2); background: var(--surface); color: var(--fg-2); font-size: 10px; cursor: pointer; display: grid; place-items: center; flex: none; }
@@ -4062,6 +4243,15 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .rc-hp-text { min-width: 0; flex: 1; }
 .rc-hp-name { display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-hp-meta { display: block; }
+
+/* Touch targets on the Recordings rows. The species-name link is a single line
+   of text, so on a phone its hit area was the glyph height — under the 24px
+   WCAG 2.2 SC 2.5.8 floor, which the newly-added mobile axe leg reports across
+   24 nodes on this page. Padding rather than min-height so the row rhythm is
+   unchanged; the negative margin keeps the text where it was. */
+@media (pointer: coarse) {
+  .rc-who-text .nm, .rc-who-text a { display: inline-block; padding: 6px 0; margin: -6px 0; }
+}
 .rc-hp-toggle { width: 30px; height: 30px; border-radius: 999px; border: 0; background: var(--fg); color: var(--bg); font-size: 11px; cursor: pointer; flex: none; }
 .rc-hp-dl { width: 28px; height: 28px; flex: none; }
 .rc-hp-scrub { height: 5px; border-radius: 3px; background: var(--surface-2); position: relative; margin-top: 12px; }
@@ -4207,11 +4397,24 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
  * for that, and a phone held one-handed outdoors in the cold is the actual use
  * case. */
 @media (max-width: 480px) {
+  /* Three columns, with the actions on their own row beneath.
+     With `auto` as a fourth column the action cluster claimed its min-content
+     width — three 40px icon buttons plus gaps, 156px of a 320px row — and
+     `minmax(0, 1fr)` gave the species name whatever was left: measured 44px at
+     390px, i.e. an ellipsis and nothing else, on the page whose entire job is
+     telling you which bird a clip is. `1 / -1` puts the buttons on a full
+     second row, right-aligned, and hands the name the ~218px back. */
   .rc-row {
-    grid-template-columns: 20px 58px minmax(0, 1fr) auto;
+    /* 70px, not 58: the date is a ten-character monospace string and at 58px
+       it wrapped to four lines ("16:56:29 / 2026-09- / 19 / 0:14"), which set
+       the height of every row on the page. The name column has the slack. */
+    grid-template-columns: 20px 70px minmax(0, 1fr);
     gap: 8px;
     padding: 9px 8px;
   }
+  .rc-acts { grid-column: 1 / -1; }
+  /* 17x17 is under the 24px WCAG 2.2 SC 2.5.8 floor. */
+  .rc-check { min-width: 24px; min-height: 24px; }
   .rc-conf { display: none; }
   .rc-acts { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
   .rc-iact { min-width: 40px; min-height: 40px; }
@@ -4277,7 +4480,12 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
    is the page furniture and the results are the content. Tokens only — no
    literal colours — so both themes come out of the same rules. */
 .sr-head        { margin-bottom: 1.25rem; }
-.sr-h1          { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.35rem; }
+/* Renamed from `.sr-h1`. The rare-bird share permalink (`share_rare.html`)
+   defines its own `.sr-h1` at 64px earlier in this sheet; equal specificity,
+   later wins, so this 24px rule was silently shrinking the hero headline of the
+   one page in the product that strangers see. The two `sr-` families are
+   unrelated — share vs. search — and `sr-h1` was their only collision. */
+.sr-title       { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.35rem; }
 .sr-lede        { color: var(--text-muted); font-size: 0.9rem; max-width: 60ch; margin: 0; }
 
 .sr-form        { display: flex; flex-direction: column; gap: 0.75rem;
@@ -4304,8 +4512,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .sr-btn-primary:hover { background: var(--fg-2); }
 
 .sr-count       { color: var(--text-muted); font-size: 0.85rem; margin: 0 0 0.5rem; }
-.sr-empty, .sr-loading, .sr-error { color: var(--text-muted); padding: 1.5rem 0; }
-.sr-error       { color: var(--danger); }
+.sr-empty, .sr-loading { color: var(--text-muted); padding: 1.5rem 0; }
 
 .sr-bulkbar     { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;
                   padding: 0.5rem 0.75rem; margin-bottom: 0.5rem;

@@ -43,12 +43,22 @@ async fn stats_partial(State(state): State<AppState>) -> Result<Html<String>, St
 // ---------------------------------------------------------------------------
 
 fn blocking_stats(state: &AppState) -> String {
-    let (total, species, today) = state.with_db(|conn| {
-        let t = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-        let s = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
-        let d = today_count(conn);
-        (t, s, d)
+    // Three counts of the reader's own birds. Defaulted, a failed read drew
+    // "Total Detections 0 · Unique Species 0 · Today 0" on the admin overview
+    // — the screen an operator opens to find out whether the station is well.
+    let counts = state.with_db(|conn| {
+        let t = birdnet_db::sqlite::detection_count(conn)?;
+        let s = birdnet_db::sqlite::species_count(conn)?;
+        let d = today_count(conn)?;
+        Ok::<_, birdnet_db::sqlite::DbError>((t, s, d))
     });
+    let (total, species, today) = match counts {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "admin overview: detection counts failed");
+            return crate::routes::pages::error_states::could_not_load("the station's totals");
+        }
+    };
 
     let sys = sample_system();
 

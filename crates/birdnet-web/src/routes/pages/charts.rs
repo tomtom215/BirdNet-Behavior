@@ -92,11 +92,16 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
     }
 
     let max_count = days.iter().map(|d| d.count).max().unwrap_or(1).max(1);
-    let chart_w = 280;
     let chart_h = 100;
     let bar_w = 32;
     let gap = 6;
     let left_pad = 5;
+    // Derived from the data, not fixed. This used to be a hard-coded 280 while
+    // `x` stepped by `bar_w + gap` per day, so the caller's 14-day request drew
+    // six bars outside the viewBox and the browser clipped them without a word.
+    // The SVG carries no intrinsic width, so `.bnb-card svg { max-width: 100% }`
+    // scales whatever we declare here down into the card.
+    let chart_w = left_pad + days.len() as i32 * (bar_w + gap);
 
     let mut svg = format!(
         r#"<svg viewBox="0 0 {svg_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
@@ -238,5 +243,99 @@ mod tests {
         let svg = render_confidence_chart(&[5, 10, 20, 30, 25, 15]);
         assert!(svg.contains("<50%"));
         assert!(svg.contains("90-100%"));
+    }
+
+    /// Extract `(x, width)` for every `<rect>` that carries an explicit `x`.
+    ///
+    /// The background rect, where one exists, has no `x`, so it is skipped and
+    /// only the data bars are returned.
+    fn bar_boxes(svg: &str) -> Vec<(i64, i64)> {
+        let mut out = Vec::new();
+        for frag in svg.split("<rect ").skip(1) {
+            let attr = |name: &str| -> Option<i64> {
+                let key = format!("{name}=\"");
+                let rest = frag.split_once(&key)?.1;
+                rest.split_once('"')?.0.parse().ok()
+            };
+            if let (Some(x), Some(w)) = (attr("x"), attr("width")) {
+                out.push((x, w));
+            }
+        }
+        out
+    }
+
+    fn view_box_width(svg: &str) -> i64 {
+        let vb = svg
+            .split_once("viewBox=\"")
+            .expect("chart has a viewBox")
+            .1
+            .split_once('"')
+            .expect("viewBox is terminated")
+            .0;
+        vb.split_whitespace()
+            .nth(2)
+            .expect("viewBox has a width")
+            .parse()
+            .expect("viewBox width is an integer")
+    }
+
+    /// Every bar `render_daily_chart` draws must fit inside the `viewBox` it
+    /// declares.
+    ///
+    /// Observed failing against the pre-fix renderer, which hard-coded
+    /// `chart_w = 280` regardless of how many days it was handed while
+    /// stepping `x` by `bar_w + gap` = 38 per day. The caller
+    /// (`species_pages::species_daily_partial`) asks for 14 days, so bar 7
+    /// ended at x = 303 and bars 8..=13 started at 309..=537 — entirely
+    /// outside the 280-wide viewBox. A species heard on nine or more distinct
+    /// days silently lost its most recent week, and the skeleton it replaced
+    /// (`skeletons::trend_line`) draws 14 bars, so the card visibly shrank on
+    /// swap. With `n = 14` the old code failed this at the first bar past
+    /// index 6; `n = 1` and `n = 7` passed even then, which is why only the
+    /// 14-day case proves the fix.
+    #[test]
+    fn daily_chart_bars_fit_inside_their_view_box() {
+        for n in [1_usize, 2, 7, 14, 30, 90] {
+            let days: Vec<_> = (0..n)
+                .map(|i| birdnet_db::sqlite::DailyCount {
+                    date: format!("2026-01-{:02}", (i % 28) + 1),
+                    count: i64::try_from(i % 17).unwrap_or(0) + 1,
+                })
+                .collect();
+            let svg = render_daily_chart(&days);
+            let vb_w = view_box_width(&svg);
+            let boxes = bar_boxes(&svg);
+            assert_eq!(boxes.len(), n, "n = {n}: every day must draw a bar");
+            for (i, (x, w)) in boxes.iter().enumerate() {
+                assert!(
+                    x + w <= vb_w,
+                    "n = {n}: bar {i} spans {x}..{} but the viewBox is only {vb_w} wide",
+                    x + w
+                );
+                assert!(*x >= 0, "n = {n}: bar {i} starts at a negative x ({x})");
+            }
+        }
+    }
+
+    /// The counterpart to the gate above: proving bars *fit* is worthless if
+    /// the renderer could satisfy it by drawing them on top of each other.
+    #[test]
+    fn daily_chart_bars_do_not_overlap() {
+        let days: Vec<_> = (0..14)
+            .map(|i| birdnet_db::sqlite::DailyCount {
+                date: format!("2026-01-{:02}", i + 1),
+                count: 5,
+            })
+            .collect();
+        let boxes = bar_boxes(&render_daily_chart(&days));
+        for pair in boxes.windows(2) {
+            let (x0, w0) = pair[0];
+            let (x1, _) = pair[1];
+            assert!(
+                x1 >= x0 + w0,
+                "bar at {x1} overlaps the one ending at {}",
+                x0 + w0
+            );
+        }
     }
 }

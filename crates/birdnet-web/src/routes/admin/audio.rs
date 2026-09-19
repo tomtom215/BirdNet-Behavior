@@ -127,9 +127,16 @@ const fn kind_css(kind: SourceKind) -> &'static str {
 /// its own copy that could drift.
 pub(crate) const fn kind_label(kind: SourceKind) -> &'static str {
     match kind {
-        SourceKind::UsbAlsa => "USB · ALSA",
-        SourceKind::PipeWire => "PipeWire",
-        SourceKind::Rtsp => "RTSP",
+        // Each of these leads with the thing the owner plugged in, because
+        // that is what they are looking for on this list. ALSA, PipeWire and
+        // RTSP are how the station talks to it, and naming a source purely by
+        // its transport ("USB · ALSA", "RTSP") tells a birdwatcher nothing
+        // about which of their microphones the row is. PipeWire keeps its name
+        // — the add-form makes you choose between it and ALSA, so the word has
+        // to stay recognisable here too.
+        SourceKind::UsbAlsa => "USB microphone",
+        SourceKind::PipeWire => "PipeWire microphone",
+        SourceKind::Rtsp => "Network camera",
     }
 }
 
@@ -1074,9 +1081,19 @@ fn render_edit_form(row: &AudioSource) -> String {
       </span>
     </div>
     <div class="audio-source__id aud-edit-id">
-      <input name="label" type="text" placeholder="Friendly label" value="{label}"
+      <!-- Both of these were nameless to assistive tech: the label input had
+           only a placeholder (which disappears the moment you type), and the
+           device input had nothing at all — no label, no aria-label, no title,
+           no placeholder. The sibling quiet-window fields below already use the
+           `<label class="sr-only">` pattern; it just had not been applied two
+           lines up. axe reports the device one as a critical `label`
+           violation, and the a11y gate never saw it because this form is an
+           HTMX partial nothing in CI clicks into. -->
+      <label class="sr-only" for="src-label-{id}">Friendly label</label>
+      <input id="src-label-{id}" name="label" type="text" placeholder="Friendly label" value="{label}"
              class="aud-edit-label">
-      <input name="device_id" class="mono aud-edit-device" type="text" value="{device_id}" required>
+      <label class="sr-only" for="src-device-{id}">Device or stream address</label>
+      <input id="src-device-{id}" name="device_id" class="mono aud-edit-device" type="text" value="{device_id}" required>
     </div>
     <div class="aud-edit-quiet">
       <span class="bnb-eyebrow">Quiet window</span>
@@ -1773,7 +1790,7 @@ mod tests {
         assert!(html.contains("rtsp://x"));
         assert!(html.contains("Down"));
         assert!(html.contains("untitled"));
-        assert!(html.contains("RTSP"));
+        assert!(html.contains("Network camera"));
     }
 
     #[test]

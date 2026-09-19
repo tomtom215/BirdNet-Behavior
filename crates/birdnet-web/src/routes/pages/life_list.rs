@@ -27,7 +27,14 @@ async fn life_accumulation_partial(
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
-            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            // `?`, not `.unwrap_or_default()`. This is the only query the
+            // partial makes, so defaulting it turned a database that could not
+            // be read into an empty map, an empty curve, and
+            // `accumulation_curve`'s "Not enough data yet for this view." —
+            // a failure rendered as a statement about the reader's birds, and
+            // to the person least able to shrug it off: a life list is the one
+            // record nobody wants to be told is empty.
+            let first_seen = birdnet_db::sqlite::species_first_seen(conn)?;
             let mut monthly: std::collections::BTreeMap<String, u32> =
                 std::collections::BTreeMap::new();
             for date in first_seen.values() {
@@ -38,17 +45,22 @@ async fn life_accumulation_partial(
                     *monthly.entry(month.to_string()).or_default() += 1;
                 }
             }
-            monthly
+            Ok::<_, birdnet_db::sqlite::DbError>(monthly)
         })
     })
     .await;
 
-    let Ok(monthly) = result else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading accumulation</p>".to_string(),
-        );
+    // See `error_states::failed_partial` for why this is a 200.
+    let monthly = match result {
+        Ok(Ok(monthly)) => monthly,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "life accumulation: query failed");
+            return super::error_states::failed_partial("your life list's growth over time");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "life accumulation: task failed");
+            return super::error_states::failed_partial("your life list's growth over time");
+        }
     };
     let mut cum: i64 = 0;
     let points: Vec<(String, i64)> = monthly

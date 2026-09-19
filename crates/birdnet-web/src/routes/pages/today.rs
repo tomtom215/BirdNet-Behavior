@@ -73,19 +73,35 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
         return Redirect::to("/onboarding").into_response();
     }
 
+    // `total_ever` decides `firstrun`, and `firstrun` decides which page this
+    // is: the setup checklist and "Let's get you listening", or the dashboard.
+    // Defaulted to 0, a database that could not be read did not merely print a
+    // wrong number — it replaced a station with years of records with the
+    // first-run experience, and told its owner to go and set up a microphone.
     let state_for_query = state.clone();
-    let (total_ever, sources, disk_pct) = tokio::task::spawn_blocking(move || {
-        let (total, sources) = state_for_query.with_read_db(|conn| {
+    let loaded = tokio::task::spawn_blocking(move || {
+        let counts = state_for_query.with_read_db(|conn| {
             use birdnet_db::audio_sources::AudioSourceStore;
-            let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-            let sources = AudioSourceStore::list(conn).unwrap_or_default();
-            (total, sources)
+            let total = birdnet_db::sqlite::detection_count(conn).map_err(|e| e.to_string())?;
+            let sources = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
+            Ok::<_, String>((total, sources))
         });
         let disk_pct = disk_used_percent(&state_for_query);
-        (total, sources, disk_pct)
+        counts.map(|(total, sources)| (total, sources, disk_pct))
     })
-    .await
-    .unwrap_or((0, Vec::new(), None));
+    .await;
+
+    let (total_ever, sources, disk_pct) = match loaded {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "today: station totals could not be read");
+            return today_error_page(&headers);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "today: task failed");
+            return today_error_page(&headers);
+        }
+    };
 
     let firstrun = total_ever == 0;
     let enabled: Vec<_> = sources.iter().filter(|s| s.disabled_at.is_none()).collect();
@@ -133,6 +149,21 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
     super::render_page_for_request("Today", &body, "today", &headers).into_response()
 }
 
+/// The dashboard when the station's own totals could not be read.
+///
+/// Rendered through the same shell as the page it replaces, so the reader
+/// keeps the navigation and can reach Station health from it. It is emphatically
+/// *not* the first-run experience, which is what a defaulted count produced.
+fn today_error_page(headers: &HeaderMap) -> Response {
+    super::render_page_for_request(
+        "Today",
+        &super::error_states::could_not_load("your dashboard"),
+        "today",
+        headers,
+    )
+    .into_response()
+}
+
 /// The hero copy a brand-new station wakes up with (the comparative-phrase
 /// partial returns the same copy until the first detection lands).
 pub(super) const FIRSTRUN_PHRASE: &str = r#"<h1 class="display td-h1">Your station is <em class="tp-c-moss-ink">waking up</em>.</h1>
@@ -153,7 +184,13 @@ fn signal_card(
         || ("input · none".to_string(), "—".to_string()),
         |s| {
             (
-                format!("input · {}", s.kind.as_str()),
+                // `as_str` is the storage form (`usb-alsa`), which has a
+                // matching `FromStr` and belongs in the database, not under a
+                // reader's eyes. `kind_label` is the display name.
+                format!(
+                    "input · {}",
+                    crate::routes::admin::audio::kind_label(s.kind)
+                ),
                 format!("{} kHz", s.sample_rate / 1000),
             )
         },
@@ -164,7 +201,9 @@ fn signal_card(
         <span class="bnb-eyebrow">Live signal · last 30 s</span>
         <span class="bnb-pill db-live-pill"><span class="bnb-dot"></span> idle</span>
       </div>
-      <canvas id="hero-pulse" height="80" class="db-pulse"></canvas>
+      <canvas id="hero-pulse" height="80" class="db-pulse" role="img"
+              aria-label="Live audio spectrogram for the selected source"></canvas>
+      <p class="bnb-meta db-signal-note" id="hero-pulse-note" aria-live="polite">Waiting for the first audio segment…</p>
       <div class="db-signal-foot">
         <span class="mono bnb-meta">{input_label}</span>
         <span class="mono bnb-meta">{rate}</span>
@@ -240,7 +279,11 @@ fn firstrun_checklist(
             } else {
                 String::new()
             };
-            let source = format!("{} · {}{more}", first.kind.as_str(), escape_html(&label));
+            let source = format!(
+                "{} · {}{more}",
+                crate::routes::admin::audio::kind_label(first.kind),
+                escape_html(&label)
+            );
             match capturing {
                 // Configured *and* the supervisor reports it up.
                 Some(true) => (
@@ -522,7 +565,7 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                     r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · no microphone configured</span>"#,
                 ),
                 (CaptureState::Down, _) => out.push_str(
-                    r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · capture is down</span>"#,
+                    r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · the microphone has stopped</span>"#,
                 ),
                 (_, Some((_, last))) => {
                     let _ = write!(
@@ -737,13 +780,47 @@ async fn today_count_partial(
             };
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], label)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "Error loading count".to_string(),
-        ),
+        // The one partial that must NOT use `error_states::failed_partial`.
+        // Its target is `#td-total`, a `<span>` holding a number inside the
+        // "Show the full day (34) — search, filter, lock & delete" button, so
+        // the shared renderer's `<p>` is not legal content there — and neither
+        // is what the page did instead. Driven to 500 in a browser, the
+        // `layout.html` fallback put a `<div role="alert">` and an `<a href>`
+        // *inside the `<button>`*, giving "Show the full day (This section
+        // could not load (HTTP 500). Reload the page) — search, filter…" and
+        // an anchor nested in a button: interactive content inside interactive
+        // content, which no keyboard or screen-reader user can resolve. The
+        // accessibility sweep never saw it, because it grades the page in the
+        // state it happened to be in.
+        //
+        // So: phrasing content only, and a mark that claims nothing. `?` is
+        // not a count; an em dash would read as "none", which is the lie this
+        // release has been taking out of the rest of the app.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "today count: query failed");
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                COUNT_UNKNOWN.to_string(),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "today count: task failed");
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                COUNT_UNKNOWN.to_string(),
+            )
+        }
     }
 }
+
+/// What `#td-total` shows when the count could not be read.
+///
+/// Phrasing content, because it lands inside a `<button>`'s label. The
+/// `sr-only` half is the whole explanation a screen-reader user gets, since
+/// `?` on its own is not one.
+const COUNT_UNKNOWN: &str = r#"?<span class="sr-only"> — this count could not be loaded</span>"#;
 
 /// HTMX partial: paginated list of today's detections as cards.
 async fn today_partial(
@@ -827,11 +904,15 @@ async fn today_partial(
 
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading detections</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "today log: query failed");
+            super::error_states::failed_partial("today's detections")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "today log: task failed");
+            super::error_states::failed_partial("today's detections")
+        }
     }
 }
 
@@ -874,12 +955,10 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     })
     .await;
 
+    // See `error_states::failed_partial` for why this is a 200.
     let Ok(Ok((rows, samples, solar))) = result else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading timeline</p>".to_string(),
-        );
+        tracing::warn!("today daystrip: query or task failed");
+        return super::error_states::failed_partial("today's timeline");
     };
 
     if rows.is_empty() {
@@ -925,11 +1004,18 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_hour:02}:00</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
         total_fmt = super::group_thousands(total),
     );
+    // The caption's temperature clause, kept in step with whether the line is
+    // actually drawn (`day_strip` draws it only for a non-empty `temps`).
+    let tempkey_oob = if temps.is_empty() {
+        r#"<span id="td-tempkey" hx-swap-oob="true"></span>"#.to_string()
+    } else {
+        r#"<span id="td-tempkey" hx-swap-oob="true"> · the <span class="x-tempkey">amber line</span> is temperature</span>"#.to_string()
+    };
     let strip = super::viz::day_strip(&hourly, &temps, solar, super::now_hour_local());
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        format!("{stats_oob}{strip}"),
+        format!("{stats_oob}{tempkey_oob}{strip}"),
     )
 }
 
@@ -964,7 +1050,7 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
         })
         .unwrap_or_default();
 
-    let av = avatar(&d.com_name, "");
+    let av = avatar(&d.com_name, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
     let com_name = escape_html(&d.com_name);
     let sci_name = escape_html(&d.sci_name);

@@ -94,9 +94,12 @@ pub fn request_restart(under_systemd: bool) -> RestartOutcome {
 fn restart_fragment(outcome: RestartOutcome) -> Html<String> {
     match outcome {
         RestartOutcome::NotUnderSystemd => Html(
-            "<p class=\"ctl-warn\">Not running under systemd, so the service can't restart itself \
-from here. Restart it from a shell: <code>sudo systemctl restart birdnet-behavior</code> \
-(or stop and re-run the binary).</p>"
+            "<p class=\"ctl-warn\">This station can't restart itself from here \
+\u{2014} nothing was changed. Switching it off at the plug and back on will do \
+it, or ask whoever set it up.<br><span class=\"bnb-meta\">For whoever set the \
+station up: it is not running under systemd, so restart it from a shell with \
+<code>sudo systemctl restart birdnet-behavior</code>, or stop and re-run the \
+binary.</span></p>"
                 .to_string(),
         ),
         RestartOutcome::Signalled => Html(

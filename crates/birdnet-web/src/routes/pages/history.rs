@@ -81,11 +81,33 @@ pub(super) async fn content(state: AppState) -> String {
         state.with_read_db(birdnet_db::sqlite::detections_per_day)
     })
     .await;
+    // A failed read is not an empty history. Collapsing both into `Vec::new()`
+    // made `render_history` tell a station with three years of data that it had
+    // never recorded anything — the same file already gets this right for the
+    // calendar partial below ("Failed to load calendar.").
     let days = match days {
         Ok(Ok(d)) => d,
-        _ => Vec::new(),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "history: detections_per_day failed");
+            return history_error();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "history: detections_per_day task failed");
+            return history_error();
+        }
     };
     render_history(&days)
+}
+
+/// The hero, then an honest failure card in place of the calendar.
+///
+/// Keeps the page's own heading so the operator still knows where they are.
+fn history_error() -> String {
+    let help_link = super::help::help_link(super::help::Topic::Reports);
+    format!(
+        r#"<div class="rp-hero"><div class="eyebrow">History {help_link}</div><h1>Browse past days</h1></div>{}"#,
+        super::error_states::could_not_load("your detection history"),
+    )
 }
 
 /// Editorial hero + the calendar / day-detail two-column layout.
@@ -129,7 +151,12 @@ async fn history_calendar_partial(
     })
     .await;
     let Ok(Ok(days)) = result else {
-        return axum::response::Html("<p class='error'>Failed to load calendar.</p>".to_string());
+        // These four partials all answer 200, so the layout's
+        // `htmx:responseError` fallback never runs and whatever is written
+        // here is the reader's last word. `content()` in this same file
+        // already routes its failure through the shared error state; these
+        // did not, and said only that something had failed.
+        return axum::response::Html(super::error_states::inline("this month's calendar"));
     };
     let sel = params.sel.as_deref().filter(|s| s.len() == 10);
     axum::response::Html(render_calendar(&days, params.month.as_deref(), sel))
@@ -200,7 +227,7 @@ fn render_calendar(
         .unwrap_or("");
     let _ = write!(
         html,
-        r#"<div class="rp-cal-head">{prev_btn}<h3>{month_label} {year}</h3>{next_btn}</div>"#,
+        r#"<div class="rp-cal-head">{prev_btn}<h2 class="rp-cal-h">{month_label} {year}</h2>{next_btn}</div>"#,
     );
 
     // Grid: weekday headers, leading blanks, then the days.
@@ -310,7 +337,7 @@ async fn history_chart_partial(
 
     let html = match result {
         Ok(Ok((hours, total, species))) => render_chart_content(&date2, total, &species, &hours),
-        _ => "<p class='error'>Failed to load chart data.</p>".to_string(),
+        _ => super::error_states::inline("this day's hourly chart"),
     };
 
     axum::response::Html(html)
@@ -346,9 +373,10 @@ async fn day_page(
         Ok(Ok((hours, total, species, rows))) => {
             render_day_page(&date2, total, &species, &hours, &rows)
         }
-        _ => r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
-<div class="bnb-card pad"><p class="error">Failed to load this day.</p></div>"#
-            .to_string(),
+        _ => format!(
+            r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>{}"#,
+            super::error_states::could_not_load("this day")
+        ),
     };
     let title = format!("History · {date2}");
     super::render_page_for_request(&title, &content, "reports", &headers)
@@ -363,7 +391,7 @@ async fn history_dates_partial(State(state): State<AppState>) -> impl IntoRespon
 
     let html = match result {
         Ok(Ok(dates)) => render_date_list(&dates),
-        _ => "<p class='error'>Failed to load dates.</p>".to_string(),
+        _ => super::error_states::inline("the list of days"),
     };
 
     axum::response::Html(html)
@@ -393,7 +421,7 @@ fn render_chart_content(
     };
     let _ = write!(
         html,
-        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date} · {weekday}</div><h3>{total} detections · {n} species</h3></div>{open_day}</div>"#,
+        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date} · {weekday}</div><h2 class="sh-h">{total} detections · {n} species</h2></div>{open_day}</div>"#,
         date = escape_html(date),
         weekday = weekday_name(date),
         n = species.len(),
@@ -407,12 +435,12 @@ fn render_chart_content(
     if species.is_empty() {
         html.push_str(r#"<p class="bnb-meta">No detections on this day.</p>"#);
     } else {
-        for (i, (com, _sci, count)) in species.iter().take(6).enumerate() {
+        for (i, (com, sci, count)) in species.iter().take(6).enumerate() {
             let _ = write!(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<div class="nm">{name}</div><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(com, ""),
+                av = avatar(com, sci, ""),
                 name = escape_html(com),
             );
         }
@@ -434,7 +462,7 @@ fn render_day_page(
     let _ = write!(
         html,
         r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
-<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">{weekday}</div><h3>{date}</h3><div class="bnb-meta">{total} detections · {n} species</div></div></div>"#,
+<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">{weekday}</div><h1 class="sh-h">{date}</h1><div class="bnb-meta">{total} detections · {n} species</div></div></div>"#,
         weekday = weekday_name(date),
         date = escape_html(date),
         n = species.len(),
@@ -453,12 +481,12 @@ fn render_day_page(
 
     // Every species heard that day (the panel only shows the top six).
     html.push_str(r#"<div class="bnb-card pad"><div class="rp-h3">Species heard</div>"#);
-    for (i, (com, _sci, count)) in species.iter().enumerate() {
+    for (i, (com, sci, count)) in species.iter().enumerate() {
         let _ = write!(
             html,
             r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
             rank = i + 1,
-            av = avatar(com, ""),
+            av = avatar(com, sci, ""),
             enc = simple_url_encode(com),
             name = escape_html(com),
         );
@@ -494,7 +522,7 @@ fn render_day_log_row(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
          <div class=\"bnb-meta mono tdl-card-sci\">{sci} · \
          <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
          </div></div>",
-        av = avatar(&d.com_name, ""),
+        av = avatar(&d.com_name, &d.sci_name, ""),
         conf = conf_bar(d.confidence),
         com = escape_html(&d.com_name),
         sci = escape_html(&d.sci_name),

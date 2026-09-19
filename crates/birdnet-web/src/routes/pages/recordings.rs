@@ -138,7 +138,7 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
     let controls = format!(
         r#"<div class="rc-controls">
   {chips}
-  <form class="rc-search" method="get" action="/recordings" role="search">
+  <form class="rc-search" method="get" action="/recordings" role="search" aria-label="Search recordings">
     <span class="ico" aria-hidden="true">⌕</span>
     <input type="hidden" name="view" value="clips">
     <input type="hidden" name="filter" value="{filter_tok}">
@@ -203,6 +203,13 @@ struct ClipsData {
     /// same gate the play button effectively has). Loaded once per page like
     /// `locked`, so there is no per-row filesystem stat.
     present: HashSet<String>,
+    /// The clip query itself failed, as opposed to returning no rows.
+    ///
+    /// Every query in `fetch_clips` used to be `unwrap_or_default`-ed, so a
+    /// database error produced `rows: []`, `total: 0` and the empty state —
+    /// which on this page reads *"No saved clips yet"*, i.e. exactly what an
+    /// operator would see if the auto-purge had deleted their recordings.
+    failed: bool,
 }
 
 /// Run the clip query, count, and per-page lookups on the blocking pool.
@@ -216,14 +223,18 @@ async fn fetch_clips(
     let present = recording_basenames(&state.recording_dir());
     tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let rows = birdnet_db::sqlite::recent_clips(
+            let clips = birdnet_db::sqlite::recent_clips(
                 conn,
                 filter,
                 search.as_deref(),
                 CLIP_PAGE,
                 offset,
-            )
-            .unwrap_or_default();
+            );
+            let failed = clips.is_err();
+            if let Err(e) = &clips {
+                tracing::warn!(error = %e, "recordings: recent_clips failed");
+            }
+            let rows = clips.unwrap_or_default();
             let total = birdnet_db::sqlite::recent_clips_count(conn, filter, search.as_deref())
                 .unwrap_or(0);
             let locked = birdnet_db::sqlite::locked_file_names(conn)
@@ -240,6 +251,7 @@ async fn fetch_clips(
                 locked,
                 first_seen,
                 present,
+                failed,
             }
         })
     })
@@ -273,6 +285,9 @@ fn render_clips_block(
     let rows = &data.rows;
     let total = data.total;
     let today = super::today_date_string();
+    if data.failed {
+        return super::error_states::could_not_load("your recordings");
+    }
     if rows.is_empty() {
         // An empty *first* page distinguishes "no clips yet" from "filter has
         // no matches"; a later empty page just means we reached the end.
@@ -329,10 +344,16 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
     let time = escape_html(&d.time);
     let date = escape_html(&d.date);
     let key = escape_html(&format!("{}|{}|{}", d.date, d.time, d.sci_name));
-    let meta = format!("{} · {} · {:.2}", d.time, d.date, d.confidence);
+    // `recordings.html` puts this straight into `.rc-hp-meta` when a clip
+    // starts, so `0.87` was a bare decimal on an unnamed scale in the player
+    // strip — the same thing the rest of this release replaced with a
+    // percentage in the row above it.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let meta_pct = (d.confidence.clamp(0.0, 1.0) * 100.0).round() as i64;
+    let meta = format!("{} · {} · {meta_pct}%", d.time, d.date);
     let meta = escape_html(&meta);
 
-    let av = avatar(&d.com_name, "");
+    let av = avatar(&d.com_name, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
     let lock = lock_button(&d.date, &d.time, &d.sci_name, is_locked);
 
@@ -518,10 +539,11 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
   Your choice is remembered in this browser.</p>
 <div class="rc-trickle">
   <div class="section-header">
-    <div><div class="bnb-eyebrow">As it happens</div><h3>Live detections</h3></div>
+    <div><div class="bnb-eyebrow">As it happens</div><h2 class="sh-h">Live detections</h2></div>
     <a class="action" href="/">Full feed →</a>
   </div>
-  <div id="rc-trickle-feed" class="feed" hx-get="/pages/detections" hx-trigger="load, every 10s" hx-swap="innerHTML" aria-live="polite">{trickle_skel}</div>
+  <div id="rc-trickle-feed" class="feed" hx-get="/pages/detections" hx-trigger="load, every 10s" hx-swap="innerHTML" aria-label="Detections as they happen">{trickle_skel}</div>
+  <p class="sr-only" id="rc-feed-status" aria-live="polite" role="status"></p>
 </div>"#
     )
 }
@@ -680,7 +702,30 @@ mod tests {
             locked: HashSet::new(),
             first_seen,
             present,
+            failed: false,
         }
+    }
+
+    /// A failed clip query must not render as "No saved clips yet".
+    ///
+    /// Observed failing against the pre-fix renderer, where every query in
+    /// `fetch_clips` was `unwrap_or_default`-ed: a database error produced the
+    /// identical `rows: []` / `total: 0` shape as a genuinely empty station, so
+    /// this assertion could not even be written — there was no `failed` flag to
+    /// set. With it hard-coded to `false` (as `data_with` still does for the
+    /// empty-state tests below) this test renders the empty copy and fails on
+    /// the first assertion.
+    #[test]
+    fn a_failed_query_is_not_reported_as_an_empty_shelf() {
+        let mut d = data_with(vec![], 0, HashMap::new(), HashSet::new());
+        d.failed = true;
+        let html = render_clips_block(&d, RecordingsFilter::All, None, 0);
+        assert!(
+            !html.contains("No saved clips yet"),
+            "a database error told the operator their recordings were gone: {html}"
+        );
+        assert!(html.contains("couldn't load"), "{html}");
+        assert!(html.contains(r#"role="alert""#), "{html}");
     }
 
     #[test]
@@ -855,6 +900,19 @@ mod tests {
         );
         assert!(absent.contains("rc-spectro-empty"));
         assert!(!absent.contains("/api/v2/spectrogram/"));
-        assert!(!absent.contains("<img"));
+        // Named, not `!absent.contains("<img")`. That broader form said what
+        // this test means only for as long as the spectrogram thumbnail was
+        // the row's only image; since 0.16.0 the avatar carries the species
+        // photograph too, and the blanket check failed on a row whose
+        // spectrogram handling was entirely correct.
+        assert!(
+            !absent.contains(r#"class="rc-spectro""#),
+            "a clip with no audio must not get a spectrogram thumbnail: {absent}"
+        );
+        assert!(
+            absent.contains("bnb-avatar-img"),
+            "the species photograph has nothing to do with the clip's audio \
+             and must survive its absence: {absent}"
+        );
     }
 }

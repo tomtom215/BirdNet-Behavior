@@ -232,7 +232,7 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
     .log-target { color:var(--fg-4); min-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .log-msg { color:var(--fg-2); flex:1; word-break:break-all; }
     .level-error .log-level { color:var(--rare); }
-    .level-warn  .log-level { color:var(--dawn); }
+    .level-warn  .log-level { color:var(--warning); }
     .level-info  .log-level { color:var(--moss); }
     .level-debug .log-level { color:var(--moss-ink); }
     .level-trace .log-level { color:var(--moss-ink); }

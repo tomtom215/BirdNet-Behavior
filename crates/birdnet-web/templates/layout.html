@@ -48,7 +48,14 @@
 </head>
 <body>
     <a href="#main-content" class="skip-link">Skip to content</a>
-    <header class="topnav" role="navigation" aria-label="Main navigation">
+    <!-- No `role="navigation"` here. A <header> that is a direct child of
+         <body> is already the page's `banner` landmark; re-roling it as
+         navigation removed the banner entirely AND announced the search form,
+         live pill, health badge, help and theme buttons as if they were part of
+         the site navigation. The inner <nav class="topnav-links"> below is the
+         real navigation landmark. (templates/login.html already did this
+         correctly with role="banner"; the two shells disagreed.) -->
+    <header class="topnav">
         <a href="/" class="topnav-brand" aria-label="BirdNet-Behavior home">
             <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
                 <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="lay-logo"></circle>
@@ -65,7 +72,7 @@
         <span class="bnb-vrule lay-vrule"></span>
         <nav class="topnav-links" aria-label="Sections">{{topnav_links}}</nav>
         <div class="topnav-right">
-            <form action="/species" method="get" class="nav-search" role="search">
+            <form action="/species" method="get" class="nav-search" role="search" aria-label="Site-wide species search">
                 <input type="search" name="q" placeholder="Search species…" aria-label="Search species">
             </form>
             <span id="live-status" class="bnb-pill lay-iflex-gap" data-state="connecting" hidden
@@ -158,10 +165,29 @@
         var cfg = evt.detail && evt.detail.requestConfig;
         return !!cfg && cfg.verb === 'get';
       }
+      // A slot that cannot legally hold a <div> and an <a>. `#td-total` is a
+      // <span> holding a number inside the "Show the full day (34)" button,
+      // and this function used to put a <div role="alert"> and a link inside
+      // it — a <div> where only phrasing content is allowed, and an anchor
+      // nested in a button, which no keyboard or screen-reader user can
+      // resolve. Driven to a failure in a browser it rendered as
+      // "Show the full day (This section could not load (HTTP 500). Reload
+      // the page) — search, filter, lock & delete".
+      var PHRASING_ONLY = 'span,p,h1,h2,h3,h4,h5,h6,label,summary,strong,em,small,b,i';
+      function textOnly(el) {
+        return !!el.closest('a,button') || el.matches(PHRASING_ONLY);
+      }
       function failed(evt, why) {
         if (!isGet(evt)) return;
         var target = evt.detail.target || evt.target;
         if (!target || !target.isConnected) return;
+        if (textOnly(target)) {
+          // No element, no link: the reader still gets the page's own reload,
+          // and the sentence around the slot stays a sentence.
+          target.textContent = '?';
+          target.setAttribute('title', 'This could not load' + why + '.');
+          return;
+        }
         var note = document.createElement('div');
         note.className = 'bnb-load-error';
         note.setAttribute('role', 'alert');
@@ -199,6 +225,90 @@
         if (next) next.focus();
         focused = null; parent = null; className = '';
       });
+    })();
+    </script>
+    <!-- Announce only what changed in a polling feed.
+         A feed that re-fetches every 10-15s and swaps its whole innerHTML is a
+         mutation in a live region on every tick, so `aria-live` on the
+         container made a screen reader read every row out again on a loop,
+         whether or not a bird had been heard. The containers are plain now;
+         this writes a one-line summary into their status element, and only
+         when the newest row's label is different from the last one announced.
+         Opt-in by `data-feed-status`, so a feed without one is silent rather
+         than accidentally noisy. -->
+    <script>
+    (function () {
+      var PAIRS = [
+        ['detections-table', 'td-feed-status'],
+        ['rc-trickle-feed', 'rc-feed-status'],
+      ];
+      var last = {};
+      function label(feed) {
+        var row = feed.querySelector('.feed-row, .rc-row, [data-species]');
+        if (!row) return '';
+        var name = row.querySelector('.name a, .name, .nm, .who .name');
+        var time = row.querySelector('.ago, .rc-time, time');
+        return ((name && name.textContent) || '').trim() +
+               (time && time.textContent ? ' at ' + time.textContent.trim() : '');
+      }
+      function sync() {
+        PAIRS.forEach(function (pair) {
+          var feed = document.getElementById(pair[0]);
+          var out = document.getElementById(pair[1]);
+          if (!feed || !out) return;
+          var now = label(feed);
+          if (!now || now === last[pair[0]]) return;
+          // The first sync after load states the newest row without claiming
+          // it just arrived; later ones are genuinely new.
+          out.textContent = (last[pair[0]] === undefined ? 'Most recent detection: ' : 'New detection: ') + now;
+          last[pair[0]] = now;
+        });
+      }
+      document.body.addEventListener('htmx:afterSettle', sync);
+      document.addEventListener('DOMContentLoaded', sync);
+    })();
+    </script>
+    <!-- Keyboard access to horizontally scrollable regions.
+         `@media (max-width: 980px) { table { display: block; overflow-x: auto } }`
+         turns every wide table into a scroll container on a phone, and a
+         container that scrolls but cannot be focused is unreachable without a
+         mouse (axe `scrollable-region-focusable`, serious). Doing it here
+         rather than in markup covers the tables that already exist, the ones
+         HTMX swaps in later, and any added afterwards.
+
+         Only regions with **no focusable descendant** get a tab stop: a table
+         full of links is already reachable, and adding one there would be an
+         extra stop that does nothing. That is the same condition the axe rule
+         applies, so the two cannot disagree. -->
+    <script>
+    (function () {
+      var FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+      function mark(root) {
+        // Any element in the content area, not a fixed class list: the Year in
+        // Review page scrolls a plain `.bnb-card.pad`, which a list of
+        // `table, [class*=scroll]` missed. The cheap geometry test runs first
+        // so `getComputedStyle` is only paid for the handful that overflow.
+        var scope = (root || document).querySelector('main') || (root || document);
+        var nodes = scope.querySelectorAll('*');
+        Array.prototype.forEach.call(nodes, function (el) {
+          if (el.hasAttribute('tabindex')) return;
+          if (el.scrollWidth <= el.clientWidth + 1) return;
+          var ox = window.getComputedStyle(el).overflowX;
+          if (ox !== 'auto' && ox !== 'scroll') return;
+          if (el.querySelector(FOCUSABLE)) return;
+          el.setAttribute('tabindex', '0');
+          if (!el.getAttribute('role')) el.setAttribute('role', 'group');
+          if (!el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby')) {
+            var cap = el.querySelector('caption');
+            el.setAttribute('aria-label', (cap && cap.textContent.trim()) || 'Scrolls sideways');
+          }
+        });
+      }
+      function schedule() { window.requestAnimationFrame(function () { mark(document); }); }
+      document.addEventListener('DOMContentLoaded', schedule);
+      document.body.addEventListener('htmx:afterSettle', schedule);
+      window.addEventListener('resize', schedule);
+      schedule();
     })();
     </script>
     {{toast_region}}

@@ -106,12 +106,12 @@ pub(super) async fn analytics_sessions_partial(
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        Ok(Err(e)) => extension_error_html("sessions", &e.to_string()),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading sessions</p>".to_string(),
-        ),
+        Ok(Err(e)) => analytics_error_html("activity sessions", &e),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics sessions: task failed");
+            super::error_states::failed_partial("this station's listening sessions")
+        }
     }
 }
 
@@ -175,12 +175,12 @@ pub(super) async fn analytics_retention_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        Ok(Err(e)) => extension_error_html("retention", &e.to_string()),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading retention</p>".to_string(),
-        ),
+        Ok(Err(e)) => analytics_error_html("return visits", &e),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics retention: task failed");
+            super::error_states::failed_partial("which birds came back")
+        }
     }
 }
 
@@ -283,12 +283,12 @@ pub(super) async fn analytics_next_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        Ok(Err(e)) => extension_error_html("next_species", &e.to_string()),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading predictions</p>".to_string(),
-        ),
+        Ok(Err(e)) => analytics_error_html("what sings next", &e),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics next: task failed");
+            super::error_states::failed_partial("what the station expects to hear next")
+        }
     }
 }
 
@@ -379,12 +379,12 @@ pub(super) async fn analytics_dawn_sequence_partial(
             [(header::CONTENT_TYPE, "text/html")],
             r#"<p class="bh-muted">Not enough dawn activity yet to read a running order — give the mornings a little longer.</p>"#.to_string(),
         ),
-        Ok(Err(e)) => extension_error_html("dawn sequence", &e.to_string()),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading dawn sequence</p>".to_string(),
-        ),
+        Ok(Err(e)) => analytics_error_html("the dawn sequence", &e),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics dawn sequence: task failed");
+            super::error_states::failed_partial("the order birds joined the dawn chorus")
+        }
     }
 }
 
@@ -587,14 +587,19 @@ async fn analytics_config_partial(
         );
         if !loaded {
             html.push_str(
-                r#"<tr><td colspan="2" class="bh-cell-note">Extension not loaded — sessions, retention and next-species queries are unavailable. Run <code>--refresh-extension</code> to fetch from the community registry, or restart with a release that bundles the extension binary (sets <code>BIRDNET_BUNDLED_EXTENSION_FILE</code> at build time, or vendors a copy under <code>crates/birdnet-behavioral/vendor/</code>).</td></tr>"#,
+                // The commands stay — this is a diagnostics table and the
+                // person who can act on them reads it — but they no longer
+                // lead. The first sentence is for the station's owner, who
+                // was previously handed a build-time environment variable and
+                // a path inside the source repository.
+                r#"<tr><td colspan="2" class="bh-cell-note">The extra behaviour insights (activity sessions, return visits, what sings next) are not available on this station. Everything else keeps recording as normal.<br><span class="bh-muted-sm">For whoever set the station up: run <code>--refresh-extension</code> to fetch the extension from the community registry, or use a release that bundles it (<code>BIRDNET_BUNDLED_EXTENSION_FILE</code> at build time, or a copy vendored under <code>crates/birdnet-behavioral/vendor/</code>).</span></td></tr>"#,
             );
         }
     }
     if compiled && !configured {
         html.push_str(r#"<tr><td colspan="2" class="bh-cell-note">Analytics is on by default — restart the service to open the DuckDB file alongside the SQLite database.</td></tr>"#);
     } else if !compiled {
-        html.push_str(r#"<tr><td colspan="2" class="bh-cell-note">Rebuild with default features (or <code>--features analytics</code>) to enable.</td></tr>"#);
+        html.push_str(r#"<tr><td colspan="2" class="bh-cell-note">This build does not include the extra behaviour insights.<br><span class="bh-muted-sm">For whoever set the station up: rebuild with default features, or <code>--features analytics</code>.</span></td></tr>"#);
     }
     html.push_str("</table>");
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -603,30 +608,53 @@ async fn analytics_config_partial(
 fn analytics_unavailable_html(
     feature: &str,
 ) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
-    let msg = if cfg!(feature = "analytics") {
-        format!(
-            r#"<p class="bh-muted">{feature} requires DuckDB analytics. Start with <code>--analytics-db</code>.</p>"#
-        )
-    } else {
-        format!(
-            r#"<p class="bh-muted">{feature} requires the analytics feature. Rebuild with <code>--features analytics</code>.</p>"#
-        )
-    };
+    // These render inside the ordinary analytics cards, not the diagnostics
+    // table, so they carry no command at all: the reader of a card about the
+    // dawn chorus is not holding a terminal.
+    let msg = format!(
+        r#"<p class="bh-muted">{feature} isn't available on this station — the extra behaviour insights aren't switched on.</p>
+<p class="bh-muted-sm">Everything else keeps recording as normal. Whoever set the station up can turn them on.</p>"#
+    );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], msg)
 }
 
+/// What to put in a behavioural card that could not be filled.
+///
+/// This used to open, for every failure, with "The `duckdb-behavioral`
+/// extension is required for {func}" followed by the raw
+/// `AnalyticsError::to_string()`. The header sentence was simply wrong for
+/// three of the four variants: a query error and a lock held by another
+/// process both loaded the extension perfectly well. So the card told its
+/// reader to install something that was already installed, and then showed
+/// them `DuckDB error: Binder Error: ...` underneath.
+///
+/// `what` completes "We couldn't load {what}", so pass a noun phrase in the
+/// reader's words.
 #[cfg(feature = "analytics")]
-fn extension_error_html(
-    func: &str,
-    error: &str,
+fn analytics_error_html(
+    what: &str,
+    error: &birdnet_behavioral::connection::AnalyticsError,
 ) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
-    let html = format!(
-        r#"<p class="bh-muted">The <code>duckdb-behavioral</code> extension is required for {func}.</p>
-<p class="bh-muted-sm">{error}</p>"#,
-        error = escape_html(error),
-    );
+    use birdnet_behavioral::connection::AnalyticsError;
+    tracing::warn!(error = %error, "behavioural card could not be filled: {what}");
+    let html = match error {
+        // The one case where the old sentence was true. Said without naming a
+        // build flag or an environment variable: the reader of this page is
+        // not the person who compiles it.
+        AnalyticsError::ExtensionLoad(_) => format!(
+            r#"<p class="bh-muted">The extra behaviour insights aren't switched on for this station, so {what} can't be worked out here.</p>
+<p class="bh-muted-sm">Everything else on the station keeps recording as normal.</p>"#
+        ),
+        // Transient and self-clearing: say so, because "try again" is the
+        // whole of the advice and it actually works.
+        AnalyticsError::Locked(_) => format!(
+            r#"<p class="bh-muted">The analytics database is busy right now, so {what} isn't ready.</p>
+<p class="bh-muted-sm">This usually clears in a moment — reload the page to try again.</p>"#
+        ),
+        _ => super::error_states::inline(what),
+    };
     // Return 200 (not 503) so HTMX swaps this informative fragment into the
-    // card; a non-2xx response leaves the "Loading…" placeholder stuck.
+    // card; a non-2xx response leaves the "Loading..." placeholder stuck.
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 

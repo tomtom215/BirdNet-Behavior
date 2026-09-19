@@ -82,11 +82,38 @@ async fn species_image_info(
     }
 }
 
+/// How long a browser may reuse an answer from the image file endpoint.
+///
+/// Both the picture and the 404 carry this. Neither used to carry any cache
+/// header at all, and with no `ETag` or `Last-Modified` either there was
+/// nothing for a browser to revalidate against, so every render fetched again.
+/// That cost nothing while the only `<img>` tags were on the species gallery
+/// and the detail page. It is not nothing now every detection row's avatar has
+/// one: the live feed re-renders on a timer, and each re-render would have
+/// pulled a fresh copy of the same thumbnail down the same wire.
+///
+/// Five minutes is short enough that an admin who blacklists a photo sees it
+/// go within the time it takes to walk to the window, and long enough that a
+/// feed polling every few seconds asks once.
+///
+/// `private`, not `public`: a station may sit behind a shared proxy, and its
+/// pages are not ours to let a cache serve to somebody else.
+const IMAGE_CACHE_CONTROL: &str = "private, max-age=300";
+
 /// Build a JSON `{"error": msg}` response for the image file endpoint.
+///
+/// Carries [`IMAGE_CACHE_CONTROL`] as well. A species the provider has no
+/// picture for answers 404 for as long as that stays true, and a browser that
+/// re-asks on every render of every row is the same waste as re-downloading
+/// the picture — worse, in fact, because a miss is the case that reaches
+/// through to the provider.
 fn image_error(status: StatusCode, msg: &str) -> axum::response::Response {
     (
         status,
-        [(header::CONTENT_TYPE, "application/json")],
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
+        ],
         json!({ "error": msg }).to_string().into_bytes(),
     )
         .into_response()
@@ -125,7 +152,10 @@ async fn species_image_file(
                 };
                 return (
                     StatusCode::OK,
-                    [(header::CONTENT_TYPE, content_type)],
+                    [
+                        (header::CONTENT_TYPE, content_type),
+                        (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
+                    ],
                     bytes,
                 )
                     .into_response();
@@ -188,7 +218,10 @@ async fn species_image_file(
 
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type)],
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, IMAGE_CACHE_CONTROL),
+        ],
         bytes,
     )
         .into_response()

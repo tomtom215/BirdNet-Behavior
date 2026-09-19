@@ -55,7 +55,12 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       .btn-secondary {{ background:var(--surface); color:var(--fg); border:1px solid var(--border); }}
       .btn-secondary:hover {{ border-color:var(--moss-ink); color:var(--moss-ink); }}
       .btn-danger {{ background:var(--rare-soft); color:var(--rare); border:1px solid var(--rare-soft); }}
-      .badge-ok {{ color:var(--moss); }} .badge-warn {{ color:var(--dawn); }}
+      /* `--dawn` is an amber *fill*, not a text colour: in light mode it
+         measures 2.85:1 on --bg and 2.97:1 on --surface, below even the 3:1
+         large-text floor, and axe flags it the moment the station actually has
+         something to warn about. `--warning` exists for this — it resolves to
+         --dawn-ink (8.4:1) in light and --dawn (10.5:1) in dark. */
+      .badge-ok {{ color:var(--moss); }} .badge-warn {{ color:var(--warning); }}
       .badge-crit {{ color:var(--rare); }}
       /* O-25 sweep: shapes promoted out of inline style= attributes. */
       h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
@@ -79,7 +84,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       .meter-val {{ font-weight:600; }}
       .meter-val.sm {{ font-weight:600; font-size:.8rem; }}
       .meter-val.ok {{ color:var(--moss); }}
-      .meter-val.warn {{ color:var(--dawn); }}
+      .meter-val.warn {{ color:var(--warning); }}
       .meter-val.crit {{ color:var(--rare); }}
       .meter-track {{ background:var(--bg); border-radius:9999px; height:8px; overflow:hidden; }}
       .meter-track.sm {{ height:6px; margin-bottom:.75rem; }}
@@ -96,7 +101,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       .temp-line {{ font-size:.8rem; margin:.25rem 0; }}
       .temp-val {{ font-weight:600; }}
       .temp-val.ok {{ color:var(--moss); }}
-      .temp-val.warn {{ color:var(--dawn); }}
+      .temp-val.warn {{ color:var(--warning); }}
       .temp-val.crit {{ color:var(--rare); }}
       .muted-note {{ color:var(--fg-4); }}
       .err-note {{ color:var(--rare); }}

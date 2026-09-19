@@ -181,6 +181,105 @@ async fn an_open_station_still_shows_the_wizard_to_everyone() {
     assert_eq!(location.as_deref(), Some("/onboarding"));
 }
 
+/// A signed-in viewer must not be walked through a wizard they cannot submit.
+///
+/// Observed failing against the pre-fix handler, which answered `200` with the
+/// full six-step wizard: `cookie_auth_middleware` lets *safe* methods through
+/// for any authenticated user and only gates unsafe ones behind
+/// `require_admin`, so a viewer filled in six steps and got
+/// "Forbidden — admin role required for this action." at Finish, with every
+/// answer gone. That is the ON-6 failure this file was written for, reproduced
+/// for a different actor — and neither existing case here covers a viewer.
+#[tokio::test]
+async fn a_signed_in_viewer_is_told_to_fetch_an_admin_rather_than_filling_in_six_steps() {
+    let (_dir, state) = station(Some("probe-pass-viewer"));
+    state.with_db(|conn| {
+        let hash = accounts::hash_password("viewer-pass-1").expect("hash");
+        conn.create_user("watcher", &hash, accounts::Role::Viewer, None)
+            .expect("create viewer");
+    });
+
+    // Sign the viewer in the way a person would, so the cookie is a real one.
+    let app = build_router(state.clone());
+    let login = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(header::ORIGIN, "http://localhost")
+                .header(header::HOST, "localhost")
+                .body(Body::from("username=watcher&password=viewer-pass-1"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        login.status(),
+        StatusCode::SEE_OTHER,
+        "viewer sign-in failed"
+    );
+    let cookie = login
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("sign-in sets a cookie")
+        .to_str()
+        .expect("ascii cookie")
+        .split(';')
+        .next()
+        .expect("cookie pair")
+        .to_owned();
+
+    let resp = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/onboarding")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = String::from_utf8_lossy(
+        &axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .into_owned();
+
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a viewer was served the wizard: {body}"
+    );
+    assert!(
+        !body.contains("ob-stepper"),
+        "the viewer got the six-step wizard they cannot submit: {body}"
+    );
+    assert!(
+        body.contains("administrator"),
+        "the refusal must say who can finish setup: {body}"
+    );
+
+    // And the save is still refused, so the two halves agree.
+    let resp = build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/onboarding/save")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from("latitude=51.48&longitude=-0.13"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(setting(&state, "latitude"), None);
+}
+
 #[tokio::test]
 async fn the_wizard_keeps_a_real_location_and_nothing_else() {
     let (_dir, state) = station(None);

@@ -40,29 +40,36 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
   <section class="card" id="set-notifications" aria-labelledby="set-notifications-h">
     <h2 class="section-title" id="set-notifications-h">Notifications</h2>
     <div>
-      <label for="notify_urls">Notification URLs</label>
+      <label for="notify_urls">Where to send alerts</label>
       <textarea id="notify_urls" name="notify_urls" rows="3" spellcheck="false"
         placeholder="discord://{{webhook_id}}/{{webhook_token}}&#10;ntfy://my-garden-topic">{notify_urls}</textarea>
       <p class="hint">
-        One per line, in Apprise URL syntax — but sent directly, so no Apprise
-        installation is needed. Supported here:
-        <code>discord://</code>, <code>slack://</code>, <code>tgram://</code>,
-        <code>ntfy://</code>, <code>gotify://</code>, <code>pover://</code>,
-        <code>json://</code> (and their TLS forms). Anything else needs the
-        Apprise config file below.
+        One address per line. Each is a short line your chat or phone-alert
+        service gives you, starting with its name: Discord
+        (<code>discord://</code>), Slack (<code>slack://</code>), Telegram
+        (<code>tgram://</code>), ntfy (<code>ntfy://</code>), Gotify
+        (<code>gotify://</code>), Pushover (<code>pover://</code>), or a plain
+        web address to post to (<code>json://</code>). Look for "webhook" in
+        that service’s settings and paste what it gives you. Nothing extra
+        needs installing on the station.
       </p>
     </div>
-    <h3 class="mt-md">Apprise (for everything else)</h3>
+    <h3 class="mt-md">Other services (advanced)</h3>
+    <p class="hint">Apprise is a separate program that can reach dozens of other
+    notification services. These two fields are only for stations that already
+    run it; leave them blank otherwise.</p>
     <div class="grid-2">
       <div>
-        <label for="apprise_url">Apprise Server URL</label>
+        <label for="apprise_url">Address of your Apprise server</label>
         <input id="apprise_url" name="apprise_url" value="{apprise}" placeholder="http://localhost:8000">
-        <p class="hint">Leave blank to disable HTTP push notifications (BirdNET-Pi: APPRISE_URL)</p>
+        <p class="hint">Leave blank if you do not run one. (BirdNET-Pi: APPRISE_URL)</p>
       </div>
       <div>
-        <label for="apprise_config">Apprise Config File (CLI mode)</label>
+        <label for="apprise_config">Path to an Apprise configuration file</label>
         <input id="apprise_config" name="apprise_config" value="{apprise_cfg}" placeholder="/etc/birdnet/apprise.yml">
-        <p class="hint">Use apprise CLI with -c flag for 80+ notification services (BirdNET-Pi: APPRISE_CONFIG_FILE)</p>
+        <p class="hint">Leave blank if you do not have one. Whoever set the
+        station up can point this at an Apprise config to reach the 80-odd
+        services it supports. (BirdNET-Pi: APPRISE_CONFIG_FILE)</p>
       </div>
     </div>
     <div class="mt-sm">
@@ -98,16 +105,18 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       </div>
     </div>
     <div>
-      <label for="notify_species_only">Notify only for these species (comma-separated common names)</label>
+      <label for="notify_species_only">Notify only for these species (common names, separated by commas)</label>
       <textarea id="notify_species_only" name="notify_species_only" rows="2"
                 placeholder="e.g. European Robin, Great Spotted Woodpecker">{only}</textarea>
       <p class="hint">Leave empty to notify for all species (BirdNET-Pi: APPRISE_ONLY_NOTIFY_SPECIES_NAMES)</p>
     </div>
     <div>
-      <label for="notify_species_exclude">Never notify for these species (comma-separated common names)</label>
+      <label for="notify_species_exclude">Never notify for these species (common names, separated by commas)</label>
       <textarea id="notify_species_exclude" name="notify_species_exclude" rows="2"
                 placeholder="e.g. House Sparrow, Feral Pigeon">{nexcl}</textarea>
-      <p class="hint">Species excluded from all notifications (dual-filter with notify-only list above)</p>
+      <p class="hint">These birds are still recorded and still appear in your
+        records — you just are not told about them. To stop recording a species
+        altogether, use "Never record these" under Species Filters.</p>
     </div>
     <div>
       <label for="notify_title_template">Notification Title Template</label>
@@ -125,7 +134,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <div>
         <label for="birdweather_token">BirdWeather Station Token</label>
         <input id="birdweather_token" name="birdweather_token" value="{bw}" placeholder="Token from BirdWeather app">
-        <p class="hint">Uploads detections to BirdWeather community map (BirdNET-Pi: BIRDWEATHER_ID)</p>
+        <p class="hint"><b>This shares your sightings publicly.</b> With a token
+        set, every detection — with this station’s location — is uploaded to the
+        BirdWeather community map, where anyone can see it. Leave blank to keep
+        everything on this device. (BirdNET-Pi: BIRDWEATHER_ID)</p>
       </div>
       <div>
         <label for="weekly_report_schedule">Weekly Report Day</label>

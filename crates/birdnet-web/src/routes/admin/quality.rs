@@ -301,7 +301,7 @@ fn render_quality_page(data: &QualityData) -> String {
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Summary</div>
-      <h3>At-a-glance statistics</h3>
+      <h2 class="sh-h">At-a-glance statistics</h2>
     </div>
   </div>
   <div id="quality-summary"
@@ -330,7 +330,7 @@ fn render_quality_page(data: &QualityData) -> String {
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">30-day trend</div>
-      <h3>Daily average confidence</h3>
+      <h2 class="sh-h">Daily average confidence</h2>
     </div>
   </div>
   <p class="bnb-meta q-meta-mb">
@@ -363,7 +363,7 @@ fn render_quality_page(data: &QualityData) -> String {
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Review verdict trend</div>
-      <h3>Human disagreement over 30 days</h3>
+      <h2 class="sh-h">Human disagreement over 30 days</h2>
     </div>
   </div>
   <p class="bnb-meta q-meta-mb">
@@ -393,7 +393,7 @@ fn render_quality_page(data: &QualityData) -> String {
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Low-confidence species</div>
-      <h3>Consistently uncertain calls</h3>
+      <h2 class="sh-h">Consistently uncertain calls</h2>
     </div>
     {tuning_link}
   </div>

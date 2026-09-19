@@ -197,11 +197,15 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p class=\"qz-err\">Error loading stats</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "quarantine totals: query failed");
+            super::error_states::failed_partial("the quarantine totals")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "quarantine totals: task failed");
+            super::error_states::failed_partial("the quarantine totals")
+        }
     }
 }
 
@@ -286,11 +290,15 @@ async fn quarantine_list_partial(
 
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p class=\"qz-err\">Error loading quarantine list</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "quarantine list: query failed");
+            super::error_states::failed_partial("the quarantined detections")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "quarantine list: task failed");
+            super::error_states::failed_partial("the quarantined detections")
+        }
     }
 }
 

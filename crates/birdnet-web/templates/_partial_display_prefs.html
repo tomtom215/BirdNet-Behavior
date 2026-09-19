@@ -15,7 +15,7 @@
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Display</div>
-      <h3>How the dashboard looks</h3>
+      <h2 class="sh-h">How the dashboard looks</h2>
     </div>
     <button type="button" class="bnb-btn ghost" data-prefs-reset>Reset</button>
   </div>
@@ -27,10 +27,10 @@
         <div class="dpf-label">Theme</div>
         <div class="bnb-meta">Light, dark, or follow the OS.</div>
       </div>
-      <div class="seg" data-prefs-key="theme" role="group" aria-label="Theme">
-        <button type="button" class="btn" data-value="light">Light</button>
-        <button type="button" class="btn" data-value="dark">Dark</button>
-        <button type="button" class="btn" data-value="auto">Auto</button>
+      <div class="seg" data-prefs-key="theme" role="radiogroup" aria-label="Theme">
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="light">Light</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="dark">Dark</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="auto">Auto</button>
       </div>
     </div>
 
@@ -40,10 +40,10 @@
         <div class="dpf-label">Density</div>
         <div class="bnb-meta">How much breathing room between elements.</div>
       </div>
-      <div class="seg" data-prefs-key="bnb-density" role="group" aria-label="Density">
-        <button type="button" class="btn" data-value="compact">Compact</button>
-        <button type="button" class="btn" data-value="regular">Regular</button>
-        <button type="button" class="btn" data-value="comfy">Comfy</button>
+      <div class="seg" data-prefs-key="bnb-density" role="radiogroup" aria-label="Density">
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="compact">Compact</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="regular">Regular</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="comfy">Comfy</button>
       </div>
     </div>
 
@@ -53,9 +53,9 @@
         <div class="dpf-label">Motion</div>
         <div class="bnb-meta">Live pulse and feed-row transitions.</div>
       </div>
-      <div class="seg" data-prefs-key="bnb-motion" role="group" aria-label="Motion">
-        <button type="button" class="btn" data-value="auto">Full</button>
-        <button type="button" class="btn" data-value="reduced">Reduced</button>
+      <div class="seg" data-prefs-key="bnb-motion" role="radiogroup" aria-label="Motion">
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="auto">Full</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="reduced">Reduced</button>
       </div>
     </div>
 
@@ -65,9 +65,9 @@
         <div class="dpf-label">Contrast</div>
         <div class="bnb-meta">Stronger borders and ink.</div>
       </div>
-      <div class="seg" data-prefs-key="bnb-contrast" role="group" aria-label="Contrast">
-        <button type="button" class="btn" data-value="auto">Standard</button>
-        <button type="button" class="btn" data-value="high">High</button>
+      <div class="seg" data-prefs-key="bnb-contrast" role="radiogroup" aria-label="Contrast">
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="auto">Standard</button>
+        <button type="button" role="radio" aria-checked="false" class="btn" data-value="high">High</button>
       </div>
     </div>
   </div>
@@ -148,20 +148,25 @@
     var current = get(key, DEFAULTS[key]);
     var group = root.querySelector('[data-prefs-key="' + key + '"]');
     if (!group) return;
-    var match = group.querySelector('[data-value="' + current + '"]');
-    if (match) match.classList.add('active');
-    else {
-      var first = group.querySelector('button');
-      if (first) first.classList.add('active');
-    }
+    // `.active` was the only record of which option was chosen, so a screen
+    // reader could not tell Light from Dark from Auto in any of the four
+    // groups. `aria-checked` now moves with it.
+    var select = function (el) {
+      group.querySelectorAll('button').forEach(function (b) {
+        b.classList.remove('active');
+        b.setAttribute('aria-checked', 'false');
+      });
+      if (el) { el.classList.add('active'); el.setAttribute('aria-checked', 'true'); }
+    };
+    group.__prefsSelect = select;
+    select(group.querySelector('[data-value="' + current + '"]') || group.querySelector('button'));
     APPLIERS[key](current);
 
     group.addEventListener('click', function (e) {
       var btn = e.target.closest('button[data-value]');
       if (!btn) return;
       e.preventDefault();
-      group.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
-      btn.classList.add('active');
+      group.__prefsSelect(btn);
       APPLIERS[key](btn.dataset.value);
     });
   });

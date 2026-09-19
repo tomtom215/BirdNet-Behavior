@@ -182,7 +182,7 @@ fn render_detail_page(
   <div>
     {audio_section}
     <div class="bnb-card pad">
-      <div class="section-header"><div><div class="bnb-eyebrow">Details</div><h3>This detection</h3></div>{conf}</div>
+      <div class="section-header"><div><div class="bnb-eyebrow">Details</div><h2 class="sh-h">This detection</h2></div>{conf}</div>
       <table>
         <tr><td class="bnb-meta">Date</td><td>{date}</td></tr>
         <tr><td class="bnb-meta">Time</td><td>{time}</td></tr>
@@ -226,7 +226,7 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     let safe = escape_html(&basename);
     format!(
         r#"<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Recording</div><h3>The 3-second clip</h3></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Recording</div><h2 class="sh-h">The 3-second clip</h2></div></div>
   <img src="/api/v2/spectrogram/{safe}"
        alt="Spectrogram"
        class="dd-spectrogram"
@@ -263,7 +263,7 @@ fn build_corroboration_section(hits: &[birdnet_db::sqlite::ConcurrentDetection])
     let label = if hits.len() == 1 { "source" } else { "sources" };
     format!(
         r#"<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Multi-stream</div><h3>Also heard by</h3></div><span class="bnb-pill moss">{n} {label}</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Multi-stream</div><h2 class="sh-h">Also heard by</h2></div><span class="bnb-pill moss">{n} {label}</span></div>
   <p class="bnb-meta">Other audio sources detected this species at nearly the same time — corroboration that it's a real detection.</p>
   <table>
     <tr><td class="bnb-meta">Source</td><td class="bnb-meta">Time</td><td class="bnb-meta">Confidence</td></tr>
@@ -312,7 +312,7 @@ fn build_nearby_section(
     };
     format!(
         r#"<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">eBird</div><h3>Reported nearby</h3></div><span class="bnb-pill moss">{scope}</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">eBird</div><h2 class="sh-h">Reported nearby</h2></div><span class="bnb-pill moss">{scope}</span></div>
   <p class="bnb-meta">{count} reported{where_} on {date}, {scope}, within the last {back} days.{age}</p>
   <p class="bnb-meta">Somebody else recording their own sightings had this species here recently, which is independent support for this detection. eBird saying nothing about a species is not evidence against it.</p>
 </div>"#,
@@ -349,7 +349,7 @@ fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     // clipboard access can still read it directly.
     format!(
         r#"<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Operator</div><h3>Daemon log trace</h3></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Operator</div><h2 class="sh-h">Daemon log trace</h2></div></div>
   <p class="bnb-meta dd-mb">
     Every event the detection daemon emitted for this audio file is
     tagged with the correlation ID below.
