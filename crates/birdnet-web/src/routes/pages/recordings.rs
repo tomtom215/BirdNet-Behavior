@@ -344,7 +344,13 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
     let time = escape_html(&d.time);
     let date = escape_html(&d.date);
     let key = escape_html(&format!("{}|{}|{}", d.date, d.time, d.sci_name));
-    let meta = format!("{} · {} · {:.2}", d.time, d.date, d.confidence);
+    // `recordings.html` puts this straight into `.rc-hp-meta` when a clip
+    // starts, so `0.87` was a bare decimal on an unnamed scale in the player
+    // strip — the same thing the rest of this release replaced with a
+    // percentage in the row above it.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let meta_pct = (d.confidence.clamp(0.0, 1.0) * 100.0).round() as i64;
+    let meta = format!("{} · {} · {meta_pct}%", d.time, d.date);
     let meta = escape_html(&meta);
 
     let av = avatar(&d.com_name, &d.sci_name, "");

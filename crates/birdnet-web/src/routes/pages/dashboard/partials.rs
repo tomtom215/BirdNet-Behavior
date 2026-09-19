@@ -212,12 +212,18 @@ fn render_best_row(
             )
         })
         .unwrap_or_default();
+    // `{:.2}` here printed `0.99` on the front page, under a heading reading
+    // "Today · Highest confidence" — the bare decimal on an unnamed scale that
+    // the rest of this release replaced with a percentage everywhere else.
+    // `conf_bar` is the wrong atom for a card this compact (it draws a track),
+    // so the number is written the same way `conf_bar` writes it.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pct = (d.confidence.clamp(0.0, 1.0) * 100.0).round() as i64;
     let _ = write!(
         html,
-        r#"<div class="x-best">{avatar}<div class="x-best-main"><div class="nm"><a href="/species/detail?name={enc}" class="t dp-link">{name}</a></div><div class="mt">{time_short} · {conf:.2}{tag}</div></div>{play}</div>"#,
+        r#"<div class="x-best">{avatar}<div class="x-best-main"><div class="nm"><a href="/species/detail?name={enc}" class="t dp-link">{name}</a></div><div class="mt">{time_short} · {pct}%{tag}</div></div>{play}</div>"#,
         avatar = avatar(&d.com_name, &d.sci_name, ""),
         name = escape_html(&d.com_name),
-        conf = d.confidence,
     );
 }
 

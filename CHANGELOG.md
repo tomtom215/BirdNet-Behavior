@@ -299,6 +299,14 @@ Copy, all of it verified in the rendered page:
   grid, the species pages and the detail page. It now reads `87%`, which is
   what the public share page and `/admin/quality` already used, and the bar
   carries an accessible name rather than reading aloud as a naked number.
+  Two surfaces were missed on the first pass and are fixed here: the Today
+  page's **Best recordings** card, which printed `06:10 · 0.99` under a
+  heading reading "Today · Highest confidence", and the **clip player's
+  now-playing strip**, whose text comes from a `data-clip-meta` attribute
+  rather than from the shared confidence atom. Neither uses `conf_bar` —
+  the card is too small for a track and the strip is plain text — which is
+  why reading that atom did not find them, and why the gate that now covers
+  them drives the two routes and looks for the decimal.
 - The top-nav health badge said "Mic down" and was a `<span>`: the reason lived
   in a `title`, which no phone can show, and the screen that explains the
   problem had to be found by guesswork. It is now a link to Station Health
