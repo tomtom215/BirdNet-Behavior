@@ -38,6 +38,113 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+### Fixed — a UI pass done by looking at the app rather than reading it
+
+Every item below was found by rendering the running station in a browser and
+measuring what came out. The pattern that recurs, as it did in the audit
+cluster below, is **a mechanism that was never connected to the thing it was
+meant to serve** — and a second one: **a check that was green because it was
+not looking**.
+
+**On a phone, the Today live feed showed no species names at all.** The feed's
+six-track grid is ID-scoped and therefore beats the phone override near the top
+of the stylesheet, which is class-scoped; a media query does not raise
+specificity. The waveform and confidence bar were hidden at that width but
+their 88px + 86px tracks were not, so the name column resolved to exactly
+`0px`: every row was a timestamp, a four-letter code, a play button and 200px
+of dead air. Measured at 390px before the fix:
+`grid-template-columns: 50px 32px 0px 88px 86px 30px`. The Recordings row had
+the same outcome from the opposite cause — its action cluster claimed 156px of
+a 320px row as `auto` min-content — and the species name measured 44px. Both
+read properly now.
+
+**Half the Patterns data was unreachable on a phone.** The hour × day-of-week
+grid and the hourly bar chart declared a pixel `width` and no `viewBox`, so the
+stylesheet's `max-width: 100%` *cropped* them rather than scaling: the hour-23
+label sat 285px beyond the SVG's right edge, and the scroll wrapper could not
+help because the element it wraps had already been forced to fit.
+
+**Other pictures that were not telling the truth.** A species heard on nine or
+more days lost its most recent week (the chart hard-coded a 280-wide viewBox
+while stepping 38 per day). A sparkline given one sample drew nothing at all —
+a case the dashboard deliberately constructs for a brand-new station — and a
+perfectly flat series was pinned to the top edge, where the Today top-species
+rail read as a stack of hairlines. The weekly report clipped the label of its
+tallest bar, which is the busiest day of the week. The live-signal card's
+"honest flat baseline" painted at alpha 35/255 and read as a blank box; a
+stream the browser could not reach drew that same line under the word "idle",
+so a blocked WebSocket was indistinguishable from a silent microphone — there
+is a third state now, and a caption saying which you are looking at.
+
+**Station Health contradicted itself**, ticking "Audio sources OK" on the same
+screen as a banner reading "an audio source is down" and two cards chipped
+Stalled and Backing off; and a snapshot it could not take reported
+`integrity_ok: true`, manufacturing a clean bill of health for the one page an
+operator opens when they suspect something is wrong.
+
+**Failures that were reported as emptiness.** History told an operator with
+three years of data "No detection history yet"; Recordings answered a failed
+query with "No saved clips yet", which reads as *the purge ate them*; the
+Migration tab reported a database error as a quiet year; the dawn-chorus polar
+did the same under a doc comment that described only the empty path. There is
+now an `error_states` vocabulary beside `empty_states`, and a gate on the
+`cached_fragment` contract that was getting this wrong.
+
+**The setup wizard told six kinds of untruth**, including one in its own doc
+comment — which claimed a single-pass template substitution "deliberately
+rather than a `.replace()` chain" directly above a seven-link `.replace()`
+chain, so an audio-source label of `{{password_step}}` spliced the password
+form into the microphone card. With JavaScript off it was a dead end the home
+page trapped you in. A signed-in viewer was walked through all six steps and
+refused at the finish line. Step 6 said "Your answers are saved" before
+anything was saved. "Skip for now" completed setup permanently, and nothing
+anywhere linked back. The Microphone step listed what was *configured* and
+said nothing about whether audio was flowing — on the demo station it now
+reads "2 of 3 sources are not sending audio right now", matching what Station
+Health says about the same station. Two things on the page were invented
+outright: a "Calibrating noise floor…" animation that calibrated nothing, and a
+"~100 km radius" that appears in no other file in the repository because there
+is no radius anywhere in the system.
+
+**The accessibility gate was running 69 of axe's 105 rules.** It gated on four
+WCAG tags, so 36 rules never executed — and adding them reported 40 findings
+immediately, in rules that had not been failing because they had not been
+running. It also ran at one desktop viewport, so the phone layout had never
+been graded; adding it found six *already-gated* serious violations on the
+spot. Both tiers now block, and CI runs both viewports. Among what this
+surfaced: no `<main>`, no skip link and no `contentinfo` on any `/admin/*` page;
+`/admin/doctor` serving no `<h1>` and a stray unmatched `</section>`; the house
+section-header pattern jumping `<h1>` to `<h3>` on fifteen routes; two
+landmarks both named "Notifications"; and six scrollable regions a keyboard
+could not reach.
+
+**The live detection feed read itself out again four times a minute.** A
+container that polls and swaps its own innerHTML is a mutation in a live
+region on every tick, so a screen reader re-read eight rows of species,
+scientific name, confidence and time every 15 seconds whether or not a bird had
+been heard. Announcements now ride a status line written only when the newest
+detection actually changes: measured, three refetches of an unchanged feed
+produce zero announcements, and a genuinely new bird produces exactly one.
+
+**Preferences that were silently dropped.** `theme-guard.js` said it mirrored
+the inline guard in `layout.html` and read two of its four keys, so Reduced
+motion and High contrast were lost on every standalone admin page. The live
+spectrogram honoured no motion preference at all, under a comment saying it
+did — it now repaints once per 1.5s when motion is reduced (measured: 640
+paints becomes 64 for the same burst of frames). `print.css` forces a light
+palette and missed seven of the twenty-nine tokens that flip between themes,
+the worst being the one the species avatars mix toward: a dark-theme operator
+printing the weekly report got invisible banding codes on every row.
+
+Also: thousands separators on the counts that lacked them; focus indicators on
+form controls, which had `outline: none` at a specificity that made the
+`:focus-visible` rule unreachable and replaced it with a 1.4:1 ring; no focus
+indicator whatsoever on the command palette input; a `.bnb-btn.dawn:hover` that
+set white on a colour that is bright yellow in dark mode (1.52:1); `--dawn`
+used as a text colour at six sites across three admin pages, where it measures
+2.85:1; a duplicated `.sr-h1` that was shrinking the share permalink's hero —
+the one page in the product that strangers see — from 64px to 24px.
+
 ### Changed — two classifiers with different windows now run together, and neither loses coverage
 
 **The chunk is cut to the longest window and stepped by the shortest** (`G-10`

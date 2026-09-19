@@ -136,6 +136,40 @@ Corollaries, each learned the same way:
 - **`pull_request`-triggered gates never see un-PR'd branches.** Open a draft PR
   early, or run the gates locally; work has sat broken on a pushed branch for
   hours because nothing was watching it.
+- **`pkill -x screenshot_server` silently matches nothing.** `pgrep`/`pkill`
+  will not match `-x` against a process name longer than 15 characters, and it
+  exits 1 rather than complaining. A restart script built on it left the old
+  binary holding port 8502 while `cargo run` rebuilt, failed to bind and
+  exited — so three rounds of "verified in the browser" were answered by the
+  *previous* build's HTML. Kill by full command line (`pgrep -f '[s]creenshot_server'`),
+  and have the restart refuse to report success when the running process
+  predates the binary it just built:
+  `ps -o lstart= -p "$PID"` against `stat -c %Y "$BIN"`.
+- **A green a11y gate can mean the rule never ran.** `axe.mjs` gates on a tag
+  list, and with only the four WCAG A/AA tags, 36 of axe's 105 rules do not
+  execute at all — `heading-order`, `landmark-one-main`, `region`,
+  `page-has-heading-one`, `target-size` and the rest. Adding them reported 40
+  findings on the first run. The same applies to *reach*: the gate ran at
+  1280x900 only, so the phone layout had never been graded, and adding it found
+  six serious violations immediately. When a gate is clean, ask what it covers
+  before believing it.
+- **A media query does not raise specificity** (CSS Cascade L4 §6.4.4). Any
+  equal-specificity rule *later* in the sheet defeats it, and an ID-scoped rule
+  defeats it wherever it sits. Three responsive overrides in `app.css` were
+  dead for one of those two reasons, including the one that left the Today
+  feed's species-name column at exactly `0px` on a phone. Confirm a responsive
+  rule with `getComputedStyle` at the target width; reading the CSS will not
+  tell you.
+- **`page.evaluate` is not subject to the page's CSP.** Playwright runs it
+  through CDP, which is exempt, so it cannot answer "is `eval` blocked here?"
+  — it will cheerfully report that `new Function` works on a page where it does
+  not. Test CSP behaviour by driving the real code path and listening for
+  `securitypolicyviolation`.
+- **`No space left on device` surfaces as unrelated test failures.** A full
+  disk inside a `cc-rs` build script reported as four failing `birdnet-behavioral`
+  ICU/extension tests, in a crate that had not been touched. `df -h /` reads
+  "Avail 1.9M" with "Used 38G" — the allowance is spent, not the machine. The
+  cheapest ~3–6 GB back is `rm -rf target/debug/incremental`.
 
 ### Key Dependencies
 

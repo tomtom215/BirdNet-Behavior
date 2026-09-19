@@ -95,6 +95,20 @@ users**, with deep analytics underneath for enthusiasts.
    **error / unavailable**, **single data point**, **huge numbers** (1.6M+
    detections), **very long species / common names**, **overflow / truncation**,
    **dense vs sparse data**. These are currently inconsistent.
+
+   *Partly addressed.* `routes/pages/error_states.rs` now gives **failure** its
+   own vocabulary beside `empty_states.rs`, because the two were being
+   conflated: History told an operator with three years of data "No detection
+   history yet", Recordings answered a failed query with "No saved clips yet"
+   (which reads as *the purge ate them*), and the Migration tab reported a
+   database error as a quiet year. Those four surfaces, the species list and
+   the dashboard heatmap are converted;
+   `tests/a_failed_fragment_never_renders_as_an_empty_one.rs` stops the
+   `cached_fragment` shape regressing. Still inconsistent elsewhere — there are
+   13 different empty-state class vocabularies and three loading idioms.
+   **Single data point** and **huge numbers** are done for the sparkline, the
+   species-detail day chart, the weekly chart and the stat tiles; the rest of
+   the numeric slots have not been swept.
 3. **At-a-glance overview.** Strengthen the Dashboard so a BirdNET-Pi user gets
    everything in one screen (today's totals, most-recent, top species, hourly
    shape, **best recordings**, multi-day trend) without hopping between
@@ -128,7 +142,27 @@ users**, with deep analytics underneath for enthusiasts.
    liveness is honest (it reflects the last captured segment; an idle/flat state
    means no recent audio). Design clear **"live / idle / no audio"**
    affordances.
+
+   *Addressed.* Three states rather than two — `ws.onerror`/`onclose` used to
+   fall through to the same flat line under the word "idle", so a blocked
+   WebSocket looked exactly like a silent microphone. There is now a
+   **"no signal"** state and a caption saying which of the two you are looking
+   at. The flat baseline itself was invisible: a 1px stroke on an integer `y`
+   straddles two device rows and painted at alpha 35/255, so the card read as a
+   blank box. Remaining design work: what the card should show on a station
+   with several sources, and whether the source picker belongs there.
 9. **Accessibility & dark-mode** parity across all of the above.
+
+   *Substantially addressed, and the gate was the problem.* `axe.mjs` gated on
+   four WCAG tags, so 36 of axe's rules never executed, and ran at one desktop
+   viewport, so the phone layout was never graded. Both are fixed and both
+   tiers are blocking; the work that surfaced is in the commit log. What
+   remains for a **design** decision rather than an implementation one:
+   `link-in-text-block` is still deferred and needs an app-wide prose-link
+   underline policy (~36 in-text link sites; `admin/settings/render/mod.rs`
+   already solves it locally for `.hint a` and cites the rule by name), and
+   the `--dawn` status dot measures 2.85:1 on `--bg` in light, which needs
+   either a token nudge or a different affordance.
 
 ## What I want from you, per screen (deliverables)
 
