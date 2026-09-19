@@ -165,10 +165,29 @@
         var cfg = evt.detail && evt.detail.requestConfig;
         return !!cfg && cfg.verb === 'get';
       }
+      // A slot that cannot legally hold a <div> and an <a>. `#td-total` is a
+      // <span> holding a number inside the "Show the full day (34)" button,
+      // and this function used to put a <div role="alert"> and a link inside
+      // it — a <div> where only phrasing content is allowed, and an anchor
+      // nested in a button, which no keyboard or screen-reader user can
+      // resolve. Driven to a failure in a browser it rendered as
+      // "Show the full day (This section could not load (HTTP 500). Reload
+      // the page) — search, filter, lock & delete".
+      var PHRASING_ONLY = 'span,p,h1,h2,h3,h4,h5,h6,label,summary,strong,em,small,b,i';
+      function textOnly(el) {
+        return !!el.closest('a,button') || el.matches(PHRASING_ONLY);
+      }
       function failed(evt, why) {
         if (!isGet(evt)) return;
         var target = evt.detail.target || evt.target;
         if (!target || !target.isConnected) return;
+        if (textOnly(target)) {
+          // No element, no link: the reader still gets the page's own reload,
+          // and the sentence around the slot stays a sentence.
+          target.textContent = '?';
+          target.setAttribute('title', 'This could not load' + why + '.');
+          return;
+        }
         var note = document.createElement('div');
         note.className = 'bnb-load-error';
         note.setAttribute('role', 'alert');

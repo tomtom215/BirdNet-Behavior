@@ -56,11 +56,15 @@ pub(super) async fn detections_partial(
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading detections</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "live feed: query failed");
+            crate::routes::pages::error_states::failed_partial("the live feed")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "live feed: task failed");
+            crate::routes::pages::error_states::failed_partial("the live feed")
+        }
     }
 }
 
@@ -169,11 +173,15 @@ pub(super) async fn best_detections_partial(
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading best recordings</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "best recordings: query failed");
+            crate::routes::pages::error_states::failed_partial("today's best recordings")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "best recordings: task failed");
+            crate::routes::pages::error_states::failed_partial("today's best recordings")
+        }
     }
 }
 
@@ -309,11 +317,15 @@ pub(super) async fn top_species_partial(
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading species</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "top species: query failed");
+            crate::routes::pages::error_states::failed_partial("today's top species")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "top species: task failed");
+            crate::routes::pages::error_states::failed_partial("today's top species")
+        }
     }
 }
 
@@ -381,11 +393,15 @@ pub(super) async fn species_list_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading species list</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species list: query failed");
+            crate::routes::pages::error_states::failed_partial("the species list")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species list: task failed");
+            crate::routes::pages::error_states::failed_partial("the species list")
+        }
     }
 }
 
@@ -407,11 +423,15 @@ pub(super) async fn hourly_chart_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_hourly_chart(&hours),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "hourly chart: query failed");
+            crate::routes::pages::error_states::failed_partial("the hourly chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "hourly chart: task failed");
+            crate::routes::pages::error_states::failed_partial("the hourly chart")
+        }
     }
 }
 
@@ -428,11 +448,15 @@ pub(super) async fn daily_chart_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_daily_chart(&days),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "daily chart: query failed");
+            crate::routes::pages::error_states::failed_partial("the daily chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "daily chart: task failed");
+            crate::routes::pages::error_states::failed_partial("the daily chart")
+        }
     }
 }
 
@@ -449,11 +473,15 @@ pub(super) async fn confidence_chart_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_confidence_chart(&buckets),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "confidence chart: query failed");
+            crate::routes::pages::error_states::failed_partial("the confidence chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "confidence chart: task failed");
+            crate::routes::pages::error_states::failed_partial("the confidence chart")
+        }
     }
 }
 

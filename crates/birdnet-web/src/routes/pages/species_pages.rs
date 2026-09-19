@@ -682,11 +682,15 @@ async fn species_summary_partial(
             [(header::CONTENT_TYPE, "text/html")],
             r#"<p class="spp-muted">Species not found.</p>"#.to_string(),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading summary</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species summary: query failed");
+            super::error_states::failed_partial("this species' summary")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species summary: task failed");
+            super::error_states::failed_partial("this species' summary")
+        }
     }
 }
 
@@ -711,11 +715,15 @@ async fn species_hourly_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_hourly_chart(&hours),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species hourly chart: query failed");
+            super::error_states::failed_partial("this species' hourly chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species hourly chart: task failed");
+            super::error_states::failed_partial("this species' hourly chart")
+        }
     }
 }
 
@@ -740,11 +748,15 @@ async fn species_daily_partial(
             [(header::CONTENT_TYPE, "text/html")],
             render_daily_chart(&days),
         ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading chart</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species daily chart: query failed");
+            super::error_states::failed_partial("this species' daily chart")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species daily chart: task failed");
+            super::error_states::failed_partial("this species' daily chart")
+        }
     }
 }
 
@@ -795,11 +807,15 @@ async fn species_detections_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading detections</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species detections: query failed");
+            super::error_states::failed_partial("this species' detections")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species detections: task failed");
+            super::error_states::failed_partial("this species' detections")
+        }
     }
 }
 
@@ -1126,11 +1142,15 @@ async fn species_companions_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading companion species</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "species companions: query failed");
+            super::error_states::failed_partial("the species heard alongside this one")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "species companions: task failed");
+            super::error_states::failed_partial("the species heard alongside this one")
+        }
     }
 }
 

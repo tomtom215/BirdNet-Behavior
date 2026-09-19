@@ -107,11 +107,11 @@ pub(super) async fn analytics_sessions_partial(
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("activity sessions", &e),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading sessions</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics sessions: task failed");
+            super::error_states::failed_partial("this station's listening sessions")
+        }
     }
 }
 
@@ -176,11 +176,11 @@ pub(super) async fn analytics_retention_partial(
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("return visits", &e),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading retention</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics retention: task failed");
+            super::error_states::failed_partial("which birds came back")
+        }
     }
 }
 
@@ -284,11 +284,11 @@ pub(super) async fn analytics_next_partial(
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("what sings next", &e),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading predictions</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics next: task failed");
+            super::error_states::failed_partial("what the station expects to hear next")
+        }
     }
 }
 
@@ -380,11 +380,11 @@ pub(super) async fn analytics_dawn_sequence_partial(
             r#"<p class="bh-muted">Not enough dawn activity yet to read a running order — give the mornings a little longer.</p>"#.to_string(),
         ),
         Ok(Err(e)) => analytics_error_html("the dawn sequence", &e),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading dawn sequence</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics dawn sequence: task failed");
+            super::error_states::failed_partial("the order birds joined the dawn chorus")
+        }
     }
 }
 

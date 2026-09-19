@@ -780,13 +780,47 @@ async fn today_count_partial(
             };
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], label)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "Error loading count".to_string(),
-        ),
+        // The one partial that must NOT use `error_states::failed_partial`.
+        // Its target is `#td-total`, a `<span>` holding a number inside the
+        // "Show the full day (34) — search, filter, lock & delete" button, so
+        // the shared renderer's `<p>` is not legal content there — and neither
+        // is what the page did instead. Driven to 500 in a browser, the
+        // `layout.html` fallback put a `<div role="alert">` and an `<a href>`
+        // *inside the `<button>`*, giving "Show the full day (This section
+        // could not load (HTTP 500). Reload the page) — search, filter…" and
+        // an anchor nested in a button: interactive content inside interactive
+        // content, which no keyboard or screen-reader user can resolve. The
+        // accessibility sweep never saw it, because it grades the page in the
+        // state it happened to be in.
+        //
+        // So: phrasing content only, and a mark that claims nothing. `?` is
+        // not a count; an em dash would read as "none", which is the lie this
+        // release has been taking out of the rest of the app.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "today count: query failed");
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                COUNT_UNKNOWN.to_string(),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "today count: task failed");
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                COUNT_UNKNOWN.to_string(),
+            )
+        }
     }
 }
+
+/// What `#td-total` shows when the count could not be read.
+///
+/// Phrasing content, because it lands inside a `<button>`'s label. The
+/// `sr-only` half is the whole explanation a screen-reader user gets, since
+/// `?` on its own is not one.
+const COUNT_UNKNOWN: &str = r#"?<span class="sr-only"> — this count could not be loaded</span>"#;
 
 /// HTMX partial: paginated list of today's detections as cards.
 async fn today_partial(
@@ -870,11 +904,15 @@ async fn today_partial(
 
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading detections</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "today log: query failed");
+            super::error_states::failed_partial("today's detections")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "today log: task failed");
+            super::error_states::failed_partial("today's detections")
+        }
     }
 }
 
@@ -917,12 +955,10 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     })
     .await;
 
+    // See `error_states::failed_partial` for why this is a 200.
     let Ok(Ok((rows, samples, solar))) = result else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading timeline</p>".to_string(),
-        );
+        tracing::warn!("today daystrip: query or task failed");
+        return super::error_states::failed_partial("today's timeline");
     };
 
     if rows.is_empty() {

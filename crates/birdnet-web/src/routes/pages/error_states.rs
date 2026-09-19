@@ -25,7 +25,44 @@
 //! };
 //! ```
 
+use axum::http::{HeaderName, StatusCode, header};
+
 use super::escape_html;
+
+/// The response an HTMX partial should send when its query failed.
+///
+/// # Why this is a 200
+///
+/// `static/htmx.min.js` ships
+/// `responseHandling:[…,{code:"[45]..",swap:false,error:true}]`, so **a 5xx
+/// body is never swapped into the page**. Every partial that answered 500
+/// with an error message was therefore writing a message no reader could
+/// ever see; driving `/pages/top-species` to 500 in a browser and reading the
+/// DOM back confirms the server's body is absent from it.
+///
+/// What the reader got instead was `layout.html`'s `htmx:responseError`
+/// fallback: *"This section could not load (HTTP 500). Reload the page"* — an
+/// HTTP status code shown to a birdwatcher, and advice that repeats the
+/// failure, since reloading a station whose database will not read just fails
+/// again. The fallback still exists and still earns its place: it is the only
+/// thing that can speak when the station does not answer at all
+/// (`htmx:sendError`, `htmx:timeout`), which no handler can do anything about.
+///
+/// So a partial whose query failed answers 200 and carries [`inline`], which
+/// htmx does swap. The same reasoning is already written out in
+/// `dashboard/kiosk.rs`, which reached it first.
+///
+/// This is deliberately *not* how the JSON API behaves: `/api/v2/stats`
+/// answers 500 when its read fails, because a caller there is a program that
+/// needs the status line to be true. These are presentation fragments.
+#[must_use]
+pub(crate) fn failed_partial(what: &str) -> (StatusCode, [(HeaderName, &'static str); 1], String) {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        inline(what),
+    )
+}
 
 /// Full-surface failure card: an illustration, what failed, and a way back.
 ///

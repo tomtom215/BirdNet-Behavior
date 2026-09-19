@@ -159,11 +159,15 @@ async fn detection_reviews_queue_partial(
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p class=\"dr-error\">Error loading the review queue.</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "review queue: query failed");
+            super::error_states::failed_partial("the review queue")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "review queue: task failed");
+            super::error_states::failed_partial("the review queue")
+        }
     }
 }
 

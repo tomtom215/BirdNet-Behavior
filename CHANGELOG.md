@@ -45,6 +45,64 @@ added, found because a gate written for something else would not go green.
 And the change a reader will notice first: **the station had a photograph of
 every bird it heard, and was showing a four-letter code instead.**
 
+### Fixed — twenty-four error messages no reader could ever see
+
+Every HTMX partial that failed answered `500` with a hand-written message:
+`<p>Error loading species</p>`, `<p>Error loading chart</p>`, and twenty-two
+more. `static/htmx.min.js` ships
+`responseHandling:[…,{code:"[45]..",swap:false,error:true}]`, so **a 5xx body
+is never swapped into the page**. Every one of those messages was unreachable.
+Driving `/pages/top-species` to 500 in a browser and reading the DOM back
+confirms it: the server's body is absent.
+
+What the reader got instead was `layout.html`'s `htmx:responseError` fallback —
+*"This section could not load (HTTP 500). Reload the page"*: an HTTP status
+code shown to a birdwatcher, and advice that repeats the failure, because
+reloading a station whose database will not read fails again. Meanwhile
+nothing logged the error either. The arms were `_ =>`, which discards it, and
+`with_read_db` is a pass-through that logs nothing of its own, so the one copy
+of the real reason was thrown away as well.
+
+Those twenty-four now answer **200** carrying the shared `error_states`
+fragment, which htmx does swap — *"We couldn't load today's top species. This
+is a fault, not an empty result — check the station."* — and each logs what
+failed. The rationale is written once, on `error_states::failed_partial`. The
+JSON API is deliberately unchanged: `/api/v2/stats` still answers 500, because
+a caller there is a program that needs the status line to be true. These are
+presentation fragments.
+
+The fallback stays and still earns its place: it is the only thing that can
+speak when the station does not answer at all.
+
+Two things this turned up that were not copy:
+
+**A failure inside a `<button>` produced markup no keyboard user could
+resolve.** `/pages/today-count` fills `#td-total`, the `<span>` holding the
+number in *"Show the full day (34) — search, filter, lock & delete"*. The
+fallback put a `<div role="alert">` and an `<a href>` in there: flow content
+where only phrasing content is allowed, and an anchor nested inside a button —
+interactive content inside interactive content. Rendered, it read *"Show the
+full day (This section could not load (HTTP 500). Reload the page) — search,
+filter, lock & delete"*. The accessibility sweep never saw it, because it
+grades a page in the state it happens to be in. That slot now gets `?` and a
+screen-reader-only explanation, and the fallback asks whether its target can
+hold flow content before building an element.
+
+**The life list reported a dead database as an empty life list.**
+`life_accumulation_partial` called `species_first_seen(conn)` with
+`.unwrap_or_default()` **inside** the closure, and that was the only query it
+made — so a failed read became an empty map, an empty curve, and
+`accumulation_curve`'s *"Not enough data yet for this view."* Shown to the
+person least able to shrug it off: a life list is the one record nobody wants
+to be told is empty. It propagates with `?` now. This is the same defect the
+rest of this release removed from six other surfaces; it survived because the
+`.unwrap_or_default()` sat one level deeper than the sweep had looked.
+
+Found by the gate refusing to pass, not by reading. A first draft dropped only
+`detections` and reported `/pages/species-list` as broken when it was fine —
+that handler reads `species_summary`, the aggregate migration 30 maintains on
+write, not a view over `detections`.
+
 ### Changed — every bird in the app is now the bird, not a four-letter code
 
 **The station had photographs of every species it heard, and showed them on

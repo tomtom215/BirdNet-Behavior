@@ -107,11 +107,15 @@ async fn notif_history_partial(
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        Ok(Err(_)) | Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading notification history</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "notification history: query failed");
+            super::error_states::failed_partial("the notification history")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "notification history: task failed");
+            super::error_states::failed_partial("the notification history")
+        }
     }
 }
 
@@ -145,11 +149,15 @@ async fn notif_stats_partial(State(state): State<AppState>) -> impl axum::respon
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        Ok(Err(_)) | Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading stats</p>".to_string(),
-        ),
+        // See `error_states::failed_partial` for why this is a 200.
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "notification totals: query failed");
+            super::error_states::failed_partial("the notification totals")
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "notification totals: task failed");
+            super::error_states::failed_partial("the notification totals")
+        }
     }
 }
 
