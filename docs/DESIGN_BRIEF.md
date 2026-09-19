@@ -157,14 +157,26 @@ users**, with deep analytics underneath for enthusiasts.
    four WCAG tags, so 36 of axe's rules never executed, and ran at one desktop
    viewport, so the phone layout was never graded. Both are fixed and both
    tiers are blocking; the work that surfaced is in the commit log. What
-   remains for a **design** decision rather than an implementation one: the
-   `--dawn` status dot measures 2.85:1 on `--bg` in light, short of the 3:1
-   WCAG 1.4.11 asks of a meaningful graphic, and clearing it means either
-   nudging the token (which moves every amber surface) or giving the dot a
-   second cue. `link-in-text-block` — the one rule this gate deferred — is
-   now enforced: it was estimated at ~36 in-text link sites and measured at
-   **five**, because everywhere else a link sits alone in its own box. Nothing
-   is excluded from the gate any more.
+   remains: nothing, on the two items that were open. `link-in-text-block` —
+   the one rule this gate deferred — is now enforced: it was estimated at ~36
+   in-text link sites and measured at **five**, because everywhere else a link
+   sits alone in its own box. Nothing is excluded from the gate any more.
+
+   The amber **status dot** is resolved too, and the resolution is worth
+   recording because it was a design choice with three candidates. The dot
+   measured 2.45:1 against the `--dawn-soft` pill it actually sits on — worse
+   than the 2.85:1 against `--bg` first reported. Recolouring
+   `.bnb-dot.dawn` alone would have fixed the number and broken the system,
+   leaving the dot the one member of the moss/dawn/rare ramp that does not
+   match its own pill. Moving `--dawn` would have fixed one 6px dot by shifting
+   every amber surface — hour bars, temperature line, buttons, meters, chips —
+   none of which is failing. Instead the **whole dot family** gains a contrast
+   ring mixed from its own hue toward `--fg`, which darkens in light and
+   lightens in dark from a single declaration; `--dot` is now the one property
+   a variant sets, so the fill and the ring cannot disagree. Measured after:
+   every dot clears 3:1 on its own background in both themes, the amber one at
+   5.65 via its ring, with no layout change. See the "Status dots" block in
+   `app.css` and `tests/a_status_dot_and_its_ring_cannot_disagree.rs`.
 
 ## What I want from you, per screen (deliverables)
 

@@ -301,10 +301,48 @@ em       { font-style: italic; }
 .bnb-pill.rare { background: var(--rare-soft); color: var(--rare);     border-color: transparent; }
 a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 
-.bnb-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--fg-3); display: inline-block; flex: 0 0 auto; }
-.bnb-dot.live { background: var(--moss); animation: bnb-pulse 1.6s ease-out infinite; }
-.bnb-dot.dawn { background: var(--dawn); }
-.bnb-dot.rare { background: var(--rare); }
+/* ── Status dots ──────────────────────────────────────────────────────────
+   One custom property, `--dot`, is the single source of truth for a dot's
+   hue: the fill and the contrast ring are both derived from it, so a variant
+   sets one value and cannot make the two disagree.
+
+   The ring exists because a 6px shape carrying no border is judged on its fill
+   alone, and `--dawn` does not survive that. Measured against the surfaces it
+   actually sits on, in light mode: 2.85:1 on `--bg`, 2.97:1 on `--surface`,
+   and **2.41:1 on the `--dawn-soft` pill fill** — which is the "Mic down"
+   badge in the top nav, the single most-seen dot in the product. WCAG 1.4.11
+   asks 3:1. Every other dot is already 4.9–10.9 in both themes; only amber in
+   light fails, and only as a fill.
+
+   Ringing the whole family rather than special-casing amber is the point.
+   Recolouring `.bnb-dot.dawn` alone would fix the number and break the system:
+   the dot would stop matching `.bnb-pill.dawn`'s own text and fill, so the
+   semantic ramp would hold everywhere except its smallest member. Moving
+   `--dawn` itself would fix one 6px dot by shifting every amber surface —
+   the dawn-chorus hour bars, the day-strip temperature line, `.bnb-btn.dawn`,
+   `.meter-fill.warn`, the whole chip family — none of which is failing.
+
+   Mixing toward `--fg` adapts per theme with one declaration: it darkens the
+   ring in light and lightens it in dark. Measured at 55%: 5.57–6.59 in light,
+   10.16–13.93 in dark, across `--bg`, `--surface` and the tinted pill fills.
+
+   `outline`, not `box-shadow`: `bnb-pulse` animates `box-shadow` on
+   `.bnb-dot.live`, and a ring declared there would be overwritten on the first
+   frame. `outline` also does not reflow, so no row moves.
+
+   Note the dot is never the only cue — every one in the product is rendered
+   beside its own label ("Mic down", "Stalled", "Live", "reporting", …), so
+   WCAG 1.4.1 is carried by the text and the ring is about glanceability: the
+   dot is what an operator sees before they read the word. */
+.bnb-dot {
+  --dot: var(--fg-3);
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--dot); display: inline-block; flex: 0 0 auto;
+  outline: 1px solid color-mix(in oklch, var(--dot) 55%, var(--fg));
+}
+.bnb-dot.live { --dot: var(--moss); animation: bnb-pulse 1.6s ease-out infinite; }
+.bnb-dot.dawn { --dot: var(--dawn); }
+.bnb-dot.rare { --dot: var(--rare); }
 @keyframes bnb-pulse {
   0%   { box-shadow: 0 0 0 0 oklch(55% 0.09 150 / .6); }
   70%  { box-shadow: 0 0 0 7px oklch(55% 0.09 150 / 0); }
@@ -507,7 +545,7 @@ tbody tr:hover { background: var(--surface-2); }
 .conf.mid  { background: var(--dawn-soft); color: var(--dawn-ink); }
 .conf.low  { background: var(--rare-soft); color: var(--rare); }
 
-.live-dot { display: inline-block; width: 7px; height: 7px; background: var(--moss); border-radius: 50%; margin-right: 4px; animation: bnb-pulse 1.6s ease-out infinite; }
+.live-dot { --dot: var(--moss); display: inline-block; width: 7px; height: 7px; background: var(--dot); border-radius: 50%; margin-right: 4px; outline: 1px solid color-mix(in oklch, var(--dot) 55%, var(--fg)); animation: bnb-pulse 1.6s ease-out infinite; }
 
 .species-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 0.5px solid var(--hairline); gap: 10px; }
 .species-item:last-child { border-bottom: none; }
@@ -609,7 +647,7 @@ footer a:hover { color: var(--moss-ink); }
 /* Live detection-stream indicator, driven by live-detections.js. Hidden until
    the client opens the socket; dimmed while reconnecting. */
 #live-status[data-state="reconnecting"] { opacity: .6; }
-#live-status[data-state="live"] .bnb-dot { background: var(--moss); }
+#live-status[data-state="live"] .bnb-dot { --dot: var(--moss); }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -1724,16 +1762,16 @@ footer a:hover { color: var(--moss-ink); }
 
 /* Status pills — drive both .bnb-pill and the .bnb-dot inside it */
 .bnb-pill.live    { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
-.bnb-pill.live    .bnb-dot { background: var(--moss); }
+.bnb-pill.live    .bnb-dot { --dot: var(--moss); }
 .bnb-pill.starting { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
 .bnb-pill.starting .bnb-dot {
-  background: var(--dawn);
+  --dot: var(--dawn);
   animation: bnb-blink 1.2s ease-in-out infinite;
 }
 .bnb-pill.paused  { background: var(--surface-2); color: var(--fg-3); }
-.bnb-pill.paused  .bnb-dot { background: var(--fg-4); }
+.bnb-pill.paused  .bnb-dot { --dot: var(--fg-4); }
 .bnb-pill.down    { background: var(--rare-soft); color: var(--rare); border-color: transparent; }
-.bnb-pill.down    .bnb-dot { background: var(--rare); }
+.bnb-pill.down    .bnb-dot { --dot: var(--rare); }
 @keyframes bnb-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 :root[data-motion="reduced"] .bnb-pill.starting .bnb-dot { animation: none; }
 
@@ -2607,8 +2645,8 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .bkr-snap-row > * { min-width: 0; }
 .bkr-snap-row .mono { overflow-wrap: anywhere; }
 .bkr-snap-row.today { background: var(--moss-soft); }
-.bkr-dot.auto     { background: var(--moss); }
-.bkr-dot.manual   { background: var(--dawn); }
+.bkr-dot.auto     { --dot: var(--moss); }   /* --dot, not background: see "Status dots" */
+.bkr-dot.manual   { --dot: var(--dawn); }   /* --dot, not background: see "Status dots" */
 .bkr-snap-when    { font-weight: 500; font-size: 13px; }
 .bkr-btn-sm       { font-size: 12px; }
 
