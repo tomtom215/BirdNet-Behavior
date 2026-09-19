@@ -129,6 +129,22 @@ const ERROR_MARKERS: &[&str] = &[
     "class=\"error\"",
     "Error loading",
     "Failed to load",
+    // The shared error states these handlers were migrated onto in 0.16.0.
+    // `history.rs` and `weekly_report.rs` used to answer 200 with
+    // `<p class='error'>Failed to load chart data.</p>`; they now render
+    // `error_states::inline` / `could_not_load`. Without these the four
+    // markers above stopped matching anything those handlers emit, and this
+    // gate went on passing while no longer able to catch the defect it exists
+    // for — precisely what the paragraph above says to prevent.
+    //
+    // NOT the `bnb-load-error` class, which is the obvious choice and is
+    // wrong: `layout.html`'s `htmx:responseError` fallback does
+    // `note.className = 'bnb-load-error'` in a script that ships on every full
+    // page, and `onboarding.rs` puts the same class on a `<noscript>` note
+    // that is not an error at all. Adding it turned `/` red on a station with
+    // nothing wrong with it. Match the prose, which only the error states say.
+    "error-state",
+    "We couldn't load",
 ];
 
 async fn get(state: &AppState, path: &str) -> (StatusCode, String) {

@@ -92,7 +92,16 @@ async fn dashboard_page_returns_html() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(response.into_body(), 65536)
+    // 1 MiB, like the other long pages in this file. This is a guard against
+    // an unbounded read, not a page-weight budget: the home page is 72,976
+    // bytes as measured here, of which ~39 KB is the layout's seventeen
+    // inline scripts (the spectrogram canvas alone is 9.5 KB). The old 65,536
+    // was simply a number that used to be above that and is now below it, and
+    // `to_bytes` answers a `LengthLimitError` — so this test failed with a
+    // bare `called `Result::unwrap()` on an `Err` value: LengthLimitError`,
+    // naming neither the page nor the size. If a page-weight budget is ever
+    // wanted it belongs in a gate of its own that says so.
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
@@ -302,7 +311,12 @@ async fn htmx_health_badge_returns_healthy_for_a_capturing_station() {
         "expected a healthy badge, or a disk warning on a full build host; got {html}"
     );
     assert!(
-        !html.contains("Mic down") && !html.contains("No microphone"),
+        // "Not recording" is what the badge says since 0.16.0; "Mic down" is
+        // kept so a revert is caught too. Without the new string this gate
+        // could no longer fail: the text it watched for had been renamed.
+        !html.contains("Not recording")
+            && !html.contains("Mic down")
+            && !html.contains("No microphone"),
         "a source publishing an up gauge must not read as down: {html}"
     );
     assert!(
