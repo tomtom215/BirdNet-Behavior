@@ -208,6 +208,47 @@
       });
     })();
     </script>
+    <!-- Announce only what changed in a polling feed.
+         A feed that re-fetches every 10-15s and swaps its whole innerHTML is a
+         mutation in a live region on every tick, so `aria-live` on the
+         container made a screen reader read every row out again on a loop,
+         whether or not a bird had been heard. The containers are plain now;
+         this writes a one-line summary into their status element, and only
+         when the newest row's label is different from the last one announced.
+         Opt-in by `data-feed-status`, so a feed without one is silent rather
+         than accidentally noisy. -->
+    <script>
+    (function () {
+      var PAIRS = [
+        ['detections-table', 'td-feed-status'],
+        ['rc-trickle-feed', 'rc-feed-status'],
+      ];
+      var last = {};
+      function label(feed) {
+        var row = feed.querySelector('.feed-row, .rc-row, [data-species]');
+        if (!row) return '';
+        var name = row.querySelector('.name a, .name, .nm, .who .name');
+        var time = row.querySelector('.ago, .rc-time, time');
+        return ((name && name.textContent) || '').trim() +
+               (time && time.textContent ? ' at ' + time.textContent.trim() : '');
+      }
+      function sync() {
+        PAIRS.forEach(function (pair) {
+          var feed = document.getElementById(pair[0]);
+          var out = document.getElementById(pair[1]);
+          if (!feed || !out) return;
+          var now = label(feed);
+          if (!now || now === last[pair[0]]) return;
+          // The first sync after load states the newest row without claiming
+          // it just arrived; later ones are genuinely new.
+          out.textContent = (last[pair[0]] === undefined ? 'Most recent detection: ' : 'New detection: ') + now;
+          last[pair[0]] = now;
+        });
+      }
+      document.body.addEventListener('htmx:afterSettle', sync);
+      document.addEventListener('DOMContentLoaded', sync);
+    })();
+    </script>
     <!-- Keyboard access to horizontally scrollable regions.
          `@media (max-width: 980px) { table { display: block; overflow-x: auto } }`
          turns every wide table into a scroll container on a phone, and a

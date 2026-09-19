@@ -21,7 +21,6 @@
          hx-get="/pages/today-phrase"
          hx-trigger="load, every 5m"
          hx-swap="innerHTML"
-         aria-live="polite"
          aria-label="Day summary">
       {{hero_phrase}}
     </div>
@@ -88,11 +87,18 @@
       </div>
       <span class="htmx-indicator bnb-meta">Searching…</span>
     </form>
+    <!-- Not a live region. With `aria-live` on this container, every 15s poll
+         replaced eight rows of species + scientific name + confidence + time
+         and a screen reader read the whole feed out again, whether or not
+         anything had changed. The announcement now rides `#td-feed-status`
+         below, which is written only when the newest detection is actually a
+         different one. -->
     <div id="detections-table" class="feed"
          hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML"
-         aria-live="polite">
+         aria-label="Detections as they happen">
       {{skel_detections}}
     </div>
+    <p class="sr-only" id="td-feed-status" aria-live="polite" role="status"></p>
     <div class="x-expander">
       <!-- The label is one <span>, deliberately. `.bnb-btn` is
            `display: inline-flex; gap: 6px`, so leaving the text bare made
