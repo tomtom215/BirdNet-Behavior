@@ -463,7 +463,7 @@ pub(super) async fn restore_backup(
 /// a C library. The detail goes to the log, where it is useful; the page says
 /// what happened, what state the station is in, and what to do.
 ///
-/// `during` completes "while <during>", so pass a phrase in the operator's
+/// `during` completes `"while {during}"`, so pass a phrase in the operator's
 /// terms ("saving the uploaded file"), not a function name.
 fn fault<E: std::fmt::Display>(during: &str, err: &E) -> Html<String> {
     tracing::error!(error = %err, "restore: failed while {during}");

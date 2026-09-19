@@ -208,8 +208,10 @@ const CONFIDENCE_FLOOR: f64 = 0.1;
 
 /// Warn about a `CONFIDENCE` that is in range but implausibly low.
 ///
-/// [`check_unit_range`] already rejects the percentage mistake (`CONFIDENCE=70`)
-/// and non-numeric junk as errors. What it cannot catch is the *decimal* slip —
+/// The [`NUMERIC_RANGES`] sweep already rejects the percentage mistake
+/// (`CONFIDENCE=70`) and non-numeric junk as errors — it replaced the old
+/// `check_unit_range` helper this line used to name. What a range check cannot
+/// catch is the *decimal* slip —
 /// `0.075` for `0.75` — or a `0` copied from `SF_THRESH`, where "0 = disabled"
 /// is the documented meaning. Those parse, sit inside 0–1, validate clean,
 /// but they make the station record whatever the model's best guess was for
