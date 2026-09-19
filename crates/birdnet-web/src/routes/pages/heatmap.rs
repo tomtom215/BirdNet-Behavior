@@ -66,16 +66,20 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
     <h1 class="display hm-h1">When the yard is alive</h1>
     <p class="bnb-lede hm-lede"><b>When your birds are out, and who is singing.</b> Two views of the same days: the flow of species over time, then the hours they favour.</p>
   </div>
-  <div class="seg" id="range-controls">
-    <button class="btn active" data-days="7">7 days</button>
-    <button class="btn" data-days="14">14 days</button>
-    <button class="btn" data-days="30">30 days</button>
-    <button class="btn" data-days="90">90 days</button>
+  <!-- role/name/state: this row conveyed the selected range with a CSS
+       class alone. `templates/today.html` already does the same control with
+       `role="group"` + `aria-pressed`, so the pattern was in the codebase.
+       `type="button"` because the default is submit. -->
+  <div class="seg" id="range-controls" role="group" aria-label="Time range">
+    <button type="button" class="btn active" data-days="7" aria-pressed="true">7 days</button>
+    <button type="button" class="btn" data-days="14" aria-pressed="false">14 days</button>
+    <button type="button" class="btn" data-days="30" aria-pressed="false">30 days</button>
+    <button type="button" class="btn" data-days="90" aria-pressed="false">90 days</button>
   </div>
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Who's singing, over time</div><h3>Activity streamgraph</h3></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Who's singing, over time</div><h2 class="sh-h">Activity streamgraph</h2></div></div>
   <p class="bnb-meta hm-chart-note">Each band is one species; its thickness is that day's detection count, stacked around a centre line. Dates run left to right.</p>
   <div id="activity-streamgraph" hx-get="/pages/activity-streamgraph?days=7" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading streamgraph...</p>
@@ -91,7 +95,7 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">All days combined</div><h3>Detections by hour</h3></div><a class="action" href="/patterns?tab=dawn">See who sings when →</a></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">All days combined</div><h2 class="sh-h">Detections by hour</h2></div><a class="action" href="/patterns?tab=dawn">See who sings when →</a></div>
   <p class="bnb-meta hm-hourly-note">Totals for every hour. Dawn (5–8 am) and dusk (6–9 pm) bars are amber; the rest green.</p>
   <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading chart...</p>
@@ -100,8 +104,12 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
 
 <script>
 function loadDays(days, btn) {
-  document.querySelectorAll('#range-controls .btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#range-controls .btn').forEach(function (b) {
+    b.classList.remove('active');
+    b.setAttribute('aria-pressed', 'false');
+  });
   btn.classList.add('active');
+  btn.setAttribute('aria-pressed', 'true');
   htmx.ajax('GET', '/pages/activity-streamgraph?days=' + days, '#activity-streamgraph');
   htmx.ajax('GET', '/pages/heatmap-grid?days=' + days, '#heatmap-grid');
   htmx.ajax('GET', '/pages/hourly-totals?days=' + days, '#hourly-totals');
@@ -215,26 +223,35 @@ async fn streamgraph_partial(
 /// Compute the dawn-chorus circadian polar for the top 5 species.
 ///
 /// Uses one batched hourly-activity query rather than a scan per species (the
-/// previous N+1). Always returns `Some`: an empty yard renders an empty polar,
-/// not an error.
+/// previous N+1). Returns `None` when a query fails, so the caller renders
+/// [`FRAGMENT_ERR`] rather than an empty polar.
+///
+/// The comment here used to read "Always returns `Some`: an empty yard renders
+/// an empty polar, not an error" — which described the empty path accurately
+/// and was silent about the error path the same two `unwrap_or_default` calls
+/// created. Either query failing produced an empty `series`, which
+/// `circadian_polar` renders as `viz::EMPTY` — "Not enough data yet for this
+/// view" — so a database error was reported to the operator as a quiet yard.
 #[allow(clippy::cast_precision_loss)]
-fn compute_dawn_chorus(state: &AppState) -> String {
+fn compute_dawn_chorus(state: &AppState) -> Option<String> {
     let series = state.with_db(|conn| {
-        let top = top_species(conn, 5).unwrap_or_default();
+        let top = top_species(conn, 5).ok()?;
         let names: Vec<String> = top.iter().map(|s| s.com_name.clone()).collect();
-        let hourly = species_hourly_activity_batch(conn, &names).unwrap_or_default();
-        top.into_iter()
-            .map(|s| {
-                let mut arr = [0.0_f64; 24];
-                if let Some(counts) = hourly.get(&s.com_name) {
-                    for (i, &c) in counts.iter().enumerate() {
-                        arr[i] = c as f64;
+        let hourly = species_hourly_activity_batch(conn, &names).ok()?;
+        Some(
+            top.into_iter()
+                .map(|s| {
+                    let mut arr = [0.0_f64; 24];
+                    if let Some(counts) = hourly.get(&s.com_name) {
+                        for (i, &c) in counts.iter().enumerate() {
+                            arr[i] = c as f64;
+                        }
                     }
-                }
-                (s.com_name, arr)
-            })
-            .collect::<Vec<_>>()
-    });
+                    (s.com_name, arr)
+                })
+                .collect::<Vec<_>>(),
+        )
+    })?;
     // Current hour-of-day (UTC) for the "now" hand on the polar.
     let now_h = {
         let secs = std::time::SystemTime::now()
@@ -242,12 +259,12 @@ fn compute_dawn_chorus(state: &AppState) -> String {
             .map_or(0, |d| d.as_secs());
         (secs % 86_400) as f64 / 3600.0
     };
-    super::viz::circadian_polar(&series, now_h)
+    Some(super::viz::circadian_polar(&series, now_h))
 }
 
 async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     let html = cached_fragment(&state, "dawn-chorus".to_string(), FRAGMENT_ERR, |s| {
-        Some(compute_dawn_chorus(s))
+        compute_dawn_chorus(s)
     })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -316,7 +333,12 @@ pub fn prewarm(state: &AppState) {
     if let Some(h) = compute_hourly_totals(state, 7) {
         cache.put("hourly-totals:7".to_string(), h);
     }
-    cache.put("dawn-chorus".to_string(), compute_dawn_chorus(state));
+    // Never cache a failure: the prewarm ran before this returned `Option`,
+    // so a boot-time query error would have been stored and served to every
+    // later visitor until the entry expired.
+    if let Some(h) = compute_dawn_chorus(state) {
+        cache.put("dawn-chorus".to_string(), h);
+    }
     if let Some(h) = compute_seasonal_phenology(state) {
         cache.put("seasonal-phenology".to_string(), h);
     }
@@ -357,7 +379,7 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     let svg_h = label_h + 7 * cell_h + 40;
 
     let mut svg = format!(
-        r#"<div class="hm-scroll">
+        r#"<div class="hm-scroll" tabindex="0" role="group" aria-label="Hour by day-of-week activity grid, scrolls sideways">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}"
      width="{svg_w}" height="{svg_h}" preserveAspectRatio="xMinYMin meet"
      class="hm-svg">
@@ -495,7 +517,7 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
     let svg_h = chart_h + label_h + 10;
 
     let mut svg = format!(
-        r#"<div class="hm-scroll">
+        r#"<div class="hm-scroll" tabindex="0" role="group" aria-label="Detections by hour, scrolls sideways">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {svg_w} {svg_h}"
              width="{svg_w}" height="{svg_h}" preserveAspectRatio="xMinYMin meet"
              class="hm-svg-block">

@@ -84,8 +84,14 @@ jobs:
           echo "::error::screenshot server did not become ready in time"
           cat "$RUNNER_TEMP/screenshot-server.log" || true
           exit 1
-      - name: Accessibility gate (axe-core, WCAG 2.1 A/AA)
+      - name: Accessibility gate (axe-core, WCAG 2.1 A/AA + 2.2 + best-practice)
         working-directory: tools/visual-qa
+        # Both viewports. The gate ran at 1280x900 only, so the entire phone
+        # layout had never been through an accessibility rule; adding the
+        # mobile leg immediately found six serious scrollable-region-focusable
+        # violations and a squeezed Recordings row.
+        env:
+          VPS: desktop,mobile
         run: node axe.mjs
       - name: Interaction gate (controls do not undo their own work)
         working-directory: tools/visual-qa

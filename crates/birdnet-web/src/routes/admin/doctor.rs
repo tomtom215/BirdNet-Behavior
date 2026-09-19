@@ -175,8 +175,14 @@ async fn doctor_page(State(state): State<AppState>) -> Html<String> {
         }
     });
 
+    // Both arms open the card. The no-report arm used to emit only
+    // `{config}{CLI_NOTE}</section>`: `card_open()` — which carries the page's
+    // one `<h1>Diagnostics</h1>` — is called from `report_body`, so a station
+    // whose diagnostics JSON could not be read served a page with no level-one
+    // heading at all and a stray unmatched `</section>`. The demo fixture is in
+    // exactly that state, which is how axe found it.
     let body = report.as_deref().map_or_else(
-        || format!("{config}{CLI_NOTE}</section>"),
+        || format!("{}{config}{CLI_NOTE}</section>", card_open()),
         |json| format!("{}{config}</section>", report_body(json)),
     );
     Html(admin_shell("Diagnostics", "doctor", &body))

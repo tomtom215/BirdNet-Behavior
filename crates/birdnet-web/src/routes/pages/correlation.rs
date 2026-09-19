@@ -64,16 +64,20 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
     {{help_link}}
     <p class="bnb-lede co-mt"><b>Species joined by a ribbon tend to be heard within five minutes of each other.</b> Thicker, brighter ribbons mean a stronger pairing; the arc length around the edge shows how connected each species is overall. It's correlation, not cause — they may just share the same good morning.</p>
   </div>
-  <div class="seg" id="range-controls">
-    <button class="btn active" data-days="30">30 days</button>
-    <button class="btn" data-days="90">90 days</button>
-    <button class="btn" data-days="180">6 months</button>
-    <button class="btn" data-days="365">1 year</button>
+  <!-- role/name/state: this row conveyed the selected range with a CSS
+       class alone. `templates/today.html` already does the same control with
+       `role="group"` + `aria-pressed`, so the pattern was in the codebase.
+       `type="button"` because the default is submit. -->
+  <div class="seg" id="range-controls" role="group" aria-label="Time range">
+    <button type="button" class="btn active" data-days="30" aria-pressed="true">30 days</button>
+    <button type="button" class="btn" data-days="90" aria-pressed="false">90 days</button>
+    <button type="button" class="btn" data-days="180" aria-pressed="false">6 months</button>
+    <button type="button" class="btn" data-days="365" aria-pressed="false">1 year</button>
   </div>
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h3>Who connects to whom</h3></div><span class="bnb-pill">ρ ≥ 0.20</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">ρ ≥ 0.20</span></div>
   <div class="pt-viz" id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
   </div>
@@ -92,7 +96,7 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Lookup</div><h3>Companion species</h3></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Lookup</div><h2 class="sh-h">Companion species</h2></div></div>
   <p class="bnb-meta co-meta-gap">Enter a species to see which others are commonly detected on the same day.</p>
   <div class="co-lookup-row">
     <input type="text" id="species-input" class="co-species-input"
@@ -111,8 +115,12 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
 
 <script>
 function loadDays(days, btn) {
-  document.querySelectorAll('#range-controls .btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#range-controls .btn').forEach(function (b) {
+    b.classList.remove('active');
+    b.setAttribute('aria-pressed', 'false');
+  });
   btn.classList.add('active');
+  btn.setAttribute('aria-pressed', 'true');
   document.getElementById('days-hidden').value = days;
   htmx.ajax('GET', '/pages/cooccurrence-matrix?days=' + days, '#cooccurrence-matrix');
   htmx.ajax('GET', '/pages/acoustic-network?days=' + days, '#acoustic-network');

@@ -47,11 +47,20 @@ use super::escape_html;
 
 const PAGE_HTML: &str = include_str!("../../../templates/migration.html");
 
-/// Empty-state body served (uncached) when the phenology ridgeline has no data.
+/// Empty-state body for a year with no migratory detections yet.
+///
+/// Returned *from the compute closure* rather than used as `cached_fragment`'s
+/// fallback — see [`FRAGMENT_ERR`]. `cached_fragment`'s fallback is what a
+/// **failed** computation renders, and pointing it at this string is what made
+/// a DuckDB or SQLite error on this tab read as a quiet year.
 const RIDGELINE_EMPTY: &str =
     r#"<p class="bnb-meta">No migratory species detected yet this year.</p>"#;
-/// Empty-state body served (uncached) when the diversity strip has no data.
+/// Empty-state body for a diversity strip with no weeks yet. See
+/// [`RIDGELINE_EMPTY`].
 const DIVERSITY_EMPTY: &str = r#"<p class="bnb-meta">No data for diversity bars yet.</p>"#;
+/// What a *failed* fragment renders, matching the three sibling analytics pages
+/// (`heatmap`, `correlation`, `timeseries_dash`) which all use this wording.
+const FRAGMENT_ERR: &str = r#"<p class="bnb-meta">Analytics temporarily unavailable.</p>"#;
 
 /// Mount the migration (phenology) page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
@@ -172,11 +181,19 @@ fn collect_ridges(
 // Ridgeline SVG
 // ---------------------------------------------------------------------------
 
+/// `None` means **the query failed**; an empty year returns its own body.
+///
+/// This used to return `None` for both, with `RIDGELINE_EMPTY` as
+/// `cached_fragment`'s fallback, so a database error on the Migration tab was
+/// reported to the operator as "No migratory species detected yet this year."
+/// The three sibling analytics pages already follow the contract restored
+/// here — `Some` for anything renderable, `None` only for a failure — and
+/// their fallback is an error message.
 fn compute_ridgeline(state: &AppState) -> Option<String> {
     let year = current_year();
     let ridges = state.with_db(|conn| collect_ridges(conn, year, 12)).ok()?;
     if ridges.is_empty() {
-        return None;
+        return Some(RIDGELINE_EMPTY.to_string());
     }
     Some(render_ridgeline_svg(&ridges, current_week()))
 }
@@ -185,7 +202,7 @@ async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
     let html = cached_fragment(
         &state,
         "migration-ridgeline".to_string(),
-        RIDGELINE_EMPTY,
+        FRAGMENT_ERR,
         compute_ridgeline,
     )
     .await;
@@ -418,8 +435,10 @@ fn compute_diversity(state: &AppState) -> Option<String> {
             Ok::<_, rusqlite::Error>(weekly)
         })
         .ok()?;
+    // Same contract as `compute_ridgeline`: a year with nothing in it is data,
+    // not a failure, and gets its own body rather than the error fallback.
     if weekly.iter().all(|&n| n == 0) {
-        return None;
+        return Some(DIVERSITY_EMPTY.to_string());
     }
     Some(render_diversity_svg(&weekly, current_week()))
 }
@@ -428,7 +447,7 @@ async fn diversity_partial(State(state): State<AppState>) -> impl IntoResponse {
     let html = cached_fragment(
         &state,
         "migration-diversity".to_string(),
-        DIVERSITY_EMPTY,
+        FRAGMENT_ERR,
         compute_diversity,
     )
     .await;

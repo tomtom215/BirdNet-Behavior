@@ -491,7 +491,7 @@ pub(crate) fn render_review_widget(
     };
     format!(
         "<div id=\"dr-review-widget\" class=\"bnb-card pad dr-widget\">\
-  <div class=\"section-header\"><div><div class=\"bnb-eyebrow\">Quality control</div><h3>Review this detection</h3></div>{badge}</div>\
+  <div class=\"section-header\"><div><div class=\"bnb-eyebrow\">Quality control</div><h2 class=\"sh-h\">Review this detection</h2></div>{badge}</div>\
   <form hx-post=\"/pages/detection-review-inline\" hx-target=\"#dr-review-widget\" hx-swap=\"outerHTML\" \
         class=\"dr-widget-form\">\
     <input type=\"hidden\" name=\"date\" value=\"{date_e}\">\

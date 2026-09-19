@@ -72,7 +72,7 @@
         <span class="bnb-vrule lay-vrule"></span>
         <nav class="topnav-links" aria-label="Sections">{{topnav_links}}</nav>
         <div class="topnav-right">
-            <form action="/species" method="get" class="nav-search" role="search">
+            <form action="/species" method="get" class="nav-search" role="search" aria-label="Site-wide species search">
                 <input type="search" name="q" placeholder="Search species…" aria-label="Search species">
             </form>
             <span id="live-status" class="bnb-pill lay-iflex-gap" data-state="connecting" hidden
@@ -206,6 +206,49 @@
         if (next) next.focus();
         focused = null; parent = null; className = '';
       });
+    })();
+    </script>
+    <!-- Keyboard access to horizontally scrollable regions.
+         `@media (max-width: 980px) { table { display: block; overflow-x: auto } }`
+         turns every wide table into a scroll container on a phone, and a
+         container that scrolls but cannot be focused is unreachable without a
+         mouse (axe `scrollable-region-focusable`, serious). Doing it here
+         rather than in markup covers the tables that already exist, the ones
+         HTMX swaps in later, and any added afterwards.
+
+         Only regions with **no focusable descendant** get a tab stop: a table
+         full of links is already reachable, and adding one there would be an
+         extra stop that does nothing. That is the same condition the axe rule
+         applies, so the two cannot disagree. -->
+    <script>
+    (function () {
+      var FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+      function mark(root) {
+        // Any element in the content area, not a fixed class list: the Year in
+        // Review page scrolls a plain `.bnb-card.pad`, which a list of
+        // `table, [class*=scroll]` missed. The cheap geometry test runs first
+        // so `getComputedStyle` is only paid for the handful that overflow.
+        var scope = (root || document).querySelector('main') || (root || document);
+        var nodes = scope.querySelectorAll('*');
+        Array.prototype.forEach.call(nodes, function (el) {
+          if (el.hasAttribute('tabindex')) return;
+          if (el.scrollWidth <= el.clientWidth + 1) return;
+          var ox = window.getComputedStyle(el).overflowX;
+          if (ox !== 'auto' && ox !== 'scroll') return;
+          if (el.querySelector(FOCUSABLE)) return;
+          el.setAttribute('tabindex', '0');
+          if (!el.getAttribute('role')) el.setAttribute('role', 'group');
+          if (!el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby')) {
+            var cap = el.querySelector('caption');
+            el.setAttribute('aria-label', (cap && cap.textContent.trim()) || 'Scrolls sideways');
+          }
+        });
+      }
+      function schedule() { window.requestAnimationFrame(function () { mark(document); }); }
+      document.addEventListener('DOMContentLoaded', schedule);
+      document.body.addEventListener('htmx:afterSettle', schedule);
+      window.addEventListener('resize', schedule);
+      schedule();
     })();
     </script>
     {{toast_region}}

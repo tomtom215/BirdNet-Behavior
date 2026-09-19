@@ -176,6 +176,20 @@ impl Default for AnalyticsCache {
 /// This is the single integration point the analytics partials and the
 /// background pre-warmer share, so both populate the same store under the same
 /// keys.
+/// Serve an analytics fragment from the cache, computing it on a blocking
+/// thread on a miss.
+///
+/// **Contract, written down because one of four call sites had it backwards.**
+/// `compute` returns `Some(body)` for anything renderable — including a
+/// designed *empty* state — and `None` **only when the computation failed**.
+/// `fallback` is therefore what a failure renders, and must be error wording,
+/// never an empty-state message. A `None` result is not cached, so a transient
+/// failure does not pin an error into the cache for its whole TTL.
+///
+/// `migration.rs` returned `None` for an empty year as well as for a failed
+/// query, with an empty-state string as its `fallback`; the effect was that a
+/// database error on the Migration tab rendered as "No migratory species
+/// detected yet this year."
 pub async fn cached_fragment<F>(
     state: &crate::state::AppState,
     key: String,

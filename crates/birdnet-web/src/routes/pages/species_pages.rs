@@ -256,7 +256,7 @@ fn controls(view: &str, filter: &str, search: Option<&str>, taxon: Option<&Taxon
             )
         });
         let form = format!(
-            r#"<span class="sp-search"><span class="ico" aria-hidden="true">⌕</span><form method="get" action="/species" role="search"><input type="hidden" name="view" value="{view}"><input type="hidden" name="filter" value="{filter}">{keep}<input type="search" name="q" value="{val}" placeholder="Find a species…" aria-label="Find a species"></form></span>"#
+            r#"<span class="sp-search"><span class="ico" aria-hidden="true">⌕</span><form method="get" action="/species" role="search" aria-label="Filter this species list"><input type="hidden" name="view" value="{view}"><input type="hidden" name="filter" value="{filter}">{keep}<input type="search" name="q" value="{val}" placeholder="Find a species…" aria-label="Find a species"></form></span>"#
         );
         (c, form)
     };
@@ -336,14 +336,27 @@ fn list_view(
     search: Option<&str>,
     taxon: Option<&TaxonFilter>,
 ) -> String {
-    let (mut species, sparks) = state.with_db(|conn| {
+    // The two `unwrap_or_default`s this replaces turned a database error into
+    // an empty species list, which `empty_note` then reports as "No species
+    // match this filter yet." — the primary browse surface telling the operator
+    // their filter matched nothing when the database is what failed. The
+    // sparklines are decoration and keep their fallback: a missing sparkline
+    // costs a picture, not a fact.
+    let loaded = state.with_db(|conn| {
         let species = search.map_or_else(
-            || birdnet_db::sqlite::top_species(conn, 500).unwrap_or_default(),
-            |q| birdnet_db::sqlite::search_species(conn, q, 500).unwrap_or_default(),
-        );
+            || birdnet_db::sqlite::top_species(conn, 500),
+            |q| birdnet_db::sqlite::search_species(conn, q, 500),
+        )?;
         let sparks = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
-        (species, sparks)
+        Ok::<_, birdnet_db::sqlite::DbError>((species, sparks))
     });
+    let (mut species, sparks) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "species list: query failed");
+            return super::error_states::could_not_load("your species list");
+        }
+    };
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
     }
@@ -496,7 +509,7 @@ fn lifelist_view(state: &AppState) -> String {
   </div>
   <div class="bnb-card pad"><div class="bnb-eyebrow">Your growing list</div><div class="sd-viz">{curve}</div></div>
 </div>
-<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most recent</div><h3>New to the list</h3></div></div><div class="sp-firsts">{firsts_html}</div></div>"#,
+<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most recent</div><h2 class="sh-h">New to the list</h2></div></div><div class="sp-firsts">{firsts_html}</div></div>"#,
         det = super::group_thousands(det_total),
     )
 }

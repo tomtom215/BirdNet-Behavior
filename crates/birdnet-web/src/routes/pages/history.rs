@@ -222,7 +222,7 @@ fn render_calendar(
         .unwrap_or("");
     let _ = write!(
         html,
-        r#"<div class="rp-cal-head">{prev_btn}<h3>{month_label} {year}</h3>{next_btn}</div>"#,
+        r#"<div class="rp-cal-head">{prev_btn}<h2 class="rp-cal-h">{month_label} {year}</h2>{next_btn}</div>"#,
     );
 
     // Grid: weekday headers, leading blanks, then the days.
@@ -415,7 +415,7 @@ fn render_chart_content(
     };
     let _ = write!(
         html,
-        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date} · {weekday}</div><h3>{total} detections · {n} species</h3></div>{open_day}</div>"#,
+        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date} · {weekday}</div><h2 class="sh-h">{total} detections · {n} species</h2></div>{open_day}</div>"#,
         date = escape_html(date),
         weekday = weekday_name(date),
         n = species.len(),
@@ -456,7 +456,7 @@ fn render_day_page(
     let _ = write!(
         html,
         r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
-<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">{weekday}</div><h3>{date}</h3><div class="bnb-meta">{total} detections · {n} species</div></div></div>"#,
+<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">{weekday}</div><h1 class="sh-h">{date}</h1><div class="bnb-meta">{total} detections · {n} species</div></div></div>"#,
         weekday = weekday_name(date),
         date = escape_html(date),
         n = species.len(),

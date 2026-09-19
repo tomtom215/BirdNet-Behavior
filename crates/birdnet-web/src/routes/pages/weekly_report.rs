@@ -204,7 +204,7 @@ fn render_weekly_content(
     // ── Daily chart ───────────────────────────────────────────────────────
     let _ = write!(
         html,
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">This week</div><h3>Detections per day</h3></div></div><div class="rp-viz">{chart}</div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">This week</div><h2 class="sh-h">Detections per day</h2></div></div><div class="rp-viz">{chart}</div></div>"#,
         chart = render_weekly_chart(week_start, daily),
     );
 
@@ -230,7 +230,7 @@ fn render_weekly_content(
     html.push_str("</div>");
 
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">First-ever</div><h3>New to your station</h3></div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">First-ever</div><h2 class="sh-h">New to your station</h2></div></div>"#,
     );
     if new_species.is_empty() {
         html.push_str(r#"<p class="wk-muted">No new species this week.</p>"#);

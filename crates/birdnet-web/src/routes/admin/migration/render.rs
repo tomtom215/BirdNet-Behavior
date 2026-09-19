@@ -238,7 +238,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Provenance</div>
-        <h3>Imported histories</h3>
+        <h2 class="sh-h">Imported histories</h2>
       </div>
     </div>
     <p class="hint">

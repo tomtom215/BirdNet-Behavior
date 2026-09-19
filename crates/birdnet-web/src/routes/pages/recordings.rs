@@ -138,7 +138,7 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
     let controls = format!(
         r#"<div class="rc-controls">
   {chips}
-  <form class="rc-search" method="get" action="/recordings" role="search">
+  <form class="rc-search" method="get" action="/recordings" role="search" aria-label="Search recordings">
     <span class="ico" aria-hidden="true">⌕</span>
     <input type="hidden" name="view" value="clips">
     <input type="hidden" name="filter" value="{filter_tok}">
@@ -533,7 +533,7 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
   Your choice is remembered in this browser.</p>
 <div class="rc-trickle">
   <div class="section-header">
-    <div><div class="bnb-eyebrow">As it happens</div><h3>Live detections</h3></div>
+    <div><div class="bnb-eyebrow">As it happens</div><h2 class="sh-h">Live detections</h2></div>
     <a class="action" href="/">Full feed →</a>
   </div>
   <div id="rc-trickle-feed" class="feed" hx-get="/pages/detections" hx-trigger="load, every 10s" hx-swap="innerHTML" aria-live="polite">{trickle_skel}</div>

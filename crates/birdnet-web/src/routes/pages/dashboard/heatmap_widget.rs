@@ -18,13 +18,31 @@ pub(super) async fn activity_heatmap_partial(
     })
     .await;
 
+    // `Ok(Err(_))` used to fall into the same arm as "no rows", so a failed
+    // query told the operator their yard had been silent all day.
     let cells = match result {
         Ok(Ok(c)) if !c.is_empty() => c,
-        _ => {
+        Ok(Ok(_)) => {
             return (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html")],
                 "<p class=\"ah-empty\">No activity recorded today.</p>".to_string(),
+            );
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "dashboard heatmap: today_species_hour_heatmap failed");
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                crate::routes::pages::error_states::inline("today's activity"),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "dashboard heatmap: task failed");
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                crate::routes::pages::error_states::inline("today's activity"),
             );
         }
     };

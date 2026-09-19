@@ -857,7 +857,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     .ob-nosubmit { display: inline-flex !important; }
   </style>
 </noscript>
-<div class="ob-root">
+<main class="ob-root" id="main-content">
   <form id="ob-form" method="post" action="/onboarding/save">
   <p class="ob-noscript-note bnb-load-error" role="note">JavaScript is off, so every step is shown at once. Fill in what you want and press <strong>Save setup</strong> at the bottom.</p>
   <!-- The pips are a labelled list with a current marker. They used to be six
@@ -1038,7 +1038,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <button type="submit" class="bnb-btn primary ob-nosubmit">Save setup</button>
   </div>
   </form>
-</div>
+</main>
 
 <script>
 (function () {

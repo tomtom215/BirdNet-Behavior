@@ -387,7 +387,14 @@ main {
 .pill-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 
 .section-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.section-header h3 { font-family: var(--font-display); font-size: 22px; }
+/* The section heading is an <h2>, not an <h3>, and is sized by class.
+   Every page that uses this pattern puts its own <h1> above it and then jumped
+   straight to <h3>, so axe's `heading-order` fired on 15 routes: the visible
+   label of each section is the small-caps `.bnb-eyebrow` div above the
+   heading, which is not a heading at all, and nothing occupied the h2 tier.
+   `h3` is kept in the selector so an un-migrated block still renders
+   identically rather than losing its type scale. */
+.section-header h1, .section-header h2, .section-header h3 { font-family: var(--font-display); font-size: 22px; font-weight: 400; margin: 0; }
 .section-header .action { font-size: 11.5px; color: var(--fg-3); }
 
 /* Stat blocks */
@@ -3148,7 +3155,7 @@ a.spp-inherit    { color: inherit; }
 
 /* History heat-calendar */
 .rp-cal-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.rp-cal-head h3 { font-family: var(--font-display); font-size: 22px; font-weight: 400; }
+.rp-cal-head h2, .rp-cal-head h3 { font-family: var(--font-display); font-size: 22px; font-weight: 400; margin: 0; }
 .rp-cal-nav { border: 0.5px solid var(--border-2); background: var(--surface); border-radius: var(--r-sm); width: 30px; height: 30px; cursor: pointer; color: var(--fg-2); text-decoration: none; display: inline-grid; place-items: center; }
 .rp-cal-nav:hover { border-color: var(--fg-4); color: var(--fg); }
 .rp-cal { display: grid; grid-template-columns: repeat(7,1fr); gap: 8px; }
@@ -3170,7 +3177,9 @@ a.spp-inherit    { color: inherit; }
 .an-status    { margin: 0; min-width: 220px; }
 .an-card-lede { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
 .an-card-lede b { color: var(--fg); font-weight: 600; }
-.an-card-h3   { font-size: 16px; margin-top: 2px; }
+/* Sized by class, not by tag: these are <h2> now. Each Behavior card sat at
+   <h3> directly under the page <h1>, with nothing in the h2 tier. */
+.an-card-h3   { font-size: 16px; margin-top: 2px; font-weight: 600; }
 .an-loading   { color: var(--text-muted); }
 
 /* ── Time series shell (/timeseries) — legacy --text-muted/--accent preserved.
@@ -4131,6 +4140,15 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .rc-hp-text { min-width: 0; flex: 1; }
 .rc-hp-name { display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rc-hp-meta { display: block; }
+
+/* Touch targets on the Recordings rows. The species-name link is a single line
+   of text, so on a phone its hit area was the glyph height — under the 24px
+   WCAG 2.2 SC 2.5.8 floor, which the newly-added mobile axe leg reports across
+   24 nodes on this page. Padding rather than min-height so the row rhythm is
+   unchanged; the negative margin keeps the text where it was. */
+@media (pointer: coarse) {
+  .rc-who-text .nm, .rc-who-text a { display: inline-block; padding: 6px 0; margin: -6px 0; }
+}
 .rc-hp-toggle { width: 30px; height: 30px; border-radius: 999px; border: 0; background: var(--fg); color: var(--bg); font-size: 11px; cursor: pointer; flex: none; }
 .rc-hp-dl { width: 28px; height: 28px; flex: none; }
 .rc-hp-scrub { height: 5px; border-radius: 3px; background: var(--surface-2); position: relative; margin-top: 12px; }
@@ -4276,11 +4294,24 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
  * for that, and a phone held one-handed outdoors in the cold is the actual use
  * case. */
 @media (max-width: 480px) {
+  /* Three columns, with the actions on their own row beneath.
+     With `auto` as a fourth column the action cluster claimed its min-content
+     width — three 40px icon buttons plus gaps, 156px of a 320px row — and
+     `minmax(0, 1fr)` gave the species name whatever was left: measured 44px at
+     390px, i.e. an ellipsis and nothing else, on the page whose entire job is
+     telling you which bird a clip is. `1 / -1` puts the buttons on a full
+     second row, right-aligned, and hands the name the ~218px back. */
   .rc-row {
-    grid-template-columns: 20px 58px minmax(0, 1fr) auto;
+    /* 70px, not 58: the date is a ten-character monospace string and at 58px
+       it wrapped to four lines ("16:56:29 / 2026-09- / 19 / 0:14"), which set
+       the height of every row on the page. The name column has the slack. */
+    grid-template-columns: 20px 70px minmax(0, 1fr);
     gap: 8px;
     padding: 9px 8px;
   }
+  .rc-acts { grid-column: 1 / -1; }
+  /* 17x17 is under the 24px WCAG 2.2 SC 2.5.8 floor. */
+  .rc-check { min-width: 24px; min-height: 24px; }
   .rc-conf { display: none; }
   .rc-acts { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
   .rc-iact { min-width: 40px; min-height: 40px; }

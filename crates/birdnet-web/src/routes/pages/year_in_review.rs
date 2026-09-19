@@ -135,7 +135,7 @@ fn render_content(
 
     // ── Year tape ────────────────────────────────────────────────────────
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every week</div><h3>The year in activity</h3></div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every week</div><h2 class="sh-h">The year in activity</h2></div></div>"#,
     );
     html.push_str(r#"<div class="yir-tape">"#);
     for (wk, &c) in weeks.iter().enumerate() {
@@ -179,7 +179,7 @@ fn render_content(
 
     // Leaderboard.
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most heard</div><h3>The year's leaderboard</h3></div><a class="action" href="/species">Full list →</a></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most heard</div><h2 class="sh-h">The year's leaderboard</h2></div><a class="action" href="/species">Full list →</a></div>"#,
     );
     if all.is_empty() {
         html.push_str(r#"<p class="bnb-meta">No detections yet.</p>"#);
@@ -221,7 +221,7 @@ fn render_content(
     let leader = all.first().map(|s| (s.com_name.clone(), s.count));
 
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Milestones</div><h3>Moments that mattered</h3></div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Milestones</div><h2 class="sh-h">Moments that mattered</h2></div></div>"#,
     );
     milestone(
         &mut html,

@@ -148,7 +148,7 @@ pub fn render_thresholds_partial(
         );
     } else {
         out.push_str(
-            r#"<table class="thr-table"><thead><tr><th class="cell-left">Species</th><th>Threshold</th><th></th></tr></thead><tbody>"#,
+            r#"<table class="thr-table"><thead><tr><th class="cell-left" scope="col">Species</th><th scope="col">Threshold</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>"#,
         );
         for t in thresholds {
             let esc = escape_html(&t.sci_name);
