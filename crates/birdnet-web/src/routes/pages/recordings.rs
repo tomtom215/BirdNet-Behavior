@@ -347,7 +347,7 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
     let meta = format!("{} · {} · {:.2}", d.time, d.date, d.confidence);
     let meta = escape_html(&meta);
 
-    let av = avatar(&d.com_name, "");
+    let av = avatar(&d.com_name, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
     let lock = lock_button(&d.date, &d.time, &d.sci_name, is_locked);
 
@@ -894,6 +894,19 @@ mod tests {
         );
         assert!(absent.contains("rc-spectro-empty"));
         assert!(!absent.contains("/api/v2/spectrogram/"));
-        assert!(!absent.contains("<img"));
+        // Named, not `!absent.contains("<img")`. That broader form said what
+        // this test means only for as long as the spectrogram thumbnail was
+        // the row's only image; since 0.16.0 the avatar carries the species
+        // photograph too, and the blanket check failed on a row whose
+        // spectrogram handling was entirely correct.
+        assert!(
+            !absent.contains(r#"class="rc-spectro""#),
+            "a clip with no audio must not get a spectrogram thumbnail: {absent}"
+        );
+        assert!(
+            absent.contains("bnb-avatar-img"),
+            "the species photograph has nothing to do with the clip's audio \
+             and must survive its absence: {absent}"
+        );
     }
 }

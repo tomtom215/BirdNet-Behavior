@@ -220,12 +220,12 @@ fn render_weekly_content(
     if top.is_empty() {
         html.push_str(r#"<p class="wk-muted">No detections this week.</p>"#);
     } else {
-        for (i, (_, com, count)) in top.iter().take(10).enumerate() {
+        for (i, (sci, com, count)) in top.iter().take(10).enumerate() {
             let _ = write!(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<div class="nm">{name}</div><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(com, ""),
+                av = avatar(com, sci, ""),
                 name = escape_html(com),
             );
         }
@@ -238,11 +238,11 @@ fn render_weekly_content(
     if new_species.is_empty() {
         html.push_str(r#"<p class="wk-muted">No new species this week.</p>"#);
     } else {
-        for (_, com, date) in new_species {
+        for (sci, com, date) in new_species {
             let _ = write!(
                 html,
                 r#"<div class="rp-new">{av}<div class="nm">{name} <span class="bnb-pill rare badge">first ever</span></div><span class="when">{date}</span></div>"#,
-                av = avatar(com, ""),
+                av = avatar(com, sci, ""),
                 name = escape_html(com),
                 date = escape_html(date),
             );

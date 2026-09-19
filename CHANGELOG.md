@@ -42,6 +42,79 @@ found by checking upstream's own config file instead of trusting a comment. And
 a notification status the database had refused to store since the day it was
 added, found because a gate written for something else would not go green.
 
+And the change a reader will notice first: **the station had a photograph of
+every bird it heard, and was showing a four-letter code instead.**
+
+### Changed — every bird in the app is now the bird, not a four-letter code
+
+**The station had photographs of every species it heard, and showed them on
+two screens out of sixteen.** `/api/v2/species/image/{scientific_name}/file`
+has served Wikipedia thumbnails to the species gallery and the species-detail
+hero since the image cache was added, and image caching is on by default — so
+a station that had been running a week already had the pictures on disk. Every
+other surface drew `atoms::avatar`, a coloured circle containing a four-letter
+banding code derived from the common name: `EUBL` for a Eurasian Blackbird,
+`BCCH` for a Black-capped Chickadee. The live feed, the Today log, Recordings,
+History and its open-day recap, the weekly report, Year in Review, the life
+list, the species table and the top-species rail — fourteen call sites across
+seven modules — all showed lettering to a reader who came to look at birds.
+
+`avatar` now takes the scientific name as well as the common one and layers
+the photograph over the code chip:
+
+```html
+<span class="bnb-avatar" data-style="--sp:…" title="Blue Jay">BLJA<img
+  src="/api/v2/species/image/Cyanocitta%20cristata/file" alt="" loading="lazy"
+  decoding="async" class="bnb-avatar-img" data-hide-on-error></span>
+```
+
+The chip is unchanged and is still the fallback, reached whenever the station
+has no picture for that bird — image caching switched off with
+`--image-cache-dir ""`, no photo on the species' Wikipedia page, a failed
+lookup, or an admin blacklist. The `<img>` opts into the existing
+`data-hide-on-error` handler, so those rows look exactly as they did before.
+Verified in a browser rather than reasoned about: with every image request
+forced to 404, all 31 chips on the Today page fall back to the code tile in
+both themes, with no broken-image glyph and no layout shift.
+
+`alt` is empty because every one of the fourteen call sites prints the species'
+name in the same row; a description would make a screen reader say the bird
+twice. A detection row whose `Sci_Name` is blank — which an imported
+BirdNET-Pi database can carry — emits no `<img>` at all rather than a request
+for `/api/v2/species/image//file` that could only 404.
+
+Measured across six routes after scrolling each to the foot: **92 avatar chips,
+92 photographs loaded, 0 hidden, 0 outstanding**. The accessibility sweep is
+unchanged at 148 pages, 0 violations, 0 advisory findings.
+
+### Fixed — a species with no photograph was looked up again on every render
+
+Found while making the change above, and a blocker for it. A miss writes no
+file, so `DiskCache::get` kept returning `None` and `species_image_file` went
+back to the provider **every single time the URL was requested**. That cost
+nothing while the only `<img>` tags were on two screens a reader opens
+deliberately. With the avatar in every detection row carrying one, and the live
+feed re-rendering on a timer, a station with thirty photo-less species would
+have asked Wikipedia about all thirty on every poll, for as long as it was
+switched on.
+
+`ImageCache` now remembers a failed lookup for fifteen minutes. Measured with a
+counting provider: five requests for the same photo-less species reached it
+**five times** before the change and **once** after. The counterparts hold that
+this is not simply "never ask" — three different species still produce three
+lookups, and evicting a species (which is what blacklisting does) forgets the
+miss so the next request re-resolves. The remembered set is capped at 4,096
+entries because its key comes straight from a URL path segment.
+
+### Fixed — the species image endpoint told browsers nothing about reuse
+
+Neither the picture nor the 404 carried `Cache-Control`, and with no `ETag` or
+`Last-Modified` either there was nothing for a browser to revalidate against,
+so every render fetched again. Both now carry `private, max-age=300`. The 404
+matters as much as the image and is the half that is easy to forget: it is the
+answer for every bird the station has no picture of, and it is the path that
+reaches through to the network.
+
 ### Fixed — a UI pass done by looking at the app rather than reading it
 
 Every item below was found by rendering the running station in a browser and

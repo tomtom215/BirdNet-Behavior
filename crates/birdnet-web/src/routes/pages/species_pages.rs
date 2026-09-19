@@ -380,7 +380,7 @@ fn list_view(
             rows,
             r#"<tr><td class="sp-rank">{rank}</td><td><a class="sp-cell" href="/species/detail?name={enc}"><span class="sp-cell-av">{av}</span><span class="sp-cell-tx"><span class="sp-nm">{name}</span><span class="sp-sci">{sci}</span></span></a></td><td>{spark}</td><td class="sp-num">{count}</td><td>{conf}</td></tr>"#,
             rank = i + 1,
-            av = avatar(&s.com_name, ""),
+            av = avatar(&s.com_name, &s.sci_name, ""),
             name = escape_html(&s.com_name),
             sci = escape_html(&s.sci_name),
             count = super::group_thousands(s.count),
@@ -512,7 +512,7 @@ fn lifelist_view(state: &AppState) -> String {
         let _ = write!(
             firsts_html,
             r#"<a class="sp-first-row" href="/species/detail?name={enc}">{av}<div class="sp-cell-tx"><div class="sp-nm">{name}</div><div class="sp-sci">{sci}</div></div><span class="when">{date}</span></a>"#,
-            av = avatar(com, ""),
+            av = avatar(com, sci, ""),
             name = escape_html(com),
             sci = escape_html(sci),
             date = escape_html(date),

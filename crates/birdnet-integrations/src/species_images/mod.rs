@@ -42,9 +42,11 @@ pub use provider::ImageProvider;
 pub use types::{ImageError, SpeciesImage};
 pub use wikipedia::WikipediaClient;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Maximum number of bytes accepted for a single image download.
 ///
@@ -53,6 +55,34 @@ use std::sync::{Arc, OnceLock};
 /// asset) could OOM the Pi. A few MB is more than enough for any thumbnail —
 /// `Special:FilePath` thumbnails are typically under 200 KB.
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+
+/// How long a failed lookup is remembered before the provider is asked again.
+///
+/// Without this, a species the provider has no picture for costs a live API
+/// round trip *every time its image URL is requested*, because nothing is
+/// written to disk on a miss and `DiskCache::get` therefore keeps returning
+/// `None`. That was tolerable while the only `<img>` tags were on the species
+/// gallery and the detail page, which a reader opens deliberately. It is not
+/// tolerable now the avatar in every detection row carries a photo: the live
+/// feed re-renders on a timer, and a station with thirty photo-less species
+/// would have asked Wikipedia about all thirty of them on every poll, for as
+/// long as it was switched on.
+///
+/// Fifteen minutes bounds a permanent miss to four lookups an hour per
+/// species, and lets a transient failure — an offline station, a rate limit —
+/// heal without a restart.
+const MISS_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// Maximum number of remembered failed lookups.
+///
+/// The key comes from a URL path segment (`/api/v2/species/image/{name}/file`)
+/// and nothing upstream checks it against the label set, so this map's key
+/// space is whatever a caller asks for rather than whatever the station has
+/// heard. A real station only ever populates it with species on its own life
+/// list that have no picture, which is a handful; the cap is for the other
+/// case. Over it, expired entries go first and the write is dropped only if
+/// that was not enough.
+const MAX_MISSES: usize = 4096;
 
 /// Download a response body with a hard byte cap so a poisoned image URL can't
 /// exhaust memory. Honours `Content-Length` up front when present and bounds
@@ -113,6 +143,13 @@ fn image_download_client() -> &'static reqwest::Client {
 pub struct ImageCache {
     provider: Arc<dyn ImageProvider>,
     disk: Arc<DiskCache>,
+    /// Species the provider has already failed to supply, and when it said so.
+    /// See [`MISS_TTL`] for why this exists.
+    ///
+    /// Behind an `Arc` like the two fields above it, and for the same reason:
+    /// the type derives `Clone`, and a clone with its own map would forget
+    /// every miss the original had recorded.
+    misses: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 impl fmt::Debug for ImageCache {
@@ -138,6 +175,7 @@ impl ImageCache {
         Ok(Self {
             provider,
             disk: Arc::new(disk),
+            misses: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -218,37 +256,87 @@ impl ImageCache {
             return Ok(img);
         }
 
+        // Second fast path: the provider has already said it has nothing for
+        // this species, recently enough to believe. A miss writes no file, so
+        // without this the disk check above can never short-circuit it.
+        if self.miss_is_fresh(&key) {
+            return Err(ImageError::NotFound(scientific_name.to_string()));
+        }
+
         // Slow path: fetch from provider.
-        let mut img = self.provider.fetch(scientific_name).await?;
+        let mut img = match self.provider.fetch(scientific_name).await {
+            Ok(img) => img,
+            Err(e) => {
+                self.record_miss(&key);
+                return Err(e);
+            }
+        };
 
         // Download and store the image bytes. Uses a User-Agent'd client
         // (Wikimedia rejects anonymous requests) and only caches a genuine
         // image so an error page can't poison the on-disk cache.
         if !img.url.is_empty() {
-            let resp = image_download_client()
-                .get(&img.url)
-                .send()
-                .await
-                .map_err(|e| ImageError::Http(e.to_string()))?
-                .error_for_status()
-                .map_err(|e| ImageError::Http(e.to_string()))?;
-            let is_image = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|ct| ct.starts_with("image/"));
-            if !is_image {
-                return Err(ImageError::Http(format!(
-                    "image download for '{scientific_name}' did not return an image"
-                )));
-            }
-            let bytes = read_capped_image_bytes(resp).await?;
+            let download = async {
+                let resp = image_download_client()
+                    .get(&img.url)
+                    .send()
+                    .await
+                    .map_err(|e| ImageError::Http(e.to_string()))?
+                    .error_for_status()
+                    .map_err(|e| ImageError::Http(e.to_string()))?;
+                let is_image = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .is_some_and(|ct| ct.starts_with("image/"));
+                if !is_image {
+                    return Err(ImageError::Http(format!(
+                        "image download for '{scientific_name}' did not return an image"
+                    )));
+                }
+                read_capped_image_bytes(resp).await
+            };
+            // A download that fails is as much a miss as a lookup that finds
+            // nothing: it leaves no file on disk, so the next request would
+            // otherwise repeat the whole round trip.
+            let bytes = match download.await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    self.record_miss(&key);
+                    return Err(e);
+                }
+            };
             let path = self.disk.store(&key, &bytes)?;
             img.cached_path = Some(path);
         }
 
         self.disk.update_metadata(&key, &img);
         Ok(img)
+    }
+
+    /// `true` when this species was recently looked up and came back empty.
+    fn miss_is_fresh(&self, key: &str) -> bool {
+        self.misses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(key)
+            .is_some_and(|at| at.elapsed() < MISS_TTL)
+    }
+
+    /// Remember that this species has no image, so the provider is not asked
+    /// again for [`MISS_TTL`].
+    fn record_miss(&self, key: &str) {
+        let mut misses = self
+            .misses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if misses.len() >= MAX_MISSES && !misses.contains_key(key) {
+            misses.retain(|_, at| at.elapsed() < MISS_TTL);
+            if misses.len() >= MAX_MISSES {
+                return;
+            }
+        }
+        misses.insert(key.to_string(), Instant::now());
     }
 
     /// Return `true` if the species image is already cached on disk.
@@ -268,7 +356,12 @@ impl ImageCache {
     /// Returns `true` if a cached file was deleted. Used when an image is
     /// blacklisted so it is no longer served and is re-fetched on next request.
     pub fn remove(&self, scientific_name: &str) -> bool {
-        self.disk.remove(&Self::cache_key(scientific_name))
+        let key = Self::cache_key(scientific_name);
+        self.misses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&key);
+        self.disk.remove(&key)
     }
 
     /// Number of cached species images.
@@ -363,6 +456,7 @@ mod tests {
         let cache = ImageCache {
             provider: Arc::new(NullProvider),
             disk: Arc::new(disk),
+            misses: Arc::new(Mutex::new(HashMap::new())),
         };
         assert!(!cache.is_cached("Turdus merula"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -378,6 +472,7 @@ mod tests {
         let cache = ImageCache {
             provider: Arc::new(NullProvider),
             disk: Arc::new(disk),
+            misses: Arc::new(Mutex::new(HashMap::new())),
         };
         assert!(cache.is_cached("Turdus merula"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -404,5 +499,101 @@ mod tests {
             let name = scientific_name.to_string();
             Box::pin(async move { Err(ImageError::NotFound(name)) })
         }
+    }
+
+    /// `NullProvider` that counts how many times it was asked.
+    struct CountingProvider(Arc<std::sync::atomic::AtomicUsize>);
+    impl ImageProvider for CountingProvider {
+        fn fetch<'life0, 'life1, 'async_trait>(
+            &'life0 self,
+            scientific_name: &'life1 str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<SpeciesImage, ImageError>>
+                    + Send
+                    + 'async_trait,
+            >,
+        >
+        where
+            'life0: 'async_trait,
+            'life1: 'async_trait,
+            Self: 'async_trait,
+        {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let name = scientific_name.to_string();
+            Box::pin(async move { Err(ImageError::NotFound(name)) })
+        }
+    }
+
+    fn counting_cache(dir: &std::path::Path) -> (ImageCache, Arc<std::sync::atomic::AtomicUsize>) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cache = ImageCache {
+            provider: Arc::new(CountingProvider(Arc::clone(&calls))),
+            disk: Arc::new(DiskCache::new(dir, 300).unwrap()),
+            misses: Arc::new(Mutex::new(HashMap::new())),
+        };
+        (cache, calls)
+    }
+
+    /// A species the provider has nothing for writes no file, so nothing in
+    /// `DiskCache` can ever short-circuit the next request for it. Before
+    /// [`MISS_TTL`] existed, that meant one live API round trip per `<img>`
+    /// render — and the avatar in every detection row now carries an `<img>`
+    /// that the live feed re-renders on a timer.
+    #[tokio::test]
+    async fn a_species_with_no_photo_is_asked_about_once() {
+        let dir = tmpdir("miss_once");
+        let (cache, calls) = counting_cache(&dir);
+
+        for _ in 0..5 {
+            assert!(cache.get_image("Turdus merula").await.is_err());
+        }
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "five requests for the same photo-less species must reach the \
+             provider once"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The counterpart: remembering a miss must not turn into never asking.
+    /// Without this, `get_image` returning `Err` unconditionally would pass
+    /// the test above.
+    #[tokio::test]
+    async fn a_species_not_yet_asked_about_still_reaches_the_provider() {
+        let dir = tmpdir("miss_per_species");
+        let (cache, calls) = counting_cache(&dir);
+
+        for sci in ["Turdus merula", "Parus major", "Pica pica"] {
+            assert!(cache.get_image(sci).await.is_err());
+        }
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "each new species must be looked up on its own"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Blacklisting a species evicts it so the next request re-resolves. A
+    /// remembered miss would defeat that, because the re-fetch never happens.
+    #[tokio::test]
+    async fn evicting_a_species_forgets_that_it_had_no_photo() {
+        let dir = tmpdir("miss_forgotten_on_remove");
+        let (cache, calls) = counting_cache(&dir);
+
+        assert!(cache.get_image("Turdus merula").await.is_err());
+        cache.remove("Turdus merula");
+        assert!(cache.get_image("Turdus merula").await.is_err());
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "an eviction must clear the remembered miss as well as the file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

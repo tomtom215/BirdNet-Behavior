@@ -122,7 +122,7 @@ fn render_feed_row(
     let _ = write!(
         html,
         r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
-        avatar = avatar(&d.com_name, ""),
+        avatar = avatar(&d.com_name, &d.sci_name, ""),
         name = escape_html(&d.com_name),
         sci = escape_html(&d.sci_name),
         wave = waveform(row_seed(&d.com_name, &d.time), 24),
@@ -215,7 +215,7 @@ fn render_best_row(
     let _ = write!(
         html,
         r#"<div class="x-best">{avatar}<div class="x-best-main"><div class="nm"><a href="/species/detail?name={enc}" class="t dp-link">{name}</a></div><div class="mt">{time_short} · {conf:.2}{tag}</div></div>{play}</div>"#,
-        avatar = avatar(&d.com_name, ""),
+        avatar = avatar(&d.com_name, &d.sci_name, ""),
         name = escape_html(&d.com_name),
         conf = d.confidence,
     );
@@ -283,7 +283,7 @@ pub(super) async fn top_species_partial(
                 );
             }
             let mut html = String::new();
-            for (com_name, _sci_name, count) in &species {
+            for (com_name, sci_name, count) in &species {
                 let enc = simple_url_encode(com_name);
                 let color = crate::routes::pages::atoms::species_color(com_name);
                 let spark = sparklines
@@ -295,7 +295,7 @@ pub(super) async fn top_species_partial(
                 let _ = write!(
                     html,
                     r#"<a class="x-top" href="/species/detail?name={enc}">{avatar}<div class="nm"><div class="t">{n}</div><div class="sc">{code}</div></div><span class="ct">{c}</span>{spark}</a>"#,
-                    avatar = avatar(com_name, ""),
+                    avatar = avatar(com_name, sci_name, ""),
                     n = escape_html(com_name),
                     code = crate::routes::pages::atoms::species_code(com_name),
                     c = count,
@@ -365,7 +365,7 @@ pub(super) async fn species_list_partial(
                     html,
                     r#"<tr><td class="mono dp-rank">{rank}</td><td><div class="dp-cell">{avatar}<div class="dp-min0"><div class="dp-name-strong"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,
                     rank = i + 1,
-                    avatar = avatar(&s.com_name, ""),
+                    avatar = avatar(&s.com_name, &s.sci_name, ""),
                     n = escape_html(&s.com_name),
                     sci = escape_html(&s.sci_name),
                     c = s.count,

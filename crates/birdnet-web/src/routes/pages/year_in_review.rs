@@ -204,7 +204,7 @@ fn render_content(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(&sp.com_name, ""),
+                av = avatar(&sp.com_name, &sp.sci_name, ""),
                 enc = simple_url_encode(&sp.com_name),
                 name = escape_html(&sp.com_name),
                 count = group_thousands(sp.count),

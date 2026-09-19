@@ -123,17 +123,45 @@ pub(crate) fn series_color(index: usize, total: usize) -> String {
     format!("oklch({lightness}% 0.14 {hue})")
 }
 
-/// Circular avatar chip carrying the species' banding code in its own hue.
-/// `size` is one of `""` (default 28px), `"sm"`, or `"lg"`.
+/// Circular avatar chip: the species' **photograph**, over its banding code in
+/// its own hue. `size` is one of `""` (default 28px), `"sm"`, or `"lg"`.
+///
+/// # Why the code is still there
+///
+/// It is the fallback, and it is reached often. `/api/v2/species/image/{sci}/file`
+/// answers 404 whenever the station has no picture for that bird — the image
+/// cache is switched off (`--image-cache-dir ""`), Wikipedia has no photo on
+/// the species page, the lookup failed, or an admin blacklisted the one it
+/// found. The `<img>` opts into `data-hide-on-error`, so on any of those the
+/// browser uncovers the coloured tile underneath and the row looks exactly as
+/// it did before this function grew a second argument. Nothing is drawn in the
+/// gap and no request is made twice.
+///
+/// `alt` is empty on purpose. Every one of the fourteen places this is called
+/// prints the species' name in the same row, so a description here would make
+/// a screen reader say the bird twice; the photo is decoration beside a name
+/// that is already text. The `title` on the chip is unchanged.
+///
+/// `scientific` may be empty — an imported BirdNET-Pi database can carry a row
+/// with no `Sci_Name` — and then no `<img>` is emitted at all, rather than a
+/// request for `/api/v2/species/image//file` that could only 404.
 #[must_use]
-pub(crate) fn avatar(common: &str, size: &str) -> String {
+pub(crate) fn avatar(common: &str, scientific: &str, size: &str) -> String {
     let cls = if size.is_empty() {
         "bnb-avatar".to_string()
     } else {
         format!("bnb-avatar {size}")
     };
+    let photo = if scientific.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<img src="/api/v2/species/image/{enc}/file" alt="" loading="lazy" decoding="async" class="bnb-avatar-img" data-hide-on-error>"#,
+            enc = super::simple_url_encode(scientific),
+        )
+    };
     format!(
-        r#"<span class="{cls}" data-style="--sp:{color}" title="{title}">{code}</span>"#,
+        r#"<span class="{cls}" data-style="--sp:{color}" title="{title}">{code}{photo}</span>"#,
         color = species_color(common),
         title = escape_html(common),
         code = species_code(common),
@@ -392,7 +420,7 @@ mod tests {
 
     #[test]
     fn avatar_carries_code_and_color() {
-        let a = avatar("Blue Jay", "lg");
+        let a = avatar("Blue Jay", "Cyanocitta cristata", "lg");
         assert!(a.contains("BLJA"));
         assert!(a.contains("bnb-avatar lg"));
         assert!(a.contains("--sp:oklch"));

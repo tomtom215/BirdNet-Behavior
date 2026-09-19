@@ -1014,7 +1014,7 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
         })
         .unwrap_or_default();
 
-    let av = avatar(&d.com_name, "");
+    let av = avatar(&d.com_name, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
     let com_name = escape_html(&d.com_name);
     let sci_name = escape_html(&d.sci_name);

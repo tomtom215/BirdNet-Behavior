@@ -435,12 +435,12 @@ fn render_chart_content(
     if species.is_empty() {
         html.push_str(r#"<p class="bnb-meta">No detections on this day.</p>"#);
     } else {
-        for (i, (com, _sci, count)) in species.iter().take(6).enumerate() {
+        for (i, (com, sci, count)) in species.iter().take(6).enumerate() {
             let _ = write!(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<div class="nm">{name}</div><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(com, ""),
+                av = avatar(com, sci, ""),
                 name = escape_html(com),
             );
         }
@@ -481,12 +481,12 @@ fn render_day_page(
 
     // Every species heard that day (the panel only shows the top six).
     html.push_str(r#"<div class="bnb-card pad"><div class="rp-h3">Species heard</div>"#);
-    for (i, (com, _sci, count)) in species.iter().enumerate() {
+    for (i, (com, sci, count)) in species.iter().enumerate() {
         let _ = write!(
             html,
             r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
             rank = i + 1,
-            av = avatar(com, ""),
+            av = avatar(com, sci, ""),
             enc = simple_url_encode(com),
             name = escape_html(com),
         );
@@ -522,7 +522,7 @@ fn render_day_log_row(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
          <div class=\"bnb-meta mono tdl-card-sci\">{sci} · \
          <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
          </div></div>",
-        av = avatar(&d.com_name, ""),
+        av = avatar(&d.com_name, &d.sci_name, ""),
         conf = conf_bar(d.confidence),
         com = escape_html(&d.com_name),
         sci = escape_html(&d.sci_name),

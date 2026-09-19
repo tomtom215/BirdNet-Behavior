@@ -397,7 +397,11 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .bnb-heat-4 { background: color-mix(in oklch, var(--dawn) 72%, var(--surface-2)); }
 .bnb-heat-5 { background: var(--dawn); }
 
-/* Species avatar (4-letter code chip in species colour, set inline via --sp) */
+/* Species avatar: the bird's photograph over a 4-letter code chip in the
+   species colour (set inline via --sp). The chip is the fallback and is what
+   shows whenever there is no photo — `position`/`overflow` here are what let
+   the <img> cover it, and `border-radius: inherit` is what keeps the photo
+   round at all three sizes. */
 .bnb-avatar {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border-radius: 50%;
@@ -406,9 +410,14 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
   /* The hue keeps the species' identity; the mix towards --sp-ink is what
      makes it readable on the tint in both themes (DD-29). */
   color: color-mix(in oklch, var(--sp, var(--moss)) 62%, var(--sp-ink)); flex: 0 0 auto;
+  position: relative; overflow: hidden;
 }
 .bnb-avatar.sm { width: 24px; height: 24px; font-size: 9px; }
 .bnb-avatar.lg { width: 36px; height: 36px; font-size: 11px; }
+.bnb-avatar-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; border-radius: inherit;
+}
 
 /* Confidence bar */
 .bnb-conf { display: inline-flex; align-items: center; gap: 6px; }
