@@ -247,6 +247,59 @@ Copy, all of it verified in the rendered page:
   failure with `StatusCode::OK`, which is the one status htmx swaps, so it lost
   the layout's "reload the page" fallback and left a dead end with no link.
 
+### Fixed — the rest of the zeroes nobody measured, including the ones a monitor scrapes
+
+The same defect as the two surfaces above, swept to completion rather than
+stopped at. A scan of every `with_db`/`with_read_db` closure in `birdnet-web`
+for *a count defaulted to zero and then printed as fact* found nine sites; five
+were real, and one of them is not a page at all.
+
+**The dashboard — the first screen anyone opens.** `dashboard/stats.rs` ran six
+counts, defaulted every one inside the closure, and returned a plain tuple, so
+its `else` arm could only fire on a task panic. A database that could not be
+read rendered `Detections 0 · Species 0 · Today 0 · Last hour 0` as an ordinary
+dashboard. `dashboard/kiosk.rs` did the same for a display that hangs on a wall
+with nobody reading a log beside it, and `admin/overview.rs` for the screen an
+operator opens to find out whether the station is well. The 12-day sparkline
+stays defaulted: it is decoration beside a number, not a claim of its own —
+which is the line `dashboard/partials.rs` had already drawn correctly, and the
+pattern these now follow.
+
+**The Today page did not print a wrong number — it changed which page you got.**
+`total_ever` was defaulted to `0`, and `firstrun = total_ever == 0` chooses the
+hero copy, the aside, the rail and a template flag. A failed read therefore
+replaced a station with years of records with the **first-run setup
+experience**, telling its owner to go and set up a microphone they had been
+using for years.
+
+**`/api/v2/stats` answered 200 with `total_detections: 0`.** A wrong number in
+an API is worse than one on a page: the consumer is a dashboard or a script and
+it stores what it is told. The response was internally inconsistent too —
+`{"total_detections":0,"unique_species":1}` — and nothing about it said the
+station had not been asked.
+
+**The Prometheus endpoint exported a zero it had not measured.**
+`routes/health.rs` states the rule itself, three lines below the offence: a
+source with no acoustic baseline "exports the level and omits the drift, rather
+than exporting a drift of zero, which would read as *measured, and
+unchanged*". Its own three counts exported the zero.
+`birdnet_detections_stored 0` on a station with years of records is a counter
+that fell to nothing, which is exactly what an alert is built to catch — so it
+fires for the wrong reason and hides the real fault behind it. Those series are
+now omitted when the read fails; the process metrics, measured from this
+process, still publish, so the scrape still succeeds and still says the station
+is up.
+
+**The life list**, where "0 species · 0 detections · 0 active days" is not an
+empty list but a lost one, shown to the reader least able to shrug it off.
+
+Four sites were left defaulted deliberately, each checked rather than skipped:
+a map lookup that is genuinely zero for a run with no detections
+(`analysis_runs.rs`); a pagination total on a path that already short-circuits
+through its own `failed` flag (`recordings.rs`); and the review nudge
+(`today.rs`), whose contract is to be absent when nothing waits — an error
+there produces no output, which is silence rather than a false claim.
+
 ### Fixed — the failures a station could not report, and the pages written for a sysadmin
 
 The rest of the same pass. Where the previous cluster was about words, this one

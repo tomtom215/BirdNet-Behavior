@@ -198,6 +198,25 @@ Corollaries, each learned the same way:
   ordinary page. Where a surface's whole content is a claim about the reader's
   data, propagate with `?` and let the caller decide; default only what is
   decoration.
+- **Sweep a defect class mechanically before believing it is gone.** After
+  fixing the silent-zero read on two surfaces, a scan of every `with_db`
+  closure in `birdnet-web` for *a count defaulted to zero and then printed as
+  fact* found nine more sites, five of them real — including the dashboard, the
+  `/api/v2/stats` JSON, and the Prometheus exposition. Grep the shape, then
+  classify each hit; a crude first scan returned 67 hits that were mostly query
+  -parameter defaults, and narrowing the pattern to the actual hazard cut it to
+  nine. Stopping at "I fixed the ones I saw" is not a sweep.
+- **A defaulted count can change which page renders, not just what it says.**
+  `today.rs` computed `firstrun = total_ever == 0` from a `.unwrap_or(0)`, so a
+  failed read served the first-run setup experience to a station with years of
+  records. Look at what the number *decides*, not only where it is printed.
+- **In an exposition format, omit rather than fabricate.** `routes/health.rs`
+  already said so for acoustic drift — omitting it "rather than exporting a
+  drift of zero, which would read as measured, and unchanged" — and exported
+  `birdnet_detections_stored 0` three lines away. A counter that falls to zero
+  is what a monitoring alert is built to catch, so a fabricated zero fires for
+  the wrong reason and hides the real fault. A missing series is stale and
+  reads as such; keep the metrics that are still true so the scrape succeeds.
 - **htmx never swaps a 4xx/5xx body, so a 500 from a POST is invisible.**
   `static/htmx.min.js` ships `{code:"[45]..", swap:false, error:true}`, and
   `layout.html`'s `htmx:responseError` fallback is gated on

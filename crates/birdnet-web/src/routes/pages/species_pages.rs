@@ -465,18 +465,20 @@ fn photos_view(
 /// The **Life list** view: the big counters, the accumulation curve, and the
 /// "New to the list" recent firsts. Every species the station has ever heard.
 fn lifelist_view(state: &AppState) -> String {
-    let (species_total, det_total, active_days, points, firsts) = state.with_db(|conn| {
-        let species_total = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
-        let det_total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-        let active_days = birdnet_db::sqlite::distinct_detection_dates(conn).map_or(0, |v| v.len());
-        let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+    // The three big counters are this page's whole point, and a life list that
+    // reads "0 species · 0 detections · 0 active days" is not an empty life
+    // list — it is a lost one, shown to the person least able to shrug it off.
+    let loaded = state.with_db(|conn| {
+        let species_total = birdnet_db::sqlite::species_count(conn)?;
+        let det_total = birdnet_db::sqlite::detection_count(conn)?;
+        let active_days = birdnet_db::sqlite::distinct_detection_dates(conn)?.len();
+        let first_seen = birdnet_db::sqlite::species_first_seen(conn)?;
         let points = accumulation_points(&first_seen);
         let new_count = new_this_year(&first_seen);
         // Most-recent firsts: scientific-name keyed first-seen, joined to common
         // names via the top-species list (which carries both).
         let mut named: Vec<(String, String, String)> =
-            birdnet_db::sqlite::top_species(conn, 10_000)
-                .unwrap_or_default()
+            birdnet_db::sqlite::top_species(conn, 10_000)?
                 .into_iter()
                 .filter_map(|s| {
                     first_seen
@@ -486,14 +488,21 @@ fn lifelist_view(state: &AppState) -> String {
                 .collect();
         named.sort_by(|a, b| b.2.cmp(&a.2));
         named.truncate(6);
-        (
+        Ok::<_, birdnet_db::sqlite::DbError>((
             species_total,
             det_total,
             active_days,
             points,
             (new_count, named),
-        )
+        ))
     });
+    let (species_total, det_total, active_days, points, firsts) = match loaded {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "life list: query failed");
+            return super::error_states::could_not_load("your life list");
+        }
+    };
     let (new_count, named) = firsts;
 
     let curve = super::viz::accumulation_curve(&points);

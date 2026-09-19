@@ -371,18 +371,22 @@ async fn disk_info(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
 
 async fn stats(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let result = tokio::task::spawn_blocking(move || {
+        // A wrong number in an API is worse than a wrong number on a page: the
+        // consumer is a dashboard or a script, and it stores what it is told.
+        // Defaulted, a failed read answered 200 with `detections: 0`, and
+        // whatever was polling it recorded a station that had heard nothing.
         state.with_read_db(|conn| {
-            let detections = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-            let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
-            let latest = birdnet_db::sqlite::latest_detection(conn).ok().flatten();
-            let confidence = birdnet_db::sqlite::confidence_distribution(conn).unwrap_or([0; 6]);
-            (detections, species, latest, confidence)
+            let detections = birdnet_db::sqlite::detection_count(conn)?;
+            let species = birdnet_db::sqlite::species_count(conn)?;
+            let latest = birdnet_db::sqlite::latest_detection(conn)?;
+            let confidence = birdnet_db::sqlite::confidence_distribution(conn)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((detections, species, latest, confidence))
         })
     })
     .await;
 
     match result {
-        Ok((detections, species, latest, confidence)) => {
+        Ok(Ok((detections, species, latest, confidence))) => {
             let latest_json = latest.map_or(json!(null), |(date, time, name)| {
                 json!({
                     "date": date,
@@ -408,6 +412,13 @@ async fn stats(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
                 })),
             )
         }
+        // A read that failed answers 500, so a consumer can tell "the station
+        // has heard nothing" from "the station could not be asked". The detail
+        // goes to the log via `log_internal`, not over the wire.
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": crate::routes::log_internal("stats query failed", &e) })),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),

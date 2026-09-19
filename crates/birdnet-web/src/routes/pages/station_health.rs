@@ -134,11 +134,14 @@ async fn gather(state: &AppState) -> Snapshot {
                     .map_err(|e| e.to_string())?;
             let last = birdnet_db::sqlite::seconds_since_last_detection(conn)
                 .map_err(|e| e.to_string())?;
+            // Propagated like its siblings: "Queued uploads 0 · all delivered"
+            // is a claim, and the one reader who needs it is the one whose
+            // uploads have stopped.
             let queued = birdnet_db::outbound_queue::depth(
                 conn,
                 birdnet_integrations::birdweather::QUEUE_KIND,
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
             let total = birdnet_db::sqlite::detection_count(conn).map_err(|e| e.to_string())?;
             // Fail-unsafe on purpose: an integrity check we could not run
             // is not an integrity check that passed.

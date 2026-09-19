@@ -73,19 +73,35 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
         return Redirect::to("/onboarding").into_response();
     }
 
+    // `total_ever` decides `firstrun`, and `firstrun` decides which page this
+    // is: the setup checklist and "Let's get you listening", or the dashboard.
+    // Defaulted to 0, a database that could not be read did not merely print a
+    // wrong number — it replaced a station with years of records with the
+    // first-run experience, and told its owner to go and set up a microphone.
     let state_for_query = state.clone();
-    let (total_ever, sources, disk_pct) = tokio::task::spawn_blocking(move || {
-        let (total, sources) = state_for_query.with_read_db(|conn| {
+    let loaded = tokio::task::spawn_blocking(move || {
+        let counts = state_for_query.with_read_db(|conn| {
             use birdnet_db::audio_sources::AudioSourceStore;
-            let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-            let sources = AudioSourceStore::list(conn).unwrap_or_default();
-            (total, sources)
+            let total = birdnet_db::sqlite::detection_count(conn).map_err(|e| e.to_string())?;
+            let sources = AudioSourceStore::list(conn).map_err(|e| e.to_string())?;
+            Ok::<_, String>((total, sources))
         });
         let disk_pct = disk_used_percent(&state_for_query);
-        (total, sources, disk_pct)
+        counts.map(|(total, sources)| (total, sources, disk_pct))
     })
-    .await
-    .unwrap_or((0, Vec::new(), None));
+    .await;
+
+    let (total_ever, sources, disk_pct) = match loaded {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "today: station totals could not be read");
+            return today_error_page(&headers);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "today: task failed");
+            return today_error_page(&headers);
+        }
+    };
 
     let firstrun = total_ever == 0;
     let enabled: Vec<_> = sources.iter().filter(|s| s.disabled_at.is_none()).collect();
@@ -131,6 +147,21 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
             &super::help::help_link(super::help::Topic::Today),
         );
     super::render_page_for_request("Today", &body, "today", &headers).into_response()
+}
+
+/// The dashboard when the station's own totals could not be read.
+///
+/// Rendered through the same shell as the page it replaces, so the reader
+/// keeps the navigation and can reach Station health from it. It is emphatically
+/// *not* the first-run experience, which is what a defaulted count produced.
+fn today_error_page(headers: &HeaderMap) -> Response {
+    super::render_page_for_request(
+        "Today",
+        &super::error_states::could_not_load("your dashboard"),
+        "today",
+        headers,
+    )
+    .into_response()
 }
 
 /// The hero copy a brand-new station wakes up with (the comparative-phrase

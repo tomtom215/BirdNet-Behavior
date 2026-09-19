@@ -48,29 +48,53 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     // `# HELP`, so an agent using it (promtool, Telegraf, the Python client)
     // scraped *nothing* from this station, and a Prometheus server took both
     // and `rate()`d a decreasing gauge as a counter.
-    let (detection_count, species_count, rejected_count) = tokio::task::spawn_blocking({
+    let db_counts = tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
+            // The same rule this file already states for acoustic drift a few
+            // lines below: omit the series rather than export a zero, "which
+            // would read as measured, and unchanged". These three did export
+            // the zero. A station whose database could not be read published
+            // `birdnet_detections_stored 0` with HTTP 200, and a Prometheus
+            // server takes a counter that fell to nothing exactly as seriously
+            // as it should — which is to say it fires, for the wrong reason,
+            // and the real fault is invisible behind it.
             state.with_db(|conn| {
                 let det: i64 = conn
                     .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
-                    .unwrap_or(0);
+                    .map_err(|e| e.to_string())?;
                 let sp: i64 = conn
                     .query_row(
                         "SELECT COUNT(DISTINCT Com_Name) FROM detections_analytic",
                         [],
                         |r| r.get(0),
                     )
-                    .unwrap_or(0);
-                let rej =
-                    i64::try_from(birdnet_db::sqlite::rejected_detection_count(conn).unwrap_or(0))
-                        .unwrap_or(0);
-                (det, sp, rej)
+                    .map_err(|e| e.to_string())?;
+                let rej = i64::try_from(
+                    birdnet_db::sqlite::rejected_detection_count(conn)
+                        .map_err(|e| e.to_string())?,
+                )
+                .unwrap_or(i64::MAX);
+                Ok::<_, String>((det, sp, rej))
             })
         }
     })
-    .await
-    .unwrap_or((0, 0, 0));
+    .await;
+    // `None` means "we could not ask", and every series derived from it is
+    // left out of the exposition entirely. The process metrics below are
+    // measured from this process and stay true either way, so the scrape still
+    // succeeds and still says the station is up.
+    let counts: Option<(i64, i64, i64)> = match db_counts {
+        Ok(Ok(v)) => Some(v),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "metrics: detection counts could not be read");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "metrics: counts task failed");
+            None
+        }
+    };
 
     // The station's own acoustic health, per source: the current mean noise
     // floor and how far it has moved from the same source's own 30-day
@@ -104,21 +128,25 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     out.push_str("# TYPE birdnet_uptime_seconds gauge\n");
     writeln!(out, "birdnet_uptime_seconds {uptime_secs}").unwrap_or_default();
 
-    out.push_str(
-        "# HELP birdnet_detections_stored Bird detections currently stored, rejections included.\n",
-    );
-    out.push_str("# TYPE birdnet_detections_stored gauge\n");
-    writeln!(out, "birdnet_detections_stored {detection_count}").unwrap_or_default();
+    if let Some((detection_count, species_count, rejected_count)) = counts {
+        out.push_str(
+            "# HELP birdnet_detections_stored Bird detections currently stored, rejections included.\n",
+        );
+        out.push_str("# TYPE birdnet_detections_stored gauge\n");
+        writeln!(out, "birdnet_detections_stored {detection_count}").unwrap_or_default();
 
-    out.push_str("# HELP birdnet_detections_rejected Detections a reviewer has marked rejected.\n");
-    out.push_str("# TYPE birdnet_detections_rejected gauge\n");
-    writeln!(out, "birdnet_detections_rejected {rejected_count}").unwrap_or_default();
+        out.push_str(
+            "# HELP birdnet_detections_rejected Detections a reviewer has marked rejected.\n",
+        );
+        out.push_str("# TYPE birdnet_detections_rejected gauge\n");
+        writeln!(out, "birdnet_detections_rejected {rejected_count}").unwrap_or_default();
 
-    out.push_str(
-        "# HELP birdnet_species_distinct Distinct species detected, excluding rejected detections.\n",
-    );
-    out.push_str("# TYPE birdnet_species_distinct gauge\n");
-    writeln!(out, "birdnet_species_distinct {species_count}").unwrap_or_default();
+        out.push_str(
+            "# HELP birdnet_species_distinct Distinct species detected, excluding rejected detections.\n",
+        );
+        out.push_str("# TYPE birdnet_species_distinct gauge\n");
+        writeln!(out, "birdnet_species_distinct {species_count}").unwrap_or_default();
+    }
 
     out.push_str("# HELP birdnet_process_resident_memory_bytes Resident memory size in bytes.\n");
     out.push_str("# TYPE birdnet_process_resident_memory_bytes gauge\n");
