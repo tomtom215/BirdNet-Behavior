@@ -9,6 +9,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Nothing yet._
 
+## [0.16.1] - 2026-09-20
+
+### Fixed
+
+- **v0.16.0 published with no binaries, and every install broke.** The release
+  body assembled from the `## [0.16.0]` CHANGELOG section came to 273,739
+  characters against GitHub's 125,000-character limit (the section alone is
+  270,796; the appended install/verify boilerplate is 2,943). `gh release edit`
+  returned HTTP 422, the publish step runs under `bash -e`, and the edit ran
+  *before* the upload — so the script died before a single archive was
+  attached.
+
+  The damage was not confined to people asking for 0.16.0 by name. `install.sh`
+  resolves `/releases/latest`, which returned v0.16.0, and then builds a
+  download URL under `releases/download/v0.16.0/` that 404s. Every fresh
+  install and every `install.sh update` failed. The Docker images, published by
+  a separate workflow on the same tag, were unaffected.
+
+  Three changes, in the order they matter:
+
+  * **Assets upload before the notes are applied.** A notes failure still fails
+    the job, but only after the binaries are attached, so the release stays
+    installable while the body is corrected by hand.
+  * **The body is bounded.** The trailing install/verify boilerplate is written
+    separately and measured, so the changelog's budget is derived by
+    subtraction rather than hard-coded — if the boilerplate grows, the budget
+    shrinks with it. An oversized section is cut at a `###` heading boundary,
+    with a notice linking to the full entry here.
+  * **A new `verify-release` job reads back what was actually published**, over
+    the same public, unauthenticated URL `install.sh` builds. It refuses a
+    draft, refuses a body still carrying the pre-upload placeholder, and
+    downloads and checksum-verifies every file the published `SHA256SUMS`
+    names — so it is driven by the manifest rather than a hard-coded list, and
+    a new build target is covered the day it joins the matrix. Nothing in the
+    pipeline had ever looked at the release itself: every job but the last
+    reported success while the release sat empty.
+
+  `validate` additionally reports the CHANGELOG section's size and warns when
+  it is large enough to be truncated. That is a warning and not a gate on
+  purpose — truncated notes are cosmetic, and failing a release over prose
+  length would be worse than what it prevents. It runs in `validate` so an
+  oversized section is visible in seconds rather than after the 39 minutes of
+  building that preceded the real failure.
+
+  Verified by extracting each `run:` block and executing it against real data.
+  The old publish step under a stubbed `gh`, with the release present and the
+  edit returning 422 — the exact v0.16.0 conditions — calls `release view` then
+  `release edit` and exits, never reaching `release upload`; the new step under
+  the same stub reaches the upload and still exits non-zero. The truncator,
+  mutated to bypass itself, reproduces 273,739 characters and is caught by its
+  own assertion, while the real 0.15.0 section passes through byte-identical
+  and untruncated. `verify-release` fails against the real, assetless v0.16.0
+  and passes against v0.15.0, downloading and checksum-verifying all seven
+  files its manifest names.
+
+  The v0.16.0 release itself remains without assets. Since `install.sh`
+  resolves `/releases/latest`, it picks up 0.16.1 with no action from the
+  operator; anyone pinned to `--version 0.16.0` should move to 0.16.1.
+
 ## [0.16.0] - 2026-09-19
 
 Seven clusters: HTTPS in the listener itself, a searchable detection log with
@@ -9039,6 +9098,7 @@ x86_64 Linux.
   automatic BirdNET+ model download from Zenodo.
 
 [Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.0...HEAD
+[0.16.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.1...v0.14.0

@@ -13,7 +13,11 @@ and later.
 #    is what actually ships, and it drifts silently. (Measured once: 150
 #    packages behind, including rustls, hyper, aws-lc-rs and webpki-roots.)
 #    NOTE: plain `cargo update`, NOT `cargo update --workspace` — the latter
-#    restricts the update to workspace members and reports "0 packages".
+#    restricts the relock to workspace members, so it refreshes no third-party
+#    dependency, which is the entire point of this step. (It reports
+#    "0 packages" only when the workspace versions have not moved; run right
+#    after a version bump it relocks each member, which is step 1's job, not
+#    this one. Observed with cargo 1.98.1.)
 cargo update
 cargo deny check advisories        # or: cargo audit
 cargo test --workspace --all-features
@@ -28,6 +32,11 @@ cargo test --workspace --all-features
 git checkout main && git pull origin main
 git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
+#    Tag and push — do NOT create the Release in the GitHub web UI. Publishing
+#    a draft there creates the tag as a side effect, which triggers this same
+#    workflow against a Release that already exists and already has a body.
+#    That is how v0.16.0 shipped: the auto-generated notes were left in place
+#    and the CHANGELOG body that should have replaced them was rejected.
 # 5. Watch Actions, then verify the published artifacts (see "Verifying").
 ```
 
@@ -40,17 +49,18 @@ Pushing a `vX.Y.Z` tag triggers **two** workflows in parallel:
 ### `release.yml` — binaries, SBOM, attestation, GitHub Release
 
 ```
-validate ──► ci ──► build (matrix) ──► package ──► github-release
-                                                    (tag push only)
+validate ──► ci ──► build (matrix) ──► package ──► github-release ──► verify-release
+                                                    (tag push only)    (tag push only)
 ```
 
 | Job | Emits |
 |-----|-------|
-| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z]` section in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. |
+| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z]` section in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
 | `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
 | `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in; dormant until `--analytics-db` is passed). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
 | `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives and SBOMs, signed via GitHub OIDC. |
-| `github-release` | Creates/updates the GitHub Release idempotently, attaches the archives, `SHA256SUMS`, `install.sh`, and SBOMs, and uses the extracted `CHANGELOG` section (plus appended install/Docker/verify notes) as the body. |
+| `github-release` | Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install/Docker/verify notes. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
+| `verify-release` | Reads the published Release back and refuses to call it done unless it is usable: not a draft, body not still the pre-upload placeholder, and every file the published `SHA256SUMS` names downloadable **unauthenticated** from the public URL and matching its checksum. Driven by the manifest, not a hard-coded list, so a new build target is covered as soon as it joins the matrix. |
 
 **Build targets** (three — there is no armv7 and no musl):
 
@@ -155,6 +165,10 @@ Copy-paste this into the release PR or issue and tick it off:
      the suite rather than shipping a spec that lies about its version)
 [ ] docs/book/reference/api.md: the sample /api/v2/health response
 [ ] Cargo.lock refreshed (cargo update — NOT --workspace, see the TL;DR)
+[ ] Cargo.lock's own workspace entries moved to X.Y.Z. `cargo update --workspace`
+    does exactly this and nothing else — useful for a patch release that should
+    not carry a dependency refresh. Confirm the diff is only the member version
+    lines before committing.
 [ ] CHANGELOG.md: [Unreleased] rolled into ## [X.Y.Z] - YYYY-MM-DD
 [ ] CHANGELOG.md: fresh empty [Unreleased] section added
 [ ] CHANGELOG.md: link references at the foot updated
@@ -165,7 +179,9 @@ Copy-paste this into the release PR or issue and tick it off:
 [ ] Version-bump PR merged to main; CI green on the merge commit
 [ ] Dry run (workflow_dispatch on release.yml) is green
 [ ] git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
-[ ] Post-publish verification done (binaries, Docker, attestation, SBOM)
+[ ] `verify-release` green (it downloads and checksum-verifies every published
+    asset over the public URL; a red one means the Release is not installable)
+[ ] Post-publish verification done (Docker, attestation, SBOM)
 ```
 
 ## Verifying a published release

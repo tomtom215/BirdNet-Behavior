@@ -17,8 +17,13 @@
 #
 # Job dependency graph:
 #
-#   validate ──► ci ──► build (matrix) ──► package ──► github-release
-#                                                       (tag push only)
+#   validate ──► ci ──► build (matrix) ──► package ──► github-release ──► verify-release
+#                                                       (tag push only)    (tag push only)
+#
+# `verify-release` is not decoration. Every job but the last reported success
+# on the v0.16.0 run while the Release itself published with zero assets, and
+# the first report came from users whose installs 404'd. It reads the Release
+# back over the same public URL `install.sh` builds.
 #
 # Companion workflow: .github/workflows/docker.yml publishes multi-arch
 # container images to GHCR in parallel on the same tag push.
@@ -205,6 +210,31 @@ jobs:
             exit 1
           fi
           echo "::notice::CHANGELOG.md entry found for v$VERSION"
+
+      - name: Report the CHANGELOG section size against the release-body limit
+        # `github-release` caps the body at GitHub's 125,000-character limit
+        # and links to CHANGELOG.md for the remainder. This is a warning and
+        # not a gate on purpose: truncated notes are cosmetic, and blocking a
+        # release over prose length would be worse than what it prevents.
+        # It runs in `validate` so an oversized section is visible in seconds
+        # rather than after a 39-minute build, which is how v0.16.0 was found.
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          SECTION_BYTES=$(
+            awk "
+              /^## \[$VERSION\]/     { found=1; next }
+              found && /^## \[/       { exit }
+              found && /^\[[^]]+\]: / { exit }
+              found                   { print }
+            " CHANGELOG.md | wc -c
+          )
+
+          echo "::notice::CHANGELOG [$VERSION] section: ${SECTION_BYTES} bytes"
+          if [[ "$SECTION_BYTES" -gt 120000 ]]; then
+            echo "::warning file=CHANGELOG.md::The [$VERSION] section is ${SECTION_BYTES} bytes. The GitHub Release body is capped at 125,000 characters, so these notes will be truncated at a heading boundary with a link to the full entry. Consider trimming the section."
+          fi
 
 # ── Job 2: Full quality gate before building release artifacts ───────────────
   ci:
@@ -735,10 +765,23 @@ jobs:
       - name: Assemble final release notes
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ needs.validate.outputs.version }}"
 
+          # GitHub rejects a release body over 125,000 characters with HTTP
+          # 422. v0.16.0's CHANGELOG section alone was 270,796, the edit
+          # 422'd, and because this job runs under `bash -e` the script died
+          # before `gh release upload` ever ran -- so the release published
+          # with NO binaries, and `install.sh` 404'd for every user, not just
+          # those asking for 0.16.0 (it resolves /releases/latest). The body
+          # is bounded here; the upload no longer sits behind it (next step).
+          MAX_BODY=125000
+
+          # Everything after the changelog is fixed-size boilerplate. Write
+          # it first and measure it, so the changelog's budget is derived
+          # rather than guessed -- if this block grows, the budget shrinks to
+          # match instead of silently going stale.
           {
-            cat release_notes.md
             echo ""
             echo "---"
             echo ""
@@ -823,7 +866,64 @@ jobs:
             echo "Dependency Graph, or any CycloneDX-aware vulnerability"
             echo "scanner. Both files are signed by the same SLSA build"
             echo "provenance attestation as the binaries."
+          } > tail_notes.md
+
+          # Budget in BYTES, not characters. awk's length() counts bytes
+          # under mawk (Ubuntu's default awk) and characters under gawk; for
+          # UTF-8, bytes >= characters, so a byte budget can only under-fill,
+          # never overshoot GitHub's character limit.
+          TAIL_BYTES=$(wc -c < tail_notes.md)
+          NOTICE_BYTES=320
+          BUDGET=$(( MAX_BODY - TAIL_BYTES - NOTICE_BYTES ))
+
+          if [[ "$(wc -c < release_notes.md)" -le "$BUDGET" ]]; then
+            cp release_notes.md head_notes.md
+            TRUNCATED=false
+          else
+            # Cut at a "### " boundary so the notes never stop mid-sentence.
+            # `last` tracks the last such heading that begins while still
+            # inside the budget; everything before it is whole sections.
+            CUT=$(awk -v budget="$BUDGET" '
+              {
+                if ($0 ~ /^### / && total <= budget) last = NR
+                total += length($0) + 1
+                if (total > budget) exit
+              }
+              END { print last+0 }
+            ' release_notes.md)
+
+            if [[ "$CUT" -gt 1 ]]; then
+              head -n "$(( CUT - 1 ))" release_notes.md > head_notes.md
+            else
+              # No "### " boundary fits -- a single enormous section. Keep
+              # whole lines up to the budget rather than emitting nothing.
+              awk -v budget="$BUDGET" '
+                { total += length($0) + 1; if (total > budget) exit; print }
+              ' release_notes.md > head_notes.md
+            fi
+            TRUNCATED=true
+          fi
+
+          {
+            cat head_notes.md
+            if [[ "$TRUNCATED" == "true" ]]; then
+              echo ""
+              echo "> **These notes are truncated.** The full \`${VERSION}\` entry exceeds"
+              echo "> GitHub's ${MAX_BODY}-character release-body limit. Read it in full in"
+              echo "> [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/v${VERSION}/CHANGELOG.md)."
+            fi
+            cat tail_notes.md
           } > final_notes.md
+
+          # This truncator is the only thing between a long CHANGELOG and
+          # another 422, so assert its output -- in characters, which is what
+          # GitHub actually counts.
+          BODY_CHARS=$(LC_ALL=C.UTF-8 wc -m < final_notes.md)
+          if [[ "$BODY_CHARS" -gt "$MAX_BODY" ]]; then
+            echo "::error::Assembled release body is ${BODY_CHARS} characters, over GitHub's ${MAX_BODY} limit -- the truncation above did not work."
+            exit 1
+          fi
+          echo "::notice::Release body: ${BODY_CHARS} characters (limit ${MAX_BODY}, truncated=${TRUNCATED})"
 
           echo "::group::Final release notes"
           cat final_notes.md
@@ -859,33 +959,44 @@ jobs:
             [[ -e "$f" ]] && SBOM_ASSETS+=("$f")
           done
 
+          # Assets first, notes last. v0.16.0 published with zero binaries
+          # because `gh release edit` 422'd on an oversized body and `-e`
+          # killed this script before `gh release upload` ran. The binaries
+          # are what `install.sh` resolves and downloads; the notes are
+          # prose. In this order a notes problem can never again cost the
+          # release its assets.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::warning::Release ${TAG} already exists — updating in place."
-            gh release edit "$TAG" \
-              "${PRE_FLAG[@]}" \
-              --title "$TITLE" \
-              --notes-file final_notes.md
-
-            gh release upload "$TAG" \
-              --clobber \
-              release/*.tar.gz \
-              release/SHA256SUMS \
-              release/install.sh \
-              release/uninstall.sh \
-              "${SBOM_ASSETS[@]}"
-            echo "::notice::Updated $RELEASE_URL"
           else
+            # Created with a placeholder body, not the real notes, so the
+            # upload below stays reachable even if the notes are unusable.
             gh release create "$TAG" \
               "${PRE_FLAG[@]}" \
               --title "$TITLE" \
-              --notes-file final_notes.md \
-              release/*.tar.gz \
-              release/SHA256SUMS \
-              release/install.sh \
-              release/uninstall.sh \
-              "${SBOM_ASSETS[@]}"
-            echo "::notice::Published $RELEASE_URL"
+              --notes "Publishing ${TAG}…"
           fi
+
+          gh release upload "$TAG" \
+            --clobber \
+            release/*.tar.gz \
+            release/SHA256SUMS \
+            release/install.sh \
+            release/uninstall.sh \
+            "${SBOM_ASSETS[@]}"
+          echo "::notice::Assets attached to $RELEASE_URL"
+
+          # A failure here leaves a fully usable release — every download
+          # link works — so it is reported loudly and fails the job, but
+          # only after the binaries are up.
+          NOTES_OK=true
+          if ! gh release edit "$TAG" \
+                 "${PRE_FLAG[@]}" \
+                 --title "$TITLE" \
+                 --notes-file final_notes.md; then
+            NOTES_OK=false
+            echo "::error::Assets are attached to ${RELEASE_URL}, but the release notes could not be applied. Downloads work; the body needs fixing by hand."
+          fi
+          echo "::notice::Published $RELEASE_URL"
 
           {
             echo "## Release v${VERSION}"
@@ -901,4 +1012,105 @@ jobs:
             echo '```'
             ls -lh release/
             echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$NOTES_OK" != "true" ]]; then
+            exit 1
+          fi
+
+# ── Job 6: Prove the published Release is actually usable ────────────────────
+#
+# v0.16.0 published with zero assets and nothing noticed. Every job in this
+# workflow reported success except the last, and no step ever looked at the
+# Release itself — the first report came from users whose installs 404'd.
+# This job is the only one that reads back what was published, and it does so
+# over the same public, unauthenticated URL `install.sh` builds, so a Release
+# that cannot be installed from fails here instead of in the field.
+  verify-release:
+    name: Verify the published Release
+    needs: [validate, github-release]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Verify the Release is complete and downloadable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate.outputs.version }}"
+          TAG="v${VERSION}"
+          REPO="${{ github.repository }}"
+          DL="https://github.com/${REPO}/releases/download/${TAG}"
+
+          # ---- 1. The Release object ----
+          gh release view "$TAG" --repo "$REPO" --json isDraft,assets,body > rel.json
+
+          if [[ "$(jq -r '.isDraft' rel.json)" != "false" ]]; then
+            echo "::error::${TAG} is still a draft, so it is invisible to install.sh and to /releases/latest."
+            exit 1
+          fi
+
+          BODY="$(jq -r '.body' rel.json)"
+          if [[ "$BODY" == "Publishing ${TAG}"* ]]; then
+            echo "::error::${TAG}'s body is still the placeholder written before the upload — the notes were never applied."
+            exit 1
+          fi
+          echo "::notice::${TAG}: published, $(jq '.assets | length' rel.json) assets, body $(printf '%s' "$BODY" | LC_ALL=C.UTF-8 wc -m) characters"
+
+          # ---- 2. SHA256SUMS, unauthenticated ----
+          # No token on purpose: this is the exact request install.sh makes,
+          # so a visibility or asset problem fails here rather than in the
+          # field. A Release with no assets dies on this line.
+          if ! curl -fsSL --retry 3 --retry-delay 2 -o SHA256SUMS "${DL}/SHA256SUMS"; then
+            echo "::error::${DL}/SHA256SUMS is not downloadable, so the Release has no usable assets. This is exactly how v0.16.0 shipped."
+            exit 1
+          fi
+
+          # ---- 3. Everything SHA256SUMS names must download and match ----
+          # Driven by the manifest rather than a hard-coded list, so a target
+          # added to the build matrix is covered the day it is added. Names are
+          # normalised to bare filenames (dropping any path or binary-mode '*')
+          # because `sha256sum -c` looks a path up exactly as written.
+          awk '{ name = $2; sub(/^\*/, "", name); sub(/^.*\//, "", name)
+                 if (name != "") printf "%s  %s\n", $1, name }' SHA256SUMS > SHA256SUMS.check
+
+          if [[ ! -s SHA256SUMS.check ]]; then
+            echo "::error::The published SHA256SUMS is empty or unparseable."
+            exit 1
+          fi
+
+          COUNT=0
+          while read -r _sum name; do
+            echo "  fetching ${name}"
+            if ! curl -fsSL --retry 3 --retry-delay 2 -o "$name" "${DL}/${name}"; then
+              echo "::error::${name} is listed in SHA256SUMS but is not downloadable from ${DL}/."
+              exit 1
+            fi
+            if [[ ! -s "$name" ]]; then
+              echo "::error::${name} downloaded as an empty file."
+              exit 1
+            fi
+            COUNT=$(( COUNT + 1 ))
+          done < SHA256SUMS.check
+
+          sha256sum -c SHA256SUMS.check
+          echo "::notice::${COUNT} published assets downloaded over the public URL and checksum-verified."
+
+          # ---- 4. Report where /releases/latest points ----
+          # Reported, not gated: `latest` is the newest by date, so a backport
+          # released after a higher version correctly leaves it elsewhere.
+          # Gating on it would fail a legitimate release.
+          LATEST="$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || echo "(none)")"
+          echo "::notice::/releases/latest currently resolves to ${LATEST}; install.sh with no --version installs that one."
+
+          {
+            echo "### Published Release verified"
+            echo ""
+            echo "- Tag: \`${TAG}\` (not a draft)"
+            echo "- Assets downloaded unauthenticated and checksum-verified: **${COUNT}**"
+            echo "- \`/releases/latest\` resolves to: \`${LATEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
