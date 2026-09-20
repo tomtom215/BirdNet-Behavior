@@ -206,6 +206,31 @@ jobs:
           fi
           echo "::notice::CHANGELOG.md entry found for v$VERSION"
 
+      - name: Report the CHANGELOG section size against the release-body limit
+        # `github-release` caps the body at GitHub's 125,000-character limit
+        # and links to CHANGELOG.md for the remainder. This is a warning and
+        # not a gate on purpose: truncated notes are cosmetic, and blocking a
+        # release over prose length would be worse than what it prevents.
+        # It runs in `validate` so an oversized section is visible in seconds
+        # rather than after a 39-minute build, which is how v0.16.0 was found.
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          SECTION_BYTES=$(
+            awk "
+              /^## \[$VERSION\]/     { found=1; next }
+              found && /^## \[/       { exit }
+              found && /^\[[^]]+\]: / { exit }
+              found                   { print }
+            " CHANGELOG.md | wc -c
+          )
+
+          echo "::notice::CHANGELOG [$VERSION] section: ${SECTION_BYTES} bytes"
+          if [[ "$SECTION_BYTES" -gt 120000 ]]; then
+            echo "::warning file=CHANGELOG.md::The [$VERSION] section is ${SECTION_BYTES} bytes. The GitHub Release body is capped at 125,000 characters, so these notes will be truncated at a heading boundary with a link to the full entry. Consider trimming the section."
+          fi
+
 # ── Job 2: Full quality gate before building release artifacts ───────────────
   ci:
     name: CI gate — ${{ matrix.name }}
@@ -735,10 +760,23 @@ jobs:
       - name: Assemble final release notes
         shell: bash
         run: |
+          set -euo pipefail
           VERSION="${{ needs.validate.outputs.version }}"
 
+          # GitHub rejects a release body over 125,000 characters with HTTP
+          # 422. v0.16.0's CHANGELOG section alone was 270,796, the edit
+          # 422'd, and because this job runs under `bash -e` the script died
+          # before `gh release upload` ever ran -- so the release published
+          # with NO binaries, and `install.sh` 404'd for every user, not just
+          # those asking for 0.16.0 (it resolves /releases/latest). The body
+          # is bounded here; the upload no longer sits behind it (next step).
+          MAX_BODY=125000
+
+          # Everything after the changelog is fixed-size boilerplate. Write
+          # it first and measure it, so the changelog's budget is derived
+          # rather than guessed -- if this block grows, the budget shrinks to
+          # match instead of silently going stale.
           {
-            cat release_notes.md
             echo ""
             echo "---"
             echo ""
@@ -823,7 +861,64 @@ jobs:
             echo "Dependency Graph, or any CycloneDX-aware vulnerability"
             echo "scanner. Both files are signed by the same SLSA build"
             echo "provenance attestation as the binaries."
+          } > tail_notes.md
+
+          # Budget in BYTES, not characters. awk's length() counts bytes
+          # under mawk (Ubuntu's default awk) and characters under gawk; for
+          # UTF-8, bytes >= characters, so a byte budget can only under-fill,
+          # never overshoot GitHub's character limit.
+          TAIL_BYTES=$(wc -c < tail_notes.md)
+          NOTICE_BYTES=320
+          BUDGET=$(( MAX_BODY - TAIL_BYTES - NOTICE_BYTES ))
+
+          if [[ "$(wc -c < release_notes.md)" -le "$BUDGET" ]]; then
+            cp release_notes.md head_notes.md
+            TRUNCATED=false
+          else
+            # Cut at a "### " boundary so the notes never stop mid-sentence.
+            # `last` tracks the last such heading that begins while still
+            # inside the budget; everything before it is whole sections.
+            CUT=$(awk -v budget="$BUDGET" '
+              {
+                if ($0 ~ /^### / && total <= budget) last = NR
+                total += length($0) + 1
+                if (total > budget) exit
+              }
+              END { print last+0 }
+            ' release_notes.md)
+
+            if [[ "$CUT" -gt 1 ]]; then
+              head -n "$(( CUT - 1 ))" release_notes.md > head_notes.md
+            else
+              # No "### " boundary fits -- a single enormous section. Keep
+              # whole lines up to the budget rather than emitting nothing.
+              awk -v budget="$BUDGET" '
+                { total += length($0) + 1; if (total > budget) exit; print }
+              ' release_notes.md > head_notes.md
+            fi
+            TRUNCATED=true
+          fi
+
+          {
+            cat head_notes.md
+            if [[ "$TRUNCATED" == "true" ]]; then
+              echo ""
+              echo "> **These notes are truncated.** The full \`${VERSION}\` entry exceeds"
+              echo "> GitHub's ${MAX_BODY}-character release-body limit. Read it in full in"
+              echo "> [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/v${VERSION}/CHANGELOG.md)."
+            fi
+            cat tail_notes.md
           } > final_notes.md
+
+          # This truncator is the only thing between a long CHANGELOG and
+          # another 422, so assert its output -- in characters, which is what
+          # GitHub actually counts.
+          BODY_CHARS=$(LC_ALL=C.UTF-8 wc -m < final_notes.md)
+          if [[ "$BODY_CHARS" -gt "$MAX_BODY" ]]; then
+            echo "::error::Assembled release body is ${BODY_CHARS} characters, over GitHub's ${MAX_BODY} limit -- the truncation above did not work."
+            exit 1
+          fi
+          echo "::notice::Release body: ${BODY_CHARS} characters (limit ${MAX_BODY}, truncated=${TRUNCATED})"
 
           echo "::group::Final release notes"
           cat final_notes.md
@@ -859,33 +954,44 @@ jobs:
             [[ -e "$f" ]] && SBOM_ASSETS+=("$f")
           done
 
+          # Assets first, notes last. v0.16.0 published with zero binaries
+          # because `gh release edit` 422'd on an oversized body and `-e`
+          # killed this script before `gh release upload` ran. The binaries
+          # are what `install.sh` resolves and downloads; the notes are
+          # prose. In this order a notes problem can never again cost the
+          # release its assets.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::warning::Release ${TAG} already exists — updating in place."
-            gh release edit "$TAG" \
-              "${PRE_FLAG[@]}" \
-              --title "$TITLE" \
-              --notes-file final_notes.md
-
-            gh release upload "$TAG" \
-              --clobber \
-              release/*.tar.gz \
-              release/SHA256SUMS \
-              release/install.sh \
-              release/uninstall.sh \
-              "${SBOM_ASSETS[@]}"
-            echo "::notice::Updated $RELEASE_URL"
           else
+            # Created with a placeholder body, not the real notes, so the
+            # upload below stays reachable even if the notes are unusable.
             gh release create "$TAG" \
               "${PRE_FLAG[@]}" \
               --title "$TITLE" \
-              --notes-file final_notes.md \
-              release/*.tar.gz \
-              release/SHA256SUMS \
-              release/install.sh \
-              release/uninstall.sh \
-              "${SBOM_ASSETS[@]}"
-            echo "::notice::Published $RELEASE_URL"
+              --notes "Publishing ${TAG}…"
           fi
+
+          gh release upload "$TAG" \
+            --clobber \
+            release/*.tar.gz \
+            release/SHA256SUMS \
+            release/install.sh \
+            release/uninstall.sh \
+            "${SBOM_ASSETS[@]}"
+          echo "::notice::Assets attached to $RELEASE_URL"
+
+          # A failure here leaves a fully usable release — every download
+          # link works — so it is reported loudly and fails the job, but
+          # only after the binaries are up.
+          NOTES_OK=true
+          if ! gh release edit "$TAG" \
+                 "${PRE_FLAG[@]}" \
+                 --title "$TITLE" \
+                 --notes-file final_notes.md; then
+            NOTES_OK=false
+            echo "::error::Assets are attached to ${RELEASE_URL}, but the release notes could not be applied. Downloads work; the body needs fixing by hand."
+          fi
+          echo "::notice::Published $RELEASE_URL"
 
           {
             echo "## Release v${VERSION}"
@@ -902,3 +1008,7 @@ jobs:
             ls -lh release/
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$NOTES_OK" != "true" ]]; then
+            exit 1
+          fi

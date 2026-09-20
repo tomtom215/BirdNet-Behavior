@@ -46,11 +46,11 @@ validate ──► ci ──► build (matrix) ──► package ──► githu
 
 | Job | Emits |
 |-----|-------|
-| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z]` section in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. |
+| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z]` section in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
 | `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
 | `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in; dormant until `--analytics-db` is passed). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
 | `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives and SBOMs, signed via GitHub OIDC. |
-| `github-release` | Creates/updates the GitHub Release idempotently, attaches the archives, `SHA256SUMS`, `install.sh`, and SBOMs, and uses the extracted `CHANGELOG` section (plus appended install/Docker/verify notes) as the body. |
+| `github-release` | Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install/Docker/verify notes. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
 
 **Build targets** (three — there is no armv7 and no musl):
 
