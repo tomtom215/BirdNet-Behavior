@@ -154,26 +154,12 @@
         return [CX + r * Math.cos(rad), CY + r * Math.sin(rad)];
     }
 
-    function hexToRgb(hex) {
-        var n = parseInt(hex.replace('#', ''), 16);
-        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    }
-
-    function lerpColor(a, b, t) {
-        return 'rgb(' +
-            Math.round(a[0] + (b[0] - a[0]) * t) + ',' +
-            Math.round(a[1] + (b[1] - a[1]) * t) + ',' +
-            Math.round(a[2] + (b[2] - a[2]) * t) + ')';
-    }
-
     function renderPolarClock(hourData) {
         // hourData: array of {hour: 0..23, avg_detections: float}
         var svg = document.getElementById('polar-clock');
         while (svg.firstChild) svg.removeChild(svg.firstChild);
 
         var maxVal = hourData.reduce(function (m, d) { return Math.max(m, d.avg_detections); }, 0.001);
-        var colorLow = hexToRgb('0ea5e9');   // accent-dim blue
-        var colorHigh = hexToRgb('22c55e');  // success green
 
         var HOURS = 24;
         var sliceAngle = 360 / HOURS;
@@ -215,8 +201,10 @@
 
             var path = document.createElementNS(SVG_NS, 'path');
             path.setAttribute('d', d_attr);
-            path.setAttribute('fill', lerpColor(colorLow, colorHigh, frac));
-            path.setAttribute('opacity', frac < 0.05 ? '0.2' : '0.85');
+            // The theme's moss ramp, by opacity, so the clock follows light,
+            // dark and high contrast like every other chart on the page.
+            path.setAttribute('fill', 'var(--moss)');
+            path.setAttribute('fill-opacity', String(0.18 + 0.72 * frac));
             path.setAttribute('stroke', 'var(--bg)');
             path.setAttribute('stroke-width', '1');
             svg.appendChild(path);
@@ -247,36 +235,45 @@
         svg.appendChild(centre);
     }
 
-    // Fetch heatmap data and render
-    fetch('/api/v2/timeseries/heatmap?days=90')
-        .then(function (r) { return r.json(); })
+    function say(message) {
+        var svg = document.getElementById('polar-clock');
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        var t = document.createElementNS(SVG_NS, 'text');
+        t.setAttribute('x', '160'); t.setAttribute('y', '170');
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('fill', 'var(--text-muted)');
+        t.setAttribute('font-size', '12');
+        t.textContent = message;
+        svg.appendChild(t);
+    }
+
+    // Fetch heatmap data and render. The endpoint answers
+    // `{"heatmap": [{hour_of_day, avg_detections_per_day, …}], "total": n}`;
+    // this used to look for `data`/`rows` and `hour`/`avg_detections`, found
+    // none of them, and drew 24 zeros — a flat clock on every station.
+    var base = (document.body && document.body.dataset.basePath) || '';
+    fetch(base + '/api/v2/timeseries/heatmap?days=90')
+        .then(function (r) {
+            if (!r.ok) { throw new Error('HTTP ' + r.status); }
+            return r.json();
+        })
         .then(function (json) {
-            // Normalise: API returns {data: [{hour, avg_detections}]} or similar
-            var rows = json.data || json.rows || json;
-            if (!Array.isArray(rows) || rows.length === 0) {
-                // Synthesise empty data so the clock still renders
-                rows = Array.from({length: 24}, function (_, i) {
-                    return {hour: i, avg_detections: 0};
-                });
+            var rows = Array.isArray(json.heatmap) ? json.heatmap : [];
+            if (rows.length === 0) {
+                say('No detections in the last 90 days');
+                return;
             }
-            // Fill missing hours with 0
             var byHour = {};
-            rows.forEach(function (r) { byHour[r.hour] = r; });
-            var full = Array.from({length: 24}, function (_, i) {
-                return byHour[i] || {hour: i, avg_detections: 0};
+            rows.forEach(function (r) {
+                byHour[r.hour_of_day] = {hour: r.hour_of_day, avg_detections: r.avg_detections_per_day || 0};
             });
-            renderPolarClock(full);
+            renderPolarClock(Array.from({length: 24}, function (_, i) {
+                return byHour[i] || {hour: i, avg_detections: 0};
+            }));
         })
         .catch(function () {
-            var svg = document.getElementById('polar-clock');
-            var t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-            t.setAttribute('x', '160'); t.setAttribute('y', '170');
-            t.setAttribute('text-anchor', 'middle');
-            t.setAttribute('fill', 'var(--text-muted)');
-            t.setAttribute('font-size', '12');
-            t.textContent = 'No data';
-            while (svg.firstChild) svg.removeChild(svg.firstChild);
-            svg.appendChild(t);
+            // A failure is not an empty clock: say so.
+            say('Could not load the activity clock');
         });
 })();
 </script>

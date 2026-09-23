@@ -256,6 +256,58 @@ async function wizardCardsByKeyboard(page) {
   check('wizard: clicking a card still selects it', clicked === '0.9' && clickedCard === '0.9', `input ${clicked}, highlighted ${clickedCard}`);
 }
 
+/** A toast the server sends out-of-band can be dismissed, and goes by itself.
+ *
+ * htmx fires `htmx:oobAfterSwap` on the main swap's target, and the region
+ * listened for its own id on `e.target`, so no server toast was ever bound:
+ * the × did nothing and "Settings saved" stayed on screen for good.
+ */
+async function serverToasts(page) {
+  await page.goto(`${BASE}/admin/settings`, { waitUntil: 'networkidle' });
+  await page.click('button.btn-primary[type=submit]');
+  const toast = await page.waitForSelector('#bnb-toasts .bnb-toast', { timeout: 10000 }).catch(() => null);
+  check('toasts: saving settings shows a toast', !!toast, 'no toast appeared');
+  if (!toast) return;
+  const bound = await toast.evaluate((t) => t.dataset.bound === '1');
+  check('toasts: the server toast is wired up', bound, 'data-bound was never set');
+  await page.click('#bnb-toasts .bnb-toast [data-toast-close]');
+  const gone = await page
+    .waitForFunction(() => document.querySelectorAll('#bnb-toasts .bnb-toast').length === 0, null, { timeout: 2000 })
+    .then(() => true, () => false);
+  check('toasts: the × dismisses it', gone, 'the toast is still on screen after its × was clicked');
+
+  await page.click('button.btn-primary[type=submit]');
+  await page.waitForSelector('#bnb-toasts .bnb-toast', { timeout: 10000 });
+  const timedOut = await page
+    .waitForFunction(() => document.querySelectorAll('#bnb-toasts .bnb-toast').length === 0, null, { timeout: 9000 })
+    .then(() => true, () => false);
+  check('toasts: a success toast goes by itself', timedOut, 'still on screen 9 s later');
+}
+
+/** The polar activity clock draws the station's data, not 24 zeros.
+ *
+ * Its script read `json.data` / `hour` / `avg_detections`; the endpoint answers
+ * `heatmap` / `hour_of_day` / `avg_detections_per_day`, so every station got a
+ * flat clock labelled "90d avg" and nothing said anything was wrong.
+ */
+async function polarClock(page) {
+  await page.goto(`${BASE}/patterns?tab=trends`, { waitUntil: 'networkidle' });
+  const found = await page.$('#polar-clock');
+  check('clock: the trends tab has the polar clock', !!found, 'no #polar-clock');
+  if (!found) return;
+  await page.evaluate(() => {
+    let d = document.getElementById('polar-clock').closest('details');
+    while (d) { d.open = true; d = d.parentElement && d.parentElement.closest('details'); }
+  });
+  const radii = await page
+    .waitForFunction(() => {
+      const paths = [...document.querySelectorAll('#polar-clock path')];
+      return paths.length === 24 ? new Set(paths.map((p) => p.getAttribute('d').split(' ')[7])).size : 0;
+    }, null, { timeout: 8000 })
+    .then((h) => h.jsonValue(), () => 0);
+  check('clock: the wedges follow the data', radii > 1, `${radii} distinct wedge radii — a flat clock`);
+}
+
 const page404 = [];
 
 async function main() {
@@ -274,6 +326,8 @@ async function main() {
     ['bulk actions', bulkActions],
     ['destructive controls', destructiveControlDisables],
     ['wizard cards by keyboard', wizardCardsByKeyboard],
+    ['server toasts', serverToasts],
+    ['activity clock', polarClock],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
