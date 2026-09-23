@@ -164,6 +164,20 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "WEEKLY_REPORT_SCHEDULE",
 ];
 
+/// Keys the installer writes into `birdnet.conf` that nothing here reads.
+///
+/// They cannot be in [`KNOWN_CONFIG_KEYS`], whose drift gate requires a
+/// reader, and are nonetheless expected in the file.
+///
+/// * `BIRDNET_LISTEN` — written by `installer/lib/62-config-file.sh` and read
+///   back by the installer on re-run, to keep the listen address.
+/// * `CADDY_USER` — written by the same file; the sign-in form reads it from
+///   the environment, and the file keeps the operator's record of it.
+///
+/// Each drew an unknown-key warning on every start of a fresh install and
+/// kept `--doctor` from ever exiting 0.
+pub const INSTALLER_KEYS: &[&str] = &["BIRDNET_LISTEN", "CADDY_USER"];
+
 /// Whether `key` is one this station reads.
 #[must_use]
 pub fn is_known(key: &str) -> bool {

@@ -259,7 +259,9 @@ impl Config {
         let mut out: Vec<UnknownKey> = self
             .values
             .keys()
-            .filter(|k| !known_keys::is_known(k))
+            .filter(|k| {
+                !known_keys::is_known(k) && !known_keys::INSTALLER_KEYS.contains(&k.as_str())
+            })
             .map(|k| UnknownKey {
                 key: k.clone(),
                 did_you_mean: known_keys::did_you_mean(k),
@@ -319,6 +321,19 @@ fn parse_value(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The keys the installer writes into every config it creates are not
+    /// "unknown". `BIRDNET_LISTEN=` (read back by the installer on re-run) and
+    /// `CADDY_USER=` (read from the environment by the sign-in form) drew an
+    /// unknown-key warning on every start of every fresh install, and kept
+    /// `--doctor` from ever exiting 0. A typo is still reported.
+    #[test]
+    fn the_installers_own_keys_are_not_unknown() {
+        let c = Config::parse("BIRDNET_LISTEN=0.0.0.0:8502\nCADDY_USER=admin\nCONFIDENC=0.8\n")
+            .expect("parses");
+        let unknown: Vec<String> = c.unknown_keys().into_iter().map(|u| u.key).collect();
+        assert_eq!(unknown, vec!["CONFIDENC".to_owned()]);
+    }
 
     /// The installer's template documents each key on a commented-out line,
     /// with its range after a `#` on the same line. Uncommenting the key the
