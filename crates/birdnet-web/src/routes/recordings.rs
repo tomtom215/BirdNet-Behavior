@@ -116,9 +116,12 @@ fn base_recording_headers(content_type: &'static str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    // `private`: the browser may keep it; a shared cache between here and the
+    // reader may not. It was `public`, on a private station too, where a
+    // recording is served only to a signed-in session.
     headers.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=86400"),
+        HeaderValue::from_static("private, max-age=86400"),
     );
     headers
 }

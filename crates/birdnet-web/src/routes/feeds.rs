@@ -184,7 +184,9 @@ fn rss_response(body: String) -> Response {
     );
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=300"),
+        // `private`, like the recordings: on a private station a feed is served
+        // only to a signed-in session, and a shared cache must not hand it on.
+        HeaderValue::from_static("private, max-age=300"),
     );
     resp
 }
@@ -226,7 +228,7 @@ async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     );
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=3600"),
+        HeaderValue::from_static("private, max-age=3600"),
     );
     resp
 }
