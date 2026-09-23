@@ -208,6 +208,8 @@ Read these before updating. Each one changes what an existing station does.
 - **Today showed "Listening" and "recording" without measuring either.**
 - **Screen readers re-read the Today nudge every minute.** It is now
   announced only when it changes.
+- **A saved-settings entry stretched the audit log to 3,818 px** at desktop
+  width. The list of keys now wraps at its commas.
 
 #### Configuration, installer and doctor
 
