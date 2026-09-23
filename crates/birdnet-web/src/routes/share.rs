@@ -21,9 +21,9 @@
 //! separator. A tampered or expired token fails verification and renders the
 //! "gone" page rather than leaking anything.
 //!
-//! Set `BNB_SHARE_SECRET` (32+ random bytes) in the environment so links
-//! survive restarts; without it a random per-process secret is used
-//! (fail-secure: every outstanding link invalidates on restart).
+//! The key is `BNB_SHARE_SECRET` when that is set, and otherwise derived from
+//! the station's persisted session secret, so links survive restarts either
+//! way. Changing either secret invalidates every outstanding link.
 
 // Crypto + HTTP rendering: short identifiers and doc acronyms (HMAC-SHA256,
 // base64url) are intrinsic; allow the pedantic/nursery style noise.
@@ -67,39 +67,26 @@ fn secret() -> &'static [u8] {
     SECRET
         .get_or_init(|| {
             std::env::var("BNB_SHARE_SECRET")
-                .map(String::into_bytes)
-                .unwrap_or_else(|_| {
-                    tracing::warn!(
-                        "BNB_SHARE_SECRET not set; using a random per-process secret. \
-                         Outstanding share links invalidate on restart."
-                    );
-                    random_secret().to_vec()
-                })
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map_or_else(derived_secret, String::into_bytes)
         })
         .as_slice()
 }
 
-/// 32 bytes of best-effort per-process entropy (std-only). Only used as the
-/// fail-secure fallback when `BNB_SHARE_SECRET` is unset — production should
-/// always set the env var so links survive restarts.
-#[allow(clippy::cast_possible_truncation)]
-fn random_secret() -> [u8; 32] {
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0xDEAD_BEEF_u64, |d| {
-            u64::from(d.subsec_nanos()) ^ d.as_secs().rotate_left(21)
-        })
-        ^ u64::from(std::process::id());
-    let mut x = seed;
-    let mut buf = [0u8; 32];
-    for b in &mut buf {
-        // SplitMix64-style scramble; good enough for a session-only secret.
-        x = x
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        *b = (x >> 56) as u8;
-    }
-    buf
+/// The share key when `BNB_SHARE_SECRET` is unset: the station's session
+/// secret — random, and persisted beside the database (DD-15) — under a label
+/// of its own, so neither key can stand in for the other.
+///
+/// It used to be 32 bytes scrambled from the start time and the process id:
+/// a 64-bit seed, so one valid link let anyone who could guess roughly when
+/// the station started search for the key offline and forge a link to any
+/// detection — and every link died at the next restart.
+fn derived_secret() -> Vec<u8> {
+    let mut mac =
+        HmacSha256::new_from_slice(&crate::session::secret()).expect("HMAC accepts any key length");
+    mac.update(b"bnb-share-links-v1");
+    mac.finalize().into_bytes().to_vec()
 }
 
 fn truncated_mac(payload: &[u8]) -> [u8; TRUNCATED_HMAC_LEN] {
@@ -439,6 +426,64 @@ fn ago_phrase(date: &str, time: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A share link outlives the process that minted it.
+    ///
+    /// With `BNB_SHARE_SECRET` unset — the default — the key was 32 bytes
+    /// scrambled from the start time and the process id: a 64-bit seed, so
+    /// one valid link let anyone who could guess roughly when the station
+    /// started search for the key offline and forge a link to any detection.
+    /// It also meant every link died with every restart. The key is now
+    /// derived from the station's persisted session secret. The test mints a
+    /// link in one run of this binary and verifies it in another, with the
+    /// same session secret and no share secret.
+    #[test]
+    fn a_share_link_survives_a_restart() {
+        const STEP: &str = "BNB_SHARE_TEST_STEP";
+        let me = "routes::share::tests::a_share_link_survives_a_restart";
+        match std::env::var(STEP).as_deref() {
+            Ok("mint") => {
+                println!(
+                    "TOKEN={}",
+                    encode_share_token("2026-05-01", "06:00:00", "Robin", u64::MAX / 2)
+                );
+                return;
+            }
+            Ok("verify") => {
+                let token = std::env::var("BNB_SHARE_TEST_TOKEN").unwrap();
+                assert!(
+                    decode_share_token(&token).is_some(),
+                    "the link did not survive"
+                );
+                return;
+            }
+            _ => {}
+        }
+        let run = |step: &str, token: &str| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", me, "--nocapture"])
+                .env(STEP, step)
+                .env("BNB_SHARE_TEST_TOKEN", token)
+                .env(
+                    "BNB_SESSION_SECRET",
+                    "a-persisted-session-secret-for-the-test",
+                )
+                .env_remove("BNB_SHARE_SECRET")
+                .output()
+                .unwrap()
+        };
+        let minted = run("mint", "");
+        let out = String::from_utf8_lossy(&minted.stdout).into_owned();
+        let token = out
+            .lines()
+            .find_map(|l| l.strip_prefix("TOKEN="))
+            .unwrap_or_else(|| panic!("no token minted: {out}"))
+            .to_owned();
+        let verified = run("verify", &token);
+        let text = String::from_utf8_lossy(&verified.stdout).into_owned()
+            + &String::from_utf8_lossy(&verified.stderr);
+        assert!(text.contains("1 passed"), "second process:\n{text}");
+    }
 
     #[test]
     fn token_roundtrip() {
