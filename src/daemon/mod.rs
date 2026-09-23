@@ -334,6 +334,16 @@ pub fn start_detection_daemon(
         tracing::info!("{note}");
     }
 
+    // The floor the inference loop runs every classifier at or below: the
+    // model confidence, lowered to any per-species threshold under it, and kept
+    // current by the processor as the operator changes thresholds.
+    // Seeded from the thresholds already loaded, so the first files — analysed
+    // before the processor thread is up to publish — are not judged by the
+    // model alone.
+    let threshold_floor =
+        std::sync::Arc::new(birdnet_core::detection::daemon::ThresholdFloor::new(
+            processor::lowest_threshold(model_confidence, &species_thresholds),
+        ));
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
@@ -382,6 +392,7 @@ pub fn start_detection_daemon(
         latitude,
         longitude,
         species_thresholds,
+        threshold_floor: Some(std::sync::Arc::clone(&threshold_floor)),
     };
 
     let (event_tx, event_rx) = mpsc::sync_channel(DETECTION_EVENT_CHANNEL_CAP);
@@ -446,6 +457,7 @@ pub fn start_detection_daemon(
                         dynamic_config,
                     ),
                     provenance,
+                    Some((threshold_floor, model_confidence)),
                 );
             });
             Some(handle)

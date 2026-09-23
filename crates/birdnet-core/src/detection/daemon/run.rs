@@ -395,6 +395,11 @@ pub fn run_daemon(
     // Snapshot the backlog settings to move into the loop thread; `config` is
     // a borrow and cannot outlive this call on the spawned 'static thread.
     let process_existing = config.process_existing;
+    // Each classifier's own threshold as loaded, and the floor the processor
+    // publishes: before every file each runs at the lower of the two, so a
+    // per-species threshold below the global one reaches the model at all.
+    let threshold_floor = config.threshold_floor.clone();
+    let loaded_thresholds = super::loaded_thresholds(&registry);
     let watch_dir = config.watch_dir.clone();
 
     // Main daemon loop -- runs on its own thread
@@ -423,6 +428,11 @@ pub fn run_daemon(
         // systemd TimeoutStartSec, and with a bounded event channel it applies
         // backpressure instead of dead-locking an undrained queue.
         if process_existing {
+            super::apply_threshold_floor(
+                &mut registry,
+                &loaded_thresholds,
+                threshold_floor.as_deref(),
+            );
             process_existing_files(
                 &watch_dir,
                 &pipeline_config,
@@ -567,6 +577,12 @@ pub fn run_daemon(
                     correlation_id = %correlation_id,
                     file = %path.display(),
                     "begin processing file"
+                );
+
+                super::apply_threshold_floor(
+                    &mut registry,
+                    &loaded_thresholds,
+                    threshold_floor.as_deref(),
                 );
 
                 // Claimed for as long as the pipeline reads it (PR-1 / S-3):
@@ -775,6 +791,7 @@ mod tests {
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),
+            threshold_floor: None,
         };
 
         let (event_tx, _event_rx) = mpsc::sync_channel(64);

@@ -150,7 +150,16 @@ impl DynamicThresholdState {
 struct ThresholdCache {
     map: std::collections::HashMap<String, f64>,
     refreshed: std::time::Instant,
+    floor: Option<PublishedFloor>,
 }
+
+/// The inference loop's threshold floor, and the lowest it may ever be set:
+/// the model confidence the station would run at with no per-species
+/// thresholds (the global confidence, or the dynamic-threshold floor).
+pub(super) type PublishedFloor = (
+    std::sync::Arc<birdnet_core::detection::daemon::ThresholdFloor>,
+    f32,
+);
 
 impl ThresholdCache {
     /// How stale a threshold may get before the next event re-reads it.
@@ -160,6 +169,23 @@ impl ThresholdCache {
         Self {
             map: initial,
             refreshed: std::time::Instant::now(),
+            floor: None,
+        }
+    }
+
+    /// Keep the inference loop's floor at the lowest threshold in force: the
+    /// model's own, or any per-species threshold below it. See
+    /// [`birdnet_core::detection::daemon::ThresholdFloor`] for why the model
+    /// has to know.
+    fn publishing(mut self, floor: Option<PublishedFloor>) -> Self {
+        self.floor = floor;
+        self.publish();
+        self
+    }
+
+    fn publish(&self) {
+        if let Some((floor, model)) = &self.floor {
+            floor.set(lowest_threshold(*model, &self.map));
         }
     }
 
@@ -174,7 +200,10 @@ impl ThresholdCache {
     ) -> &std::collections::HashMap<String, f64> {
         if self.refreshed.elapsed() >= Self::TTL {
             match state.with_db(birdnet_db::sqlite::get_species_threshold_map) {
-                Ok(fresh) => self.map = fresh,
+                Ok(fresh) => {
+                    self.map = fresh;
+                    self.publish();
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "could not refresh per-species thresholds; keeping the previous set");
                 }
@@ -183,6 +212,20 @@ impl ThresholdCache {
         }
         &self.map
     }
+}
+
+/// The lowest confidence any species may be recorded at: `model`, or a
+/// per-species threshold below it. Clamped to 0–1 — a stored threshold is
+/// validated where it is typed, but this feeds the classifier directly.
+#[allow(clippy::cast_possible_truncation)]
+pub(super) fn lowest_threshold(
+    model: f32,
+    thresholds: &std::collections::HashMap<String, f64>,
+) -> f32 {
+    thresholds
+        .values()
+        .filter(|t| t.is_finite())
+        .fold(model, |acc, &t| acc.min(t.clamp(0.0, 1.0) as f32))
 }
 
 /// What a notification-log row says about the detection it concerns.
@@ -379,9 +422,11 @@ pub(super) fn event_processor(
     daylight: crate::daemon::daylight::DaylightFilter,
     dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
     provenance: RunProvenance,
+    threshold_floor: Option<PublishedFloor>,
 ) {
     tracing::debug!("event processor started");
-    let mut species_thresholds = ThresholdCache::new(species_thresholds);
+    let mut species_thresholds =
+        ThresholdCache::new(species_thresholds).publishing(threshold_floor);
     let mut dynamic = DynamicThresholdState::new(dynamic, &state);
     let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
     if daylight.is_enabled() {
@@ -1434,6 +1479,63 @@ mod tests {
         );
     }
 
+    /// The inference loop's floor follows the lowest threshold in force.
+    ///
+    /// The model discards everything under its own threshold before this
+    /// processor sees it, so a per-species threshold below the global one
+    /// reached nothing unless the model was told to run that low (see
+    /// `ThresholdFloor`). Set at start from the loaded map, lowered when an
+    /// operator lowers a species at runtime, raised again when they remove it —
+    /// never above the model's own confidence, never below 0.
+    #[test]
+    fn the_model_floor_follows_the_lowest_species_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let floor = std::sync::Arc::new(birdnet_core::detection::daemon::ThresholdFloor::new(0.75));
+        let mut cache =
+            ThresholdCache::new(thresholds(&[("Strix aluco", 0.5), ("Pica pica", 0.9)]))
+                .publishing(Some((std::sync::Arc::clone(&floor), 0.75)));
+        assert!(
+            (floor.get() - 0.5).abs() < f32::EPSILON,
+            "floor {}",
+            floor.get()
+        );
+
+        let age = |cache: &mut ThresholdCache| {
+            cache.refreshed = std::time::Instant::now()
+                .checked_sub(ThresholdCache::TTL)
+                .expect("clock is well past the TTL");
+        };
+        state.with_db(|c| {
+            birdnet_db::sqlite::set_species_threshold(c, "Strix aluco", 0.3).unwrap();
+        });
+        age(&mut cache);
+        let _ = cache.current(&state);
+        assert!(
+            (floor.get() - 0.3).abs() < 1e-6,
+            "lowered at runtime: {}",
+            floor.get()
+        );
+
+        state.with_db(|c| {
+            c.execute("DELETE FROM species_thresholds", []).unwrap();
+        });
+        age(&mut cache);
+        let _ = cache.current(&state);
+        assert!(
+            (floor.get() - 0.75).abs() < f32::EPSILON,
+            "with no species below it, the model runs at its own confidence: {}",
+            floor.get()
+        );
+
+        // A species set *above* the model changes nothing about the floor.
+        assert!(
+            (lowest_threshold(0.75, &thresholds(&[("Pica pica", 0.95)])) - 0.75).abs()
+                < f32::EPSILON
+        );
+        assert!(lowest_threshold(0.75, &thresholds(&[("x", -3.0)])).abs() < f32::EPSILON);
+    }
+
     #[test]
     fn threshold_cache_keeps_the_previous_map_when_a_refresh_fails() {
         // Falling back to an empty map on a transient read failure would
@@ -1658,6 +1760,7 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
@@ -1759,6 +1862,7 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
@@ -1841,6 +1945,7 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
@@ -1943,6 +2048,7 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
@@ -2664,6 +2770,7 @@ mod tests {
                 daylight,
                 dynamic,
                 provenance,
+                None,
             );
         })
         .await

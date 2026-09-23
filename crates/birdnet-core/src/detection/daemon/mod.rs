@@ -661,6 +661,77 @@ pub struct DaemonConfig {
     ///
     /// Species in this map use the specified threshold instead of the global one.
     pub species_thresholds: std::collections::HashMap<String, f64>,
+    /// The lowest confidence any species may be recorded at, kept current by
+    /// the detection processor. See [`ThresholdFloor`]. `None` runs every
+    /// classifier at its own threshold for the life of the daemon.
+    pub threshold_floor: Option<Arc<ThresholdFloor>>,
+}
+
+/// The lowest confidence any species may currently be recorded at.
+///
+/// # Why the inference loop needs to know
+///
+/// A classifier discards every score below its own threshold inside
+/// `predict_chunk`, before the processor that applies per-species thresholds
+/// ever sees it. The model ran at the global confidence, so an operator who
+/// followed the tuning guide and lowered one rare owl to 0.5 under a global
+/// 0.75 changed nothing: every 0.6 owl was dropped inside the model. The
+/// feature was on, configured, and inert.
+///
+/// The processor re-reads the per-species thresholds every 30 s and publishes
+/// the lowest one in force here; the inference loop runs each classifier at the
+/// lower of its own threshold and this floor before every file
+/// ([`apply_threshold_floor`]). Everything above the floor is still decided by
+/// the processor, per species, exactly as before — the floor only stops the
+/// model from deciding first.
+#[derive(Debug)]
+pub struct ThresholdFloor(std::sync::atomic::AtomicU32);
+
+impl ThresholdFloor {
+    /// A floor starting at `value`.
+    #[must_use]
+    pub const fn new(value: f32) -> Self {
+        Self(std::sync::atomic::AtomicU32::new(value.to_bits()))
+    }
+
+    /// The floor now.
+    #[must_use]
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+
+    /// Move the floor.
+    pub fn set(&self, value: f32) {
+        self.0.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// Run each classifier at the lower of its own threshold (`base[i]`, what it
+/// was loaded with) and the shared floor. A no-op without a floor.
+pub fn apply_threshold_floor(
+    registry: &mut crate::inference::registry::ClassifierRegistry,
+    base: &[f32],
+    floor: Option<&ThresholdFloor>,
+) {
+    let Some(floor) = floor else {
+        return;
+    };
+    let floor = floor.get();
+    for (idx, &own) in base.iter().enumerate() {
+        if let Some(registered) = registry.model_mut(idx) {
+            registered.model.set_confidence_threshold(own.min(floor));
+        }
+    }
+}
+
+/// Each classifier's own threshold, as loaded — the `base` for
+/// [`apply_threshold_floor`].
+#[must_use]
+pub fn loaded_thresholds(registry: &crate::inference::registry::ClassifierRegistry) -> Vec<f32> {
+    (0..registry.len())
+        .filter_map(|idx| registry.model(idx))
+        .map(|registered| registered.model.config().confidence_threshold)
+        .collect()
 }
 
 /// A detection event produced by the daemon.
@@ -800,6 +871,7 @@ mod tests {
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),
+            threshold_floor: None,
         };
         assert_eq!(config.watch_dir, PathBuf::from("/tmp/StreamData"));
         assert!(!config.process_existing);
