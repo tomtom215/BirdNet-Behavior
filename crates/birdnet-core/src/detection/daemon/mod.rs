@@ -595,6 +595,15 @@ pub struct DaemonConfig {
     /// unattended station being OOM-killed at three in the morning is a worse
     /// outcome than running with one model and saying so.
     pub extra_models: Vec<crate::inference::registry::ModelSpec>,
+    /// The primary classifier's id: recorded on its detections and named in
+    /// routes (`MODEL_ID`; `birdnet` when unset).
+    pub primary_id: String,
+    /// The primary's own confidence threshold (`MODEL_THRESHOLD`), or `None`
+    /// to use the station's.
+    pub primary_threshold: Option<f32>,
+    /// The primary's declared sample rate (`MODEL_SAMPLE_RATE`), or `None` to
+    /// derive it from the model's input shape.
+    pub primary_sample_rate: Option<u32>,
     /// Which classifiers judge which audio source, by source id.
     ///
     /// A source absent from this map is judged by the primary classifier —
@@ -850,6 +859,9 @@ mod tests {
             model_path: PathBuf::from("/opt/birdnet/model.onnx"),
             labels_path: PathBuf::from("/opt/birdnet/labels.txt"),
             extra_models: Vec::new(),
+            primary_id: "birdnet".to_owned(),
+            primary_threshold: None,
+            primary_sample_rate: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),

@@ -70,7 +70,7 @@ Every key also exists as `BIRDNET_MODEL_2_PATH` and so on in the environment; se
 
 **`MODEL_n_SAMPLE_RATE` is not optional for Perch.** Its tensor declares `[-1, 160000]`, which is 5 s at 32 kHz and equally 3⅓ s at 48 kHz — nothing in the shape distinguishes them, so it has to be told. BirdNET's own shapes are unambiguous, and the station derives those for itself.
 
-**`MODEL_n_THRESHOLD`** lets a second classifier be held to its own confidence bar. Leave it unset to use the station's.
+**`MODEL_n_THRESHOLD`** (and `MODEL_THRESHOLD` for the primary) holds that classifier's detections to its own confidence bar, whether it is below the station's or above it. Leave it unset to use the station's. A per-species threshold still overrides either.
 
 ## Routing sources to classifiers
 

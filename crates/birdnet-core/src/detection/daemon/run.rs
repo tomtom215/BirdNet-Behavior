@@ -31,6 +31,28 @@ use super::{
 /// neither is worth a query per detection during a dawn-chorus burst.
 const SPECIES_LISTS_TTL: Duration = Duration::from_secs(30);
 
+/// Every classifier the daemon loads, primary first.
+///
+/// The primary's id, threshold and rate are the operator's (`MODEL_ID`,
+/// `MODEL_THRESHOLD`, `MODEL_SAMPLE_RATE`). They were resolved by the plan and
+/// then replaced here with `birdnet` and two `None`s, so a route naming the
+/// primary by its configured id stopped the daemon, and the other two did
+/// nothing at all.
+fn classifier_specs(config: &DaemonConfig) -> Vec<crate::inference::registry::ModelSpec> {
+    let mut specs = Vec::with_capacity(1 + config.extra_models.len());
+    specs.push(crate::inference::registry::ModelSpec {
+        id: config.primary_id.clone(),
+        model_path: config.model_path.clone(),
+        labels_path: config.labels_path.clone(),
+        threshold: config.primary_threshold,
+        // `None` derives the rate from the model's shape, which is right for
+        // the BirdNET shapes that derivation was built from.
+        sample_rate: config.primary_sample_rate,
+    });
+    specs.extend(config.extra_models.iter().cloned());
+    specs
+}
+
 /// Run the detection daemon loop.
 ///
 /// Watches `watch_dir` for new audio files and processes them through
@@ -69,17 +91,7 @@ pub fn run_daemon(
     // journal and `--doctor` will show it. An unattended station that starts
     // with a microphone routed to nothing looks identical to one having a
     // quiet month.
-    let mut specs = Vec::with_capacity(1 + config.extra_models.len());
-    specs.push(crate::inference::registry::ModelSpec {
-        id: "birdnet".to_owned(),
-        model_path: config.model_path.clone(),
-        labels_path: config.labels_path.clone(),
-        threshold: None,
-        // The primary's rate is derived from its shape, which is right for
-        // the BirdNET shapes that derivation was built from.
-        sample_rate: None,
-    });
-    specs.extend(config.extra_models.iter().cloned());
+    let specs = classifier_specs(config);
 
     let mut registry = crate::inference::registry::ClassifierRegistry::load(
         &specs,
@@ -745,31 +757,29 @@ mod tests {
     use super::*;
     use crate::inference::model::ModelConfig;
 
-    #[test]
-    fn run_daemon_loop_advances_heartbeat() {
-        // A healthy detection loop must keep advancing its heartbeat, so the
-        // watchdog never mistakes a *running* daemon for a hung one and
-        // needlessly restarts a healthy field station. Stand the real loop up
-        // against the tiny bundled model and assert the counter climbs.
+    /// A daemon over the tiny bundled model, watching an empty directory.
+    fn tiny_config(tmp: &std::path::Path) -> DaemonConfig {
         const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
 
-        let tmp = tempfile::tempdir().unwrap();
-        let watch_dir = tmp.path().join("recs");
+        let watch_dir = tmp.join("recs");
         std::fs::create_dir_all(&watch_dir).unwrap();
-        let model_path = tmp.path().join("model.onnx");
+        let model_path = tmp.join("model.onnx");
         std::fs::write(&model_path, TINY_V24).unwrap();
-        let labels_path = tmp.path().join("labels.txt");
+        let labels_path = tmp.join("labels.txt");
         let labels = (0..11)
             .map(|i| format!("Species{i}_Bird {i}"))
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(&labels_path, labels).unwrap();
 
-        let config = DaemonConfig {
+        DaemonConfig {
             watch_dir,
             model_path,
             labels_path,
             extra_models: Vec::new(),
+            primary_id: "birdnet".to_owned(),
+            primary_threshold: None,
+            primary_sample_rate: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
@@ -792,7 +802,43 @@ mod tests {
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),
             threshold_floor: None,
-        };
+        }
+    }
+
+    /// `MODEL_ID`, `MODEL_THRESHOLD` and `MODEL_SAMPLE_RATE` were resolved into
+    /// the primary's spec by the plan and then thrown away: the daemon rebuilt
+    /// the primary as `birdnet` with neither. A route naming the primary by
+    /// its configured id then stopped the daemon at startup
+    /// (`UnknownRouteTarget`), and without routes the other two were ignored.
+    #[test]
+    fn the_primary_is_loaded_as_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.primary_id = "mybird".to_owned();
+        config.primary_threshold = Some(0.6);
+        config.primary_sample_rate = Some(48_000);
+        config
+            .model_routes
+            .insert("garden".to_owned(), vec!["mybird".to_owned()]);
+
+        let specs = classifier_specs(&config);
+        assert_eq!(specs[0].id, "mybird");
+        assert_eq!(specs[0].threshold, Some(0.6));
+        assert_eq!(specs[0].sample_rate, Some(48_000));
+
+        let (event_tx, _event_rx) = mpsc::sync_channel(64);
+        let handle = run_daemon(&config, event_tx).expect("a route to the configured primary");
+        handle.stop();
+    }
+
+    #[test]
+    fn run_daemon_loop_advances_heartbeat() {
+        // A healthy detection loop must keep advancing its heartbeat, so the
+        // watchdog never mistakes a *running* daemon for a hung one and
+        // needlessly restarts a healthy field station. Stand the real loop up
+        // against the tiny bundled model and assert the counter climbs.
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tiny_config(tmp.path());
 
         let (event_tx, _event_rx) = mpsc::sync_channel(64);
         let handle = run_daemon(&config, event_tx).expect("daemon starts with the tiny model");

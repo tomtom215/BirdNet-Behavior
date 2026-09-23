@@ -334,7 +334,7 @@ fn record_notification(
 /// `sensitivity` and `overlap` are the inference settings the run started
 /// with. The confidence cutoff is not here because it is per row: it is the
 /// threshold `decide_disposition` admitted the detection at.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct RunProvenance {
     /// The `analysis_runs` row this daemon start registered (R-1): the model
     /// bytes, labels and settings every row of this run was made with. Not
@@ -351,6 +351,20 @@ pub(super) struct RunProvenance {
     pub sensitivity: f64,
     /// Analysis-window overlap in seconds.
     pub overlap: f64,
+    /// Each classifier's own confidence threshold, by id, for those that set
+    /// one; the rest are held to the station's.
+    pub model_thresholds: std::collections::HashMap<String, f32>,
+}
+
+impl RunProvenance {
+    /// The confidence floor for a detection made by `model_id`: that
+    /// classifier's own threshold where it has one, else `station`.
+    fn floor_for(&self, model_id: Option<&str>, station: f32) -> f32 {
+        model_id
+            .and_then(|id| self.model_thresholds.get(id))
+            .copied()
+            .unwrap_or(station)
+    }
 }
 
 /// What the soundscape upload needs, gathered on the processor thread while
@@ -489,6 +503,14 @@ pub(super) fn event_processor(
 
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
+        // The floor for this detection: its classifier's own threshold where
+        // one is set, the station's otherwise. Every classifier's threshold was
+        // compared to the station's alone, so `MODEL_2_THRESHOLD=0.35` under a
+        // 0.75 station let the second model emit 0.35–0.75 and dropped every
+        // one of them here — and a stricter classifier, run at the station
+        // floor so a lowered species can reach it, was held only to that.
+        let global_confidence =
+            provenance.floor_for(detection.model_id.as_deref(), global_confidence);
 
         // Does this recording name a day the station could have recorded on?
         //
@@ -2528,7 +2550,7 @@ mod tests {
                 tmp.path().join("a.wav"),
                 "c1",
             )],
-            under_a,
+            under_a.clone(),
         )
         .await;
         let under_b = test_provenance_under(&state, SHA_B);
@@ -2541,7 +2563,7 @@ mod tests {
                 tmp.path().join("b.wav"),
                 "c2",
             )],
-            under_b,
+            under_b.clone(),
         )
         .await;
 
@@ -2620,6 +2642,7 @@ mod tests {
             lon: Some(-0.13),
             sensitivity: 1.25,
             overlap: 1.5,
+            model_thresholds: HashMap::new(),
         }
     }
 
@@ -2819,6 +2842,59 @@ mod tests {
             .unwrap()
         });
         assert_eq!(stored, Some(4242), "the row keeps the soundscape id");
+    }
+
+    /// A classifier's own threshold is the floor for what it detects.
+    ///
+    /// `MODEL_2_THRESHOLD=0.35` (the example `classifiers.md` gives) under a
+    /// 0.75 station: the second model emits a 0.40 detection, and the
+    /// processor dropped it for being under 0.75. And a stricter classifier
+    /// (0.90), run at the station floor so a lowered species can reach it,
+    /// had its 0.80 accepted. Both are held to their own number now; a
+    /// classifier with none is held to the station's.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_classifier_is_held_to_its_own_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut provenance = test_provenance(&state);
+        provenance.model_thresholds =
+            HashMap::from([("loose".to_owned(), 0.35), ("strict".to_owned(), 0.90)]);
+        let by = |model: &str, sci: &str, conf: f32, id: &str| {
+            let mut e = make_event(sci, sci, conf, tmp.path().join("none.wav"), id);
+            e.detection.model_id = Some(model.to_owned());
+            e
+        };
+        let events = vec![
+            by("loose", "Pica pica", 0.40, "loose-under-station"),
+            by("strict", "Corvus corone", 0.80, "strict-under-own"),
+            by("birdnet", "Turdus merula", 0.80, "station-over"),
+            by("birdnet", "Erithacus rubecula", 0.40, "station-under"),
+        ];
+        run_processor_dynamic(
+            &state,
+            events,
+            HashMap::new(),
+            0.75,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            provenance,
+        )
+        .await;
+        let mut stored: Vec<String> = state.with_db(|conn| {
+            let mut stmt = conn.prepare("SELECT Sci_Name FROM detections").unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        });
+        stored.sort();
+        assert_eq!(
+            stored,
+            vec!["Pica pica".to_owned(), "Turdus merula".to_owned()]
+        );
     }
 
     fn make_event(

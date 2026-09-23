@@ -21,6 +21,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use birdnet_core::audio::extraction::Extractor;
+use birdnet_core::inference::registry::ModelSpec;
 use birdnet_integrations::notification::{NotificationFilter, NotificationTemplate};
 
 use crate::cli::Cli;
@@ -155,6 +156,34 @@ fn shed_policy() -> birdnet_core::detection::daemon::ShedPolicy {
     })
 }
 
+/// The plan's classifiers split for the daemon: the primary (always first),
+/// the rest, and each one's own threshold by id — the processor holds a
+/// detection to the threshold of the classifier that made it where one is set.
+fn split_plan(
+    specs: Vec<ModelSpec>,
+    model_path: &std::path::Path,
+    labels_path: &std::path::Path,
+) -> (
+    ModelSpec,
+    Vec<ModelSpec>,
+    std::collections::HashMap<String, f32>,
+) {
+    let thresholds = specs
+        .iter()
+        .filter_map(|s| s.threshold.map(|t| (s.id.clone(), t)))
+        .collect();
+    let mut specs = specs.into_iter();
+    // `plan` always puts the primary first; an empty plan is the defaults.
+    let primary = specs.next().unwrap_or_else(|| ModelSpec {
+        id: "birdnet".to_owned(),
+        model_path: model_path.to_path_buf(),
+        labels_path: labels_path.to_path_buf(),
+        threshold: None,
+        sample_rate: None,
+    });
+    (primary, specs.collect(), thresholds)
+}
+
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
@@ -164,6 +193,7 @@ fn shed_policy() -> birdnet_core::detection::daemon::ShedPolicy {
 /// file with dedicated unit-test coverage. See the module docs for the
 /// rationale.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub fn start_detection_daemon(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -333,6 +363,8 @@ pub fn start_detection_daemon(
     for note in &model_plan.notes {
         tracing::info!("{note}");
     }
+    let (primary, extra_models, model_thresholds) =
+        split_plan(model_plan.specs, &model_path, &labels_path);
 
     // The floor the inference loop runs every classifier at or below: the
     // model confidence, lowered to any per-species threshold under it, and kept
@@ -349,8 +381,11 @@ pub fn start_detection_daemon(
         model_path,
         labels_path,
         // The primary is built by the daemon from `model_path`/`labels_path`
-        // above, so only what the plan added beyond it travels here.
-        extra_models: model_plan.specs.into_iter().skip(1).collect(),
+        // above and the plan's three settings for it below.
+        extra_models,
+        primary_id: primary.id,
+        primary_threshold: primary.threshold,
+        primary_sample_rate: primary.sample_rate,
         model_routes: model_plan.routes,
         pipeline: build_pipeline_config(watch_dir, overlap),
         model: build_model_config(sensitivity, model_confidence),
@@ -417,6 +452,7 @@ pub fn start_detection_daemon(
         sf_thresh: f64::from(sf_thresh),
         lat: latitude,
         lon: longitude,
+        model_thresholds,
     };
 
     // Extract clips into the SAME dir the web serves recordings from
