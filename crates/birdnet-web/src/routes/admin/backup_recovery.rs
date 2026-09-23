@@ -429,7 +429,7 @@ fn render_body(f: &DataFacts) -> String {
         ),
         (
             "BirdNET-Pi BirdDB.txt",
-            "tab-separated, for tools expecting the original format",
+            "semicolon-separated, for tools expecting the original format",
             "/api/v2/detections/export/birddb",
             "BirdDB.txt",
         ),
