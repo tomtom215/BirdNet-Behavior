@@ -252,14 +252,11 @@ fn compute_dawn_chorus(state: &AppState) -> Option<String> {
                 .collect::<Vec<_>>(),
         )
     })?;
-    // Current hour-of-day (UTC) for the "now" hand on the polar.
-    let now_h = {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        (secs % 86_400) as f64 / 3600.0
-    };
-    Some(super::viz::circadian_polar(&series, now_h))
+    // The "now" hand, on the local clock the hourly series are bucketed in.
+    Some(super::viz::circadian_polar(
+        &series,
+        super::now_hour_local(),
+    ))
 }
 
 async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {

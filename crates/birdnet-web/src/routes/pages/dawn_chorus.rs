@@ -408,8 +408,10 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], solar: Option<(f64, f64)>) -> Stri
         cy = CY + 10.0,
     );
 
-    // Current-time hand.
-    let now_h = current_hour_decimal();
+    // Current-time hand, on the same local clock as the ribbons and the sun.
+    // It was `unix_secs % 86400` — UTC — so at 07:00 on a CEST station it
+    // pointed at 05:00.
+    let now_h = super::now_hour_local();
     let a = hour_to_angle(now_h);
     let (hx1, hy1) = polar(CX, CY, a, RING_MIN - 4.0);
     let (hx2, hy2) = polar(CX, CY, a, RING_MAX + 14.0);
@@ -569,15 +571,6 @@ fn fmt_hour(h: f64) -> String {
     format!("{hh:02}:{mm:02}")
 }
 
-fn current_hour_decimal() -> f64 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let secs_today = (secs % 86400) as f64;
-    secs_today / 3600.0
-}
-
 fn alpha_code(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().collect();
     let code = match words.len() {
@@ -675,6 +668,62 @@ mod tests {
         assert!(!svg.contains("var(--night)"), "no night wedge");
         // The rest of the clock still renders.
         assert!(svg.contains(r#"data-moon-segment="new""#));
+    }
+
+    /// The "now" hand is on the same local clock as the ribbons and the sun.
+    ///
+    /// It was `unix_secs % 86400`, UTC, so at 07:00 on a CEST station it
+    /// pointed at 05:00. Re-runs itself under `TZ=Asia/Kolkata` (UTC+5:30, no
+    /// daylight saving) — `set_var` is unsafe in this edition — and reads
+    /// the hand's angle back out of the drawn SVG.
+    #[test]
+    fn the_now_hand_is_on_the_local_clock() {
+        const MARK: &str = "BNB_NOW_HAND_CHILD";
+        if std::env::var_os(MARK).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "routes::pages::dawn_chorus::tests::the_now_hand_is_on_the_local_clock",
+                    "--nocapture",
+                ])
+                .env(MARK, "1")
+                .env("TZ", "Asia/Kolkata")
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).into_owned()
+                + &String::from_utf8_lossy(&out.stderr);
+            assert!(
+                text.contains("1 passed"),
+                "child under TZ=Asia/Kolkata:\n{text}"
+            );
+            return;
+        }
+        let local = super::super::now_hour_local();
+        let utc = super::super::unix_secs().rem_euclid(86_400) as f64 / 3600.0;
+        // Precondition: the zone took effect, or this proves nothing.
+        assert!(
+            ((local - utc).rem_euclid(24.0) - 5.5).abs() < 0.01,
+            "local {local} utc {utc}"
+        );
+
+        let svg = render_polar_svg(&[], None);
+        let hand = svg
+            .split("<line ")
+            .find(|l| l.contains(r#"stroke-dasharray="2 3""#))
+            .expect("the now hand");
+        let attr = |name: &str| -> f64 {
+            let at = hand.find(&format!(r#"{name}=""#)).unwrap() + name.len() + 2;
+            hand[at..].split('"').next().unwrap().parse().unwrap()
+        };
+        let angle = (attr("y2") - attr("y1")).atan2(attr("x2") - attr("x1"));
+        let drawn = ((angle + PI / 2.0) / (2.0 * PI) * 24.0).rem_euclid(24.0);
+        let off = (drawn - local)
+            .rem_euclid(24.0)
+            .min((local - drawn).rem_euclid(24.0));
+        assert!(
+            off < 0.05,
+            "hand at {drawn:.2} h, local {local:.2} h, UTC {utc:.2} h"
+        );
     }
 
     #[test]
