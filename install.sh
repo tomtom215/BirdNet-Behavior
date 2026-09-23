@@ -1369,7 +1369,14 @@ create_directories() {
         "${IMAGE_CACHE_DIR}" \
         "${MODEL_DIR}" \
         "${DATA_DIR}/backups"
-    install -d -m 0755 "${CONFIG_DIR}"
+    # The config dir is root's, but the service must be able to write its
+    # last-good copy of the configuration beside the file
+    # (`birdnet.conf.last-good`, via a `.part` file and a rename). At 0755 it
+    # could not, so the rollback every doc promises never had a copy to roll
+    # back to, and one bad edit ran the station web-only. Group-writable for the
+    # service, with the sticky bit so the service can create and replace only
+    # files it owns — never the root-owned birdnet.conf itself.
+    install -d -m 1770 -o root -g "${SERVICE_USER}" "${CONFIG_DIR}"
     success "Directories created under ${DATA_DIR}"
 }
 

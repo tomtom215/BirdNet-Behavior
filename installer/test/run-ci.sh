@@ -30,6 +30,7 @@ CI_TESTS=(
     binary-swap-atomicity.sh
     blank-env-opt-outs.sh
     checksum-refusals.sh
+    config-dir-permissions.sh
     config-template.sh
     container-model-cache.sh
     coord-parse.sh
