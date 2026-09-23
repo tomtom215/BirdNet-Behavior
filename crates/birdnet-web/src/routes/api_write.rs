@@ -776,7 +776,15 @@ fn redacted_settings(raw: &std::collections::HashMap<String, String>) -> BTreeMa
 }
 
 async fn read_settings(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    let raw = crate::routes::admin::settings::handler::load_all_settings(&state);
+    let raw = match crate::routes::admin::settings::handler::load_all_settings(&state) {
+        Ok(raw) => raw,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("the settings could not be read: {e}") })),
+            );
+        }
+    };
     let redacted = redacted_settings(&raw);
     let masked: Vec<&String> = redacted
         .iter()
@@ -882,7 +890,14 @@ async fn write_settings(
         return bad_request("the body could not be read as a settings payload");
     };
 
-    let existing = crate::routes::admin::settings::handler::load_all_settings(&state);
+    // Refused when the current values cannot be read: diffed against nothing,
+    // every submitted field would count as changed and be written.
+    let Ok(existing) = crate::routes::admin::settings::handler::load_all_settings(&state) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "the current settings could not be read; nothing was written" })),
+        );
+    };
     let items = crate::routes::admin::settings::handler::build_settings_items(&form, &existing);
     if items.is_empty() {
         return (

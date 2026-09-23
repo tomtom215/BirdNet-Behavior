@@ -28,8 +28,10 @@ pub async fn settings_page(
     State(state): State<AppState>,
     user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
 ) -> Result<Html<String>, StatusCode> {
-    let settings_map = load_settings_for(&state, user.as_deref());
-    Ok(Html(render_settings_page(&settings_map)))
+    Ok(Html(match load_settings_for(&state, user.as_deref()) {
+        Ok(settings_map) => render_settings_page(&settings_map),
+        Err(e) => crate::routes::admin::admin_shell("Settings", "settings", &unreadable_notice(&e)),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -45,8 +47,10 @@ pub async fn settings_partial(
     State(state): State<AppState>,
     user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
 ) -> Result<Html<String>, StatusCode> {
-    let settings_map = load_settings_for(&state, user.as_deref());
-    Ok(Html(render_settings_form(&settings_map)))
+    Ok(Html(match load_settings_for(&state, user.as_deref()) {
+        Ok(settings_map) => render_settings_form(&settings_map),
+        Err(e) => unreadable_notice(&e),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +174,24 @@ pub async fn save_settings(
     // page's render-time defaults (e.g. `night_inhibit=false` when no row
     // exists) would silently overlay over the file config / env every
     // time *any* unrelated setting is saved.
-    let existing = load_all_settings(&state);
+    // Refuse outright when the current values cannot be read: the diff below
+    // would count every submitted field as changed and write all of them,
+    // render-time defaults included, over the operator's real configuration.
+    let existing = match load_all_settings(&state) {
+        Ok(existing) => existing,
+        Err(e) => {
+            let body = Html(format!(
+                r#"<div class="alert alert-error" id="settings-feedback" hx-swap-oob="true" role="alert">{}</div>"#,
+                crate::routes::pages::escape_html(&format!(
+                    "Nothing was saved: the station's current settings could not be read ({e})."
+                ))
+            ));
+            return Ok(toast::with(
+                body,
+                Toast::error("Nothing was saved: the current settings could not be read."),
+            ));
+        }
+    };
     let items = build_settings_items(&form, &existing);
 
     // Reject before writing, and reject the whole submission: a partial save
@@ -407,25 +428,49 @@ pub(crate) fn mask_credentials(raw: &HashMap<String, String>) -> HashMap<String,
 /// `None` — no identity on the request, which the admin gate never lets
 /// happen — is treated as a viewer: the safe default for a form that would
 /// otherwise print credentials.
+///
+/// # Errors
+///
+/// The settings could not be read; see [`load_all_settings`].
 pub(crate) fn load_settings_for(
     state: &AppState,
     user: Option<&crate::auth_middleware::RequestUser>,
-) -> HashMap<String, String> {
-    let raw = load_all_settings(state);
-    if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
-        raw
-    } else {
-        mask_credentials(&raw)
-    }
+) -> Result<HashMap<String, String>, String> {
+    let raw = load_all_settings(state)?;
+    Ok(
+        if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
+            raw
+        } else {
+            mask_credentials(&raw)
+        },
+    )
 }
 
-pub(crate) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
+/// Every stored setting, by key.
+///
+/// # Errors
+///
+/// The read failed. It used to default to an empty map, and every caller
+/// then went on as if the station had no settings: the form rendered its
+/// defaults as the configuration, the save counted every field as changed
+/// and wrote all of them, and the API reported `{}`.
+pub(crate) fn load_all_settings(state: &AppState) -> Result<HashMap<String, String>, String> {
     state.with_db(|conn| {
         ensure_settings_table(conn).ok();
         list(conn, None)
             .map(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect())
-            .unwrap_or_default()
+            .map_err(|e| e.to_string())
     })
+}
+
+/// What a settings form says in place of itself when the settings could not
+/// be read. The form is withheld, not rendered from defaults: saving a form of
+/// defaults would write them over the real configuration.
+pub(crate) fn unreadable_notice(detail: &str) -> String {
+    format!(
+        r#"<div class="alert alert-error" role="alert"><p><b>The station's settings could not be read</b>, so the form is not shown — saving it would write defaults over them. Nothing has changed. <a href="/admin/doctor">The doctor</a> can say what is wrong with the database.</p><p class="bnb-meta mono">{}</p></div>"#,
+        crate::routes::pages::escape_html(detail)
+    )
 }
 
 /// Whether a field carries a number whose decimal separator the

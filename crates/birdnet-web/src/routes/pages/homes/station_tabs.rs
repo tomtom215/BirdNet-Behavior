@@ -74,6 +74,12 @@ async fn capture_page(
 
 fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
     let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
+    let section_form = |sections: &[Section]| {
+        settings.as_ref().map_or_else(
+            |e| crate::routes::admin::settings::handler::unreadable_notice(e),
+            |s| render_section_form(s, sections),
+        )
+    };
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>What your station is listening to, and which birds it keeps.</b> Add microphones or camera streams, tune which species count, and set how sure the model must be.</p>
@@ -88,10 +94,7 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
         sources = crate::routes::admin::audio::sources_body(state, user.is_admin()),
         species = crate::routes::admin::species::handler::species_body(state),
         settings_css = SETTINGS_FORM_CSS,
-        form = render_section_form(
-            &settings,
-            &[Section::Audio, Section::Location, Section::Detection]
-        ),
+        form = section_form(&[Section::Audio, Section::Location, Section::Detection]),
     )
 }
 
@@ -112,6 +115,12 @@ async fn alerts_page(
 
 fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
     let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
+    let section_form = |sections: &[Section]| {
+        settings.as_ref().map_or_else(
+            |e| crate::routes::admin::settings::handler::unreadable_notice(e),
+            |s| render_section_form(s, sections),
+        )
+    };
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Get a nudge when something special happens</b> — build a rule, pick where it goes, and send yourself a test before you rely on it.</p>
@@ -126,7 +135,7 @@ fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) ->
         rules = crate::routes::admin::rules::rules_body(),
         channels = crate::routes::admin::notification_test::channels_test_body(state),
         settings_css = SETTINGS_FORM_CSS,
-        form = render_section_form(&settings, &[Section::Notifications, Section::Email]),
+        form = section_form(&[Section::Notifications, Section::Email]),
         recent = crate::routes::admin::notifications::recent_body(state),
     )
 }
@@ -179,6 +188,12 @@ async fn settings_page(
 
 fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
     let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
+    let section_form = |sections: &[Section]| {
+        settings.as_ref().map_or_else(
+            |e| crate::routes::admin::settings::handler::unreadable_notice(e),
+            |s| render_section_form(s, sections),
+        )
+    };
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Your preferences — the look, the station identity, and the wall display.</b></p>
@@ -195,7 +210,7 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
         tabs = station_subtabs("settings"),
         display = DISPLAY_PREFS_HTML,
         settings_css = SETTINGS_FORM_CSS,
-        form = render_section_form(&settings, &[Section::System]),
+        form = section_form(&[Section::System]),
     )
 }
 
