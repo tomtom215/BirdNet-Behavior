@@ -86,9 +86,24 @@ pub fn publish_with(
     payload: &[u8],
     retain: bool,
 ) -> Result<(), MqttError> {
-    let mut transport = open(config, None)?;
+    let mut transport = open(config, None, &stateless_client_id(&config.client_id))?;
     send_publish(&mut transport, topic, payload, retain, config.qos)
         .and_then(|()| send_disconnect(&mut transport))
+}
+
+/// The client ID for one stateless publish: the configured ID and a
+/// per-process sequence number.
+///
+/// Each stateless publish is its own connection, and the detection processor
+/// runs one per detection, so several species in one segment overlap. With one
+/// shared ID, MQTT 3.1.1 §3.1.4 has the broker disconnect the earlier
+/// connection when the later one arrives: its `QoS` 0 message was silently lost
+/// and its `QoS` 1 publish failed. The presence session keeps the configured ID
+/// unchanged — its will belongs to it.
+fn stateless_client_id(base: &str) -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{base}-{n:x}")
 }
 
 /// Open a connection and complete the CONNECT → CONNACK handshake.
@@ -96,7 +111,7 @@ pub fn publish_with(
 /// `will` is registered with the broker for the life of the session. It is
 /// meaningless on a connection that goes on to send DISCONNECT, which
 /// [`publish_with`] does — hence `None` there.
-fn open(config: &MqttConfig, will: Option<&Will>) -> Result<Transport, MqttError> {
+fn open(config: &MqttConfig, will: Option<&Will>, client_id: &str) -> Result<Transport, MqttError> {
     // The TLS session is built *before* the socket is opened. A CA file that
     // is missing or unusable is a configuration mistake, and reporting it as
     // "connection refused" — which is what happens when the broker is also
@@ -115,7 +130,7 @@ fn open(config: &MqttConfig, will: Option<&Will>) -> Result<Transport, MqttError
         None => Transport::Plain(stream),
         Some(conn) => Transport::Tls(Box::new(rustls::StreamOwned::new(conn, stream))),
     };
-    send_connect(&mut transport, config, will)?;
+    send_connect(&mut transport, config, will, client_id)?;
     recv_connack(&mut transport)?;
     Ok(transport)
 }
@@ -325,7 +340,7 @@ impl PresenceSession {
             qos: QosLevel::AtLeastOnce,
             retain: true,
         };
-        let mut transport = open(config, Some(&will))?;
+        let mut transport = open(config, Some(&will), &config.client_id)?;
         send_publish(
             &mut transport,
             &topic,
@@ -398,6 +413,7 @@ fn send_connect<S: Write>(
     stream: &mut S,
     config: &MqttConfig,
     will: Option<&Will>,
+    client_id: &str,
 ) -> Result<(), MqttError> {
     // Connect flags byte (§3.1.2.3):
     //   bit 7: Username flag
@@ -442,7 +458,7 @@ fn send_connect<S: Write>(
     // out-of-order field is not a rejected packet but a will published to
     // whatever the username happened to be.
     let mut payload_bytes = Vec::new();
-    payload_bytes.extend_from_slice(&encode_utf8_string(&config.client_id)?);
+    payload_bytes.extend_from_slice(&encode_utf8_string(client_id)?);
     if let Some(will) = will {
         payload_bytes.extend_from_slice(&encode_utf8_string(&will.topic)?);
         payload_bytes.extend_from_slice(&encode_binary(&will.payload)?);
