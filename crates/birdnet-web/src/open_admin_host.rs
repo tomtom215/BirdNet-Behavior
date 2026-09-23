@@ -98,7 +98,7 @@ fn may_open_bypass_with(authority: Option<&str>, allowed: &[String]) -> bool {
     if host.parse::<std::net::IpAddr>().is_ok() || host == "localhost" || !host.contains('.') {
         return true;
     }
-    LAN_SUFFIXES.iter().any(|s| host.ends_with(s)) || allowed.iter().any(|a| *a == host)
+    LAN_SUFFIXES.iter().any(|s| host.ends_with(s)) || allowed.contains(&host)
 }
 
 /// The `Host` a request names: the header, or for HTTP/2 the URI authority.

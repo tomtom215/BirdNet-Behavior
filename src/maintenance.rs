@@ -850,7 +850,7 @@ const MASS_MISSING_MIN: usize = 20;
 /// makes every `exists()` false. Stamping on that evidence marked the whole
 /// archive pruned — permanently, since retention then skips stamped rows — the
 /// moment a drive was late to mount.
-fn looks_unmounted(dir_entries: usize, referenced: usize, missing: usize) -> bool {
+const fn looks_unmounted(dir_entries: usize, referenced: usize, missing: usize) -> bool {
     (dir_entries == 0 && referenced > 0)
         || (missing >= MASS_MISSING_MIN && missing.saturating_mul(2) > referenced)
 }
