@@ -42,7 +42,7 @@ pub fn weekly_heatmap(conn: &Connection, days: u32) -> Result<Vec<HeatmapCell>, 
             CAST(SUBSTR(Time, 1, 2) AS INTEGER)   AS hour,
             COUNT(*)                               AS count
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
          GROUP BY dow, hour
          ORDER BY dow, hour",
     )?;
@@ -73,7 +73,7 @@ pub fn hourly_totals(conn: &Connection, days: u32) -> Result<Vec<HourTotal>, DbE
             CAST(SUBSTR(Time, 1, 2) AS INTEGER) AS hour,
             COUNT(*)                             AS count
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
          GROUP BY hour
          ORDER BY hour",
     )?;
@@ -105,7 +105,7 @@ pub fn species_daily_heatmap(
     let mut stmt = conn.prepare(
         "SELECT Date, Com_Name, COUNT(*) AS count
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
          GROUP BY Date, Com_Name
          ORDER BY Date, count DESC",
     )?;
@@ -132,7 +132,7 @@ mod tests {
         // of truth.
         let conn = Connection::open_in_memory().unwrap();
         crate::migration::migrate(&conn).unwrap();
-        // Dates are computed at insert time via SQLite's DATE('now', '-N days')
+        // Dates are computed at insert time via SQLite's DATE('now', 'localtime', '-N days')
         // so the fixture stays within the 30-day window used by the queries
         // under test, regardless of when the suite runs.
         conn.execute_batch(
@@ -140,10 +140,10 @@ mod tests {
               (Date, Time, Sci_Name, Com_Name, Confidence,
                Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
             VALUES
-              (DATE('now', '-7 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-7 days'),'07:30:00','A','Robin',0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-7 days'),'08:00:00','B','Wren', 0.7, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-6 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,'');",
+              (DATE('now', 'localtime', '-7 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-7 days'),'07:30:00','A','Robin',0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-7 days'),'08:00:00','B','Wren', 0.7, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-6 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,'');",
         )
         .unwrap();
         conn

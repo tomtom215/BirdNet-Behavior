@@ -53,7 +53,7 @@ pub fn top_cooccurrence_pairs(
     let mut stmt = conn.prepare(
         "WITH daily AS (
             SELECT DISTINCT Date, Com_Name FROM detections_analytic
-            WHERE Date >= DATE('now', '-' || ?1 || ' days')
+            WHERE Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
          ),
          counts AS (
             SELECT Com_Name, COUNT(DISTINCT Date) AS total_days
@@ -111,7 +111,7 @@ pub fn companion_species(
         "WITH trigger_dates AS (
             SELECT DISTINCT Date FROM detections_analytic
             WHERE Com_Name = ?1
-              AND Date >= DATE('now', '-' || ?2 || ' days')
+              AND Date >= DATE('now', 'localtime', '-' || ?2 || ' days')
          )
          SELECT
             ?1 AS trigger,
@@ -167,7 +167,7 @@ pub fn temporal_cooccurrence(
                    SUBSTR(Time, 7, 2)        AS secs,
                    Com_Name
             FROM detections_analytic
-            WHERE Date >= DATE('now', '-' || ?3 || ' days')
+            WHERE Date >= DATE('now', 'localtime', '-' || ?3 || ' days')
          )
          SELECT
             CASE WHEN a.Com_Name < b.Com_Name THEN a.Com_Name ELSE b.Com_Name END,
@@ -213,7 +213,7 @@ mod tests {
         // of truth.
         let conn = Connection::open_in_memory().unwrap();
         crate::migration::migrate(&conn).unwrap();
-        // Dates are computed at insert time via SQLite's DATE('now', '-N days')
+        // Dates are computed at insert time via SQLite's DATE('now', 'localtime', '-N days')
         // so the fixture stays within the 30-day window used by the queries
         // under test, regardless of when the suite runs.
         conn.execute_batch(
@@ -221,12 +221,12 @@ mod tests {
               (Date, Time, Sci_Name, Com_Name, Confidence,
                Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
             VALUES
-              (DATE('now', '-7 days'),'07:00:00','A sp','Robin',  0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-7 days'),'07:05:00','B sp','Wren',   0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-7 days'),'08:00:00','C sp','Finch',  0.7, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-6 days'),'07:00:00','A sp','Robin',  0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-6 days'),'07:10:00','B sp','Wren',   0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-5 days'),'07:00:00','A sp','Robin',  0.9, NULL,NULL,NULL,NULL,NULL,NULL,'');",
+              (DATE('now', 'localtime', '-7 days'),'07:00:00','A sp','Robin',  0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-7 days'),'07:05:00','B sp','Wren',   0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-7 days'),'08:00:00','C sp','Finch',  0.7, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-6 days'),'07:00:00','A sp','Robin',  0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-6 days'),'07:10:00','B sp','Wren',   0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-5 days'),'07:00:00','A sp','Robin',  0.9, NULL,NULL,NULL,NULL,NULL,NULL,'');",
         )
         .unwrap();
         conn

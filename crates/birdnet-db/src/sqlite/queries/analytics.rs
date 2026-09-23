@@ -36,7 +36,7 @@ pub fn daily_counts(conn: &Connection, days: u32) -> Result<Vec<DailyCount>, DbE
     let mut stmt = conn.prepare(
         "SELECT Date, COUNT(*) as count
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
          GROUP BY Date ORDER BY Date ASC",
     )?;
     let rows = stmt
@@ -386,7 +386,7 @@ pub fn review_verdict_trend(
                FROM detections d
           LEFT JOIN detection_reviews r
                  ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
-              WHERE d.Date >= DATE('now', '-' || ?1 || ' days')
+              WHERE d.Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
               GROUP BY d.Date
          )
          SELECT day,
@@ -592,7 +592,7 @@ pub fn confidence_trend(conn: &Connection, days: u32) -> Result<Vec<(String, f64
     let mut stmt = conn.prepare(
         "SELECT Date, AVG(Confidence) as avg_conf
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
          GROUP BY Date
          ORDER BY Date ASC",
     )?;
@@ -633,8 +633,11 @@ pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)
 
 /// Number of detections in the rolling 60-minute window ending now.
 ///
-/// Concatenates `Date` and `Time` into an ISO-8601 datetime string and compares
-/// against `datetime('now', '-1 hour')`, so results are relative to UTC.
+/// `Date` and `Time` are the station's local wall clock, so the window is
+/// measured on it too: `datetime('now', 'localtime', '-1 hour')`. Without
+/// `'localtime'` the comparison was against UTC, which west of UTC counted
+/// nothing ever and east of UTC counted the last (1 + offset) hours
+/// (`tests/local_day_boundary.rs`).
 ///
 /// # Errors
 ///
@@ -642,7 +645,7 @@ pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)
 pub fn last_hour_count(conn: &Connection) -> Result<i64, DbError> {
     conn.query_row(
         "SELECT COUNT(*) FROM detections_analytic
-         WHERE datetime(Date || ' ' || Time) >= datetime('now', '-1 hour')",
+         WHERE datetime(Date || ' ' || Time) >= datetime('now', 'localtime', '-1 hour')",
         [],
         |row| row.get(0),
     )
@@ -727,9 +730,11 @@ mod tests {
     /// Return the ISO-8601 date `n` days before `now`, computed by `SQLite`
     /// so callers and the fixture agree regardless of the host clock.
     fn days_ago(conn: &Connection, n: i64) -> String {
-        conn.query_row(&format!("SELECT DATE('now', '-{n} days')"), [], |row| {
-            row.get(0)
-        })
+        conn.query_row(
+            &format!("SELECT DATE('now', 'localtime', '-{n} days')"),
+            [],
+            |row| row.get(0),
+        )
         .unwrap()
     }
 

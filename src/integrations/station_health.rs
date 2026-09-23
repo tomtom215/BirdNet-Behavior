@@ -2041,16 +2041,17 @@ mod tests {
             "an empty database really has had no detections"
         );
 
-        // `date('now')`/`time('now')` rather than a literal: the query compares
-        // against `datetime('now')`, so letting SQLite write both sides keeps
-        // this independent of the runner's timezone.
+        // SQLite's local `date`/`time` rather than a literal: the query compares
+        // the station's wall clock against `datetime('now', 'localtime')`, so
+        // letting SQLite write both sides keeps this independent of the
+        // runner's timezone.
         state.with_db(|conn| {
             for i in 0..3 {
                 conn.execute(
                     "INSERT INTO detections
                          (Date, Time, Sci_Name, Com_Name, Confidence, Cutoff, Week, Sens,
                           Overlap, File_Name, chunk_offset_secs)
-                     VALUES (date('now'), time('now'), 'Pica pica', 'Eurasian Magpie',
+                     VALUES (date('now', 'localtime'), time('now', 'localtime'), 'Pica pica', 'Eurasian Magpie',
                              0.9, 0.7, 36, 1.25, 0.0, ?1, 0)",
                     rusqlite::params![format!("x{i}.wav")],
                 )
