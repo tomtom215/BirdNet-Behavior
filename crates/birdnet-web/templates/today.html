@@ -68,13 +68,19 @@
       </div>
       <span class="bnb-pill moss"><span class="bnb-dot live"></span> Listening</span>
     </div>
-    <form id="search-form" class="td-logbar">
+    <!-- The form, not only the input, is an htmx request: Enter submits a
+         form, and a form with no handler navigates — to `/?search=…`, a full
+         reload that collapsed the day and lost the results. -->
+    <form id="search-form" class="td-logbar"
+          hx-get="/pages/today-list" hx-trigger="submit"
+          hx-target="#today-full" hx-swap="innerHTML">
       <span class="nav-search td-search-wrap">
+        <label class="sr-only" for="today-search">Search today's detections</label>
         <input type="search" name="search" id="today-search"
                placeholder="Search species… (try NOT Robin)"
                class="td-search-input"
                hx-get="/pages/today-list"
-               hx-trigger="input changed delay:300ms, search"
+               hx-trigger="input changed delay:300ms"
                hx-target="#today-full"
                hx-swap="innerHTML"
                hx-include="#search-form">
@@ -219,41 +225,8 @@
     if (this.value.trim() !== '') openFull();
   });
 
-  // ── Shared clip player for [data-play-src] buttons ─────────────────────
-  var player = null;
-  var playingBtn = null;
-  function stopCurrent() {
-    if (player) { player.pause(); }
-    // The label moves with the glyph: `aria-label="Play clip"` is written into
-    // the row once by the renderer and aria-label wins over text content, so a
-    // playing clip's button went on announcing "Play clip".
-    if (playingBtn) {
-      playingBtn.classList.remove('playing');
-      playingBtn.textContent = '▶';
-      playingBtn.setAttribute('aria-label', 'Play clip');
-    }
-    playingBtn = null;
-  }
-  document.addEventListener('click', function (e) {
-    var btn = e.target.closest('[data-play-src]');
-    if (!btn) return;
-    e.preventDefault();
-    if (btn === playingBtn) { stopCurrent(); return; }
-    stopCurrent();
-    if (!player) {
-      player = new Audio();
-      player.preload = 'none';
-      player.addEventListener('ended', stopCurrent);
-      player.addEventListener('error', stopCurrent);
-    }
-    player.src = btn.getAttribute('data-play-src');
-    player.play().then(function () {
-      playingBtn = btn;
-      btn.classList.add('playing');
-      btn.textContent = '⏸';
-      btn.setAttribute('aria-label', 'Pause clip');
-    }).catch(stopCurrent);
-  });
+  // The [data-play-src] clip player is /static/clip-player.js, shared by
+  // every page (it used to live here, which left Recordings → Live with none).
 
   // ── Source picker: live audio per source lives on Recordings → Live ───
   var src = document.getElementById('td-source');

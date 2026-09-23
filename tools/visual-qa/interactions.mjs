@@ -308,6 +308,92 @@ async function polarClock(page) {
   check('clock: the wedges follow the data', radii > 1, `${radii} distinct wedge radii — a flat clock`);
 }
 
+/** Searching leaves the page's own URL in the address bar, and it reloads.
+ *
+ * The form pushed the fragment's URL (`/pages/search-results?…`), so a reload,
+ * a bookmark or Back showed a bare, unstyled list with no page around it.
+ */
+async function searchAddressBar(page) {
+  await page.goto(`${BASE}/search`, { waitUntil: 'networkidle' });
+  await page.fill('#sr-form input[name=q]', 'robin');
+  await page.press('#sr-form input[name=q]', 'Enter');
+  await page.waitForFunction(() => location.search.includes('q=robin'), null, { timeout: 8000 }).catch(() => {});
+  const path = await page.evaluate(() => location.pathname + location.search);
+  check('search: the address bar carries the page, not the fragment', path.startsWith('/search?') && path.includes('q=robin'), path);
+  await page.reload({ waitUntil: 'networkidle' });
+  const whole = await page.evaluate(() => !!document.querySelector('#sr-form') && document.title.length > 0);
+  check('search: reloading that URL gives the whole page back', whole, `title="${await page.title()}"`);
+}
+
+/** Bulk "Apply" asks first, then acts and says so.
+ *
+ * It targeted `#toast-region`, an id no page has, so htmx refused to send it:
+ * confirm, reject, lock, unlock and delete in bulk all did nothing. And its
+ * confirmation was never wired, so once it did send, Delete would not ask.
+ */
+async function searchBulkApply(page) {
+  await page.goto(`${BASE}/search?q=robin`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('form.sr-bulk input[type=checkbox][name]', { timeout: 8000 });
+  await page.check('form.sr-bulk input[type=checkbox][name]');
+  await page.selectOption('#sr-bulk-action', 'lock');
+  const sent = [];
+  page.on('request', (r) => { if (r.url().includes('/pages/search-bulk')) sent.push(r.method()); });
+  await page.click('form.sr-bulk button[type=submit]');
+  const asked = await page.waitForSelector('#bnb-confirm[open]', { timeout: 3000 }).then(() => true, () => false);
+  check('bulk: Apply asks before acting', asked, 'no confirmation dialog opened');
+  check('bulk: nothing is sent before the answer', sent.length === 0, `${sent.length} request(s) already sent`);
+  if (!asked) return;
+  await page.click('#bnb-confirm [data-confirm-ok]');
+  const toast = await page.waitForSelector('#bnb-toasts .bnb-toast', { timeout: 8000 }).then(() => true, () => false);
+  check('bulk: confirming sends it', sent.length === 1, `${sent.length} request(s)`);
+  check('bulk: the outcome is shown', toast, 'no toast after the bulk action');
+}
+
+/** Every ▶ plays — including the Live view's feed, which had no player. */
+async function livePlayButtons(page) {
+  await page.addInitScript(() => {
+    window.__plays = 0;
+    HTMLMediaElement.prototype.play = function () { window.__plays += 1; return Promise.resolve(); };
+  });
+  await page.goto(`${BASE}/recordings?view=live`, { waitUntil: 'networkidle' });
+  const btn = await page.waitForSelector('[data-play-src]', { timeout: 8000 }).catch(() => null);
+  check('live feed: rows carry a play button', !!btn, 'no [data-play-src] on the Live view');
+  if (!btn) return;
+  await btn.click();
+  await page.waitForTimeout(300);
+  const plays = await page.evaluate(() => window.__plays);
+  check('live feed: ▶ plays the clip', plays === 1, `play() called ${plays} time(s)`);
+}
+
+/** Enter in Today's search filters in place instead of reloading the page. */
+async function todaySearchEnter(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  let navigations = 0;
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations += 1; });
+  await page.fill('#today-search', 'Cardinal');
+  await page.press('#today-search', 'Enter');
+  await page.waitForTimeout(1500);
+  check('today: Enter does not reload the page', navigations === 0, `${navigations} navigation(s), now at ${page.url()}`);
+}
+
+/** "Load more" adds to the list rather than replacing it. */
+async function loadMoreAppends(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  // Open the day the way a reader does, then load it five at a time so the
+  // demo station's day is long enough to need a second page.
+  await page.click('button:has-text("Show the full day")');
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    window.htmx.ajax('GET', '/pages/today-list?limit=5', { target: '#today-full', swap: 'innerHTML' });
+  });
+  await page.waitForSelector('#today-full .tdl-more-btn', { timeout: 8000 });
+  const before = await page.$$eval('#today-full .tdl-card', (e) => e.length);
+  await page.click('#today-full .tdl-more-btn');
+  await page.waitForFunction((n) => document.querySelectorAll('#today-full .tdl-card').length !== n, before, { timeout: 8000 }).catch(() => {});
+  const after = await page.$$eval('#today-full .tdl-card', (e) => e.length);
+  check('today: Load more adds to the list', before === 5 && after === 10, `${before} rows, then ${after}`);
+}
+
 const page404 = [];
 
 async function main() {
@@ -328,6 +414,11 @@ async function main() {
     ['wizard cards by keyboard', wizardCardsByKeyboard],
     ['server toasts', serverToasts],
     ['activity clock', polarClock],
+    ['search address bar', searchAddressBar],
+    ['search bulk apply', searchBulkApply],
+    ['live feed play', livePlayButtons],
+    ['today search enter', todaySearchEnter],
+    ['load more', loadMoreAppends],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();

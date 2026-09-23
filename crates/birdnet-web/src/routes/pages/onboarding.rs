@@ -727,7 +727,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BirdNet-Behavior · Set up your station</title>
 <link rel="stylesheet" href="/static/css/app.css?v={{version}}">
-<script src="/static/theme-guard.js"></script>
+<script src="/static/theme-guard.js?v={{version}}"></script>
 <style>
   body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }
   .ob-root { max-width:980px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; padding:0 24px; }

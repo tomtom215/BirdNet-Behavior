@@ -60,7 +60,7 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
      hx-swap="innerHTML">
   <p class="ki-loading">Loading…</p>
 </main>
-<script src="/static/htmx.min.js"></script>
+<script src="/static/htmx.min.js?v={{version}}"></script>
 <script>
   // ESC leaves kiosk mode — the keyboard counterpart of the corner link.
   document.addEventListener('keydown', function (e) {

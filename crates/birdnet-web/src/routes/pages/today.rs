@@ -868,7 +868,10 @@ async fn today_partial(
                 render_detection_card(&mut html, d);
             }
 
-            // "Load more" button if there are more results
+            // "Load more" button if there are more results. It replaces
+            // itself with the next page — rows and, if any remain, the next
+            // button — so the list grows; it used to swap the next page into
+            // the whole list, throwing away what the reader had scrolled past.
             let shown = offset + limit;
             #[allow(
                 clippy::cast_possible_truncation,
@@ -895,7 +898,7 @@ async fn today_partial(
                     html,
                     "<div class=\"tdl-more\">\
                      <button hx-get=\"/pages/today-list?offset={shown}&limit={limit}{search_param}{filter_param}\" \
-                     hx-target=\"#today-full\" hx-swap=\"innerHTML\" \
+                     hx-target=\"closest .tdl-more\" hx-swap=\"outerHTML\" \
                      class=\"tdl-more-btn\">\
                      Load {limit} more ({remaining} remaining)\
                      </button></div>",

@@ -261,7 +261,20 @@ async fn search_page(
 async fn search_results_partial(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
-) -> impl IntoResponse {
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    // The page promises "the address bar carries the search". The form pushed
+    // the URL of *this fragment*, so a reload, a bookmark or Back landed on a
+    // bare, unstyled list with no page around it. htmx now pushes the page's
+    // own URL (`HX-Push-Url`), and anything that is not htmx asking for the
+    // fragment — a reload of an old pushed URL, a shared link — is sent to it.
+    let page_url = format!(
+        "/search?{}",
+        params.to_query_string().trim_start_matches('&')
+    );
+    if !headers.contains_key("hx-request") {
+        return axum::response::Redirect::to(&page_url).into_response();
+    }
     let filter = params.to_filter();
     let offset = params.offset.unwrap_or(0);
 
@@ -284,7 +297,15 @@ async fn search_results_partial(
         // the app says, carries `role="alert"`, and links to Station health.
         _ => super::error_states::inline("the search results"),
     };
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html".to_owned()),
+            (header::HeaderName::from_static("hx-push-url"), page_url),
+        ],
+        html,
+    )
+        .into_response()
 }
 
 /// One bulk action over the selected rows.
@@ -406,10 +427,12 @@ impl BulkAction {
 async fn bulk_action(
     State(state): State<AppState>,
     axum::extract::RawForm(body): axum::extract::RawForm,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let form = parse_bulk_form(&body);
     let Some(action) = BulkAction::parse(&form.action) else {
-        return super::toast::Toast::error("That action is not one this page offers.").render();
+        return super::toast::Toast::error("That action is not one this page offers.")
+            .render()
+            .into_response();
     };
 
     let keys: Vec<RowKey> = form
@@ -420,7 +443,9 @@ async fn bulk_action(
         .collect();
 
     if keys.is_empty() {
-        return super::toast::Toast::info("Nothing was selected.").render();
+        return super::toast::Toast::info("Nothing was selected.")
+            .render()
+            .into_response();
     }
     let requested = keys.len();
 
@@ -489,9 +514,20 @@ async fn bulk_action(
             } else {
                 format!("{done} of {requested} detections {verb}; the rest were already gone.")
             };
-            super::toast::Toast::success(&msg).render()
+            // Tell the results to re-run, so a row that was just deleted or
+            // rejected does not sit on the page as if nothing happened.
+            (
+                [(
+                    header::HeaderName::from_static("hx-trigger"),
+                    "bnb-search-changed",
+                )],
+                super::toast::Toast::success(&msg).render(),
+            )
+                .into_response()
         }
-        _ => super::toast::Toast::error("That bulk action could not be completed.").render(),
+        _ => super::toast::Toast::error("That bulk action could not be completed.")
+            .render()
+            .into_response(),
     }
 }
 
@@ -565,7 +601,7 @@ fn render_page(p: &SearchParams, sources: &[String]) -> String {
 </div>\
 <form class=\"sr-form\" id=\"sr-form\" \
       hx-get=\"/pages/search-results\" hx-target=\"#sr-results\" \
-      hx-trigger=\"submit, change delay:250ms from:.sr-live\" \
+      hx-trigger=\"submit, change delay:250ms from:.sr-live, bnb-search-changed from:body\" \
       hx-push-url=\"true\" hx-swap=\"innerHTML\">\
   <div class=\"sr-row\">\
     <label class=\"sr-field sr-grow\"><span>Name contains</span>\
@@ -641,8 +677,8 @@ fn render_results(
     );
 
     html.push_str(
-        "<form class=\"sr-bulk\" hx-post=\"/pages/search-bulk\" hx-target=\"#toast-region\" \
-         hx-swap=\"innerHTML\">\
+        "<form class=\"sr-bulk\" hx-post=\"/pages/search-bulk\" hx-target=\"#bnb-toasts\" \
+         hx-swap=\"beforeend\">\
          <div class=\"sr-bulkbar\">\
            <label class=\"sr-selall\"><input type=\"checkbox\" \
              data-sr-toggle-all=\"1\"> Select all on this page</label>\
@@ -654,8 +690,11 @@ fn render_results(
              <option value=\"unlock\">Unlock clip</option>\
              <option value=\"delete\">Delete</option>\
            </select>\
-           <button type=\"submit\" class=\"sr-btn\" \
-             data-confirm=\"Apply this action to every selected detection?\">Apply</button>\
+           <button type=\"submit\" class=\"sr-btn\" data-confirm-action \
+             data-confirm-title=\"Apply to every selected detection?\" \
+             data-confirm-body=\"Deleting cannot be undone; confirming, rejecting and \
+             locking can be changed back one detection at a time.\" \
+             data-confirm-confirm-label=\"Apply\" data-confirm-style=\"warn\">Apply</button>\
          </div>\
          <ul class=\"sr-list\">",
     );
