@@ -365,10 +365,13 @@ pub(super) fn check_config_file(cli: &Cli, config: Option<&Config>) -> Check {
         // macOS, where the recommended home is the user-writable Application
         // Support directory the launchd LaunchAgent points at.
         let remediation: &str = if cfg!(target_os = "macos") {
-            "copy .env.example to \"$HOME/Library/Application Support/birdnet-behavior/birdnet.conf\" \
-             and start with -c that path (the /etc default needs sudo on macOS)"
+            "create \"$HOME/Library/Application Support/birdnet-behavior/birdnet.conf\" with KEY=value \
+             lines (file keys have no BIRDNET_ prefix, e.g. LATITUDE=51.48) and start with -c that \
+             path (the /etc default needs sudo on macOS)"
         } else {
-            "copy .env.example to /etc/birdnet/birdnet.conf and edit before going to production"
+            "create /etc/birdnet/birdnet.conf with KEY=value lines — file keys have no BIRDNET_ \
+             prefix (LATITUDE=51.48, not BIRDNET_LATITUDE) — or re-run the installer, which writes \
+             a commented starter there. Copying .env.example gives BIRDNET_* keys the file ignores"
         };
         Check::warn(
             "Configuration file",

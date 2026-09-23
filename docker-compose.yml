@@ -129,7 +129,7 @@ services:
       #   - ./data/model:/data/model
       #   - ./data/recordings:/data/recordings
       #   - ./data/cache:/data/cache
-      #   - ./birdnet.db:/data/birdnet.db
+      #   - ./data/BirdNet-Behavior:/data/BirdNet-Behavior   # birds.db lives here (HOME=/data)
       - birdnet-data:/data
 
     # -------------------------------------------------------------------------

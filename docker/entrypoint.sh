@@ -474,9 +474,9 @@ fi
 # ---------------------------------------------------------------------------
 # Container defaults
 # ---------------------------------------------------------------------------
-# The binary defaults to 127.0.0.1:8502 (loopback only), which is unreachable
-# from outside the container.  Override to bind on all interfaces unless the
-# user has already set BIRDNET_LISTEN explicitly.
+# The binary already defaults to 0.0.0.0:8502; this pins that default here so
+# the container binds on all interfaces whatever the binary's default becomes,
+# unless the user has set BIRDNET_LISTEN explicitly.
 : "${BIRDNET_LISTEN:=0.0.0.0:8502}"
 export BIRDNET_LISTEN
 

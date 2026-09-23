@@ -87,11 +87,14 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_PUBLIC_ACCESS` | `--public-access` | `PUBLIC_ACCESS` | — (nothing carved out). Comma-separated `live_audio`, `share`, `metrics`; no effect without private mode |
 | `BIRDNET_CORS_ALLOWED_ORIGINS` | — | — | — (same-origin only) |
 
-> **Invalid settings fail fast.** On startup the daemon validates the
-> configuration and **refuses to start** on an out-of-range value (e.g. a
-> latitude outside ±90, or a malformed `RECORDING_SCHEDULE`) instead of running
-> silently degraded. Run `birdnet-behavior --doctor` to check a config before
-> deploying it.
+> **Invalid settings are not run.** On startup the station validates the
+> configuration. If a value is out of range (e.g. a latitude outside ±90, or a
+> malformed `RECORDING_SCHEDULE`), it runs on the last configuration that
+> passed, or — when there is none — starts web-only, recording nothing, so the
+> dashboard can still tell you what is wrong. Both are reported in the journal
+> and by `birdnet-behavior --doctor`; run the doctor on a config before
+> deploying it, or apply it with `--apply-config`, which refuses a file that
+> does not validate.
 
 > **`BIRDNET_LISTEN` binds all interfaces by default** (`0.0.0.0:8502`), so the
 > dashboard is reachable across your LAN out of the box. Viewing is open;
