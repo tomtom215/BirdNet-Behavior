@@ -48,6 +48,8 @@ const POSTS: &[(&str, &str)] = &[
     ),
     ("/admin/rules/1/delete", ""),
     ("/admin/rules/1/toggle", ""),
+    // Creating a rule answered a refused insert with a bare 500.
+    ("/admin/rules", "name=owls+at+night&action_type=log"),
 ];
 
 /// A station whose rule and blacklist tables have been dropped: the connection
@@ -136,4 +138,32 @@ async fn the_same_endpoints_still_succeed_on_a_working_station() {
             page.chars().take(200).collect::<String>()
         );
     }
+}
+
+/// `hx-delete` on a backup row answered a failed delete with a bare 500: the
+/// row stayed and nothing said why. A backup that is not there is the
+/// reachable failure; the answer must be one htmx swaps, with a toast.
+#[tokio::test]
+async fn a_backup_that_could_not_be_deleted_says_so() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("birds.db");
+    let conn = rusqlite::Connection::open(&db).expect("open");
+    birdnet_db::migration::migrate(&conn).expect("migrate schema");
+    let state = AppState::from_connection(conn, db);
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/admin/system/backups/birds.db.backup.1700000000")
+        .body(Body::empty())
+        .expect("request");
+    let res = birdnet_web::server::build_router(state)
+        .oneshot(req)
+        .await
+        .expect("response");
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    let page = String::from_utf8_lossy(&bytes);
+    assert!(status.is_success(), "answered {status}");
+    assert!(page.contains("toast"), "said nothing: {page}");
 }
