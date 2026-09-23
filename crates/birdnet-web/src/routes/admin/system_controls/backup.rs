@@ -109,6 +109,22 @@ fn scratch_dir(db_path: &std::path::Path) -> std::path::PathBuf {
     ))
 }
 
+/// The file an uploaded restore archive is streamed into: beside the
+/// database, for the reason [`scratch_dir`] gives. It was the system temp
+/// dir — under the shipped unit's `PrivateTmp=yes`, on the tmpfs the installer
+/// mounts, whose pages count against `MemoryMax=1G` — so uploading a
+/// multi-gigabyte backup to restore could get the station OOM-killed.
+fn restore_spool(db_path: &std::path::Path) -> std::io::Result<tempfile::NamedTempFile> {
+    let dir = db_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    tempfile::Builder::new()
+        .prefix(".bnb-restore-")
+        .suffix(".tar.gz")
+        .tempfile_in(dir)
+}
+
 /// Take a consistent snapshot of `db_path` into `staging`, named exactly as the
 /// live database is, and return its path.
 ///
@@ -429,9 +445,8 @@ pub(super) async fn restore_backup(
     // backups and would OOM a Pi. Streaming keeps memory flat regardless of
     // archive size. NamedTempFile auto-removes the file on drop (even on an
     // early return), replacing the previous manual cleanup.
-    let Ok(Ok(tmp)) =
-        tokio::task::spawn_blocking(|| tempfile::Builder::new().suffix(".tar.gz").tempfile()).await
-    else {
+    let db_path = state.db_path().to_path_buf();
+    let Ok(Ok(tmp)) = tokio::task::spawn_blocking(move || restore_spool(&db_path)).await else {
         return Html(
             r#"<p class="ctl-err">The station could not make room to receive the upload, and nothing was changed. Check that the disk is not full, then try again.</p>"#.to_string(),
         );
@@ -833,6 +848,13 @@ mod tests {
     /// Two backups begun in the same second shared `.bnb-backup-{pid}-{secs}`:
     /// both `tar`s wrote one file, and the first to finish removed the other's
     /// staging directory.
+    #[test]
+    fn a_restore_upload_is_spooled_beside_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = super::restore_spool(&dir.path().join("birds.db")).unwrap();
+        assert_eq!(spool.path().parent(), Some(dir.path()));
+    }
+
     #[test]
     fn a_second_backup_waits_for_the_first() {
         let first = super::BackupGuard::claim().expect("nothing running");
