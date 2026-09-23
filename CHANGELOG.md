@@ -7,7 +7,222 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+Where an entry names a test, that test was seen failing against the code
+before the fix. Each commit message says how, and names any part of its fix
+that has no test of its own.
+
+### Upgrade notes
+
+Read these before updating. Each one changes what an existing station does.
+
+- **An open station answers only to names outside parties cannot point at it.**
+  A station with no admin password now admits `/admin` only when the request
+  arrives under an IP address, `localhost`, a single-label name, or a name
+  ending in `.local`, `.lan`, `.home`, `.home.arpa`, `.internal` or
+  `.localdomain`. Any other name gets a 403 page telling the owner to set a
+  password or to list the name in the new `BIRDNET_ALLOWED_HOSTS`. A station
+  with a password is unaffected.
+- **`CF-Connecting-IP` is read only when `cloudflare` is named in
+  `BIRDNET_TRUSTED_PROXIES`.** A station behind a Cloudflare Tunnel that does
+  not name it now takes the visitor's address from `X-Forwarded-For`.
+- **Share links are signed with a key derived from the session secret.**
+  `BNB_SHARE_SECRET` is used only when it is at least 32 bytes long and does
+  not contain `CHANGE-ME`. A shorter or placeholder value is ignored with a
+  warning, and links signed with it stop verifying. Links signed with the
+  derived key keep working across restarts.
+- **`/api/v2/timeseries/year-over-year` returns `yoy_delta: null`** when the
+  same week last year has no detections. It used to return the week's own
+  count as the delta.
+- **Behavior-tab residency classes are computed differently.** A species is
+  now classed from the share of the station's weeks it was heard in:
+  Resident above 70%, Regular 30–70%, Migrant below that. A Rarity is a
+  species whose every detection falls within 7 days, on a station with at
+  least 4 weeks of history. Classes will change on most stations.
+  `SpeciesRetention` gains `weeks_present` and `station_weeks`.
+- **API:** `/api/v2/detections?date=` and `?species=` now honour `limit` and
+  `offset`. `GET` and `PUT /api/v2/settings` answer 503 when the settings
+  cannot be read; they used to return `{}`, or save against it.
+- **Viewer accounts see credentials masked**, and get a 403 for backup,
+  full-backup, support-bundle and rules-export downloads, and for an audio
+  source's own row and edit form.
+- **Audio is downsampled with a sinc filter.** Scores shift slightly: on the
+  bundled magpie recording, confident detections moved by at most 0.0164.
+- **Stateless MQTT publishes connect as `<client_id>-<n>`.** The presence
+  session keeps the configured ID. A broker ACL that matches client IDs
+  exactly needs a wildcard for the suffix.
+- **A per-classifier threshold (`MODEL_THRESHOLD`, `MODEL_2_THRESHOLD`, …)
+  now applies to that classifier's detections.** A per-species threshold
+  still overrides it. Before, every detection was held to the station's
+  confidence.
+- **Recordings and the RSS/iCal feeds send `Cache-Control: private`.** They
+  used to send `public`; the `max-age` values are unchanged.
+- **`/etc/birdnet` is `root:<service user>` mode 1770.** The next
+  `install.sh update` or `repair` applies it, so the service can write
+  `birdnet.conf.last-good` for the first time.
+
+### Security
+
+- **Script injection through a species name in the URL.**
+  `/species/detail?name=</title><script>…` put a working script on a public
+  page, and the Content-Security-Policy nonce was stamped onto it too. The
+  layout now escapes every page title.
+  (`a_page_title_is_text_not_markup.rs`)
+- **Stored settings were written into form fields unescaped.** A site name
+  containing `"` could inject a script into the admin page; the bearer API
+  token can write settings. (`a_stored_setting_is_shown_as_text.rs`)
+- **A viewer account could read every credential and download the whole
+  database**, because the admin gate checked the role only on unsafe
+  methods. (`a_viewer_cannot_read_the_stations_credentials.rs`)
+- **DNS rebinding could operate a station with no admin password** from any
+  website someone in the house visited. See the upgrade notes.
+  (`an_open_station_is_not_open_to_a_rebound_name.rs`)
+- **Sign-in could redirect off-site:** `next=/\evil.example` passed the check,
+  and browsers read `/\` as `//`.
+  (`signing_in_returns_you_to_where_you_were.rs`)
+- **A session created while the station had no password survived the owner
+  setting one**, including across restarts. Setting a first password, from
+  the accounts page, the setup wizard or `CADDY_PWD`, now revokes every
+  earlier session on the account.
+  (`a_session_from_the_open_window_ends_when_the_station_locks.rs`)
+- **Three ways around the sign-in throttle.** A client could put a new
+  `CF-Connecting-IP` on each request. A LAN hop could name an unlimited number
+  of client addresses; each non-loopback hop now has a budget of 30 failures
+  in total. A burst of guesses arriving together all passed the check.
+  (`login_is_throttled.rs`)
+- **A password that could not be written left `/admin` open.** A failed
+  `CADDY_PWD` bootstrap, or a failed read of the password, now keeps it
+  closed. (`a_station_whose_password_could_not_be_written_is_not_open.rs`)
+- **Forgeable share links.** With `BNB_SHARE_SECRET` unset, the signing key
+  came from a 64-bit seed of the clock and the process ID. The macOS plist
+  shipped a placeholder secret that every unedited install shared.
+  (`share::tests`)
+- **Credentials in error text.** BirdWeather, heartbeat, Apprise and Flickr
+  errors printed the request URL, token included, into the journal, the
+  notification log and the support bundle.
+  (`a_failed_request_never_prints_its_credential.rs`)
+- **Anyone could make the station download pictures.** The image endpoints
+  fetched pictures for any name, and a full image cache kept writing to disk.
+  Lookups are now limited to species the station has heard, and a full cache
+  writes nothing.
+  (`a_stranger_cannot_make_the_station_download_pictures.rs`)
+- **A full backup could be started by another website** through an `<img>`
+  tag. Two backups started together shared a staging directory, and any
+  number could run at once. Now only one runs at a time, each has its own
+  staging directory, and a cross-site request gets 403.
+  (`a_backup_is_not_started_by_another_website.rs`, `backup::tests`)
+
+### Fixed
+
+#### Detection and audio
+
+- **A per-species threshold below the global one had no effect**, because the
+  model discarded those scores first. The model now runs at the lowest
+  threshold in force. (`a_lowered_species_threshold_reaches_the_model.rs`)
+- **Detections the database refused were still broadcast**, notified,
+  mirrored to DuckDB and sent to BirdWeather and MQTT. The processor now
+  stops there and removes the clip it extracted.
+- **The primary classifier ignored `MODEL_ID`, `MODEL_THRESHOLD` and
+  `MODEL_SAMPLE_RATE`.** A `MODEL_ROUTES` entry naming it refused to start.
+- **Downsampling from 48 kHz folded 16–24 kHz sound into the bird band**
+  (−0.9 to −4.9 dB). The sinc resampler holds those aliases below −141 dB.
+  Measured on a Xeon, it costs 0.193 s per 60 s of audio, against 0.054 s
+  before. (`audio::resample::tests`)
+- **Repeat-confirmation passed a lone detection** in the first and last
+  chunks of a file. (`corroboration::tests`)
+
+#### Notifications and integrations
+
+- **A watchlist of common names silenced every notification**, and a list of
+  scientific names silenced Apprise. Both names now match, ignoring case.
+- **The `new-species` and `new-species-daily` modes notified on every
+  detection.** They now count detections from the store.
+- **A notification that was rate-limited or failed still started the
+  species cooldown**, so the bird was never announced.
+- **A slow notification destination stalled detection recording** for up to
+  120 s per send.
+- **Email ignored the notification filters**, and sent one message per
+  detection while the first send was still in flight.
+- **The weekly report ran on UTC's calendar.** West of UTC it could fire a
+  day early, over the wrong window.
+- **Overlapping MQTT publishes disconnected each other**, which lost QoS 0
+  messages.
+- **A failure between two renames during auto-update could leave no binary
+  at all.** The install is now a single atomic rename with syncs on both
+  sides.
+
+#### Data, backups and migration
+
+- **A database error while reading the locked clips let the disk-full purge
+  delete them.**
+- **An unmounted recordings drive marked every clip as pruned, for good.**
+  The pass now refuses to mark clips when the directory looks empty, and a
+  marked clip that is back on disk is unmarked.
+- **`BirdDB.txt` imported 0 rows**: it is semicolon-separated. Re-importing
+  this station's own CSV export duplicated its history.
+- **CSV imports ignored the batch tag, the clock shift and the source
+  location.** A batch that could not be recorded now stops the import
+  instead of importing untagged.
+- **The backup ring counted `-wal` and `-shm` files as backups**, which could
+  cut it to 2–3 real snapshots and report a healthy backup as corrupt.
+- **Offsite retention could delete another station's backups** that shared
+  the bucket.
+- **A restore upload was held in RAM** (`PrivateTmp` on tmpfs, counted
+  against `MemoryMax`). It is now spooled beside the database.
+
+#### Analytics
+
+- **Elapsed-time analytics used DuckDB's session time zone.** On any station
+  outside UTC this undid the daylight-saving fix for sessions, funnels and
+  sequences.
+- **"Last hour" and every rolling window were cut on UTC's clock.** West of
+  UTC, "last hour" always read 0 and a DetectionsPerHour alert rule fired
+  permanently.
+- **Year-over-year never read last year**: 1 of 39 weeks had a prior-year
+  count.
+- **The migration tiles showed a failed read as zeros, and cached it.**
+  They also counted every species as arriving early in a station's first
+  year.
+- **The dawn-chorus "now" hand pointed at UTC.**
+
+#### Web interface
+
+- **Server toasts could never be dismissed or time out.** The activity clock
+  was always flat.
+- **Controls that did nothing in a real browser:** bulk Apply in search,
+  ▶ on Recordings → Live, Enter in Today's search, and "Load more" (which
+  replaced the list instead of extending it). Search also pushed the
+  fragment's URL into the address bar, and several pages loaded cached
+  scripts without a version query.
+- **A lock or delete the database refused was shown as done.** Failed
+  threshold, alert-rule and backup-delete writes in the admin pages now say
+  what was not saved. For a percentage entered as a threshold, the message
+  says which decimal was probably meant.
+- **Unreadable settings rendered as a form of defaults**, and saving that
+  form wrote the defaults over the real configuration.
+- **Nine links led to 404 pages**, including all five Export buttons.
+  (`every_link_on_every_page_resolves.rs`)
+- **One malformed imported `Time` could abort the whole process** through a
+  panic in the hourly chart.
+- **The live signal said "idle" when it could not reach the stream**, and
+  never reconnected.
+- **Today showed "Listening" and "recording" without measuring either.**
+- **Screen readers re-read the Today nudge every minute.** It is now
+  announced only when it changes.
+
+#### Configuration, installer and doctor
+
+- **An inline comment became part of a config value**, and decimal commas
+  that `--doctor` accepted were not read at runtime.
+- **`sudo --apply-config` left a config the service could not read.**
+- **A blank `RTSP_URL`, `ALSA_CARD` or `PIPEWIRE_DEVICE` failed `--doctor`**,
+  which stopped the station from starting.
+- **`BIRDNET_LISTEN` and `CADDY_USER` were reported as unknown keys** on
+  every fresh install.
+- **Documentation corrected** where it was wrong: the Docker bind-mount path,
+  the listen address in the entrypoint comment, what an invalid configuration
+  actually does, the doctor's advice for a missing config, a
+  `--trusted-proxies` flag that does not exist, and what offsite retention
+  checks.
 
 ## [0.16.1] - 2026-09-20
 
