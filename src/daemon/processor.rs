@@ -481,6 +481,10 @@ pub(super) fn event_processor(
     tracing::debug!("event processor started");
     let mut species_thresholds =
         ThresholdCache::new(species_thresholds).publishing(threshold_floor);
+    // Asked about every detection, so it must not wait on the client: a send
+    // holds the client's lock for its whole round trip (see
+    // `apprise::Client::gatekeeper`). Taken once, before the first event.
+    let apprise_gate = apprise.as_ref().map(|a| a.blocking_lock().gatekeeper());
     let mut dynamic = DynamicThresholdState::new(dynamic, &state);
     let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
     if daylight.is_enabled() {
@@ -1132,8 +1136,8 @@ pub(super) fn event_processor(
         };
 
         // Apprise push notification (with filter and template).
-        if let Some(ref apprise) = apprise {
-            let apprise_says_notify = apprise.blocking_lock().should_notify_detection(
+        if let (Some(apprise), Some(gate)) = (&apprise, &apprise_gate) {
+            let apprise_says_notify = gate.should_notify_detection(
                 &detection.common_name,
                 &detection.scientific_name,
                 detection.confidence,
@@ -1143,6 +1147,7 @@ pub(super) fn event_processor(
             if should_send {
                 let (title, body) = notification_template.render(&notify_ctx);
                 let client = Arc::clone(apprise);
+                let gate = gate.clone();
                 let log_state = state.clone();
                 let log_subject = subject.clone();
 
@@ -1169,7 +1174,7 @@ pub(super) fn event_processor(
                             // Not delivered: the next detection of this bird
                             // may try again rather than wait out a cooldown
                             // for a notification that never left.
-                            client.lock().await.release_cooldown(&log_subject.com_name);
+                            gate.release_cooldown(&log_subject.com_name);
                             log_state
                                 .metrics()
                                 .inc_notification_dropped(e.drop_reason());
@@ -1965,6 +1970,88 @@ mod tests {
             last = now;
         }
         count()
+    }
+
+    /// A send in flight does not stall the detection processor.
+    ///
+    /// Every detection asked the Apprise client whether to notify through
+    /// `blocking_lock()`, and every send held that same lock for its whole
+    /// round trip — up to 10 s per destination, 120 s for the CLI. One slow
+    /// destination therefore made every detection wait behind it, on the
+    /// single thread that records them. The test holds the lock, as a send
+    /// would, and requires the processor to get through a detection anyway.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_send_in_flight_does_not_stall_the_processor() {
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig::default(),
+        )
+        .expect("client");
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let for_processor = std::sync::Arc::clone(&apprise);
+        let state_for_processor = state.clone();
+        let processor = tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(for_processor),
+                None,
+                None,
+                None,
+                birdnet_integrations::notification::NotificationFilter {
+                    trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+                    species_filter: birdnet_integrations::notification::SpeciesFilter::new(
+                        None, None,
+                    ),
+                },
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        });
+        // Let the processor start and wait on its channel, then hold the
+        // client as a send in flight holds it.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let in_flight = apprise.lock().await;
+        let started = std::time::Instant::now();
+        event_tx
+            .send(make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "a",
+            ))
+            .unwrap();
+        drop(event_tx);
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(3), processor).await;
+        let waited = started.elapsed();
+        drop(in_flight);
+        assert!(
+            finished.is_ok(),
+            "the processor was still waiting on the Apprise lock after {waited:?}"
+        );
+        let stored: i64 = state.with_db(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+                .unwrap()
+        });
+        assert_eq!(stored, 1);
     }
 
     /// A notification that did not leave the station does not start its
