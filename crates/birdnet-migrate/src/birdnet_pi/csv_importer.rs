@@ -31,6 +31,7 @@ use rusqlite::Connection;
 
 use crate::error::MigrateError;
 use crate::progress::{MigrationProgress, MigrationStage, ProgressHandle};
+use crate::provenance::{ImportOptions, SourceProfile};
 use crate::traits::{MigrationSummary, Migrator};
 
 /// Minimum number of fields required per data line.
@@ -68,12 +69,57 @@ struct CsvRow {
 #[derive(Debug, Clone, Default)]
 pub struct CsvImporter;
 
+impl CsvImporter {
+    /// Import with the reconciliation the operator chose, as
+    /// [`super::BirdNetPiImporter::migrate_with_options`] does for a database:
+    /// an `import_batches` row (kind `birdnet-pi-csv`) that every imported row
+    /// points at, the clock conversion applied to each timestamp, and the
+    /// source's modal site recorded with the distance to this station.
+    ///
+    /// `run_migration_with_options` used to send a CSV to plain
+    /// [`Migrator::migrate`] and drop all of that, so a `BirdDB.txt` from
+    /// another site became indistinguishable from this station's recordings.
+    ///
+    /// # Errors
+    ///
+    /// As [`Migrator::migrate`], and when the batch row cannot be written.
+    pub fn migrate_with_options(
+        &self,
+        source_path: &Path,
+        dest_path: &Path,
+        progress: &ProgressHandle,
+        options: &ImportOptions,
+        station: (Option<f64>, Option<f64>),
+    ) -> Result<MigrationSummary, MigrateError> {
+        Self::run(source_path, dest_path, progress, Some((options, station)))
+    }
+}
+
 impl Migrator for CsvImporter {
     fn migrate(
         &self,
         source_path: &Path,
         dest_path: &Path,
         progress: &ProgressHandle,
+    ) -> Result<MigrationSummary, MigrateError> {
+        Self::run(source_path, dest_path, progress, None)
+    }
+}
+
+/// This station's `(lat, lon)`, as `run_migration_with_options` passes it.
+type Station = (Option<f64>, Option<f64>);
+
+/// Rows at each coordinate, rounded to three decimals (~110 m) as
+/// [`SourceProfile::from_connection`] rounds them.
+type SiteCounts = std::collections::HashMap<(i64, i64), u64>;
+
+impl CsvImporter {
+    #[allow(clippy::too_many_lines)]
+    fn run(
+        source_path: &Path,
+        dest_path: &Path,
+        progress: &ProgressHandle,
+        reconcile: Option<(&ImportOptions, Station)>,
     ) -> Result<MigrationSummary, MigrateError> {
         progress.set_stage(MigrationStage::Importing, "Opening CSV source file");
 
@@ -134,6 +180,21 @@ impl Migrator for CsvImporter {
             ))
         })?;
 
+        let batch_id = match reconcile {
+            Some((options, station)) => super::importer::record_import_batch(
+                &dest_conn,
+                "birdnet-pi-csv",
+                source_path,
+                // The site is not known until the rows are read; it is filled
+                // in below, once they have been.
+                &SourceProfile::default(),
+                options,
+                station,
+            )?,
+            None => None,
+        };
+        let mut sites = SiteCounts::new();
+
         let mut imported = 0u64;
         let mut skipped = 0u64;
         let mut unparseable = 0u64;
@@ -163,10 +224,13 @@ impl Migrator for CsvImporter {
             data_lines += 1;
 
             match parse_line(line, &layout) {
-                Ok(row) => {
+                Ok(mut row) => {
+                    if let Some((options, _)) = reconcile {
+                        reconcile_row(&dest_conn, &mut row, options, &mut sites);
+                    }
                     batch.push(row);
                     if batch.len() >= BATCH_SIZE {
-                        let (ins, sk) = flush_batch(&dest_conn, &batch)?;
+                        let (ins, sk) = flush_batch(&dest_conn, &batch, batch_id)?;
                         imported += ins;
                         skipped += sk;
                         batch.clear();
@@ -196,9 +260,27 @@ impl Migrator for CsvImporter {
 
         // Flush remainder.
         if !batch.is_empty() {
-            let (ins, sk) = flush_batch(&dest_conn, &batch)?;
+            let (ins, sk) = flush_batch(&dest_conn, &batch, batch_id)?;
             imported += ins;
             skipped += sk;
+        }
+
+        if let (Some(id), Some((_, (station_lat, station_lon)))) = (batch_id, reconcile) {
+            let profile = modal_site(&sites);
+            dest_conn
+                .execute(
+                    "UPDATE import_batches
+                        SET row_count = ?1, source_lat = ?2, source_lon = ?3, distance_km = ?4
+                      WHERE id = ?5",
+                    rusqlite::params![
+                        i64::try_from(imported).unwrap_or(i64::MAX),
+                        profile.modal_lat,
+                        profile.modal_lon,
+                        profile.distance_km_to(station_lat, station_lon),
+                        id,
+                    ],
+                )
+                .map_err(MigrateError::DataTransfer)?;
         }
 
         Ok(MigrationSummary {
@@ -392,8 +474,53 @@ fn parse_line(line: &str, layout: &Layout) -> Result<CsvRow, MigrateError> {
     })
 }
 
-/// Insert a batch of rows into the destination, returning (inserted, skipped).
-fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), MigrateError> {
+/// Apply the operator's clock reconciliation to `row` and count its site.
+fn reconcile_row(
+    conn: &Connection,
+    row: &mut CsvRow,
+    options: &ImportOptions,
+    sites: &mut SiteCounts,
+) {
+    if options.shifts_time() {
+        // The source's offset wins when it is given, as in the database path.
+        let (d, t) = options.source_utc_offset_secs.map_or_else(
+            || super::importer::shift_timestamp(conn, &row.date, &row.time, options.shift_secs),
+            |src| super::importer::to_local_here(conn, &row.date, &row.time, src),
+        );
+        row.date = d;
+        row.time = t;
+    }
+    if let (Some(lat), Some(lon)) = (row.lat, row.lon)
+        && !(lat == 0.0 && lon == 0.0)
+    {
+        #[allow(clippy::cast_possible_truncation)]
+        let key = ((lat * 1000.0).round() as i64, (lon * 1000.0).round() as i64);
+        *sites.entry(key).or_default() += 1;
+    }
+}
+
+/// The commonest site among `sites`, as a profile that knows only that.
+fn modal_site(sites: &SiteCounts) -> SourceProfile {
+    let mut profile = SourceProfile::default();
+    // Ties broken by the key, so the answer does not depend on hash order.
+    if let Some((&(lat, lon), &n)) = sites.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0))) {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            profile.modal_lat = Some(lat as f64 / 1000.0);
+            profile.modal_lon = Some(lon as f64 / 1000.0);
+        }
+        profile.modal_rows = n;
+    }
+    profile
+}
+
+/// Insert a batch of rows into the destination, tagged with `batch_id`,
+/// returning (inserted, skipped).
+fn flush_batch(
+    conn: &Connection,
+    batch: &[CsvRow],
+    batch_id: Option<i64>,
+) -> Result<(u64, u64), MigrateError> {
     let tx = conn
         .unchecked_transaction()
         .map_err(MigrateError::DataTransfer)?;
@@ -404,13 +531,14 @@ fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), Migrat
         let rows_changed = tx
             .execute(
                 "INSERT INTO detections
-                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name,
+                  import_batch_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
                 rusqlite::params![
                     row.date, row.time, row.sci_name, row.com_name,
                     row.confidence, row.lat, row.lon, row.cutoff,
-                    row.week, row.sens, row.overlap, row.file_name,
+                    row.week, row.sens, row.overlap, row.file_name, batch_id,
                 ],
             )
             .map_err(MigrateError::DataTransfer)?;

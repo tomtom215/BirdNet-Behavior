@@ -79,11 +79,17 @@ pub fn run_migration_with_options(
     options: &crate::provenance::ImportOptions,
     station: (Option<f64>, Option<f64>),
 ) -> Result<MigrationSummary, MigrateError> {
-    use crate::traits::{Migrator, SchemaDetector, Validator};
+    use crate::traits::{SchemaDetector, Validator};
 
     // CSV/TSV path — if the file is not a SQLite database, try CSV import.
     if is_csv_file(source_path) {
-        return CsvImporter.migrate(source_path, dest_path, progress);
+        return CsvImporter.migrate_with_options(
+            source_path,
+            dest_path,
+            progress,
+            options,
+            station,
+        );
     }
 
     let detector = BirdNetPiDetector;

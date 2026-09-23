@@ -349,3 +349,38 @@ fn a_same_site_import_shifts_nothing_but_is_still_attributable() {
     assert!(km_apart < 0.1, "same site, distance ~0: {km_apart}");
     assert_eq!(rows, 2, "the batch records how many rows it brought");
 }
+
+/// A batch row that cannot be written stops the import.
+///
+/// Every failure to write it used to be read as "the destination predates
+/// migration 25" and the rows went in untagged — where they can be neither
+/// undone nor told apart from the station's own. But the destination is
+/// migrated when it is opened, so the table is always there; what remains is
+/// a lock held past the busy timeout or an I/O error, and importing through
+/// either is the unrecoverable outcome. (The trigger stands in for them.)
+#[test]
+fn a_batch_that_cannot_be_recorded_stops_the_import() {
+    let dir = TempDir::new().unwrap();
+    let dst = dest(&dir);
+    Connection::open(&dst)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse BEFORE INSERT ON import_batches
+             BEGIN SELECT RAISE(ABORT, 'database is locked'); END;",
+        )
+        .unwrap();
+    let src = source_at(&dir, "far.db", 48.8566, 2.3522, 6, 3);
+    let result = BirdNetPiImporter.migrate_with_options(
+        &src,
+        &dst,
+        &ProgressHandle::new(),
+        &ImportOptions::default(),
+        (None, None),
+    );
+    assert!(result.is_err(), "imported untagged: {result:?}");
+    let rows: i64 = Connection::open(&dst)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 0, "no untagged rows went in");
+}
