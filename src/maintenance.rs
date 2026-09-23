@@ -1408,9 +1408,15 @@ fn prune_old_backups_blocking(backup_dir: &Path, keep: usize) -> std::io::Result
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|n| n.contains(".backup."))
+            // Not the `-wal`/`-shm` a read-only check leaves beside a backup:
+            // newer than every backup they sit beside, they took the newest
+            // places in the retention and pushed real snapshots out of it.
+            e.file_name().to_str().is_some_and(|n| {
+                n.contains(".backup.")
+                    && !["-wal", "-shm", "-journal"]
+                        .iter()
+                        .any(|suffix| n.ends_with(suffix))
+            })
         })
         .filter_map(|e| {
             e.metadata()
@@ -1429,6 +1435,11 @@ fn prune_old_backups_blocking(backup_dir: &Path, keep: usize) -> std::io::Result
         match std::fs::remove_file(&path) {
             Ok(()) => tracing::debug!(file = %path.display(), "pruned old backup"),
             Err(e) => tracing::warn!(file = %path.display(), error = %e, "failed to prune backup"),
+        }
+        for sidecar in ["-wal", "-shm"] {
+            let mut name = path.clone().into_os_string();
+            name.push(sidecar);
+            let _ = std::fs::remove_file(PathBuf::from(name));
         }
     }
     if count > 0 {
@@ -1493,6 +1504,45 @@ mod tests {
         prune_old_backups_blocking(tmp.path(), 10).unwrap();
         let remaining: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().collect();
         assert_eq!(remaining.len(), 2);
+    }
+
+    /// The `-wal`/`-shm` a read-only check leaves beside a backup are not
+    /// backups. They are newer than every backup they sit beside, so counted
+    /// as backups they took the newest places in the retention and pushed
+    /// real snapshots out of it — here two of the three.
+    #[test]
+    fn a_checks_sidecars_do_not_push_backups_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let ago = |s| now - std::time::Duration::from_secs(s);
+        for (i, name) in ["1700000001", "1700000002", "1700000003"]
+            .iter()
+            .enumerate()
+        {
+            touch(
+                tmp.path(),
+                &format!("birds.db.backup.{name}"),
+                ago(3000 - 100 * i as u64),
+            );
+        }
+        touch(tmp.path(), "birds.db.backup.1700000003-wal", ago(10));
+        touch(tmp.path(), "birds.db.backup.1700000003-shm", ago(10));
+        prune_old_backups_blocking(tmp.path(), 3).unwrap();
+        let mut backups: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().into_string().unwrap())
+            .filter(|n| !n.ends_with("-wal") && !n.ends_with("-shm"))
+            .collect();
+        backups.sort();
+        assert_eq!(
+            backups,
+            [
+                "birds.db.backup.1700000001",
+                "birds.db.backup.1700000002",
+                "birds.db.backup.1700000003"
+            ]
+        );
     }
 
     #[test]

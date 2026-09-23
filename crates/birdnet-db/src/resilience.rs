@@ -601,64 +601,17 @@ fn copy_whole_database(backup: &rusqlite::backup::Backup<'_, '_>) -> Result<(), 
     }
 }
 
-/// Remove old backup files, keeping only the N most recent.
-fn prune_backups(backup_dir: &Path, db_name: &str, keep: usize) -> Result<(), ResilienceError> {
-    let prefix = format!("{db_name}.backup.");
-    let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&prefix) {
-                Some(entry.path())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    backups.sort();
-
-    if backups.len() > keep {
-        for old in &backups[..backups.len() - keep] {
-            tracing::debug!(path = %old.display(), "pruning old backup");
-            std::fs::remove_file(old)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Find the most recent backup file for a database.
-pub fn find_latest_backup(backup_dir: &Path, db_name: &str) -> Option<PathBuf> {
-    let prefix = format!("{db_name}.backup.");
-    let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)
-        .ok()?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(&prefix) {
-                Some(entry.path())
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    backups.sort();
-    backups.pop()
-}
-
-/// Every backup for `db_name`, newest first.
+/// Every backup of `db_name` in `backup_dir`, oldest first: files named
+/// `{db_name}.backup.{stamp}` that are not one of SQLite's own sidecars.
 ///
-/// The names embed a zero-padded-by-magnitude Unix timestamp, so a lexical
-/// sort is chronological for any timestamp of the same digit count — which
-/// holds for every backup this decade — and the reverse gives newest-first.
-///
-/// # Errors
-///
-/// Never errors; an unreadable directory yields an empty list.
-#[must_use]
-pub fn backups_newest_first(backup_dir: &Path, db_name: &str) -> Vec<PathBuf> {
+/// A backup keeps the WAL header, so opening one read-only —
+/// `full_integrity_check`, over the whole ring, in `check_and_recover` —
+/// leaves `…backup.N-wal` and `-shm` beside it, and the prefix match took
+/// those for backups: listed first and logged as corrupt, counted against the
+/// ring's five, returned as "the latest backup". The stamp is not required
+/// to be digits: this station writes Unix seconds, but a copy placed in the
+/// ring by hand under another stamp is still a backup.
+fn backup_files(backup_dir: &Path, db_name: &str) -> Vec<PathBuf> {
     let prefix = format!("{db_name}.backup.");
     let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)
         .into_iter()
@@ -666,10 +619,51 @@ pub fn backups_newest_first(backup_dir: &Path, db_name: &str) -> Vec<PathBuf> {
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            name.starts_with(&prefix).then(|| entry.path())
+            let stamp = name.strip_prefix(&prefix)?;
+            let sidecar = ["-wal", "-shm", "-journal"]
+                .iter()
+                .any(|suffix| stamp.ends_with(suffix));
+            (!stamp.is_empty() && !sidecar).then(|| entry.path())
         })
         .collect();
+    // The names embed a Unix timestamp; a lexical sort is chronological for
+    // any timestamp of the same digit count, which holds for every backup
+    // this decade.
     backups.sort_unstable();
+    backups
+}
+
+/// Remove old backup files, keeping only the N most recent — and the
+/// `-wal`/`-shm` a check may have left beside each one removed.
+fn prune_backups(backup_dir: &Path, db_name: &str, keep: usize) -> Result<(), ResilienceError> {
+    let backups = backup_files(backup_dir, db_name);
+    if backups.len() > keep {
+        for old in &backups[..backups.len() - keep] {
+            tracing::debug!(path = %old.display(), "pruning old backup");
+            std::fs::remove_file(old)?;
+            for sidecar in ["-wal", "-shm"] {
+                let mut name = old.clone().into_os_string();
+                name.push(sidecar);
+                let _ = std::fs::remove_file(PathBuf::from(name));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Find the most recent backup file for a database.
+pub fn find_latest_backup(backup_dir: &Path, db_name: &str) -> Option<PathBuf> {
+    backup_files(backup_dir, db_name).pop()
+}
+
+/// Every backup for `db_name`, newest first.
+///
+/// # Errors
+///
+/// Never errors; an unreadable directory yields an empty list.
+#[must_use]
+pub fn backups_newest_first(backup_dir: &Path, db_name: &str) -> Vec<PathBuf> {
+    let mut backups = backup_files(backup_dir, db_name);
     backups.reverse();
     backups
 }
@@ -988,6 +982,43 @@ pub enum RecoveryAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Checking a backup does not grow the backup ring.
+    ///
+    /// Backups keep the WAL header, so the read-only `full_integrity_check`
+    /// that `check_and_recover` runs over them leaves `…backup.N-wal` and
+    /// `-shm` beside each one. All three ring helpers matched the name prefix
+    /// only: the sidecars were listed first (and logged as corrupt backups),
+    /// counted against the five kept, and returned as the latest backup.
+    #[test]
+    fn a_checked_backup_leaves_the_ring_holding_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("birds.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0))
+            .unwrap();
+        conn.execute_batch("CREATE TABLE t (x); INSERT INTO t VALUES (1);")
+            .unwrap();
+        let backups = dir.path().join("backups");
+        let made = backup_database(&db, &backups).expect("backup");
+        assert!(full_integrity_check(&made).unwrap());
+        let names: Vec<String> = std::fs::read_dir(&backups)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        // Precondition: the mechanism the audit found is real here.
+        assert!(
+            names
+                .iter()
+                .any(|n| n.ends_with("-wal") || n.ends_with("-shm")),
+            "no sidecar appeared; this proves nothing: {names:?}"
+        );
+        assert_eq!(
+            backups_newest_first(&backups, "birds.db"),
+            vec![made.clone()]
+        );
+        assert_eq!(find_latest_backup(&backups, "birds.db"), Some(made));
+    }
     use crate::sqlite::open_or_create;
 
     fn temp_db_with_data() -> (tempfile::NamedTempFile, PathBuf) {
