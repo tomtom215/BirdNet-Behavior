@@ -22,6 +22,18 @@ use std::time::{Duration, Instant};
 /// refused — the reference project's number.
 pub const MAX_FAILURES: usize = 5;
 
+/// Failures one *vouching hop* may accumulate inside one [`WINDOW`], summed
+/// over every client it has named.
+///
+/// A trusted hop can name any client it likes, so a LAN host that sends a
+/// fresh `X-Forwarded-For` per attempt — directly, or through a proxy that
+/// appends — gets a fresh five each time. This bounds what such a hop can
+/// buy. It is wider than [`MAX_FAILURES`] because an honest proxy on another
+/// box also vouches for every visitor behind it, and a loopback hop is not
+/// counted at all: a same-host proxy records what it saw, and counting it
+/// would let any few strangers lock the owner out of the whole station.
+pub const VOUCHER_MAX_FAILURES: usize = 30;
+
 /// How long a failure counts against its address.
 pub const WINDOW: Duration = Duration::from_secs(15 * 60);
 
@@ -29,12 +41,31 @@ pub const WINDOW: Duration = Duration::from_secs(15 * 60);
 /// touch. One entry is an address and at most [`MAX_FAILURES`] instants.
 const PRUNE_ABOVE: usize = 1024;
 
+type Table = HashMap<IpAddr, VecDeque<Instant>>;
+
 /// Per-address record of recent failed sign-ins.
 #[derive(Debug)]
 pub struct LoginThrottle {
-    failures: Mutex<HashMap<IpAddr, VecDeque<Instant>>>,
+    /// Clients, then vouching hops. One lock, so an attempt is checked and
+    /// counted against both in one step.
+    tables: Mutex<(Table, Table)>,
     max_failures: usize,
+    voucher_max_failures: usize,
     window: Duration,
+}
+
+/// A sign-in attempt [`LoginThrottle::begin`] let through.
+///
+/// It is counted as a failure *before* the password is checked. Counting it
+/// afterwards let a parallel burst through: every request passed the check
+/// while none had yet recorded, so the global limiter's burst of sixty was
+/// sixty guesses, not five. Dropping an `Attempt` leaves the failure counted;
+/// [`LoginThrottle::succeeded`] withdraws it.
+#[derive(Debug)]
+#[must_use = "drop it for a failure, or pass it to `succeeded`"]
+pub struct Attempt {
+    client: IpAddr,
+    voucher: Option<IpAddr>,
 }
 
 impl Default for LoginThrottle {
@@ -45,91 +76,147 @@ impl Default for LoginThrottle {
 
 impl LoginThrottle {
     /// A throttle refusing an address after `max_failures` failures inside
-    /// `window`.
+    /// `window` (and a vouching hop after [`VOUCHER_MAX_FAILURES`]).
     #[must_use]
     pub fn new(max_failures: usize, window: Duration) -> Self {
         Self {
-            failures: Mutex::new(HashMap::new()),
+            tables: Mutex::new((HashMap::new(), HashMap::new())),
             max_failures: max_failures.max(1),
+            voucher_max_failures: VOUCHER_MAX_FAILURES,
             window,
         }
     }
 
-    /// Whether `ip` may attempt to sign in now. `Err` carries how long until
-    /// its oldest counted failure expires — the `Retry-After`.
+    /// Admit a sign-in attempt from `client`, named by `voucher` (`None` when
+    /// nothing but the connection itself vouched, or the hop was loopback),
+    /// counting it as a failure now. `Err` carries how long until the budget
+    /// that refused it frees up — the `Retry-After`.
     ///
     /// # Errors
     ///
-    /// The address has [`MAX_FAILURES`] failures inside the window.
-    pub fn check(&self, ip: IpAddr) -> Result<(), Duration> {
-        self.check_at(ip, Instant::now())
+    /// The client, or the hop that vouched for it, has used its budget inside
+    /// the window.
+    pub fn begin(&self, client: IpAddr, voucher: Option<IpAddr>) -> Result<Attempt, Duration> {
+        self.begin_at(client, voucher, Instant::now())
     }
 
-    /// Count a failed attempt from `ip`.
-    pub fn record_failure(&self, ip: IpAddr) {
-        self.record_failure_at(ip, Instant::now());
-    }
-
-    /// Forget `ip`'s failures — a successful sign-in.
-    pub fn clear(&self, ip: IpAddr) {
-        if let Ok(mut map) = self.failures.lock() {
-            map.remove(&ip);
+    /// The attempt signed in: forget the client's failures, and withdraw the
+    /// one this attempt charged its voucher. Other clients' failures on that
+    /// voucher stand.
+    // By value on purpose: an attempt is withdrawn once, and taking it makes a
+    // second withdrawal a compile error rather than a second `pop_back`.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn succeeded(&self, attempt: Attempt) {
+        let Attempt { client, voucher } = attempt;
+        if let Ok(mut tables) = self.tables.lock() {
+            tables.0.remove(&client);
+            if let Some(v) = voucher
+                && let Some(recent) = tables.1.get_mut(&v)
+            {
+                recent.pop_back();
+                if recent.is_empty() {
+                    tables.1.remove(&v);
+                }
+            }
         }
     }
 
-    fn check_at(&self, ip: IpAddr, now: Instant) -> Result<(), Duration> {
+    fn begin_at(
+        &self,
+        client: IpAddr,
+        voucher: Option<IpAddr>,
+        now: Instant,
+    ) -> Result<Attempt, Duration> {
         // A poisoned lock (a panic while holding it) fails open, as the global
         // limiter does: refusing every sign-in for the life of the process is
         // the worse outcome for a station nobody can reach otherwise.
-        let Ok(mut map) = self.failures.lock() else {
-            return Ok(());
+        let Ok(mut guard) = self.tables.lock() else {
+            return Ok(Attempt { client, voucher });
         };
-        let Some(recent) = map.get_mut(&ip) else {
-            return Ok(());
-        };
-        Self::expire(recent, now, self.window);
-        if recent.len() < self.max_failures {
-            return Ok(());
+        let (clients, vouchers) = &mut *guard;
+        let window = self.window;
+        if let Some(wait) = refusal(clients, client, now, window, self.max_failures) {
+            return Err(wait);
         }
-        let oldest = recent.front().copied().unwrap_or(now);
-        Err(self
-            .window
-            .saturating_sub(now.saturating_duration_since(oldest))
-            .max(Duration::from_secs(1)))
-    }
-
-    fn record_failure_at(&self, ip: IpAddr, now: Instant) {
-        let Ok(mut map) = self.failures.lock() else {
-            return;
-        };
-        if map.len() > PRUNE_ABOVE {
-            let window = self.window;
-            map.retain(|_, recent| {
-                Self::expire(recent, now, window);
-                !recent.is_empty()
-            });
-        }
-        let recent = map.entry(ip).or_default();
-        Self::expire(recent, now, self.window);
-        recent.push_back(now);
-        while recent.len() > self.max_failures {
-            recent.pop_front();
-        }
-    }
-
-    fn expire(recent: &mut VecDeque<Instant>, now: Instant, window: Duration) {
-        while recent
-            .front()
-            .is_some_and(|t| now.saturating_duration_since(*t) >= window)
+        if let Some(v) = voucher
+            && let Some(wait) = refusal(vouchers, v, now, window, self.voucher_max_failures)
         {
-            recent.pop_front();
+            return Err(wait);
         }
+        charge(clients, client, now, window, self.max_failures);
+        if let Some(v) = voucher {
+            charge(vouchers, v, now, window, self.voucher_max_failures);
+        }
+        Ok(Attempt { client, voucher })
     }
 
     /// Addresses currently tracked (diagnostics).
     #[must_use]
     pub fn tracked_addresses(&self) -> usize {
-        self.failures.lock().map_or(0, |m| m.len())
+        self.tables.lock().map_or(0, |t| t.0.len())
+    }
+
+    #[cfg(test)]
+    fn check_at(&self, ip: IpAddr, now: Instant) -> Result<(), Duration> {
+        let mut t = self.tables.lock().unwrap();
+        refusal(&mut t.0, ip, now, self.window, self.max_failures).map_or(Ok(()), Err)
+    }
+
+    #[cfg(test)]
+    fn record_failure_at(&self, ip: IpAddr, now: Instant) {
+        let mut t = self.tables.lock().unwrap();
+        charge(&mut t.0, ip, now, self.window, self.max_failures);
+    }
+
+    #[cfg(test)]
+    fn clear(&self, ip: IpAddr) {
+        self.tables.lock().unwrap().0.remove(&ip);
+    }
+}
+
+/// How long `ip` must wait, if its failures inside `window` have reached `max`.
+fn refusal(
+    table: &mut Table,
+    ip: IpAddr,
+    now: Instant,
+    window: Duration,
+    max: usize,
+) -> Option<Duration> {
+    let recent = table.get_mut(&ip)?;
+    expire(recent, now, window);
+    if recent.len() < max {
+        return None;
+    }
+    let oldest = recent.front().copied().unwrap_or(now);
+    Some(
+        window
+            .saturating_sub(now.saturating_duration_since(oldest))
+            .max(Duration::from_secs(1)),
+    )
+}
+
+/// Count one failure against `ip`.
+fn charge(table: &mut Table, ip: IpAddr, now: Instant, window: Duration, max: usize) {
+    if table.len() > PRUNE_ABOVE {
+        table.retain(|_, recent| {
+            expire(recent, now, window);
+            !recent.is_empty()
+        });
+    }
+    let recent = table.entry(ip).or_default();
+    expire(recent, now, window);
+    recent.push_back(now);
+    while recent.len() > max {
+        recent.pop_front();
+    }
+}
+
+fn expire(recent: &mut VecDeque<Instant>, now: Instant, window: Duration) {
+    while recent
+        .front()
+        .is_some_and(|t| now.saturating_duration_since(*t) >= window)
+    {
+        recent.pop_front();
     }
 }
 
@@ -216,5 +303,69 @@ mod tests {
             1,
             "only the fresh failure survives the prune"
         );
+    }
+
+    /// Five attempts in flight at once, none finished: the sixth is refused.
+    /// The old check-then-record order admitted all of them, because none had
+    /// recorded when the next was checked.
+    #[test]
+    fn attempts_in_flight_count_before_they_finish() {
+        let t = LoginThrottle::default();
+        let now = Instant::now();
+        let held: Vec<Attempt> = (0..MAX_FAILURES)
+            .map(|i| {
+                t.begin_at(A, None, now)
+                    .unwrap_or_else(|_| panic!("attempt {i}"))
+            })
+            .collect();
+        assert!(t.begin_at(A, None, now).is_err(), "the sixth in flight");
+        drop(held);
+    }
+
+    /// A hop that names a new client each time runs out at its own budget;
+    /// a different hop's clients are untouched.
+    #[test]
+    fn a_hop_naming_a_new_client_each_time_runs_out() {
+        let t = LoginThrottle::default();
+        let now = Instant::now();
+        let hop = IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 50));
+        let other = IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 51));
+        for i in 0..VOUCHER_MAX_FAILURES {
+            let minted = IpAddr::V4(std::net::Ipv4Addr::from(
+                0x0909_0000 + u32::try_from(i).unwrap(),
+            ));
+            let _ = t
+                .begin_at(minted, Some(hop), now)
+                .expect("inside the hop's budget");
+        }
+        assert!(
+            t.begin_at(
+                IpAddr::V4(std::net::Ipv4Addr::new(9, 9, 99, 99)),
+                Some(hop),
+                now
+            )
+            .is_err()
+        );
+        assert!(
+            t.begin_at(B, Some(other), now).is_ok(),
+            "another hop is not affected"
+        );
+    }
+
+    /// A success withdraws the charge it made on its hop, and only that.
+    #[test]
+    fn a_success_withdraws_only_its_own_charge_on_the_hop() {
+        let t = LoginThrottle::default();
+        let now = Instant::now();
+        let hop = IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 50));
+        let _ = t.begin_at(A, Some(hop), now).unwrap();
+        let ok = t.begin_at(B, Some(hop), now).unwrap();
+        t.succeeded(ok);
+        assert_eq!(
+            t.tables.lock().unwrap().1[&hop].len(),
+            1,
+            "A's failure stands"
+        );
+        assert_eq!(t.tracked_addresses(), 1);
     }
 }

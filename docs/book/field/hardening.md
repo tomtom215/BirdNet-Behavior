@@ -109,6 +109,13 @@ internet-reachable, keep it set (and add TLS off-LAN).
   visitor's only if the proxy is trusted (`BIRDNET_TRUSTED_PROXIES`; there is
   no command-line flag for it); otherwise every
   visitor shares the proxy's bucket, which is the conservative failure.
+  An attempt counts from the moment it arrives, not when its password check
+  finishes, so twenty sent at once still get five checked. A trusted hop can
+  name any visitor it likes, so each hop other than this machine also has a
+  budget of its own — thirty failures a quarter-hour across every address it
+  names — and a LAN device that invents a new `X-Forwarded-For` per guess
+  runs out there. `CF-Connecting-IP` is believed only when `cloudflare` is in
+  `BIRDNET_TRUSTED_PROXIES`.
 
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. The password
   crosses the wire in clear text unless TLS is on — turn on `--tls-mode`, put a

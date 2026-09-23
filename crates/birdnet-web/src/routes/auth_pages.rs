@@ -79,6 +79,7 @@ async fn login_page(req: Request) -> Html<String> {
 async fn login_submit(
     State(state): State<AppState>,
     client: Option<Extension<ClientIp>>,
+    vouched_by: Option<Extension<crate::client_ip::VouchedBy>>,
     headers: axum::http::HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
@@ -90,22 +91,32 @@ async fn login_submit(
     let ip = client
         .as_ref()
         .map_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), |c| c.0.0);
-    if let Err(retry_after) = state.login_throttle().check(ip) {
-        crate::audit::audit_user_id(
-            &state,
-            None,
-            "auth.login.throttled",
-            Some(&form.username),
-            None,
-        );
-        tracing::warn!(
-            ip = %ip,
-            username = %form.username,
-            retry_after_secs = retry_after.as_secs(),
-            "sign-in refused: too many failed attempts from this address"
-        );
-        return throttled_response(retry_after, &next);
-    }
+    // The hop that named this address has a budget of its own, so a hop that
+    // names a new address per attempt cannot buy unlimited guesses. Not when
+    // nothing but the connection vouched (that *is* the client), and not for
+    // loopback — see `login_throttle::VOUCHER_MAX_FAILURES`.
+    let voucher = vouched_by
+        .map(|v| v.0.0)
+        .filter(|v| *v != ip && !v.is_loopback());
+    let attempt = match state.login_throttle().begin(ip, voucher) {
+        Ok(attempt) => attempt,
+        Err(retry_after) => {
+            crate::audit::audit_user_id(
+                &state,
+                None,
+                "auth.login.throttled",
+                Some(&form.username),
+                None,
+            );
+            tracing::warn!(
+                ip = %ip,
+                username = %form.username,
+                retry_after_secs = retry_after.as_secs(),
+                "sign-in refused: too many failed attempts from this address"
+            );
+            return throttled_response(retry_after, &next);
+        }
+    };
     let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
         (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
         _ => None,
@@ -143,11 +154,12 @@ async fn login_submit(
         // that does. There is no actor id because there is no actor — that is
         // why `audit_log.user_id` is nullable.
         crate::audit::audit_user_id(&state, None, "auth.login.fail", Some(&form.username), None);
-        state.login_throttle().record_failure(ip);
+        // Already counted by `begin`; dropping the attempt keeps it.
+        drop(attempt);
         let query = format!("?error=1&next={}", urlencode_path(&next));
         return Redirect::to(&format!("/login{query}")).into_response();
     };
-    state.login_throttle().clear(ip);
+    state.login_throttle().succeeded(attempt);
 
     let ttl_ms = if form.remember.as_deref() == Some("1") {
         session::REMEMBER_ME_TTL_MS

@@ -173,3 +173,144 @@ async fn a_successful_sign_in_clears_the_address_failures() {
         StatusCode::TOO_MANY_REQUESTS
     );
 }
+
+async fn post_login_via(
+    state: &AppState,
+    peer: &str,
+    extra: &[(&str, &str)],
+    password: &str,
+) -> Response<Body> {
+    let app = birdnet_web::server::build_router(state.clone());
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("origin", "http://localhost")
+        .header("host", "localhost");
+    for (k, v) in extra {
+        req = req.header(*k, *v);
+    }
+    let mut req = req
+        .body(Body::from(format!("username=admin&password={password}")))
+        .expect("build request");
+    let peer: std::net::SocketAddr = format!("{peer}:40000").parse().unwrap();
+    req.extensions_mut()
+        .insert(axum::extract::ConnectInfo(peer));
+    app.oneshot(req).await.expect("router responds")
+}
+
+/// Behind the Caddy that `remote-access.md` documents, the peer is loopback —
+/// always trusted — and Caddy writes `X-Forwarded-For` itself but passes any
+/// `CF-Connecting-IP` through as the client typed it. Believing that header
+/// gave every visitor a fresh five guesses per request. Without `cloudflare`
+/// named, it is not believed: the sixth attempt from one visitor is refused
+/// whatever it claims.
+#[tokio::test]
+async fn a_cloudflare_header_nobody_vouched_for_does_not_mint_an_address() {
+    let state = state_with_admin();
+    for i in 1..=5u8 {
+        let cf = format!("9.9.9.{i}");
+        let res = post_login_via(
+            &state,
+            "127.0.0.1",
+            &[
+                ("x-forwarded-for", "203.0.113.7"),
+                ("cf-connecting-ip", &cf),
+            ],
+            "wrong",
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "attempt {i}");
+    }
+    let res = post_login_via(
+        &state,
+        "127.0.0.1",
+        &[
+            ("x-forwarded-for", "203.0.113.7"),
+            ("cf-connecting-ip", "9.9.9.6"),
+        ],
+        "wrong",
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+/// A LAN host is a trusted hop under the default `private`, so it can name any
+/// client it likes. Each named client gets five; the hop itself gets
+/// `VOUCHER_MAX_FAILURES`, and then it is refused whatever it names.
+#[tokio::test]
+async fn a_lan_hop_naming_a_new_address_each_time_runs_out() {
+    use birdnet_web::login_throttle::VOUCHER_MAX_FAILURES;
+    let state = state_with_admin();
+    for i in 0..VOUCHER_MAX_FAILURES {
+        let xff = format!("198.51.100.{i}");
+        let res = post_login_via(
+            &state,
+            "192.168.1.50",
+            &[("x-forwarded-for", &xff)],
+            "wrong",
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "attempt {i}");
+    }
+    let res = post_login_via(
+        &state,
+        "192.168.1.50",
+        &[("x-forwarded-for", "198.51.100.250")],
+        PASSWORD,
+    )
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "the hop is spent"
+    );
+    // Another host on the LAN is not the one that spent it.
+    let res = post_login_via(&state, "192.168.1.51", &[], PASSWORD).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(res.headers().get("set-cookie").is_some());
+}
+
+/// The counterpart: a same-host proxy vouches for every visitor, honestly, and
+/// is not counted — many different visitors failing once each do not lock the
+/// station.
+#[tokio::test]
+async fn a_same_host_proxy_is_not_charged_for_its_visitors() {
+    use birdnet_web::login_throttle::VOUCHER_MAX_FAILURES;
+    let state = state_with_admin();
+    for i in 0..=VOUCHER_MAX_FAILURES {
+        let xff = format!("198.51.100.{i}");
+        let res = post_login_via(&state, "127.0.0.1", &[("x-forwarded-for", &xff)], "wrong").await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER, "visitor {i}");
+    }
+    let res = post_login_via(
+        &state,
+        "127.0.0.1",
+        &[("x-forwarded-for", "198.51.100.251")],
+        PASSWORD,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(res.headers().get("set-cookie").is_some());
+}
+
+/// Twenty attempts at once from one address: at most five are checked. The
+/// throttle used to check before hashing and record after, so a burst that
+/// arrived together all passed the check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn a_burst_gets_five_guesses_not_twenty() {
+    let state = state_with_admin();
+    let mut set = tokio::task::JoinSet::new();
+    for _ in 0..20 {
+        let state = state.clone();
+        set.spawn(async move { post_login(&state, "203.0.113.9", "wrong").await.status() });
+    }
+    let mut checked = 0;
+    while let Some(status) = set.join_next().await {
+        if status.unwrap() == StatusCode::SEE_OTHER {
+            checked += 1;
+        }
+    }
+    assert!(checked <= 5, "{checked} guesses were checked");
+    assert!(checked >= 1, "the burst was not refused outright");
+}
