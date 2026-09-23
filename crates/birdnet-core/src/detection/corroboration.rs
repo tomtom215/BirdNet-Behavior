@@ -245,21 +245,34 @@ pub fn corroborate(
     }
 
     let half = REFERENCE_SPAN / 2.0;
-    predictions
+    // Every chunk starting within half a span either side, this one included.
+    let neighbourhoods: Vec<Vec<usize>> = starts
         .iter()
-        .enumerate()
-        .map(|(idx, chunk)| {
-            let here = starts[idx];
-            // Every chunk starting within half a span either side, this one
-            // included. Computed per chunk rather than per detection because it
-            // does not depend on the species.
-            let neighbourhood: Vec<usize> = starts
+        .map(|here| {
+            starts
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| (**s - here).abs() <= half)
                 .map(|(j, _)| j)
-                .collect();
-            let required = required_confirmations(level, neighbourhood.len());
+                .collect()
+        })
+        .collect();
+    // What a chunk in the middle of the file is held to. A chunk near either
+    // edge has fewer neighbours, and its requirement used to be the fraction
+    // of whatever was left — at 0 s overlap `balanced` needs 2 of 3, but the
+    // edge chunks have 2 and half of 2 rounds up to 1: themselves. Now the
+    // same count applies everywhere, capped at the chunks there are.
+    let full = required_confirmations(
+        level,
+        neighbourhoods.iter().map(Vec::len).max().unwrap_or(0),
+    );
+    predictions
+        .iter()
+        .enumerate()
+        .map(|(idx, chunk)| {
+            let neighbourhood = &neighbourhoods[idx];
+            let required = required_confirmations(level, neighbourhood.len())
+                .max(full.min(neighbourhood.len()));
 
             chunk
                 .iter()
@@ -313,6 +326,42 @@ mod tests {
         out.iter()
             .map(|c| c.iter().map(|d| d.scientific_name.clone()).collect())
             .collect()
+    }
+
+    // ── file edges ────────────────────────────────────────────────────────
+
+    /// A lone detection at the start or end of a file is held to the same
+    /// count as one in the middle.
+    ///
+    /// The neighbourhood is cut off at the file's edges, and the requirement
+    /// was taken as a fraction of whatever was left: at 0 s overlap,
+    /// `balanced` needs 2 of 3 mid-file, but the first and last chunk have
+    /// only 2 neighbours, and half of 2 rounded up is 1 — themselves. A
+    /// one-off artefact in 2 of every 5 chunks passed.
+    #[test]
+    fn a_lone_detection_at_a_file_edge_is_dropped() {
+        let (starts, preds) = scenario(3.0, &[&["Tyto alba"], &[], &[], &[], &["Strix aluco"]]);
+        let out = corroborate(ConfirmationLevel::Balanced, &starts, &preds);
+        assert_eq!(names(&out), vec![Vec::<String>::new(); 5]);
+
+        // The audit's `lenient` case: a 1 s step (2 s overlap) passed lone
+        // detections at 0, 1, 13 and 14 s of a 15 s file.
+        assert!(ConfirmationLevel::Lenient.required_confirmations_at(2.0, 3.0) >= 2);
+        let mut per_chunk: Vec<&[&str]> = vec![&[]; 15];
+        per_chunk[0] = &["Tyto alba"];
+        per_chunk[14] = &["Strix aluco"];
+        let (starts, preds) = scenario(1.0, &per_chunk);
+        let out = corroborate(ConfirmationLevel::Lenient, &starts, &preds);
+        assert!(names(&out).iter().all(Vec::is_empty), "{:?}", names(&out));
+    }
+
+    /// The counterpart: an edge detection its neighbour confirms is kept.
+    #[test]
+    fn a_confirmed_detection_at_a_file_edge_is_kept() {
+        let (starts, preds) = scenario(3.0, &[&["Tyto alba"], &["Tyto alba"], &[], &[], &[]]);
+        let out = corroborate(ConfirmationLevel::Balanced, &starts, &preds);
+        assert_eq!(names(&out)[0], vec!["Tyto alba".to_owned()]);
+        assert_eq!(names(&out)[1], vec!["Tyto alba".to_owned()]);
     }
 
     // ── the levels themselves ─────────────────────────────────────────────
