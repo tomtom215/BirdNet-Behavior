@@ -30,15 +30,17 @@ How the token works:
 - Verification is **constant-time**. A tampered or expired token renders a neutral "This clip is gone" page (HTTP 404, `noindex`) that leaks nothing about whether the detection exists.
 - `/r/<token>/audio.wav` and `/r/<token>/spectrogram.png` resolve the recording by **filename** and serve it through the same handlers as the normal media routes, so the clip and spectrogram render without exposing any internal id — and without depending on those routes being reachable.
 
-### `BNB_SHARE_SECRET` — set it in production
+### The signing key
 
-Tokens are signed with `BNB_SHARE_SECRET`:
+With `BNB_SHARE_SECRET` unset — the usual case — tokens are signed with a key derived from the station's own session secret, which is random and kept beside the database. Links therefore survive restarts, and changing that secret invalidates them.
+
+Set `BNB_SHARE_SECRET` only to rotate share links on their own:
 
 ```bash
-# 32+ random bytes; keep it stable so issued links survive restarts
+# 32+ random bytes
 BNB_SHARE_SECRET="$(openssl rand -base64 48)"
 ```
 
-If the variable is **unset**, the station falls back to a random per-process secret and logs a warning. That is *fail-secure* — every previously issued link is invalidated the moment the process restarts — but it means share links won't survive a reboot. Set `BNB_SHARE_SECRET` to a stable random value on any station you actually share from.
+A value shorter than 32 bytes, or one still containing `CHANGE-ME`, is ignored with a warning and the derived key is used instead.
 
 > Share links are deliberately read-only and scoped to one detection. They are not affected by — and do not bypass — the admin password or any reverse-proxy auth in front of the main UI. On a station in [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in) they are behind the sign-in like everything else unless `BIRDNET_PUBLIC_ACCESS` includes `share`, which opens the links you mint and nothing else.

@@ -2981,7 +2981,7 @@ mac_brew_dep() { # $1=formula  $2=why
 }
 
 macos_setup_config_and_agent() { # $1=binary path
-    local bin="$1" secret
+    local bin="$1"
     mkdir -p "${MAC_DATA_DIR}" "${HOME}/Library/Logs" "$(dirname "${MAC_PLIST}")"
     if [ ! -f "${MAC_DATA_DIR}/birdnet.conf" ]; then
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
@@ -3004,7 +3004,6 @@ CONF
     else
         info "Keeping existing config: ${MAC_DATA_DIR}/birdnet.conf"
     fi
-    secret="$(openssl rand -base64 48 2>/dev/null | tr -d '\n' || echo 'CHANGE-ME-to-32-plus-random-bytes')"
     cat > "${MAC_PLIST}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -3025,7 +3024,6 @@ CONF
   <dict>
     <key>BNB_STATION_LAT</key><string>0.0</string>
     <key>BNB_STATION_LON</key><string>0.0</string>
-    <key>BNB_SHARE_SECRET</key><string>${secret}</string>
   </dict>
 </dict>
 </plist>

@@ -69,9 +69,27 @@ fn secret() -> &'static [u8] {
             std::env::var("BNB_SHARE_SECRET")
                 .ok()
                 .filter(|s| !s.is_empty())
+                .filter(|s| {
+                    let usable = usable_share_secret(s);
+                    if !usable {
+                        tracing::warn!(
+                            "BNB_SHARE_SECRET is a placeholder or shorter than 32 bytes; \
+                             ignoring it and deriving the share key from the station's own secret"
+                        );
+                    }
+                    usable
+                })
                 .map_or_else(derived_secret, String::into_bytes)
         })
         .as_slice()
+}
+
+/// Whether `secret` can sign share links: 32 bytes or more, and not the
+/// `CHANGE-ME…` placeholder the macOS plist once shipped — a key every station
+/// using that file shared, so anyone could mint a link to any detection on
+/// any of them, past private mode.
+fn usable_share_secret(secret: &str) -> bool {
+    secret.len() >= 32 && !secret.to_ascii_uppercase().contains("CHANGE-ME")
 }
 
 /// The share key when `BNB_SHARE_SECRET` is unset: the station's session
@@ -426,6 +444,18 @@ fn ago_phrase(date: &str, time: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_placeholder_or_short_share_secret_is_not_used() {
+        assert!(!usable_share_secret("CHANGE-ME-to-32-plus-random-bytes"));
+        assert!(!usable_share_secret(
+            "change-me-please-to-something-long-enough"
+        ));
+        assert!(!usable_share_secret("short"));
+        assert!(usable_share_secret(
+            "q3ZC0Ma7b4vX1l5pQd9rT2wYk8nH6sJfUe0iLzAoBc4="
+        ));
+    }
 
     /// A share link outlives the process that minted it.
     ///

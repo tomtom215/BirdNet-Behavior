@@ -145,11 +145,11 @@ fi
 hdr "Generate a from-source LaunchAgent"
 # The committed plist assumes Homebrew paths (/opt/homebrew/bin). A from-source
 # run lives at target/release, so generate a ready-to-load plist pre-filled with
-# the real binary path and a fresh random share secret — no hand-editing needed.
+# the real binary path — no hand-editing needed. (No share secret: the station
+# derives one from its own persisted secret, so links survive restarts.)
 if [ -x "$BIN" ]; then
   GEN="$ROOT/target/com.tomtom215.birdnet-behavior.generated.plist"
   CONF_DIR="$HOME/Library/Application Support/birdnet-behavior"
-  SECRET="$(openssl rand -base64 48 2>/dev/null | tr -d '\n' || echo 'CHANGE-ME-to-32-plus-random-bytes')"
   mkdir -p "$ROOT/target"
   cat > "$GEN" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -173,13 +173,12 @@ if [ -x "$BIN" ]; then
   <dict>
     <key>BNB_STATION_LAT</key><string>0.0</string>
     <key>BNB_STATION_LON</key><string>0.0</string>
-    <key>BNB_SHARE_SECRET</key><string>$SECRET</string>
   </dict>
 </dict>
 </plist>
 PLIST
   ok "wrote $GEN"
-  echo "  Binary path and a random BNB_SHARE_SECRET are already filled in. Before loading:"
+  echo "  The binary path is already filled in. Before loading:"
   echo "    1. mkdir -p \"$CONF_DIR\" && cp .env.example \"$CONF_DIR/birdnet.conf\"   # then set LATITUDE/LONGITUDE"
   echo "    2. edit BNB_STATION_LAT/LON in the plist to your station coordinates"
   echo "    3. cp \"$GEN\" ~/Library/LaunchAgents/com.tomtom215.birdnet-behavior.plist"

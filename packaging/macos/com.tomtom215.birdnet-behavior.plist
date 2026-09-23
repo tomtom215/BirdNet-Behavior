@@ -50,9 +50,6 @@
     <string>0.0</string>
     <key>BNB_STATION_LON</key>
     <string>0.0</string>
-    <!-- Stable secret so share links survive restarts (generate your own). -->
-    <key>BNB_SHARE_SECRET</key>
-    <string>CHANGE-ME-to-32-plus-random-bytes</string>
   </dict>
 </dict>
 </plist>
