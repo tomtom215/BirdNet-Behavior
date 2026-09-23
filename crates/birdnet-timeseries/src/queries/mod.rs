@@ -75,9 +75,15 @@ pub mod trend;
 /// `DailySchedule::clock()` made for the recording gate — a caller that has to
 /// remember which clock a bare `ts` means will eventually not.
 ///
-/// `to_timestamp` yields a `TIMESTAMP WITH TIME ZONE`; the cast to plain
-/// `TIMESTAMP` keeps it the same type as `detection_timestamp` so the two are
-/// interchangeable as arguments to the extension's functions. Rows with no
+/// `make_timestamp(microseconds)` yields a plain `TIMESTAMP` holding the UTC
+/// instant, the same type as `detection_timestamp`, so the two are
+/// interchangeable as arguments to the extension's functions. It was
+/// `CAST(to_timestamp(..) AS TIMESTAMP)`, which is not the same thing: once ICU
+/// is loaded that cast converts into the session `TimeZone`, which defaults to
+/// the system zone. On any station not set to UTC both passes through a
+/// repeated autumn hour then read as the same local time, and every elapsed
+/// time across the change came out an hour short — while CI, running in UTC,
+/// stayed green (`tests/two_clocks.rs` now runs in `Europe/Berlin`). Rows with no
 /// instant — a history predating migration 32, or one whose wall clock names no
 /// point in time — yield NULL and drop out of ordered and bucketed results
 /// exactly as they already do for `detection_timestamp`.
@@ -91,7 +97,7 @@ pub const ENSURE_TS_VIEW: &str = "
 CREATE OR REPLACE VIEW detections_ts AS
 SELECT *,
     TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
-    CAST(to_timestamp(detected_at_utc) AS TIMESTAMP) AS detection_instant,
+    make_timestamp(detected_at_utc * 1000000) AS detection_instant,
     TRY_CAST(Date AS DATE) AS detection_date
 FROM detections
 WHERE review_verdict IS DISTINCT FROM 'rejected';

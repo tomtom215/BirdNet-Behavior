@@ -121,3 +121,106 @@ fn a_row_without_an_instant_yields_null_not_an_epoch_default() {
         .expect("query");
     assert_eq!(epoch, 0, "no detection was invented at the epoch");
 }
+
+/// Every gate above, again, on a station whose clock is not UTC.
+///
+/// This file was green in CI and wrong on every station outside UTC, because
+/// CI runs in `Etc/UTC` and the view's instant was
+/// `CAST(to_timestamp(detected_at_utc) AS TIMESTAMP)` — a cast `DuckDB` makes
+/// in the session `TimeZone`, which ICU takes from the system zone. Run in
+/// `Europe/Berlin` the hour gate read 0 minutes, not 60.
+///
+/// The process time zone cannot be changed from inside a test (`set_var` is
+/// `unsafe` in edition 2024, and this workspace forbids `unsafe`), so this
+/// re-runs the binary with `TZ` set, the same move `tests/local_day_boundary.rs`
+/// makes. A zone name rather than a POSIX offset string, because ICU carries its
+/// own zone database and is what has to understand it.
+#[test]
+fn the_clock_gates_hold_on_a_station_outside_utc() {
+    const CHILD: &str = "BNB_TWO_CLOCKS_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return;
+    }
+    let exe = std::env::current_exe().expect("test binary path");
+    let out = std::process::Command::new(exe)
+        .env("TZ", "Europe/Berlin")
+        .env(CHILD, "1")
+        .args(["--test-threads", "1"])
+        .output()
+        .expect("re-run the test binary");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "the two-clocks gates fail under TZ=Europe/Berlin:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Counterpart: the child must have run the gates, not an empty filter.
+    assert!(
+        stdout.contains(
+            "one_real_hour_reads_as_an_hour_on_the_instant_and_zero_on_the_wall_clock ... ok"
+        ),
+        "the child run did not execute the hour gate:\n{stdout}"
+    );
+}
+
+/// A step time shown to a person is the station's wall clock.
+///
+/// The event functions time their steps on `detection_instant`, which is UTC.
+/// Shown raw, "first heard" on a UTC+2 station is two hours early — or, before
+/// the instant was fixed, right only on a station whose `DuckDB` session zone
+/// happened to match its own. The fixture's rows are 05:00 and 05:10 local on a
+/// UTC+2 day, so their instants are 03:00Z and 03:10Z.
+#[test]
+fn a_step_time_is_shown_on_the_wall_clock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut db = AnalyticsDb::open(&dir.path().join("a.duckdb")).expect("open");
+    if let Err(e) = db.load_extension() {
+        birdnet_behavioral::gating::skip_or_fail("the behavioral extension", &e.to_string());
+        return;
+    }
+    // 2026-05-01 03:00:00Z and 03:10:00Z.
+    let (robin, blackbird) = (1_777_604_400_i64, 1_777_605_000_i64);
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+             VALUES ('2026-05-01','05:00:00','Erithacus rubecula','Robin',0.9,{robin}),
+                    ('2026-05-01','05:10:00','Turdus merula','Blackbird',0.9,{blackbird});"
+        ))
+        .expect("seed");
+    let species = vec!["Robin".to_string(), "Blackbird".to_string()];
+
+    let funnel = db
+        .funnel_events(&birdnet_behavioral::types::FunnelParams {
+            species_sequence: species.clone(),
+            window_minutes: 60,
+            hour_start: 3,
+            hour_end: 10,
+        })
+        .expect("funnel events");
+    assert_eq!(
+        funnel.first().map(|e| e.step_times.clone()),
+        Some(vec![
+            "2026-05-01 05:00:00".to_string(),
+            "2026-05-01 05:10:00".to_string()
+        ]),
+        "funnel step times must read as the station's clock"
+    );
+
+    let sequence = db
+        .sequence_match_events(&birdnet_behavioral::types::PatternParams {
+            species_sequence: species,
+            max_gap_minutes: None,
+            hour_start: 3,
+            hour_end: 10,
+        })
+        .expect("sequence events");
+    assert_eq!(
+        sequence.first().map(|e| e.step_times.clone()),
+        Some(vec![
+            "2026-05-01 05:00:00".to_string(),
+            "2026-05-01 05:10:00".to_string()
+        ]),
+        "sequence step times must read as the station's clock"
+    );
+}
