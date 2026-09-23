@@ -39,6 +39,7 @@ CALLS="$(
     install() { printf '%s\n' "$*"; }
     # shellcheck disable=SC2034  # read by the sourced function
     SERVICE_USER="birdsvc"
+    # shellcheck disable=SC2034  # read by the sourced function
     DATA_DIR=/d RECS_DIR=/d/r IMAGE_CACHE_DIR=/d/i MODEL_DIR=/d/m CONFIG_DIR=/etc/birdnet
     create_directories
 )"
