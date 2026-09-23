@@ -410,6 +410,26 @@ async function liveSignal(page) {
   check('live signal: it tries again after losing the stream', attempts >= 2, `${attempts} connection attempt(s) in 3.5 s`);
 }
 
+// The rare-sightings nudge is said once, not every time it is re-fetched.
+async function nudgeAnnouncesOnce(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  const first = await page.$eval('#td-nudge-status', (e) => e.textContent.trim()).catch(() => '');
+  check('nudge: the waiting sightings are announced', /waiting for review/.test(first), `status says "${first}"`);
+  const writes = await page.evaluate(async () => {
+    const out = document.getElementById('td-nudge-status');
+    let n = 0;
+    new MutationObserver(() => { n += 1; }).observe(out, { childList: true, characterData: true, subtree: true });
+    for (let i = 0; i < 2; i += 1) {
+      await new Promise((resolve) => {
+        document.body.addEventListener('htmx:afterSettle', resolve, { once: true });
+        window.htmx.ajax('GET', '/pages/today-nudge', { target: '#today-nudge', swap: 'innerHTML' });
+      });
+    }
+    return n;
+  });
+  check('nudge: an unchanged nudge is not re-announced', writes === 0, `${writes} status write(s) over 2 re-fetches`);
+}
+
 const page404 = [];
 
 async function main() {
@@ -436,6 +456,7 @@ async function main() {
     ['today search enter', todaySearchEnter],
     ['load more', loadMoreAppends],
     ['live signal', liveSignal],
+    ['nudge announces once', nudgeAnnouncesOnce],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();

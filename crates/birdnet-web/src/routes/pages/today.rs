@@ -662,13 +662,13 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
                     ("rare sightings are", "they're", "them")
                 };
                 return format!(
-                    r#"<div class="x-nudge" data-screen-label="Review nudge"><span class="ico">✦</span><div class="txt"><b>{pending} {noun} waiting for your eye.</b> Confirm {verb} real to add {obj} to your records.</div><a class="bnb-btn primary" href="/quarantine">Review →</a></div>"#
+                    r#"<div class="x-nudge" data-screen-label="Review nudge" data-announce="{pending} {noun} waiting for review."><span class="ico">✦</span><div class="txt"><b>{pending} {noun} waiting for your eye.</b> Confirm {verb} real to add {obj} to your records.</div><a class="bnb-btn primary" href="/quarantine">Review →</a></div>"#
                 );
             }
             if let Some((silent, last)) = capture_outage(conn) {
                 let dur = fmt_duration(silent);
                 return format!(
-                    r#"<div class="x-nudge" data-screen-label="Outage banner"><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
+                    r#"<div class="x-nudge" data-screen-label="Outage banner" data-announce="No detections recently: the microphone may be unplugged or the recorder stopped."><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
                 );
             }
             String::new()

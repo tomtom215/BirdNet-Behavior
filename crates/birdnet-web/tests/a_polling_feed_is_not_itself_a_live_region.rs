@@ -96,3 +96,56 @@ fn the_page_heading_is_not_re_announced_every_five_minutes() {
          the heading is announced again on every poll. Tag: {tag}"
     );
 }
+
+/// Today's nudge strip polls every minute, and it was `aria-live`: the same
+/// "6 rare sightings are waiting" was read out again every minute, and the
+/// outage banner's "No detections for 12m" — whose duration changes each
+/// time — on every tick as though it were news. Its announcement now rides
+/// `#td-nudge-status`, written only when the nudge's `data-announce` changes;
+/// that sentence carries the rare count (a new sighting is news) and leaves
+/// the running duration out (a longer outage is not).
+#[test]
+fn the_nudge_announces_a_change_not_a_tick() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let today = std::fs::read_to_string(root.join("templates/today.html")).expect("today.html");
+    let tag = opening_tag(&today, "today-nudge").expect("#today-nudge");
+    assert!(
+        tag.contains("every"),
+        "#today-nudge is expected to poll: {tag}"
+    );
+    assert!(
+        !tag.contains("aria-live"),
+        "the polling nudge is a live region: {tag}"
+    );
+    assert!(
+        today.contains("id=\"td-nudge-status\""),
+        "no status line for the nudge"
+    );
+    assert!(
+        today.contains("data-announce"),
+        "nothing reads data-announce"
+    );
+
+    let rs = std::fs::read_to_string(root.join("src/routes/pages/today.rs")).expect("today.rs");
+    let outage = rs
+        .lines()
+        .find(|l| l.contains("Outage banner"))
+        .expect("the outage banner markup");
+    let announce = outage
+        .split("data-announce=\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .expect("the outage banner carries data-announce");
+    assert!(
+        !announce.contains("{dur}"),
+        "the running duration re-announces it: {announce}"
+    );
+    let review = rs
+        .lines()
+        .find(|l| l.contains("Review nudge"))
+        .expect("the review nudge markup");
+    assert!(
+        review.contains("data-announce=\"{pending}"),
+        "a new sighting is not announced"
+    );
+}

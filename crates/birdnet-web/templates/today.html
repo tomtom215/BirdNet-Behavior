@@ -37,9 +37,30 @@
   </aside>
 </section>
 
+<!-- Not a live region: it is re-fetched every minute, and as one it read the
+     same "6 rare sightings are waiting" out again each time — and an outage
+     banner whose minutes change on every tick. #td-nudge-status below says it
+     once, when the nudge's data-announce sentence changes. -->
 <div id="today-nudge"
-     hx-get="/pages/today-nudge" hx-trigger="load, every 60s" hx-swap="innerHTML"
-     aria-live="polite"></div>
+     hx-get="/pages/today-nudge" hx-trigger="load, every 60s" hx-swap="innerHTML"></div>
+<p class="sr-only" id="td-nudge-status" role="status" aria-live="polite"></p>
+<script>
+(function () {
+  var nudge = document.getElementById('today-nudge');
+  var out = document.getElementById('td-nudge-status');
+  if (!nudge || !out) return;
+  var last = null;
+  document.body.addEventListener('htmx:afterSettle', function (e) {
+    if (e.target !== nudge) return;
+    var el = nudge.querySelector('[data-announce]');
+    var now = el ? el.getAttribute('data-announce') : '';
+    // The first answer after load is announced like any change; a strip
+    // that went away says nothing.
+    if (now && now !== last) out.textContent = now;
+    last = now;
+  });
+})();
+</script>
 
 <!-- Day strip — the one picture of the day's shape; stats live in the header -->
 <div class="bnb-card pad" data-screen-label="Day strip">
