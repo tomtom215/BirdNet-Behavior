@@ -24,8 +24,11 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// Returns `StatusCode` on internal rendering failures.
-pub async fn settings_page(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
-    let settings_map = load_all_settings(&state);
+pub async fn settings_page(
+    State(state): State<AppState>,
+    user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
+) -> Result<Html<String>, StatusCode> {
+    let settings_map = load_settings_for(&state, user.as_deref());
     Ok(Html(render_settings_page(&settings_map)))
 }
 
@@ -38,8 +41,11 @@ pub async fn settings_page(State(state): State<AppState>) -> Result<Html<String>
 /// # Errors
 ///
 /// Returns `StatusCode` on internal rendering failures.
-pub async fn settings_partial(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
-    let settings_map = load_all_settings(&state);
+pub async fn settings_partial(
+    State(state): State<AppState>,
+    user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
+) -> Result<Html<String>, StatusCode> {
+    let settings_map = load_settings_for(&state, user.as_deref());
     Ok(Html(render_settings_form(&settings_map)))
 }
 
@@ -369,6 +375,49 @@ pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, Stri
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// Every credential in `raw` masked, by the project's one redaction rule:
+/// [`is_secret_key`](birdnet_core::config::redact::is_secret_key) by name, then
+/// [`redact_value`](birdnet_core::config::redact::redact_value) by value shape
+/// (an Apprise URL, a heartbeat URL, an RTSP password). The settings API and
+/// the forms a viewer sees both use this, so the two cannot disagree about
+/// which values are secret.
+#[must_use]
+pub(crate) fn mask_credentials(raw: &HashMap<String, String>) -> HashMap<String, String> {
+    use birdnet_core::config::redact::{REDACTED, is_secret_key, redact_value};
+    raw.iter()
+        .map(|(k, v)| {
+            let shown = if is_secret_key(k) {
+                REDACTED.to_owned()
+            } else {
+                redact_value(v)
+            };
+            (k.clone(), shown)
+        })
+        .collect()
+}
+
+/// The settings as `user` may see them in a form.
+///
+/// An admin sees every stored value — they are the one who types them in. A
+/// viewer is read-only on `/admin`, and "read-only" had meant "can read the
+/// SMTP password, the BirdWeather token and every notification URL in
+/// plaintext": the settings API has always masked them, the forms did not.
+///
+/// `None` — no identity on the request, which the admin gate never lets
+/// happen — is treated as a viewer: the safe default for a form that would
+/// otherwise print credentials.
+pub(crate) fn load_settings_for(
+    state: &AppState,
+    user: Option<&crate::auth_middleware::RequestUser>,
+) -> HashMap<String, String> {
+    let raw = load_all_settings(state);
+    if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
+        raw
+    } else {
+        mask_credentials(&raw)
+    }
+}
 
 pub(crate) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
     state.with_db(|conn| {

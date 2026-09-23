@@ -291,9 +291,47 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
         return *resp;
     }
 
+    // Read-only is not read-everything. These GETs hand over the station's
+    // credentials or its whole database (password hashes included), so a
+    // viewer is refused them as it is refused a write.
+    if request.method().is_safe()
+        && !viewer_may_read(path)
+        && let Err(resp) = require_admin(&user)
+    {
+        tracing::info!(
+            user = %user.user.username,
+            path = %path,
+            "RBAC: viewer denied a credential-bearing read"
+        );
+        return *resp;
+    }
+
     let mut req = request;
     req.extensions_mut().insert(user);
     next.run(req).await
+}
+
+/// Whether a viewer may `GET` this admin path.
+///
+/// `false` for the reads that export what a viewer must not hold: the database
+/// and its backups (every password hash and every stored credential), the
+/// support bundle, the rules export (webhook URLs carry their tokens), and an
+/// audio source's own row and edit form (an RTSP URL carries its password).
+/// The source's status pill (`/probe`) stays readable — the capture tab polls
+/// it for everyone. The settings forms stay readable too, with every
+/// credential masked (`settings::handler::load_settings_for`).
+fn viewer_may_read(path: &str) -> bool {
+    if matches!(
+        path,
+        "/admin/system/backup/full" | "/admin/support-bundle" | "/admin/rules/export"
+    ) || path.starts_with("/admin/system/backups/")
+    {
+        return false;
+    }
+    if let Some(rest) = path.strip_prefix("/admin/audio/sources/") {
+        return rest.ends_with("/probe");
+    }
+    true
 }
 
 /// The signed-in user behind a request's `bnb-session` cookie, if the cookie
