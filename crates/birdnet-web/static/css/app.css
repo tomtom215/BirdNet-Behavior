@@ -2782,7 +2782,11 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .audit-list     { list-style: none; padding: 0; margin: 0; }
 .audit-note     { margin-top: 14px; }
 .audit-row      { padding: 10px 0; border-top: 0.5px solid var(--hairline); display: grid; grid-template-columns: 170px 120px 1fr; gap: 12px; align-items: start; }
-.audit-meta-row { margin-top: 4px; font-size: 11px; color: var(--fg-3); overflow-x: auto; }
+/* A saved-settings entry is one comma-joined list with no spaces. It sits in
+   `.account-audit li`'s `auto` column (that rule outranks .audit-row's grid),
+   so it could not wrap and widened /admin/audit to 3818px. The renderer puts a
+   <wbr> after each comma; `anywhere` is the fallback for one very long token. */
+.audit-meta-row { margin-top: 4px; font-size: 11px; color: var(--fg-3); overflow-wrap: anywhere; }
 @media (max-width: 520px) {
   .audit-row { grid-template-columns: 1fr; }
 }
