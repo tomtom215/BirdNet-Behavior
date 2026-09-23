@@ -71,7 +71,14 @@ pub enum FullDiskAction {
 /// then is fair game for the purge. Because `birdnet-core` must not depend on
 /// `birdnet-db`, the database query is injected as this callback rather than
 /// performed here.
-pub type LockedFilesProvider = std::sync::Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+///
+/// `None` means the set **could not be read** (the database was busy, failing,
+/// or gone), and the cycle then deletes nothing. It used to be impossible to
+/// say: the station's provider answered a failed query with an empty set, and
+/// "nothing is locked" is exactly the answer that lets a disk-full purge
+/// delete every clip its owner locked — irreversibly, and at the one moment
+/// the disk is under stress.
+pub type LockedFilesProvider = std::sync::Arc<dyn Fn() -> Option<Vec<String>> + Send + Sync>;
 
 /// Configuration for automatic disk management.
 #[derive(Clone)]
@@ -528,17 +535,48 @@ impl DiskManager {
     /// string vector, at most once a minute — costs nothing next to the
     /// directory walk that follows, and keeps every purge entry point reading
     /// one consistent snapshot without interior mutability.
-    fn with_fresh_locks(&self) -> std::borrow::Cow<'_, Self> {
+    ///
+    /// `None` when the provider could not read the set: the caller must then
+    /// delete nothing this cycle.
+    fn with_fresh_locks(&self) -> Option<std::borrow::Cow<'_, Self>> {
         let Some(provider) = self.config.locked_provider.as_ref() else {
-            return std::borrow::Cow::Borrowed(self);
+            return Some(std::borrow::Cow::Borrowed(self));
         };
         let mut config = self.config.clone();
-        config.locked_file_names = provider();
-        std::borrow::Cow::Owned(Self {
+        config.locked_file_names = provider()?;
+        Some(std::borrow::Cow::Owned(Self {
             config,
             governor: Arc::clone(&self.governor),
             raw_seen: Arc::clone(&self.raw_seen),
-        })
+        }))
+    }
+
+    /// One pass of the loop: drain, purge, enforce the species cap — or, when
+    /// the locked set cannot be read, nothing at all. Returns whether it ran.
+    fn run_cycle(&self) -> bool {
+        // Re-read the operator's locked clips before anything is deleted:
+        // a clip locked since the last cycle must be protected by this one.
+        let Some(cycle) = self.with_fresh_locks() else {
+            tracing::error!(
+                dir = %self.config.monitored_dir.display(),
+                "could not read which clips are locked; deleting nothing this cycle \
+                 rather than risk a locked clip (retrying next cycle)"
+            );
+            return false;
+        };
+
+        // Proactively drain the transient stream segments first, so
+        // steady-state usage stays low regardless of the disk-full backstop.
+        cycle.cleanup_stream_segments();
+
+        if let Err(e) = cycle.check_and_purge() {
+            tracing::error!(error = %e, "disk manager check_and_purge failed");
+        }
+
+        if let Err(e) = cycle.enforce_species_limits() {
+            tracing::error!(error = %e, "disk manager enforce_species_limits failed");
+        }
+        true
     }
 
     /// Run the disk manager loop (blocking).
@@ -566,21 +604,7 @@ impl DiskManager {
                 }
             }
 
-            // Re-read the operator's locked clips before anything is deleted:
-            // a clip locked since the last cycle must be protected by this one.
-            let cycle = self.with_fresh_locks();
-
-            // Proactively drain the transient stream segments first, so
-            // steady-state usage stays low regardless of the disk-full backstop.
-            cycle.cleanup_stream_segments();
-
-            if let Err(e) = cycle.check_and_purge() {
-                tracing::error!(error = %e, "disk manager check_and_purge failed");
-            }
-
-            if let Err(e) = cycle.enforce_species_limits() {
-                tracing::error!(error = %e, "disk manager enforce_species_limits failed");
-            }
+            self.run_cycle();
         }
     }
 }
@@ -615,7 +639,7 @@ mod tests {
         let provider_view = Arc::clone(&locked);
         let manager = DiskManager::new(DiskManagerConfig {
             locked_provider: Some(std::sync::Arc::new(move || {
-                provider_view.lock().unwrap().clone()
+                Some(provider_view.lock().unwrap().clone())
             })),
             ..DiskManagerConfig::default()
         });
@@ -623,6 +647,7 @@ mod tests {
         assert!(
             manager
                 .with_fresh_locks()
+                .expect("locks read")
                 .config()
                 .locked_file_names
                 .is_empty(),
@@ -633,7 +658,11 @@ mod tests {
         locked.lock().unwrap().push("keep-me.wav".to_string());
 
         assert_eq!(
-            manager.with_fresh_locks().config().locked_file_names,
+            manager
+                .with_fresh_locks()
+                .expect("locks read")
+                .config()
+                .locked_file_names,
             vec!["keep-me.wav".to_string()],
             "a clip locked after startup must be visible to the very next cycle"
         );
@@ -649,7 +678,11 @@ mod tests {
             ..DiskManagerConfig::default()
         });
         assert_eq!(
-            manager.with_fresh_locks().config().locked_file_names,
+            manager
+                .with_fresh_locks()
+                .expect("locks read")
+                .config()
+                .locked_file_names,
             vec!["static.wav".to_string()]
         );
     }
@@ -672,12 +705,18 @@ mod tests {
             stream_retention_secs: 60,
             locked_provider: Some({
                 let table = table.clone();
-                std::sync::Arc::new(move || table.names())
+                std::sync::Arc::new(move || Some(table.names()))
             }),
             ..DiskManagerConfig::default()
         });
         let lease = table.claim(&dir.path().join("reading.wav"));
-        assert_eq!(manager.with_fresh_locks().cleanup_stream_segments(), 1);
+        assert_eq!(
+            manager
+                .with_fresh_locks()
+                .expect("locks read")
+                .cleanup_stream_segments(),
+            1
+        );
         assert!(
             dir.path().join("reading.wav").exists(),
             "under analysis: kept"
@@ -685,7 +724,10 @@ mod tests {
         assert!(!dir.path().join("done.wav").exists());
         drop(lease);
         assert_eq!(
-            manager.with_fresh_locks().cleanup_stream_segments(),
+            manager
+                .with_fresh_locks()
+                .expect("locks read")
+                .cleanup_stream_segments(),
             1,
             "released: drained"
         );
@@ -707,17 +749,55 @@ mod tests {
         let manager = DiskManager::new(DiskManagerConfig {
             monitored_dir: dir.path().to_path_buf(),
             stream_retention_secs: 60,
-            locked_provider: Some(std::sync::Arc::new(|| vec!["locked.wav".to_string()])),
+            locked_provider: Some(std::sync::Arc::new(|| Some(vec!["locked.wav".to_string()]))),
             ..DiskManagerConfig::default()
         });
 
-        let removed = manager.with_fresh_locks().cleanup_stream_segments();
+        let removed = manager
+            .with_fresh_locks()
+            .expect("locks read")
+            .cleanup_stream_segments();
 
         assert_eq!(removed, 1, "only the unlocked segment is drained");
         assert!(
             dir.path().join("locked.wav").exists(),
             "a locked clip must survive the drain"
         );
+        assert!(!dir.path().join("unlocked.wav").exists());
+    }
+
+    #[test]
+    fn a_cycle_that_cannot_read_the_locks_deletes_nothing() {
+        // The segments are ancient, so the drain would take both. The provider
+        // cannot say which are locked — and "unknown" must not be read as
+        // "none": the cycle deletes nothing and says it skipped.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for name in ["locked.wav", "unlocked.wav"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, vec![0_u8; 128]).expect("write");
+            filetime::set_file_mtime(&p, filetime::FileTime::from_unix_time(1_000_000, 0))
+                .expect("mtime");
+        }
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            stream_retention_secs: 60,
+            locked_provider: Some(std::sync::Arc::new(|| None)),
+            ..DiskManagerConfig::default()
+        });
+
+        assert!(!manager.run_cycle(), "the cycle must report it skipped");
+        assert!(dir.path().join("locked.wav").exists());
+        assert!(dir.path().join("unlocked.wav").exists());
+
+        // Counterpart: once the set is readable, the same cycle runs.
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            stream_retention_secs: 60,
+            locked_provider: Some(std::sync::Arc::new(|| Some(vec!["locked.wav".to_string()]))),
+            ..DiskManagerConfig::default()
+        });
+        assert!(manager.run_cycle());
+        assert!(dir.path().join("locked.wav").exists());
         assert!(!dir.path().join("unlocked.wav").exists());
     }
 

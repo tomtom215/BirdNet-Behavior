@@ -118,9 +118,7 @@ pub fn start_disk_manager(
     // lets the purge delete everything locked since.
     let locked_provider: LockedFilesProvider = {
         let state = state.clone();
-        std::sync::Arc::new(move || {
-            state.with_db(|conn| birdnet_db::sqlite::locked_file_names(conn).unwrap_or_default())
-        })
+        std::sync::Arc::new(move || locked_clips(&state))
     };
 
     let mut handles = Vec::new();
@@ -161,7 +159,7 @@ pub fn start_disk_manager(
                 // here.
                 locked_provider: Some({
                     let in_flight = in_flight.clone();
-                    std::sync::Arc::new(move || in_flight.names())
+                    std::sync::Arc::new(move || Some(in_flight.names()))
                 }),
                 ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
                 stream_retention_secs: retention,
@@ -228,6 +226,21 @@ pub fn start_disk_manager(
 }
 
 /// Spawn one disk-manager thread for `config`, logging what it will do.
+/// The clips the operator has locked, or `None` when they cannot be read.
+///
+/// `None` rather than an empty list: the disk manager reads "nothing is
+/// locked" as licence to delete, so a busy or failing database must not be
+/// able to say it (see `LockedFilesProvider`).
+fn locked_clips(state: &birdnet_web::state::AppState) -> Option<Vec<String>> {
+    match state.with_db(birdnet_db::sqlite::locked_file_names) {
+        Ok(names) => Some(names),
+        Err(e) => {
+            tracing::error!(error = %e, "could not read the locked clips");
+            None
+        }
+    }
+}
+
 fn spawn_manager(
     config: birdnet_core::audio::capture::DiskManagerConfig,
     role: &'static str,
@@ -391,9 +404,29 @@ pub fn maybe_install_avahi_service(port: u16, site_name: &str) {
 mod tests {
     use super::{
         DEFAULT_PURGE_THRESHOLD, DEFAULT_STREAM_MAX_MB, DEFAULT_STREAM_RETENTION_SECS,
-        maybe_install_avahi_service, start_disk_manager,
+        locked_clips, maybe_install_avahi_service, start_disk_manager,
     };
     use crate::helpers::test_support::{default_cli, test_state_in};
+
+    #[test]
+    fn locked_clips_are_unknown_not_empty_when_the_database_fails() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = test_state_in(dir.path());
+        assert_eq!(
+            locked_clips(&state),
+            Some(Vec::new()),
+            "a healthy empty set"
+        );
+
+        state
+            .with_db(|conn| conn.execute_batch("DROP TABLE detections;"))
+            .expect("break the database");
+        assert_eq!(
+            locked_clips(&state),
+            None,
+            "a failed read must not be reported as 'nothing is locked'"
+        );
+    }
 
     #[test]
     fn avahi_is_noop_when_target_dir_absent() {
