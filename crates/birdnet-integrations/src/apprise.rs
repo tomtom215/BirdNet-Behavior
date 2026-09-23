@@ -323,6 +323,22 @@ impl Client {
     /// - Species is not on the watchlist (when watchlist is non-empty)
     /// - The species was notified recently (within cooldown period)
     pub fn should_notify(&mut self, species: &str, confidence: f32) -> bool {
+        self.should_notify_detection(species, species, confidence)
+    }
+
+    /// [`Self::should_notify`] for a detection with both of its names: the
+    /// watch and exclude lists may hold either, in any case. They are the same
+    /// setting the station's notification filter reads, and the two used to
+    /// read it as different kinds of name (see
+    /// [`crate::notification::SpeciesFilter::allows`]). The cooldown is keyed
+    /// on the common name, as before.
+    pub fn should_notify_detection(
+        &mut self,
+        species: &str,
+        sci_name: &str,
+        confidence: f32,
+    ) -> bool {
+        use crate::notification::names_listed;
         // Confidence threshold
         if confidence < self.config.min_confidence {
             return false;
@@ -330,18 +346,13 @@ impl Client {
 
         // Species include-list (empty = all species pass)
         if !self.config.species_watchlist.is_empty()
-            && !self.config.species_watchlist.iter().any(|s| s == species)
+            && !names_listed(&self.config.species_watchlist, species, sci_name)
         {
             return false;
         }
 
         // Species exclude-list — exclusion always wins, even for watchlist members
-        if self
-            .config
-            .species_notify_exclude
-            .iter()
-            .any(|s| s == species)
-        {
+        if names_listed(&self.config.species_notify_exclude, species, sci_name) {
             return false;
         }
 

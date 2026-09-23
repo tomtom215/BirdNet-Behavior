@@ -31,8 +31,8 @@ pub use read::{
     detection_count_for_date, detection_count_for_species_date, detection_dates,
     detections_by_date, detections_by_species, detections_for_clip, detections_per_day,
     recent_clips, recent_clips_count, recent_detections, recent_detections_page,
-    seconds_since_last_detection, species_for_date, todays_detection_count, todays_detections,
-    todays_source_activity, unstamped_detection_count,
+    seconds_since_last_detection, species_detection_count_between, species_for_date,
+    todays_detection_count, todays_detections, todays_source_activity, unstamped_detection_count,
 };
 pub use search::{SearchTerm, parse_search_term};
 pub use write::{

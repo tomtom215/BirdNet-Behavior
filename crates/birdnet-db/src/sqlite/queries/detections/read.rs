@@ -133,6 +133,26 @@ pub fn detection_count_for_species_date(
     .map_err(DbError::Sqlite)
 }
 
+/// Detections of one species with `Date` in `[from, to]` (inclusive).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_detection_count_between(
+    conn: &Connection,
+    sci_name: &str,
+    from: &str,
+    to: &str,
+) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections_analytic \
+         WHERE Sci_Name = ?1 AND Date >= ?2 AND Date <= ?3",
+        params![sci_name, from, to],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
 /// Query detections for a specific date, ordered by time descending.
 ///
 /// # Errors

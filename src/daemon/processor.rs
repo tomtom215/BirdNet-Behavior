@@ -228,6 +228,46 @@ pub(super) fn lowest_threshold(
         .fold(model, |acc, &t| acc.min(t.clamp(0.0, 1.0) as f32))
 }
 
+/// How often a species had been detected *before* the detection being
+/// processed, for the `new-species` and `new-species-daily` trigger modes.
+///
+/// Nothing implemented `DetectionCounter`, so the processor passed `None`,
+/// every count read as 0, and both modes notified on every detection exactly
+/// like `each` — the setup wizard's recommended mode included. The row for the
+/// current detection is already stored when this is asked, so it is
+/// subtracted; a read that fails counts as "heard before" (`u64::MAX`), which
+/// stays quiet rather than notifying on a database error.
+struct PriorDetections<'a> {
+    state: &'a birdnet_web::state::AppState,
+    date: &'a str,
+}
+
+impl PriorDetections<'_> {
+    fn before_this_one(&self, from: &str, sci_name: &str) -> u64 {
+        self.state
+            .with_db(|conn| {
+                birdnet_db::sqlite::species_detection_count_between(conn, sci_name, from, self.date)
+            })
+            .map_or(u64::MAX, |n| {
+                u64::try_from(n.saturating_sub(1)).unwrap_or(0)
+            })
+    }
+}
+
+impl birdnet_integrations::notification::DetectionCounter for PriorDetections<'_> {
+    fn todays_count_for(&self, sci_name: &str) -> u64 {
+        self.before_this_one(self.date, sci_name)
+    }
+
+    /// The seven days ending on the detection's date — BirdNET-Pi's
+    /// `Date >= DATE('now', '-7 day')`, on the detection's own calendar.
+    fn this_weeks_count_for(&self, sci_name: &str) -> u64 {
+        let from = birdnet_core::civil::shift_datetime(self.date, "00:00:00", -6.0 * 86_400.0)
+            .map_or_else(|| self.date.to_owned(), |(date, _)| date);
+        self.before_this_one(&from, sci_name)
+    }
+}
+
 /// What a notification-log row says about the detection it concerns.
 ///
 /// Built once per detection and cloned into each channel's task, so a channel
@@ -1005,13 +1045,14 @@ pub(super) fn event_processor(
         // Check if this is the first detection of this species today
         // (to power the rare-species celebration in the dashboard).
         let is_new_today = state.with_db(|conn| {
-            let today_count = birdnet_db::sqlite::detection_count_for_species_date(
+            birdnet_db::sqlite::detection_count_for_species_date(
                 conn,
                 &detection.date,
                 &detection.scientific_name,
             )
-            .unwrap_or(1);
-            is_first_detection_today(today_count)
+            // A failed read is not a first sighting: defaulting to 1 lit the
+            // dashboard's "new today" celebration on a database error.
+            .is_ok_and(is_first_detection_today)
         });
 
         // Broadcast to WebSocket clients.
@@ -1047,8 +1088,15 @@ pub(super) fn event_processor(
 
         // Check notification filter (trigger mode + species filter).
         // Also respect Suppress alert rules.
-        let filter_says_notify =
-            notification_filter.should_notify(&detection.scientific_name, None);
+        let prior = PriorDetections {
+            state: &state,
+            date: &detection.date,
+        };
+        let filter_says_notify = notification_filter.should_notify_detection(
+            &detection.scientific_name,
+            &detection.common_name,
+            Some(&prior),
+        );
         let dispatch_allowed = passes_filter(rule_suppressed, filter_says_notify);
 
         // What every channel below records about this detection. Built once so a
@@ -1063,9 +1111,11 @@ pub(super) fn event_processor(
 
         // Apprise push notification (with filter and template).
         if let Some(ref apprise) = apprise {
-            let apprise_says_notify = apprise
-                .blocking_lock()
-                .should_notify(&detection.common_name, detection.confidence);
+            let apprise_says_notify = apprise.blocking_lock().should_notify_detection(
+                &detection.common_name,
+                &detection.scientific_name,
+                detection.confidence,
+            );
             let should_send = should_dispatch_notification(dispatch_allowed, apprise_says_notify);
 
             if should_send {
@@ -1779,6 +1829,188 @@ mod tests {
         .unwrap();
 
         apprise_rows_within(&state, std::time::Duration::from_secs(20)).await
+    }
+
+    /// Drive `events` (`time`s of Eurasian Magpie detections on one day)
+    /// through the processor with this notification `filter` and an Apprise
+    /// client configured by `config`, and count the `apprise` sends logged once
+    /// every send has settled.
+    async fn apprise_attempts(
+        filter: birdnet_integrations::notification::NotificationFilter,
+        config: birdnet_integrations::apprise::NotifyConfig,
+        times: &[&str],
+    ) -> usize {
+        // A listener that answers every request 200, so each notification is
+        // a real, successful send: a refused port trips the dispatcher's
+        // circuit breaker after a couple of failures, and the count would
+        // then measure the breaker instead of the decision under test.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0_u8; 8192];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            config,
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        for (i, time) in times.iter().enumerate() {
+            let mut ev = make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join(format!("seg{i}.wav")),
+                "c",
+            );
+            ev.detection.time = (*time).into();
+            event_tx.send(ev).unwrap();
+        }
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(apprise),
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+
+        // Sends are detached tasks; a refused connection settles in
+        // milliseconds. Wait for the count to stop moving.
+        let count = || {
+            state
+                .with_db(|conn| birdnet_db::notifications::recent_notifications(conn, 100, 0))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.channel == "apprise")
+                .count()
+        };
+        let mut last = usize::MAX;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let now = count();
+            if now == last && now > 0 {
+                break;
+            }
+            last = now;
+        }
+        count()
+    }
+
+    /// The watchlist the settings form asks for — common names — must let the
+    /// watched species through. The station's filter compared it with the
+    /// scientific name while the Apprise client compared it with the common
+    /// name, and both had to pass: every notification was silenced, the
+    /// watched bird's included. Either name, any case, now works in both.
+    #[tokio::test]
+    async fn a_watchlist_of_common_names_notifies_for_the_watched_species() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        for list in ["Eurasian Magpie", "eurasian magpie", "Pica pica"] {
+            let filter = NotificationFilter {
+                trigger: TriggerMode::EachDetection,
+                species_filter: SpeciesFilter::new(None, Some(list)),
+            };
+            let config = birdnet_integrations::apprise::NotifyConfig {
+                species_watchlist: vec![list.to_owned()],
+                ..birdnet_integrations::apprise::NotifyConfig::default()
+            };
+            assert_eq!(
+                apprise_attempts(filter, config, &["09:00:00"]).await,
+                1,
+                "a watchlist of {list:?} silenced the species it watches"
+            );
+        }
+        // Counterpart: the watchlist still excludes a species not on it.
+        let filter = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(None, Some("European Robin")),
+        };
+        let config = birdnet_integrations::apprise::NotifyConfig {
+            species_watchlist: vec!["European Robin".to_owned()],
+            ..birdnet_integrations::apprise::NotifyConfig::default()
+        };
+        assert_eq!(apprise_attempts(filter, config, &["09:00:00"]).await, 0);
+    }
+
+    /// `new-species-daily` notifies on the first detection of a species each
+    /// day, not on every one. Nothing implemented the counter the mode asks,
+    /// so it read 0 every time and notified like `each`.
+    #[tokio::test]
+    async fn new_species_daily_notifies_once_per_species_per_day() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        let quiet_apprise = birdnet_integrations::apprise::NotifyConfig {
+            cooldown: std::time::Duration::ZERO,
+            ..birdnet_integrations::apprise::NotifyConfig::default()
+        };
+        let filter = |trigger| NotificationFilter {
+            trigger,
+            species_filter: SpeciesFilter::new(None, None),
+        };
+        assert_eq!(
+            apprise_attempts(
+                filter(TriggerMode::NewSpeciesDaily),
+                quiet_apprise.clone(),
+                &["09:00:00", "09:10:00", "09:20:00"]
+            )
+            .await,
+            1,
+            "new-species-daily notified more than once for one species in one day"
+        );
+        // Counterpart: `each` still notifies every time, so the 1 above is the
+        // mode deciding and not the channel dropping sends.
+        assert_eq!(
+            apprise_attempts(
+                filter(TriggerMode::EachDetection),
+                quiet_apprise,
+                &["09:00:00", "09:10:00", "09:20:00"]
+            )
+            .await,
+            3
+        );
     }
 
     #[tokio::test]
