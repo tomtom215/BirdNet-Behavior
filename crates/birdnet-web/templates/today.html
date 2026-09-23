@@ -429,33 +429,74 @@
     // paint's own handling is in `drawFrame` above. (This comment used to
     // open by claiming the drawer "honours prefers-reduced-motion", which read
     // as though the whole canvas did.)
+    // Whether the stream is reachable at all. "Idle" means reachable and quiet;
+    // this loop used to decide between live and idle only, so it overwrote
+    // "no signal" with "idle" within a second of the socket failing — the
+    // exact conflation the three states exist to prevent.
+    var connected = false;
     function idleLoop() {
-        if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
+        if (!connected) {
+            setState('nosignal');
+        } else if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
             setLive(false);
             drawIdle();
         }
         setTimeout(idleLoop, 1000);
     }
-    setLive(false);
+    setState('nosignal');
     drawIdle();
     setTimeout(idleLoop, 1000);
 
-    // WebSocket consumer. Failures (no producer, --web-only, WS blocked
-    // by a reverse proxy) fall back silently to the idle baseline.
-    try {
-        var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var base = (document.body && document.body.dataset.basePath) || '';
-        var ws = new WebSocket(proto + '//' + location.host + base + '/api/v2/ws/spectrogram');
+    // WebSocket consumer, reconnecting. It used to connect once: after a
+    // Wi-Fi blip or a station restart the card stayed dead until the page was
+    // reloaded. Backoff doubles to 30 s with jitter, and waits while the tab
+    // is hidden rather than retrying at a station nobody is looking at.
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var base = (document.body && document.body.dataset.basePath) || '';
+    var backoff = 1000;
+    var retry = null;
+    function scheduleReconnect() {
+        if (retry) return;
+        if (document.hidden) {
+            document.addEventListener('visibilitychange', function once() {
+                if (document.hidden) return;
+                document.removeEventListener('visibilitychange', once);
+                scheduleReconnect();
+            });
+            return;
+        }
+        var wait = backoff + Math.floor(Math.random() * 500);
+        backoff = Math.min(backoff * 2, 30000);
+        retry = setTimeout(function () { retry = null; connect(); }, wait);
+    }
+    function lost() {
+        // A stream we cannot reach is not a quiet yard — say so rather than
+        // drawing the same flat line under the word "idle".
+        connected = false;
+        setState('nosignal');
+        drawIdle();
+        scheduleReconnect();
+    }
+    function connect() {
+        var ws;
+        try {
+            ws = new WebSocket(proto + '//' + location.host + base + '/api/v2/ws/spectrogram');
+        } catch (_) { lost(); return; }
+        ws.onopen = function () {
+            connected = true;
+            backoff = 1000;
+            // Reachable; "live" arrives with the first frame.
+            if (Date.now() - lastFrameTime > IDLE_AFTER_MS) setLive(false);
+        };
         ws.onmessage = function (ev) {
             try {
                 var msg = JSON.parse(ev.data);
                 if (msg.event === 'spectrogram') drawFrame(msg);
             } catch (_) { /* ignore non-JSON */ }
         };
-        // A stream we cannot reach is not a quiet yard — say so rather than
-        // drawing the same flat line under the word "idle".
-        ws.onerror = function () { setState('nosignal'); drawIdle(); };
-        ws.onclose = function () { setState('nosignal'); drawIdle(); };
-    } catch (_) { setState('nosignal'); drawIdle(); }
+        ws.onerror = function () { try { ws.close(); } catch (_) { /* already closed */ } };
+        ws.onclose = lost;
+    }
+    connect();
 })();
 </script>

@@ -394,6 +394,22 @@ async function loadMoreAppends(page) {
   check('today: Load more adds to the list', before === 5 && after === 10, `${before} rows, then ${after}`);
 }
 
+/** A stream this browser cannot reach says "no signal", and keeps trying.
+ *
+ * The idle poll overwrote "no signal" with "idle" within a second — so a
+ * blocked socket read as a quiet yard — and the socket was opened once and
+ * never again, leaving the card dead after any blip until a reload.
+ */
+async function liveSignal(page) {
+  let attempts = 0;
+  await page.routeWebSocket(/\/api\/v2\/ws\/spectrogram/, (ws) => { attempts += 1; ws.close(); });
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(3500);
+  const pill = await page.$eval('.db-live-pill', (p) => p.textContent.trim()).catch(() => '(no pill)');
+  check('live signal: an unreachable stream reads "no signal", not "idle"', /no signal/.test(pill), `pill says "${pill}"`);
+  check('live signal: it tries again after losing the stream', attempts >= 2, `${attempts} connection attempt(s) in 3.5 s`);
+}
+
 const page404 = [];
 
 async function main() {
@@ -419,6 +435,7 @@ async function main() {
     ['live feed play', livePlayButtons],
     ['today search enter', todaySearchEnter],
     ['load more', loadMoreAppends],
+    ['live signal', liveSignal],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
