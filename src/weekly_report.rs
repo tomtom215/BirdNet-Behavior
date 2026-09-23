@@ -133,54 +133,73 @@ fn build_weekly_report(
 
 /// Return `(today_str, seven_days_ago_str)` as ISO date strings.
 fn week_range_strings() -> (String, String) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let today_days = secs / 86400;
-    let start_days = today_days.saturating_sub(6); // 7 days inclusive
-
-    (days_to_date_str(today_days), days_to_date_str(start_days))
+    week_range_on(today_local_day())
 }
 
-/// Convert days since Unix epoch to `"YYYY-MM-DD"`.
-#[allow(
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
-fn days_to_date_str(days: u64) -> String {
-    #[allow(clippy::cast_possible_wrap)]
-    birdnet_core::civil::date_string_from_days(days as i64)
+/// The seven days ending on `day` (days since the epoch), inclusive.
+fn week_range_on(day: i64) -> (String, String) {
+    (
+        birdnet_core::civil::date_string_from_days(day),
+        birdnet_core::civil::date_string_from_days(day - 6),
+    )
+}
+
+/// Today, as days since the epoch.
+fn today_local_day() -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    local_day(now, birdnet_db::clock::local_utc_offset_secs())
+}
+
+/// The station's day containing `now_secs`, at `utc_offset_secs` east of UTC.
+///
+/// Local, because the `Date` column the report counts is local. It was
+/// `secs / 86400` — UTC — so at UTC−8 a Monday report fired about 16:00 on
+/// Sunday, with a window that ended "tomorrow".
+const fn local_day(now_secs: i64, utc_offset_secs: i64) -> i64 {
+    (now_secs + utc_offset_secs).div_euclid(86_400)
 }
 
 /// Return today's ISO date string and ISO weekday (0 = Mon, 6 = Sun).
 fn today_weekday() -> (String, u8) {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    let day = today_local_day();
+    (
+        birdnet_core::civil::date_string_from_days(day),
+        weekday_of(day),
+    )
+}
 
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let days = secs / 86400;
-
-    // ISO weekday: (days_since_epoch + 3) % 7, where 0=Mon. 1970-01-01 was a
-    // Thursday, which is where the 3 comes from.
-    #[allow(clippy::cast_possible_truncation)]
-    let weekday = ((days + 3) % 7) as u8;
-
-    #[allow(clippy::cast_possible_wrap)]
-    let date_str = birdnet_core::civil::date_string_from_days(days as i64);
-    (date_str, weekday)
+/// ISO weekday of `day` (days since the epoch), 0 = Monday. 1970-01-01 was a
+/// Thursday, which is where the 3 comes from.
+fn weekday_of(day: i64) -> u8 {
+    u8::try_from((day + 3).rem_euclid(7)).unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The report's day is the station's day.
+    ///
+    /// It was `secs / 86400`, UTC. At UTC−8 a Monday report fired about
+    /// 16:00 local on Sunday, with a window ending "tomorrow" that covered
+    /// six days and part of the current one — compared against the `Date`
+    /// column, which is local.
+    #[test]
+    fn the_report_runs_on_the_stations_calendar() {
+        // 2026-09-21 00:30 UTC is Sunday 2026-09-20 16:30 at UTC−8.
+        let now = 1_789_950_600;
+        let pacific = -8 * 3600;
+        let day = super::local_day(now, pacific);
+        assert_eq!(super::weekday_of(day), 6, "Sunday at the station");
+        assert_eq!(
+            super::week_range_on(day),
+            ("2026-09-20".to_owned(), "2026-09-14".to_owned())
+        );
+        // Counterpart: at UTC it is Monday already.
+        assert_eq!(super::weekday_of(super::local_day(now, 0)), 0);
+    }
 
     #[test]
     fn parse_weekday_valid() {
@@ -200,9 +219,15 @@ mod tests {
 
     #[test]
     fn days_to_date_str_known_values() {
-        assert_eq!(days_to_date_str(0), "1970-01-01");
-        assert_eq!(days_to_date_str(19_723), "2024-01-01");
-        assert_eq!(days_to_date_str(20_454), "2026-01-01");
+        assert_eq!(birdnet_core::civil::date_string_from_days(0), "1970-01-01");
+        assert_eq!(
+            birdnet_core::civil::date_string_from_days(19_723),
+            "2024-01-01"
+        );
+        assert_eq!(
+            birdnet_core::civil::date_string_from_days(20_454),
+            "2026-01-01"
+        );
     }
 
     #[test]
