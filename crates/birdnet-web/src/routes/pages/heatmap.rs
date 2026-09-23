@@ -526,9 +526,14 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
     );
 
     // Build a lookup by hour
+    // An hour outside 0–23 comes from a malformed `Time` (the BirdNET-Pi
+    // importer copies those through), and is skipped: indexing with it
+    // panicked, and `panic = "abort"` took the station down with the page.
     let mut by_hour = [0i64; 24];
     for h in totals {
-        by_hour[h.hour as usize] = h.count;
+        if let Some(slot) = by_hour.get_mut(usize::from(h.hour)) {
+            *slot = h.count;
+        }
     }
 
     for (hour, &count) in by_hour.iter().enumerate() {
