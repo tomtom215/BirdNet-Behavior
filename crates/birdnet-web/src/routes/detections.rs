@@ -58,7 +58,7 @@ async fn list_detections(
             let species = species.clone();
             tokio::task::spawn_blocking(move || {
                 state.with_db(|conn| {
-                    birdnet_db::sqlite::detections_by_species(conn, &species, limit)
+                    birdnet_db::sqlite::detections_by_species_page(conn, &species, limit, offset)
                         .map(|rows| (rows, None))
                 })
             })
@@ -67,7 +67,10 @@ async fn list_detections(
             let date = date.clone();
             tokio::task::spawn_blocking(move || {
                 state.with_db(|conn| {
-                    birdnet_db::sqlite::detections_by_date(conn, &date).map(|rows| (rows, None))
+                    // Paged like the rest: this had no LIMIT, so a busy day
+                    // came back whole under a response that said `limit: 100`.
+                    birdnet_db::sqlite::detections_by_date_page(conn, &date, limit, offset)
+                        .map(|rows| (rows, None))
                 })
             })
             .await

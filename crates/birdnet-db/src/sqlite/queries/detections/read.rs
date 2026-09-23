@@ -167,6 +167,29 @@ pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<Detection
     Ok(rows)
 }
 
+/// [`detections_by_date`], one page at a time: `limit` rows after the first
+/// `offset`, in the same order.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_by_date_page(
+    conn: &Connection,
+    date: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections WHERE Date = ?1 \
+         ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![date, limit, offset], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Seconds elapsed since the most recent stored detection, or `None` when
 /// the station has never detected anything.
 ///
@@ -468,6 +491,29 @@ pub fn detections_by_species(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![com_name, limit], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// [`detections_by_species`], one page at a time: `limit` rows after the
+/// first `offset`, in the same order.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_by_species_page(
+    conn: &Connection,
+    com_name: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections \
+         WHERE Com_Name = ?1 ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![com_name, limit, offset], map_detection_row)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }

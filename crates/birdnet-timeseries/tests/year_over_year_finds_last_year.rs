@@ -81,6 +81,9 @@ fn a_week_with_no_prior_year_has_no_delta() {
     assert!(!rows.is_empty());
     for r in rows {
         assert_eq!(r.prior_year_count, None);
-        assert_eq!(r.yoy_delta, None, "a delta against a year with no data: {r:?}");
+        assert_eq!(
+            r.yoy_delta, None,
+            "a delta against a year with no data: {r:?}"
+        );
     }
 }
