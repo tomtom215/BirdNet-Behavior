@@ -245,8 +245,16 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
 /// within each day interval (its first argument anchors the cohort and is
 /// always satisfied; argument `i+1` is "seen again within interval `i`").
 /// Averaging the boolean array across a species' anchors gives its retention
-/// rate at each interval; the final (long-term) rate drives the residency
-/// classification.
+/// rate at each interval.
+///
+/// The residency classification is **not** drawn from those rates. "Seen
+/// again within N days" holds on every day of a species' presence except the
+/// last of each run, so a passage migrant, a vagrant and a summer breeder all
+/// scored about (days − runs)/days at every interval and were classed
+/// Resident. The query also returns, per species, the weeks it was heard in,
+/// the weeks the station heard anything in, and the days between its first
+/// and last detection — what [`crate::types::ResidencyType::classify`]
+/// reads.
 ///
 /// Callers must pass at least one interval and at most 31 (the aggregate
 /// accepts 2..=32 conditions including the anchor); [`crate::connection`]
@@ -265,8 +273,6 @@ pub fn retention_sql(params: &RetentionParams) -> String {
     let rate_exprs: Vec<String> = (0..params.intervals.len())
         .map(|i| format!("AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END)", i + 2))
         .collect();
-    let long_term_idx = params.intervals.len(); // 1-based index of the last rate
-
     format!(
         "WITH sd AS (
             SELECT DISTINCT Com_Name, detection_date AS d FROM detections_ts
@@ -276,12 +282,28 @@ pub fn retention_sql(params: &RetentionParams) -> String {
                    retention({conditions}) AS r
             FROM sd a JOIN sd b ON a.Com_Name = b.Com_Name
             GROUP BY a.Com_Name, a.d
+        ),
+        rates AS (
+            SELECT species, [{rates}] AS retention_rates
+            FROM cohort
+            GROUP BY species
+            HAVING COUNT(*) >= {min}
+        ),
+        presence AS (
+            SELECT Com_Name AS species,
+                   COUNT(DISTINCT date_trunc('week', d)) AS weeks_present,
+                   date_diff('day', MIN(d), MAX(d)) AS span_days
+            FROM sd
+            GROUP BY Com_Name
+        ),
+        station AS (
+            SELECT COUNT(DISTINCT date_trunc('week', d)) AS weeks FROM sd
         )
-        SELECT species, [{rates}] AS retention_rates
-        FROM cohort
-        GROUP BY species
-        HAVING COUNT(*) >= {min}
-        ORDER BY retention_rates[{long_term_idx}] DESC",
+        SELECT r.species, r.retention_rates, p.weeks_present, s.weeks, p.span_days
+        FROM rates r
+        JOIN presence p ON p.species = r.species
+        CROSS JOIN station s
+        ORDER BY p.weeks_present DESC, r.species",
         conditions = conditions.join(", "),
         rates = rate_exprs.join(", "),
         min = params.min_detections,
@@ -554,7 +576,7 @@ mod tests {
         assert!(sql.contains("b.d <= a.d + INTERVAL '30 day'"));
         assert!(sql.contains("AVG(CASE WHEN r[2] THEN 1.0 ELSE 0.0 END)"));
         // 6 default intervals -> long-term rate is element 6.
-        assert!(sql.contains("ORDER BY retention_rates[6] DESC"));
+        assert!(sql.contains("ORDER BY p.weeks_present DESC"));
         assert!(sql.contains(">= 5"));
         // The old, non-existent `retention(date, [int,…])` form is gone.
         assert!(!sql.contains("retention(detection_date"));

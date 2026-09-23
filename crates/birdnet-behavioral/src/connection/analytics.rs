@@ -80,23 +80,33 @@ impl AnalyticsDb {
                     .collect(),
                 _ => Vec::new(),
             };
-            Ok((species, rates_raw))
+            let weeks_present: i64 = row.get(2)?;
+            let station_weeks: i64 = row.get(3)?;
+            let span_days: i64 = row.get(4)?;
+            Ok((species, rates_raw, weeks_present, station_weeks, span_days))
         })?;
 
+        let count = |n: i64| u32::try_from(n.max(0)).unwrap_or(u32::MAX);
         let mut results = Vec::new();
         for row in rows {
-            let (species, rates_raw) = row?;
+            let (species, rates_raw, weeks_present, station_weeks, span_days) = row?;
             let retention_rates: Vec<types::RetentionRate> = params
                 .intervals
                 .iter()
                 .zip(rates_raw.iter())
                 .map(|(&days, &rate)| types::RetentionRate { days, rate })
                 .collect();
-            let long_term = retention_rates.last().map_or(0.0, |r| r.rate);
+            let (weeks_present, station_weeks) = (count(weeks_present), count(station_weeks));
             results.push(types::SpeciesRetention {
                 species,
                 retention_rates,
-                classification: types::ResidencyType::from_retention_rate(long_term),
+                weeks_present,
+                station_weeks,
+                classification: types::ResidencyType::classify(
+                    weeks_present,
+                    station_weeks,
+                    count(span_days),
+                ),
             });
         }
         Ok(results)

@@ -394,3 +394,85 @@ fn live_raw_queries_execute() {
             .unwrap_or_else(|e| panic!("query failed to execute: {e}\n--- SQL ---\n{sql}"));
     }
 }
+
+/// Two years of four presence patterns, one detection per day present:
+/// a resident heard daily, a summer breeder (May–August), a passage migrant
+/// (twelve days each spring and autumn) and a five-day vagrant.
+fn seed_residency(db: &AnalyticsDb) {
+    let insert = |com: &str, sci: &str, from: &str, days: u32| {
+        db.conn()
+            .execute_batch(&format!(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+                 SELECT strftime(d, '%Y-%m-%d'), '06:00:00', '{sci}', '{com}', 0.9,
+                        epoch(d + INTERVAL 6 HOUR)
+                   FROM range(TIMESTAMP '{from}', TIMESTAMP '{from}' + INTERVAL {days} DAY,
+                              INTERVAL 1 DAY) t(d)"
+            ))
+            .expect("seed");
+    };
+    insert("Eurasian Blackbird", "Turdus merula", "2024-01-01", 731);
+    for year in [2024, 2025] {
+        insert("Common Swift", "Apus apus", &format!("{year}-05-01"), 120);
+        insert(
+            "Wood Warbler",
+            "Phylloscopus sibilatrix",
+            &format!("{year}-04-20"),
+            12,
+        );
+        insert(
+            "Wood Warbler",
+            "Phylloscopus sibilatrix",
+            &format!("{year}-08-20"),
+            12,
+        );
+    }
+    insert("Wallcreeper", "Tichodroma muraria", "2025-03-10", 5);
+}
+
+/// Residency tells a resident from a seasonal visitor from a migrant from a
+/// vagrant.
+///
+/// It was drawn from "seen again within N days", which is true on every day
+/// of a species' presence except the last of each run — so every rate came
+/// out at about (days − runs)/days, and the audit's simulation classified a
+/// passage migrant (0.917), a vagrant (0.80) and a summer breeder (0.99) all
+/// as Resident.
+#[test]
+fn live_residency_separates_the_four_patterns() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed_residency(&db);
+    let ret = db
+        .retention(&types::RetentionParams {
+            min_detections: 1,
+            ..types::RetentionParams::default()
+        })
+        .unwrap();
+    let class = |sp: &str| {
+        ret.iter().find(|r| r.species == sp).map_or_else(
+            || panic!("{sp} missing: {ret:?}"),
+            |r| r.classification.clone(),
+        )
+    };
+    assert_eq!(
+        class("Eurasian Blackbird"),
+        types::ResidencyType::Resident,
+        "{ret:?}"
+    );
+    assert_eq!(
+        class("Common Swift"),
+        types::ResidencyType::Regular,
+        "{ret:?}"
+    );
+    assert_eq!(
+        class("Wood Warbler"),
+        types::ResidencyType::Migrant,
+        "{ret:?}"
+    );
+    assert_eq!(
+        class("Wallcreeper"),
+        types::ResidencyType::Rarity,
+        "{ret:?}"
+    );
+}

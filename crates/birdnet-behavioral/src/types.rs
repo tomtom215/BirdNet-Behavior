@@ -36,7 +36,13 @@ pub struct SpeciesRetention {
     /// Retention rates at specified intervals.
     /// Key: day interval (e.g., 1, 7, 30), Value: retention rate (0.0-1.0).
     pub retention_rates: Vec<RetentionRate>,
-    /// Classification based on retention pattern.
+    /// Weeks this species was heard in.
+    pub weeks_present: u32,
+    /// Weeks the station heard anything in — the denominator for
+    /// [`Self::weeks_present`], so a station that was off is not read as a
+    /// bird that was absent.
+    pub station_weeks: u32,
+    /// Classification from presence; see [`ResidencyType::classify`].
     pub classification: ResidencyType,
 }
 
@@ -49,35 +55,46 @@ pub struct RetentionRate {
     pub rate: f64,
 }
 
-/// Species residency classification derived from retention patterns.
+/// Species residency classification, from how much of the station's time
+/// the species was present.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum ResidencyType {
-    /// High retention (> 0.7 at day 30) -- present most days.
+    /// Heard in more than 70 % of the weeks the station recorded.
     Resident,
-    /// Medium retention (0.3 - 0.7 at day 30) -- seasonal visitor.
+    /// Heard in 30–70 % of them: a seasonal visitor.
     Regular,
-    /// Low retention (< 0.3 at day 30) -- passing through.
+    /// Heard in fewer: passing through.
     Migrant,
-    /// Single-day event (retention drops to 0 after day 1).
+    /// Every detection within one week, on a station with at least four
+    /// weeks of history: a single visit.
     Rarity,
 }
 
 impl ResidencyType {
-    /// Classify a species based on its long-term retention rate.
+    /// Classify from presence: `weeks_present` of the station's
+    /// `station_weeks`, with `span_days` between the first detection and the
+    /// last.
     ///
-    /// - Resident: > 0.7 (present most days)
-    /// - Regular: 0.3 - 0.7 (seasonal visitor)
-    /// - Migrant: 0.01 - 0.3 (passing through)
-    /// - Rarity: < 0.01 (single-day event)
-    pub fn from_retention_rate(rate: f64) -> Self {
-        if rate > 0.7 {
+    /// This replaced a classification from the longest retention rate, which
+    /// could not separate these: "seen again within N days" is true on every
+    /// day of a bird's presence but the last of each run, so a passage
+    /// migrant, a five-day vagrant and a summer breeder all came out
+    /// Resident.
+    ///
+    /// A station younger than four weeks has no rarities: a bird heard all
+    /// five days of a five-day-old station has not been shown to be a visitor.
+    #[must_use]
+    pub fn classify(weeks_present: u32, station_weeks: u32, span_days: u32) -> Self {
+        if span_days < 7 && station_weeks >= 4 {
+            return Self::Rarity;
+        }
+        let share = f64::from(weeks_present) / f64::from(station_weeks.max(1));
+        if share > 0.7 {
             Self::Resident
-        } else if rate > 0.3 {
+        } else if share > 0.3 {
             Self::Regular
-        } else if rate > 0.01 {
-            Self::Migrant
         } else {
-            Self::Rarity
+            Self::Migrant
         }
     }
 }
@@ -198,7 +215,8 @@ impl Default for SessionizeParams {
 pub struct RetentionParams {
     /// Day intervals to measure retention at.
     pub intervals: Vec<u32>,
-    /// Minimum number of total detections to include a species.
+    /// Minimum number of distinct detection days to include a species. (It
+    /// counts days, not detections: the query groups by day before counting.)
     pub min_detections: u32,
 }
 
@@ -271,6 +289,16 @@ impl Default for PatternParams {
 
 #[cfg(test)]
 mod tests {
+
+    /// A bird heard every day of a five-day-old station has not been shown to
+    /// be a visitor; the same five days on a station with a year behind it
+    /// are a single visit.
+    #[test]
+    fn a_young_station_has_no_rarities() {
+        use super::ResidencyType;
+        assert_eq!(ResidencyType::classify(1, 1, 4), ResidencyType::Resident);
+        assert_eq!(ResidencyType::classify(1, 52, 4), ResidencyType::Rarity);
+    }
     use super::*;
 
     #[test]

@@ -154,7 +154,7 @@ pub(super) async fn analytics_retention_partial(
                 );
             }
             let mut html = String::from(
-                r"<table><thead><tr><th>Species</th><th>Classification</th><th>Day 1</th><th>Day 7</th><th>Day 30</th></tr></thead><tbody>",
+                r"<table><thead><tr><th>Species</th><th>Classification</th><th>Weeks heard</th><th>Day 1</th><th>Day 7</th><th>Day 30</th></tr></thead><tbody>",
             );
             for r in &retention {
                 let (label, cls) = match r.classification {
@@ -165,8 +165,11 @@ pub(super) async fn analytics_retention_partial(
                 };
                 let _ = write!(
                     html,
-                    r#"<tr><td>{sp}</td><td><span class="conf {cls}">{label}</span></td><td>{d1}</td><td>{d7}</td><td>{d30}</td></tr>"#,
+                    r#"<tr><td>{sp}</td><td><span class="conf {cls}">{label}</span></td><td class="mono">{wk} of {of}</td><td>{d1}</td><td>{d7}</td><td>{d30}</td></tr>"#,
                     sp = escape_html(&r.species),
+                    // The class is read from this, so it is shown beside it.
+                    wk = r.weeks_present,
+                    of = r.station_weeks,
                     d1 = find_rate(&r.retention_rates, 1),
                     d7 = find_rate(&r.retention_rates, 7),
                     d30 = find_rate(&r.retention_rates, 30),
