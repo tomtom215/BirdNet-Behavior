@@ -128,6 +128,13 @@ async fn login_submit(
                 .with_db(|conn| conn.find_user_by_name("admin"))
                 .is_ok_and(|u| accounts::is_legacy_password_hash(&u.pwd_argon2))
         {
+            // The same name check as the middleware's bypass: a session minted
+            // here under a rebound name would carry the attacker straight past
+            // it on the next request.
+            let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+            if !crate::open_admin_host::may_open_bypass(host) {
+                return crate::open_admin_host::refused(host.unwrap_or(""));
+            }
             return open_bypass_redirect(&state, &next, &device);
         }
         // The target carries the *submitted* username, not a verified one:

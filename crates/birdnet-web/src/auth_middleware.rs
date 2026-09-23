@@ -248,6 +248,18 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
     if !admin_password_configured(state)
         && let Some(synth) = synthesise_seed_admin(state)
     {
+        // Only for a name no outside website can point here — otherwise DNS
+        // rebinding turns "open on the LAN" into "open to every page anyone
+        // in the house visits". See `open_admin_host`.
+        let authority = crate::open_admin_host::request_authority(&request);
+        if !crate::open_admin_host::may_open_bypass(authority.as_deref()) {
+            tracing::warn!(
+                host = authority.as_deref().unwrap_or(""),
+                path = %path,
+                "open-admin bypass refused for a rebindable Host name"
+            );
+            return crate::open_admin_host::refused(authority.as_deref().unwrap_or(""));
+        }
         let mut req = request;
         req.extensions_mut().insert(synth);
         return next.run(req).await;

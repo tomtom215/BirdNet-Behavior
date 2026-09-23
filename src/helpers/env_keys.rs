@@ -18,6 +18,7 @@ use crate::cli::Cli;
 /// Variables read with `std::env::var` rather than through clap. Pinned by
 /// `direct_reads_match_the_source`, which scans for the literals.
 const DIRECT_ENV_KEYS: &[&str] = &[
+    "BIRDNET_ALLOWED_HOSTS",
     "BIRDNET_BASE_PATH",
     "BIRDNET_BIRDWEATHER_URL",
     "BIRDNET_CLIP_PEAK_CEILING_DBFS",

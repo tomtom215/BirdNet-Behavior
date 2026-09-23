@@ -106,7 +106,8 @@ internet-reachable, keep it set (and add TLS off-LAN).
   than an Argon2 hash per guess. Each refused attempt is in the audit log as
   `auth.login.throttled`; a successful sign-in clears the address, and a
   restart forgives everything. Behind a reverse proxy the address is the
-  visitor's only if the proxy is trusted (`--trusted-proxies`); otherwise every
+  visitor's only if the proxy is trusted (`BIRDNET_TRUSTED_PROXIES`; there is
+  no command-line flag for it); otherwise every
   visitor shares the proxy's bucket, which is the conservative failure.
 
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. The password
@@ -116,6 +117,18 @@ internet-reachable, keep it set (and add TLS off-LAN).
   dashboard (delete a detection, relabel it, set a review verdict, approve or
   delete a quarantined record, save the onboarding wizard) — to anyone who can
   reach it. Reading stays open either way.
+
+  "Anyone who can reach it" means *by a local name*. With no password, the
+  admin panel answers only when the station is addressed by an IP address,
+  `localhost`, a one-word name (`birdnet`), or a name ending in `.local`,
+  `.lan`, `.home`, `.home.arpa`, `.internal` or `.localdomain`. Any other
+  name gets a page asking for a password to be set first. That closes **DNS
+  rebinding**: without it, a website anyone in the house visits could point
+  its own name at the Pi and operate the open panel through their browser,
+  because the browser's `Origin` and `Host` would agree. If you reach an open
+  station through your own domain and want that to keep working, list the
+  name in `BIRDNET_ALLOWED_HOSTS` — or, better, set a password, which makes
+  the check moot.
 - **Reverse-proxy auth** (recommended for internet exposure): terminate TLS and
   require a password at the proxy (Caddy `basic_auth`, nginx `auth_basic`), so
   credentials never cross the wire in clear text.

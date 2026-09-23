@@ -16,6 +16,7 @@ pub mod login_throttle;
 pub mod metrics;
 pub mod notification_probes;
 pub mod notifier;
+pub mod open_admin_host;
 pub mod private_mode;
 pub mod rate_limit;
 pub mod routes;
