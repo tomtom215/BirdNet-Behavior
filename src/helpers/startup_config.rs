@@ -140,6 +140,34 @@ pub fn record_last_good(config_path: &Path) -> std::io::Result<()> {
     std::fs::rename(&part, &dest)
 }
 
+/// Replace `target` with `bytes` atomically, keeping its mode **and its
+/// owner and group**.
+///
+/// `--apply-config` is documented to run under `sudo`, so the new file is
+/// created by root. Copying only the mode turned the installer's
+/// `root:<service user> 0640` into `root:root 0640`: the service could no
+/// longer read its own configuration, `--doctor` in `ExecStartPre` failed
+/// with the wrong reason, and the unit never started — with no web UI to
+/// say why. If the ownership cannot be carried over, nothing is installed.
+fn install_config(bytes: &[u8], target: &Path) -> std::io::Result<()> {
+    let part = PathBuf::from(format!("{}.part", target.display()));
+    let result = std::fs::write(&part, bytes).and_then(|()| {
+        if let Ok(meta) = std::fs::metadata(target) {
+            std::fs::set_permissions(&part, meta.permissions())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt as _;
+                std::os::unix::fs::chown(&part, Some(meta.uid()), Some(meta.gid()))?;
+            }
+        }
+        std::fs::rename(&part, target)
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    result
+}
+
 /// `--apply-config <candidate>`: validate, back up, install, restart.
 /// Returns the process exit code: `0` applied, `2` refused.
 pub fn run_apply_config(candidate: &Path, target: &Path) -> i32 {
@@ -190,15 +218,7 @@ pub fn run_apply_config(candidate: &Path, target: &Path) -> i32 {
         }
         println!("previous configuration kept at {}", backup.display());
     }
-    let part = PathBuf::from(format!("{}.part", target.display()));
-    let installed = std::fs::write(&part, text.as_bytes()).and_then(|()| {
-        if let Ok(meta) = std::fs::metadata(target) {
-            let _ = std::fs::set_permissions(&part, meta.permissions());
-        }
-        std::fs::rename(&part, target)
-    });
-    if let Err(e) = installed {
-        let _ = std::fs::remove_file(&part);
+    if let Err(e) = install_config(text.as_bytes(), target) {
         eprintln!("cannot install {}: {e}", target.display());
         return 2;
     }
@@ -233,6 +253,37 @@ mod tests {
 
     const GOOD: &str = "LATITUDE=42.36\nLONGITUDE=-71.06\nSITENAME=Good\n";
     const BAD: &str = "LATITUDE=abc\nLONGITUDE=-71.06\nSITENAME=Bad\n";
+
+    /// The installed file keeps the owner and group of the one it replaces.
+    ///
+    /// Needs root, because that is the situation (`sudo --apply-config`) and
+    /// only root can hand a file to another user. Without it the test says so
+    /// and passes; the unit test above still covers the content and mode.
+    #[cfg(unix)]
+    #[test]
+    fn an_applied_config_keeps_the_owner_the_service_reads_it_as() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("birdnet.conf");
+        std::fs::write(&target, GOOD).expect("write");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).expect("mode");
+        // The service user, as the installer leaves it: some other uid/gid.
+        if let Err(e) = std::os::unix::fs::chown(&target, Some(65_534), Some(65_534)) {
+            eprintln!("SKIP: cannot hand a file to another user without root ({e})");
+            return;
+        }
+
+        install_config(GOOD.replace("Good", "Better").as_bytes(), &target).expect("install");
+
+        let meta = std::fs::metadata(&target).expect("meta");
+        assert_eq!(
+            (meta.uid(), meta.gid()),
+            (65_534, 65_534),
+            "the service could no longer read its own configuration"
+        );
+        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        assert!(std::fs::read_to_string(&target).unwrap().contains("Better"));
+    }
 
     /// The gate for LC-6's start-side half: a file with errors reverts to the
     /// last-good copy when there is one and runs web-only when there is not;
