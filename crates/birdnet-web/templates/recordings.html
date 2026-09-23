@@ -206,11 +206,16 @@
     bulkBusy = true;
     Promise.all(rows.map(function (r) { return post(url, keyOf(r)); }))
       .then(function (responses) {
-        var failed = responses.filter(function (r) { return !r.ok; }).length;
+        // A write the station refused answers 200 with `HX-Reswap: none`
+        // (htmx drops the body of an error status), so `ok` alone is not
+        // enough. And the others in the batch *were* changed: this used to say
+        // "Nothing else was changed", which was never true.
+        var failed = responses.filter(function (r) {
+          return !r.ok || r.headers.get('HX-Reswap') === 'none';
+        }).length;
         if (failed) {
-          bulkBusy = false;
-          window.alert(failed + ' of ' + responses.length + ' clips could not be updated. Nothing else was changed.');
-          return;
+          window.alert(failed + ' of ' + responses.length + ' clips could not be updated; ' +
+            (responses.length - failed) + ' were. The page will now show where each one stands.');
         }
         window.location.reload();
       })

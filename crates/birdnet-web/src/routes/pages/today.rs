@@ -1101,11 +1101,33 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
 /// list (its container) with the current search/filter still applied.
 const RELOAD_LIST: &str = "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\"></div>";
 
+/// The list reloaded, and a toast that says what the write did.
+fn after_write(
+    write: super::toast::RowWrite,
+    done: &str,
+    failed: &str,
+) -> axum::response::Response {
+    use super::toast::{RowWrite, Toast};
+    match write {
+        RowWrite::Done => super::toast::with(
+            axum::response::Html(RELOAD_LIST.to_string()),
+            Toast::success(done),
+        )
+        .into_response(),
+        RowWrite::Gone => super::toast::with(
+            axum::response::Html(RELOAD_LIST.to_string()),
+            Toast::info("That detection is no longer there — it may have been removed elsewhere."),
+        )
+        .into_response(),
+        RowWrite::Failed => super::toast::not_applied(&Toast::error(failed)),
+    }
+}
+
 /// Delete a detection and re-render the list.
 async fn delete_detection(
     State(state): State<AppState>,
     Form(form): Form<DeleteForm>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let date = form.date;
     let time = form.time;
     let sci_name = form.sci_name;
@@ -1113,13 +1135,12 @@ async fn delete_detection(
     // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
     // copy is incremental and can never notice a removal on its own, so the
     // deletion has to be mirrored at the same moment.
-    let _ =
+    let result =
         tokio::task::spawn_blocking(move || state.delete_detection(&date, &time, &sci_name)).await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "delete detection"),
+        "Detection deleted.",
+        "The station could not delete that detection.",
     )
 }
 
@@ -1127,9 +1148,9 @@ async fn delete_detection(
 async fn relabel_detection(
     State(state): State<AppState>,
     Form(form): Form<RelabelForm>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Paired write — see `delete_detection` above.
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.relabel_detection(
             &form.date,
             &form.time,
@@ -1139,11 +1160,10 @@ async fn relabel_detection(
         )
     })
     .await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "relabel detection"),
+        "Detection relabelled.",
+        "The station could not relabel that detection.",
     )
 }
 
@@ -1151,18 +1171,17 @@ async fn relabel_detection(
 async fn lock_detection(
     State(state): State<AppState>,
     Form(form): Form<LockForm>,
-) -> impl IntoResponse {
-    let _ = tokio::task::spawn_blocking(move || {
+) -> axum::response::Response {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             birdnet_db::sqlite::lock_detection(conn, &form.date, &form.time, &form.sci_name)
         })
     })
     .await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "lock clip"),
+        "Clip locked — it will not be removed to free space.",
+        "The station could not lock that clip, so it is not protected.",
     )
 }
 
@@ -1170,18 +1189,17 @@ async fn lock_detection(
 async fn unlock_detection(
     State(state): State<AppState>,
     Form(form): Form<LockForm>,
-) -> impl IntoResponse {
-    let _ = tokio::task::spawn_blocking(move || {
+) -> axum::response::Response {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             birdnet_db::sqlite::unlock_detection(conn, &form.date, &form.time, &form.sci_name)
         })
     })
     .await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "unlock clip"),
+        "Clip unlocked.",
+        "The station could not unlock that clip.",
     )
 }
 

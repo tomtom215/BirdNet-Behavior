@@ -558,56 +558,86 @@ struct ClipAction {
     sci_name: String,
 }
 
-async fn lock_clip(State(state): State<AppState>, Form(f): Form<ClipAction>) -> impl IntoResponse {
-    // The toggled button is the same whether or not a row matched, so render it
-    // before moving the key into the blocking lock.
+async fn lock_clip(
+    State(state): State<AppState>,
+    Form(f): Form<ClipAction>,
+) -> axum::response::Response {
     let button = lock_button(&f.date, &f.time, &f.sci_name, true);
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state
             .with_db(|conn| birdnet_db::sqlite::lock_detection(conn, &f.date, &f.time, &f.sci_name))
     })
     .await;
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
+    clip_write(
+        super::toast::RowWrite::from_result(result, "lock clip"),
         button,
+        "The station could not lock that clip, so it is not protected.",
     )
 }
 
 async fn unlock_clip(
     State(state): State<AppState>,
     Form(f): Form<ClipAction>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let button = lock_button(&f.date, &f.time, &f.sci_name, false);
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             birdnet_db::sqlite::unlock_detection(conn, &f.date, &f.time, &f.sci_name)
         })
     })
     .await;
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
+    clip_write(
+        super::toast::RowWrite::from_result(result, "unlock clip"),
         button,
+        "The station could not unlock that clip.",
     )
+}
+
+/// The toggled button when the write happened; otherwise the button stays as
+/// it was and a toast says why.
+fn clip_write(
+    write: super::toast::RowWrite,
+    toggled: String,
+    failed: &str,
+) -> axum::response::Response {
+    use super::toast::{RowWrite, Toast};
+    match write {
+        RowWrite::Done => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            toggled,
+        )
+            .into_response(),
+        RowWrite::Gone => super::toast::not_applied(&Toast::warn(
+            "That clip's detection is no longer there — it may have been removed elsewhere.",
+        )),
+        RowWrite::Failed => super::toast::not_applied(&Toast::error(failed)),
+    }
 }
 
 async fn delete_clip(
     State(state): State<AppState>,
     Form(form): Form<ClipAction>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Paired write: the analytics copy is incremental and cannot notice a
     // removal on its own. See `AppState::delete_detection`.
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.delete_detection(&form.date, &form.time, &form.sci_name)
     })
     .await;
-    // Empty body → the row's `hx-swap="outerHTML"` removes it from the list.
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        String::new(),
-    )
+    match super::toast::RowWrite::from_result(result, "delete clip") {
+        // Empty body → the row's `hx-swap="outerHTML"` removes it from the
+        // list — right whether this request removed it or someone else had.
+        super::toast::RowWrite::Done | super::toast::RowWrite::Gone => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            String::new(),
+        )
+            .into_response(),
+        super::toast::RowWrite::Failed => super::toast::not_applied(&super::toast::Toast::error(
+            "The station could not delete that clip.",
+        )),
+    }
 }
 
 #[cfg(test)]
