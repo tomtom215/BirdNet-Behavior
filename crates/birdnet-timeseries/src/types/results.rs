@@ -123,8 +123,9 @@ pub struct YearOverYearRow {
     pub current_year_count: i64,
     /// Detection count same week last year.
     pub prior_year_count: Option<i64>,
-    /// Absolute delta (current − prior).
-    pub yoy_delta: i64,
+    /// Absolute delta (current − prior); `None` when the same week last year
+    /// has no detections to compare against.
+    pub yoy_delta: Option<i64>,
     /// Species count this year.
     pub current_year_species: i64,
     /// Species count prior year.

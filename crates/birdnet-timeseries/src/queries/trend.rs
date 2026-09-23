@@ -105,29 +105,34 @@ impl Default for YearOverYear {
 impl QueryPlan for YearOverYear {
     fn sql(&self) -> String {
         let weeks = self.weeks;
+        // The CTE reaches 52 weeks further back than the window compared, so
+        // the week each is joined to is in it. It used to stop at the window,
+        // so every join missed and `yoy_delta` was the current count against
+        // a year the query never read. The window counts back from today, as
+        // `weeks` says, rather than from 1 January, and a week with nothing
+        // to compare against has no delta rather than a delta against zero.
         format!(
             "WITH weekly AS (
     SELECT
         date_trunc('week', detection_date)::DATE AS week_start,
-        year(detection_date)                      AS yr,
         COUNT(*)                                  AS detection_count,
         COUNT(DISTINCT Com_Name)                  AS species_count
     FROM detections_ts
-    WHERE detection_date >= CURRENT_DATE - INTERVAL {weeks} WEEKS
-    GROUP BY week_start, yr
+    WHERE detection_date >= date_trunc('week', CURRENT_DATE - INTERVAL {weeks} WEEKS)
+                            - INTERVAL 52 WEEKS
+    GROUP BY week_start
 )
 SELECT
     strftime(w1.week_start, '%Y-%m-%d') AS week_start,
     w1.detection_count  AS current_year_count,
     w2.detection_count  AS prior_year_count,
-    w1.detection_count - COALESCE(w2.detection_count, 0) AS yoy_delta,
+    w1.detection_count - w2.detection_count AS yoy_delta,
     w1.species_count    AS current_year_species,
     w2.species_count    AS prior_year_species
 FROM weekly w1
 LEFT JOIN weekly w2
     ON w2.week_start = w1.week_start - INTERVAL 52 WEEKS
-   AND w2.yr         = w1.yr - 1
-WHERE w1.yr = year(CURRENT_DATE)
+WHERE w1.week_start > CURRENT_DATE - INTERVAL {weeks} WEEKS
 ORDER BY w1.week_start"
         )
     }
