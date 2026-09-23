@@ -134,6 +134,9 @@ pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
         if accounts::is_legacy_password_hash(&admin.pwd_argon2) {
             let hash = accounts::hash_password(&env_pwd)?;
             conn.set_password(admin.id, &hash)?;
+            // The station had no password until now, so every session it holds
+            // came from the open window, where any `POST /login` is admin.
+            conn.revoke_others(admin.id, "")?;
             return Ok(BootstrapOutcome::RotatedLegacy);
         }
         let verifies = accounts::verify_password(&admin.pwd_argon2, &env_pwd).unwrap_or(false);
@@ -333,6 +336,32 @@ mod tests {
         let (_d, state) = fixture();
         assert_eq!(purge_legacy_credential_settings(&state), 0);
         assert_eq!(purge_legacy_credential_settings(&state), 0);
+    }
+
+    /// A station that had no password until `CADDY_PWD` appeared in its config
+    /// may hold sessions minted in the open window, where any `POST /login`
+    /// is admin. The first boot with a password must end all of them.
+    #[test]
+    fn a_first_password_from_the_config_ends_the_open_windows_sessions() {
+        use birdnet_db::accounts::SessionStore as _;
+        let (_d, state) = fixture();
+        state
+            .with_db(|conn| -> Result<(), AccountsError> {
+                let admin = conn.find_user_by_name("admin")?;
+                conn.create_session("open-window", admin.id, "2999-01-01 00:00:00", None, None)
+                    .map(drop)
+            })
+            .expect("a session from the open window");
+
+        bootstrap_admin_password(&state, Some(&config_with("CADDY_PWD", "now-it-has-one")));
+
+        assert!(
+            state
+                .with_db(|conn| conn.find_active_session("open-window"))
+                .is_err(),
+            "the open window's session survived the station acquiring a password"
+        );
+        assert!(!accounts::is_legacy_password_hash(&admin_hash(&state)));
     }
 
     #[test]

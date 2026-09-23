@@ -447,7 +447,17 @@ async fn set_password(
     let first_password = request_user.session_id == "open-bypass"
         && request_user.user.id == id
         && accounts::is_legacy_password_hash(&request_user.user.pwd_argon2);
-    let result = state.with_db(|conn| conn.set_password(id, &pwd_argon2));
+    let result = state.with_db(|conn| {
+        conn.set_password(id, &pwd_argon2)?;
+        if first_password {
+            // Every session on this account was minted while the station was
+            // open, when `POST /login` hands anyone an admin cookie. The
+            // station is locking now; none of them may outlive that. The
+            // owner's own session is minted below, after this.
+            conn.revoke_others(id, "")?;
+        }
+        Ok::<(), AccountsError>(())
+    });
     match result {
         Ok(()) => {
             // The target is the account whose password changed, which is not
