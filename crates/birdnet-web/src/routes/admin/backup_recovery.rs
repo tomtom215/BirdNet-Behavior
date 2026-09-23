@@ -412,31 +412,31 @@ fn render_body(f: &DataFacts) -> String {
         (
             "Detections (CSV)",
             "every detection with date, species and confidence",
-            "/detections/export",
+            "/api/v2/detections/export",
             "detections.csv",
         ),
         (
             "Species summary (CSV)",
             "per-species totals and first-seen dates",
-            "/species/export",
+            "/api/v2/species/export",
             "species.csv",
         ),
         (
             "eBird checklist",
             "record format for submission to eBird",
-            "/detections/export/ebird",
+            "/api/v2/detections/export/ebird",
             "ebird.csv",
         ),
         (
             "BirdNET-Pi BirdDB.txt",
             "tab-separated, for tools expecting the original format",
-            "/detections/export/birddb",
+            "/api/v2/detections/export/birddb",
             "BirdDB.txt",
         ),
         (
             "Raven selection table",
             "one table over every clip, for Raven Pro / Lite; each clip also has its own at /api/v2/recordings/<clip>/raven.txt and an Audacity label track at …/labels.txt",
-            "/detections/export/raven",
+            "/api/v2/detections/export/raven",
             "detections.raven.txt",
         ),
     ] {
@@ -512,7 +512,7 @@ fn render_body(f: &DataFacts) -> String {
   <div class="bnb-card pad">
     <div class="bnb-eyebrow">Logs</div>
     <p class="bnb-meta bkr-rail-note">Backup, purge and integrity-check results are written to the service log.</p>
-    <a class="bnb-btn ghost bkr-w-full" href="/admin/logs">Open the log viewer</a>
+    <a class="bnb-btn ghost bkr-w-full" href="/admin/system/logs/page">Open the log viewer</a>
   </div>
   <div class="bnb-card pad">
     <div class="bnb-eyebrow">System update</div>
