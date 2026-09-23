@@ -2086,13 +2086,19 @@ mod tests {
         let (_, rate_limited) = apprise.lock().await.skip_counts();
         assert_eq!(rate_limited, 1, "precondition: the jay was rate-limited");
 
-        let mut client = apprise.lock().await;
+        let (jay_free, magpie_free) = {
+            let mut client = apprise.lock().await;
+            (
+                client.should_notify_detection("Eurasian Jay", "Garrulus glandarius", 0.95),
+                client.should_notify_detection("Eurasian Magpie", "Pica pica", 0.95),
+            )
+        };
         assert!(
-            client.should_notify_detection("Eurasian Jay", "Garrulus glandarius", 0.95),
+            jay_free,
             "the jay was never announced, and its next call is suppressed anyway"
         );
         assert!(
-            !client.should_notify_detection("Eurasian Magpie", "Pica pica", 0.95),
+            !magpie_free,
             "the magpie was announced and keeps its cooldown"
         );
     }
