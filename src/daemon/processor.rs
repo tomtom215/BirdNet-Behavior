@@ -1166,6 +1166,10 @@ pub(super) fn event_processor(
                             None,
                         ),
                         Err(e) => {
+                            // Not delivered: the next detection of this bird
+                            // may try again rather than wait out a cooldown
+                            // for a notification that never left.
+                            client.lock().await.release_cooldown(&log_subject.com_name);
                             log_state
                                 .metrics()
                                 .inc_notification_dropped(e.drop_reason());
@@ -1961,6 +1965,136 @@ mod tests {
             last = now;
         }
         count()
+    }
+
+    /// A notification that did not leave the station does not start its
+    /// species' cooldown.
+    ///
+    /// The cooldown was recorded when the send was *decided*. With the
+    /// routine budget spent (a dawn chorus does it), a vagrant's first
+    /// detection was skipped by the rate limiter — counted, no row — and every
+    /// detection of it for the next 300 s was then suppressed by a cooldown
+    /// for a notification nobody received. The counterpart: a species whose
+    /// notification *was* sent keeps its cooldown.
+    #[tokio::test]
+    async fn a_skipped_notification_does_not_start_the_cooldown() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0_u8; 8192];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let config = birdnet_integrations::apprise::NotifyConfig {
+            rate_per_minute: 1,
+            ..birdnet_integrations::apprise::NotifyConfig::default()
+        };
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            config,
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "a",
+            ))
+            .unwrap();
+        let mut jay = make_event(
+            "Garrulus glandarius",
+            "Eurasian Jay",
+            0.95,
+            tmp.path().join("b.wav"),
+            "b",
+        );
+        jay.detection.time = "09:00:05".into();
+        event_tx.send(jay).unwrap();
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let state_for_processor = state.clone();
+        let for_processor = std::sync::Arc::clone(&apprise);
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(for_processor),
+                None,
+                None,
+                None,
+                birdnet_integrations::notification::NotificationFilter {
+                    trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+                    species_filter: birdnet_integrations::notification::SpeciesFilter::new(
+                        None, None,
+                    ),
+                },
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+
+        // The sends are detached tasks, run in order on the client's lock.
+        // Wait for the magpie's row, then for the jay's task behind it.
+        for _ in 0..40 {
+            let sent = state
+                .with_db(|conn| birdnet_db::notifications::recent_notifications(conn, 100, 0))
+                .unwrap_or_default()
+                .len();
+            if sent > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let (_, rate_limited) = apprise.lock().await.skip_counts();
+        assert_eq!(rate_limited, 1, "precondition: the jay was rate-limited");
+
+        let mut client = apprise.lock().await;
+        assert!(
+            client.should_notify_detection("Eurasian Jay", "Garrulus glandarius", 0.95),
+            "the jay was never announced, and its next call is suppressed anyway"
+        );
+        assert!(
+            !client.should_notify_detection("Eurasian Magpie", "Pica pica", 0.95),
+            "the magpie was announced and keeps its cooldown"
+        );
     }
 
     /// The watchlist the settings form asks for — common names — must let the

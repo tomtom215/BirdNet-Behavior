@@ -378,9 +378,23 @@ impl Client {
                 .retain(|_, instant| now.duration_since(*instant) < prune_after);
         }
 
-        // Update last-notified timestamp
+        // Reserve the cooldown now, so the other detections of the same bird
+        // in this segment do not each decide to send. A send that does not
+        // deliver hands it back with `release_cooldown`.
         self.last_notified.insert(species.to_string(), now);
         true
+    }
+
+    /// Withdraw the cooldown [`Self::should_notify_detection`] reserved for
+    /// `species`, because the notification it was reserved for did not
+    /// deliver — every destination skipped it, or every attempt failed.
+    ///
+    /// Without this a rate-limited first detection of a rare bird started a
+    /// cooldown for a notification nobody received, and suppressed every
+    /// later detection of it inside the cooldown: a bird that only called in
+    /// that window was never announced at all.
+    pub fn release_cooldown(&mut self, species: &str) {
+        self.last_notified.remove(species);
     }
 
     /// Send a bird detection notification.
