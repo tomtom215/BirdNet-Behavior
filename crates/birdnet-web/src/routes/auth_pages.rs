@@ -134,11 +134,10 @@ async fn login_submit(
         // Wrong credentials, or no admin password configured at all.
         // Bypass the gate when basic-auth would also have let the
         // request through (no CADDY_USER + no DB admin password).
-        if configured_env.is_none()
-            && state
-                .with_db(|conn| conn.find_user_by_name("admin"))
-                .is_ok_and(|u| accounts::is_legacy_password_hash(&u.pwd_argon2))
-        {
+        // The same fail-closed test as the middleware's bypass: a password
+        // whose bootstrap write failed, or a database that did not answer,
+        // is not "no password".
+        if configured_env.is_none() && !crate::auth_middleware::admin_password_configured(&state) {
             // The same name check as the middleware's bypass: a session minted
             // here under a rebound name would carry the attacker straight past
             // it on the next request.

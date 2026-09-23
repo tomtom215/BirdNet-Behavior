@@ -382,16 +382,25 @@ fn is_excluded(path: &str) -> bool {
 /// `CADDY_PWD` in the environment, or a real Argon2 hash on the seed admin
 /// row. `false` is the open station the middleware waves everyone through —
 /// and the one the wizard must offer a password step to (DD-14).
+///
+/// Fails closed: `false` only when the database positively shows the seed
+/// admin without a password *and* nothing says one was configured. It used to
+/// read a failed database read as "no password" — the middleware's next read
+/// could then succeed and synthesise the admin — and it could not see a
+/// `CADDY_PWD` from `birdnet.conf` whose bootstrap write had failed, which
+/// left the row empty: an operator's password-protected station, open to the
+/// network. A station in either state is locked until the write succeeds or
+/// the database answers, which is the safer of the two ways to be wrong.
 pub fn admin_password_configured(state: &AppState) -> bool {
     // Either CADDY_PWD env is set OR the seed admin row carries a real
     // password hash. The bootstrap in `helpers::auth` keeps these in sync.
     let env_set = std::env::var("CADDY_PWD").is_ok_and(|v| !v.is_empty());
-    if env_set {
+    if env_set || state.admin_bootstrap_failed() {
         return true;
     }
     state
         .with_db(|conn| conn.find_user_by_name("admin"))
-        .is_ok_and(|u| !accounts::is_legacy_password_hash(&u.pwd_argon2))
+        .map_or(true, |u| !accounts::is_legacy_password_hash(&u.pwd_argon2))
 }
 
 fn synthesise_seed_admin(state: &AppState) -> Option<RequestUser> {
