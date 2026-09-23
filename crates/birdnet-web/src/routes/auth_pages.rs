@@ -50,11 +50,12 @@ async fn login_page(req: Request) -> Html<String> {
         .split('&')
         .find_map(|p| p.strip_prefix("error="))
         .map(LoginError::from_code);
-    let next = query
-        .split('&')
-        .find_map(|p| p.strip_prefix("next=").map(str::to_string))
-        .filter(|s| s.starts_with('/'))
-        .unwrap_or_else(|| "/admin/overview".to_string());
+    // Decoded: the gate percent-encodes the original path and query into
+    // `next=` (`?` arrives as `%3F`), so reading it raw sent every deep link
+    // with a query string to a 404 after a correct password.
+    let next = form_urlencoded::parse(query.as_bytes())
+        .find_map(|(k, v)| (k == "next").then(|| v.into_owned()));
+    let next = sanitize_next(next.as_deref()).to_string();
 
     Html(render_login(LoginContext {
         error,
@@ -403,8 +404,19 @@ fn sanitize_next(raw: Option<&str>) -> &str {
     // Only allow path-rooted redirects so an attacker can't smuggle in an
     // off-host URL via `next=`. Anything else falls back to the admin
     // overview.
-    raw.filter(|s| s.starts_with('/') && !s.starts_with("//"))
-        .unwrap_or("/admin/overview")
+    //
+    // A browser reads a leading `/\` as `//` (the WHATWG URL parser treats `\`
+    // as `/` in special schemes) and skips tabs and newlines inside a URL, so
+    // `/\evil.example` and `/\t/evil.example` are off-site too. No path on this
+    // station contains a backslash or a control character, so both are
+    // refused outright rather than normalised.
+    raw.filter(|s| {
+        s.starts_with('/')
+            && !s.starts_with("//")
+            && !s.contains('\\')
+            && !s.chars().any(char::is_control)
+    })
+    .unwrap_or("/admin/overview")
 }
 
 #[derive(Debug, Deserialize)]
