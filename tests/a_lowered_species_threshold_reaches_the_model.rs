@@ -83,7 +83,8 @@ fn a_lowered_threshold_reaches_a_model_loaded_above_it() {
     .expect("model");
     let mut registry = ClassifierRegistry::single("birdnet", model);
     let base = loaded_thresholds(&registry);
-    assert_eq!(base, vec![0.95]);
+    assert_eq!(base.len(), 1);
+    assert!((base[0] - 0.95).abs() < f32::EPSILON);
     let dir = tempfile::tempdir().expect("tempdir");
 
     // Precondition: at its own 0.95 the model discards the ~0.93 magpie. If it
@@ -108,5 +109,8 @@ fn a_lowered_threshold_reaches_a_model_loaded_above_it() {
     // the model above what it was loaded at.
     floor.set(0.99);
     apply_threshold_floor(&mut registry, &base, Some(&floor));
-    assert_eq!(registry.primary().model.config().confidence_threshold, 0.95);
+    assert!(
+        (registry.primary().model.config().confidence_threshold - 0.95).abs() < f32::EPSILON,
+        "the floor lifted the model above its own threshold"
+    );
 }

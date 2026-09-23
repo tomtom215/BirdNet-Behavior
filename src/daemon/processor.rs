@@ -850,22 +850,34 @@ pub(super) fn event_processor(
                 time = %detection.time,
                 "detection classified but refused by the database — it is lost"
             );
-        } else {
-            metrics.inc_detection(&detection.scientific_name, detection.start);
-            // The one place a species can confirm itself, and it is after the
-            // row exists on purpose. Every gate has run by here — the chunk
-            // filters and the occurrence filter in the daemon, the plausible-
-            // hour filter, the threshold gate, the duplicate interval — and a
-            // detection that failed any of them took an early `continue`. A
-            // confirmation from a detection the database then refused would be
-            // learning from something the station did not record.
-            dynamic.confirm(
-                &detection.scientific_name,
-                detection.confidence,
-                now_ms,
-                &state,
-            );
+            // Stop here. Everything below — the DuckDB mirror, alert rules,
+            // the live broadcast, Apprise, email, BirdWeather, MQTT — would
+            // announce a detection the station has no record of, and leave the
+            // analytics copy disagreeing with the store it copies. The clip
+            // written for it has no row to be reached from; `claim_unused_path`
+            // gave it a name no other row uses, so removing it is safe.
+            if let Ok(clip) = &extracted
+                && let Err(e) = std::fs::remove_file(&clip.path)
+            {
+                tracing::debug!(error = %e, path = %clip.path.display(), "could not remove the refused detection's clip");
+            }
+            metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
+            continue;
         }
+        metrics.inc_detection(&detection.scientific_name, detection.start);
+        // The one place a species can confirm itself, and it is after the
+        // row exists on purpose. Every gate has run by here — the chunk
+        // filters and the occurrence filter in the daemon, the plausible-
+        // hour filter, the threshold gate, the duplicate interval — and a
+        // detection that failed any of them took an early `continue`. A
+        // confirmation from a detection the database then refused would be
+        // learning from something the station did not record.
+        dynamic.confirm(
+            &detection.scientific_name,
+            detection.confidence,
+            now_ms,
+            &state,
+        );
         // event.latency_ms covers decode + inference; surface as a histogram
         // so the dashboard can flag rising p95s before they catch the eye.
         metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
@@ -2775,6 +2787,53 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    /// A detection the database refused is not announced as one it recorded.
+    ///
+    /// A refused insert (a full disk, a locked or failing database) logged
+    /// "it is lost" and then carried on: mirrored into DuckDB, evaluated
+    /// against alert rules, broadcast to every open dashboard, and sent to
+    /// Apprise, email, BirdWeather and MQTT — for a row that did not exist.
+    /// The dashboard showed a bird the station had no record of, and the
+    /// analytics copy disagreed with the store it is a copy of.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_detection_the_database_refused_is_not_announced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut live = state.detection_broadcast().subscribe();
+        let event = || {
+            make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.9,
+                tmp.path().join("seg.wav"),
+                "c1",
+            )
+        };
+
+        // Counterpart first: a row the database takes is broadcast. Without
+        // this, "nothing was broadcast" below could mean nothing ever is.
+        run_processor(&state, vec![event()], HashMap::new(), 0.25).await;
+        assert!(
+            live.try_recv().is_ok(),
+            "a recorded detection must be broadcast"
+        );
+
+        state.with_db(|c| {
+            c.execute_batch(
+                "CREATE TRIGGER refuse BEFORE INSERT ON detections
+                 BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;",
+            )
+            .unwrap();
+        });
+        let mut second = event();
+        second.detection.time = "09:05:00".into();
+        run_processor(&state, vec![second], HashMap::new(), 0.25).await;
+        assert!(
+            live.try_recv().is_err(),
+            "a detection the database refused was broadcast as if recorded"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
