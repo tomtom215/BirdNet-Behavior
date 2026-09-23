@@ -1305,8 +1305,13 @@ pub(super) fn event_processor(
             });
         }
 
-        // Email alert.
-        if let Some(ref notifier) = email {
+        // Email alert, under the same notification settings and alert rules as
+        // every other channel. It used to sit outside `dispatch_allowed`, so an
+        // excluded species, the trigger mode and a Suppress rule all still
+        // sent it.
+        if let Some(ref notifier) = email
+            && dispatch_allowed
+        {
             let notifier = std::sync::Arc::clone(notifier);
             let alert = birdnet_integrations::email::DetectionEmail {
                 common_name: detection.common_name.clone(),
@@ -1970,6 +1975,144 @@ mod tests {
             last = now;
         }
         count()
+    }
+
+    /// Email sends attempted for `events` with this notification `filter`,
+    /// counted as connections to the SMTP port. The listener holds every
+    /// connection open and answers nothing, so a send that was attempted stays
+    /// in flight for as long as the test looks — which is what lets it see
+    /// whether a second detection sent while the first was still going.
+    async fn email_attempts(
+        filter: birdnet_integrations::notification::NotificationFilter,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+    ) -> usize {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = std::sync::Arc::clone(&connections);
+        std::thread::spawn(move || {
+            // Never read: holding the streams is what keeps each send in flight.
+            #[allow(clippy::collection_is_never_read)]
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                held.push(stream);
+            }
+        });
+        let notifier = birdnet_integrations::email::EmailNotifier::new(
+            birdnet_integrations::email::EmailConfig {
+                smtp_host: "127.0.0.1".to_owned(),
+                smtp_port: port,
+                username: String::new(),
+                password: String::new(),
+                from_address: "station@example.org".to_owned(),
+                to_address: "owner@example.org".to_owned(),
+                from_name: None,
+                use_starttls: false,
+                min_confidence: 0.1,
+                cooldown_secs: 300,
+            },
+        )
+        .expect("notifier");
+        let email = std::sync::Arc::new(notifier);
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        for e in events {
+            event_tx.send(e).unwrap();
+        }
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state,
+                broadcast,
+                None,
+                None,
+                Some(email),
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        connections.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Email obeys the station's notification settings, as every other
+    /// channel does.
+    ///
+    /// The email dispatch sat outside the `dispatch_allowed` check that gates
+    /// Apprise: an excluded species, a species off the allow list, a trigger
+    /// mode of "new species" and a Suppress alert rule all still sent it. The
+    /// counterpart holds that an allowed species is still emailed, so the 0
+    /// below is the filter and not a broken channel.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn email_obeys_the_notification_filters() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        let magpie = || {
+            vec![make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                std::path::PathBuf::from("/nonexistent/a.wav"),
+                "a",
+            )]
+        };
+        let excluded = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(Some("Eurasian Magpie"), None),
+        };
+        assert_eq!(
+            email_attempts(excluded, magpie()).await,
+            0,
+            "an excluded species was emailed"
+        );
+        let allowed = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(None, None),
+        };
+        assert_eq!(email_attempts(allowed, magpie()).await, 1);
+    }
+
+    /// Two detections of one bird in one segment send one email. The
+    /// cooldown was checked before the send and recorded after it, so every
+    /// detection that arrived while the first send was in flight sent too.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn one_bird_in_one_segment_is_one_email() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        let events = (0..3)
+            .map(|i| {
+                make_event(
+                    "Pica pica",
+                    "Eurasian Magpie",
+                    0.95,
+                    std::path::PathBuf::from(format!("/nonexistent/{i}.wav")),
+                    "a",
+                )
+            })
+            .collect();
+        let filter = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(None, None),
+        };
+        assert_eq!(email_attempts(filter, events).await, 1);
     }
 
     /// A send in flight does not stall the detection processor.
