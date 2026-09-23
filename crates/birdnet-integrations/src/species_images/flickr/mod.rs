@@ -126,7 +126,7 @@ impl FlickrClient {
             .timeout(DEFAULT_TIMEOUT)
             .user_agent(super::IMAGE_DOWNLOAD_USER_AGENT)
             .build()
-            .map_err(|e| ImageError::Http(e.to_string()))?;
+            .map_err(|e| ImageError::Http(crate::http_error_text(e)))?;
         Ok(Self {
             http,
             api_key: api_key.trim().to_string(),
@@ -213,14 +213,14 @@ impl FlickrClient {
                     let body = resp
                         .text()
                         .await
-                        .map_err(|e| ImageError::Http(e.to_string()))?;
+                        .map_err(|e| ImageError::Http(crate::http_error_text(e)))?;
                     let json: serde_json::Value =
                         serde_json::from_str(&body).map_err(|e| ImageError::Api(e.to_string()))?;
                     check_api_error(&json)?;
                     return Ok(json);
                 }
                 Ok(resp) => last_error = ImageError::Api(format!("HTTP {}", resp.status())),
-                Err(e) => last_error = ImageError::Http(e.to_string()),
+                Err(e) => last_error = ImageError::Http(crate::http_error_text(e)),
             }
         }
         Err(last_error)

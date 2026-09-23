@@ -207,7 +207,7 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .map_err(|e| BirdWeatherError::Http(e.to_string()))?;
+            .map_err(|e| BirdWeatherError::Http(crate::http_error_text(e)))?;
 
         Ok(Self {
             station_token: station_token.to_string(),
@@ -293,7 +293,7 @@ impl Client {
             .body(soundscape.audio)
             .send()
             .await
-            .map_err(|e| BirdWeatherError::Http(e.to_string()))?;
+            .map_err(|e| BirdWeatherError::Http(crate::http_error_text(e)))?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -302,7 +302,7 @@ impl Client {
         let parsed = resp
             .json::<SoundscapeResponse>()
             .await
-            .map_err(|e| BirdWeatherError::Api(e.to_string()))?;
+            .map_err(|e| BirdWeatherError::Api(crate::http_error_text(e)))?;
         match (parsed.success, parsed.soundscape) {
             (true, Some(stored)) => Ok(stored.id),
             (_, _) => {
@@ -351,7 +351,7 @@ impl Client {
                         return resp
                             .json::<ApiResponse>()
                             .await
-                            .map_err(|e| BirdWeatherError::Api(e.to_string()));
+                            .map_err(|e| BirdWeatherError::Api(crate::http_error_text(e)));
                     }
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
@@ -366,7 +366,7 @@ impl Client {
                     }
                 }
                 Err(e) => {
-                    last_error = BirdWeatherError::Http(e.to_string());
+                    last_error = BirdWeatherError::Http(crate::http_error_text(e));
                 }
             }
         }

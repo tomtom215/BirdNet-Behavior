@@ -192,8 +192,10 @@ impl std::error::Error for EbirdError {
 }
 
 impl From<reqwest::Error> for EbirdError {
+    /// Without the URL: its `Display` would print the request URL, which
+    /// carries the station's coordinates (see `crate::http_error_text`).
     fn from(e: reqwest::Error) -> Self {
-        Self::Http(e)
+        Self::Http(e.without_url())
     }
 }
 

@@ -269,7 +269,7 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .map_err(|e| AppriseError::Http(e.to_string()))?;
+            .map_err(|e| AppriseError::Http(crate::http_error_text(e)))?;
 
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -300,7 +300,7 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .map_err(|e| AppriseError::Http(e.to_string()))?;
+            .map_err(|e| AppriseError::Http(crate::http_error_text(e)))?;
 
         Ok(Self {
             base_url: String::new(), // no HTTP server
@@ -777,7 +777,7 @@ impl Client {
                     }
                 }
                 Err(e) => {
-                    last_error = AppriseError::Http(e.to_string());
+                    last_error = AppriseError::Http(crate::http_error_text(e));
                 }
             }
         }

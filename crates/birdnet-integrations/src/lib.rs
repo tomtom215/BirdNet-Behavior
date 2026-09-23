@@ -24,3 +24,13 @@ pub mod species_images;
 pub mod weather;
 pub mod webhook;
 pub mod weekly_report;
+
+/// A `reqwest::Error` as text, without the URL it carries.
+///
+/// `reqwest::Error`'s `Display` appends ` for url (<the whole URL>)`, and the
+/// BirdWeather token, the heartbeat ping id, the Apprise API key and the
+/// Flickr API key all live in that URL. Every error text built from one goes
+/// through here, or through `without_url()` directly.
+pub(crate) fn http_error_text(e: reqwest::Error) -> String {
+    e.without_url().to_string()
+}
