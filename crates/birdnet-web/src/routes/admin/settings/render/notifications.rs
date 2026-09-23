@@ -35,7 +35,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     // terminal — the operators least likely to notice by other means.
     let hb = get_setting(s, "heartbeat_url", "");
     let deadman = get_setting(s, "deadman_hours", "24");
-    let weekly_opts = render_weekly_options(weekly);
+    let weekly_opts = render_weekly_options(&weekly);
     write!(out, r#"
   <section class="card" id="set-notifications" aria-labelledby="set-notifications-h">
     <h2 class="section-title" id="set-notifications-h">Notifications</h2>

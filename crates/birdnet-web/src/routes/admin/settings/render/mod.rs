@@ -75,12 +75,20 @@ fn section_index() -> String {
     out
 }
 
-pub(in crate::routes::admin::settings) fn get_setting<'a>(
-    map: &'a HashMap<String, String>,
+/// A stored setting, **HTML-escaped**, ready to drop into `value="…"` or a
+/// `<textarea>`.
+///
+/// Every caller interpolates the result into markup, and none escaped it: a
+/// site name containing `"` broke out of its attribute (a stored-XSS path from
+/// anyone holding the bearer API token, which may `PUT /api/v2/settings`), and
+/// an SMTP password containing `&lt;` was shown — and on the next save written
+/// back — as `<`. Escaping here, once, means a new field cannot forget.
+pub(in crate::routes::admin::settings) fn get_setting(
+    map: &HashMap<String, String>,
     key: &str,
-    default: &'a str,
-) -> &'a str {
-    map.get(key).map_or(default, String::as_str)
+    default: &str,
+) -> String {
+    crate::routes::pages::escape_html(map.get(key).map_or(default, String::as_str))
 }
 
 pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String {
