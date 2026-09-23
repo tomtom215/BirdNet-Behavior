@@ -55,7 +55,7 @@
 
   function scheduleReconnect() {
     if (stopped || reconnectTimer !== null) return;
-    setStatus("reconnecting", "Reconnecting…");
+    setStatus("reconnecting", "Feed reconnecting…");
     var delay = backoffDelayMs();
     reconnectTimer = window.setTimeout(function () {
       reconnectTimer = null;
@@ -108,7 +108,7 @@
 
     socket.onopen = function () {
       attempt = 0;
-      setStatus("live", "Live");
+      setStatus("live", "Feed live");
     };
 
     socket.onmessage = function (ev) {

@@ -26,7 +26,10 @@
     </div>
     <div class="pill-row" id="today-pills"
          hx-get="/pages/today-pills" hx-trigger="load, every 60s" hx-swap="innerHTML">
-      <span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>
+      <!-- Neutral until the partial answers: only it reads the capture gauge.
+           A literal green "recording" here stood for as long as that request
+           was slow or failed, whatever the microphone was doing. -->
+      <span class="bnb-pill"><span class="bnb-dot"></span> …</span>
     </div>
   </div>
   <aside aria-label="Live signal">
@@ -66,7 +69,10 @@
         <div class="bnb-eyebrow">Live feed</div>
         <h2 class="sh-h">Detections as they happen</h2>
       </div>
-      <span class="bnb-pill moss"><span class="bnb-dot live"></span> Listening</span>
+      <!-- What this card can promise is its own refresh. It said "Listening"
+           as literal text, beside the hero's "not recording · the microphone
+           has stopped"; capture state is the hero pill row's to report. -->
+      <span class="bnb-meta">updates every 15 s</span>
     </div>
     <!-- The form, not only the input, is an htmx request: Enter submits a
          form, and a form with no handler navigates — to `/?search=…`, a full

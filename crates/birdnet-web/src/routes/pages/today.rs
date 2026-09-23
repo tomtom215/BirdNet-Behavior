@@ -348,6 +348,14 @@ fn firstrun_checklist(
             (mark, detail.to_string(), format!("{pct:.0}% used"))
         },
     );
+    // The station listens only when the two rows that make it listen pass. A
+    // live "Listening for the first call…" under "Microphone not recording"
+    // promised what the rows above had just withdrawn.
+    let listening_row = if mic_mark == "done" && model_loaded {
+        r#"<div class="x-check-row"><span class="mk wait"><span class="bnb-dot live"></span></span><div class="c"><div class="t">Listening for the first call…</div><div class="d">this can take a few minutes</div></div><span class="v">—</span></div>"#
+    } else {
+        r#"<div class="x-check-row"><span class="mk wait"><span class="bnb-dot"></span></span><div class="c"><div class="t">Not listening yet</div><div class="d">starts once the microphone and detector above are ready</div></div><span class="v">—</span></div>"#
+    };
     format!(
         r#"<div class="bnb-card pad">
       <div class="bnb-eyebrow td-check-eb">Getting ready</div>
@@ -356,7 +364,7 @@ fn firstrun_checklist(
         <div class="x-check-row">{mic_mark_html}<div class="c"><div class="t">{mic_title}</div><div class="d">{mic_detail}</div></div><span class="v">{mic_value}</span></div>
         {model_row}
         <div class="x-check-row">{disk_mark_html}<div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>
-        <div class="x-check-row"><span class="mk wait"><span class="bnb-dot live"></span></span><div class="c"><div class="t">Listening for the first call…</div><div class="d">this can take a few minutes</div></div><span class="v">—</span></div>
+        {listening_row}
       </div>
     </div>"#
     )
@@ -1337,6 +1345,27 @@ mod tests {
             html.contains("/station/capture"),
             "must point at where to fix it"
         );
+    }
+
+    /// "Listening for the first call…" with a live dot sat under
+    /// "Microphone not recording" and "Detector not running": a promise the
+    /// two rows above it had just withdrawn.
+    #[test]
+    fn firstrun_checklist_listens_only_when_the_microphone_and_detector_are_up() {
+        let s = src("src_1");
+        for (capturing, model) in [(Some(false), true), (None, true), (Some(true), false)] {
+            let html = firstrun_checklist(&[&s], Some(38.0), capturing, true, model);
+            assert!(
+                !html.contains("bnb-dot live") && !html.contains("Listening for the first call"),
+                "capturing={capturing:?} model={model}: {html}"
+            );
+        }
+        let none = firstrun_checklist(&[], Some(38.0), None, true, true);
+        assert!(!none.contains("bnb-dot live"), "no microphone: {none}");
+
+        let html = firstrun_checklist(&[&s], Some(38.0), Some(true), true, true);
+        assert!(html.contains("Listening for the first call"), "{html}");
+        assert!(html.contains("bnb-dot live"), "{html}");
     }
 
     #[test]
