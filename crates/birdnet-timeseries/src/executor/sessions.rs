@@ -127,6 +127,10 @@ impl super::TimeSeriesDb<'_> {
 
     /// Build a date-range session query without SQL injection risk
     /// (all interpolated values are validated u32 integers).
+    ///
+    /// Two rules shared with [`SessionSpec`] (ANA12): a session's longest gap
+    /// excludes the row that opens it, whose gap is the silence *before* the
+    /// session; and `limit` keeps the newest sessions, returned oldest-first.
     pub(super) fn build_daterange_session_sql(params: &SessionParams) -> String {
         let threshold = params.gap_minutes;
         let days = params.lookback_days;
@@ -151,19 +155,25 @@ with_session_id AS (
         SUM(CASE WHEN gap_minutes >= {threshold} OR gap_minutes IS NULL THEN 1 ELSE 0 END)
             OVER (ORDER BY detection_instant ROWS UNBOUNDED PRECEDING) AS session_id
     FROM ordered
+),
+sessions AS (
+    SELECT
+        session_id,
+        strftime(detection_date, '%Y-%m-%d') AS d,
+        strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS s_start,
+        strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS s_end,
+        COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS species,
+        date_diff('minute', MIN(detection_instant), MAX(detection_instant)) AS duration,
+        MAX(gap_minutes) FILTER (WHERE gap_minutes < {threshold}) AS max_gap,
+        MIN(detection_instant) AS start_instant
+    FROM with_session_id
+    GROUP BY session_id, detection_date
+    ORDER BY start_instant DESC
+    LIMIT {limit}
 )
-SELECT
-    session_id,
-    strftime(detection_date, '%Y-%m-%d'),
-    strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S'),
-    strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S'),
-    COUNT(*), COUNT(DISTINCT Com_Name),
-    date_diff('minute', MIN(detection_instant), MAX(detection_instant)),
-    MAX(gap_minutes)
-FROM with_session_id
-GROUP BY session_id, detection_date
-ORDER BY MIN(detection_instant)
-LIMIT {limit}"
+SELECT session_id, d, s_start, s_end, n, species, duration, max_gap
+FROM sessions
+ORDER BY start_instant"
         )
     }
 }

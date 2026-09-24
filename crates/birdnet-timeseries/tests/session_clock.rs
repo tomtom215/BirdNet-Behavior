@@ -187,3 +187,75 @@ fn an_intraday_gap_is_measured_in_real_minutes() {
         "sixty real minutes; the wall clock reads zero and reports no gap at all"
     );
 }
+
+/// Instant of 2026-05-01 05:00:00Z, and a helper for minutes after it.
+const MAY_DAWN: i64 = 1_777_611_600;
+const fn at(minutes: i64) -> i64 {
+    MAY_DAWN + minutes * 60
+}
+
+/// ANA12: a session's longest gap is a gap *inside* it.
+///
+/// Two sessions: 05:00 and 05:10, then 07:00 and 07:05. The second session's
+/// longest internal gap is five minutes. `MAX(gap_minutes)` also counted the
+/// row that opens a session — whose gap is the silence *before* it, 110
+/// minutes here, always at or over the threshold — so every session but the
+/// first reported the gap that separated it from the last one.
+#[test]
+fn a_sessions_longest_gap_is_inside_it() {
+    let (_dir, db) = store(&[
+        ("2026-05-01", "05:00:00", at(0)),
+        ("2026-05-01", "05:10:00", at(10)),
+        ("2026-05-01", "07:00:00", at(120)),
+        ("2026-05-01", "07:05:00", at(125)),
+    ]);
+    let by_date = sessions_for_date(&db, "2026-05-01");
+    let by_range = TimeSeriesDb::new(db.conn())
+        .expect("the ts view builds")
+        .activity_sessions(&SessionParams {
+            gap_minutes: 30,
+            date_filter: None,
+            lookback_days: 40_000,
+            limit: 100,
+        })
+        .expect("activity_sessions");
+    for (builder, sessions) in [("date", &by_date), ("range", &by_range)] {
+        assert_eq!(sessions.len(), 2, "{builder}: {sessions:?}");
+        let gaps: Vec<_> = sessions
+            .iter()
+            .map(|s| s.max_internal_gap_minutes)
+            .collect();
+        // Counterpart: the first session, which has no gap before it, was
+        // already right.
+        assert_eq!(gaps, [Some(10), Some(5)], "{builder}: {sessions:?}");
+    }
+}
+
+/// ANA12: when there are more sessions than the limit, the newest are kept.
+///
+/// The Time-series card asks for 50 over three days and shows 20. Ordered
+/// oldest-first and cut by `LIMIT`, a busy station's card showed three days
+/// ago and never reached today. Rows still come back in chronological order.
+#[test]
+fn a_truncated_session_list_keeps_the_newest() {
+    let (_dir, db) = store(&[
+        ("2026-05-01", "05:00:00", at(0)),
+        ("2026-05-01", "07:00:00", at(120)),
+        ("2026-05-01", "09:00:00", at(240)),
+    ]);
+    let sessions = TimeSeriesDb::new(db.conn())
+        .expect("the ts view builds")
+        .activity_sessions(&SessionParams {
+            gap_minutes: 30,
+            date_filter: None,
+            lookback_days: 40_000,
+            limit: 2,
+        })
+        .expect("activity_sessions");
+    let starts: Vec<&str> = sessions.iter().map(|s| s.session_start.as_str()).collect();
+    assert_eq!(
+        starts,
+        ["2026-05-01 07:00:00", "2026-05-01 09:00:00"],
+        "the limit dropped the newest session"
+    );
+}

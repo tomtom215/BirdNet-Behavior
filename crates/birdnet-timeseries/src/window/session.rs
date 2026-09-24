@@ -139,23 +139,31 @@ with_session_id AS (
             ROWS UNBOUNDED PRECEDING
         ) AS session_id
     FROM ordered
+),
+sessions AS (
+    SELECT
+        session_id,
+        strftime(detection_date, '%Y-%m-%d') AS detection_date,
+        strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_start,
+        strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_end,
+        COUNT(*)                 AS detection_count,
+        COUNT(DISTINCT Com_Name) AS species_count,
+        date_diff('minute',
+            MIN(detection_instant),
+            MAX(detection_instant)
+        )                        AS duration_minutes,
+        MAX(gap_minutes) FILTER (WHERE gap_minutes < {threshold})
+                                 AS max_internal_gap_minutes,
+        MIN(detection_instant)   AS start_instant
+    FROM with_session_id
+    GROUP BY session_id, detection_date
+    ORDER BY start_instant DESC
+    LIMIT {limit}
 )
-SELECT
-    session_id,
-    strftime(detection_date, '%Y-%m-%d') AS detection_date,
-    strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_start,
-    strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_end,
-    COUNT(*)                 AS detection_count,
-    COUNT(DISTINCT Com_Name) AS species_count,
-    date_diff('minute',
-        MIN(detection_instant),
-        MAX(detection_instant)
-    )                        AS duration_minutes,
-    MAX(gap_minutes)         AS max_internal_gap_minutes
-FROM with_session_id
-GROUP BY session_id, detection_date
-ORDER BY session_start
-LIMIT {limit}"
+SELECT session_id, detection_date, session_start, session_end, detection_count,
+       species_count, duration_minutes, max_internal_gap_minutes
+FROM sessions
+ORDER BY start_instant"
         )
     }
 

@@ -376,7 +376,9 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
     let mut html = String::from(
         r"<table><thead><tr><th>Start</th><th>Duration</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
     );
-    for row in rows.iter().take(20) {
+    // Rows arrive oldest-first; the card shows the latest twenty, newest at
+    // the top (ANA12). `take(20)` alone showed the oldest of the window.
+    for row in rows.iter().rev().take(20) {
         let _ = write!(
             html,
             r"<tr><td>{}</td><td>{}m</td><td>{}</td><td>{}</td></tr>",
@@ -492,5 +494,32 @@ mod tests {
         // Counterparts: an ordinary value and a missing one are unchanged.
         assert_eq!(super::shannon_cell(Some(std::f64::consts::LN_2)), "0.693");
         assert_eq!(super::shannon_cell(None), "—");
+    }
+
+    /// ANA12: the sessions card shows the newest sessions, newest first.
+    #[test]
+    fn the_sessions_card_shows_the_newest_first() {
+        let rows: Vec<_> = (0..25)
+            .map(|i| birdnet_timeseries::types::results::SessionRow {
+                session_id: i,
+                date: "2026-05-01".into(),
+                session_start: format!("2026-05-01 {i:02}:00:00"),
+                session_end: String::new(),
+                detection_count: 1,
+                species_count: 1,
+                duration_minutes: 0,
+                max_internal_gap_minutes: None,
+            })
+            .collect();
+        let html = super::render_sessions_table(&rows);
+        let newest = html
+            .find("2026-05-01 24:00:00")
+            .expect("the newest is shown");
+        let next = html.find("2026-05-01 23:00:00").expect("and the next");
+        assert!(newest < next, "newest first");
+        assert!(
+            !html.contains("2026-05-01 00:00:00"),
+            "the oldest falls off"
+        );
     }
 }
