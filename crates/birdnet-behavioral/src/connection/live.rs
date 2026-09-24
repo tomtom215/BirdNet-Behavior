@@ -344,6 +344,66 @@ fn live_next_species() {
     assert!((preds[0].probability - 1.0).abs() < 1e-9);
 }
 
+/// ANA8: a probability is the share of *every* session in which the trigger
+/// was followed by something, not of the rows that survived `LIMIT`.
+///
+/// Eight mornings, each a Robin then one other bird: Blackbird three times,
+/// Wren three times, Tit twice. Blackbird's probability is 3/8. Normalising
+/// after the limit, a top-2 query reported 3/6 — and the same species' odds
+/// changed with how many rows the caller asked for.
+#[test]
+fn live_next_species_probability_is_over_every_session() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    let followers = [
+        "Eurasian Blackbird",
+        "Eurasian Blackbird",
+        "Eurasian Blackbird",
+        "Eurasian Wren",
+        "Eurasian Wren",
+        "Eurasian Wren",
+        "Great Tit",
+        "Great Tit",
+    ];
+    let values: Vec<String> = followers
+        .iter()
+        .enumerate()
+        .flat_map(|(i, next)| {
+            let d = format!("2024-06-{:02}", i + 1);
+            [
+                format!("('{d}', '05:00:00', 'x', 'European Robin', 0.9, epoch(TIMESTAMP '{d} 05:00:00'))"),
+                format!("('{d}', '05:10:00', 'y', '{next}', 0.9, epoch(TIMESTAMP '{d} 05:10:00'))"),
+            ]
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) \
+             VALUES {};",
+            values.join(", ")
+        ))
+        .expect("seed");
+
+    let prob = |limit: u32, species: &str| {
+        db.next_species("European Robin", 60, limit)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.predicted_species == species)
+            .map(|p| p.probability)
+            .unwrap()
+    };
+    let top_two = prob(2, "Eurasian Blackbird");
+    assert!(
+        (top_two - 3.0 / 8.0).abs() < 1e-9,
+        "top-2 reported {top_two}, not 3/8"
+    );
+    // Counterpart: with every follower returned, the answer was already right,
+    // and the limit must not change it.
+    let all = prob(10, "Eurasian Blackbird");
+    assert!((all - 3.0 / 8.0).abs() < 1e-9, "{all}");
+}
+
 #[test]
 fn live_retention() {
     let Some((db, _tmp)) = loaded_db() else {

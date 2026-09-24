@@ -481,6 +481,11 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
 /// Counting those across sessions yields a frequency distribution of what
 /// typically follows the trigger species.
 ///
+/// `sessions` is the number of sessions with any follower, taken by a window
+/// over the grouped rows *before* `LIMIT` — the denominator of each
+/// probability. Summing the returned frequencies instead normalised over the
+/// top `limit` only (ANA8).
+///
 /// `sequence_next_node(direction, mode, ts, value, base_cond, event_cond)`
 /// requires at least two boolean conditions; `forward`/`first_match` anchors on
 /// the first event matching `base_cond` (the trigger) and the `TRUE` event
@@ -502,7 +507,8 @@ pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) 
             FROM sessioned
             GROUP BY sid
         )
-        SELECT predicted AS predicted_species, COUNT(*) AS frequency
+        SELECT predicted AS predicted_species, COUNT(*) AS frequency,
+               SUM(COUNT(*)) OVER () AS sessions
         FROM per_session
         WHERE predicted IS NOT NULL
         GROUP BY predicted
