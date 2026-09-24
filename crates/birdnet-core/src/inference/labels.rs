@@ -173,11 +173,19 @@ impl LabelSet {
     /// Returns `LabelError::Format` if any line cannot be parsed.
     pub fn parse(content: &str) -> Result<Self, LabelError> {
         let mut labels = Vec::new();
+        let mut blank_since_label = false;
 
         for line in content.lines() {
             let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+            if line.is_empty() {
+                blank_since_label |= !labels.is_empty();
                 continue;
+            }
+            if line.starts_with('#') {
+                continue;
+            }
+            if blank_since_label {
+                return Err(interior_blank(line));
             }
 
             // BirdNET label format: "Scientific name_Common name"
@@ -226,11 +234,19 @@ impl LabelSet {
     /// columns, or if the file contains no labels at all.
     pub fn parse_tsv(content: &str) -> Result<Self, LabelError> {
         let mut labels = Vec::new();
+        let mut blank_since_label = false;
 
         for line in content.lines() {
             let line = line.trim_end_matches(['\r', '\n']);
-            if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            if line.trim().is_empty() {
+                blank_since_label |= !labels.is_empty();
                 continue;
+            }
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            if blank_since_label {
+                return Err(interior_blank(line));
             }
 
             let cols: Vec<&str> = line.split('\t').map(str::trim).collect();
@@ -318,11 +334,16 @@ impl LabelSet {
         let code_col = headers.iter().position(|h| *h == "species_code");
 
         let mut labels = Vec::new();
+        let mut blank_since_label = false;
 
         for line in lines {
             let line = line.trim();
             if line.is_empty() {
+                blank_since_label |= !labels.is_empty();
                 continue;
+            }
+            if blank_since_label {
+                return Err(interior_blank(line));
             }
 
             let fields: Vec<&str> = line.split(delim).collect();
@@ -435,9 +456,46 @@ impl LabelSet {
     }
 }
 
+/// A blank line between two labels.
+///
+/// Labels map to model outputs by position, so skipping it would move every
+/// later label up one output and name the wrong bird for each of them. A blank
+/// line before the first label or after the last shifts nothing and is
+/// allowed.
+fn interior_blank(next: &str) -> LabelError {
+    LabelError::Format(format!(
+        "a blank line between labels, before '{next}': labels are matched to the model's \
+         outputs by position, so every label after it would name the wrong species; delete \
+         the line, or restore the label that was on it"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A blank line *between* labels is refused in every format.
+    ///
+    /// Labels are matched to model outputs by position, and blank lines were
+    /// skipped. A label line blanked rather than deleted therefore moved every
+    /// later label up one output: every detection past it named the wrong
+    /// bird, and nothing on the detection path checks the count.
+    #[test]
+    fn a_blank_line_between_labels_is_refused() {
+        let text = "Turdus merula_Blackbird\n\nErithacus rubecula_Robin\n";
+        assert!(LabelSet::parse(text).is_err(), "text");
+        let tsv = "tm\tTurdus merula\tBlackbird\n\ner\tErithacus rubecula\tRobin\n";
+        assert!(LabelSet::parse_tsv(tsv).is_err(), "tsv");
+        let csv = "sci_name;com_name\nTurdus merula;Blackbird\n\nErithacus rubecula;Robin\n";
+        assert!(LabelSet::parse_csv(csv).is_err(), "csv");
+
+        // Counterparts: blank lines before the first label and after the last
+        // shift nothing, and comments stay allowed.
+        let ok = "\nTurdus merula_Blackbird\n# note\nErithacus rubecula_Robin\n\n\n";
+        assert_eq!(LabelSet::parse(ok).unwrap().len(), 2);
+        let ok_csv = "sci_name;com_name\nTurdus merula;Blackbird\nErithacus rubecula;Robin\n\n";
+        assert_eq!(LabelSet::parse_csv(ok_csv).unwrap().len(), 2);
+    }
 
     #[test]
     fn parse_valid_labels() {
