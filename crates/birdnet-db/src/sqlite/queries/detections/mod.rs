@@ -35,7 +35,7 @@ pub use read::{
     species_for_date, todays_detection_count, todays_detections, todays_source_activity,
     unstamped_detection_count,
 };
-pub use search::{SearchTerm, parse_search_term};
+pub use search::{SearchTerm, like_contains, parse_search_term};
 pub use write::{
     delete_detection, insert_detection, relabel_detection, set_birdweather_soundscape,
 };

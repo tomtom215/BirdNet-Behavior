@@ -472,13 +472,13 @@ async fn species_hits(state: &AppState, qlc: &str, limit: usize) -> Vec<Entry> {
     let state2 = state.clone();
     tokio::task::spawn_blocking(move || {
         state2.with_db(|conn| {
-            let pattern = format!("%{qlc}%");
+            let pattern = birdnet_db::sqlite::like_contains(&qlc);
             let limit_i64 = i64::try_from(limit).unwrap_or(8);
             let Ok(mut stmt) = conn.prepare(
                 "SELECT Com_Name, Sci_Name, COUNT(*) AS n
                    FROM detections_analytic
-                  WHERE LOWER(Com_Name) LIKE ?1
-                     OR LOWER(Sci_Name) LIKE ?1
+                  WHERE LOWER(Com_Name) LIKE ?1 ESCAPE '\\'
+                     OR LOWER(Sci_Name) LIKE ?1 ESCAPE '\\'
                   GROUP BY Com_Name, Sci_Name
                   ORDER BY n DESC
                   LIMIT ?2",
@@ -646,6 +646,29 @@ const fn ymd_to_days(y: u32, m: u32, d: u32) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DB9: the palette's species search treats `_` and `%` as the characters
+    /// typed, not as `LIKE` wildcards. Typing `_` listed every species.
+    #[tokio::test]
+    async fn the_species_search_is_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().join("birds.db")).expect("state");
+        state.with_db(|conn| {
+            for (sci, com) in [("Parus major", "Great Tit"), ("Unknown sp.", "Test_bird")] {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES ('2026-05-01', '06:00:00', ?1, ?2, 0.8)",
+                    (sci, com),
+                )
+                .unwrap();
+            }
+        });
+        let labels = |hits: Vec<Entry>| hits.into_iter().map(|e| e.label).collect::<Vec<_>>();
+        assert_eq!(labels(species_hits(&state, "_", 8).await), ["Test_bird"]);
+        assert!(labels(species_hits(&state, "%", 8).await).is_empty());
+        // Counterpart: an ordinary substring still finds its species.
+        assert_eq!(labels(species_hits(&state, "tit", 8).await), ["Great Tit"]);
+    }
 
     #[test]
     fn pages_index_has_all_topnav_links() {

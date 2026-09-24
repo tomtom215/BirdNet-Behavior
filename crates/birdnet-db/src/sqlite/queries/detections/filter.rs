@@ -43,7 +43,7 @@ use crate::sqlite::queries::detections::search::SearchTerm;
 use crate::sqlite::types::{DETECTION_COLS, DetectionRow, map_detection_row};
 
 use super::read::TodayFilter;
-use super::search::parse_search_term;
+use super::search::{like_contains, parse_search_term};
 
 /// A boxed bound parameter. The clause builder owns its values so the caller
 /// does not have to keep nine borrows alive.
@@ -309,14 +309,14 @@ impl DetectionFilter {
 
         match parse_search_term(self.text.as_deref()) {
             Some(SearchTerm::Include(term)) => {
-                parts.push("(Com_Name LIKE ? OR Sci_Name LIKE ?)".into());
-                let pattern = format!("%{term}%");
+                parts.push(r"(Com_Name LIKE ? ESCAPE '\' OR Sci_Name LIKE ? ESCAPE '\')".into());
+                let pattern = like_contains(&term);
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern));
             }
             Some(SearchTerm::Exclude(rest)) => {
-                parts.push("Com_Name NOT LIKE ?".into());
-                params.push(Box::new(format!("%{rest}%")));
+                parts.push(r"Com_Name NOT LIKE ? ESCAPE '\'".into());
+                params.push(Box::new(like_contains(&rest)));
             }
             None => {}
         }

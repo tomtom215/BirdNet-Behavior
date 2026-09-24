@@ -8,7 +8,7 @@ use crate::sqlite::types::{
     ConcurrentDetection, DETECTION_COLS, DayCount, DetectionRow, SourceActivity, map_detection_row,
 };
 
-use super::search::{SearchTerm, parse_search_term};
+use super::search::{SearchTerm, like_contains, parse_search_term};
 
 /// SQL predicate for "this detection has audio you can actually play".
 ///
@@ -761,24 +761,24 @@ pub fn recent_clips(
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
+                let pattern = like_contains(&rest);
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND Com_Name NOT LIKE ?1{extra} \
+                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
                     vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
                 )
             }
             Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
+                let pattern = like_contains(&term);
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra} \
+                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'){extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
                     vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
@@ -819,23 +819,23 @@ pub fn recent_clips_count(
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
+                let pattern = like_contains(&rest);
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND Com_Name NOT LIKE ?1{extra}"
+                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{extra}"
                     ),
                     vec![Box::new(pattern)],
                 )
             }
             Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
+                let pattern = like_contains(&term);
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra}"
+                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'){extra}"
                     ),
                     vec![Box::new(pattern)],
                 )
