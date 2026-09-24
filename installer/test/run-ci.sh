@@ -39,6 +39,7 @@ CI_TESTS=(
     model-resume.sh
     pipefail-sigpipe.sh
     quickstart-env.sh
+    service-owner-preserved.sh
     service-unit.sh
     uninstall-paths.sh
 )

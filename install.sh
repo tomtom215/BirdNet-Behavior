@@ -419,12 +419,15 @@ EOF
         fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
+    derive_home_paths
+}
 
-    # Under sudo, $HOME is usually /root, not the service user's home — so the
-    # data dir computed at the top of this script can land in /root, which the
-    # non-root service user cannot reach (and ProtectHome=read-only would block
-    # it anyway). Re-derive every home-based path from the service user's actual
-    # home so the daemon can read its database, recordings, and model.
+# Under sudo, $HOME is usually /root, not the service user's home — so the
+# data dir computed at the top of this script can land in /root, which the
+# non-root service user cannot reach (and ProtectHome=read-only would block
+# it anyway). Re-derive every home-based path from the service user's actual
+# home so the daemon can read its database, recordings, and model.
+derive_home_paths() {
     local svc_home
     svc_home="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
     if [ -n "${svc_home}" ]; then
@@ -806,6 +809,29 @@ HAVE_SERVICE=0
 HAVE_CONFIG=0
 INSTALLED_VERSION=""
 EXISTING_INSTALL=0
+
+# An update or a repair keeps the station it finds. The service user comes
+# from SUDO_USER on every run, so `sudo install.sh update` from a different
+# account rewrote User=, ReadWritePaths= and --analytics-db onto that
+# account's home, chowned the config to it, and left the kept config's
+# DB_PATH naming the first home — hidden from the new user by the unit's
+# ProtectHome, so the doctor failed the database directory and the station
+# did not start. The existing unit's User= wins, and the home-based paths
+# are derived from that user exactly as the first install derived them.
+adopt_existing_service_user() {
+    [ -f "${SERVICE_FILE}" ] || return 0
+    local unit_user
+    unit_user="$(grep -E '^User=' "${SERVICE_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    [ -n "${unit_user}" ] && [ "${unit_user}" != "${SERVICE_USER}" ] || return 0
+    if ! getent passwd "${unit_user}" >/dev/null 2>&1; then
+        warn "The existing unit runs as '${unit_user}', which no longer exists — installing for '${SERVICE_USER}'."
+        return 0
+    fi
+    warn "This station runs as '${unit_user}'; keeping that (the installer was run by '${SERVICE_USER}')."
+    warn "To move it to another account: sudo bash install.sh uninstall, then install from that account."
+    SERVICE_USER="${unit_user}"
+    derive_home_paths
+}
 
 detect_existing_install() {
     HAVE_BINARY=0; HAVE_SERVICE=0; HAVE_CONFIG=0; INSTALLED_VERSION=""; EXISTING_INSTALL=0
@@ -3253,6 +3279,7 @@ main() {
 
     require_root
     detect_existing_install
+    adopt_existing_service_user
 
     # No explicit command: a fresh box installs; an existing one offers the
     # menu interactively, or silently updates when non-interactive (preserving
