@@ -430,6 +430,37 @@ async function nudgeAnnouncesOnce(page) {
   check('nudge: an unchanged nudge is not re-announced', writes === 0, `${writes} status write(s) over 2 re-fetches`);
 }
 
+/** M14: the live feed comes back after the browser restores the page.
+ *
+ * The socket was stopped on `beforeunload`, which set a flag nothing ever
+ * cleared. A page restored from the back/forward cache (`pageshow` with
+ * `persisted`) therefore had a dead feed until reloaded, and a `beforeunload`
+ * listener is itself one of the things that keeps a page out of that cache.
+ * Playwright's Chromium runs with the cache off, so the events the browser
+ * fires around it are replayed in order.
+ */
+async function liveFeedSurvivesBackForward(page) {
+  let sockets = 0;
+  page.on('websocket', (ws) => {
+    if (ws.url().includes('/ws/detections')) sockets += 1;
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  check('bfcache: the feed connects on load', sockets >= 1, `${sockets} socket(s)`);
+  const before = sockets;
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('beforeunload'));
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await page.waitForTimeout(1500);
+  check(
+    'bfcache: a restored page reconnects its live feed',
+    sockets > before,
+    `no new socket after pageshow (persisted); ${sockets} total`,
+  );
+}
+
 const page404 = [];
 
 async function main() {
@@ -457,6 +488,7 @@ async function main() {
     ['load more', loadMoreAppends],
     ['live signal', liveSignal],
     ['nudge announces once', nudgeAnnouncesOnce],
+    ['live feed after back/forward', liveFeedSurvivesBackForward],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
