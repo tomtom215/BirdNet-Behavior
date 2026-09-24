@@ -297,3 +297,59 @@ fn interval_lookback_expressions_bind() {
         );
     }
 }
+
+/// ANA11: "average per day" for an hour divides by the days the station heard
+/// anything, not by the days that hour happened to be busy.
+///
+/// Ten days of one 06:00 detection each; two of them also have one at 03:00.
+/// 03:00 averages 2/10 = 0.2 a day. Dividing by that hour's own active days
+/// reported 1.0 — the same as 06:00, which is heard every day — so the chart
+/// drew a rare night call as tall as the dawn chorus.
+#[test]
+fn an_hours_daily_average_counts_the_days_it_was_quiet() {
+    let dir = TempDir::new().expect("temp dir");
+    let db = AnalyticsDb::open(&dir.path().join("ts.duckdb")).expect("open");
+    let conn = db.conn();
+    let today: String = conn
+        .query_row("SELECT CAST(CURRENT_DATE AS VARCHAR)", [], |r| r.get(0))
+        .expect("current date");
+    let parts: Vec<u32> = today.split('-').map(|p| p.parse().unwrap()).collect();
+    let today_days = days_from_civil(parts[0], parts[1], parts[2]);
+
+    let mut rows = Vec::new();
+    for back in 1..=10 {
+        let (y, m, d) = civil_from_days(today_days - back);
+        let date = format!("{y:04}-{m:02}-{d:02}");
+        let mut hours = vec![6];
+        if back <= 2 {
+            hours.push(3);
+        }
+        for h in hours {
+            rows.push(format!(
+                "('{date}','{h:02}:00:00','Strix aluco','Tawny Owl',0.9,epoch(TIMESTAMP '{date} {h:02}:00:00'))"
+            ));
+        }
+    }
+    conn.execute_batch(&format!(
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES {};",
+        rows.join(",")
+    ))
+    .expect("seed");
+
+    let ts = TimeSeriesDb::new(conn).expect("executor");
+    let heat = ts
+        .hourly_heatmap(&HourlyParams {
+            lookback_days: 30,
+            species: None,
+        })
+        .expect("heatmap");
+    let avg = |hour: u8| {
+        heat.iter()
+            .find(|r| u8::try_from(r.hour_of_day).ok() == Some(hour))
+            .map(|r| r.avg_detections_per_day)
+            .expect("hour present")
+    };
+    assert!((avg(3) - 0.2).abs() < 1e-9, "03:00 averaged {}", avg(3));
+    // Counterpart: an hour heard every day still averages one.
+    assert!((avg(6) - 1.0).abs() < 1e-9, "06:00 averaged {}", avg(6));
+}

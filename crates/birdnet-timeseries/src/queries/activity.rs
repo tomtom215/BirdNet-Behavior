@@ -132,6 +132,12 @@ ORDER BY window_start"
 /// Hourly activity heatmap: average detections per hour-of-day across all days.
 ///
 /// Useful for showing the typical daily rhythm (dawn chorus, midday lull, etc.)
+///
+/// The average divides by every day in the window on which the station heard
+/// anything, not by the days that hour was busy (ANA11): an owl heard at 03:00
+/// on two nights of ten averages 0.2 a day, not 1.0. Days with no detection at
+/// all are left out, so a station installed last week is not averaged over
+/// ninety days it was not running.
 #[derive(Debug, Clone)]
 pub struct HourlyHeatmap {
     /// Number of days of history to include (default: 90).
@@ -148,14 +154,18 @@ impl QueryPlan for HourlyHeatmap {
     fn sql(&self) -> String {
         let days = self.lookback_days;
         format!(
-            "SELECT
+            "WITH windowed AS (
+    SELECT * FROM detections_ts
+    WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+),
+station_days AS (SELECT COUNT(DISTINCT detection_date) AS n FROM windowed)
+SELECT
     hour(detection_timestamp)    AS hour_of_day,
     COUNT(*)                     AS total_detections,
     COUNT(DISTINCT detection_date) AS active_days,
-    COUNT(*) * 1.0 / COUNT(DISTINCT detection_date) AS avg_detections_per_day,
+    COUNT(*) * 1.0 / ANY_VALUE(station_days.n) AS avg_detections_per_day,
     COUNT(DISTINCT Com_Name)     AS unique_species
-FROM detections_ts
-WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+FROM windowed, station_days
 GROUP BY hour(detection_timestamp)
 ORDER BY hour_of_day"
         )

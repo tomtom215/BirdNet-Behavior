@@ -279,8 +279,10 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
     let max_avg = rows
         .iter()
         .map(|r| r.avg_detections_per_day)
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
+        .fold(0.0_f64, f64::max);
+    // Scale to the busiest hour, whatever its size: averages below one a day
+    // are ordinary once quiet days count (ANA11).
+    let max_avg = if max_avg > 0.0 { max_avg } else { 1.0 };
 
     let mut html = String::from(
         r"<table><thead><tr><th>Hour</th><th>Avg/Day</th><th>Total</th><th>Trend</th></tr></thead><tbody>",
@@ -291,7 +293,7 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
             html,
             r#"<tr>
 <td class="tsd-key">{h:02}:00</td>
-<td>{avg:.1}</td>
+<td>{avg:.2}</td>
 <td>{total}</td>
 <td><div data-style="width:{pct:.0}%;height:8px;background:var(--accent);border-radius:4px;min-width:2px;"></div></td>
 </tr>"#,
