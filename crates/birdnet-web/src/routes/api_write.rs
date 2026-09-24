@@ -898,7 +898,11 @@ async fn write_settings(
             Json(json!({ "error": "the current settings could not be read; nothing was written" })),
         );
     };
-    let items = crate::routes::admin::settings::handler::build_settings_items(&form, &existing);
+    let items = crate::routes::admin::settings::handler::build_settings_items(
+        &form,
+        &existing,
+        crate::routes::admin::settings::handler::Unset::AsEmpty,
+    );
     if items.is_empty() {
         return (
             StatusCode::OK,

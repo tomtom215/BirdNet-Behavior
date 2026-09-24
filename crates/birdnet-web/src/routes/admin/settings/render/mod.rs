@@ -86,9 +86,68 @@ fn section_index() -> String {
 pub(in crate::routes::admin::settings) fn get_setting(
     map: &HashMap<String, String>,
     key: &str,
-    default: &str,
 ) -> String {
-    crate::routes::pages::escape_html(map.get(key).map_or(default, String::as_str))
+    map.get(key).map_or_else(
+        || crate::routes::pages::escape_html(&form_default(key)),
+        |stored| crate::routes::pages::escape_html(stored),
+    )
+}
+
+/// What a field shows when the settings table has no row for it — the one
+/// place that says so, read by the renderer above and by the save's diff.
+///
+/// The save used to compare each submitted field with its row, or with `""`
+/// when there was none. Every field showing a default therefore counted as
+/// changed: on a fresh install the first press of Save, with nothing edited,
+/// wrote 32 rows, reported "32 values updated", audited 32 keys as changed,
+/// and pinned each default in the table, where it outranks a later
+/// `birdnet.conf` edit of the same key. Comparing with the value the form
+/// actually showed writes only what the operator changed.
+pub(in crate::routes::admin::settings) fn form_default(key: &str) -> String {
+    // The detection defaults mirror the daemon's shared constants, so the form
+    // never advertises a value the station does not apply. `{:.2}` keeps the
+    // familiar two-decimal form (0.70) from the shared 0.7 constant.
+    match key {
+        "confidence_threshold" => {
+            format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD)
+        }
+        "sensitivity" => format!("{:.2}", birdnet_core::config::DEFAULT_SENSITIVITY),
+        other => fixed_form_default(other).to_owned(),
+    }
+}
+
+/// The literal defaults; every key not named here shows as empty.
+fn fixed_form_default(key: &str) -> &'static str {
+    match key {
+        "audio_format" => "wav",
+        "clip_retention_days"
+        | "freq_shift_hz"
+        | "max_files_per_species"
+        | "post_sunset_offset"
+        | "pre_sunrise_offset" => "0",
+        "confirmation_level" => "off",
+        "database_lang" => "en",
+        "deadman_hours" => "24",
+        "email_cooldown_secs" | "notify_cooldown" => "300",
+        "email_from_name" => "BirdNet-Behavior",
+        "email_min_confidence" | "notify_confidence" => "0.80",
+        "email_smtp_port" => "587",
+        "email_starttls" => "true",
+        "extraction_length" => "6",
+        "info_site" => "ebird",
+        "night_inhibit" | "raw_spectrogram" => "false",
+        "notify_trigger" => "each",
+        "overlap" | "privacy_threshold" => "0.0",
+        "purge_threshold" => "95",
+        "rare_species_days" => "30",
+        "recording_schedule" => "all-day",
+        "segment_duration" => "15",
+        "sf_thresh" => "0.03",
+        "stream_max_mb" => "512",
+        "stream_retention_secs" => "600",
+        "weekly_report_schedule" => "monday",
+        _ => "",
+    }
 }
 
 pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String {
@@ -397,13 +456,14 @@ mod tests {
     #[test]
     fn get_setting_default() {
         let map = HashMap::new();
-        assert_eq!(get_setting(&map, "missing", "fallback"), "fallback");
+        assert_eq!(get_setting(&map, "audio_format"), "wav");
+        assert_eq!(get_setting(&map, "no_such_key"), "");
     }
 
     #[test]
     fn get_setting_present() {
-        let map = HashMap::from([("key".to_string(), "val".to_string())]);
-        assert_eq!(get_setting(&map, "key", "default"), "val");
+        let map = HashMap::from([("audio_format".to_string(), "flac".to_string())]);
+        assert_eq!(get_setting(&map, "audio_format"), "flac");
     }
 
     #[test]

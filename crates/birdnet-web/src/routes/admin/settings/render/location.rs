@@ -6,12 +6,12 @@ use std::fmt::Write as _;
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let lat = get_setting(s, "latitude", "");
-    let lon = get_setting(s, "longitude", "");
-    let station = get_setting(s, "station_name", "");
-    let inhibit = get_setting(s, "night_inhibit", "false");
-    let pre = get_setting(s, "pre_sunrise_offset", "0");
-    let post = get_setting(s, "post_sunset_offset", "0");
+    let lat = get_setting(s, "latitude");
+    let lon = get_setting(s, "longitude");
+    let station = get_setting(s, "station_name");
+    let inhibit = get_setting(s, "night_inhibit");
+    let pre = get_setting(s, "pre_sunrise_offset");
+    let post = get_setting(s, "post_sunset_offset");
     let inh_yes = if inhibit == "true" { " selected" } else { "" };
     let inh_no = if inhibit == "true" { "" } else { " selected" };
     // The recording window itself. The page has always offered the sunrise /
@@ -19,7 +19,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     // 0.12.0 the runtime ignored the configured mode entirely, so a station
     // set to `solar` recorded around the clock. `fixed:` windows keep their
     // free-text form because the spec carries the hours.
-    let schedule = get_setting(s, "recording_schedule", "all-day");
+    let schedule = get_setting(s, "recording_schedule");
     write!(out, r#"
   <section class="card" id="set-location" aria-labelledby="set-location-h">
     <h2 class="section-title" id="set-location-h">Location &amp; Recording Schedule</h2>

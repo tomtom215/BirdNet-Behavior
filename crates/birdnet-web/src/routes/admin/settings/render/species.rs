@@ -6,8 +6,8 @@ use std::fmt::Write as _;
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let excl = get_setting(s, "species_exclude", "");
-    let incl = get_setting(s, "species_include", "");
+    let excl = get_setting(s, "species_exclude");
+    let incl = get_setting(s, "species_include");
     write!(
         out,
         r#"

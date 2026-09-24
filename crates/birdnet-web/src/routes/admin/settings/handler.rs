@@ -192,7 +192,7 @@ pub async fn save_settings(
             ));
         }
     };
-    let items = build_settings_items(&form, &existing);
+    let items = build_settings_items(&form, &existing, Unset::AsShownByTheForm);
 
     // Reject before writing, and reject the whole submission: a partial save
     // would leave the form showing one thing and the station running another.
@@ -508,10 +508,34 @@ fn is_numeric_field(key: &str) -> bool {
     )
 }
 
-/// Look up `key` in the existing DB snapshot, treating `None` and `""`
-/// as the same thing — both mean "the operator hasn't set this".
-fn existing_or_empty<'a>(map: &'a std::collections::HashMap<String, String>, key: &str) -> &'a str {
-    map.get(key).map_or("", String::as_str)
+/// What a submitted value is compared with when the settings table has no row
+/// for its key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unset {
+    /// The settings page: a key with no row was shown at its form default, so
+    /// submitting that default back is not a change.
+    AsShownByTheForm,
+    /// The API: the client saw no form, so any non-empty value it sends for a
+    /// key with no row is a change.
+    AsEmpty,
+}
+
+/// Whether `value` is what the operator already had for `key`: the stored
+/// row when there is one (an empty row included — the form shows it empty),
+/// otherwise nothing, or the form default when `unset` says the form showed it.
+fn unchanged(
+    existing: &std::collections::HashMap<String, String>,
+    key: &str,
+    value: &str,
+    unset: Unset,
+) -> bool {
+    existing.get(key).map_or_else(
+        || {
+            value.is_empty()
+                || (unset == Unset::AsShownByTheForm && value == super::render::form_default(key))
+        },
+        |stored| value == stored,
+    )
 }
 
 /// Convert the flat form into a list of `(key, value, category)` triples
@@ -530,6 +554,7 @@ fn existing_or_empty<'a>(map: &'a std::collections::HashMap<String, String>, key
 pub(crate) fn build_settings_items(
     form: &SettingsForm,
     existing: &std::collections::HashMap<String, String>,
+    unset: Unset,
 ) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut items: Vec<(&'static str, String, SettingsCategory)> = Vec::new();
 
@@ -541,7 +566,7 @@ pub(crate) fn build_settings_items(
                 } else {
                     raw.clone()
                 };
-                if value != existing_or_empty(existing, $key) {
+                if !unchanged(existing, $key, &value, unset) {
                     items.push(($key, value, $cat));
                 }
             }
@@ -923,7 +948,7 @@ mod tests {
             latitude: Some("42,3601".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let lat = items
             .iter()
             .find(|(k, _, _)| *k == "latitude")
@@ -937,7 +962,7 @@ mod tests {
             longitude: Some("-71,0589".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let lon = items.iter().find(|(k, _, _)| *k == "longitude").unwrap();
         assert_eq!(lon.1, "-71.0589");
     }
@@ -948,7 +973,7 @@ mod tests {
             confidence_threshold: Some("0,75".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let conf = items
             .iter()
             .find(|(k, _, _)| *k == "confidence_threshold")
@@ -966,7 +991,7 @@ mod tests {
             latitude: Some("42.3601".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         assert!(
             !items.iter().any(|(k, _, _)| *k == "latitude"),
             "unchanged latitude should not be re-persisted"
@@ -984,7 +1009,7 @@ mod tests {
             latitude: Some("42,3601".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         assert!(!items.iter().any(|(k, _, _)| *k == "latitude"));
     }
 
@@ -1000,17 +1025,13 @@ mod tests {
             night_inhibit: Some("false".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         assert!(!items.iter().any(|(k, _, _)| *k == "latitude"));
         assert!(!items.iter().any(|(k, _, _)| *k == "confidence_threshold"));
-        // night_inhibit defaults to "false" in the form render — and
-        // since there's no existing row, the empty-existing "" doesn't
-        // match form "false", so it WOULD pass through. That's a render
-        // problem, not a save problem; addressed by the form template
-        // change that prefixes the option with the saved value vs. the
-        // hard-coded default.
-        // The bug fix is the *general* mechanism: any field whose value
-        // hasn't changed is not re-written. Confirmed.
+        // Under `Unset::AsEmpty` (the API's baseline) `night_inhibit=false`
+        // with no row still counts as a change. The settings page uses
+        // `Unset::AsShownByTheForm`, where it does not — pinned end to end by
+        // tests/saving_the_settings_form_unchanged_writes_nothing.rs.
     }
 
     #[test]
@@ -1021,7 +1042,7 @@ mod tests {
             latitude: Some("51.5074".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         let lat = items.iter().find(|(k, _, _)| *k == "latitude").unwrap();
         assert_eq!(lat.1, "51.5074");
     }
@@ -1035,7 +1056,7 @@ mod tests {
             latitude: Some(String::new()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         let lat = items
             .iter()
             .find(|(k, _, _)| *k == "latitude")
@@ -1061,7 +1082,7 @@ mod tests {
             serde_json::from_value(serde_json::to_value(&submitted).expect("payload serialises"))
                 .expect("a payload of every declared key deserialises into the form");
 
-        let emitted: BTreeSet<&str> = build_settings_items(&form, &HashMap::new())
+        let emitted: BTreeSet<&str> = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty)
             .into_iter()
             .map(|(k, _, _)| k)
             .collect();
@@ -1081,7 +1102,7 @@ mod tests {
             station_name: Some("Backyard, Boston".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let name = items.iter().find(|(k, _, _)| *k == "station_name").unwrap();
         assert_eq!(name.1, "Backyard, Boston");
     }

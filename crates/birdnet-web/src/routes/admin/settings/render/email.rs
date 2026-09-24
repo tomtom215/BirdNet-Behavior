@@ -6,18 +6,18 @@ use std::fmt::Write as _;
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let host = get_setting(s, "email_smtp_host", "");
-    let port = get_setting(s, "email_smtp_port", "587");
-    let user = get_setting(s, "email_smtp_user", "");
-    let pass = get_setting(s, "email_smtp_pass", "");
-    let from = get_setting(s, "email_from", "");
-    let to = get_setting(s, "email_to", "");
-    let name = get_setting(s, "email_from_name", "BirdNet-Behavior");
-    let tls = get_setting(s, "email_starttls", "true");
+    let host = get_setting(s, "email_smtp_host");
+    let port = get_setting(s, "email_smtp_port");
+    let user = get_setting(s, "email_smtp_user");
+    let pass = get_setting(s, "email_smtp_pass");
+    let from = get_setting(s, "email_from");
+    let to = get_setting(s, "email_to");
+    let name = get_setting(s, "email_from_name");
+    let tls = get_setting(s, "email_starttls");
     let tls_yes = if tls == "false" { "" } else { " selected" };
     let tls_no = if tls == "false" { " selected" } else { "" };
-    let econf = get_setting(s, "email_min_confidence", "0.80");
-    let ecool = get_setting(s, "email_cooldown_secs", "300");
+    let econf = get_setting(s, "email_min_confidence");
+    let ecool = get_setting(s, "email_cooldown_secs");
     write!(out, r#"
   <section class="card" id="set-email" aria-labelledby="set-email-h">
     <h2 class="section-title" id="set-email-h">Email Alerts</h2>
