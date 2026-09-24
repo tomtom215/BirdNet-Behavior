@@ -15,7 +15,8 @@ use birdnet_integrations::apprise::{Client as AppriseClient, NotifyType};
 /// Start the weekly report scheduler as a background tokio task.
 ///
 /// Wakes up hourly, checks if today is the configured weekday and if the
-/// report has already been sent today. If not, generates and sends the report.
+/// report has already been sent this week (recorded in the database, so a
+/// restart does not repeat it). If not, generates and sends the report.
 ///
 /// `schedule` is one of: "monday", "tuesday", "wednesday", "thursday",
 /// "friday", "saturday", "sunday", or "disabled".
@@ -62,7 +63,8 @@ async fn weekly_report_loop(
     apprise: Arc<Mutex<AppriseClient>>,
     state: birdnet_web::state::AppState,
 ) {
-    // Track the last date we sent a report to avoid duplicates.
+    // Also held in memory, so a database that cannot record the send does not
+    // turn into a report every hour for the rest of the day.
     let mut last_sent_date: Option<String> = None;
 
     loop {
@@ -78,6 +80,17 @@ async fn weekly_report_loop(
 
         if last_sent_date.as_deref() == Some(&today_str) {
             continue; // Already sent today.
+        }
+        let now_secs = unix_now();
+        match already_sent(&state, now_secs) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                // Unknown is not "not sent": try again next hour rather than
+                // risk a duplicate.
+                tracing::warn!(error = %e, "could not read when the weekly report was last sent");
+                continue;
+            }
         }
 
         tracing::info!(date = %today_str, "sending weekly detection report");
@@ -96,6 +109,9 @@ async fn weekly_report_loop(
                     tracing::warn!(error = %e, "weekly report notification failed");
                 } else {
                     tracing::info!("weekly report sent");
+                    if let Err(e) = record_sent(&state, now_secs) {
+                        tracing::warn!(error = %e, "weekly report sent but not recorded; a restart today would send it again");
+                    }
                     last_sent_date = Some(today_str);
                 }
             }
@@ -104,6 +120,38 @@ async fn weekly_report_loop(
             }
         }
     }
+}
+
+/// The `maintenance_runs` key a sent report is recorded under.
+///
+/// Not a `JOB_` in the maintenance catalogue: the report is a notification
+/// with its own weekday and may be disabled, and the maintenance status would
+/// then show it as a job that never ran.
+const SENT_KEY: &str = "weekly_report_sent";
+
+/// A report sent less than this long ago is this week's. Six days rather than
+/// a calendar comparison, so a daylight-saving change between a send and the
+/// next hourly check cannot move the send onto "yesterday".
+const RESEND_AFTER_SECS: i64 = 6 * 86_400;
+
+/// Whether this week's report has already gone out, as recorded in the
+/// database — so a restart on report day does not send it again.
+fn already_sent(
+    state: &birdnet_web::state::AppState,
+    now_secs: i64,
+) -> Result<bool, birdnet_db::sqlite::DbError> {
+    let last = state.with_db(|conn| birdnet_db::sqlite::last_run_unix(conn, SENT_KEY))?;
+    // A clock that has gone backwards since the send (a Pi with no RTC before
+    // NTP answers) reads as recent: suppressing one report beats sending two.
+    Ok(last.is_some_and(|t| now_secs - t < RESEND_AFTER_SECS))
+}
+
+/// Record that the report went out at `now_secs`.
+fn record_sent(
+    state: &birdnet_web::state::AppState,
+    now_secs: i64,
+) -> Result<(), birdnet_db::sqlite::DbError> {
+    state.with_db(|conn| birdnet_db::sqlite::record_run(conn, SENT_KEY, now_secs))
 }
 
 /// Build the weekly report title and body.
@@ -144,12 +192,16 @@ fn week_range_on(day: i64) -> (String, String) {
     )
 }
 
+/// Seconds since the epoch.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
 /// Today, as days since the epoch.
 fn today_local_day() -> i64 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
-    local_day(now, birdnet_db::clock::local_utc_offset_secs())
+    local_day(unix_now(), birdnet_db::clock::local_utc_offset_secs())
 }
 
 /// The station's day containing `now_secs`, at `utc_offset_secs` east of UTC.
@@ -276,6 +328,26 @@ mod tests {
         );
         assert!(body.contains("Top species"));
         assert!(body.contains("Northern Cardinal"));
+    }
+
+    /// A sent report survives a restart. The sent date was a local variable
+    /// in the loop, so a station restarted on report day — an update, a power
+    /// cut, a settings change — sent the week's report again.
+    #[test]
+    fn a_sent_report_is_remembered_across_a_restart() {
+        let now = 1_789_950_600;
+        let state = seeded_state(&[]);
+        assert!(!already_sent(&state, now).unwrap(), "nothing sent yet");
+        record_sent(&state, now).unwrap();
+
+        // The "restart": nothing in memory, only what the database holds.
+        assert!(
+            already_sent(&state, now + 3600).unwrap(),
+            "an hour later the report would go out again"
+        );
+        assert!(already_sent(&state, now + 5 * 86_400).unwrap());
+        // Counterpart: next week's report is not suppressed.
+        assert!(!already_sent(&state, now + 7 * 86_400).unwrap());
     }
 
     #[test]
