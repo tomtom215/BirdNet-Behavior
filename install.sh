@@ -1788,6 +1788,9 @@ ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --config ${
 # falls back to <database>.duckdb. Any other change to this line is replaced by
 # the next update; make it with `sudo systemctl edit birdnet-behavior` instead.
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${analytics_arg}
+# `systemctl reload birdnet-behavior` re-reads LOG_LEVEL / LOG_MODULES from
+# the config and applies them without a restart (the SIGHUP handler in main.rs).
+ExecReload=/bin/kill -HUP \$MAINPID
 
 # Restart policy. panic=abort means panics show up as SIGABRT exits;
 # Restart=always covers panics, OOM kills, and any non-zero exit.

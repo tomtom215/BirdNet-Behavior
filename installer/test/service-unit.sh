@@ -241,7 +241,8 @@ for directive in \
     "MemoryMax=" \
     "OOMPolicy=stop" \
     "DeviceAllow=char-alsa rw" \
-    "SupplementaryGroups=audio"
+    "SupplementaryGroups=audio" \
+    'ExecReload=/bin/kill -HUP $MAINPID'
 do
     if grep -qF -- "${directive}" "${UNIT}"; then
         pass "${directive}"
