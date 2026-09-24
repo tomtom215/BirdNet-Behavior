@@ -2436,6 +2436,42 @@ mod tests {
         );
     }
 
+    /// `new-species` asks for the seven dates ending on the detection's own:
+    /// the day six before it counts, the day seven before does not, and the
+    /// detection's own row is not a prior sighting. The daily test above only
+    /// reaches `todays_count_for`, so this window had no unit test at all.
+    #[test]
+    fn this_weeks_count_is_the_seven_dates_ending_on_the_detection() {
+        use birdnet_integrations::notification::DetectionCounter;
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        state
+            .with_db(|conn| {
+                for (date, sci) in [
+                    ("2026-03-11", "Pica pica"), // the detection being processed
+                    ("2026-03-05", "Pica pica"), // six days before: in the week
+                    ("2026-03-08", "Pica pica"),
+                    ("2026-03-04", "Pica pica"), // seven days before: not
+                    ("2026-03-09", "Garrulus glandarius"), // another species
+                ] {
+                    conn.execute(
+                        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+                         VALUES (?1, '09:00:00', ?2, 'x', 0.9)",
+                        rusqlite::params![date, sci],
+                    )?;
+                }
+                Ok::<_, rusqlite::Error>(())
+            })
+            .unwrap();
+        let prior = PriorDetections {
+            state: &state,
+            date: "2026-03-11",
+        };
+
+        assert_eq!(prior.this_weeks_count_for("Pica pica"), 2);
+        assert_eq!(prior.todays_count_for("Pica pica"), 0);
+    }
+
     #[tokio::test]
     async fn a_notification_that_failed_on_the_wire_is_logged() {
         // Nothing was listening on port 1, so a destination was tried and the

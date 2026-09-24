@@ -386,8 +386,10 @@ pub fn start_detection_daemon(
     // With the privacy filter on, a clip stays inside its own segment, and the
     // filter is told how far a clip reaches so it can clear the whole of it
     // (PIPE7). Both are fixed for the daemon's life, as the settings they come
-    // from are read once at start.
-    extraction_config.own_segment_only = privacy_threshold > 0.0;
+    // from are read once at start. "On" is the filter's own rule, so clips
+    // are kept in their segment exactly when the filter runs.
+    extraction_config.own_segment_only =
+        birdnet_core::detection::privacy::PrivacyFilter::new(privacy_threshold).is_enabled();
     let privacy_clip_reach = extraction_config.clip_reach();
 
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
