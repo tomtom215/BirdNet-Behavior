@@ -39,6 +39,8 @@ The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.con
 - **Higher (→1.5)** makes the model more eager — more detections, more borderline calls.
 - **Lower (→0.5)** makes it more conservative.
 - Most stations leave this at the default and tune the confidence threshold instead. Reach for sensitivity only when the threshold alone can't find a good balance.
+- It only affects BirdNET V2.4 models; the bundled V3.0 model reports calibrated probabilities and ignores it.
+- It runs the opposite way to BirdNET-Pi's setting of the same name. If you migrated, don't copy BirdNET-Pi's number across expecting the same result.
 
 ### 4. Species-frequency (SF) filter
 

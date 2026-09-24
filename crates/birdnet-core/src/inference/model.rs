@@ -995,8 +995,18 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 ///   it to an already-calibrated probability is meaningless and was the
 ///   cause of the 52 % → 93 % Magpie fix in this session.
 ///
-/// * `is_probability == false` (V2.4): apply `sigmoid(sensitivity * raw)`,
-///   matching the canonical BirdNET-Analyzer pipeline.
+/// * `is_probability == false` (V2.4): apply `sigmoid(sensitivity * raw)`.
+///   The setting *is* the slope, so raising it steepens the curve, and at any
+///   confidence threshold above 0.5 more detections pass (a logit clears the
+///   bar when `raw > logit(threshold) / sensitivity`).
+///
+///   This is not the upstream mapping. BirdNET-Pi uses a slope of
+///   `clamp(2 − SENSITIVITY, 0.5, 1.5)` (`Nachtzuster/BirdNET-Pi`,
+///   `scripts/utils/models.py`), so the same number moves the other way — its
+///   default 1.25 is a slope of 0.75 there and 1.25 here. BirdNET-Analyzer's
+///   `flat_sigmoid` treats sensitivity as a bias shift instead. A
+///   `SENSITIVITY` carried over from BirdNET-Pi is read as written, and
+///   therefore does not reproduce that station's behaviour.
 #[must_use]
 pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
     if is_probability {

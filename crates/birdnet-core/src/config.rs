@@ -40,7 +40,11 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/birdnet/birdnet.conf";
 /// Settings → Detection, or the wizard's Accuracy step.
 pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
-/// Default detection sensitivity, matching BirdNET-Pi's `SENSITIVITY` default.
+/// Default detection sensitivity: BirdNET-Pi's default value.
+///
+/// The value (1.25, BirdNET-Pi's `scripts/install_config.sh`), though not its
+/// meaning: BirdNET-Pi maps it to a sigmoid slope of `2 − value`, this project
+/// uses the value itself (see `inference::model::compute_confidence`).
 ///
 /// Like [`DEFAULT_CONFIDENCE_THRESHOLD`], this is shared by the daemon and the
 /// settings form so they cannot drift. Sensitivity is a pre-sigmoid scale factor

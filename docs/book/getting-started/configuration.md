@@ -154,7 +154,7 @@ These are stored in the SQLite settings table and have **no** environment variab
 | Setting | Where | Note |
 |---|---|---|
 | Detection confidence threshold | Detection | Per-species overrides also live here |
-| Detection sensitivity (0.5–1.5) | Detection | Also `SENSITIVITY` in `birdnet.conf` for BirdNET-Pi compat |
+| Detection sensitivity (0.5–1.5) | Detection | Also `SENSITIVITY` in `birdnet.conf`; read as written, which is not how BirdNET-Pi applies it — see [Settings](../admin/settings.md) |
 | Email / SMTP notifications | Notifications | |
 | Rare-bird quarantine rules | Species | |
 | BirdWeather station details | BirdWeather | Token can also be set via env var |

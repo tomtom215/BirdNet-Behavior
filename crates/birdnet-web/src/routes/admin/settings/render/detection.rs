@@ -74,7 +74,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <input id="sensitivity" name="sensitivity" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
                value="{sens}" placeholder="{sens_default}">
-        <p class="hint">Higher = more sensitive, more false positives. Applies to V2.4 models; the bundled V3.0 model uses calibrated probabilities and ignores it (BirdNET-Pi: SENSITIVITY)</p>
+        <p class="hint">Higher = more sensitive, more false positives. Applies to V2.4 models; the bundled V3.0 model uses calibrated probabilities and ignores it. Same key as BirdNET-Pi's SENSITIVITY, but BirdNET-Pi applies it the other way round.</p>
       </div>
     </div>
     <div class="grid-2">
