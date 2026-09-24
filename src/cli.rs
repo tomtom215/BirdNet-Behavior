@@ -204,6 +204,17 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Run the doctor as the service's start gate, then exit.
+    ///
+    /// The same checks and report as `--doctor`, but only a failure the
+    /// station cannot run past — an unreadable config file, an invalid listen
+    /// address, an unwritable database directory, an unusable HTTPS setup —
+    /// exits 2. Any other failure exits 1: the station starts, runs what it
+    /// can, and `/admin/doctor` shows the same report. The systemd unit's
+    /// `ExecStartPre` uses this; `--doctor` keeps its own exit codes.
+    #[arg(long)]
+    pub doctor_gate: bool,
+
     /// Install a classifier from the built-in catalogue, then exit (`G-10`).
     ///
     /// `--install-model perch-v2`. Pass `list` to print the catalogue without

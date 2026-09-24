@@ -107,7 +107,7 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::SupportBundle
     } else if cli.install_model.is_some() {
         Action::InstallModel
-    } else if cli.doctor || cli.doctor_json || cli.fix {
+    } else if cli.doctor || cli.doctor_json || cli.fix || cli.doctor_gate {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
         // `--fix` alone implies the human-readable doctor.

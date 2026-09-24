@@ -284,10 +284,14 @@ This is the workhorse of unattended operation:
    permanently-broken install retries quietly every five minutes for
    ever and recovers by itself the moment its cause is fixed. An
    unattended box never parks itself in `failed` waiting for a visit.
-5. `ExecStartPre` runs `birdnet-behavior --doctor`. Exit codes 0
-   (clean) and 1 (warnings) allow the service to start; exit code 2
-   (errors that will prevent operation) blocks startup so the journal
-   shows *what is broken* instead of just "service kept restarting".
+5. `ExecStartPre` runs `birdnet-behavior --doctor-gate`: the full
+   doctor report, in the journal on every start. It exits 2, blocking
+   startup, only for a failure the station cannot run past (an
+   unreadable configuration file, an invalid listen address, an
+   unwritable database directory, an unusable HTTPS setup), so the
+   journal shows *what is broken* instead of just "service kept
+   restarting". Any other failure is reported and the service starts;
+   run `birdnet-behavior --doctor` for the plain exit codes.
 
 Smoke-test the watchdog after installation:
 

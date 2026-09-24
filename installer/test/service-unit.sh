@@ -190,6 +190,20 @@ on an unwritable recordings directory"
 fi
 
 echo
+echo "=== 4b. the start is blocked only by what the station cannot run past ==="
+# The preflight ran the plain doctor, whose exit 2 covers every Fail: an
+# offsite key with the wrong mode, a misspelt PUBLIC_ACCESS carve-out, a model
+# that will not load. Each of those leaves a station that runs; blocking the
+# start over one was an outage with no web UI to say why. --doctor-gate exits 2
+# only for the few failures the process cannot run past (src/doctor/render.rs
+# START_CRITICAL).
+if grep -qE '^ExecStartPre=.*--doctor-gate' "${UNIT}"; then
+    pass "ExecStartPre runs the doctor as a start gate"
+else
+    fail "ExecStartPre runs the plain doctor — any Fail, however minor, stops the station starting"
+fi
+
+echo
 echo "=== 5. the hardening that was deliberately chosen is still there ==="
 # Not a style check: each of these was added for a reason recorded in
 # 65-service.sh, and a heredoc is easy to edit carelessly.

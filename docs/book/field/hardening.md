@@ -269,9 +269,12 @@ birdnet-behavior --doctor                                # the same checks, on d
 birdnet-behavior --doctor-json                           # exit code: 0 ok, 1 warn, 2 error
 ```
 
-The systemd unit still runs `--doctor` as an `ExecStartPre` gate for the
-journal's sake; a configuration error is reported there as a warning naming
-what the start will do, so the gate lets it happen.
+The systemd unit runs the doctor as an `ExecStartPre` gate
+(`--doctor-gate`) for the journal's sake. It blocks the start only for a
+failure the station cannot run past — an unreadable configuration file, an
+invalid listen address, an unwritable database directory, an unusable HTTPS
+setup. Every other failure, a configuration error included, is reported there
+and the start goes ahead; `/admin/doctor` shows the same report.
 
 ---
 

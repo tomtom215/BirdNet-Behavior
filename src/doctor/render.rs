@@ -86,6 +86,38 @@ pub(super) fn summarise(checks: &[Check]) -> i32 {
     }
 }
 
+/// The checks whose failure stops the station from starting under
+/// `--doctor-gate`, the systemd unit's `ExecStartPre`.
+///
+/// Only what the station cannot run past, or must not: an unreadable config
+/// file would leave it running on defaults — without the `CADDY_PWD` and
+/// `PRIVATE_MODE` the file sets, so open — and an invalid listen address, an
+/// unwritable database directory or an unusable HTTPS setup each stop the
+/// process on its own, where the report is the better message. Every other
+/// failure (an offsite plan, a missing encoder, a misspelt carve-out, a model
+/// that will not load) leaves a station that runs, records what it can and
+/// shows the report at `/admin/doctor`; blocking the start over one of them
+/// was an outage with no UI to say why.
+pub(super) const START_CRITICAL: [&str; 4] = [
+    "Configuration file",
+    "Web listen address",
+    "Database directory",
+    "HTTPS",
+];
+
+/// [`summarise`] for the start gate: a failure outside [`START_CRITICAL`]
+/// counts as a warning.
+#[must_use]
+pub(super) fn summarise_gate(checks: &[Check]) -> i32 {
+    let blocking = checks
+        .iter()
+        .any(|c| c.status == Status::Fail && START_CRITICAL.contains(&c.name.as_str()));
+    if blocking {
+        return 2;
+    }
+    summarise(checks).min(1)
+}
+
 /// Render the full diagnostic report as a single string of text.
 ///
 /// Pure function with no I/O — every byte of the human-readable
@@ -167,6 +199,56 @@ mod tests {
 
         let only_pass = vec![Check::pass("a", "ok"), Check::skip("b", "n/a")];
         assert_eq!(summarise(&only_pass), 0);
+    }
+
+    /// Under the start gate a failure blocks the start only when it is one the
+    /// station cannot run past; every other failure is reported and let
+    /// through, as a warning. The plain doctor's exit code is unchanged.
+    #[test]
+    fn the_start_gate_blocks_only_on_what_the_station_cannot_run_past() {
+        use super::summarise_gate;
+        let offsite = vec![
+            Check::pass("a", "ok"),
+            Check::fail("Offsite backup", "no key", "fix"),
+        ];
+        assert_eq!(summarise(&offsite), 2, "the plain doctor still says error");
+        assert_eq!(
+            summarise_gate(&offsite),
+            1,
+            "an offsite fault blocked the start"
+        );
+
+        for name in super::START_CRITICAL {
+            let critical = vec![Check::pass("a", "ok"), Check::fail(name, "broken", "fix")];
+            assert_eq!(summarise_gate(&critical), 2, "{name} must block the start");
+        }
+        assert_eq!(summarise_gate(&[Check::warn("b", "m", "fix")]), 1);
+        assert_eq!(summarise_gate(&[Check::pass("a", "ok")]), 0);
+    }
+
+    /// Every name the gate blocks on is a check the doctor really fails under
+    /// that name — a rename would otherwise quietly make it non-blocking.
+    #[test]
+    fn every_start_critical_name_is_a_real_failure() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/doctor");
+        let sources: String = std::fs::read_dir(&dir)
+            .expect("src/doctor")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "rs"))
+            .map(|e| std::fs::read_to_string(e.path()).expect("read"))
+            .collect();
+        for name in super::START_CRITICAL {
+            let literal = format!("Check::fail(\n            \"{name}\"");
+            let inline = format!("Check::fail(\"{name}\"");
+            let nested = format!("Check::fail(\n                \"{name}\"");
+            let via_const = format!("const NAME: &str = \"{name}\"");
+            assert!(
+                [literal, inline, nested, via_const]
+                    .iter()
+                    .any(|p| sources.contains(p.as_str())),
+                "{name} is not the name of any failing doctor check"
+            );
+        }
     }
 
     #[test]

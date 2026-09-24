@@ -102,12 +102,13 @@ Environment=BNB_HELP_DIR=${HELP_DIR}
 # writable, so the watch dir does not need to be in ReadWritePaths.
 ExecStartPre=/bin/mkdir -p ${STREAM_DIR}
 
-# Preflight: run the doctor before starting the main service so a broken
-# install fails fast with an actionable report in the journal, rather than
-# entering a restart loop that fills the disk with logs.
-# Exit 0 (pass) or 1 (warnings only) are both accepted — only exit 2
-# (errors that will prevent operation) keeps the service from starting.
-ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor --config ${CONFIG_FILE} || [ \$? -le 1 ]'
+# Preflight: run the doctor before starting the main service, so its full
+# report is in the journal for every start. --doctor-gate exits 2 only for a
+# failure the station cannot run past (an unreadable config, an invalid listen
+# address, an unwritable database directory, an unusable HTTPS setup); every
+# other failure is reported and the service starts, running without what it
+# names, with the same report at /admin/doctor. Exit 0 and 1 are accepted.
+ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --config ${CONFIG_FILE} || [ \$? -le 1 ]'
 # DuckDB behavioral analytics is compiled into every release binary and enabled
 # here by default (the database is created on first run). To run without it
 # (e.g. on a very low-RAM board), change the flag below to --analytics-db "":
