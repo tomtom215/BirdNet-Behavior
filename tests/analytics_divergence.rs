@@ -880,3 +880,62 @@ async fn the_batch_route_records_verdicts_in_the_olap_copy() {
          dashboards will keep counting a detection the operator rejected"
     );
 }
+
+/// The search page's bulk actions must reach the analytics copy too.
+///
+/// `/pages/search-bulk` ran every action inside one `with_db` closure over the
+/// raw `SQLite` helpers, so a bulk delete or a bulk reject from Search changed
+/// the source of truth and left every analytics dashboard counting the rows.
+/// Delete and reject diverge differently (a row removed, a column changed), so
+/// both are driven.
+#[tokio::test]
+async fn the_search_bulk_route_reaches_the_olap_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    assert_eq!(olap_count(&state), 3, "fixture");
+
+    let status = post_form(
+        &state,
+        "/pages/search-bulk",
+        format!("action=delete&selected={today}%7C06%3A15%3A00%7CTurdus+merula"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the bulk route answered");
+    let sqlite_left: i64 = state
+        .with_db(|c| c.query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0)))
+        .expect("count");
+    assert_eq!(
+        sqlite_left, 2,
+        "precondition: the bulk delete happened in SQLite"
+    );
+    assert_eq!(
+        olap_count_of(&state, "Turdus merula"),
+        0,
+        "the search bulk delete bypassed the paired write"
+    );
+    assert_eq!(olap_count(&state), 2, "and only that row went");
+
+    let status = post_form(
+        &state,
+        "/pages/search-bulk",
+        format!("action=reject&selected={today}%7C07%3A15%3A00%7CErithacus+rubecula"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the bulk route answered");
+    let rejected: i64 = state
+        .with_analytics(|adb| {
+            adb.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM detections
+                      WHERE review_verdict = 'rejected' AND Sci_Name = 'Erithacus rubecula'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .expect("count verdicts")
+        })
+        .expect("analytics is configured");
+    assert_eq!(
+        rejected, 1,
+        "the search bulk reject wrote the verdict to SQLite only"
+    );
+}

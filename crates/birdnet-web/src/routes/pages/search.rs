@@ -449,57 +449,56 @@ async fn bulk_action(
     }
     let requested = keys.len();
 
+    // Each row goes through `AppState`'s paired writes, not the raw `SQLite`
+    // helpers inside one `with_db`: a delete or a verdict that reached only
+    // `SQLite` left every analytics dashboard counting the row.
     let applied = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            let mut done = 0_usize;
-            for k in &keys {
-                let ok = match action {
-                    BulkAction::Delete => {
-                        birdnet_db::sqlite::delete_detection(conn, &k.date, &k.time, &k.sci_name)?
-                    }
-                    BulkAction::Lock => {
-                        birdnet_db::sqlite::lock_detection(conn, &k.date, &k.time, &k.sci_name)?
-                    }
-                    BulkAction::Unlock => {
-                        birdnet_db::sqlite::unlock_detection(conn, &k.date, &k.time, &k.sci_name)?
-                    }
-                    BulkAction::Confirm | BulkAction::Reject => {
-                        // The common name comes from the row, not from the
-                        // checkbox: `set_detection_review` stores it for
-                        // display, and a review naming a different bird from
-                        // the detection it reviews is a quiet corruption of the
-                        // curation record. The lookup doubles as the existence
-                        // check — a row somebody else already deleted is a
-                        // skip, not an error.
-                        match birdnet_db::sqlite::com_name_for(conn, &k.date, &k.time, &k.sci_name)?
-                        {
-                            Some(com_name) => {
-                                let status = if action == BulkAction::Confirm {
-                                    birdnet_db::sqlite::ReviewStatus::Confirmed
-                                } else {
-                                    birdnet_db::sqlite::ReviewStatus::Rejected
-                                };
-                                birdnet_db::sqlite::set_detection_review(
-                                    conn,
-                                    &k.date,
-                                    &k.time,
-                                    &k.sci_name,
-                                    &com_name,
-                                    status,
-                                    None,
-                                )?;
-                                true
-                            }
-                            None => false,
+        let mut done = 0_usize;
+        for k in &keys {
+            let ok = match action {
+                BulkAction::Delete => state.delete_detection(&k.date, &k.time, &k.sci_name)?,
+                BulkAction::Lock => state.with_db(|conn| {
+                    birdnet_db::sqlite::lock_detection(conn, &k.date, &k.time, &k.sci_name)
+                })?,
+                BulkAction::Unlock => state.with_db(|conn| {
+                    birdnet_db::sqlite::unlock_detection(conn, &k.date, &k.time, &k.sci_name)
+                })?,
+                BulkAction::Confirm | BulkAction::Reject => {
+                    // The common name comes from the row, not from the
+                    // checkbox: `set_detection_review` stores it for display,
+                    // and a review naming a different bird from the detection
+                    // it reviews is a quiet corruption of the curation record.
+                    // The lookup doubles as the existence check — a row
+                    // somebody else already deleted is a skip, not an error.
+                    let com_name = state.with_db(|conn| {
+                        birdnet_db::sqlite::com_name_for(conn, &k.date, &k.time, &k.sci_name)
+                    })?;
+                    match com_name {
+                        Some(com_name) => {
+                            let status = if action == BulkAction::Confirm {
+                                birdnet_db::sqlite::ReviewStatus::Confirmed
+                            } else {
+                                birdnet_db::sqlite::ReviewStatus::Rejected
+                            };
+                            state.set_detection_review(
+                                &k.date,
+                                &k.time,
+                                &k.sci_name,
+                                &com_name,
+                                status,
+                                None,
+                            )?;
+                            true
                         }
+                        None => false,
                     }
-                };
-                if ok {
-                    done += 1;
                 }
+            };
+            if ok {
+                done += 1;
             }
-            Ok::<_, birdnet_db::sqlite::DbError>(done)
-        })
+        }
+        Ok::<_, birdnet_db::sqlite::DbError>(done)
     })
     .await;
 
