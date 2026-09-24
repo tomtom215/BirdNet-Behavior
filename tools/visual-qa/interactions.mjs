@@ -572,8 +572,28 @@ async function correlationRangeHolds(page) {
  * replaced the page it had just loaded with "Couldn't load help". And the
  * docs' links are relative, so inside the host page they resolved against
  * `/admin/...` and led nowhere.
+ *
+ * The page is served from a fixture, not the mdBook render: the root crate's
+ * `build.rs` produces that render and CI builds only `birdnet-web`, so there
+ * `/help/*` is a 404 and this gate was grading the drawer's error path. The
+ * fixture keeps the mdBook shape the drawer relies on (`<main>`, an id that
+ * starts with a digit, relative links).
  */
 async function helpDrawerDeepLink(page) {
+  await page.route('**/help/guides/tuning', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body:
+        '<!DOCTYPE html><html><head><title>Tuning</title></head><body>' +
+        '<nav class="sidebar"><a href="../index.html">Home</a></nav>' +
+        '<main><h1 id="tuning">Tuning</h1>' +
+        '<p>See <a href="../reference/configuration.html">configuration</a> and ' +
+        '<a href="first-run.html#1-location">first run</a>.</p>' +
+        '<h3 id="3-sensitivity">3. Sensitivity</h3><p>Sensitivity text.</p>' +
+        '</main></body></html>',
+    }),
+  );
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
   await page.evaluate(() => {
     const b = document.createElement('button');
@@ -590,12 +610,22 @@ async function helpDrawerDeepLink(page) {
   );
   const title = await page.textContent('#bnb-help-drawer-title');
   check('help: a digit-leading anchor still shows the page', !/Couldn/.test(title), `title: ${title}`);
-  const stray = await page.evaluate((base) => {
-    return Array.from(document.querySelectorAll('#bnb-help-drawer-body a[href]'))
-      .map((a) => ({ raw: a.getAttribute('href'), abs: a.href }))
-      .filter((x) => !/^(#|https?:|mailto:)/.test(x.raw) && !x.abs.startsWith(`${base}/help/`));
-  }, BASE);
-  check('help: relative links resolve inside /help', stray.length === 0, JSON.stringify(stray.slice(0, 3)));
+  check(
+    'help: the drawer shows the fetched page',
+    await page.$('#bnb-help-drawer-body #\\33 -sensitivity') !== null,
+    `body: ${(await page.textContent('#bnb-help-drawer-body')).slice(0, 120)}`,
+  );
+  const links = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('#bnb-help-drawer-body a[href]'))
+      .map((a) => a.href)
+      .filter((h) => /configuration\.html|first-run\.html/.test(h)),
+  );
+  // Without this the check below passes on an empty list — which is what it
+  // did while the page failed to load.
+  check('help: the fixture\'s relative links reached the drawer', links.length === 2, JSON.stringify(links));
+  const stray = links.filter((h) => !h.startsWith(`${BASE}/help/`));
+  check('help: relative links resolve inside /help', stray.length === 0, JSON.stringify(stray));
+  await page.unroute('**/help/guides/tuning');
 }
 
 /** M13: a hidden tab does not poll; it catches up when shown.
