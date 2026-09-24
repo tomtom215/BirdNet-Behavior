@@ -21,6 +21,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Default request timeout for the Apprise server.
@@ -214,6 +215,94 @@ impl Default for NotifyConfig {
     }
 }
 
+/// Per-species time of the last notification decided, shared between a
+/// [`Client`] and its [`Gatekeeper`]s. A plain mutex: it is held for a map
+/// lookup, never across I/O.
+#[derive(Debug, Clone, Default)]
+struct Cooldowns(Arc<std::sync::Mutex<HashMap<String, Instant>>>);
+
+impl Cooldowns {
+    /// Reserve `species`' cooldown if it is free: `true` if the caller may
+    /// notify. Reserved now, so the other detections of the same bird in one
+    /// segment do not each decide to send.
+    fn claim(&self, config: &NotifyConfig, species: &str) -> bool {
+        let cooldown = config
+            .per_species_cooldown
+            .get(species)
+            .copied()
+            .unwrap_or(config.cooldown);
+        let now = Instant::now();
+        let mut map = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(last) = map.get(species)
+            && now.duration_since(*last) < cooldown
+        {
+            return false;
+        }
+        // Prune stale entries (older than 2x cooldown) so a long field
+        // deployment does not grow the map without bound.
+        if map.len() > 100 {
+            let prune_after = cooldown * 2;
+            map.retain(|_, instant| now.duration_since(*instant) < prune_after);
+        }
+        map.insert(species.to_string(), now);
+        true
+    }
+
+    fn release(&self, species: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(species);
+    }
+
+    fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
+/// The notify-or-not decision, without the [`Client`]; see
+/// [`Client::gatekeeper`].
+#[derive(Debug, Clone)]
+pub struct Gatekeeper {
+    config: NotifyConfig,
+    cooldowns: Cooldowns,
+}
+
+impl Gatekeeper {
+    /// [`Client::should_notify_detection`], answered here.
+    pub fn should_notify_detection(&self, species: &str, sci_name: &str, confidence: f32) -> bool {
+        passes_filters(&self.config, species, sci_name, confidence)
+            && self.cooldowns.claim(&self.config, species)
+    }
+
+    /// [`Client::release_cooldown`], answered here.
+    pub fn release_cooldown(&self, species: &str) {
+        self.cooldowns.release(species);
+    }
+}
+
+/// The confidence threshold and the watch and exclude lists.
+fn passes_filters(config: &NotifyConfig, species: &str, sci_name: &str, confidence: f32) -> bool {
+    use crate::notification::names_listed;
+    if confidence < config.min_confidence {
+        return false;
+    }
+    // Species include-list (empty = all species pass).
+    if !config.species_watchlist.is_empty()
+        && !names_listed(&config.species_watchlist, species, sci_name)
+    {
+        return false;
+    }
+    // Exclusion always wins, even for watchlist members.
+    !names_listed(&config.species_notify_exclude, species, sci_name)
+}
+
 /// Apprise notification client.
 ///
 /// Sends notifications to an Apprise API server (or via the `apprise` CLI
@@ -229,8 +318,9 @@ pub struct Client {
     http: reqwest::Client,
     /// Notification filtering configuration.
     config: NotifyConfig,
-    /// Per-species last-notification timestamps for cooldown.
-    last_notified: HashMap<String, Instant>,
+    /// Per-species last-notification timestamps for cooldown. Shared with
+    /// every [`Gatekeeper`] this client hands out; see there for why.
+    last_notified: Cooldowns,
     /// Optional path to an Apprise config file (uses `apprise` CLI).
     ///
     /// When set, `send_notification` invokes `apprise -c <path> -t <title> -b <body>`
@@ -269,13 +359,13 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .map_err(|e| AppriseError::Http(e.to_string()))?;
+            .map_err(|e| AppriseError::Http(crate::http_error_text(e)))?;
 
         Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
             config,
-            last_notified: HashMap::new(),
+            last_notified: Cooldowns::default(),
             config_file: None,
             native: Vec::new(),
             guards: Vec::new(),
@@ -300,13 +390,13 @@ impl Client {
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .map_err(|e| AppriseError::Http(e.to_string()))?;
+            .map_err(|e| AppriseError::Http(crate::http_error_text(e)))?;
 
         Ok(Self {
             base_url: String::new(), // no HTTP server
             http,
             config: notify_config,
-            last_notified: HashMap::new(),
+            last_notified: Cooldowns::default(),
             config_file: Some(config_file),
             native: Vec::new(),
             guards: Vec::new(),
@@ -323,53 +413,52 @@ impl Client {
     /// - Species is not on the watchlist (when watchlist is non-empty)
     /// - The species was notified recently (within cooldown period)
     pub fn should_notify(&mut self, species: &str, confidence: f32) -> bool {
-        // Confidence threshold
-        if confidence < self.config.min_confidence {
-            return false;
-        }
+        self.should_notify_detection(species, species, confidence)
+    }
 
-        // Species include-list (empty = all species pass)
-        if !self.config.species_watchlist.is_empty()
-            && !self.config.species_watchlist.iter().any(|s| s == species)
-        {
-            return false;
-        }
+    /// [`Self::should_notify`] for a detection with both of its names: the
+    /// watch and exclude lists may hold either, in any case. They are the same
+    /// setting the station's notification filter reads, and the two used to
+    /// read it as different kinds of name (see
+    /// [`crate::notification::SpeciesFilter::allows`]). The cooldown is keyed
+    /// on the common name, as before.
+    pub fn should_notify_detection(
+        &mut self,
+        species: &str,
+        sci_name: &str,
+        confidence: f32,
+    ) -> bool {
+        passes_filters(&self.config, species, sci_name, confidence)
+            && self.last_notified.claim(&self.config, species)
+    }
 
-        // Species exclude-list — exclusion always wins, even for watchlist members
-        if self
-            .config
-            .species_notify_exclude
-            .iter()
-            .any(|s| s == species)
-        {
-            return false;
-        }
+    /// Withdraw the cooldown [`Self::should_notify_detection`] reserved for
+    /// `species`, because the notification it was reserved for did not
+    /// deliver — every destination skipped it, or every attempt failed.
+    ///
+    /// Without this a rate-limited first detection of a rare bird started a
+    /// cooldown for a notification nobody received, and suppressed every
+    /// later detection of it inside the cooldown: a bird that only called in
+    /// that window was never announced at all.
+    pub fn release_cooldown(&mut self, species: &str) {
+        self.last_notified.release(species);
+    }
 
-        // Per-species cooldown (use species-specific override if available)
-        let cooldown = self
-            .config
-            .per_species_cooldown
-            .get(species)
-            .copied()
-            .unwrap_or(self.config.cooldown);
-        let now = Instant::now();
-        if let Some(last) = self.last_notified.get(species)
-            && now.duration_since(*last) < cooldown
-        {
-            return false;
+    /// A handle that answers [`Self::should_notify_detection`] and
+    /// [`Self::release_cooldown`] without this client.
+    ///
+    /// The client lives behind an async mutex that a send holds for its whole
+    /// round trip — up to 10 s a destination, 120 s for the CLI — and the
+    /// detection processor asked it about *every* detection, on the one
+    /// thread that records them. One slow destination made every detection
+    /// wait. The decision needs only the filter settings and the cooldowns;
+    /// the handle carries a copy of the one and shares the other.
+    #[must_use]
+    pub fn gatekeeper(&self) -> Gatekeeper {
+        Gatekeeper {
+            config: self.config.clone(),
+            cooldowns: self.last_notified.clone(),
         }
-
-        // Prune stale cooldown entries (older than 2x cooldown) to prevent
-        // unbounded memory growth over long field deployments.
-        if self.last_notified.len() > 100 {
-            let prune_after = cooldown * 2;
-            self.last_notified
-                .retain(|_, instant| now.duration_since(*instant) < prune_after);
-        }
-
-        // Update last-notified timestamp
-        self.last_notified.insert(species.to_string(), now);
-        true
     }
 
     /// Send a bird detection notification.
@@ -766,7 +855,7 @@ impl Client {
                     }
                 }
                 Err(e) => {
-                    last_error = AppriseError::Http(e.to_string());
+                    last_error = AppriseError::Http(crate::http_error_text(e));
                 }
             }
         }

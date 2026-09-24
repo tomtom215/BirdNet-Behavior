@@ -30,6 +30,7 @@ main() {
 
     require_root
     detect_existing_install
+    adopt_existing_service_user
 
     # No explicit command: a fresh box installs; an existing one offers the
     # menu interactively, or silently updates when non-interactive (preserving

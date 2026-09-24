@@ -344,6 +344,66 @@ fn live_next_species() {
     assert!((preds[0].probability - 1.0).abs() < 1e-9);
 }
 
+/// ANA8: a probability is the share of *every* session in which the trigger
+/// was followed by something, not of the rows that survived `LIMIT`.
+///
+/// Eight mornings, each a Robin then one other bird: Blackbird three times,
+/// Wren three times, Tit twice. Blackbird's probability is 3/8. Normalising
+/// after the limit, a top-2 query reported 3/6 — and the same species' odds
+/// changed with how many rows the caller asked for.
+#[test]
+fn live_next_species_probability_is_over_every_session() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    let followers = [
+        "Eurasian Blackbird",
+        "Eurasian Blackbird",
+        "Eurasian Blackbird",
+        "Eurasian Wren",
+        "Eurasian Wren",
+        "Eurasian Wren",
+        "Great Tit",
+        "Great Tit",
+    ];
+    let values: Vec<String> = followers
+        .iter()
+        .enumerate()
+        .flat_map(|(i, next)| {
+            let d = format!("2024-06-{:02}", i + 1);
+            [
+                format!("('{d}', '05:00:00', 'x', 'European Robin', 0.9, epoch(TIMESTAMP '{d} 05:00:00'))"),
+                format!("('{d}', '05:10:00', 'y', '{next}', 0.9, epoch(TIMESTAMP '{d} 05:10:00'))"),
+            ]
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) \
+             VALUES {};",
+            values.join(", ")
+        ))
+        .expect("seed");
+
+    let prob = |limit: u32, species: &str| {
+        db.next_species("European Robin", 60, limit)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.predicted_species == species)
+            .map(|p| p.probability)
+            .unwrap()
+    };
+    let top_two = prob(2, "Eurasian Blackbird");
+    assert!(
+        (top_two - 3.0 / 8.0).abs() < 1e-9,
+        "top-2 reported {top_two}, not 3/8"
+    );
+    // Counterpart: with every follower returned, the answer was already right,
+    // and the limit must not change it.
+    let all = prob(10, "Eurasian Blackbird");
+    assert!((all - 3.0 / 8.0).abs() < 1e-9, "{all}");
+}
+
 #[test]
 fn live_retention() {
     let Some((db, _tmp)) = loaded_db() else {
@@ -393,4 +453,86 @@ fn live_raw_queries_execute() {
             .execute_batch(&sql)
             .unwrap_or_else(|e| panic!("query failed to execute: {e}\n--- SQL ---\n{sql}"));
     }
+}
+
+/// Two years of four presence patterns, one detection per day present:
+/// a resident heard daily, a summer breeder (May–August), a passage migrant
+/// (twelve days each spring and autumn) and a five-day vagrant.
+fn seed_residency(db: &AnalyticsDb) {
+    let insert = |com: &str, sci: &str, from: &str, days: u32| {
+        db.conn()
+            .execute_batch(&format!(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+                 SELECT strftime(d, '%Y-%m-%d'), '06:00:00', '{sci}', '{com}', 0.9,
+                        epoch(d + INTERVAL 6 HOUR)
+                   FROM range(TIMESTAMP '{from}', TIMESTAMP '{from}' + INTERVAL {days} DAY,
+                              INTERVAL 1 DAY) t(d)"
+            ))
+            .expect("seed");
+    };
+    insert("Eurasian Blackbird", "Turdus merula", "2024-01-01", 731);
+    for year in [2024, 2025] {
+        insert("Common Swift", "Apus apus", &format!("{year}-05-01"), 120);
+        insert(
+            "Wood Warbler",
+            "Phylloscopus sibilatrix",
+            &format!("{year}-04-20"),
+            12,
+        );
+        insert(
+            "Wood Warbler",
+            "Phylloscopus sibilatrix",
+            &format!("{year}-08-20"),
+            12,
+        );
+    }
+    insert("Wallcreeper", "Tichodroma muraria", "2025-03-10", 5);
+}
+
+/// Residency tells a resident from a seasonal visitor from a migrant from a
+/// vagrant.
+///
+/// It was drawn from "seen again within N days", which is true on every day
+/// of a species' presence except the last of each run — so every rate came
+/// out at about (days − runs)/days, and the audit's simulation classified a
+/// passage migrant (0.917), a vagrant (0.80) and a summer breeder (0.99) all
+/// as Resident.
+#[test]
+fn live_residency_separates_the_four_patterns() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed_residency(&db);
+    let ret = db
+        .retention(&types::RetentionParams {
+            min_detections: 1,
+            ..types::RetentionParams::default()
+        })
+        .unwrap();
+    let class = |sp: &str| {
+        ret.iter().find(|r| r.species == sp).map_or_else(
+            || panic!("{sp} missing: {ret:?}"),
+            |r| r.classification.clone(),
+        )
+    };
+    assert_eq!(
+        class("Eurasian Blackbird"),
+        types::ResidencyType::Resident,
+        "{ret:?}"
+    );
+    assert_eq!(
+        class("Common Swift"),
+        types::ResidencyType::Regular,
+        "{ret:?}"
+    );
+    assert_eq!(
+        class("Wood Warbler"),
+        types::ResidencyType::Migrant,
+        "{ret:?}"
+    );
+    assert_eq!(
+        class("Wallcreeper"),
+        types::ResidencyType::Rarity,
+        "{ret:?}"
+    );
 }

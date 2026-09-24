@@ -440,17 +440,45 @@ pub fn apply_update(
         return Err(e);
     }
 
-    // 6. Backup current binary (best-effort).
-    if current_binary.exists() {
-        tracing::info!("backing up current binary to {}", bak_path.display());
-        fs::rename(current_binary, &bak_path)?;
-    }
-
-    // 7. Move new binary into place.
-    tracing::info!("installing new binary to {}", current_binary.display());
-    fs::rename(&staged_path, current_binary)?;
+    // 6–7. Back up the current binary and put the new one in its place.
+    install_staged(&staged_path, current_binary, &bak_path)?;
 
     tracing::info!("update applied successfully");
+    Ok(())
+}
+
+/// Back up `current` to `bak` and install `staged` in its place, so that the
+/// path names a whole binary at every instant.
+///
+/// It used to rename `current` to `bak` and then `staged` to `current`.
+/// Between the two there was no binary at the path; a failure of the second
+/// rename left it that way, and so did a power cut — made likelier by
+/// neither the extracted file nor the directory ever being synced, and by
+/// ext4's `auto_da_alloc` protecting only a rename *over* an existing file.
+/// A station in that state does not start again.
+///
+/// Now: sync the new file; make `bak` a second name for the running binary
+/// (a hard link, a copy where links are refused); rename `staged` over
+/// `current` in one step, which POSIX makes atomic; sync the directory so
+/// the rename survives a power cut.
+fn install_staged(staged: &Path, current: &Path, bak: &Path) -> Result<(), UpdateError> {
+    fs::File::open(staged)?.sync_all()?;
+    if current.exists() {
+        tracing::info!("backing up current binary to {}", bak.display());
+        match fs::remove_file(bak) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        if fs::hard_link(current, bak).is_err() {
+            fs::copy(current, bak)?;
+        }
+    }
+    tracing::info!("installing new binary to {}", current.display());
+    fs::rename(staged, current)?;
+    if let Some(dir) = current.parent() {
+        fs::File::open(dir)?.sync_all()?;
+    }
     Ok(())
 }
 
@@ -979,6 +1007,45 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// An install that fails leaves the station its binary.
+    ///
+    /// The old sequence renamed the running binary to `.bak` and then the
+    /// new one into place: between the two there was no binary at the path at
+    /// all, and a failure of the second rename left it that way — a station
+    /// that would not start again. (A power cut there did the same, which no
+    /// test can reproduce; this is the part of it that one can.)
+    #[test]
+    fn a_failed_install_leaves_the_running_binary_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("birdnet-behavior");
+        let bak = dir.path().join("birdnet-behavior.bak");
+        std::fs::write(&current, b"old").unwrap();
+        // A directory opens and syncs like the staged file would, and then
+        // cannot be renamed over a file: the failure lands after the backup,
+        // at the step that used to leave the path empty.
+        let staged = dir.path().join("staged");
+        std::fs::create_dir(&staged).unwrap();
+        assert!(install_staged(&staged, &current, &bak).is_err());
+        assert_eq!(std::fs::read(&current).ok().as_deref(), Some(&b"old"[..]));
+    }
+
+    /// The counterpart: a good install puts the new binary in place and keeps
+    /// the old one as `.bak`.
+    #[test]
+    fn an_install_keeps_the_old_binary_as_the_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let current = dir.path().join("birdnet-behavior");
+        let bak = dir.path().join("birdnet-behavior.bak");
+        let staged = dir.path().join("birdnet-behavior.new");
+        std::fs::write(&current, b"old").unwrap();
+        std::fs::write(&bak, b"older").unwrap();
+        std::fs::write(&staged, b"new").unwrap();
+        install_staged(&staged, &current, &bak).unwrap();
+        assert_eq!(std::fs::read(&current).unwrap(), b"new");
+        assert_eq!(std::fs::read(&bak).unwrap(), b"old");
+        assert!(!staged.exists());
+    }
+
     #[test]
     fn smoke_test_passes_when_binary_runs() {
         let tmp = tempfile::tempdir().unwrap();

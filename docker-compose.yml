@@ -94,8 +94,11 @@ services:
       BIRDNET_SF_THRESH: ${BIRDNET_SF_THRESH:-0.03}
       BIRDNET_PRIVACY_THRESHOLD: ${BIRDNET_PRIVACY_THRESHOLD:-0.0}
       BIRDNET_LANG: ${BIRDNET_LANG:-en}
-      BIRDNET_RECORDING_SCHEDULE: ${BIRDNET_RECORDING_SCHEDULE:-all-day}
-      BIRDNET_SEGMENT_DURATION: ${BIRDNET_SEGMENT_DURATION:-15}
+      # Not given defaults here: an environment variable wins over
+      # /admin/settings, so a default here made the page's choice of schedule
+      # and segment length do nothing. Set them in .env only to pin them.
+      # BIRDNET_RECORDING_SCHEDULE
+      # BIRDNET_SEGMENT_DURATION
 
       # Integrations (set in .env)
       # BIRDNET_BIRDWEATHER_TOKEN
@@ -129,17 +132,19 @@ services:
       #   - ./data/model:/data/model
       #   - ./data/recordings:/data/recordings
       #   - ./data/cache:/data/cache
-      #   - ./birdnet.db:/data/birdnet.db
+      #   - ./data/BirdNet-Behavior:/data/BirdNet-Behavior   # birds.db lives here (HOME=/data)
       - birdnet-data:/data
 
     # -------------------------------------------------------------------------
-    # Resource limits — conservative defaults suitable for Raspberry Pi 4
-    # Adjust or remove if running on a server with more headroom
+    # Resource limits — the same ceiling as the systemd unit's MemoryMax. The
+    # model is loaded into anonymous memory, which a limit cannot reclaim:
+    # measured with the V3.0 FP32 model and analytics on, ~575 MB at idle and
+    # ~650 MB while analysing. 512M killed the container as the model loaded.
     # -------------------------------------------------------------------------
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
         reservations:
           memory: 128M
 

@@ -60,6 +60,8 @@ load_entrypoint_fns() {
     source <(sed -n '/^human_bytes()/,/^}/p' "${ENTRYPOINT}")
     # shellcheck disable=SC1090
     source <(sed -n '/^ensure_model_file()/,/^}/p' "${ENTRYPOINT}")
+    # shellcheck disable=SC1090
+    source <(sed -n '/^ensure_geomodel_file()/,/^}/p' "${ENTRYPOINT}")
 }
 
 DIGEST_OF_GOOD=""
@@ -128,6 +130,55 @@ if run_ensure 'GOOD MODEL BYTES' "${DIGEST_OF_GOOD}"; then
     fi
 else
     fail "a verified cached model was rejected"
+    sed 's/^/        /' "${OUT}"
+fi
+
+# run_ensure_geo <cached-contents> <expected-digest> — the same, for the
+# optional geomodel, whose cache branch trusted presence alone just as the
+# classifier's once did.
+run_ensure_geo() {
+    local contents="$1" expected="$2"
+    SANDBOX="$(mktemp -d)"
+    OUT="${SANDBOX}/out.log"
+    (
+        set -uo pipefail
+        log()  { echo "[birdnet] $*"; }
+        warn() { echo "[birdnet] WARNING: $*"; }
+        load_entrypoint_fns
+        fetch_one() {
+            echo "fetched" >>"${SANDBOX}/fetched"
+            printf 'GOOD MODEL BYTES' >"$1"
+            return 0
+        }
+        # shellcheck disable=SC2034  # read by the sourced function
+        GH_BASE="https://example.invalid/gh"
+        # shellcheck disable=SC2034
+        GEOMODEL_UPSTREAM_BASE="https://example.invalid/upstream"
+        # shellcheck disable=SC2034
+        MODEL_RELEASE_TAG="test"
+        # shellcheck disable=SC2034
+        GEOMODEL_VERSION="test"
+        printf '%s' "${contents}" >"${SANDBOX}/geomodel.onnx"
+        ensure_geomodel_file "${SANDBOX}/geomodel.onnx" "geomodel.onnx" "${expected}" "Geomodel"
+    ) >"${OUT}" 2>&1
+    return $?
+}
+
+echo "=== the geomodel: a cached file that does not match must not be adopted ==="
+run_ensure_geo 'TRUNCATED' "${DIGEST_OF_GOOD}"
+if [ -s "${SANDBOX}/fetched" ] && [ "$(cat "${SANDBOX}/geomodel.onnx")" = "GOOD MODEL BYTES" ]; then
+    pass "a mismatched cached geomodel was discarded and re-fetched"
+else
+    fail "ensure_geomodel_file adopted a cached file it never verified"
+    printf '        cached bytes kept: %s\n' "$(cat "${SANDBOX}/geomodel.onnx")"
+    sed 's/^/        /' "${OUT}"
+fi
+
+echo "=== the counterpart: a cached geomodel that DOES match is used, not re-fetched ==="
+if run_ensure_geo 'GOOD MODEL BYTES' "${DIGEST_OF_GOOD}" && [ ! -e "${SANDBOX}/fetched" ]; then
+    pass "a verified cached geomodel is used without downloading"
+else
+    fail "a verified cached geomodel was re-fetched or rejected"
     sed 's/^/        /' "${OUT}"
 fi
 

@@ -3,6 +3,10 @@
 //! Returns detection counts aggregated by (hour-of-day × day-of-week) so the
 //! web dashboard can render a calendar-heat-map showing when birds are most
 //! active throughout the week.
+//!
+//! A `days`-day window is `days` dates ending today: `Date >= today - (days -
+//! 1)`. It was `today - days`, one date more, so a 7-day week view counted one
+//! weekday twice (`ANA14c`). A zero-day window matches nothing.
 
 use rusqlite::{Connection, params};
 
@@ -42,7 +46,7 @@ pub fn weekly_heatmap(conn: &Connection, days: u32) -> Result<Vec<HeatmapCell>, 
             CAST(SUBSTR(Time, 1, 2) AS INTEGER)   AS hour,
             COUNT(*)                               AS count
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || (?1 - 1) || ' days')
          GROUP BY dow, hour
          ORDER BY dow, hour",
     )?;
@@ -73,7 +77,7 @@ pub fn hourly_totals(conn: &Connection, days: u32) -> Result<Vec<HourTotal>, DbE
             CAST(SUBSTR(Time, 1, 2) AS INTEGER) AS hour,
             COUNT(*)                             AS count
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || (?1 - 1) || ' days')
          GROUP BY hour
          ORDER BY hour",
     )?;
@@ -105,7 +109,7 @@ pub fn species_daily_heatmap(
     let mut stmt = conn.prepare(
         "SELECT Date, Com_Name, COUNT(*) AS count
          FROM detections_analytic
-         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         WHERE Date >= DATE('now', 'localtime', '-' || (?1 - 1) || ' days')
          GROUP BY Date, Com_Name
          ORDER BY Date, count DESC",
     )?;
@@ -132,7 +136,7 @@ mod tests {
         // of truth.
         let conn = Connection::open_in_memory().unwrap();
         crate::migration::migrate(&conn).unwrap();
-        // Dates are computed at insert time via SQLite's DATE('now', '-N days')
+        // Dates are computed at insert time via SQLite's DATE('now', 'localtime', '-N days')
         // so the fixture stays within the 30-day window used by the queries
         // under test, regardless of when the suite runs.
         conn.execute_batch(
@@ -140,13 +144,48 @@ mod tests {
               (Date, Time, Sci_Name, Com_Name, Confidence,
                Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
             VALUES
-              (DATE('now', '-7 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-7 days'),'07:30:00','A','Robin',0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-7 days'),'08:00:00','B','Wren', 0.7, NULL,NULL,NULL,NULL,NULL,NULL,''),
-              (DATE('now', '-6 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,'');",
+              (DATE('now', 'localtime', '-7 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-7 days'),'07:30:00','A','Robin',0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-7 days'),'08:00:00','B','Wren', 0.7, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', 'localtime', '-6 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,'');",
         )
         .unwrap();
         conn
+    }
+
+    /// `ANA14c`: a `days`-day window is `days` dates, today included. It was
+    /// `Date >= today - days`, one date more — so the week view added a
+    /// second copy of one weekday. The fixture has rows 7 and 6 days back.
+    #[test]
+    fn a_seven_day_window_is_seven_dates() {
+        let conn = setup();
+        let heat: i64 = weekly_heatmap(&conn, 7)
+            .unwrap()
+            .iter()
+            .map(|c| c.count)
+            .sum();
+        assert_eq!(heat, 1, "the heatmap counted the eighth day");
+        let totals: i64 = hourly_totals(&conn, 7)
+            .unwrap()
+            .iter()
+            .map(|h| h.count)
+            .sum();
+        assert_eq!(totals, 1, "the hourly totals counted the eighth day");
+        assert_eq!(species_daily_heatmap(&conn, 7).unwrap().len(), 1);
+        let spark = crate::sqlite::species_sparklines(&conn, 7).unwrap();
+        assert!(
+            !spark.contains_key("Wren"),
+            "a species seen only on the eighth day: {spark:?}"
+        );
+        // Counterpart: eight days reaches the older rows.
+        let heat8: i64 = weekly_heatmap(&conn, 8)
+            .unwrap()
+            .iter()
+            .map(|c| c.count)
+            .sum();
+        assert_eq!(heat8, 4);
+        // A zero-day window is empty, not an error.
+        assert!(weekly_heatmap(&conn, 0).unwrap().is_empty());
     }
 
     #[test]

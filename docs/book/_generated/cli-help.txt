@@ -103,6 +103,11 @@ Options:
 
           [alias: --preflight]
 
+      --doctor-gate
+          Run the doctor as the service's start gate, then exit.
+
+          The same checks and report as `--doctor`, but only a failure the station cannot run past — an unreadable config file, an invalid listen address, an unwritable database directory, an unusable HTTPS setup — exits 2. Any other failure exits 1: the station starts, runs what it can, and `/admin/doctor` shows the same report. The systemd unit's `ExecStartPre` uses this; `--doctor` keeps its own exit codes.
+
       --install-model <ID>
           Install a classifier from the built-in catalogue, then exit (`G-10`).
 

@@ -210,12 +210,14 @@ async fn log_page(_: State<AppState>) -> Html<String> {
 
 const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
-<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css?v={{version}}">
+<head><script src="/static/theme-guard.js?v={{version}}"></script><link rel="stylesheet" href="/static/css/app.css?v={{version}}">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Live Logs — BirdNet-Behavior Admin</title>
-  <script src="/static/htmx.min.js"></script>
-  <script src="/static/htmx-sse.js"></script>
+  <script src="/static/htmx.min.js?v={{version}}"></script>
+  <script src="/static/poll-visibility.js?v={{version}}"></script>
+  <script src="/static/base-path.js?v={{version}}"></script>
+  <script src="/static/htmx-sse.js?v={{version}}"></script>
   <style>
     body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }
     .container { max-width:1100px; margin:0 auto; padding:2rem 1rem; }

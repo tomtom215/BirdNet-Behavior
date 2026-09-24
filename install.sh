@@ -419,12 +419,15 @@ EOF
         fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
+    derive_home_paths
+}
 
-    # Under sudo, $HOME is usually /root, not the service user's home — so the
-    # data dir computed at the top of this script can land in /root, which the
-    # non-root service user cannot reach (and ProtectHome=read-only would block
-    # it anyway). Re-derive every home-based path from the service user's actual
-    # home so the daemon can read its database, recordings, and model.
+# Under sudo, $HOME is usually /root, not the service user's home — so the
+# data dir computed at the top of this script can land in /root, which the
+# non-root service user cannot reach (and ProtectHome=read-only would block
+# it anyway). Re-derive every home-based path from the service user's actual
+# home so the daemon can read its database, recordings, and model.
+derive_home_paths() {
     local svc_home
     svc_home="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
     if [ -n "${svc_home}" ]; then
@@ -806,6 +809,29 @@ HAVE_SERVICE=0
 HAVE_CONFIG=0
 INSTALLED_VERSION=""
 EXISTING_INSTALL=0
+
+# An update or a repair keeps the station it finds. The service user comes
+# from SUDO_USER on every run, so `sudo install.sh update` from a different
+# account rewrote User=, ReadWritePaths= and --analytics-db onto that
+# account's home, chowned the config to it, and left the kept config's
+# DB_PATH naming the first home — hidden from the new user by the unit's
+# ProtectHome, so the doctor failed the database directory and the station
+# did not start. The existing unit's User= wins, and the home-based paths
+# are derived from that user exactly as the first install derived them.
+adopt_existing_service_user() {
+    [ -f "${SERVICE_FILE}" ] || return 0
+    local unit_user
+    unit_user="$(grep -E '^User=' "${SERVICE_FILE}" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    [ -n "${unit_user}" ] && [ "${unit_user}" != "${SERVICE_USER}" ] || return 0
+    if ! getent passwd "${unit_user}" >/dev/null 2>&1; then
+        warn "The existing unit runs as '${unit_user}', which no longer exists — installing for '${SERVICE_USER}'."
+        return 0
+    fi
+    warn "This station runs as '${unit_user}'; keeping that (the installer was run by '${SERVICE_USER}')."
+    warn "To move it to another account: sudo bash install.sh uninstall, then install from that account."
+    SERVICE_USER="${unit_user}"
+    derive_home_paths
+}
 
 detect_existing_install() {
     HAVE_BINARY=0; HAVE_SERVICE=0; HAVE_CONFIG=0; INSTALLED_VERSION=""; EXISTING_INSTALL=0
@@ -1351,7 +1377,8 @@ download_geomodel() {
     chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}" "${labels_dest}"
     GEOMODEL_INSTALLED=1
     success "Geomodel installed to ${model_dest}"
-    success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
+    # Whether filtering is on depends on the config naming it, which
+    # write_config settles and reports (enable_geomodel_in_kept_config).
     return 0
 }
 
@@ -1369,7 +1396,14 @@ create_directories() {
         "${IMAGE_CACHE_DIR}" \
         "${MODEL_DIR}" \
         "${DATA_DIR}/backups"
-    install -d -m 0755 "${CONFIG_DIR}"
+    # The config dir is root's, but the service must be able to write its
+    # last-good copy of the configuration beside the file
+    # (`birdnet.conf.last-good`, via a `.part` file and a rename). At 0755 it
+    # could not, so the rollback every doc promises never had a copy to roll
+    # back to, and one bad edit ran the station web-only. Group-writable for the
+    # service, with the sticky bit so the service can create and replace only
+    # files it owns — never the root-owned birdnet.conf itself.
+    install -d -m 1770 -o root -g "${SERVICE_USER}" "${CONFIG_DIR}"
     success "Directories created under ${DATA_DIR}"
 }
 
@@ -1426,9 +1460,39 @@ MEOF
 # Write the default configuration file
 # ---------------------------------------------------------------------------
 
+# The geomodel, downloaded on an update or a repair, is used only once the
+# config names it — and write_config keeps an existing config. A station
+# installed before the geomodel shipped was told "occurrence filtering is ON"
+# and ran without it. Fill the settings in where that is certainly wanted:
+#   * no METADATA_MODEL_PATH line at all — a config from before the geomodel;
+#   * the template's own empty placeholders, written when a fresh install's
+#     download failed.
+# A line commented out with a path in it is the operator's choice; say so and
+# leave it.
+enable_geomodel_in_kept_config() {
+    [ "${GEOMODEL_INSTALLED:-0}" = "1" ] || return 0
+    local model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
+    local labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+    if ! grep -q 'METADATA_MODEL_PATH' "${CONFIG_FILE}"; then
+        printf '\n# --- Species occurrence filtering (added by install.sh) ---\n%s\n%s\n' \
+            "${model_line}" "${labels_line}" >>"${CONFIG_FILE}"
+        success "Species occurrence filtering is ON: added the geomodel to ${CONFIG_FILE}."
+    elif grep -qE '^# METADATA_MODEL_PATH=$' "${CONFIG_FILE}"; then
+        sed -i -e "s|^# METADATA_MODEL_PATH=\$|${model_line}|" \
+            -e "s|^# METADATA_LABELS_PATH=\$|${labels_line}|" "${CONFIG_FILE}"
+        success "Species occurrence filtering is ON: filled in the geomodel settings in ${CONFIG_FILE}."
+    elif grep -qE '^[[:space:]]*METADATA_MODEL_PATH=' "${CONFIG_FILE}"; then
+        success "Species occurrence filtering is configured in ${CONFIG_FILE}."
+    else
+        warn "The geomodel is installed, but METADATA_MODEL_PATH is commented out in"
+        warn "${CONFIG_FILE}, so species occurrence filtering stays OFF. Uncomment it to use it."
+    fi
+}
+
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
+        enable_geomodel_in_kept_config
         # Upgrade from a version that left the config world-readable: tighten it
         # without touching the user's settings.
         chown "root:${SERVICE_USER}" "${CONFIG_FILE}" 2>/dev/null || true
@@ -1588,6 +1652,9 @@ EOF
     chown "root:${SERVICE_USER}" "${CONFIG_FILE}"
     chmod 0640 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
+    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+        success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
+    fi
 }
 
 # ===== installer/lib/65-service.sh =====
@@ -1632,6 +1699,18 @@ resolve_listen_addr() {
 
 install_service() {
     info "Installing systemd service…"
+
+    # The one unit edit the unit's own comment invites: --analytics-db "" to run
+    # without analytics. This function rewrites the unit on every update, so
+    # the choice has to be read back from the unit it replaces, or the next
+    # update turns analytics on again. Any other path is not carried: a custom
+    # location belongs in a drop-in (`systemctl edit`), which updates keep.
+    local analytics_arg="${DATA_DIR}/analytics.db"
+    if [ -f "${SERVICE_FILE}" ] &&
+        grep -qE -e '^ExecStart=.*--analytics-db (""|'"''"')( |$)' "${SERVICE_FILE}"; then
+        analytics_arg='""'
+        info "Keeping analytics off (--analytics-db \"\" in the existing unit)."
+    fi
 
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
@@ -1695,17 +1774,23 @@ Environment=BNB_HELP_DIR=${HELP_DIR}
 # writable, so the watch dir does not need to be in ReadWritePaths.
 ExecStartPre=/bin/mkdir -p ${STREAM_DIR}
 
-# Preflight: run the doctor before starting the main service so a broken
-# install fails fast with an actionable report in the journal, rather than
-# entering a restart loop that fills the disk with logs.
-# Exit 0 (pass) or 1 (warnings only) are both accepted — only exit 2
-# (errors that will prevent operation) keeps the service from starting.
-ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor --config ${CONFIG_FILE} || [ \$? -le 1 ]'
+# Preflight: run the doctor before starting the main service, so its full
+# report is in the journal for every start. --doctor-gate exits 2 only for a
+# failure the station cannot run past (an unreadable config, an invalid listen
+# address, an unwritable database directory, an unusable HTTPS setup); every
+# other failure is reported and the service starts, running without what it
+# names, with the same report at /admin/doctor. Exit 0 and 1 are accepted.
+ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --config ${CONFIG_FILE} || [ \$? -le 1 ]'
 # DuckDB behavioral analytics is compiled into every release binary and enabled
 # here by default (the database is created on first run). To run without it
 # (e.g. on a very low-RAM board), change the flag below to --analytics-db "":
-# removing it does not turn analytics off, it falls back to <database>.duckdb.
-ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${DATA_DIR}/analytics.db
+# an update keeps that choice. Removing the flag does not turn analytics off, it
+# falls back to <database>.duckdb. Any other change to this line is replaced by
+# the next update; make it with `sudo systemctl edit birdnet-behavior` instead.
+ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${analytics_arg}
+# `systemctl reload birdnet-behavior` re-reads LOG_LEVEL / LOG_MODULES from
+# the config and applies them without a restart (the SIGHUP handler in main.rs).
+ExecReload=/bin/kill -HUP \$MAINPID
 
 # Restart policy. panic=abort means panics show up as SIGABRT exits;
 # Restart=always covers panics, OOM kills, and any non-zero exit.
@@ -1732,8 +1817,9 @@ WatchdogSec=120
 
 # Resource ceilings — cap a runaway process without starving the workload.
 # The bundled DuckDB analytics engine is on by default and its queries can be
-# memory-hungry under load; 1 GiB leaves that headroom (the FP32 model is
-# mmap'd, so its pages are reclaimable and don't count as anonymous RSS). On a
+# memory-hungry under load. The FP32 model is NOT mmap'd: ONNX Runtime loads
+# its weights into anonymous memory, measured at ~575 MB idle and ~650 MB
+# while analysing with analytics on, so 1 GiB is headroom, not slack. On a
 # multi-GB Pi this is the binding limit; on a 512 MB board physical RAM + zram
 # bind first, so raising the cgroup ceiling here is harmless there.
 MemoryHigh=768M
@@ -2974,7 +3060,7 @@ mac_brew_dep() { # $1=formula  $2=why
 }
 
 macos_setup_config_and_agent() { # $1=binary path
-    local bin="$1" secret
+    local bin="$1"
     mkdir -p "${MAC_DATA_DIR}" "${HOME}/Library/Logs" "$(dirname "${MAC_PLIST}")"
     if [ ! -f "${MAC_DATA_DIR}/birdnet.conf" ]; then
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
@@ -2997,7 +3083,6 @@ CONF
     else
         info "Keeping existing config: ${MAC_DATA_DIR}/birdnet.conf"
     fi
-    secret="$(openssl rand -base64 48 2>/dev/null | tr -d '\n' || echo 'CHANGE-ME-to-32-plus-random-bytes')"
     cat > "${MAC_PLIST}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -3018,7 +3103,6 @@ CONF
   <dict>
     <key>BNB_STATION_LAT</key><string>0.0</string>
     <key>BNB_STATION_LON</key><string>0.0</string>
-    <key>BNB_SHARE_SECRET</key><string>${secret}</string>
   </dict>
 </dict>
 </plist>
@@ -3213,6 +3297,7 @@ main() {
 
     require_root
     detect_existing_install
+    adopt_existing_service_user
 
     # No explicit command: a fresh box installs; an existing one offers the
     # menu interactively, or silently updates when non-interactive (preserving

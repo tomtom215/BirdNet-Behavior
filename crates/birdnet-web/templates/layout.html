@@ -44,7 +44,9 @@
       self-hosted Noto Sans; non-Latin species names (CJK, Devanagari, …) use
       the client's installed system fonts named in the --font-ui stack.
     -->
-    <script src="/static/htmx.min.js"></script>
+    <script src="/static/htmx.min.js?v={{version}}"></script>
+    <script src="/static/poll-visibility.js?v={{version}}"></script>
+    <script src="/static/base-path.js?v={{version}}"></script>
 </head>
 <body>
     <a href="#main-content" class="skip-link">Skip to content</a>
@@ -77,7 +79,7 @@
             </form>
             <span id="live-status" class="bnb-pill lay-iflex-gap" data-state="connecting" hidden
                   title="Live detection stream" aria-live="polite">
-                <span class="bnb-dot"></span><span data-live-label>Live</span>
+                <span class="bnb-dot"></span><span data-live-label>Feed live</span>
             </span>
             <div class="status lay-iflex" hx-get="/pages/health-badge" hx-trigger="load, every 30s" hx-swap="innerHTML">
                 <span class="bnb-pill"><span class="bnb-dot"></span> …</span>
@@ -150,7 +152,8 @@
          new page; it is not threaded through this template. -->
     <!-- Live detection stream: keeps a reconnecting WebSocket to surface a
          live/offline indicator and dispatch birdnet:detection events. -->
-    <script src="/static/live-detections.js" defer></script>
+    <script src="/static/live-detections.js?v={{version}}" defer></script>
+    <script src="/static/clip-player.js?v={{version}}" defer></script>
     <!-- A region that fails to load must say so. htmx leaves the target as it
          was on a 4xx/5xx and on a transport error, so a failed partial — or a
          station that died under an open dashboard — used to leave its

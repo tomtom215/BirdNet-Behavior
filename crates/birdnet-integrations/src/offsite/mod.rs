@@ -207,8 +207,17 @@ pub fn offsite_name(local: &Path) -> String {
 /// station did not write, which retention treats as "not mine, do not touch" —
 /// an operator who keeps other files in the same bucket prefix should not find
 /// them deleted.
+///
+/// A name with a `/` in it is in a folder below this station's prefix, and
+/// this station writes nothing there. S3 lists by string prefix and with no
+/// delimiter, so an empty prefix lists every station in the bucket and a
+/// prefix of `pi-1` lists `pi-10/…`; both used to carry another station's
+/// backups into retention, and delete them.
 #[must_use]
 pub fn backup_timestamp(name: &str) -> Option<u64> {
+    if name.contains('/') {
+        return None;
+    }
     let stem = name.strip_suffix(ENCRYPTED_SUFFIX)?;
     let (_, ts) = stem.rsplit_once(".backup.")?;
     ts.parse().ok()
@@ -422,6 +431,26 @@ mod tests {
             ],
             "only this station's own backups may be pruned: {pruned:?}"
         );
+    }
+
+    /// Another station's backups in a folder under this one's prefix — an
+    /// empty prefix, or `pi-1` listing `pi-10/…` — have this station's name
+    /// shape. They are not this station's to prune.
+    #[test]
+    fn retention_never_reaches_into_another_stations_folder() {
+        let names: Vec<String> = [
+            "pi-2/birds.db.backup.100.bnb",
+            "0/birds.db.backup.150.bnb",
+            "birds.db.backup.200.bnb",
+            "birds.db.backup.300.bnb",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(
+            prune_list(&names, 1),
+            vec!["birds.db.backup.200.bnb".to_owned()]
+        );
+        assert_eq!(kept_count(&names, &prune_list(&names, 1)), 1);
     }
 
     #[test]

@@ -226,8 +226,8 @@ pub fn from_env() -> BasePath {
 /// Only attributes, and only these: matching on the *value* alone would rewrite
 /// paths inside prose, JSON embedded in a `<script type="application/json">`,
 /// and any documentation on the page that shows a URL. Every entry here is
-/// followed by `="` in the scan, so a value must be quoted to be rewritten,
-/// which is true of all markup this application emits.
+/// followed by `="` or `='` in the scan, so a value must be quoted to be rewritten,
+/// with either quote — some markup quotes `hx-get` with `'`.
 const URL_ATTRIBUTES: &[&str] = &[
     "href",
     "src",
@@ -244,6 +244,14 @@ const URL_ATTRIBUTES: &[&str] = &[
     "hx-delete",
     "ws-connect",
     "sse-connect",
+    // Site-root paths the scripts read (M8): the command palette follows
+    // `data-href`, the clip players play `data-play-src`, the help drawer
+    // fetches `data-help-drawer`, and share buttons join `data-copy-url` to
+    // `location.origin`.
+    "data-href",
+    "data-play-src",
+    "data-help-drawer",
+    "data-copy-url",
 ];
 
 /// Prefix every application-absolute URL in an HTML document.
@@ -266,13 +274,18 @@ pub fn rewrite_html(html: &str, base: &BasePath) -> String {
     let bytes = html.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        // An attribute value can only start after `="`, so anchor on the quote
-        // rather than on each attribute name: one scan instead of fifteen.
-        let Some(rel) = html[i..].find("=\"/") else {
+        // An attribute value can only start after `="` or `='`, so anchor on
+        // the quote rather than on each attribute name: one scan instead of
+        // one per name. Either quote: some markup quotes `hx-get` with `'`,
+        // and anchoring on `"` alone let those requests leave the prefix (M8).
+        // One forward walk over `=` signs: two independent `find`s would each
+        // rescan the rest of the page on every match.
+        let Some(eq) = (i..bytes.len().saturating_sub(2)).find(|&k| {
+            bytes[k] == b'=' && matches!(bytes[k + 1], b'"' | b'\'') && bytes[k + 2] == b'/'
+        }) else {
             out.push_str(&html[i..]);
             break;
         };
-        let eq = i + rel;
         let slash = eq + 2;
         // Protocol-relative `//host/path` points at another origin.
         let protocol_relative = bytes.get(slash + 1) == Some(&b'/');

@@ -6,17 +6,17 @@ use std::fmt::Write as _;
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let alsa = get_setting(s, "alsa_device", "");
-    let rtsp = get_setting(s, "rtsp_url", "");
-    let rtsp_urls = get_setting(s, "rtsp_urls", "");
-    let seg = get_setting(s, "segment_duration", "15");
-    let fmt = get_setting(s, "audio_format", "wav");
+    let alsa = get_setting(s, "alsa_device");
+    let rtsp = get_setting(s, "rtsp_url");
+    let rtsp_urls = get_setting(s, "rtsp_urls");
+    let seg = get_setting(s, "segment_duration");
+    let fmt = get_setting(s, "audio_format");
     let fmt_wav = if fmt == "wav" { " selected" } else { "" };
     let fmt_mp3 = if fmt == "mp3" { " selected" } else { "" };
     let fmt_flac = if fmt == "flac" { " selected" } else { "" };
     let fmt_ogg = if fmt == "ogg" { " selected" } else { "" };
-    let freq_shift = get_setting(s, "freq_shift_hz", "0");
-    let lufs = get_setting(s, "clip_target_lufs", "");
+    let freq_shift = get_setting(s, "freq_shift_hz");
+    let lufs = get_setting(s, "clip_target_lufs");
     let lufs_opt = |v: &str| if lufs == v { " selected" } else { "" };
     let (lufs_off, lufs_14, lufs_18, lufs_23) = (
         lufs_opt(""),

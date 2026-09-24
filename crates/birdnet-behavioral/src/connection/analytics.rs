@@ -80,23 +80,33 @@ impl AnalyticsDb {
                     .collect(),
                 _ => Vec::new(),
             };
-            Ok((species, rates_raw))
+            let weeks_present: i64 = row.get(2)?;
+            let station_weeks: i64 = row.get(3)?;
+            let span_days: i64 = row.get(4)?;
+            Ok((species, rates_raw, weeks_present, station_weeks, span_days))
         })?;
 
+        let count = |n: i64| u32::try_from(n.max(0)).unwrap_or(u32::MAX);
         let mut results = Vec::new();
         for row in rows {
-            let (species, rates_raw) = row?;
+            let (species, rates_raw, weeks_present, station_weeks, span_days) = row?;
             let retention_rates: Vec<types::RetentionRate> = params
                 .intervals
                 .iter()
                 .zip(rates_raw.iter())
                 .map(|(&days, &rate)| types::RetentionRate { days, rate })
                 .collect();
-            let long_term = retention_rates.last().map_or(0.0, |r| r.rate);
+            let (weeks_present, station_weeks) = (count(weeks_present), count(station_weeks));
             results.push(types::SpeciesRetention {
                 species,
                 retention_rates,
-                classification: types::ResidencyType::from_retention_rate(long_term),
+                weeks_present,
+                station_weeks,
+                classification: types::ResidencyType::classify(
+                    weeks_present,
+                    station_weeks,
+                    count(span_days),
+                ),
             });
         }
         Ok(results)
@@ -343,28 +353,22 @@ impl AnalyticsDb {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], |row| {
             let frequency: i64 = row.get(1)?;
+            // Over every session with a follower, not the rows `LIMIT` kept.
+            let sessions: f64 = row.get(2)?;
+            #[allow(clippy::cast_precision_loss)]
+            let probability = if sessions > 0.0 {
+                frequency as f64 / sessions
+            } else {
+                0.0
+            };
             Ok(types::NextSpeciesPrediction {
                 after_species: trigger.to_string(),
                 predicted_species: row.get(0)?,
                 frequency: u64::try_from(frequency).unwrap_or(0),
-                probability: 0.0,
+                probability,
             })
         })?;
-
-        let mut results: Vec<types::NextSpeciesPrediction> = rows
-            .map(|r| r.map_err(AnalyticsError::from))
-            .collect::<Result<_, _>>()?;
-
-        let total: u64 = results.iter().map(|r| r.frequency).sum();
-        if total > 0 {
-            for result in &mut results {
-                #[allow(clippy::cast_precision_loss)]
-                {
-                    result.probability = result.frequency as f64 / total as f64;
-                }
-            }
-        }
-        Ok(results)
+        rows.map(|r| r.map_err(AnalyticsError::from)).collect()
     }
 
     /// Guard: return an error if the extension is not loaded.

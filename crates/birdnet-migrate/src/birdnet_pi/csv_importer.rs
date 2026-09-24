@@ -1,19 +1,28 @@
 //! BirdNET-Pi CSV/TSV detection log importer.
 //!
-//! BirdNET-Pi writes detections to a tab-separated text file in the format:
+//! Three shapes reach this importer, and it reads all of them:
+//!
+//! * **BirdNET-Pi's `BirdDB.txt`** — semicolon-separated, the twelve columns
+//!   below in this order, with or without a header line. The migration page
+//!   names this file, and this importer used to read it as a single-column
+//!   CSV: every line was skipped and the import reported success with 0 rows.
+//! * **A tab- or comma-separated export** of the same twelve columns.
+//! * **This station's own CSV export** (`/api/v2/detections/export`) — a
+//!   header row, RFC 4180 quoting, a `'` guard in front of any text that looks
+//!   like a spreadsheet formula, and five more columns after `File_Name`.
+//!   Columns are matched by header name, so the extra ones are ignored rather
+//!   than run together into `File_Name` (which made every re-imported row a
+//!   new, duplicate detection pointing at a clip that did not exist).
 //!
 //! ```text
-//! Date\tTime\tSci_Name\tCom_Name\tConfidence\tLat\tLon\tCutoff\tWeek\tSens\tOverlap\tFile_Name
-//! 2026-01-15\t06:23:11\tTurdus merula\tEurasian Blackbird\t0.921\t51.5\t-0.1\t0.7\t3\t1.0\t0.0\trec.wav
+//! Date;Time;Sci_Name;Com_Name;Confidence;Lat;Lon;Cutoff;Week;Sens;Overlap;File_Name
+//! 2026-01-15;06:23:11;Turdus merula;Eurasian Blackbird;0.921;51.5;-0.1;0.7;3;1.0;0.0;rec.wav
 //! ```
 //!
-//! The first line is a header (may vary); the remaining lines are data.
-//! Lines with < 12 fields are skipped with a warning.
-//!
-//! The importer is tolerant of:
-//! - Missing optional fields (replaced by `NULL`)
-//! - Comma-separated files (auto-detected if no tab in header)
-//! - Windows line endings (`\r\n`)
+//! A first line is a header when its first field is `Date`; otherwise it is
+//! data. Missing optional fields become `NULL`; Windows line endings are
+//! accepted. A file in which not one line could be read is an error, not an
+//! import of nothing.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -22,6 +31,7 @@ use rusqlite::Connection;
 
 use crate::error::MigrateError;
 use crate::progress::{MigrationProgress, MigrationStage, ProgressHandle};
+use crate::provenance::{ImportOptions, SourceProfile};
 use crate::traits::{MigrationSummary, Migrator};
 
 /// Minimum number of fields required per data line.
@@ -59,12 +69,57 @@ struct CsvRow {
 #[derive(Debug, Clone, Default)]
 pub struct CsvImporter;
 
+impl CsvImporter {
+    /// Import with the reconciliation the operator chose, as
+    /// [`super::BirdNetPiImporter::migrate_with_options`] does for a database:
+    /// an `import_batches` row (kind `birdnet-pi-csv`) that every imported row
+    /// points at, the clock conversion applied to each timestamp, and the
+    /// source's modal site recorded with the distance to this station.
+    ///
+    /// `run_migration_with_options` used to send a CSV to plain
+    /// [`Migrator::migrate`] and drop all of that, so a `BirdDB.txt` from
+    /// another site became indistinguishable from this station's recordings.
+    ///
+    /// # Errors
+    ///
+    /// As [`Migrator::migrate`], and when the batch row cannot be written.
+    pub fn migrate_with_options(
+        &self,
+        source_path: &Path,
+        dest_path: &Path,
+        progress: &ProgressHandle,
+        options: &ImportOptions,
+        station: (Option<f64>, Option<f64>),
+    ) -> Result<MigrationSummary, MigrateError> {
+        Self::run(source_path, dest_path, progress, Some((options, station)))
+    }
+}
+
 impl Migrator for CsvImporter {
     fn migrate(
         &self,
         source_path: &Path,
         dest_path: &Path,
         progress: &ProgressHandle,
+    ) -> Result<MigrationSummary, MigrateError> {
+        Self::run(source_path, dest_path, progress, None)
+    }
+}
+
+/// This station's `(lat, lon)`, as `run_migration_with_options` passes it.
+type Station = (Option<f64>, Option<f64>);
+
+/// Rows at each coordinate, rounded to three decimals (~110 m) as
+/// [`SourceProfile::from_connection`] rounds them.
+type SiteCounts = std::collections::HashMap<(i64, i64), u64>;
+
+impl CsvImporter {
+    #[allow(clippy::too_many_lines)]
+    fn run(
+        source_path: &Path,
+        dest_path: &Path,
+        progress: &ProgressHandle,
+        reconcile: Option<(&ImportOptions, Station)>,
     ) -> Result<MigrationSummary, MigrateError> {
         progress.set_stage(MigrationStage::Importing, "Opening CSV source file");
 
@@ -79,11 +134,11 @@ impl Migrator for CsvImporter {
             Some(Err(e)) => return Err(MigrateError::Io(e)),
             None => return Err(MigrateError::CsvParse("file is empty".to_string())),
         };
-        let delim = if header.contains('\t') { '\t' } else { ',' };
+        let layout = Layout::detect(&header);
 
         // Pre-scan to estimate total lines (for progress reporting).
         drop(lines);
-        let total = count_lines(source_path)?.saturating_sub(1); // minus header
+        let total = count_lines(source_path)?.saturating_sub(usize::from(layout.has_header()));
 
         progress.update(MigrationProgress {
             stage: MigrationStage::Importing,
@@ -99,8 +154,8 @@ impl Migrator for CsvImporter {
         // station before we ever see it.
         let file2 = std::fs::File::open(source_path).map_err(MigrateError::Io)?;
         let mut reader2 = BufReader::new(file2);
-        // Skip header.
-        {
+        // Skip the header, when there is one.
+        if layout.has_header() {
             let mut hdr = Vec::new();
             let _ = read_capped_line(&mut reader2, &mut hdr)?;
         }
@@ -125,8 +180,25 @@ impl Migrator for CsvImporter {
             ))
         })?;
 
+        let batch_id = match reconcile {
+            Some((options, station)) => super::importer::record_import_batch(
+                &dest_conn,
+                "birdnet-pi-csv",
+                source_path,
+                // The site is not known until the rows are read; it is filled
+                // in below, once they have been.
+                &SourceProfile::default(),
+                options,
+                station,
+            )?,
+            None => None,
+        };
+        let mut sites = SiteCounts::new();
+
         let mut imported = 0u64;
         let mut skipped = 0u64;
+        let mut unparseable = 0u64;
+        let mut data_lines = 0u64;
         let mut batch: Vec<CsvRow> = Vec::with_capacity(BATCH_SIZE);
 
         let mut buf: Vec<u8> = Vec::with_capacity(512);
@@ -149,12 +221,16 @@ impl Migrator for CsvImporter {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
+            data_lines += 1;
 
-            match parse_line(line, delim) {
-                Ok(row) => {
+            match parse_line(line, &layout) {
+                Ok(mut row) => {
+                    if let Some((options, _)) = reconcile {
+                        reconcile_row(&dest_conn, &mut row, options, &mut sites);
+                    }
                     batch.push(row);
                     if batch.len() >= BATCH_SIZE {
-                        let (ins, sk) = flush_batch(&dest_conn, &batch)?;
+                        let (ins, sk) = flush_batch(&dest_conn, &batch, batch_id)?;
                         imported += ins;
                         skipped += sk;
                         batch.clear();
@@ -170,15 +246,41 @@ impl Migrator for CsvImporter {
                 Err(e) => {
                     tracing::warn!(err = %e, line = %line, "skipping unparseable CSV line");
                     skipped += 1;
+                    unparseable += 1;
                 }
             }
+        }
+        if data_lines > 0 && unparseable == data_lines {
+            return Err(MigrateError::CsvParse(format!(
+                "none of the {data_lines} lines could be read as a detection \
+                 (expected {} columns: Date, Time, Sci_Name, Com_Name, Confidence, …)",
+                layout.describe()
+            )));
         }
 
         // Flush remainder.
         if !batch.is_empty() {
-            let (ins, sk) = flush_batch(&dest_conn, &batch)?;
+            let (ins, sk) = flush_batch(&dest_conn, &batch, batch_id)?;
             imported += ins;
             skipped += sk;
+        }
+
+        if let (Some(id), Some((_, (station_lat, station_lon)))) = (batch_id, reconcile) {
+            let profile = modal_site(&sites);
+            dest_conn
+                .execute(
+                    "UPDATE import_batches
+                        SET row_count = ?1, source_lat = ?2, source_lon = ?3, distance_km = ?4
+                      WHERE id = ?5",
+                    rusqlite::params![
+                        i64::try_from(imported).unwrap_or(i64::MAX),
+                        profile.modal_lat,
+                        profile.modal_lon,
+                        profile.distance_km_to(station_lat, station_lon),
+                        id,
+                    ],
+                )
+                .map_err(MigrateError::DataTransfer)?;
         }
 
         Ok(MigrationSummary {
@@ -195,65 +297,230 @@ impl Migrator for CsvImporter {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// The twelve columns, in BirdNET-Pi's order, by the names a header uses.
+const COLUMNS: [&str; 12] = [
+    "date",
+    "time",
+    "sci_name",
+    "com_name",
+    "confidence",
+    "lat",
+    "lon",
+    "cutoff",
+    "week",
+    "sens",
+    "overlap",
+    "file_name",
+];
+
+/// How a file's lines are laid out: the separator, and — when the first line
+/// is a header — where each of [`COLUMNS`] sits.
+pub(crate) struct Layout {
+    delim: char,
+    /// `positions[i]` is the field index of `COLUMNS[i]`; `None` when the file
+    /// has no header, in which case the fields are in `COLUMNS` order.
+    positions: Option<[Option<usize>; 12]>,
+}
+
+impl Layout {
+    /// Read the layout from a file's first line.
+    pub(crate) fn detect(first_line: &str) -> Self {
+        // The separator that occurs most, among the three any of these files
+        // uses. `BirdDB.txt` has eleven `;` and at most a comma or two in a
+        // species name; a CSV has eleven or more `,`.
+        let count = |c: char| first_line.matches(c).count();
+        let delim = [';', '\t', ',']
+            .into_iter()
+            .max_by_key(|&c| (count(c), c == ';'))
+            .unwrap_or(',');
+        let fields = split_fields(first_line, delim);
+        let is_header = fields.first().is_some_and(|f| {
+            f.trim()
+                .trim_start_matches('\u{feff}')
+                .eq_ignore_ascii_case("date")
+        });
+        let positions = is_header.then(|| {
+            let names: Vec<String> = fields
+                .iter()
+                .map(|f| f.trim().to_ascii_lowercase())
+                .collect();
+            COLUMNS.map(|col| names.iter().position(|n| n == col))
+        });
+        Self { delim, positions }
+    }
+
+    /// Whether the first line is a header rather than a detection.
+    pub(crate) const fn has_header(&self) -> bool {
+        self.positions.is_some()
+    }
+
+    /// The field index of `COLUMNS[col]`.
+    fn index(&self, col: usize) -> Option<usize> {
+        self.positions.map_or(Some(col), |p| p[col])
+    }
+
+    fn describe(&self) -> String {
+        let sep = match self.delim {
+            ';' => "semicolon-separated",
+            '\t' => "tab-separated",
+            _ => "comma-separated",
+        };
+        format!(
+            "{sep} {}",
+            if self.has_header() {
+                "with a header"
+            } else {
+                "without a header"
+            }
+        )
+    }
+}
+
+/// Split one line on `delim`, honouring RFC 4180 quoting: a field that starts
+/// with `"` runs to the matching `"`, and `""` inside it is one `"`.
+fn split_fields(line: &str, delim: char) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut field = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+    let mut at_start = true;
+    while let Some(c) = chars.next() {
+        if quoted {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    field.push('"');
+                    chars.next();
+                } else {
+                    quoted = false;
+                }
+            } else {
+                field.push(c);
+            }
+        } else if c == '"' && at_start {
+            quoted = true;
+            at_start = false;
+        } else if c == delim {
+            out.push(std::mem::take(&mut field));
+            at_start = true;
+        } else {
+            field.push(c);
+            at_start = false;
+        }
+    }
+    out.push(field);
+    out
+}
+
+/// Undo the export's formula guard: `escape_csv` puts a `'` in front of text
+/// that starts with `=`, `+`, `-`, `@`, a tab or a CR.
+fn unguard(s: &str) -> &str {
+    match s.strip_prefix('\'') {
+        Some(rest) if rest.starts_with(['=', '+', '-', '@', '\t', '\r']) => rest,
+        _ => s,
+    }
+}
+
 /// Parse one data line into a `CsvRow`.
 #[allow(clippy::similar_names)]
-fn parse_line(line: &str, delim: char) -> Result<CsvRow, MigrateError> {
-    let fields: Vec<&str> = line.splitn(12, delim).collect();
+fn parse_line(line: &str, layout: &Layout) -> Result<CsvRow, MigrateError> {
+    let fields = split_fields(line, layout.delim);
     if fields.len() < MIN_FIELDS {
         return Err(MigrateError::CsvParse(format!(
             "expected ≥{MIN_FIELDS} fields, got {}",
             fields.len()
         )));
     }
-
-    let parse_opt_f64 = |s: &str| -> Option<f64> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() || trimmed == "\\N" || trimmed == "NULL" {
-            None
-        } else {
-            trimmed.parse().ok()
-        }
+    let field = |col: usize| -> Option<&str> {
+        layout
+            .index(col)
+            .and_then(|i| fields.get(i))
+            .map(|f| unguard(f.trim()))
     };
-    let parse_opt_i64 = |s: &str| -> Option<i64> {
-        let trimmed = s.trim();
-        if trimmed.is_empty() || trimmed == "\\N" || trimmed == "NULL" {
-            None
-        } else {
-            trimmed.parse().ok()
-        }
+    let required = |col: usize| -> Result<&str, MigrateError> {
+        field(col)
+            .filter(|f| !f.is_empty())
+            .ok_or_else(|| MigrateError::CsvParse(format!("missing {}", COLUMNS[col])))
     };
-    let parse_opt_str = |s: &str| -> Option<String> {
-        let s = s.trim();
-        if s.is_empty() || s == "\\N" || s == "NULL" {
-            None
-        } else {
-            Some(s.to_string())
-        }
+    let absent = |s: &str| s.is_empty() || s == "\\N" || s == "NULL";
+    let opt_f64 = |col: usize| {
+        field(col)
+            .filter(|s| !absent(s))
+            .and_then(|s| s.parse().ok())
+    };
+    let opt_i64 = |col: usize| {
+        field(col)
+            .filter(|s| !absent(s))
+            .and_then(|s| s.parse().ok())
     };
 
-    let confidence: f64 = fields[4]
-        .trim()
+    let raw_confidence = required(4)?;
+    let confidence: f64 = raw_confidence
         .parse()
-        .map_err(|_| MigrateError::CsvParse(format!("invalid confidence: '{}'", fields[4])))?;
+        .map_err(|_| MigrateError::CsvParse(format!("invalid confidence: '{raw_confidence}'")))?;
 
     Ok(CsvRow {
-        date: fields[0].trim().to_string(),
-        time: fields[1].trim().to_string(),
-        sci_name: fields[2].trim().to_string(),
-        com_name: fields[3].trim().to_string(),
+        date: required(0)?.to_string(),
+        time: required(1)?.to_string(),
+        sci_name: required(2)?.to_string(),
+        com_name: required(3)?.to_string(),
         confidence,
-        lat: fields.get(5).copied().and_then(parse_opt_f64),
-        lon: fields.get(6).copied().and_then(parse_opt_f64),
-        cutoff: fields.get(7).copied().and_then(parse_opt_f64),
-        week: fields.get(8).copied().and_then(parse_opt_i64),
-        sens: fields.get(9).copied().and_then(parse_opt_f64),
-        overlap: fields.get(10).copied().and_then(parse_opt_f64),
-        file_name: fields.get(11).copied().and_then(parse_opt_str),
+        lat: opt_f64(5),
+        lon: opt_f64(6),
+        cutoff: opt_f64(7),
+        week: opt_i64(8),
+        sens: opt_f64(9),
+        overlap: opt_f64(10),
+        file_name: field(11).filter(|s| !absent(s)).map(str::to_string),
     })
 }
 
-/// Insert a batch of rows into the destination, returning (inserted, skipped).
-fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), MigrateError> {
+/// Apply the operator's clock reconciliation to `row` and count its site.
+fn reconcile_row(
+    conn: &Connection,
+    row: &mut CsvRow,
+    options: &ImportOptions,
+    sites: &mut SiteCounts,
+) {
+    if options.shifts_time() {
+        // The source's offset wins when it is given, as in the database path.
+        let (d, t) = options.source_utc_offset_secs.map_or_else(
+            || super::importer::shift_timestamp(conn, &row.date, &row.time, options.shift_secs),
+            |src| super::importer::to_local_here(conn, &row.date, &row.time, src),
+        );
+        row.date = d;
+        row.time = t;
+    }
+    if let (Some(lat), Some(lon)) = (row.lat, row.lon)
+        && !(lat == 0.0 && lon == 0.0)
+    {
+        #[allow(clippy::cast_possible_truncation)]
+        let key = ((lat * 1000.0).round() as i64, (lon * 1000.0).round() as i64);
+        *sites.entry(key).or_default() += 1;
+    }
+}
+
+/// The commonest site among `sites`, as a profile that knows only that.
+fn modal_site(sites: &SiteCounts) -> SourceProfile {
+    let mut profile = SourceProfile::default();
+    // Ties broken by the key, so the answer does not depend on hash order.
+    if let Some((&(lat, lon), &n)) = sites.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0))) {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            profile.modal_lat = Some(lat as f64 / 1000.0);
+            profile.modal_lon = Some(lon as f64 / 1000.0);
+        }
+        profile.modal_rows = n;
+    }
+    profile
+}
+
+/// Insert a batch of rows into the destination, tagged with `batch_id`,
+/// returning (inserted, skipped).
+fn flush_batch(
+    conn: &Connection,
+    batch: &[CsvRow],
+    batch_id: Option<i64>,
+) -> Result<(u64, u64), MigrateError> {
     let tx = conn
         .unchecked_transaction()
         .map_err(MigrateError::DataTransfer)?;
@@ -264,13 +531,14 @@ fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), Migrat
         let rows_changed = tx
             .execute(
                 "INSERT INTO detections
-                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name,
+                  import_batch_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
                 rusqlite::params![
                     row.date, row.time, row.sci_name, row.com_name,
                     row.confidence, row.lat, row.lon, row.cutoff,
-                    row.week, row.sens, row.overlap, row.file_name,
+                    row.week, row.sens, row.overlap, row.file_name, batch_id,
                 ],
             )
             .map_err(MigrateError::DataTransfer)?;
@@ -411,7 +679,7 @@ mod tests {
     #[test]
     fn parse_tab_separated_line() {
         let line = "2026-01-15\t06:23:11\tTurdus merula\tEurasian Blackbird\t0.921\t51.5\t-0.1\t0.7\t3\t1.0\t0.0\trec.wav";
-        let row = parse_line(line, '\t').unwrap();
+        let row = parse_line(line, &Layout::detect(line)).unwrap();
         assert_eq!(row.date, "2026-01-15");
         assert_eq!(row.com_name, "Eurasian Blackbird");
         assert!((row.confidence - 0.921).abs() < 1e-6);
@@ -421,15 +689,109 @@ mod tests {
     #[test]
     fn parse_comma_separated_line() {
         let line = "2026-01-15,06:23:11,Turdus merula,Eurasian Blackbird,0.80,,,,,,,";
-        let row = parse_line(line, ',').unwrap();
+        let row = parse_line(line, &Layout::detect(line)).unwrap();
         assert_eq!(row.com_name, "Eurasian Blackbird");
         assert!(row.lat.is_none());
     }
 
     #[test]
     fn parse_line_too_few_fields() {
-        let result = parse_line("2026-01-15\t06:23:11", '\t');
+        let line = "2026-01-15\t06:23:11";
+        let result = parse_line(line, &Layout::detect(line));
         assert!(result.is_err());
+    }
+
+    fn import(text: &str) -> Result<(MigrationSummary, NamedTempFile), MigrateError> {
+        let src = make_csv(text);
+        let dst = NamedTempFile::new().unwrap();
+        let progress = crate::progress::ProgressHandle::new();
+        CsvImporter
+            .migrate(src.path(), dst.path(), &progress)
+            .map(|s| (s, dst))
+    }
+
+    fn file_names(dst: &NamedTempFile) -> Vec<Option<String>> {
+        let conn = rusqlite::Connection::open(dst.path()).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT File_Name FROM detections ORDER BY Date, Time")
+            .unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// BirdNET-Pi's `BirdDB.txt` — the file the migration page names — is
+    /// semicolon-separated. This importer read it as a one-column CSV, skipped
+    /// every line, and reported a successful import of 0 rows.
+    #[test]
+    fn birddb_txt_is_semicolon_separated_with_or_without_a_header() {
+        let body = "2026-01-15;06:23:11;Turdus merula;Eurasian Blackbird;0.921;51.5;-0.1;0.7;3;1.0;0.0;rec.wav\n\
+                    2026-01-16;07:00:00;Passer domesticus;House Sparrow;0.85;51.5;-0.1;0.7;3;1.0;0.0;b.wav\n";
+        let (summary, dst) = import(body).expect("headerless BirdDB.txt");
+        assert_eq!(
+            summary.imported_rows, 2,
+            "the first line is data, not a header"
+        );
+        assert_eq!(
+            file_names(&dst),
+            vec![Some("rec.wav".into()), Some("b.wav".into())]
+        );
+
+        let with_header = format!(
+            "Date;Time;Sci_Name;Com_Name;Confidence;Lat;Lon;Cutoff;Week;Sens;Overlap;File_Name\n{body}"
+        );
+        let (summary, _) = import(&with_header).expect("BirdDB.txt with a header");
+        assert_eq!(summary.imported_rows, 2);
+    }
+
+    /// This station's own CSV export, read back: a header, five more columns
+    /// after `File_Name`, RFC 4180 quoting and the formula guard. Read
+    /// positionally, the extra columns ran into `File_Name`, so every row was a
+    /// new duplicate pointing at a clip that did not exist.
+    #[test]
+    fn this_stations_own_export_reads_back_as_itself() {
+        let export = "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
+Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256\n\
+2026-04-01,03:30:00,Strix aluco,\"Owl, Tawny\",0.9100,51.48,-0.13,0.75,13,1.25,0,clip.wav,2026-04-01,2026-04-01T02:30:00Z,3,BirdNET,abc\n\
+2026-04-01,03:31:00,Strix aluco,'-odd name,0.8000,,,,,,,,2026-04-01,,,,\n";
+        let (summary, dst) = import(export).expect("own export");
+        assert_eq!(summary.imported_rows, 2);
+        assert_eq!(file_names(&dst), vec![Some("clip.wav".into()), None]);
+        let conn = rusqlite::Connection::open(dst.path()).unwrap();
+        let names: Vec<String> = conn
+            .prepare("SELECT Com_Name FROM detections ORDER BY Time")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            names,
+            vec!["Owl, Tawny".to_string(), "-odd name".to_string()]
+        );
+
+        // Re-importing the same export adds nothing.
+        let src = make_csv(export);
+        let again = CsvImporter
+            .migrate(
+                src.path(),
+                dst.path(),
+                &crate::progress::ProgressHandle::new(),
+            )
+            .expect("re-import");
+        assert_eq!(
+            again.imported_rows, 0,
+            "a re-import duplicated the station's history"
+        );
+    }
+
+    /// A file none of whose lines is a detection is an error, not a success
+    /// with 0 rows. (Counterpart to the above: a re-import that finds only
+    /// duplicates is still a success.)
+    #[test]
+    fn a_file_with_no_readable_line_is_an_error() {
+        assert!(import("this is not\na detection log\n").is_err());
     }
 
     #[test]

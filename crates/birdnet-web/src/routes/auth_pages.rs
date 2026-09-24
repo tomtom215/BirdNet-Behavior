@@ -50,11 +50,12 @@ async fn login_page(req: Request) -> Html<String> {
         .split('&')
         .find_map(|p| p.strip_prefix("error="))
         .map(LoginError::from_code);
-    let next = query
-        .split('&')
-        .find_map(|p| p.strip_prefix("next=").map(str::to_string))
-        .filter(|s| s.starts_with('/'))
-        .unwrap_or_else(|| "/admin/overview".to_string());
+    // Decoded: the gate percent-encodes the original path and query into
+    // `next=` (`?` arrives as `%3F`), so reading it raw sent every deep link
+    // with a query string to a 404 after a correct password.
+    let next = form_urlencoded::parse(query.as_bytes())
+        .find_map(|(k, v)| (k == "next").then(|| v.into_owned()));
+    let next = sanitize_next(next.as_deref()).to_string();
 
     Html(render_login(LoginContext {
         error,
@@ -78,6 +79,7 @@ async fn login_page(req: Request) -> Html<String> {
 async fn login_submit(
     State(state): State<AppState>,
     client: Option<Extension<ClientIp>>,
+    vouched_by: Option<Extension<crate::client_ip::VouchedBy>>,
     headers: axum::http::HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
@@ -89,22 +91,32 @@ async fn login_submit(
     let ip = client
         .as_ref()
         .map_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), |c| c.0.0);
-    if let Err(retry_after) = state.login_throttle().check(ip) {
-        crate::audit::audit_user_id(
-            &state,
-            None,
-            "auth.login.throttled",
-            Some(&form.username),
-            None,
-        );
-        tracing::warn!(
-            ip = %ip,
-            username = %form.username,
-            retry_after_secs = retry_after.as_secs(),
-            "sign-in refused: too many failed attempts from this address"
-        );
-        return throttled_response(retry_after, &next);
-    }
+    // The hop that named this address has a budget of its own, so a hop that
+    // names a new address per attempt cannot buy unlimited guesses. Not when
+    // nothing but the connection vouched (that *is* the client), and not for
+    // loopback — see `login_throttle::VOUCHER_MAX_FAILURES`.
+    let voucher = vouched_by
+        .map(|v| v.0.0)
+        .filter(|v| *v != ip && !v.is_loopback());
+    let attempt = match state.login_throttle().begin(ip, voucher) {
+        Ok(attempt) => attempt,
+        Err(retry_after) => {
+            crate::audit::audit_user_id(
+                &state,
+                None,
+                "auth.login.throttled",
+                Some(&form.username),
+                None,
+            );
+            tracing::warn!(
+                ip = %ip,
+                username = %form.username,
+                retry_after_secs = retry_after.as_secs(),
+                "sign-in refused: too many failed attempts from this address"
+            );
+            return throttled_response(retry_after, &next);
+        }
+    };
     let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
         (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
         _ => None,
@@ -122,11 +134,17 @@ async fn login_submit(
         // Wrong credentials, or no admin password configured at all.
         // Bypass the gate when basic-auth would also have let the
         // request through (no CADDY_USER + no DB admin password).
-        if configured_env.is_none()
-            && state
-                .with_db(|conn| conn.find_user_by_name("admin"))
-                .is_ok_and(|u| accounts::is_legacy_password_hash(&u.pwd_argon2))
-        {
+        // The same fail-closed test as the middleware's bypass: a password
+        // whose bootstrap write failed, or a database that did not answer,
+        // is not "no password".
+        if configured_env.is_none() && !crate::auth_middleware::admin_password_configured(&state) {
+            // The same name check as the middleware's bypass: a session minted
+            // here under a rebound name would carry the attacker straight past
+            // it on the next request.
+            let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+            if !crate::open_admin_host::may_open_bypass(host) {
+                return crate::open_admin_host::refused(host.unwrap_or(""));
+            }
             return open_bypass_redirect(&state, &next, &device);
         }
         // The target carries the *submitted* username, not a verified one:
@@ -135,11 +153,12 @@ async fn login_submit(
         // that does. There is no actor id because there is no actor — that is
         // why `audit_log.user_id` is nullable.
         crate::audit::audit_user_id(&state, None, "auth.login.fail", Some(&form.username), None);
-        state.login_throttle().record_failure(ip);
+        // Already counted by `begin`; dropping the attempt keeps it.
+        drop(attempt);
         let query = format!("?error=1&next={}", urlencode_path(&next));
         return Redirect::to(&format!("/login{query}")).into_response();
     };
-    state.login_throttle().clear(ip);
+    state.login_throttle().succeeded(attempt);
 
     let ttl_ms = if form.remember.as_deref() == Some("1") {
         session::REMEMBER_ME_TTL_MS
@@ -403,8 +422,19 @@ fn sanitize_next(raw: Option<&str>) -> &str {
     // Only allow path-rooted redirects so an attacker can't smuggle in an
     // off-host URL via `next=`. Anything else falls back to the admin
     // overview.
-    raw.filter(|s| s.starts_with('/') && !s.starts_with("//"))
-        .unwrap_or("/admin/overview")
+    //
+    // A browser reads a leading `/\` as `//` (the WHATWG URL parser treats `\`
+    // as `/` in special schemes) and skips tabs and newlines inside a URL, so
+    // `/\evil.example` and `/\t/evil.example` are off-site too. No path on this
+    // station contains a backslash or a control character, so both are
+    // refused outright rather than normalised.
+    raw.filter(|s| {
+        s.starts_with('/')
+            && !s.starts_with("//")
+            && !s.contains('\\')
+            && !s.chars().any(char::is_control)
+    })
+    .unwrap_or("/admin/overview")
 }
 
 #[derive(Debug, Deserialize)]

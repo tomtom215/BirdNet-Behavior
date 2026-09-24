@@ -16,72 +16,72 @@
 /* ── Fonts ────────────────────────────────────────────────────────────── */
 /* Inter Tight — UI */
 @font-face { font-family:"Inter Tight"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/inter-tight-latin-400-normal.woff2) format("woff2");
+  src:url(../fonts/inter-tight-latin-400-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Inter Tight"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/inter-tight-latin-ext-400-normal.woff2) format("woff2");
+  src:url(../fonts/inter-tight-latin-ext-400-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 @font-face { font-family:"Inter Tight"; font-style:normal; font-weight:500; font-display:swap;
-  src:url(/static/fonts/inter-tight-latin-500-normal.woff2) format("woff2");
+  src:url(../fonts/inter-tight-latin-500-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Inter Tight"; font-style:normal; font-weight:500; font-display:swap;
-  src:url(/static/fonts/inter-tight-latin-ext-500-normal.woff2) format("woff2");
+  src:url(../fonts/inter-tight-latin-ext-500-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 @font-face { font-family:"Inter Tight"; font-style:normal; font-weight:600; font-display:swap;
-  src:url(/static/fonts/inter-tight-latin-600-normal.woff2) format("woff2");
+  src:url(../fonts/inter-tight-latin-600-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Inter Tight"; font-style:normal; font-weight:600; font-display:swap;
-  src:url(/static/fonts/inter-tight-latin-ext-600-normal.woff2) format("woff2");
+  src:url(../fonts/inter-tight-latin-ext-600-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 
 /* Instrument Serif — display */
 @font-face { font-family:"Instrument Serif"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/instrument-serif-latin-400-normal.woff2) format("woff2");
+  src:url(../fonts/instrument-serif-latin-400-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Instrument Serif"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/instrument-serif-latin-ext-400-normal.woff2) format("woff2");
+  src:url(../fonts/instrument-serif-latin-ext-400-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 @font-face { font-family:"Instrument Serif"; font-style:italic; font-weight:400; font-display:swap;
-  src:url(/static/fonts/instrument-serif-latin-400-italic.woff2) format("woff2");
+  src:url(../fonts/instrument-serif-latin-400-italic.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Instrument Serif"; font-style:italic; font-weight:400; font-display:swap;
-  src:url(/static/fonts/instrument-serif-latin-ext-400-italic.woff2) format("woff2");
+  src:url(../fonts/instrument-serif-latin-ext-400-italic.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 
 /* JetBrains Mono — mono */
 @font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2");
+  src:url(../fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/jetbrains-mono-latin-ext-400-normal.woff2) format("woff2");
+  src:url(../fonts/jetbrains-mono-latin-ext-400-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 @font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:500; font-display:swap;
-  src:url(/static/fonts/jetbrains-mono-latin-500-normal.woff2) format("woff2");
+  src:url(../fonts/jetbrains-mono-latin-500-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:500; font-display:swap;
-  src:url(/static/fonts/jetbrains-mono-latin-ext-500-normal.woff2) format("woff2");
+  src:url(../fonts/jetbrains-mono-latin-ext-500-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 
 /* Noto Sans — self-hosted Latin/latin-ext fallback for the BirdNET language
    label packs. Non-Latin scripts (CJK, Devanagari, …) fall through to the
    client's installed system fonts named in --font-ui (no CDN dependency). */
 @font-face { font-family:"Noto Sans"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/noto-sans-latin-400-normal.woff2) format("woff2");
+  src:url(../fonts/noto-sans-latin-400-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Noto Sans"; font-style:normal; font-weight:400; font-display:swap;
-  src:url(/static/fonts/noto-sans-latin-ext-400-normal.woff2) format("woff2");
+  src:url(../fonts/noto-sans-latin-ext-400-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 @font-face { font-family:"Noto Sans"; font-style:normal; font-weight:500; font-display:swap;
-  src:url(/static/fonts/noto-sans-latin-500-normal.woff2) format("woff2");
+  src:url(../fonts/noto-sans-latin-500-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Noto Sans"; font-style:normal; font-weight:500; font-display:swap;
-  src:url(/static/fonts/noto-sans-latin-ext-500-normal.woff2) format("woff2");
+  src:url(../fonts/noto-sans-latin-ext-500-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 @font-face { font-family:"Noto Sans"; font-style:normal; font-weight:600; font-display:swap;
-  src:url(/static/fonts/noto-sans-latin-600-normal.woff2) format("woff2");
+  src:url(../fonts/noto-sans-latin-600-normal.woff2) format("woff2");
   unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family:"Noto Sans"; font-style:normal; font-weight:600; font-display:swap;
-  src:url(/static/fonts/noto-sans-latin-ext-600-normal.woff2) format("woff2");
+  src:url(../fonts/noto-sans-latin-ext-600-normal.woff2) format("woff2");
   unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 
 /* ── Tokens · light (default) ─────────────────────────────────────────── */
@@ -2782,7 +2782,11 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .audit-list     { list-style: none; padding: 0; margin: 0; }
 .audit-note     { margin-top: 14px; }
 .audit-row      { padding: 10px 0; border-top: 0.5px solid var(--hairline); display: grid; grid-template-columns: 170px 120px 1fr; gap: 12px; align-items: start; }
-.audit-meta-row { margin-top: 4px; font-size: 11px; color: var(--fg-3); overflow-x: auto; }
+/* A saved-settings entry is one comma-joined list with no spaces. It sits in
+   `.account-audit li`'s `auto` column (that rule outranks .audit-row's grid),
+   so it could not wrap and widened /admin/audit to 3818px. The renderer puts a
+   <wbr> after each comma; `anywhere` is the fallback for one very long token. */
+.audit-meta-row { margin-top: 4px; font-size: 11px; color: var(--fg-3); overflow-wrap: anywhere; }
 @media (max-width: 520px) {
   .audit-row { grid-template-columns: 1fr; }
 }

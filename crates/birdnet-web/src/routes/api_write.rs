@@ -38,7 +38,7 @@ use axum::{
     Json, Router,
     routing::{get, post},
 };
-use birdnet_core::config::redact::{REDACTED, is_secret_key, redact_value};
+use birdnet_core::config::redact::REDACTED;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -750,7 +750,9 @@ async fn batch(
 /// The station's settings, with every credential masked.
 ///
 /// Applies the project's existing redaction rule rather than a second copy of
-/// it: [`is_secret_key`] by key name, then [`redact_value`] by value shape.
+/// it: [`is_secret_key`](birdnet_core::config::redact::is_secret_key) by key
+/// name, then [`redact_value`](birdnet_core::config::redact::redact_value) by
+/// value shape.
 /// That is `support::redacted_config`'s rule, and it lives in `birdnet-core`
 /// so both callers share one definition — two copies of "which values are
 /// secret" is the arrangement that once shipped an open `/admin` a diagnostic
@@ -763,24 +765,26 @@ async fn batch(
 /// `apprise_url`, `notify_urls` and `heartbeat_url` are the interesting cases.
 /// None of their *names* looks like a secret, and all three routinely carry one
 /// in the value — `ntfy://user:pass@host` in the authority, and a heartbeat
-/// URL whose path segment *is* the credential (`NT-16`). [`redact_value`]
+/// URL whose path segment *is* the credential (`NT-16`).
+/// [`redact_value`](birdnet_core::config::redact::redact_value)
 /// covers both shapes: an `http(s)` URL keeps its host and loses its path, and
 /// an Apprise-style URL keeps only its scheme.
 fn redacted_settings(raw: &std::collections::HashMap<String, String>) -> BTreeMap<String, String> {
-    raw.iter()
-        .map(|(k, v)| {
-            let shown = if is_secret_key(k) {
-                REDACTED.to_owned()
-            } else {
-                redact_value(v)
-            };
-            (k.clone(), shown)
-        })
+    crate::routes::admin::settings::handler::mask_credentials(raw)
+        .into_iter()
         .collect()
 }
 
 async fn read_settings(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    let raw = crate::routes::admin::settings::handler::load_all_settings(&state);
+    let raw = match crate::routes::admin::settings::handler::load_all_settings(&state) {
+        Ok(raw) => raw,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "error": format!("the settings could not be read: {e}") })),
+            );
+        }
+    };
     let redacted = redacted_settings(&raw);
     let masked: Vec<&String> = redacted
         .iter()
@@ -886,8 +890,19 @@ async fn write_settings(
         return bad_request("the body could not be read as a settings payload");
     };
 
-    let existing = crate::routes::admin::settings::handler::load_all_settings(&state);
-    let items = crate::routes::admin::settings::handler::build_settings_items(&form, &existing);
+    // Refused when the current values cannot be read: diffed against nothing,
+    // every submitted field would count as changed and be written.
+    let Ok(existing) = crate::routes::admin::settings::handler::load_all_settings(&state) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "the current settings could not be read; nothing was written" })),
+        );
+    };
+    let items = crate::routes::admin::settings::handler::build_settings_items(
+        &form,
+        &existing,
+        crate::routes::admin::settings::handler::Unset::AsEmpty,
+    );
     if items.is_empty() {
         return (
             StatusCode::OK,

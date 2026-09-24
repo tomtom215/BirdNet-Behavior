@@ -25,7 +25,7 @@ pub use analytics::{
     reviewed_detections_by_species, species_shapes, today_species_hour_heatmap,
     weekly_detection_count, weekly_new_species, weekly_top_species,
 };
-pub use correlation::{companion_species, temporal_cooccurrence, top_cooccurrence_pairs};
+pub use correlation::{companion_species, top_cooccurrence_pairs};
 pub use detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
     detection_review_counts, detection_review_total, detection_reviews_page, get_detection_review,
@@ -39,11 +39,12 @@ pub use detections::{
     analytic_species_count_for_date, best_detections_for_date, com_name_for,
     concurrent_detections_from_other_sources, delete_detection, detected_at_utc_for, detection_at,
     detection_count, detection_count_for_date, detection_count_for_species_date, detection_dates,
-    detections_by_date, detections_by_species, detections_for_clip, detections_per_day,
-    insert_detection, is_detection_locked, known_sources, lock_detection, locked_file_names,
-    recent_clips, recent_clips_count, recent_detections, recent_detections_page, relabel_detection,
-    search_detection_count, search_detections, seconds_since_last_detection,
-    set_birdweather_soundscape, species_for_date, todays_detection_count, todays_detections,
+    detections_by_date, detections_by_date_page, detections_by_species, detections_by_species_page,
+    detections_for_clip, detections_per_day, insert_detection, is_detection_locked, known_sources,
+    like_contains, lock_detection, locked_file_names, recent_clips, recent_clips_count,
+    recent_detections, recent_detections_page, relabel_detection, search_detection_count,
+    search_detections, seconds_since_last_detection, set_birdweather_soundscape,
+    species_detection_count_between, species_for_date, todays_detection_count, todays_detections,
     todays_source_activity, unlock_detection, unstamped_detection_count,
 };
 pub use effort::total_recording_seconds;

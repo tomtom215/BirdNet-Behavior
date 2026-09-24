@@ -17,10 +17,7 @@ use axum::http::{StatusCode, header};
 use axum::routing::get;
 use serde::Deserialize;
 
-use birdnet_db::sqlite::{
-    HeatmapCell, hourly_totals, species_hourly_activity_batch, species_sparklines, top_species,
-    weekly_heatmap,
-};
+use birdnet_db::sqlite::{HeatmapCell, hourly_totals, species_sparklines, weekly_heatmap};
 
 use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
@@ -35,11 +32,6 @@ pub fn router() -> Router<AppState> {
         .route("/pages/heatmap-grid", get(heatmap_grid_partial))
         .route("/pages/hourly-totals", get(hourly_totals_partial))
         .route("/pages/activity-streamgraph", get(streamgraph_partial))
-        .route("/pages/dawn-chorus", get(dawn_chorus_partial))
-        .route(
-            "/pages/seasonal-phenology",
-            get(migration_ridgeline_partial),
-        )
 }
 
 #[derive(Deserialize)]
@@ -217,104 +209,6 @@ async fn streamgraph_partial(
 }
 
 // ---------------------------------------------------------------------------
-// GET /pages/dawn-chorus — circadian polar of the top species
-// ---------------------------------------------------------------------------
-
-/// Compute the dawn-chorus circadian polar for the top 5 species.
-///
-/// Uses one batched hourly-activity query rather than a scan per species (the
-/// previous N+1). Returns `None` when a query fails, so the caller renders
-/// [`FRAGMENT_ERR`] rather than an empty polar.
-///
-/// The comment here used to read "Always returns `Some`: an empty yard renders
-/// an empty polar, not an error" — which described the empty path accurately
-/// and was silent about the error path the same two `unwrap_or_default` calls
-/// created. Either query failing produced an empty `series`, which
-/// `circadian_polar` renders as `viz::EMPTY` — "Not enough data yet for this
-/// view" — so a database error was reported to the operator as a quiet yard.
-#[allow(clippy::cast_precision_loss)]
-fn compute_dawn_chorus(state: &AppState) -> Option<String> {
-    let series = state.with_db(|conn| {
-        let top = top_species(conn, 5).ok()?;
-        let names: Vec<String> = top.iter().map(|s| s.com_name.clone()).collect();
-        let hourly = species_hourly_activity_batch(conn, &names).ok()?;
-        Some(
-            top.into_iter()
-                .map(|s| {
-                    let mut arr = [0.0_f64; 24];
-                    if let Some(counts) = hourly.get(&s.com_name) {
-                        for (i, &c) in counts.iter().enumerate() {
-                            arr[i] = c as f64;
-                        }
-                    }
-                    (s.com_name, arr)
-                })
-                .collect::<Vec<_>>(),
-        )
-    })?;
-    // Current hour-of-day (UTC) for the "now" hand on the polar.
-    let now_h = {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        (secs % 86_400) as f64 / 3600.0
-    };
-    Some(super::viz::circadian_polar(&series, now_h))
-}
-
-async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    let html = cached_fragment(&state, "dawn-chorus".to_string(), FRAGMENT_ERR, |s| {
-        compute_dawn_chorus(s)
-    })
-    .await;
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-// ---------------------------------------------------------------------------
-// GET /pages/seasonal-phenology — per-species seasonal joyplot
-// (the dedicated /migration page owns the canonical /pages/migration-ridgeline)
-// ---------------------------------------------------------------------------
-
-/// Compute the seasonal-phenology ridgeline, or `None` on a query error.
-///
-/// Top 7 species, weekly buckets over the year. This is the heaviest single
-/// analytics query (a full year of per-species daily counts), so caching it
-/// matters most.
-fn compute_seasonal_phenology(state: &AppState) -> Option<String> {
-    // One dense query for the year, then bucket each species into ~52 weeks.
-    let map = state.with_db(|conn| species_sparklines(conn, 364)).ok()?;
-    let mut ranked: Vec<(String, Vec<i64>)> = map.into_iter().collect();
-    ranked.sort_by(|a, b| {
-        b.1.iter()
-            .sum::<i64>()
-            .cmp(&a.1.iter().sum::<i64>())
-            .then_with(|| a.0.cmp(&b.0))
-    });
-    ranked.truncate(7);
-    let series: Vec<(String, Vec<i64>)> = ranked
-        .into_iter()
-        .map(|(name, daily)| {
-            let weekly: Vec<i64> = daily.chunks(7).map(|c| c.iter().sum()).collect();
-            (name, weekly)
-        })
-        .collect();
-    Some(super::viz::ridgeline(&series))
-}
-
-async fn migration_ridgeline_partial(
-    State(state): State<AppState>,
-) -> impl axum::response::IntoResponse {
-    let html = cached_fragment(
-        &state,
-        "seasonal-phenology".to_string(),
-        FRAGMENT_ERR,
-        compute_seasonal_phenology,
-    )
-    .await;
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-// ---------------------------------------------------------------------------
 // Pre-warm
 // ---------------------------------------------------------------------------
 
@@ -332,15 +226,6 @@ pub fn prewarm(state: &AppState) {
     }
     if let Some(h) = compute_hourly_totals(state, 7) {
         cache.put("hourly-totals:7".to_string(), h);
-    }
-    // Never cache a failure: the prewarm ran before this returned `Option`,
-    // so a boot-time query error would have been stored and served to every
-    // later visitor until the entry expired.
-    if let Some(h) = compute_dawn_chorus(state) {
-        cache.put("dawn-chorus".to_string(), h);
-    }
-    if let Some(h) = compute_seasonal_phenology(state) {
-        cache.put("seasonal-phenology".to_string(), h);
     }
 }
 
@@ -526,9 +411,14 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
     );
 
     // Build a lookup by hour
+    // An hour outside 0–23 comes from a malformed `Time` (the BirdNET-Pi
+    // importer copies those through), and is skipped: indexing with it
+    // panicked, and `panic = "abort"` took the station down with the page.
     let mut by_hour = [0i64; 24];
     for h in totals {
-        by_hour[h.hour as usize] = h.count;
+        if let Some(slot) = by_hour.get_mut(usize::from(h.hour)) {
+            *slot = h.count;
+        }
     }
 
     for (hour, &count) in by_hour.iter().enumerate() {

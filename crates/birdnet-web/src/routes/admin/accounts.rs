@@ -447,7 +447,17 @@ async fn set_password(
     let first_password = request_user.session_id == "open-bypass"
         && request_user.user.id == id
         && accounts::is_legacy_password_hash(&request_user.user.pwd_argon2);
-    let result = state.with_db(|conn| conn.set_password(id, &pwd_argon2));
+    let result = state.with_db(|conn| {
+        conn.set_password(id, &pwd_argon2)?;
+        if first_password {
+            // Every session on this account was minted while the station was
+            // open, when `POST /login` hands anyone an admin cookie. The
+            // station is locking now; none of them may outlive that. The
+            // owner's own session is minted below, after this.
+            conn.revoke_others(id, "")?;
+        }
+        Ok::<(), AccountsError>(())
+    });
     match result {
         Ok(()) => {
             // The target is the account whose password changed, which is not
@@ -800,7 +810,9 @@ fn render_audit_full_rows(entries: &[AuditEntry], users: &[User]) -> String {
             .map(|m| {
                 format!(
                     r#"<div class="mono bnb-meta audit-meta-row">{}</div>"#,
-                    escape_html(m)
+                    // A break opportunity after each comma: a saved-settings
+                    // entry is one long comma-joined list with no spaces.
+                    escape_html(m).replace(',', ",<wbr>")
                 )
             })
             .unwrap_or_default();
@@ -1002,6 +1014,25 @@ mod tests {
         assert!(html.contains("rule:nightjar"));
         // Metadata is escaped (JSON quoted) — verify the quote becomes an entity.
         assert!(html.contains("&quot;enabled&quot;"));
+    }
+
+    /// A saved-settings entry is one comma-joined list with no spaces; with no
+    /// break opportunity it widened /admin/audit to 3818px at 1440.
+    #[test]
+    fn a_long_settings_list_can_wrap_at_its_commas() {
+        let entries = vec![AuditEntry {
+            id: 1,
+            at: "2026-09-23 23:06:08".to_string(),
+            user_id: None,
+            action: "settings.update".to_string(),
+            target: None,
+            metadata: Some("audio_format,clip_retention_days,confidence_threshold".to_string()),
+        }];
+        let html = render_audit_full_rows(&entries, &[]);
+        assert!(
+            html.contains("audio_format,<wbr>clip_retention_days,<wbr>confidence_threshold"),
+            "no break opportunity between the keys: {html}"
+        );
     }
 
     #[test]

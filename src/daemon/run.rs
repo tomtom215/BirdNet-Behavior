@@ -37,6 +37,9 @@ pub(super) struct RunManifest {
     pub lat: Option<f64>,
     /// Station longitude.
     pub lon: Option<f64>,
+    /// Each classifier's own confidence threshold, by id, for the ones that
+    /// set one (`MODEL_THRESHOLD`, `MODEL_2_THRESHOLD`, …).
+    pub model_thresholds: std::collections::HashMap<String, f32>,
 }
 
 /// A run that exists in the database.
@@ -151,6 +154,7 @@ pub(super) fn provenance_for(
             lon: manifest.lon,
             sensitivity: manifest.sensitivity,
             overlap: manifest.overlap,
+            model_thresholds: manifest.model_thresholds.clone(),
         }),
         Err(e) => {
             tracing::error!(
@@ -183,6 +187,7 @@ mod tests {
             sf_thresh: 0.03,
             lat: Some(51.48),
             lon: Some(-0.13),
+            model_thresholds: std::collections::HashMap::new(),
         }
     }
 

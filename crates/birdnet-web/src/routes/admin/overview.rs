@@ -211,7 +211,7 @@ fn overview_body(stats_html: &str) -> String {
         <div class="quick-link-title">📈 Time Series</div>
         <div class="quick-link-desc">Trends, diversity, peak activity</div>
       </a>
-      <a href="/api/v2/export/csv" class="quick-link">
+      <a href="/api/v2/detections/export" class="quick-link">
         <div class="quick-link-title">⬇️ Export CSV</div>
         <div class="quick-link-desc">Download all detections as CSV</div>
       </a>

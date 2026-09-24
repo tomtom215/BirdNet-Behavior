@@ -51,7 +51,7 @@ impl HeartbeatClient {
         let client = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
             .build()
-            .map_err(|e| HeartbeatError::Http(e.to_string()))?;
+            .map_err(|e| HeartbeatError::Http(crate::http_error_text(e)))?;
 
         Ok(Self {
             url: url.to_string(),
@@ -70,7 +70,7 @@ impl HeartbeatClient {
             .get(&self.url)
             .send()
             .await
-            .map_err(|e| HeartbeatError::Http(e.to_string()))?;
+            .map_err(|e| HeartbeatError::Http(crate::http_error_text(e)))?;
 
         if resp.status().is_success() {
             Ok(())

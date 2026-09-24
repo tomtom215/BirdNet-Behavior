@@ -1,7 +1,7 @@
 //! The daemon run loop: watch the directory, debounce writes, and drive each
 //! settled clip through the processing pipeline.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -30,6 +30,28 @@ use super::{
 /// changing something on `/admin/species` and seeing it take effect, and
 /// neither is worth a query per detection during a dawn-chorus burst.
 const SPECIES_LISTS_TTL: Duration = Duration::from_secs(30);
+
+/// Every classifier the daemon loads, primary first.
+///
+/// The primary's id, threshold and rate are the operator's (`MODEL_ID`,
+/// `MODEL_THRESHOLD`, `MODEL_SAMPLE_RATE`). They were resolved by the plan and
+/// then replaced here with `birdnet` and two `None`s, so a route naming the
+/// primary by its configured id stopped the daemon, and the other two did
+/// nothing at all.
+fn classifier_specs(config: &DaemonConfig) -> Vec<crate::inference::registry::ModelSpec> {
+    let mut specs = Vec::with_capacity(1 + config.extra_models.len());
+    specs.push(crate::inference::registry::ModelSpec {
+        id: config.primary_id.clone(),
+        model_path: config.model_path.clone(),
+        labels_path: config.labels_path.clone(),
+        threshold: config.primary_threshold,
+        // `None` derives the rate from the model's shape, which is right for
+        // the BirdNET shapes that derivation was built from.
+        sample_rate: config.primary_sample_rate,
+    });
+    specs.extend(config.extra_models.iter().cloned());
+    specs
+}
 
 /// Run the detection daemon loop.
 ///
@@ -69,17 +91,7 @@ pub fn run_daemon(
     // journal and `--doctor` will show it. An unattended station that starts
     // with a microphone routed to nothing looks identical to one having a
     // quiet month.
-    let mut specs = Vec::with_capacity(1 + config.extra_models.len());
-    specs.push(crate::inference::registry::ModelSpec {
-        id: "birdnet".to_owned(),
-        model_path: config.model_path.clone(),
-        labels_path: config.labels_path.clone(),
-        threshold: None,
-        // The primary's rate is derived from its shape, which is right for
-        // the BirdNET shapes that derivation was built from.
-        sample_rate: None,
-    });
-    specs.extend(config.extra_models.iter().cloned());
+    let specs = classifier_specs(config);
 
     let mut registry = crate::inference::registry::ClassifierRegistry::load(
         &specs,
@@ -299,7 +311,9 @@ pub fn run_daemon(
 
     // Create the whole-chunk filters.
     let chunk_filters = ChunkFilters {
-        privacy: PrivacyFilter::new(config.privacy_threshold),
+        privacy: PrivacyFilter::new(config.privacy_threshold)
+            .with_clip_reach(config.privacy_clip_reach)
+            .with_chunk_secs(config.pipeline.chunk_duration_secs),
         noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
             .remembering(config.noise_remember_secs),
         confirmation: config.confirmation,
@@ -395,6 +409,11 @@ pub fn run_daemon(
     // Snapshot the backlog settings to move into the loop thread; `config` is
     // a borrow and cannot outlive this call on the spawned 'static thread.
     let process_existing = config.process_existing;
+    // Each classifier's own threshold as loaded, and the floor the processor
+    // publishes: before every file each runs at the lower of the two, so a
+    // per-species threshold below the global one reaches the model at all.
+    let threshold_floor = config.threshold_floor.clone();
+    let loaded_thresholds = super::loaded_thresholds(&registry);
     let watch_dir = config.watch_dir.clone();
 
     // Main daemon loop -- runs on its own thread
@@ -410,39 +429,38 @@ pub fn run_daemon(
         let _alive = running_guard;
         tracing::info!("detection daemon started");
 
-        // The registry moved in with this closure. Files arriving through the
-        // watch directory carry no audio-source id, so they are judged by the
-        // default route — the primary classifier — exactly as before Stage 2.
-        // Per-source routing applies where a source is known; this path is the
-        // file watcher, which only knows a path.
-        let route = ClassifierRegistry::default_route();
-
         // Process any pre-existing backlog here, on the loop thread, rather
         // than before signalling readiness. The event consumer is already
         // draining by now, so a large backlog cannot block startup past the
         // systemd TimeoutStartSec, and with a bounded event channel it applies
         // backpressure instead of dead-locking an undrained queue.
-        if process_existing {
-            process_existing_files(
-                &watch_dir,
-                &pipeline_config,
-                &mut registry,
-                &route,
-                &chunk_filters,
-                &mut species_filter,
-                filter_observer.as_ref(),
-                throughput.as_ref(),
-                lat,
-                lon,
-                &event_tx,
-            );
-        }
-
         // Debounce watcher events: a clip is decoded only once its size has
         // been stable for FILE_SETTLE (see PendingFiles), so an in-progress
         // ffmpeg/RTSP segment isn't decoded mid-write (which fails with
         // "unexpected end of file" and reprocesses the same growing file).
         let mut pending = PendingFiles::new();
+
+        if process_existing {
+            super::apply_threshold_floor(
+                &mut registry,
+                &loaded_thresholds,
+                threshold_floor.as_deref(),
+            );
+            process_existing_files(
+                &watch_dir,
+                &pipeline_config,
+                &mut registry,
+                &chunk_filters,
+                &mut species_filter,
+                filter_observer.as_ref(),
+                throughput.as_ref(),
+                in_flight.as_ref(),
+                &mut pending,
+                lat,
+                lon,
+                &event_tx,
+            );
+        }
 
         // Track when the operator's species lists were last re-read, so a
         // change on /admin/species applies to the next file rather than the
@@ -450,14 +468,24 @@ pub fn run_daemon(
         // a 500 ms poll and the lists live in a database.
         let mut lists_refreshed = Instant::now();
 
+        // Segments a stop cut off mid-sweep (PIPE8b), reported on the way out
+        // with whatever is still settling.
+        let mut left: Vec<PathBuf> = Vec::new();
+        let mut stop_requested = false;
+
         loop {
             // Heartbeat: record that the loop is still cycling so a watchdog
             // can tell a hung pipeline from an idle one.
             heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
             // Check for stop signal (non-blocking)
-            if stop_rx.try_recv().is_ok() {
+            if stop_requested || stop_rx.try_recv().is_ok() {
                 tracing::info!("detection daemon stopping");
+                report_unanalysed(
+                    left.into_iter().chain(pending.into_paths()),
+                    process_existing,
+                    throughput.as_ref(),
+                );
                 break;
             }
 
@@ -537,7 +565,16 @@ pub fn run_daemon(
                 }
                 None => settled.ready,
             };
-            for path in ready {
+            let mut ready = ready.into_iter();
+            while let Some(path) = ready.next() {
+                // A stop between files, not only between sweeps: one sweep can
+                // hold a long backlog, and shutdown waits on this loop.
+                if stop_rx.try_recv().is_ok() {
+                    stop_requested = true;
+                    left.push(path);
+                    left.extend(ready);
+                    break;
+                }
                 // Keep the watchdog fed if a single sweep processes several files.
                 heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
@@ -569,9 +606,20 @@ pub fn run_daemon(
                     "begin processing file"
                 );
 
+                super::apply_threshold_floor(
+                    &mut registry,
+                    &loaded_thresholds,
+                    threshold_floor.as_deref(),
+                );
+
                 // Claimed for as long as the pipeline reads it (PR-1 / S-3):
-                // the stream directory's purge skips a claimed name.
-                let _lease = in_flight.as_ref().map(|table| table.claim(&path));
+                // the stream directory's purge skips a claimed name. Each
+                // event carries a share of the claim, so it lasts until the
+                // processor has cut the clips too (PIPE8a).
+                let lease = in_flight
+                    .as_ref()
+                    .map(|table| std::sync::Arc::new(table.claim(&path)));
+                let route = route_for_segment(&registry, &path);
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
@@ -593,7 +641,8 @@ pub fn run_daemon(
                         if let Some(observer) = throughput.as_ref() {
                             observer.analysed(&path);
                         }
-                        for event in events {
+                        for mut event in events {
+                            event.lease.clone_from(&lease);
                             if event_tx.send(event).is_err() {
                                 tracing::warn!(
                                     correlation_id = %correlation_id,
@@ -639,17 +688,77 @@ pub fn run_daemon(
     })
 }
 
+/// The classifiers that judge a segment: its source's `MODEL_ROUTES` entry.
+///
+/// A capture source names its segments with its id — the `audio_sources` row
+/// id, the key routes are written against — so the id is read back from the
+/// file name. A name without one (a lone microphone's BirdNET-Pi-style name, or
+/// a file dropped in by hand) gets the default route, the primary, as does a
+/// source with no route. Before this every segment got the default, whatever
+/// its source, and no route ever applied.
+fn route_for_segment(registry: &ClassifierRegistry, path: &Path) -> Vec<usize> {
+    let source = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(crate::detection::types::RecordingFile::parse)
+        .and_then(|f| f.rtsp_id);
+    registry.route_for(source.as_deref())
+}
+
+/// Say what a stopping daemon leaves unanalysed (`PIPE8b`).
+///
+/// Nothing reads the watch directory's backlog at the next start unless
+/// `process_existing` is set, so without it these segments are never analysed:
+/// each is reported as dropped, and one warning says how many. With it they
+/// are deferred, not lost, and are logged as such.
+fn report_unanalysed(
+    paths: impl Iterator<Item = PathBuf>,
+    process_existing: bool,
+    throughput: Option<&super::ThroughputObserver>,
+) {
+    let paths: Vec<PathBuf> = paths.filter(|p| is_audio_file(p)).collect();
+    if paths.is_empty() {
+        return;
+    }
+    if process_existing {
+        tracing::info!(
+            segments = paths.len(),
+            "stopping before these segments were analysed; the next start's backlog pass \
+             reads them if they are still there"
+        );
+        return;
+    }
+    tracing::warn!(
+        segments = paths.len(),
+        "stopping before these recorded segments were analysed, and nothing will analyse \
+         them later: the next start does not read the backlog unless --process-existing is set"
+    );
+    if let Some(observer) = throughput {
+        for path in &paths {
+            observer.dropped(path);
+        }
+    }
+}
+
 /// Process any audio files already present in the watch directory.
+///
+/// A file modified within [`FILE_SETTLE`] may still be being written, so it is
+/// handed to `pending` — the watcher's queue, which analyses it once it has
+/// settled — instead of being read now (`PIPE8c`). Read here, it was decoded
+/// part-written and then again by the watcher when the recorder finished it.
+/// Each file read here is claimed in `in_flight` like the loop's, and its
+/// events carry the claim.
 #[allow(clippy::too_many_arguments)]
 fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
     registry: &mut ClassifierRegistry,
-    route: &[usize],
     chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&super::SpeciesFilterObserver>,
     throughput: Option<&super::ThroughputObserver>,
+    in_flight: Option<&super::InFlight>,
+    pending: &mut PendingFiles,
     lat: Option<f64>,
     lon: Option<f64>,
     event_tx: &mpsc::SyncSender<DetectionEvent>,
@@ -677,12 +786,25 @@ fn process_existing_files(
             continue;
         }
 
+        let recently_written = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_none_or(|age| age < FILE_SETTLE);
+        if recently_written {
+            pending.note(path, Instant::now());
+            continue;
+        }
+
+        let lease = in_flight.map(|table| std::sync::Arc::new(table.claim(&path)));
         let correlation_id = new_event_correlation_id();
+        let route = route_for_segment(registry, &path);
         match process_and_infer_filtered(
             &path,
             pipeline_config,
             registry,
-            route,
+            &route,
             chunk_filters,
             species_filter,
             filter_observer,
@@ -694,7 +816,8 @@ fn process_existing_files(
                 if let Some(observer) = throughput {
                     observer.analysed(&path);
                 }
-                for event in events {
+                for mut event in events {
+                    event.lease.clone_from(&lease);
                     // Surface a closed receiver instead of swallowing it: with
                     // the prior `let _ =` a consumer that dropped mid-backlog
                     // left this loop spinning through the rest of the watch
@@ -729,31 +852,29 @@ mod tests {
     use super::*;
     use crate::inference::model::ModelConfig;
 
-    #[test]
-    fn run_daemon_loop_advances_heartbeat() {
-        // A healthy detection loop must keep advancing its heartbeat, so the
-        // watchdog never mistakes a *running* daemon for a hung one and
-        // needlessly restarts a healthy field station. Stand the real loop up
-        // against the tiny bundled model and assert the counter climbs.
+    /// A daemon over the tiny bundled model, watching an empty directory.
+    fn tiny_config(tmp: &std::path::Path) -> DaemonConfig {
         const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
 
-        let tmp = tempfile::tempdir().unwrap();
-        let watch_dir = tmp.path().join("recs");
+        let watch_dir = tmp.join("recs");
         std::fs::create_dir_all(&watch_dir).unwrap();
-        let model_path = tmp.path().join("model.onnx");
+        let model_path = tmp.join("model.onnx");
         std::fs::write(&model_path, TINY_V24).unwrap();
-        let labels_path = tmp.path().join("labels.txt");
+        let labels_path = tmp.join("labels.txt");
         let labels = (0..11)
             .map(|i| format!("Species{i}_Bird {i}"))
             .collect::<Vec<_>>()
             .join("\n");
         std::fs::write(&labels_path, labels).unwrap();
 
-        let config = DaemonConfig {
+        DaemonConfig {
             watch_dir,
             model_path,
             labels_path,
             extra_models: Vec::new(),
+            primary_id: "birdnet".to_owned(),
+            primary_threshold: None,
+            primary_sample_rate: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
@@ -768,6 +889,7 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_remember_secs: 0.0,
             noise_classes: Vec::new(),
@@ -775,7 +897,312 @@ mod tests {
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),
+            threshold_floor: None,
+        }
+    }
+
+    /// `MODEL_ID`, `MODEL_THRESHOLD` and `MODEL_SAMPLE_RATE` were resolved into
+    /// the primary's spec by the plan and then thrown away: the daemon rebuilt
+    /// the primary as `birdnet` with neither. A route naming the primary by
+    /// its configured id then stopped the daemon at startup
+    /// (`UnknownRouteTarget`), and without routes the other two were ignored.
+    #[test]
+    fn the_primary_is_loaded_as_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.primary_id = "mybird".to_owned();
+        config.primary_threshold = Some(0.6);
+        config.primary_sample_rate = Some(48_000);
+        config
+            .model_routes
+            .insert("garden".to_owned(), vec!["mybird".to_owned()]);
+
+        let specs = classifier_specs(&config);
+        assert_eq!(specs[0].id, "mybird");
+        assert_eq!(specs[0].threshold, Some(0.6));
+        assert_eq!(specs[0].sample_rate, Some(48_000));
+
+        let (event_tx, _event_rx) = mpsc::sync_channel(64);
+        let handle = run_daemon(&config, event_tx).expect("a route to the configured primary");
+        handle.stop();
+    }
+
+    /// Write `secs` seconds of low noise at 48 kHz into `dir/name`.
+    fn write_noise(dir: &std::path::Path, name: &str, secs: u32) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
         };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * secs {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            w.write_sample(((x >> 16) as i16) / 8).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    /// `PIPE8a`: a segment stays claimed until its detections have been handled.
+    ///
+    /// The claim was a local in the loop, dropped as soon as the file's events
+    /// were queued. The processor reads the segment again afterwards to cut
+    /// each detection's clip, and a disk-full purge — oldest first, which is
+    /// exactly a segment whose events are still queued behind a busy
+    /// processor — was free to delete it in between.
+    #[test]
+    fn a_segment_stays_claimed_while_its_events_are_queued() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.model.confidence_threshold = 0.0;
+        let table = super::super::InFlight::new();
+        config.in_flight = Some(table.clone());
+        let (event_tx, event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 3);
+
+        let first = event_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("precondition: the tiny model emits events at threshold 0");
+        // Let the loop finish the file and drop its own hold.
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert_eq!(
+            table.names(),
+            ["2026-05-19-birdnet-09:00:00.wav"],
+            "the segment was released while its events were still queued"
+        );
+
+        // Counterpart: once every event is handled, the claim is gone.
+        drop(first);
+        while event_rx.try_recv().is_ok() {}
+        assert!(table.names().is_empty(), "{:?}", table.names());
+        handle.stop();
+    }
+
+    /// Start a daemon, give it one segment, and stop it before the segment
+    /// settles. Returns the paths reported as dropped.
+    fn stop_with_a_segment_settling(process_existing: bool) -> Vec<std::path::PathBuf> {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.process_existing = process_existing;
+        let dropped = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let d = std::sync::Arc::clone(&dropped);
+        config.on_file_analysed = Some(
+            super::super::ThroughputObserver::new(|_| {})
+                .with_dropped(move |p| d.lock().unwrap().push(p.to_path_buf())),
+        );
+        let (event_tx, _event_rx) = mpsc::sync_channel(64);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        std::thread::sleep(Duration::from_millis(300));
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 1);
+        // Long enough for the watcher event, well short of FILE_SETTLE.
+        std::thread::sleep(Duration::from_millis(800));
+        handle.stop();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while handle.is_running() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!handle.is_running(), "the loop exits on stop");
+        dropped.lock().unwrap().clone()
+    }
+
+    /// `PIPE8b`: a segment the daemon stops before analysing is reported.
+    ///
+    /// On stop the loop broke out and discarded whatever was still settling,
+    /// without a word. Nothing reads the stream directory's backlog at the
+    /// next start unless `--process-existing` is set, so that audio was never
+    /// analysed and nothing said so.
+    #[test]
+    fn a_segment_left_at_stop_is_reported() {
+        let dropped = stop_with_a_segment_settling(false);
+        assert_eq!(dropped.len(), 1, "{dropped:?}");
+        // Counterpart: when the next start's backlog pass will read it, it is
+        // not lost, and not reported as lost.
+        assert!(stop_with_a_segment_settling(true).is_empty());
+    }
+
+    /// `PIPE8c`: the startup backlog pass leaves a segment still being written
+    /// to the watcher, so it is analysed once, whole.
+    ///
+    /// The pass analysed every file in the directory at once, with no settle
+    /// check and no claim. A segment the recorder was still writing was
+    /// decoded part-written, and then again by the watcher when it finished.
+    #[test]
+    fn a_segment_being_written_at_start_is_analysed_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.process_existing = true;
+        let analysed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let a = std::sync::Arc::clone(&analysed);
+        config.on_file_analysed = Some(super::super::ThroughputObserver::new(move |p| {
+            a.lock()
+                .unwrap()
+                .push(p.file_name().unwrap().to_string_lossy().into_owned());
+        }));
+        // An old, finished segment, and one the recorder has just started.
+        let old = write_noise(&config.watch_dir, "2026-05-19-birdnet-08:00:00.wav", 3);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 1);
+
+        let (event_tx, _event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        std::thread::sleep(Duration::from_millis(300));
+        // The recorder finishes the segment.
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 3);
+        std::thread::sleep(Duration::from_millis(4_000));
+        handle.stop();
+
+        let seen = analysed.lock().unwrap().clone();
+        let count = |n: &str| seen.iter().filter(|s| s.as_str() == n).count();
+        assert_eq!(count("2026-05-19-birdnet-09:00:00.wav"), 1, "{seen:?}");
+        // Counterpart: the finished backlog is still read, once.
+        assert_eq!(count("2026-05-19-birdnet-08:00:00.wav"), 1, "{seen:?}");
+    }
+
+    /// A watched segment is judged by its source's route (`MODEL_ROUTES`).
+    ///
+    /// The loop gave every file the default route — the primary alone —
+    /// because "files arriving through the watch directory carry no
+    /// audio-source id". They do: a capture source's segments are named with
+    /// its `audio_sources` row id, the key `MODEL_ROUTES` uses. So no route
+    /// ever applied, and a second classifier never ran on anything.
+    #[test]
+    fn a_segment_is_judged_by_its_sources_route() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.model.confidence_threshold = 0.0;
+        config
+            .extra_models
+            .push(crate::inference::registry::ModelSpec {
+                id: "second".to_owned(),
+                model_path: config.model_path.clone(),
+                labels_path: config.labels_path.clone(),
+                threshold: None,
+                sample_rate: None,
+            });
+        config.model_routes.insert(
+            "pond".to_owned(),
+            vec!["birdnet".to_owned(), "second".to_owned()],
+        );
+        let (event_tx, event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-pond-09:00:00.wav", 3);
+        write_noise(
+            &config.watch_dir,
+            "2026-05-19-birdnet-garden-09:00:00.wav",
+            3,
+        );
+
+        let mut agreement: std::collections::HashMap<String, Option<u8>> =
+            std::collections::HashMap::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while agreement.len() < 2 && Instant::now() < deadline {
+            if let Ok(ev) = event_rx.recv_timeout(Duration::from_millis(200)) {
+                let name = ev
+                    .source_file
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                agreement
+                    .entry(name)
+                    .or_insert(ev.detection.agreeing_models);
+            }
+        }
+        handle.stop();
+        assert_eq!(
+            agreement.get("2026-05-19-birdnet-pond-09:00:00.wav"),
+            Some(&Some(2)),
+            "the routed source was not judged by both classifiers: {agreement:?}"
+        );
+        // Counterpart: an unrouted source gets the primary alone.
+        assert_eq!(
+            agreement.get("2026-05-19-birdnet-garden-09:00:00.wav"),
+            Some(&Some(1)),
+            "{agreement:?}"
+        );
+    }
+
+    /// A species only the second classifier knows is recorded, and the
+    /// operator's lists still apply to it.
+    ///
+    /// Every detection was checked against an allow-list built from the
+    /// primary's labels alone, so a species outside BirdNET's vocabulary — the
+    /// reason to run Perch in the tropics — was dropped whichever model heard
+    /// it, contradicting both the docs and the comment above that line.
+    #[test]
+    fn a_species_only_the_second_classifier_knows_is_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.model.confidence_threshold = 0.0;
+        let other_labels = tmp.path().join("other.txt");
+        std::fs::write(
+            &other_labels,
+            (0..11)
+                .map(|i| format!("Other{i}_Other bird {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        config
+            .extra_models
+            .push(crate::inference::registry::ModelSpec {
+                id: "second".to_owned(),
+                model_path: config.model_path.clone(),
+                labels_path: other_labels,
+                threshold: None,
+                sample_rate: None,
+            });
+        config.model_routes.insert(
+            "pond".to_owned(),
+            vec!["birdnet".to_owned(), "second".to_owned()],
+        );
+        config.species_filter.exclude_list = vec!["Other1".to_owned()];
+        let (event_tx, event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-pond-09:00:00.wav", 3);
+
+        let mut species = std::collections::BTreeSet::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            match event_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(ev) => {
+                    species.insert(ev.detection.scientific_name);
+                }
+                Err(_) if !species.is_empty() => break,
+                Err(_) => {}
+            }
+        }
+        handle.stop();
+        assert!(
+            species.iter().any(|s| s.starts_with("Species")),
+            "precondition: the primary's species are recorded: {species:?}"
+        );
+        assert!(
+            species.contains("Other0"),
+            "the second classifier's own species were dropped: {species:?}"
+        );
+        // Counterpart: the operator's exclude list still binds on them.
+        assert!(!species.contains("Other1"), "{species:?}");
+    }
+
+    #[test]
+    fn run_daemon_loop_advances_heartbeat() {
+        // A healthy detection loop must keep advancing its heartbeat, so the
+        // watchdog never mistakes a *running* daemon for a hung one and
+        // needlessly restarts a healthy field station. Stand the real loop up
+        // against the tiny bundled model and assert the counter climbs.
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tiny_config(tmp.path());
 
         let (event_tx, _event_rx) = mpsc::sync_channel(64);
         let handle = run_daemon(&config, event_tx).expect("daemon starts with the tiny model");

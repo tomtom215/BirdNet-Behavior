@@ -84,7 +84,14 @@ impl BirdNetPiImporter {
         });
 
         let mut dst_conn = open_or_create_destination(dest_path)?;
-        let batch_id = record_import_batch(&dst_conn, source_path, &profile, options, station);
+        let batch_id = record_import_batch(
+            &dst_conn,
+            "birdnet-pi-sqlite",
+            source_path,
+            &profile,
+            options,
+            station,
+        )?;
 
         let (imported, skipped) =
             import_batched_tagged(&src_conn, &mut dst_conn, total, progress, options, batch_id)?;
@@ -192,13 +199,23 @@ fn open_or_create_destination(path: &Path) -> Result<Connection, MigrateError> {
 /// a database whose rows are all local recordings, so "untagged" is the honest
 /// answer, and refusing to import into it would be worse than importing without
 /// provenance.
-fn record_import_batch(
+///
+/// # Errors
+///
+/// Any other failure to write the row. Every one of them used to be read as
+/// "predates migration 25" and the import carried on untagged; but the
+/// destination is migrated when it is opened, so the table is always there,
+/// and the failures that remain — a lock held past the busy timeout, an I/O
+/// error — are exactly the ones after which an untagged import can neither be
+/// undone nor told apart from the station's own recordings.
+pub(crate) fn record_import_batch(
     dst: &Connection,
+    source_kind: &str,
     source_path: &Path,
     profile: &SourceProfile,
     options: &ImportOptions,
     station: (Option<f64>, Option<f64>),
-) -> Option<i64> {
+) -> Result<Option<i64>, MigrateError> {
     let (station_lat, station_lon) = station;
     let distance = profile.distance_km_to(station_lat, station_lon);
 
@@ -209,7 +226,7 @@ fn record_import_batch(
              applied_shift_secs, row_count, notes)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11)",
         params![
-            "birdnet-pi-sqlite",
+            source_kind,
             options.label.as_deref(),
             source_path.display().to_string(),
             profile.modal_lat,
@@ -224,15 +241,16 @@ fn record_import_batch(
     );
 
     match inserted {
-        Ok(_) => Some(dst.last_insert_rowid()),
+        Ok(_) => Ok(Some(dst.last_insert_rowid())),
         // No `import_batches` table: a pre-migration-25 destination. Importing
         // untagged is the right answer there — every row in such a database is
         // a local recording, so "untagged" is true — and refusing the import
         // would be worse than importing without provenance.
-        Err(e) => {
+        Err(e) if e.to_string().contains("no such table") => {
             tracing::warn!(error = %e, "import provenance not recorded (destination predates migration 25)");
-            None
+            Ok(None)
         }
+        Err(e) => Err(MigrateError::DataTransfer(e)),
     }
 }
 
@@ -248,7 +266,12 @@ fn record_import_batch(
 /// databases (a NULL `Date` arrives as `""`), they are already excluded from
 /// every time-bucketed analytic, and silently rewriting them to some epoch
 /// would turn "unplaceable" into "placed, wrongly".
-fn shift_timestamp(conn: &Connection, date: &str, time: &str, secs: i64) -> (String, String) {
+pub(crate) fn shift_timestamp(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    secs: i64,
+) -> (String, String) {
     if secs == 0 {
         return (date.to_owned(), time.to_owned());
     }
@@ -310,7 +333,7 @@ fn shift_timestamp(conn: &Connection, date: &str, time: &str, secs: i64) -> (Str
 /// A row whose `Date`/`Time` name no point in time — BirdNET-Pi's columns are
 /// free-form `TEXT` — is returned unchanged rather than dropped, which is what
 /// the flat shift did too.
-fn to_local_here(
+pub(crate) fn to_local_here(
     conn: &Connection,
     date: &str,
     time: &str,

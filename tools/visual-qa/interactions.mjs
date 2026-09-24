@@ -256,6 +256,417 @@ async function wizardCardsByKeyboard(page) {
   check('wizard: clicking a card still selects it', clicked === '0.9' && clickedCard === '0.9', `input ${clicked}, highlighted ${clickedCard}`);
 }
 
+/** A toast the server sends out-of-band can be dismissed, and goes by itself.
+ *
+ * htmx fires `htmx:oobAfterSwap` on the main swap's target, and the region
+ * listened for its own id on `e.target`, so no server toast was ever bound:
+ * the × did nothing and "Settings saved" stayed on screen for good.
+ */
+async function serverToasts(page) {
+  await page.goto(`${BASE}/admin/settings`, { waitUntil: 'networkidle' });
+  await page.click('button.btn-primary[type=submit]');
+  const toast = await page.waitForSelector('#bnb-toasts .bnb-toast', { timeout: 10000 }).catch(() => null);
+  check('toasts: saving settings shows a toast', !!toast, 'no toast appeared');
+  if (!toast) return;
+  const bound = await toast.evaluate((t) => t.dataset.bound === '1');
+  check('toasts: the server toast is wired up', bound, 'data-bound was never set');
+  await page.click('#bnb-toasts .bnb-toast [data-toast-close]');
+  const gone = await page
+    .waitForFunction(() => document.querySelectorAll('#bnb-toasts .bnb-toast').length === 0, null, { timeout: 2000 })
+    .then(() => true, () => false);
+  check('toasts: the × dismisses it', gone, 'the toast is still on screen after its × was clicked');
+
+  await page.click('button.btn-primary[type=submit]');
+  await page.waitForSelector('#bnb-toasts .bnb-toast', { timeout: 10000 });
+  const timedOut = await page
+    .waitForFunction(() => document.querySelectorAll('#bnb-toasts .bnb-toast').length === 0, null, { timeout: 9000 })
+    .then(() => true, () => false);
+  check('toasts: a success toast goes by itself', timedOut, 'still on screen 9 s later');
+}
+
+/** The polar activity clock draws the station's data, not 24 zeros.
+ *
+ * Its script read `json.data` / `hour` / `avg_detections`; the endpoint answers
+ * `heatmap` / `hour_of_day` / `avg_detections_per_day`, so every station got a
+ * flat clock labelled "90d avg" and nothing said anything was wrong.
+ */
+async function polarClock(page) {
+  await page.goto(`${BASE}/patterns?tab=trends`, { waitUntil: 'networkidle' });
+  const found = await page.$('#polar-clock');
+  check('clock: the trends tab has the polar clock', !!found, 'no #polar-clock');
+  if (!found) return;
+  await page.evaluate(() => {
+    let d = document.getElementById('polar-clock').closest('details');
+    while (d) { d.open = true; d = d.parentElement && d.parentElement.closest('details'); }
+  });
+  const radii = await page
+    .waitForFunction(() => {
+      const paths = [...document.querySelectorAll('#polar-clock path')];
+      return paths.length === 24 ? new Set(paths.map((p) => p.getAttribute('d').split(' ')[7])).size : 0;
+    }, null, { timeout: 8000 })
+    .then((h) => h.jsonValue(), () => 0);
+  check('clock: the wedges follow the data', radii > 1, `${radii} distinct wedge radii — a flat clock`);
+}
+
+/** Searching leaves the page's own URL in the address bar, and it reloads.
+ *
+ * The form pushed the fragment's URL (`/pages/search-results?…`), so a reload,
+ * a bookmark or Back showed a bare, unstyled list with no page around it.
+ */
+async function searchAddressBar(page) {
+  await page.goto(`${BASE}/search`, { waitUntil: 'networkidle' });
+  await page.fill('#sr-form input[name=q]', 'robin');
+  await page.press('#sr-form input[name=q]', 'Enter');
+  await page.waitForFunction(() => location.search.includes('q=robin'), null, { timeout: 8000 }).catch(() => {});
+  const path = await page.evaluate(() => location.pathname + location.search);
+  check('search: the address bar carries the page, not the fragment', path.startsWith('/search?') && path.includes('q=robin'), path);
+  await page.reload({ waitUntil: 'networkidle' });
+  const whole = await page.evaluate(() => !!document.querySelector('#sr-form') && document.title.length > 0);
+  check('search: reloading that URL gives the whole page back', whole, `title="${await page.title()}"`);
+}
+
+/** Bulk "Apply" asks first, then acts and says so.
+ *
+ * It targeted `#toast-region`, an id no page has, so htmx refused to send it:
+ * confirm, reject, lock, unlock and delete in bulk all did nothing. And its
+ * confirmation was never wired, so once it did send, Delete would not ask.
+ */
+async function searchBulkApply(page) {
+  await page.goto(`${BASE}/search?q=robin`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('form.sr-bulk input[type=checkbox][name]', { timeout: 8000 });
+  await page.check('form.sr-bulk input[type=checkbox][name]');
+  await page.selectOption('#sr-bulk-action', 'lock');
+  const sent = [];
+  page.on('request', (r) => { if (r.url().includes('/pages/search-bulk')) sent.push(r.method()); });
+  await page.click('form.sr-bulk button[type=submit]');
+  const asked = await page.waitForSelector('#bnb-confirm[open]', { timeout: 3000 }).then(() => true, () => false);
+  check('bulk: Apply asks before acting', asked, 'no confirmation dialog opened');
+  check('bulk: nothing is sent before the answer', sent.length === 0, `${sent.length} request(s) already sent`);
+  if (!asked) return;
+  await page.click('#bnb-confirm [data-confirm-ok]');
+  const toast = await page.waitForSelector('#bnb-toasts .bnb-toast', { timeout: 8000 }).then(() => true, () => false);
+  check('bulk: confirming sends it', sent.length === 1, `${sent.length} request(s)`);
+  check('bulk: the outcome is shown', toast, 'no toast after the bulk action');
+}
+
+/** Every ▶ plays — including the Live view's feed, which had no player. */
+async function livePlayButtons(page) {
+  await page.addInitScript(() => {
+    window.__plays = 0;
+    HTMLMediaElement.prototype.play = function () { window.__plays += 1; return Promise.resolve(); };
+  });
+  await page.goto(`${BASE}/recordings?view=live`, { waitUntil: 'networkidle' });
+  const btn = await page.waitForSelector('[data-play-src]', { timeout: 8000 }).catch(() => null);
+  check('live feed: rows carry a play button', !!btn, 'no [data-play-src] on the Live view');
+  if (!btn) return;
+  await btn.click();
+  await page.waitForTimeout(300);
+  const plays = await page.evaluate(() => window.__plays);
+  check('live feed: ▶ plays the clip', plays === 1, `play() called ${plays} time(s)`);
+}
+
+/** Enter in Today's search filters in place instead of reloading the page. */
+async function todaySearchEnter(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  let navigations = 0;
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) navigations += 1; });
+  await page.fill('#today-search', 'Cardinal');
+  await page.press('#today-search', 'Enter');
+  await page.waitForTimeout(1500);
+  check('today: Enter does not reload the page', navigations === 0, `${navigations} navigation(s), now at ${page.url()}`);
+}
+
+/** "Load more" adds to the list rather than replacing it. */
+async function loadMoreAppends(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  // Open the day the way a reader does, then load it five at a time so the
+  // demo station's day is long enough to need a second page.
+  await page.click('button:has-text("Show the full day")');
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    window.htmx.ajax('GET', '/pages/today-list?limit=5', { target: '#today-full', swap: 'innerHTML' });
+  });
+  await page.waitForSelector('#today-full .tdl-more-btn', { timeout: 8000 });
+  const before = await page.$$eval('#today-full .tdl-card', (e) => e.length);
+  await page.click('#today-full .tdl-more-btn');
+  await page.waitForFunction((n) => document.querySelectorAll('#today-full .tdl-card').length !== n, before, { timeout: 8000 }).catch(() => {});
+  const after = await page.$$eval('#today-full .tdl-card', (e) => e.length);
+  check('today: Load more adds to the list', before === 5 && after === 10, `${before} rows, then ${after}`);
+}
+
+/** A stream this browser cannot reach says "no signal", and keeps trying.
+ *
+ * The idle poll overwrote "no signal" with "idle" within a second — so a
+ * blocked socket read as a quiet yard — and the socket was opened once and
+ * never again, leaving the card dead after any blip until a reload.
+ */
+async function liveSignal(page) {
+  let attempts = 0;
+  await page.routeWebSocket(/\/api\/v2\/ws\/spectrogram/, (ws) => { attempts += 1; ws.close(); });
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(3500);
+  const pill = await page.$eval('.db-live-pill', (p) => p.textContent.trim()).catch(() => '(no pill)');
+  check('live signal: an unreachable stream reads "no signal", not "idle"', /no signal/.test(pill), `pill says "${pill}"`);
+  check('live signal: it tries again after losing the stream', attempts >= 2, `${attempts} connection attempt(s) in 3.5 s`);
+}
+
+// The rare-sightings nudge is said once, not every time it is re-fetched.
+async function nudgeAnnouncesOnce(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  const first = await page.$eval('#td-nudge-status', (e) => e.textContent.trim()).catch(() => '');
+  check('nudge: the waiting sightings are announced', /waiting for review/.test(first), `status says "${first}"`);
+  const writes = await page.evaluate(async () => {
+    const out = document.getElementById('td-nudge-status');
+    let n = 0;
+    new MutationObserver(() => { n += 1; }).observe(out, { childList: true, characterData: true, subtree: true });
+    for (let i = 0; i < 2; i += 1) {
+      await new Promise((resolve) => {
+        document.body.addEventListener('htmx:afterSettle', resolve, { once: true });
+        window.htmx.ajax('GET', '/pages/today-nudge', { target: '#today-nudge', swap: 'innerHTML' });
+      });
+    }
+    return n;
+  });
+  check('nudge: an unchanged nudge is not re-announced', writes === 0, `${writes} status write(s) over 2 re-fetches`);
+}
+
+/** M14: the live feed comes back after the browser restores the page.
+ *
+ * The socket was stopped on `beforeunload`, which set a flag nothing ever
+ * cleared. A page restored from the back/forward cache (`pageshow` with
+ * `persisted`) therefore had a dead feed until reloaded, and a `beforeunload`
+ * listener is itself one of the things that keeps a page out of that cache.
+ * Playwright's Chromium runs with the cache off, so the events the browser
+ * fires around it are replayed in order.
+ */
+async function liveFeedSurvivesBackForward(page) {
+  let sockets = 0;
+  page.on('websocket', (ws) => {
+    if (ws.url().includes('/ws/detections')) sockets += 1;
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(500);
+  check('bfcache: the feed connects on load', sockets >= 1, `${sockets} socket(s)`);
+  const before = sockets;
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('beforeunload'));
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await page.waitForTimeout(1500);
+  check(
+    'bfcache: a restored page reconnects its live feed',
+    sockets > before,
+    `no new socket after pageshow (persisted); ${sockets} total`,
+  );
+}
+
+/** M5: a live detection refreshes Today's feed at once.
+ *
+ * The listener called `htmx.trigger(feed, 'load')`. htmx fires its `load`
+ * trigger itself, once, and does not listen for a `load` event, so the call
+ * fetched nothing and a new bird waited for the 15-second poll.
+ */
+async function liveDetectionRefreshesFeed(page) {
+  let fetches = 0;
+  page.on('request', (r) => {
+    if (r.url().includes('/pages/detections')) fetches += 1;
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  const before = fetches;
+  await page.evaluate(() => {
+    document.dispatchEvent(
+      new CustomEvent('birdnet:detection', { detail: { event: 'detection' } }),
+    );
+  });
+  await page.waitForTimeout(1500);
+  check(
+    'feed: a live detection refreshes the feed',
+    fetches > before,
+    `no /pages/detections request within 1.5 s of the event (${fetches} total)`,
+  );
+}
+
+/** M5: the command palette loads when it is opened, and fresh each time.
+ *
+ * Its input carried `hx-trigger="…, load"`, so every page view fetched
+ * /pages/cmdk (a database read) for a palette nobody opened; and reopening
+ * it called `htmx.trigger(input, 'load')`, which fetches nothing — the input
+ * was cleared and the last query's results stayed under it.
+ */
+async function paletteLoadsOnOpen(page) {
+  const queries = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/pages/cmdk')) queries.push(new URL(r.url()).searchParams.get('q'));
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  check('palette: a page view does not query it', queries.length === 0, `${queries.length} request(s)`);
+
+  const beforeOpen = queries.length;
+  await page.keyboard.press('Control+k');
+  await page.waitForTimeout(600);
+  check(
+    'palette: opening it loads the default list',
+    queries.length === beforeOpen + 1,
+    `${queries.length - beforeOpen} request(s) caused by opening it`,
+  );
+
+  await page.keyboard.type('zzzz');
+  await page.waitForTimeout(800);
+  await page.keyboard.press('Escape');
+  const before = queries.length;
+  await page.keyboard.press('Control+k');
+  await page.waitForTimeout(800);
+  const reloaded = queries.length > before && (queries[queries.length - 1] || '') === '';
+  check(
+    'palette: reopening it shows the default list, not the last query',
+    reloaded,
+    `requests after reopen: ${JSON.stringify(queries.slice(before))}`,
+  );
+}
+
+/** M7: the co-occurrence range the reader picked is the range every part of
+ * the tab shows.
+ *
+ * The companion lookup sent `days-val`, which the server never reads, so it
+ * always answered for 30 days; and the two collapsed tables were fetched on
+ * first opening with a hard-coded `?days=30`, overwriting whatever range had
+ * been chosen before they were opened.
+ */
+async function correlationRangeHolds(page) {
+  const seen = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (/cooccurrence-matrix|correlation-pairs|companion-species/.test(u.pathname)) {
+      seen.push({ path: u.pathname, days: u.searchParams.get('days') });
+    }
+  });
+  await page.goto(`${BASE}/patterns?tab=together`, { waitUntil: 'networkidle' });
+  await page.click('#range-controls [data-days="90"]');
+  await page.waitForTimeout(600);
+  const opened = seen.length;
+  await page.click('summary:has-text("co-occurrence matrix")');
+  await page.waitForTimeout(800);
+  const afterOpen = seen.slice(opened).filter((x) => x.path.endsWith('cooccurrence-matrix'));
+  check(
+    'range: opening the matrix keeps the chosen 90 days',
+    afterOpen.every((x) => x.days === '90'),
+    `requests on opening: ${JSON.stringify(afterOpen)}`,
+  );
+  // Typed, not filled: the input listens for `keyup`, which fill() never sends.
+  await page.click('#species-input');
+  await page.keyboard.type('Robin');
+  await page.waitForTimeout(900);
+  const companion = seen.filter((x) => x.path.endsWith('companion-species')).pop();
+  check(
+    'range: the companion lookup asks for the chosen 90 days',
+    companion && companion.days === '90',
+    `last companion request: ${JSON.stringify(companion)}`,
+  );
+}
+
+/** M11: the help drawer shows the page it fetched, with working links.
+ *
+ * `body.querySelector(hash)` throws for an id that starts with a digit —
+ * mdBook's `3-sensitivity` — and the throw landed in the catch, which
+ * replaced the page it had just loaded with "Couldn't load help". And the
+ * docs' links are relative, so inside the host page they resolved against
+ * `/admin/...` and led nowhere.
+ *
+ * The page is served from a fixture, not the mdBook render: the root crate's
+ * `build.rs` produces that render and CI builds only `birdnet-web`, so there
+ * `/help/*` is a 404 and this gate was grading the drawer's error path. The
+ * fixture keeps the mdBook shape the drawer relies on (`<main>`, an id that
+ * starts with a digit, relative links).
+ */
+async function helpDrawerDeepLink(page) {
+  await page.route('**/help/guides/tuning', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body:
+        '<!DOCTYPE html><html><head><title>Tuning</title></head><body>' +
+        '<nav class="sidebar"><a href="../index.html">Home</a></nav>' +
+        '<main><h1 id="tuning">Tuning</h1>' +
+        '<p>See <a href="../reference/configuration.html">configuration</a> and ' +
+        '<a href="first-run.html#1-location">first run</a>.</p>' +
+        '<h3 id="3-sensitivity">3. Sensitivity</h3><p>Sensitivity text.</p>' +
+        '</main></body></html>',
+    }),
+  );
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => {
+    const b = document.createElement('button');
+    b.id = 'zz-help';
+    b.setAttribute('data-help-drawer', '/help/guides/tuning#3-sensitivity');
+    b.textContent = 'help';
+    document.body.appendChild(b);
+  });
+  await page.click('#zz-help');
+  await page.waitForFunction(
+    () => !/Loading/.test(document.getElementById('bnb-help-drawer-title').textContent),
+    null,
+    { timeout: 10000 },
+  );
+  const title = await page.textContent('#bnb-help-drawer-title');
+  check('help: a digit-leading anchor still shows the page', !/Couldn/.test(title), `title: ${title}`);
+  check(
+    'help: the drawer shows the fetched page',
+    await page.$('#bnb-help-drawer-body #\\33 -sensitivity') !== null,
+    `body: ${(await page.textContent('#bnb-help-drawer-body')).slice(0, 120)}`,
+  );
+  const links = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('#bnb-help-drawer-body a[href]'))
+      .map((a) => a.href)
+      .filter((h) => /configuration\.html|first-run\.html/.test(h)),
+  );
+  // Without this the check below passes on an empty list — which is what it
+  // did while the page failed to load.
+  check('help: the fixture\'s relative links reached the drawer', links.length === 2, JSON.stringify(links));
+  const stray = links.filter((h) => !h.startsWith(`${BASE}/help/`));
+  check('help: relative links resolve inside /help', stray.length === 0, JSON.stringify(stray));
+  await page.unroute('**/help/guides/tuning');
+}
+
+/** M13: a hidden tab does not poll; it catches up when shown.
+ *
+ * Every `hx-trigger="every …"` kept firing in a background tab — a Today page
+ * left open all day is a dozen database reads a minute that nobody sees. htmx
+ * filters (`[!document.hidden]`) need `eval`, which the CSP refuses.
+ */
+async function hiddenTabsDoNotPoll(page) {
+  let polls = 0;
+  page.on('request', (r) => {
+    if (r.url().includes('/pages/today-count?bare=1&zz=poll')) polls += 1;
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => {
+    window.__hidden = false;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__hidden });
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => (window.__hidden ? 'hidden' : 'visible'),
+    });
+    const d = document.createElement('div');
+    d.id = 'zz-poll';
+    d.setAttribute('hx-get', '/pages/today-count?bare=1&zz=poll');
+    d.setAttribute('hx-trigger', 'every 1s');
+    document.body.appendChild(d);
+    window.htmx.process(d);
+    window.__hidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(3500);
+  check('poll: a hidden tab does not poll', polls === 0, `${polls} poll(s) while hidden`);
+  const atShow = polls;
+  await page.evaluate(() => {
+    window.__hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(600);
+  check('poll: showing the tab refreshes at once', polls > atShow, `${polls - atShow} poll(s) after showing`);
+}
+
 const page404 = [];
 
 async function main() {
@@ -274,6 +685,21 @@ async function main() {
     ['bulk actions', bulkActions],
     ['destructive controls', destructiveControlDisables],
     ['wizard cards by keyboard', wizardCardsByKeyboard],
+    ['server toasts', serverToasts],
+    ['activity clock', polarClock],
+    ['search address bar', searchAddressBar],
+    ['search bulk apply', searchBulkApply],
+    ['live feed play', livePlayButtons],
+    ['today search enter', todaySearchEnter],
+    ['load more', loadMoreAppends],
+    ['live signal', liveSignal],
+    ['nudge announces once', nudgeAnnouncesOnce],
+    ['live feed after back/forward', liveFeedSurvivesBackForward],
+    ['live detection refreshes the feed', liveDetectionRefreshesFeed],
+    ['palette loads on open', paletteLoadsOnOpen],
+    ['co-occurrence range holds', correlationRangeHolds],
+    ['help drawer deep link', helpDrawerDeepLink],
+    ['hidden tabs do not poll', hiddenTabsDoNotPoll],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();

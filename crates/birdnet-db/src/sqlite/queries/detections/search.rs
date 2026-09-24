@@ -21,6 +21,27 @@ pub enum SearchTerm {
     Exclude(String),
 }
 
+/// `%term%` for a `LIKE … ESCAPE '\'` clause, with the term's own `\`, `%`
+/// and `_` escaped so they match themselves.
+///
+/// What an operator types is text: unescaped, a search for `_` matched every
+/// detection and the exclusion `NOT _` hid every one (DB9). Every caller must
+/// pair the pattern with `ESCAPE '\'` — `LIKE` has no default escape
+/// character, so without it the backslashes are literal and nothing matches.
+#[must_use]
+pub fn like_contains(term: &str) -> String {
+    let mut out = String::with_capacity(term.len() + 2);
+    out.push('%');
+    for c in term.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
 /// Parse an operator-supplied search box value into [`SearchTerm`].
 ///
 /// `None` if the input is `None`, empty, or whitespace-only — the caller

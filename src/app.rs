@@ -393,10 +393,11 @@ async fn serve(
         state
     };
     let state = helpers::init_site_name(state, &cli, config.as_ref());
-    let state = if cli.info_site == "ebird" {
+    let info_site = helpers::info_site(&cli, config.as_ref());
+    let state = if info_site == "ebird" {
         state
     } else {
-        state.with_info_site(cli.info_site.clone())
+        state.with_info_site(info_site)
     };
     let state = helpers::init_species_codes(state, &cli, config.as_ref());
     let state = helpers::init_taxonomy(state, &cli, config.as_ref());
@@ -627,17 +628,13 @@ async fn serve(
 
     // Start the web server.
     //
-    // Warn if the admin UI is exposed off-loopback without a configured
-    // password. Keys on `CADDY_PWD` (config or env) — the same knob the
-    // cookie middleware's "no admin password → open access" bypass and the
-    // `helpers::auth` bootstrap read. (A password set directly via the
-    // accounts UI also protects the panel; this loopback warning tracks the
-    // env/config knob, matching the pre-cookie-flip behaviour.)
-    let admin_password_configured = config
-        .as_ref()
-        .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
-        .or_else(|| std::env::var("CADDY_PWD").ok())
-        .is_some_and(|pwd| !pwd.is_empty());
+    // Warn if the admin UI is exposed off-loopback without a password. The
+    // predicate is the gate's own, so a password set through the setup wizard
+    // or the accounts page counts, as it does for every request: reading only
+    // `CADDY_PWD` here announced a lockout on a wizard-protected private
+    // station that did not have one. The bootstrap above has already put a
+    // configured `CADDY_PWD` on the seed admin row.
+    let admin_password_configured = birdnet_web::auth_middleware::admin_password_configured(&state);
     // O-4: a private station with no password fails closed — every request
     // outside the sign-in and the probe gets a 503 — so say so where the
     // operator will look first. `--doctor` reports the same.
@@ -1049,12 +1046,30 @@ async fn serve(
     // left to a SIGKILL.
     if let Some(handle) = daemon_handle.as_ref() {
         handle.stop();
+        // `stop` only signals. Returning at once ended the process under a
+        // file mid-analysis, and before the loop could say what it was leaving
+        // unanalysed (PIPE8b). Give it a bounded window: SHUTDOWN_GRACE above
+        // plus this stays inside the unit's TimeoutStopSec=30.
+        let deadline = tokio::time::Instant::now() + DAEMON_STOP_GRACE;
+        while handle.is_running() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        if handle.is_running() {
+            tracing::warn!(
+                grace_secs = DAEMON_STOP_GRACE.as_secs(),
+                "detection loop still analysing at shutdown; exiting without waiting for it"
+            );
+        }
     }
 
     sd_notify::stopping();
     tracing::info!("BirdNet-Behavior stopped");
     Ok(())
 }
+
+/// How long shutdown waits for the detection loop to finish the segment it is
+/// analysing and exit.
+const DAEMON_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// After a shutdown signal, allow in-flight connections a bounded window to
 /// drain before we stop waiting — so a long-lived WebSocket can't wedge

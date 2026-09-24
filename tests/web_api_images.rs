@@ -97,6 +97,17 @@ fn state_with_stub_cache(base: String, cache_dir: &std::path::Path) -> AppState 
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     birdnet_db::migration::migrate(&conn).unwrap();
+    // A miss is looked up only for a species the station has heard (every
+    // picture the UI asks for comes from a detection row), so the species
+    // these tests request must be in `detections`.
+    for (i, sci) in ["Turdus merula", "Parus major"].iter().enumerate() {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+             VALUES ('2026-09-01', ?1, ?2, ?2, 0.9)",
+            rusqlite::params![format!("06:0{i}:00"), sci],
+        )
+        .unwrap();
+    }
     AppState::from_connection(conn, std::path::PathBuf::from(":memory:")).with_image_cache(cache)
 }
 

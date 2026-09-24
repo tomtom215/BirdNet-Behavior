@@ -239,3 +239,64 @@ mod tests {
         assert!(res.0.contains(r#"hx-swap-oob="beforeend""#));
     }
 }
+
+/// What a one-row write (lock, unlock, delete, relabel) actually did.
+///
+/// The handlers used to discard the result with `let _ =` and answer as if it
+/// had worked: the Clips 🔒 flipped to locked and a deleted row vanished even
+/// when the database had refused — and a lock is what keeps a clip from the
+/// disk-full purge, so "locked" on screen and unlocked on disk is the worst
+/// way for that to go wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowWrite {
+    /// The row was changed.
+    Done,
+    /// No row matched — someone else removed it first.
+    Gone,
+    /// The write failed; nothing is known to have changed.
+    Failed,
+}
+
+impl RowWrite {
+    /// Classify the result of a blocking `Result<bool, _>` write, logging a
+    /// failure with `what` so the journal names the operation.
+    pub fn from_result<E: std::fmt::Display, J: std::fmt::Display>(
+        result: Result<Result<bool, E>, J>,
+        what: &str,
+    ) -> Self {
+        match result {
+            Ok(Ok(true)) => Self::Done,
+            Ok(Ok(false)) => Self::Gone,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, operation = what, "row write failed");
+                Self::Failed
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, operation = what, "row write task failed");
+                Self::Failed
+            }
+        }
+    }
+}
+
+/// Leave the page exactly as it is and say why, in a toast.
+///
+/// `200` with `HX-Reswap: none`, not a `5xx`: htmx discards the body of an
+/// error response, so a failure answered with one changes nothing on the page
+/// and says nothing either. Out-of-band swaps still run under `none`, so the
+/// toast lands. A `fetch` caller reads the same header as "not applied".
+pub fn not_applied(toast: &Toast) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    (
+        axum::http::StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                axum::http::header::HeaderName::from_static("hx-reswap"),
+                "none",
+            ),
+        ],
+        toast.render_oob(),
+    )
+        .into_response()
+}

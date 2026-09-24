@@ -16,7 +16,7 @@ The **When active** and **Dawn chorus** tabs of [Patterns](./patterns.md) (`/pat
 
 ## Co-occurrence — "Who sings with whom"
 
-The **Who sings together** tab of [Patterns](./patterns.md) (`/patterns?tab=together`) shows which species are detected together.
+The **Who sings together** tab of [Patterns](./patterns.md) (`/patterns?tab=together`) shows which species are detected together — heard in the same five-minute block of the same day. A pair's strength is its overlap: the blocks they share, as a share of the blocks in which either was heard. A pair needs at least three shared blocks to be drawn.
 
 ![The co-occurrence matrix and acoustic-network chord diagram](../images/correlation.png)
 

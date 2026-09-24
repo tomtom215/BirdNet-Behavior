@@ -115,9 +115,20 @@ pub fn is_usable(findings: &[Finding]) -> bool {
     !findings.iter().any(|f| f.severity == Severity::Error)
 }
 
+/// A key's value, or `None` when it is absent **or blank**.
+///
+/// Every runtime reader treats `KEY=` as unset — `get_parsed(…).ok()` fails on
+/// the empty string and falls back to the default — so a blank line is not an
+/// error here either. It used to be one for eleven keys, and an error makes
+/// the whole file unusable: `LATITUDE=` left over from an edit reverted every
+/// other setting to the last-good copy, or ran the station web-only.
+fn value_of<'a>(config: &'a Config, key: &str) -> Option<&'a str> {
+    config.get(key).map(str::trim).filter(|v| !v.is_empty())
+}
+
 fn check_coords(config: &Config, out: &mut Vec<Finding>) {
-    let lat_raw = config.get("LATITUDE").map(str::trim);
-    let lon_raw = config.get("LONGITUDE").map(str::trim);
+    let lat_raw = value_of(config, "LATITUDE");
+    let lon_raw = value_of(config, "LONGITUDE");
 
     if let Some(raw) = lat_raw {
         // `parse_decimal` accepts both `.` and `,` as the decimal
@@ -320,7 +331,7 @@ fn check_bounded(config: &Config, key: &str, min: f64, max: f64, out: &mut Vec<F
 }
 
 fn check_positive_int(config: &Config, key: &str, min: u64, max: u64, out: &mut Vec<Finding>) {
-    let Some(raw) = config.get(key) else {
+    let Some(raw) = value_of(config, key) else {
         return;
     };
     match raw.parse::<u64>() {
@@ -390,9 +401,7 @@ fn check_audio_sources(config: &Config, out: &mut Vec<Finding>) {
 }
 
 fn check_audio_format(config: &Config, out: &mut Vec<Finding>) {
-    let Some(raw) = config
-        .get("AUDIOFMT")
-        .or_else(|| config.get("AUDIO_FORMAT"))
+    let Some(raw) = value_of(config, "AUDIOFMT").or_else(|| value_of(config, "AUDIO_FORMAT"))
     else {
         return;
     };
@@ -455,7 +464,7 @@ fn check_public_access(config: &Config, out: &mut Vec<Finding>) {
     for name in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let normalised = name.to_ascii_lowercase().replace('-', "_");
         if !PUBLIC_ACCESS_NAMES.contains(&normalised.as_str()) {
-            out.push(Finding::error(
+            out.push(Finding::warn(
                 "PUBLIC_ACCESS",
                 format!(
                     "PUBLIC_ACCESS names {name:?}, which is not a carve-out; the station skips it"
@@ -486,7 +495,7 @@ fn check_lang(config: &Config, out: &mut Vec<Finding>) {
 
 fn parse_float(config: &Config, key: &str) -> Option<Result<f64, std::num::ParseFloatError>> {
     // Locale-tolerant — accepts both `42.36` and `42,36`.
-    config.get(key).map(super::locale::parse_decimal)
+    value_of(config, key).map(super::locale::parse_decimal)
 }
 
 #[cfg(test)]
@@ -776,7 +785,12 @@ mod tests {
 
     /// `PUBLIC_ACCESS` names only the carve-outs the web crate implements.
     /// Hyphens, case, spaces and a trailing comma are forgiven; an unknown
-    /// name is an error that quotes it, one finding per unknown name.
+    /// name is a warning that quotes it, one finding per unknown name.
+    ///
+    /// A warning, not an error: the station skips the name, which closes that
+    /// one surface — the safe direction. As an error it made the whole file
+    /// unusable, so a misspelt carve-out reverted every other setting in the
+    /// edit to the last-good copy, or ran the station web-only.
     #[test]
     fn public_access_names_only_the_carve_outs_that_exist() {
         let findings = validate(&cfg(&[(
@@ -790,8 +804,12 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .all(|f| f.severity == Severity::Error && f.key == "PUBLIC_ACCESS"),
+                .all(|f| f.severity == Severity::Warning && f.key == "PUBLIC_ACCESS"),
             "{findings:?}"
+        );
+        assert!(
+            is_usable(&findings),
+            "a misspelt carve-out must not revert the file"
         );
         assert!(findings[0].message.contains("live_audo"), "{findings:?}");
         assert!(findings[1].message.contains("dashboard"), "{findings:?}");
@@ -987,5 +1005,35 @@ mod tests {
             "a correct file drew findings: {:?}",
             validate(&cfg)
         );
+    }
+
+    /// A blank value is an unset one, for every key the station knows — the
+    /// runtime's reading. Eleven keys used to answer `KEY=` with an error, and
+    /// an error reverts the whole file.
+    #[test]
+    fn a_blank_value_is_unset_not_an_error() {
+        let mut wrong = Vec::new();
+        for key in crate::config::known_keys::KNOWN_CONFIG_KEYS {
+            let config = Config::parse(&format!("{key}=\n")).unwrap();
+            let errors: Vec<_> = validate(&config)
+                .into_iter()
+                .filter(|f| f.severity == Severity::Error)
+                .map(|f| f.message)
+                .collect();
+            if !errors.is_empty() {
+                wrong.push(format!("{key}= -> {errors:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+
+        // Counterpart: a value that is there and wrong is still an error.
+        for (key, bad) in [
+            ("LATITUDE", "abc"),
+            ("CONFIDENCE", "x"),
+            ("SEGMENT_DURATION", "-1"),
+        ] {
+            let config = Config::parse(&format!("{key}={bad}\n")).unwrap();
+            assert!(!is_usable(&validate(&config)), "{key}={bad} passed");
+        }
     }
 }

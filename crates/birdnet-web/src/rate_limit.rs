@@ -187,12 +187,15 @@ pub async fn rate_limit_middleware(
     mut req: Request<Body>,
     next: Next,
 ) -> Response {
-    let ip = extract_ip(&req, &limiter.config.trusted_proxies);
+    let resolved = resolve(&req, &limiter.config.trusted_proxies);
+    let ip = resolved.client;
     // Publish the resolution so every handler downstream agrees with the
     // limiter about who is calling. This layer is the first that needs it, so
     // resolving once here costs nothing and removes the temptation for a
     // handler to read `ConnectInfo` and get the proxy instead.
     req.extensions_mut().insert(ClientIp(ip));
+    req.extensions_mut()
+        .insert(crate::client_ip::VouchedBy(resolved.vouched_by));
 
     if !limiter.check(ip) {
         tracing::debug!(ip = %ip, "rate limit exceeded");
@@ -230,12 +233,17 @@ pub async fn rate_limit_middleware(
 /// Falling back to loopback keeps such a request in one shared bucket rather
 /// than giving it an unthrottled path, and loopback is trusted by default, so
 /// a test that sets forwarded headers still exercises the proxied path.
-pub(crate) fn extract_ip(req: &Request<Body>, trusted: &TrustedProxies) -> IpAddr {
+#[cfg(test)]
+fn extract_ip(req: &Request<Body>, trusted: &TrustedProxies) -> IpAddr {
+    resolve(req, trusted).client
+}
+
+fn resolve(req: &Request<Body>, trusted: &TrustedProxies) -> crate::client_ip::Resolved {
     let peer = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map_or_else(|| IpAddr::from([127, 0, 0, 1]), |ci| ci.0.ip());
-    trusted.client_ip(req.headers(), peer)
+    trusted.resolve(req.headers(), peer)
 }
 
 // ---------------------------------------------------------------------------

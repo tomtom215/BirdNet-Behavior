@@ -30,6 +30,7 @@ CI_TESTS=(
     binary-swap-atomicity.sh
     blank-env-opt-outs.sh
     checksum-refusals.sh
+    config-dir-permissions.sh
     config-template.sh
     container-model-cache.sh
     coord-parse.sh
@@ -37,7 +38,10 @@ CI_TESTS=(
     location-notice.sh
     model-resume.sh
     pipefail-sigpipe.sh
+    quickstart-env.sh
+    service-owner-preserved.sh
     service-unit.sh
+    uninstall-paths.sh
 )
 
 # Deliberately not run in CI. Each entry is "file|reason" and the reason is

@@ -279,8 +279,10 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
     let max_avg = rows
         .iter()
         .map(|r| r.avg_detections_per_day)
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
+        .fold(0.0_f64, f64::max);
+    // Scale to the busiest hour, whatever its size: averages below one a day
+    // are ordinary once quiet days count (ANA11).
+    let max_avg = if max_avg > 0.0 { max_avg } else { 1.0 };
 
     let mut html = String::from(
         r"<table><thead><tr><th>Hour</th><th>Avg/Day</th><th>Total</th><th>Trend</th></tr></thead><tbody>",
@@ -291,7 +293,7 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
             html,
             r#"<tr>
 <td class="tsd-key">{h:02}:00</td>
-<td>{avg:.1}</td>
+<td>{avg:.2}</td>
 <td>{total}</td>
 <td><div data-style="width:{pct:.0}%;height:8px;background:var(--accent);border-radius:4px;min-width:2px;"></div></td>
 </tr>"#,
@@ -329,6 +331,17 @@ fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> 
     html
 }
 
+/// Shannon H′ for a table cell. A day with one species has H′ = −(1 · ln 1),
+/// which DuckDB returns as −0.0 and `{:.3}` prints as "-0.000" (`ANA14d`).
+/// H′ is never negative, so anything at or below zero is shown as 0.000.
+#[cfg(feature = "analytics")]
+fn shannon_cell(h: Option<f64>) -> String {
+    h.map_or_else(
+        || "—".to_string(),
+        |v| format!("{:.3}", if v <= 0.0 { 0.0 } else { v }),
+    )
+}
+
 #[cfg(feature = "analytics")]
 fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityRow]) -> String {
     if rows.is_empty() {
@@ -338,9 +351,7 @@ fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityR
         r"<table><thead><tr><th>Date</th><th>Richness</th><th>Shannon H′</th><th>Evenness</th></tr></thead><tbody>",
     );
     for row in rows.iter().rev().take(14).rev() {
-        let h = row
-            .shannon_h
-            .map_or_else(|| "—".to_string(), |v| format!("{v:.3}"));
+        let h = shannon_cell(row.shannon_h);
         let ev = row
             .pielou_evenness
             .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
@@ -365,7 +376,9 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
     let mut html = String::from(
         r"<table><thead><tr><th>Start</th><th>Duration</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
     );
-    for row in rows.iter().take(20) {
+    // Rows arrive oldest-first; the card shows the latest twenty, newest at
+    // the top (ANA12). `take(20)` alone showed the oldest of the window.
+    for row in rows.iter().rev().take(20) {
         let _ = write!(
             html,
             r"<tr><td>{}</td><td>{}m</td><td>{}</td><td>{}</td></tr>",
@@ -471,3 +484,42 @@ pub fn prewarm(state: &AppState) {
 /// No-op pre-warm when analytics is not compiled in.
 #[cfg(not(feature = "analytics"))]
 pub const fn prewarm(_state: &AppState) {}
+
+#[cfg(all(test, feature = "analytics"))]
+mod tests {
+    /// `ANA14d`: a one-species day reads 0.000, not -0.000.
+    #[test]
+    fn a_one_species_day_has_zero_diversity_not_negative() {
+        assert_eq!(super::shannon_cell(Some(-0.0)), "0.000");
+        // Counterparts: an ordinary value and a missing one are unchanged.
+        assert_eq!(super::shannon_cell(Some(std::f64::consts::LN_2)), "0.693");
+        assert_eq!(super::shannon_cell(None), "—");
+    }
+
+    /// ANA12: the sessions card shows the newest sessions, newest first.
+    #[test]
+    fn the_sessions_card_shows_the_newest_first() {
+        let rows: Vec<_> = (0..25)
+            .map(|i| birdnet_timeseries::types::results::SessionRow {
+                session_id: i,
+                date: "2026-05-01".into(),
+                session_start: format!("2026-05-01 {i:02}:00:00"),
+                session_end: String::new(),
+                detection_count: 1,
+                species_count: 1,
+                duration_minutes: 0,
+                max_internal_gap_minutes: None,
+            })
+            .collect();
+        let html = super::render_sessions_table(&rows);
+        let newest = html
+            .find("2026-05-01 24:00:00")
+            .expect("the newest is shown");
+        let next = html.find("2026-05-01 23:00:00").expect("and the next");
+        assert!(newest < next, "newest first");
+        assert!(
+            !html.contains("2026-05-01 00:00:00"),
+            "the oldest falls off"
+        );
+    }
+}

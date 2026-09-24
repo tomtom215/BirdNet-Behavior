@@ -37,6 +37,36 @@ impl Drop for RestoreGuard {
     }
 }
 
+/// Set while a full backup is being built. Each one snapshots the database and
+/// tars every recording into a scratch file on the data disk, so two at once
+/// is twice the disk for no second archive worth having; a second request is
+/// told one is already running.
+static BACKUP_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Holds [`BACKUP_IN_PROGRESS`] for as long as it lives.
+struct BackupGuard;
+
+impl BackupGuard {
+    fn claim() -> Option<Self> {
+        BACKUP_IN_PROGRESS
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+            .then_some(Self)
+    }
+}
+
+impl Drop for BackupGuard {
+    fn drop(&mut self) {
+        BACKUP_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Removes the staging directory however the backup closure leaves — including
 /// the several `?` returns between creating it and streaming the archive.
 struct StagingDir(std::path::PathBuf);
@@ -59,18 +89,40 @@ impl Drop for StagingDir {
 /// with a few gigabytes of clips could therefore OOM-kill itself by pressing
 /// "download backup". The database's own directory is real disk, and it is the
 /// one the operator has already sized for this data.
+///
+/// The name carries a per-process sequence number as well as the second: two
+/// backups begun in the same second used to share one directory, so both
+/// `tar`s wrote one file and the first to finish removed the other's staging.
 fn scratch_dir(db_path: &std::path::Path) -> std::path::PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let parent = db_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     parent.join(format!(
-        ".bnb-backup-{}-{}",
+        ".bnb-backup-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs()
+            .as_secs(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ))
+}
+
+/// The file an uploaded restore archive is streamed into: beside the
+/// database, for the reason [`scratch_dir`] gives. It was the system temp
+/// dir — under the shipped unit's `PrivateTmp=yes`, on the tmpfs the installer
+/// mounts, whose pages count against `MemoryMax=1G` — so uploading a
+/// multi-gigabyte backup to restore could get the station OOM-killed.
+fn restore_spool(db_path: &std::path::Path) -> std::io::Result<tempfile::NamedTempFile> {
+    let dir = db_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    tempfile::Builder::new()
+        .prefix(".bnb-restore-")
+        .suffix(".tar.gz")
+        .tempfile_in(dir)
 }
 
 /// Take a consistent snapshot of `db_path` into `staging`, named exactly as the
@@ -121,7 +173,30 @@ fn stage_backup_snapshot(
     Ok(target)
 }
 
-pub(super) async fn full_backup(State(state): State<AppState>) -> axum::response::Response {
+pub(super) async fn full_backup(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    // A GET, so the CSRF check does not see it; on a station with no password
+    // another website's `<img src=…/backup/full>` started a full archive on
+    // every page load. Browsers say so; the station's own link is same-origin.
+    if headers
+        .get("sec-fetch-site")
+        .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"cross-site"))
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            "A backup can only be started from the station's own pages.",
+        )
+            .into_response();
+    }
+    let Some(guard) = BackupGuard::claim() else {
+        return (
+            StatusCode::CONFLICT,
+            "A backup is already being built. Wait for that download to finish.",
+        )
+            .into_response();
+    };
     let db_path = state.db_path().to_path_buf();
     let rec_dir = state.recording_dir();
     let base_dir = db_path
@@ -130,6 +205,9 @@ pub(super) async fn full_backup(State(state): State<AppState>) -> axum::response
         .to_path_buf();
 
     let result = tokio::task::spawn_blocking(move || {
+        // Held while the archive is built. Once it is built the file is open
+        // and unlinked, so streaming it costs no further disk.
+        let _guard = guard;
         let staging = scratch_dir(&db_path);
         let cleanup = StagingDir(staging.clone());
         let tmp = staging.join("birdnet-backup.tar.gz");
@@ -367,9 +445,8 @@ pub(super) async fn restore_backup(
     // backups and would OOM a Pi. Streaming keeps memory flat regardless of
     // archive size. NamedTempFile auto-removes the file on drop (even on an
     // early return), replacing the previous manual cleanup.
-    let Ok(Ok(tmp)) =
-        tokio::task::spawn_blocking(|| tempfile::Builder::new().suffix(".tar.gz").tempfile()).await
-    else {
+    let db_path = state.db_path().to_path_buf();
+    let Ok(Ok(tmp)) = tokio::task::spawn_blocking(move || restore_spool(&db_path)).await else {
         return Html(
             r#"<p class="ctl-err">The station could not make room to receive the upload, and nothing was changed. Check that the disk is not full, then try again.</p>"#.to_string(),
         );
@@ -763,9 +840,34 @@ fn merge_dir(from: &std::path::Path, to: &std::path::Path) -> Result<(), String>
 mod tests {
     use super::{
         RESTORE_IN_PROGRESS, RestoreGuard, check_archive_members, finalize_restore,
-        parse_verbose_listing, restore_archive_into, space_verdict, stage_backup_snapshot,
+        parse_verbose_listing, restore_archive_into, scratch_dir, space_verdict,
+        stage_backup_snapshot,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Two backups begun in the same second shared `.bnb-backup-{pid}-{secs}`:
+    /// both `tar`s wrote one file, and the first to finish removed the other's
+    /// staging directory.
+    #[test]
+    fn a_restore_upload_is_spooled_beside_the_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let spool = super::restore_spool(&dir.path().join("birds.db")).unwrap();
+        assert_eq!(spool.path().parent(), Some(dir.path()));
+    }
+
+    #[test]
+    fn a_second_backup_waits_for_the_first() {
+        let first = super::BackupGuard::claim().expect("nothing running");
+        assert!(super::BackupGuard::claim().is_none(), "one at a time");
+        drop(first);
+        assert!(super::BackupGuard::claim().is_some(), "released on drop");
+    }
+
+    #[test]
+    fn two_backups_begun_together_do_not_share_a_staging_dir() {
+        let db = std::path::Path::new("/var/lib/birdnet/birds.db");
+        assert_ne!(scratch_dir(db), scratch_dir(db));
+    }
 
     /// A WAL-mode database with `n` rows committed and **not** checkpointed, so
     /// the newest rows exist only in `birds.db-wal`.

@@ -79,11 +79,17 @@ pub fn run_migration_with_options(
     options: &crate::provenance::ImportOptions,
     station: (Option<f64>, Option<f64>),
 ) -> Result<MigrationSummary, MigrateError> {
-    use crate::traits::{Migrator, SchemaDetector, Validator};
+    use crate::traits::{SchemaDetector, Validator};
 
     // CSV/TSV path — if the file is not a SQLite database, try CSV import.
     if is_csv_file(source_path) {
-        return CsvImporter.migrate(source_path, dest_path, progress);
+        return CsvImporter.migrate_with_options(
+            source_path,
+            dest_path,
+            progress,
+            options,
+            station,
+        );
     }
 
     let detector = BirdNetPiDetector;
@@ -215,11 +221,9 @@ fn validate_csv_source(path: &Path) -> Result<(DetectedSchema, ValidationReport)
         ));
     };
 
-    let delim = if header.contains('\t') { '\t' } else { ',' };
-    let fields: Vec<&str> = header.splitn(6, delim).collect();
-    let has_expected_header = fields.len() >= 5
-        && fields[0].trim().eq_ignore_ascii_case("date")
-        && fields[3].trim().eq_ignore_ascii_case("com_name");
+    // The same layout detection the importer uses, so the check and the
+    // import cannot disagree about what the file is.
+    let has_expected_header = csv_importer::Layout::detect(&header).has_header();
 
     let row_count = lines
         .filter(|l| l.as_ref().is_ok_and(|s| !s.trim().is_empty()))

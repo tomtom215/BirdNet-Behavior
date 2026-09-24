@@ -204,6 +204,17 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Run the doctor as the service's start gate, then exit.
+    ///
+    /// The same checks and report as `--doctor`, but only a failure the
+    /// station cannot run past — an unreadable config file, an invalid listen
+    /// address, an unwritable database directory, an unusable HTTPS setup —
+    /// exits 2. Any other failure exits 1: the station starts, runs what it
+    /// can, and `/admin/doctor` shows the same report. The systemd unit's
+    /// `ExecStartPre` uses this; `--doctor` keeps its own exit codes.
+    #[arg(long)]
+    pub doctor_gate: bool,
+
     /// Install a classifier from the built-in catalogue, then exit (`G-10`).
     ///
     /// `--install-model perch-v2`. Pass `list` to print the catalogue without
@@ -668,7 +679,7 @@ pub struct Cli {
     ///
     /// Species with occurrence probability below this threshold are filtered out.
     /// Lower values allow more species through; higher values are more restrictive.
-    #[arg(long, default_value = "0.03", env = "BIRDNET_SF_THRESH")]
+    #[arg(long, default_value = "0.03", env = "BIRDNET_SF_THRESH", value_parser = sf_thresh_in_range)]
     pub sf_thresh: f32,
 
     /// Privacy filter threshold for human voice detection (0.0 = disabled).
@@ -678,7 +689,12 @@ pub struct Cli {
     /// with the windows either side of it. Read from the model's output before
     /// the detection threshold applies, so this value binds on its own: lower
     /// suppresses more. Typical values: 0.01-0.03.
-    #[arg(long, default_value = "0.0", env = "BIRDNET_PRIVACY_THRESHOLD")]
+    #[arg(
+        long,
+        default_value = "0.0",
+        env = "BIRDNET_PRIVACY_THRESHOLD",
+        value_parser = privacy_threshold_in_range
+    )]
     pub privacy_threshold: f32,
 
     /// Confidence at which a barking dog suppresses its audio chunk
@@ -812,7 +828,7 @@ pub struct Cli {
     /// Controls how much consecutive 3-second analysis windows overlap.
     /// Higher overlap increases sensitivity at the cost of more CPU time.
     /// BirdNET-Pi equivalent: OVERLAP config option.
-    #[arg(long, default_value = "0.0", env = "BIRDNET_OVERLAP")]
+    #[arg(long, default_value = "0.0", env = "BIRDNET_OVERLAP", value_parser = overlap_in_range)]
     pub overlap: f32,
 
     /// Custom site name displayed in page titles and header.
@@ -1102,9 +1118,72 @@ impl Cli {
     }
 }
 
+/// Parse `raw` and hold it to `key`'s bounds in
+/// `birdnet_core::config::validate::NUMERIC_RANGES` — the table the config
+/// file and the settings page are checked against, so a flag or environment
+/// variable cannot set what they refuse.
+fn in_config_range(key: &str, raw: &str) -> Result<f32, String> {
+    // Compared as `f64`, as the table is: 2.9 read as `f32` widens to
+    // 2.9000000953… and would fail its own upper bound.
+    let value: f64 = raw
+        .trim()
+        .parse()
+        .map_err(|e| format!("not a number: {e}"))?;
+    let (_, lo, hi) = birdnet_core::config::validate::NUMERIC_RANGES
+        .iter()
+        .find(|(k, _, _)| *k == key)
+        .ok_or_else(|| format!("{key} has no range"))?;
+    if value.is_finite() && (*lo..=*hi).contains(&value) {
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(value as f32)
+    } else {
+        Err(format!(
+            "must be between {lo} and {hi} (the bounds of {key})"
+        ))
+    }
+}
+
+fn sf_thresh_in_range(raw: &str) -> Result<f32, String> {
+    in_config_range("SF_THRESH", raw)
+}
+
+fn privacy_threshold_in_range(raw: &str) -> Result<f32, String> {
+    in_config_range("PRIVACY_THRESHOLD", raw)
+}
+
+fn overlap_in_range(raw: &str) -> Result<f32, String> {
+    in_config_range("OVERLAP", raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three thresholds a flag or environment variable can set are held
+    /// to the bounds the config file is: `validate::NUMERIC_RANGES`, one table.
+    ///
+    /// The file and the settings page were bounded, the flags were not. An
+    /// `--overlap` of 3.0 made the analysis step one sample: a 15-second
+    /// segment at 48 kHz would be ~720 000 chunks of 144 000 samples, about
+    /// 415 GB of `f32` (arithmetic, not a measured run).
+    #[test]
+    fn flag_thresholds_are_held_to_the_config_bounds() {
+        for (flag, bad, good) in [
+            ("--overlap", "3.0", "2.9"),
+            ("--overlap", "-0.5", "0.0"),
+            ("--sf-thresh", "1.5", "1.0"),
+            ("--privacy-threshold", "2", "0.02"),
+        ] {
+            assert!(
+                Cli::try_parse_from(["birdnet-behavior", flag, bad]).is_err(),
+                "{flag} {bad} was accepted"
+            );
+            assert!(
+                Cli::try_parse_from(["birdnet-behavior", flag, good]).is_ok(),
+                "{flag} {good} was refused"
+            );
+        }
+    }
     use clap::Parser;
 
     #[test]

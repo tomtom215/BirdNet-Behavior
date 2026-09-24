@@ -121,9 +121,11 @@ fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{title} — BirdNet-Behavior Admin</title>
-<script src="/static/theme-guard.js"></script>
+<script src="/static/theme-guard.js?v={css_v}"></script>
 <link rel="stylesheet" href="/static/css/app.css?v={css_v}">
-<script src="/static/htmx.min.js"></script>
+<script src="/static/htmx.min.js?v={css_v}"></script>
+<script src="/static/poll-visibility.js?v={css_v}"></script>
+<script src="/static/base-path.js?v={css_v}"></script>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }}
   .admin-wrap {{ max-width:1180px; margin:0 auto; padding:1.5rem 1.25rem 3rem; }}

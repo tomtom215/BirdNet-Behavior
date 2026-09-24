@@ -36,8 +36,8 @@
       </div>
 
       <div class="sd-actions">
-        <a class="bnb-btn primary" href="/?q={{species_encoded}}">
-          View in today's log →
+        <a class="bnb-btn primary" href="/search?species={{species_encoded}}">
+          All its detections →
         </a>
         <a class="bnb-btn" href="/patterns">
           When it's active
@@ -112,7 +112,7 @@
             <div class="bnb-eyebrow">Recent</div>
             <h2 class="sh-h">Detections</h2>
           </div>
-          <a class="action" href="/?q={{species_encoded}}">See all →</a>
+          <a class="action" href="/search?species={{species_encoded}}">See all →</a>
         </div>
         <div hx-get="/pages/species-detections?name={{species_encoded}}"
              hx-trigger="load" hx-swap="innerHTML">

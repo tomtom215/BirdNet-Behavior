@@ -103,6 +103,61 @@ fn no_stylesheet_is_linked_without_a_version_query() {
     );
 }
 
+/// The scripts served `immutable`.
+///
+/// The same trap as the stylesheets, one tag over. `theme-guard.js` carried a
+/// fix for Reduced motion and High contrast being lost on the admin pages, and
+/// every browser that had visited before the upgrade kept the old guard for a
+/// year: the admin shell, the log viewer and onboarding loaded it from a bare
+/// URL. `htmx.min.js` was bare in all four places that load it.
+const IMMUTABLE_SCRIPTS: &[&str] = &[
+    "/static/htmx.min.js",
+    "/static/theme-guard.js",
+    "/static/clip-player.js",
+];
+
+#[test]
+fn no_immutable_script_is_loaded_without_a_version_query() {
+    let mut offenders: Vec<String> = Vec::new();
+    let mut seen = 0_usize;
+    for file in markup_sources() {
+        if file.ends_with("static_files.rs") {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for (n, line) in src.lines().enumerate() {
+            if !line.contains("<script") {
+                continue;
+            }
+            for script in IMMUTABLE_SCRIPTS {
+                let Some(at) = line.find(script) else {
+                    continue;
+                };
+                seen += 1;
+                if !line[at + script.len()..].starts_with("?v=") {
+                    offenders.push(format!("{}:{}  {}", file.display(), n + 1, line.trim()));
+                }
+            }
+        }
+    }
+    // Counterpart: the scan must be finding the tags — layout, admin shell, log
+    // viewer, kiosk and onboarding load at least six between them.
+    assert!(
+        seen >= 6,
+        "found only {seen} immutable <script> tags; the scan is blind"
+    );
+    offenders.sort();
+    offenders.dedup();
+    assert!(
+        offenders.is_empty(),
+        "these scripts are served `immutable` but loaded without `?v=`, so an \
+         upgrade never reaches a browser that has them cached:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// The counterpart: the scan has to be finding the links at all.
 ///
 /// A path typo, a rename, or a `<link>` written some other way would make the

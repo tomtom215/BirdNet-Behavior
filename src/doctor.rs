@@ -163,9 +163,21 @@ pub enum Format {
 /// Returns the process exit code that should be used (`0`/`1`/`2`).
 pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i32 {
     let checks = collect(cli, config);
-    let exit_code = render::summarise(&checks);
+    let exit_code = if cli.doctor_gate {
+        render::summarise_gate(&checks)
+    } else {
+        render::summarise(&checks)
+    };
     match format {
-        Format::Text => print!("{}", render::render_text(&checks)),
+        Format::Text => {
+            print!("{}", render::render_text(&checks));
+            if cli.doctor_gate && exit_code < 2 && render::summarise(&checks) == 2 {
+                println!(
+                    "Start gate: the failures above do not stop the station. It starts and \
+                     runs without what they name; /admin/doctor shows this same report."
+                );
+            }
+        }
         Format::Json => println!("{}", render::render_json(&checks, exit_code)),
     }
     exit_code

@@ -150,7 +150,16 @@ impl DynamicThresholdState {
 struct ThresholdCache {
     map: std::collections::HashMap<String, f64>,
     refreshed: std::time::Instant,
+    floor: Option<PublishedFloor>,
 }
+
+/// The inference loop's threshold floor, and the lowest it may ever be set:
+/// the model confidence the station would run at with no per-species
+/// thresholds (the global confidence, or the dynamic-threshold floor).
+pub(super) type PublishedFloor = (
+    std::sync::Arc<birdnet_core::detection::daemon::ThresholdFloor>,
+    f32,
+);
 
 impl ThresholdCache {
     /// How stale a threshold may get before the next event re-reads it.
@@ -160,6 +169,23 @@ impl ThresholdCache {
         Self {
             map: initial,
             refreshed: std::time::Instant::now(),
+            floor: None,
+        }
+    }
+
+    /// Keep the inference loop's floor at the lowest threshold in force: the
+    /// model's own, or any per-species threshold below it. See
+    /// [`birdnet_core::detection::daemon::ThresholdFloor`] for why the model
+    /// has to know.
+    fn publishing(mut self, floor: Option<PublishedFloor>) -> Self {
+        self.floor = floor;
+        self.publish();
+        self
+    }
+
+    fn publish(&self) {
+        if let Some((floor, model)) = &self.floor {
+            floor.set(lowest_threshold(*model, &self.map));
         }
     }
 
@@ -174,7 +200,10 @@ impl ThresholdCache {
     ) -> &std::collections::HashMap<String, f64> {
         if self.refreshed.elapsed() >= Self::TTL {
             match state.with_db(birdnet_db::sqlite::get_species_threshold_map) {
-                Ok(fresh) => self.map = fresh,
+                Ok(fresh) => {
+                    self.map = fresh;
+                    self.publish();
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "could not refresh per-species thresholds; keeping the previous set");
                 }
@@ -182,6 +211,60 @@ impl ThresholdCache {
             self.refreshed = std::time::Instant::now();
         }
         &self.map
+    }
+}
+
+/// The lowest confidence any species may be recorded at: `model`, or a
+/// per-species threshold below it. Clamped to 0–1 — a stored threshold is
+/// validated where it is typed, but this feeds the classifier directly.
+#[allow(clippy::cast_possible_truncation)]
+pub(super) fn lowest_threshold(
+    model: f32,
+    thresholds: &std::collections::HashMap<String, f64>,
+) -> f32 {
+    thresholds
+        .values()
+        .filter(|t| t.is_finite())
+        .fold(model, |acc, &t| acc.min(t.clamp(0.0, 1.0) as f32))
+}
+
+/// How often a species had been detected *before* the detection being
+/// processed, for the `new-species` and `new-species-daily` trigger modes.
+///
+/// Nothing implemented `DetectionCounter`, so the processor passed `None`,
+/// every count read as 0, and both modes notified on every detection exactly
+/// like `each` — the setup wizard's recommended mode included. The row for the
+/// current detection is already stored when this is asked, so it is
+/// subtracted; a read that fails counts as "heard before" (`u64::MAX`), which
+/// stays quiet rather than notifying on a database error.
+struct PriorDetections<'a> {
+    state: &'a birdnet_web::state::AppState,
+    date: &'a str,
+}
+
+impl PriorDetections<'_> {
+    fn before_this_one(&self, from: &str, sci_name: &str) -> u64 {
+        self.state
+            .with_db(|conn| {
+                birdnet_db::sqlite::species_detection_count_between(conn, sci_name, from, self.date)
+            })
+            .map_or(u64::MAX, |n| {
+                u64::try_from(n.saturating_sub(1)).unwrap_or(0)
+            })
+    }
+}
+
+impl birdnet_integrations::notification::DetectionCounter for PriorDetections<'_> {
+    fn todays_count_for(&self, sci_name: &str) -> u64 {
+        self.before_this_one(self.date, sci_name)
+    }
+
+    /// The seven days ending on the detection's date — BirdNET-Pi's
+    /// `Date >= DATE('now', '-7 day')`, on the detection's own calendar.
+    fn this_weeks_count_for(&self, sci_name: &str) -> u64 {
+        let from = birdnet_core::civil::shift_datetime(self.date, "00:00:00", -6.0 * 86_400.0)
+            .map_or_else(|| self.date.to_owned(), |(date, _)| date);
+        self.before_this_one(&from, sci_name)
     }
 }
 
@@ -251,7 +334,7 @@ fn record_notification(
 /// `sensitivity` and `overlap` are the inference settings the run started
 /// with. The confidence cutoff is not here because it is per row: it is the
 /// threshold `decide_disposition` admitted the detection at.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct RunProvenance {
     /// The `analysis_runs` row this daemon start registered (R-1): the model
     /// bytes, labels and settings every row of this run was made with. Not
@@ -268,6 +351,20 @@ pub(super) struct RunProvenance {
     pub sensitivity: f64,
     /// Analysis-window overlap in seconds.
     pub overlap: f64,
+    /// Each classifier's own confidence threshold, by id, for those that set
+    /// one; the rest are held to the station's.
+    pub model_thresholds: std::collections::HashMap<String, f32>,
+}
+
+impl RunProvenance {
+    /// The confidence floor for a detection made by `model_id`: that
+    /// classifier's own threshold where it has one, else `station`.
+    fn floor_for(&self, model_id: Option<&str>, station: f32) -> f32 {
+        model_id
+            .and_then(|id| self.model_thresholds.get(id))
+            .copied()
+            .unwrap_or(station)
+    }
 }
 
 /// What the soundscape upload needs, gathered on the processor thread while
@@ -379,9 +476,15 @@ pub(super) fn event_processor(
     daylight: crate::daemon::daylight::DaylightFilter,
     dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholds,
     provenance: RunProvenance,
+    threshold_floor: Option<PublishedFloor>,
 ) {
     tracing::debug!("event processor started");
-    let mut species_thresholds = ThresholdCache::new(species_thresholds);
+    let mut species_thresholds =
+        ThresholdCache::new(species_thresholds).publishing(threshold_floor);
+    // Asked about every detection, so it must not wait on the client: a send
+    // holds the client's lock for its whole round trip (see
+    // `apprise::Client::gatekeeper`). Taken once, before the first event.
+    let apprise_gate = apprise.as_ref().map(|a| a.blocking_lock().gatekeeper());
     let mut dynamic = DynamicThresholdState::new(dynamic, &state);
     let mut duplicates = crate::daemon::duplicate::DuplicateGate::new(duplicate_interval_secs);
     if daylight.is_enabled() {
@@ -404,6 +507,38 @@ pub(super) fn event_processor(
 
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
+        // The floor for this detection: its classifier's own threshold where
+        // one is set, the station's otherwise. Every classifier's threshold was
+        // compared to the station's alone, so `MODEL_2_THRESHOLD=0.35` under a
+        // 0.75 station let the second model emit 0.35–0.75 and dropped every
+        // one of them here — and a stricter classifier, run at the station
+        // floor so a lowered species can reach it, was held only to that.
+        let global_confidence =
+            provenance.floor_for(detection.model_id.as_deref(), global_confidence);
+
+        // Decided once, before the clock and hour gates: a detection the
+        // global threshold drops is dropped, whatever the hour. The classifier
+        // runs at the lowest per-species threshold, so calls under the
+        // station's own bar reach this loop, and the gates below used to
+        // quarantine them — filling the night's review queue with detections
+        // daylight would never have recorded. A per-species miss still goes
+        // on to the gates, so an implausible hour stays the reason it is filed
+        // under.
+        let disposition = decide_disposition(
+            detection.confidence,
+            &detection.scientific_name,
+            species_thresholds,
+            global_confidence,
+            dynamic.tracker(),
+            now_ms,
+        );
+        if matches!(disposition, DispositionDecision::DropBelowGlobal) {
+            // Counted, not silent. "The station is detecting nothing" and
+            // "the station is discarding everything" look identical from
+            // outside, and the reason label is what tells them apart.
+            state.metrics().inc_detection_dropped("confidence");
+            continue;
+        }
 
         // Does this recording name a day the station could have recorded on?
         //
@@ -543,14 +678,7 @@ pub(super) fn event_processor(
         // Detections that pass the global threshold but fail a stricter
         // per-species threshold are quarantined for manual review rather
         // than silently dropped.
-        let admitted_at = match decide_disposition(
-            detection.confidence,
-            &detection.scientific_name,
-            species_thresholds,
-            global_confidence,
-            dynamic.tracker(),
-            now_ms,
-        ) {
+        let admitted_at = match disposition {
             DispositionDecision::Quarantine { threshold } => {
                 tracing::debug!(
                     correlation_id,
@@ -597,13 +725,8 @@ pub(super) fn event_processor(
                 state.metrics().inc_detection_dropped("quarantine");
                 continue;
             }
-            DispositionDecision::DropBelowGlobal => {
-                // Counted, not silent. "The station is detecting nothing" and
-                // "the station is discarding everything" look identical from
-                // outside, and the reason label is what tells them apart.
-                state.metrics().inc_detection_dropped("confidence");
-                continue;
-            }
+            // Dropped above, before the clock and hour gates.
+            DispositionDecision::DropBelowGlobal => continue,
             DispositionDecision::Accept { threshold } => threshold,
         };
 
@@ -805,22 +928,34 @@ pub(super) fn event_processor(
                 time = %detection.time,
                 "detection classified but refused by the database — it is lost"
             );
-        } else {
-            metrics.inc_detection(&detection.scientific_name, detection.start);
-            // The one place a species can confirm itself, and it is after the
-            // row exists on purpose. Every gate has run by here — the chunk
-            // filters and the occurrence filter in the daemon, the plausible-
-            // hour filter, the threshold gate, the duplicate interval — and a
-            // detection that failed any of them took an early `continue`. A
-            // confirmation from a detection the database then refused would be
-            // learning from something the station did not record.
-            dynamic.confirm(
-                &detection.scientific_name,
-                detection.confidence,
-                now_ms,
-                &state,
-            );
+            // Stop here. Everything below — the DuckDB mirror, alert rules,
+            // the live broadcast, Apprise, email, BirdWeather, MQTT — would
+            // announce a detection the station has no record of, and leave the
+            // analytics copy disagreeing with the store it copies. The clip
+            // written for it has no row to be reached from; `claim_unused_path`
+            // gave it a name no other row uses, so removing it is safe.
+            if let Ok(clip) = &extracted
+                && let Err(e) = std::fs::remove_file(&clip.path)
+            {
+                tracing::debug!(error = %e, path = %clip.path.display(), "could not remove the refused detection's clip");
+            }
+            metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
+            continue;
         }
+        metrics.inc_detection(&detection.scientific_name, detection.start);
+        // The one place a species can confirm itself, and it is after the
+        // row exists on purpose. Every gate has run by here — the chunk
+        // filters and the occurrence filter in the daemon, the plausible-
+        // hour filter, the threshold gate, the duplicate interval — and a
+        // detection that failed any of them took an early `continue`. A
+        // confirmation from a detection the database then refused would be
+        // learning from something the station did not record.
+        dynamic.confirm(
+            &detection.scientific_name,
+            detection.confidence,
+            now_ms,
+            &state,
+        );
         // event.latency_ms covers decode + inference; surface as a histogram
         // so the dashboard can flag rising p95s before they catch the eye.
         metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
@@ -948,13 +1083,14 @@ pub(super) fn event_processor(
         // Check if this is the first detection of this species today
         // (to power the rare-species celebration in the dashboard).
         let is_new_today = state.with_db(|conn| {
-            let today_count = birdnet_db::sqlite::detection_count_for_species_date(
+            birdnet_db::sqlite::detection_count_for_species_date(
                 conn,
                 &detection.date,
                 &detection.scientific_name,
             )
-            .unwrap_or(1);
-            is_first_detection_today(today_count)
+            // A failed read is not a first sighting: defaulting to 1 lit the
+            // dashboard's "new today" celebration on a database error.
+            .is_ok_and(is_first_detection_today)
         });
 
         // Broadcast to WebSocket clients.
@@ -990,8 +1126,15 @@ pub(super) fn event_processor(
 
         // Check notification filter (trigger mode + species filter).
         // Also respect Suppress alert rules.
-        let filter_says_notify =
-            notification_filter.should_notify(&detection.scientific_name, None);
+        let prior = PriorDetections {
+            state: &state,
+            date: &detection.date,
+        };
+        let filter_says_notify = notification_filter.should_notify_detection(
+            &detection.scientific_name,
+            &detection.common_name,
+            Some(&prior),
+        );
         let dispatch_allowed = passes_filter(rule_suppressed, filter_says_notify);
 
         // What every channel below records about this detection. Built once so a
@@ -1005,15 +1148,18 @@ pub(super) fn event_processor(
         };
 
         // Apprise push notification (with filter and template).
-        if let Some(ref apprise) = apprise {
-            let apprise_says_notify = apprise
-                .blocking_lock()
-                .should_notify(&detection.common_name, detection.confidence);
+        if let (Some(apprise), Some(gate)) = (&apprise, &apprise_gate) {
+            let apprise_says_notify = gate.should_notify_detection(
+                &detection.common_name,
+                &detection.scientific_name,
+                detection.confidence,
+            );
             let should_send = should_dispatch_notification(dispatch_allowed, apprise_says_notify);
 
             if should_send {
                 let (title, body) = notification_template.render(&notify_ctx);
                 let client = Arc::clone(apprise);
+                let gate = gate.clone();
                 let log_state = state.clone();
                 let log_subject = subject.clone();
 
@@ -1037,6 +1183,10 @@ pub(super) fn event_processor(
                             None,
                         ),
                         Err(e) => {
+                            // Not delivered: the next detection of this bird
+                            // may try again rather than wait out a cooldown
+                            // for a notification that never left.
+                            gate.release_cooldown(&log_subject.com_name);
                             log_state
                                 .metrics()
                                 .inc_notification_dropped(e.drop_reason());
@@ -1121,6 +1271,24 @@ pub(super) fn event_processor(
                     );
                     return;
                 };
+                // Refused for its content: parking it would only replay the
+                // same refusal (INT13). Recorded as failed, with the reason.
+                if e.is_permanent() {
+                    tracing::warn!(
+                        error = %e,
+                        species = %post.common_name,
+                        "BirdWeather rejected the upload; not queued for replay"
+                    );
+                    record_notification(
+                        &log_state,
+                        "birdweather",
+                        &log_subject,
+                        NotifStatus::Failed,
+                        None,
+                        Some(&e.to_string()),
+                    );
+                    return;
+                }
                 // Recorded as `queued`, not `failed`: the payload is parked for
                 // the store-and-forward drainer, so "this did not reach
                 // BirdWeather yet" is a different fact from "this was lost", and
@@ -1167,8 +1335,13 @@ pub(super) fn event_processor(
             });
         }
 
-        // Email alert.
-        if let Some(ref notifier) = email {
+        // Email alert, under the same notification settings and alert rules as
+        // every other channel. It used to sit outside `dispatch_allowed`, so an
+        // excluded species, the trigger mode and a Suppress rule all still
+        // sent it.
+        if let Some(ref notifier) = email
+            && dispatch_allowed
+        {
             let notifier = std::sync::Arc::clone(notifier);
             let alert = birdnet_integrations::email::DetectionEmail {
                 common_name: detection.common_name.clone(),
@@ -1434,6 +1607,63 @@ mod tests {
         );
     }
 
+    /// The inference loop's floor follows the lowest threshold in force.
+    ///
+    /// The model discards everything under its own threshold before this
+    /// processor sees it, so a per-species threshold below the global one
+    /// reached nothing unless the model was told to run that low (see
+    /// `ThresholdFloor`). Set at start from the loaded map, lowered when an
+    /// operator lowers a species at runtime, raised again when they remove it —
+    /// never above the model's own confidence, never below 0.
+    #[test]
+    fn the_model_floor_follows_the_lowest_species_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let floor = std::sync::Arc::new(birdnet_core::detection::daemon::ThresholdFloor::new(0.75));
+        let mut cache =
+            ThresholdCache::new(thresholds(&[("Strix aluco", 0.5), ("Pica pica", 0.9)]))
+                .publishing(Some((std::sync::Arc::clone(&floor), 0.75)));
+        assert!(
+            (floor.get() - 0.5).abs() < f32::EPSILON,
+            "floor {}",
+            floor.get()
+        );
+
+        let age = |cache: &mut ThresholdCache| {
+            cache.refreshed = std::time::Instant::now()
+                .checked_sub(ThresholdCache::TTL)
+                .expect("clock is well past the TTL");
+        };
+        state.with_db(|c| {
+            birdnet_db::sqlite::set_species_threshold(c, "Strix aluco", 0.3).unwrap();
+        });
+        age(&mut cache);
+        let _ = cache.current(&state);
+        assert!(
+            (floor.get() - 0.3).abs() < 1e-6,
+            "lowered at runtime: {}",
+            floor.get()
+        );
+
+        state.with_db(|c| {
+            c.execute("DELETE FROM species_thresholds", []).unwrap();
+        });
+        age(&mut cache);
+        let _ = cache.current(&state);
+        assert!(
+            (floor.get() - 0.75).abs() < f32::EPSILON,
+            "with no species below it, the model runs at its own confidence: {}",
+            floor.get()
+        );
+
+        // A species set *above* the model changes nothing about the floor.
+        assert!(
+            (lowest_threshold(0.75, &thresholds(&[("Pica pica", 0.95)])) - 0.75).abs()
+                < f32::EPSILON
+        );
+        assert!(lowest_threshold(0.75, &thresholds(&[("x", -3.0)])).abs() < f32::EPSILON);
+    }
+
     #[test]
     fn threshold_cache_keeps_the_previous_map_when_a_refresh_fails() {
         // Falling back to an empty map on a transient read failure would
@@ -1626,6 +1856,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "test-corr-notify".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -1658,12 +1889,587 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
         .unwrap();
 
         apprise_rows_within(&state, std::time::Duration::from_secs(20)).await
+    }
+
+    /// Drive `events` (`time`s of Eurasian Magpie detections on one day)
+    /// through the processor with this notification `filter` and an Apprise
+    /// client configured by `config`, and count the `apprise` sends logged once
+    /// every send has settled.
+    async fn apprise_attempts(
+        filter: birdnet_integrations::notification::NotificationFilter,
+        config: birdnet_integrations::apprise::NotifyConfig,
+        times: &[&str],
+    ) -> usize {
+        // A listener that answers every request 200, so each notification is
+        // a real, successful send: a refused port trips the dispatcher's
+        // circuit breaker after a couple of failures, and the count would
+        // then measure the breaker instead of the decision under test.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0_u8; 8192];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            config,
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        for (i, time) in times.iter().enumerate() {
+            let mut ev = make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join(format!("seg{i}.wav")),
+                "c",
+            );
+            ev.detection.time = (*time).into();
+            event_tx.send(ev).unwrap();
+        }
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let state_for_processor = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(apprise),
+                None,
+                None,
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+
+        // Sends are detached tasks; a refused connection settles in
+        // milliseconds. Wait for the count to stop moving.
+        let count = || {
+            state
+                .with_db(|conn| birdnet_db::notifications::recent_notifications(conn, 100, 0))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.channel == "apprise")
+                .count()
+        };
+        let mut last = usize::MAX;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let now = count();
+            if now == last && now > 0 {
+                break;
+            }
+            last = now;
+        }
+        count()
+    }
+
+    /// Email sends attempted for `events` with this notification `filter`,
+    /// counted as connections to the SMTP port. The listener holds every
+    /// connection open and answers nothing, so a send that was attempted stays
+    /// in flight for as long as the test looks — which is what lets it see
+    /// whether a second detection sent while the first was still going.
+    async fn email_attempts(
+        filter: birdnet_integrations::notification::NotificationFilter,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+    ) -> usize {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = std::sync::Arc::clone(&connections);
+        std::thread::spawn(move || {
+            // Never read: holding the streams is what keeps each send in flight.
+            #[allow(clippy::collection_is_never_read)]
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                held.push(stream);
+            }
+        });
+        let notifier = birdnet_integrations::email::EmailNotifier::new(
+            birdnet_integrations::email::EmailConfig {
+                smtp_host: "127.0.0.1".to_owned(),
+                smtp_port: port,
+                username: String::new(),
+                password: String::new(),
+                from_address: "station@example.org".to_owned(),
+                to_address: "owner@example.org".to_owned(),
+                from_name: None,
+                use_starttls: false,
+                min_confidence: 0.1,
+                cooldown_secs: 300,
+            },
+        )
+        .expect("notifier");
+        let email = std::sync::Arc::new(notifier);
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        for e in events {
+            event_tx.send(e).unwrap();
+        }
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state,
+                broadcast,
+                None,
+                None,
+                Some(email),
+                None,
+                filter,
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        connections.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Email obeys the station's notification settings, as every other
+    /// channel does.
+    ///
+    /// The email dispatch sat outside the `dispatch_allowed` check that gates
+    /// Apprise: an excluded species, a species off the allow list, a trigger
+    /// mode of "new species" and a Suppress alert rule all still sent it. The
+    /// counterpart holds that an allowed species is still emailed, so the 0
+    /// below is the filter and not a broken channel.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn email_obeys_the_notification_filters() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        let magpie = || {
+            vec![make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                std::path::PathBuf::from("/nonexistent/a.wav"),
+                "a",
+            )]
+        };
+        let excluded = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(Some("Eurasian Magpie"), None),
+        };
+        assert_eq!(
+            email_attempts(excluded, magpie()).await,
+            0,
+            "an excluded species was emailed"
+        );
+        let allowed = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(None, None),
+        };
+        assert_eq!(email_attempts(allowed, magpie()).await, 1);
+    }
+
+    /// Two detections of one bird in one segment send one email. The
+    /// cooldown was checked before the send and recorded after it, so every
+    /// detection that arrived while the first send was in flight sent too.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn one_bird_in_one_segment_is_one_email() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        let events = (0..3)
+            .map(|i| {
+                make_event(
+                    "Pica pica",
+                    "Eurasian Magpie",
+                    0.95,
+                    std::path::PathBuf::from(format!("/nonexistent/{i}.wav")),
+                    "a",
+                )
+            })
+            .collect();
+        let filter = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(None, None),
+        };
+        assert_eq!(email_attempts(filter, events).await, 1);
+    }
+
+    /// A send in flight does not stall the detection processor.
+    ///
+    /// Every detection asked the Apprise client whether to notify through
+    /// `blocking_lock()`, and every send held that same lock for its whole
+    /// round trip — up to 10 s per destination, 120 s for the CLI. One slow
+    /// destination therefore made every detection wait behind it, on the
+    /// single thread that records them. The test holds the lock, as a send
+    /// would, and requires the processor to get through a detection anyway.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_send_in_flight_does_not_stall_the_processor() {
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig::default(),
+        )
+        .expect("client");
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let for_processor = std::sync::Arc::clone(&apprise);
+        let state_for_processor = state.clone();
+        let processor = tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(for_processor),
+                None,
+                None,
+                None,
+                birdnet_integrations::notification::NotificationFilter {
+                    trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+                    species_filter: birdnet_integrations::notification::SpeciesFilter::new(
+                        None, None,
+                    ),
+                },
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        });
+        // Let the processor start and wait on its channel, then hold the
+        // client as a send in flight holds it.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let in_flight = apprise.lock().await;
+        let started = std::time::Instant::now();
+        event_tx
+            .send(make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "a",
+            ))
+            .unwrap();
+        drop(event_tx);
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(3), processor).await;
+        let waited = started.elapsed();
+        drop(in_flight);
+        assert!(
+            finished.is_ok(),
+            "the processor was still waiting on the Apprise lock after {waited:?}"
+        );
+        let stored: i64 = state.with_db(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+                .unwrap()
+        });
+        assert_eq!(stored, 1);
+    }
+
+    /// A notification that did not leave the station does not start its
+    /// species' cooldown.
+    ///
+    /// The cooldown was recorded when the send was *decided*. With the
+    /// routine budget spent (a dawn chorus does it), a vagrant's first
+    /// detection was skipped by the rate limiter — counted, no row — and every
+    /// detection of it for the next 300 s was then suppressed by a cooldown
+    /// for a notification nobody received. The counterpart: a species whose
+    /// notification *was* sent keeps its cooldown.
+    #[tokio::test]
+    async fn a_skipped_notification_does_not_start_the_cooldown() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                let mut buf = [0_u8; 8192];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let config = birdnet_integrations::apprise::NotifyConfig {
+            rate_per_minute: 1,
+            ..birdnet_integrations::apprise::NotifyConfig::default()
+        };
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            config,
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "a",
+            ))
+            .unwrap();
+        let mut jay = make_event(
+            "Garrulus glandarius",
+            "Eurasian Jay",
+            0.95,
+            tmp.path().join("b.wav"),
+            "b",
+        );
+        jay.detection.time = "09:00:05".into();
+        event_tx.send(jay).unwrap();
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let state_for_processor = state.clone();
+        let for_processor = std::sync::Arc::clone(&apprise);
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(for_processor),
+                None,
+                None,
+                None,
+                birdnet_integrations::notification::NotificationFilter {
+                    trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+                    species_filter: birdnet_integrations::notification::SpeciesFilter::new(
+                        None, None,
+                    ),
+                },
+                birdnet_integrations::notification::NotificationTemplate::default(),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+
+        // The sends are detached tasks, run in order on the client's lock.
+        // Wait for the magpie's row, then for the jay's task behind it.
+        for _ in 0..40 {
+            let sent = state
+                .with_db(|conn| birdnet_db::notifications::recent_notifications(conn, 100, 0))
+                .unwrap_or_default()
+                .len();
+            if sent > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let (_, rate_limited) = apprise.lock().await.skip_counts();
+        assert_eq!(rate_limited, 1, "precondition: the jay was rate-limited");
+
+        let (jay_free, magpie_free) = {
+            let mut client = apprise.lock().await;
+            (
+                client.should_notify_detection("Eurasian Jay", "Garrulus glandarius", 0.95),
+                client.should_notify_detection("Eurasian Magpie", "Pica pica", 0.95),
+            )
+        };
+        assert!(
+            jay_free,
+            "the jay was never announced, and its next call is suppressed anyway"
+        );
+        assert!(
+            !magpie_free,
+            "the magpie was announced and keeps its cooldown"
+        );
+    }
+
+    /// The watchlist the settings form asks for — common names — must let the
+    /// watched species through. The station's filter compared it with the
+    /// scientific name while the Apprise client compared it with the common
+    /// name, and both had to pass: every notification was silenced, the
+    /// watched bird's included. Either name, any case, now works in both.
+    #[tokio::test]
+    async fn a_watchlist_of_common_names_notifies_for_the_watched_species() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        for list in ["Eurasian Magpie", "eurasian magpie", "Pica pica"] {
+            let filter = NotificationFilter {
+                trigger: TriggerMode::EachDetection,
+                species_filter: SpeciesFilter::new(None, Some(list)),
+            };
+            let config = birdnet_integrations::apprise::NotifyConfig {
+                species_watchlist: vec![list.to_owned()],
+                ..birdnet_integrations::apprise::NotifyConfig::default()
+            };
+            assert_eq!(
+                apprise_attempts(filter, config, &["09:00:00"]).await,
+                1,
+                "a watchlist of {list:?} silenced the species it watches"
+            );
+        }
+        // Counterpart: the watchlist still excludes a species not on it.
+        let filter = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(None, Some("European Robin")),
+        };
+        let config = birdnet_integrations::apprise::NotifyConfig {
+            species_watchlist: vec!["European Robin".to_owned()],
+            ..birdnet_integrations::apprise::NotifyConfig::default()
+        };
+        assert_eq!(apprise_attempts(filter, config, &["09:00:00"]).await, 0);
+    }
+
+    /// `new-species-daily` notifies on the first detection of a species each
+    /// day, not on every one. Nothing implemented the counter the mode asks,
+    /// so it read 0 every time and notified like `each`.
+    #[tokio::test]
+    async fn new_species_daily_notifies_once_per_species_per_day() {
+        use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+        let quiet_apprise = birdnet_integrations::apprise::NotifyConfig {
+            cooldown: std::time::Duration::ZERO,
+            ..birdnet_integrations::apprise::NotifyConfig::default()
+        };
+        let filter = |trigger| NotificationFilter {
+            trigger,
+            species_filter: SpeciesFilter::new(None, None),
+        };
+        assert_eq!(
+            apprise_attempts(
+                filter(TriggerMode::NewSpeciesDaily),
+                quiet_apprise.clone(),
+                &["09:00:00", "09:10:00", "09:20:00"]
+            )
+            .await,
+            1,
+            "new-species-daily notified more than once for one species in one day"
+        );
+        // Counterpart: `each` still notifies every time, so the 1 above is the
+        // mode deciding and not the channel dropping sends.
+        assert_eq!(
+            apprise_attempts(
+                filter(TriggerMode::EachDetection),
+                quiet_apprise,
+                &["09:00:00", "09:10:00", "09:20:00"]
+            )
+            .await,
+            3
+        );
+    }
+
+    /// `new-species` asks for the seven dates ending on the detection's own:
+    /// the day six before it counts, the day seven before does not, and the
+    /// detection's own row is not a prior sighting. The daily test above only
+    /// reaches `todays_count_for`, so this window had no unit test at all.
+    #[test]
+    fn this_weeks_count_is_the_seven_dates_ending_on_the_detection() {
+        use birdnet_integrations::notification::DetectionCounter;
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        state
+            .with_db(|conn| {
+                for (date, sci) in [
+                    ("2026-03-11", "Pica pica"), // the detection being processed
+                    ("2026-03-05", "Pica pica"), // six days before: in the week
+                    ("2026-03-08", "Pica pica"),
+                    ("2026-03-04", "Pica pica"), // seven days before: not
+                    ("2026-03-09", "Garrulus glandarius"), // another species
+                ] {
+                    conn.execute(
+                        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+                         VALUES (?1, '09:00:00', ?2, 'x', 0.9)",
+                        rusqlite::params![date, sci],
+                    )?;
+                }
+                Ok::<_, rusqlite::Error>(())
+            })
+            .unwrap();
+        let prior = PriorDetections {
+            state: &state,
+            date: "2026-03-11",
+        };
+
+        assert_eq!(prior.this_weeks_count_for("Pica pica"), 2);
+        assert_eq!(prior.todays_count_for("Pica pica"), 0);
     }
 
     #[tokio::test]
@@ -1724,6 +2530,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "test-corr-abc".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -1759,6 +2566,7 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
@@ -1809,6 +2617,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "clock-gate".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -1841,6 +2650,7 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
@@ -1911,6 +2721,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "ps5-gate".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -1943,6 +2754,7 @@ mod tests {
                     birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
                 ),
                 provenance,
+                None,
             );
         })
         .await
@@ -2178,7 +2990,7 @@ mod tests {
                 tmp.path().join("a.wav"),
                 "c1",
             )],
-            under_a,
+            under_a.clone(),
         )
         .await;
         let under_b = test_provenance_under(&state, SHA_B);
@@ -2191,7 +3003,7 @@ mod tests {
                 tmp.path().join("b.wav"),
                 "c2",
             )],
-            under_b,
+            under_b.clone(),
         )
         .await;
 
@@ -2270,6 +3082,7 @@ mod tests {
             lon: Some(-0.13),
             sensitivity: 1.25,
             overlap: 1.5,
+            model_thresholds: HashMap::new(),
         }
     }
 
@@ -2471,6 +3284,59 @@ mod tests {
         assert_eq!(stored, Some(4242), "the row keeps the soundscape id");
     }
 
+    /// A classifier's own threshold is the floor for what it detects.
+    ///
+    /// `MODEL_2_THRESHOLD=0.35` (the example `classifiers.md` gives) under a
+    /// 0.75 station: the second model emits a 0.40 detection, and the
+    /// processor dropped it for being under 0.75. And a stricter classifier
+    /// (0.90), run at the station floor so a lowered species can reach it,
+    /// had its 0.80 accepted. Both are held to their own number now; a
+    /// classifier with none is held to the station's.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_classifier_is_held_to_its_own_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut provenance = test_provenance(&state);
+        provenance.model_thresholds =
+            HashMap::from([("loose".to_owned(), 0.35), ("strict".to_owned(), 0.90)]);
+        let by = |model: &str, sci: &str, conf: f32, id: &str| {
+            let mut e = make_event(sci, sci, conf, tmp.path().join("none.wav"), id);
+            e.detection.model_id = Some(model.to_owned());
+            e
+        };
+        let events = vec![
+            by("loose", "Pica pica", 0.40, "loose-under-station"),
+            by("strict", "Corvus corone", 0.80, "strict-under-own"),
+            by("birdnet", "Turdus merula", 0.80, "station-over"),
+            by("birdnet", "Erithacus rubecula", 0.40, "station-under"),
+        ];
+        run_processor_dynamic(
+            &state,
+            events,
+            HashMap::new(),
+            0.75,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            provenance,
+        )
+        .await;
+        let mut stored: Vec<String> = state.with_db(|conn| {
+            let mut stmt = conn.prepare("SELECT Sci_Name FROM detections").unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        });
+        stored.sort();
+        assert_eq!(
+            stored,
+            vec!["Pica pica".to_owned(), "Turdus merula".to_owned()]
+        );
+    }
+
     fn make_event(
         sci: &str,
         com: &str,
@@ -2497,6 +3363,7 @@ mod tests {
             source_file,
             latency_ms: 100,
             correlation_id: correlation_id.into(),
+            lease: None,
         }
     }
 
@@ -2664,10 +3531,58 @@ mod tests {
                 daylight,
                 dynamic,
                 provenance,
+                None,
             );
         })
         .await
         .unwrap();
+    }
+
+    /// A detection the database refused is not announced as one it recorded.
+    ///
+    /// A refused insert (a full disk, a locked or failing database) logged
+    /// "it is lost" and then carried on: mirrored into DuckDB, evaluated
+    /// against alert rules, broadcast to every open dashboard, and sent to
+    /// Apprise, email, BirdWeather and MQTT — for a row that did not exist.
+    /// The dashboard showed a bird the station had no record of, and the
+    /// analytics copy disagreed with the store it is a copy of.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_detection_the_database_refused_is_not_announced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut live = state.detection_broadcast().subscribe();
+        let event = || {
+            make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.9,
+                tmp.path().join("seg.wav"),
+                "c1",
+            )
+        };
+
+        // Counterpart first: a row the database takes is broadcast. Without
+        // this, "nothing was broadcast" below could mean nothing ever is.
+        run_processor(&state, vec![event()], HashMap::new(), 0.25).await;
+        assert!(
+            live.try_recv().is_ok(),
+            "a recorded detection must be broadcast"
+        );
+
+        state.with_db(|c| {
+            c.execute_batch(
+                "CREATE TRIGGER refuse BEFORE INSERT ON detections
+                 BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;",
+            )
+            .unwrap();
+        });
+        let mut second = event();
+        second.detection.time = "09:05:00".into();
+        run_processor(&state, vec![second], HashMap::new(), 0.25).await;
+        assert!(
+            live.try_recv().is_err(),
+            "a detection the database refused was broadcast as if recorded"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3232,6 +4147,41 @@ mod tests {
                 .unwrap_or_default()
         });
         assert_eq!(reason, "implausible_hour", "filed under the wrong reason");
+    }
+
+    /// A detection the global threshold would drop is dropped, whatever the
+    /// hour or the clock.
+    ///
+    /// The classifier runs at the lowest per-species threshold, so detections
+    /// under the station's own bar reach the processor, where the threshold
+    /// gate drops them. The night and clock gates ran first and quarantined
+    /// them instead — so after dark the review queue filled with calls that
+    /// would never have been recorded in daylight.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_sub_threshold_call_is_dropped_not_quarantined_at_night() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut faint = winter_event("Cyanistes caeruleus", "02:30:00", tmp.path());
+        faint.detection.confidence = 0.10;
+        let mut unset_clock = winter_event("Parus major", "13:00:00", tmp.path());
+        unset_clock.detection.date = "1970-01-01".into();
+        unset_clock.detection.confidence = 0.10;
+
+        run_processor_full(
+            &state,
+            vec![faint, unset_clock],
+            HashMap::new(),
+            0.25,
+            0,
+            greenwich_night(),
+        )
+        .await;
+
+        assert_eq!(
+            counts(&state),
+            (0, 0),
+            "a below-threshold call was quarantined"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

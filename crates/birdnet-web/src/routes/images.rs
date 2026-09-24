@@ -57,6 +57,17 @@ async fn species_image_info(
         );
     }
 
+    if !has_been_heard(&state, &scientific_name) {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "status": "not_found",
+                "scientific_name": scientific_name,
+                "error": "not a species this station has detected",
+            })),
+        );
+    }
+
     // Try to fetch from Wikipedia (get_image fetches and caches in one step).
     match cache.get_image(&scientific_name).await {
         Ok(image) => (
@@ -80,6 +91,26 @@ async fn species_image_info(
             })),
         ),
     }
+}
+
+/// Whether the station has detected `scientific_name` — the only names a
+/// cache miss is looked up for.
+///
+/// Both image endpoints are public, and a miss used to be looked up and
+/// downloaded for any name at all: a stranger could have the station fetch
+/// and store a picture of every Wikipedia title in turn. Every picture the UI
+/// asks for is of a bird in a detection row, so nothing it shows is lost. A
+/// database that cannot answer answers "no": the picture is decoration.
+fn has_been_heard(state: &AppState, scientific_name: &str) -> bool {
+    state
+        .with_read_db(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM detections WHERE Sci_Name = ?1)",
+                [scientific_name],
+                |r| r.get::<_, bool>(0),
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// How long a browser may reuse an answer from the image file endpoint.
@@ -175,6 +206,9 @@ async fn species_image_file(
     // is a no-op network-wise once the file is already cached.
     let image = match cache.get_cached(&scientific_name) {
         Some(image) => image,
+        None if !has_been_heard(&state, &scientific_name) => {
+            return image_error(StatusCode::NOT_FOUND, "image not available");
+        }
         None => match cache.get_image(&scientific_name).await {
             Ok(image) => image,
             // Lookup/download failed (offline, rate-limited, not found, …).

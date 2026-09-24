@@ -8,19 +8,14 @@ use birdnet_core::detection::corroboration::{ConfirmationLevel, REFERENCE_SPAN};
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    // Display default mirrors the daemon's enforced default so the form never
-    // advertises a threshold the station does not apply. `{:.2}` keeps the
-    // familiar two-decimal form (0.70) from the shared 0.7 constant.
-    let conf_default = format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD);
-    let conf = get_setting(s, "confidence_threshold", &conf_default);
-    // Sensitivity default also mirrors the daemon's shared constant (BirdNET-Pi's
-    // 1.25), so the form never advertises a value the station does not apply.
-    let sens_default = format!("{:.2}", birdnet_core::config::DEFAULT_SENSITIVITY);
-    let sens = get_setting(s, "sensitivity", &sens_default);
-    let over = get_setting(s, "overlap", "0.0");
-    let sf = get_setting(s, "sf_thresh", "0.03");
-    let priv_t = get_setting(s, "privacy_threshold", "0.0");
-    let confirm = get_setting(s, "confirmation_level", "off");
+    let conf = get_setting(s, "confidence_threshold");
+    let conf_default = super::form_default("confidence_threshold");
+    let sens = get_setting(s, "sensitivity");
+    let sens_default = super::form_default("sensitivity");
+    let over = get_setting(s, "overlap");
+    let sf = get_setting(s, "sf_thresh");
+    let priv_t = get_setting(s, "privacy_threshold");
+    let confirm = get_setting(s, "confirmation_level");
     // The one setting on this page whose effect depends on another setting on
     // the same page: with no overlap the gentler levels ask for agreement from
     // a neighbourhood of one, which every detection already has. Rather than
@@ -79,7 +74,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <input id="sensitivity" name="sensitivity" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
                value="{sens}" placeholder="{sens_default}">
-        <p class="hint">Higher = more sensitive, more false positives. Applies to V2.4 models; the bundled V3.0 model uses calibrated probabilities and ignores it (BirdNET-Pi: SENSITIVITY)</p>
+        <p class="hint">Higher = more sensitive, more false positives. Applies to V2.4 models; the bundled V3.0 model uses calibrated probabilities and ignores it. Same key as BirdNET-Pi's SENSITIVITY, but BirdNET-Pi applies it the other way round.</p>
       </div>
     </div>
     <div class="grid-2">

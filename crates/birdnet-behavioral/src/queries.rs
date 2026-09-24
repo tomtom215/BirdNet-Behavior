@@ -73,9 +73,15 @@ use crate::types::{FunnelParams, PatternParams, RetentionParams, SessionizeParam
 /// `DailySchedule::clock()` made for the recording gate — a caller that has to
 /// remember which clock a bare `ts` means will eventually not.
 ///
-/// `to_timestamp` yields a `TIMESTAMP WITH TIME ZONE`; the cast to plain
-/// `TIMESTAMP` keeps it the same type as `detection_timestamp` so the two are
-/// interchangeable as arguments to the extension's functions. Rows with no
+/// `make_timestamp(microseconds)` yields a plain `TIMESTAMP` holding the UTC
+/// instant, the same type as `detection_timestamp`, so the two are
+/// interchangeable as arguments to the extension's functions. It was
+/// `CAST(to_timestamp(..) AS TIMESTAMP)`, which is not the same thing: once ICU
+/// is loaded that cast converts into the session `TimeZone`, which defaults to
+/// the system zone. On any station not set to UTC both passes through a
+/// repeated autumn hour then read as the same local time, and every elapsed
+/// time across the change came out an hour short — while CI, running in UTC,
+/// stayed green (`tests/two_clocks.rs` now runs in `Europe/Berlin`). Rows with no
 /// instant — a history predating migration 32, or one whose wall clock names no
 /// point in time — yield NULL and drop out of ordered and bucketed results
 /// exactly as they already do for `detection_timestamp`.
@@ -83,7 +89,7 @@ pub const CREATE_DETECTIONS_TS_VIEW: &str = "
 CREATE OR REPLACE VIEW detections_ts AS
 SELECT *,
     TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
-    CAST(to_timestamp(detected_at_utc) AS TIMESTAMP) AS detection_instant,
+    make_timestamp(detected_at_utc * 1000000) AS detection_instant,
     TRY_CAST(Date AS DATE) AS detection_date
 FROM detections
 WHERE review_verdict IS DISTINCT FROM 'rejected';
@@ -117,7 +123,7 @@ pub fn detections_ts_view_sql(exclude_imports: bool) -> String {
 CREATE OR REPLACE VIEW detections_ts AS
 SELECT *,
     TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
-    CAST(to_timestamp(detected_at_utc) AS TIMESTAMP) AS detection_instant,
+    make_timestamp(detected_at_utc * 1000000) AS detection_instant,
     TRY_CAST(Date AS DATE) AS detection_date
 FROM detections
 WHERE review_verdict IS DISTINCT FROM 'rejected'
@@ -239,8 +245,16 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
 /// within each day interval (its first argument anchors the cohort and is
 /// always satisfied; argument `i+1` is "seen again within interval `i`").
 /// Averaging the boolean array across a species' anchors gives its retention
-/// rate at each interval; the final (long-term) rate drives the residency
-/// classification.
+/// rate at each interval.
+///
+/// The residency classification is **not** drawn from those rates. "Seen
+/// again within N days" holds on every day of a species' presence except the
+/// last of each run, so a passage migrant, a vagrant and a summer breeder all
+/// scored about (days − runs)/days at every interval and were classed
+/// Resident. The query also returns, per species, the weeks it was heard in,
+/// the weeks the station heard anything in, and the days between its first
+/// and last detection — what [`crate::types::ResidencyType::classify`]
+/// reads.
 ///
 /// Callers must pass at least one interval and at most 31 (the aggregate
 /// accepts 2..=32 conditions including the anchor); [`crate::connection`]
@@ -259,8 +273,6 @@ pub fn retention_sql(params: &RetentionParams) -> String {
     let rate_exprs: Vec<String> = (0..params.intervals.len())
         .map(|i| format!("AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END)", i + 2))
         .collect();
-    let long_term_idx = params.intervals.len(); // 1-based index of the last rate
-
     format!(
         "WITH sd AS (
             SELECT DISTINCT Com_Name, detection_date AS d FROM detections_ts
@@ -270,12 +282,28 @@ pub fn retention_sql(params: &RetentionParams) -> String {
                    retention({conditions}) AS r
             FROM sd a JOIN sd b ON a.Com_Name = b.Com_Name
             GROUP BY a.Com_Name, a.d
+        ),
+        rates AS (
+            SELECT species, [{rates}] AS retention_rates
+            FROM cohort
+            GROUP BY species
+            HAVING COUNT(*) >= {min}
+        ),
+        presence AS (
+            SELECT Com_Name AS species,
+                   COUNT(DISTINCT date_trunc('week', d)) AS weeks_present,
+                   date_diff('day', MIN(d), MAX(d)) AS span_days
+            FROM sd
+            GROUP BY Com_Name
+        ),
+        station AS (
+            SELECT COUNT(DISTINCT date_trunc('week', d)) AS weeks FROM sd
         )
-        SELECT species, [{rates}] AS retention_rates
-        FROM cohort
-        GROUP BY species
-        HAVING COUNT(*) >= {min}
-        ORDER BY retention_rates[{long_term_idx}] DESC",
+        SELECT r.species, r.retention_rates, p.weeks_present, s.weeks, p.span_days
+        FROM rates r
+        JOIN presence p ON p.species = r.species
+        CROSS JOIN station s
+        ORDER BY p.weeks_present DESC, r.species",
         conditions = conditions.join(", "),
         rates = rate_exprs.join(", "),
         min = params.min_detections,
@@ -310,6 +338,17 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
     )
 }
 
+/// The select-list item that carries a morning's wall-clock offset.
+///
+/// The event functions time their steps on `detection_instant`, which is UTC,
+/// but the step times are shown to a person as "first heard at 05:42", which
+/// is the station's wall clock. Adding the morning's own
+/// `detection_timestamp - detection_instant` converts one to the other without
+/// asking `DuckDB` what time zone it thinks it is in — the question that made
+/// `detection_instant` itself wrong on every station outside UTC. `MIN` picks
+/// one offset for the day; the dawn window never contains a clock change.
+const WALL_OFFSET: &str = "MIN(detection_timestamp - detection_instant) AS wall_offset";
+
 /// Build SQL for dawn-chorus funnel *step timings* (`window_funnel_events`,
 /// v0.8.0).
 ///
@@ -323,19 +362,20 @@ pub fn funnel_events_sql(params: &FunnelParams) -> String {
     let conditions = species_conditions(&params.species_sequence);
 
     format!(
-        "SELECT
-            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
-            list_transform(
+        "SELECT date, list_transform(ev, x -> CAST(x + wall_offset AS VARCHAR)) AS step_times
+        FROM (
+            SELECT
+                CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
                 window_funnel_events(
                     INTERVAL '{window} MINUTE',
                     detection_instant,
                     {conditions}
-                ),
-                x -> CAST(x AS VARCHAR)
-            ) AS step_times
-        FROM detections_ts
-        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-        GROUP BY CAST(detection_timestamp AS DATE)
+                ) AS ev,
+                {WALL_OFFSET}
+            FROM detections_ts
+            WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+            GROUP BY CAST(detection_timestamp AS DATE)
+        )
         ORDER BY date DESC",
         window = params.window_minutes,
         start = params.hour_start,
@@ -415,17 +455,18 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
     let conditions = species_conditions(&params.species_sequence);
 
     format!(
-        "SELECT
-            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
-            list_transform(
+        "SELECT date, list_transform(ev, x -> CAST(x + wall_offset AS VARCHAR)) AS step_times
+        FROM (
+            SELECT
+                CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
                 sequence_match_events('{pattern}', detection_instant,
                     {conditions}
-                ),
-                x -> CAST(x AS VARCHAR)
-            ) AS step_times
-        FROM detections_ts
-        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-        GROUP BY CAST(detection_timestamp AS DATE)
+                ) AS ev,
+                {WALL_OFFSET}
+            FROM detections_ts
+            WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+            GROUP BY CAST(detection_timestamp AS DATE)
+        )
         ORDER BY date DESC",
         start = params.hour_start,
         end = params.hour_end,
@@ -439,6 +480,11 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
 /// species detected immediately after the first occurrence of the trigger.
 /// Counting those across sessions yields a frequency distribution of what
 /// typically follows the trigger species.
+///
+/// `sessions` is the number of sessions with any follower, taken by a window
+/// over the grouped rows *before* `LIMIT` — the denominator of each
+/// probability. Summing the returned frequencies instead normalised over the
+/// top `limit` only (ANA8).
 ///
 /// `sequence_next_node(direction, mode, ts, value, base_cond, event_cond)`
 /// requires at least two boolean conditions; `forward`/`first_match` anchors on
@@ -461,7 +507,8 @@ pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) 
             FROM sessioned
             GROUP BY sid
         )
-        SELECT predicted AS predicted_species, COUNT(*) AS frequency
+        SELECT predicted AS predicted_species, COUNT(*) AS frequency,
+               SUM(COUNT(*)) OVER () AS sessions
         FROM per_session
         WHERE predicted IS NOT NULL
         GROUP BY predicted
@@ -535,7 +582,7 @@ mod tests {
         assert!(sql.contains("b.d <= a.d + INTERVAL '30 day'"));
         assert!(sql.contains("AVG(CASE WHEN r[2] THEN 1.0 ELSE 0.0 END)"));
         // 6 default intervals -> long-term rate is element 6.
-        assert!(sql.contains("ORDER BY retention_rates[6] DESC"));
+        assert!(sql.contains("ORDER BY p.weeks_present DESC"));
         assert!(sql.contains(">= 5"));
         // The old, non-existent `retention(date, [int,…])` form is gone.
         assert!(!sql.contains("retention(detection_date"));
@@ -583,9 +630,11 @@ mod tests {
     fn sequence_match_events_sql_default() {
         let sql = sequence_match_events_sql(&PatternParams::default());
         assert!(sql.contains("sequence_match_events('(?1).*(?2).*(?3)', detection_instant"));
-        // The TIMESTAMP[] is cast element-wise to VARCHAR for a plain list.
+        // The TIMESTAMP[] is moved onto the wall clock and cast element-wise
+        // to VARCHAR for a plain list (tests/two_clocks.rs holds the values).
         assert!(sql.contains("list_transform("));
-        assert!(sql.contains("x -> CAST(x AS VARCHAR)"));
+        assert!(sql.contains("x -> CAST(x + wall_offset AS VARCHAR)"));
+        assert!(sql.contains(WALL_OFFSET));
         assert!(sql.contains("AS step_times"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         // Conditions are variadic, not wrapped in an array literal.
@@ -607,9 +656,11 @@ mod tests {
     fn funnel_events_sql_default() {
         let sql = funnel_events_sql(&FunnelParams::default());
         assert!(sql.contains("window_funnel_events("));
-        // The TIMESTAMP[] is cast element-wise to VARCHAR for a plain list.
+        // The TIMESTAMP[] is moved onto the wall clock and cast element-wise
+        // to VARCHAR for a plain list (tests/two_clocks.rs holds the values).
         assert!(sql.contains("list_transform("));
-        assert!(sql.contains("x -> CAST(x AS VARCHAR)"));
+        assert!(sql.contains("x -> CAST(x + wall_offset AS VARCHAR)"));
+        assert!(sql.contains(WALL_OFFSET));
         assert!(sql.contains("AS step_times"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         // Conditions are variadic, not wrapped in an array literal.

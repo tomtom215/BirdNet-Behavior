@@ -32,10 +32,19 @@
 //! 1. If the peer is **not** trusted, it *is* the client. Forwarded headers
 //!    are ignored entirely — not preferred-but-overridable, ignored.
 //! 2. If the peer **is** trusted, take the client from the forwarded headers:
-//!    `CF-Connecting-IP` first (Cloudflare writes exactly one value and
-//!    overwrites any the client sent), then `X-Forwarded-For` walked
-//!    **right to left**, stopping at the first hop that is not itself a
-//!    trusted proxy, then `X-Real-IP`.
+//!    `CF-Connecting-IP` first — but only when the operator has named
+//!    `cloudflare` — then `X-Forwarded-For` walked **right to left**, stopping
+//!    at the first hop that is not itself a trusted proxy, then `X-Real-IP`.
+//!
+//!    Cloudflare overwrites `CF-Connecting-IP`; nothing else does. Caddy and
+//!    nginx pass it through as the client sent it, so believing it from any
+//!    trusted peer meant that a station behind the reverse proxy
+//!    `remote-access.md` documents — loopback, always trusted — let every
+//!    visitor on the internet name its own address, one per request, and so
+//!    walk past both the sign-in throttle and the rate limiter. Naming
+//!    `cloudflare` is the operator saying a Cloudflare edge is in front. A
+//!    Cloudflare Tunnel without the name still resolves the visitor: the edge
+//!    appends it to `X-Forwarded-For`, and the walk reaches it.
 //! 3. If every hop in `X-Forwarded-For` is trusted, the leftmost is the
 //!    client — that is the whole chain being proxies we know about.
 //!
@@ -80,6 +89,11 @@ use axum::http::HeaderMap;
 /// would come back one handler at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientIp(pub IpAddr);
+
+/// The hop that vouched for [`ClientIp`] — [`Resolved::vouched_by`], published
+/// beside it by the rate-limit middleware for the sign-in throttle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VouchedBy(pub IpAddr);
 
 impl fmt::Display for ClientIp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -278,14 +292,31 @@ pub const DEFAULT_SPEC: &str = "private";
 #[derive(Debug, Clone)]
 pub struct TrustedProxies {
     nets: Vec<IpCidr>,
+    /// `cloudflare` was named: `CF-Connecting-IP` is Cloudflare's to write.
+    believe_cf_header: bool,
+}
+
+/// Who a request is from, and who said so.
+///
+/// `client` is [`TrustedProxies::client_ip`]'s answer. `vouched_by` is the
+/// hop that put that answer in front of us: the peer itself when no header was
+/// believed, otherwise the trusted hop immediately to the client's right in
+/// the forwarding chain. A trusted hop can name any client it likes, honestly
+/// or not, so a budget meant for "one client" can only be as strict as the
+/// hop that named it — which is what the sign-in throttle keys its second
+/// budget on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resolved {
+    /// The client address.
+    pub client: IpAddr,
+    /// The hop that vouched for `client` (equal to it when nothing did).
+    pub vouched_by: IpAddr,
 }
 
 impl Default for TrustedProxies {
     /// Loopback plus the private ranges — see [`DEFAULT_SPEC`].
     fn default() -> Self {
-        Self::parse(DEFAULT_SPEC).unwrap_or_else(|_| Self {
-            nets: expand(LOOPBACK),
-        })
+        Self::parse(DEFAULT_SPEC).unwrap_or_else(|_| Self::loopback_only())
     }
 }
 
@@ -307,6 +338,7 @@ impl TrustedProxies {
     /// module exists to avoid.
     pub fn parse(spec: &str) -> Result<Self, CidrParseError> {
         let mut nets = expand(LOOPBACK);
+        let mut believe_cf_header = false;
         for tok in spec.split([',', ' ', '\t', '\n']) {
             let tok = tok.trim();
             if tok.is_empty() {
@@ -315,11 +347,17 @@ impl TrustedProxies {
             match tok.to_ascii_lowercase().as_str() {
                 "loopback" => {}
                 "private" => nets.extend(expand(PRIVATE)),
-                "cloudflare" => nets.extend(expand(CLOUDFLARE)),
+                "cloudflare" => {
+                    nets.extend(expand(CLOUDFLARE));
+                    believe_cf_header = true;
+                }
                 _ => nets.push(parse_cidr(tok)?),
             }
         }
-        Ok(Self { nets })
+        Ok(Self {
+            nets,
+            believe_cf_header,
+        })
     }
 
     /// Trust nothing but the local host.
@@ -327,6 +365,7 @@ impl TrustedProxies {
     pub fn loopback_only() -> Self {
         Self {
             nets: expand(LOOPBACK),
+            believe_cf_header: false,
         }
     }
 
@@ -356,30 +395,42 @@ impl TrustedProxies {
     /// untrusted peer is the client and its headers are ignored.
     #[must_use]
     pub fn client_ip(&self, headers: &HeaderMap, peer: IpAddr) -> IpAddr {
+        self.resolve(headers, peer).client
+    }
+
+    /// [`Self::client_ip`], together with the hop that vouched for it.
+    #[must_use]
+    pub fn resolve(&self, headers: &HeaderMap, peer: IpAddr) -> Resolved {
         let peer = unmap(peer);
+        let from_peer = |client| Resolved {
+            client,
+            vouched_by: peer,
+        };
         if !self.is_trusted(peer) {
-            return peer;
+            return from_peer(peer);
         }
 
         // Cloudflare writes exactly one value here and replaces anything the
-        // client sent, so when the peer is trusted this is the least ambiguous
-        // signal available.
-        if let Some(ip) = header_ip(headers, "cf-connecting-ip") {
-            return ip;
+        // client sent — but only Cloudflare does, so it is read only when the
+        // operator has said Cloudflare is in front (see the module docs).
+        if self.believe_cf_header
+            && let Some(ip) = header_ip(headers, "cf-connecting-ip")
+        {
+            return from_peer(ip);
         }
 
-        if let Some(ip) = self.walk_forwarded_for(headers) {
-            return ip;
+        if let Some(resolved) = self.walk_forwarded_for(headers, peer) {
+            return resolved;
         }
 
         // nginx's `X-Real-IP` is a single value describing nginx's own client.
         // Last because in a chain it names the previous proxy rather than the
         // origin, which the `X-Forwarded-For` walk gets right.
         if let Some(ip) = header_ip(headers, "x-real-ip") {
-            return ip;
+            return from_peer(ip);
         }
 
-        peer
+        from_peer(peer)
     }
 
     /// Walk `X-Forwarded-For` right to left, returning the first hop that is
@@ -392,7 +443,7 @@ impl TrustedProxies {
     ///
     /// When every entry is trusted the leftmost is returned: the whole chain
     /// is proxies we know, so the first of them recorded the real client.
-    fn walk_forwarded_for(&self, headers: &HeaderMap) -> Option<IpAddr> {
+    fn walk_forwarded_for(&self, headers: &HeaderMap, peer: IpAddr) -> Option<Resolved> {
         // A request may carry several `X-Forwarded-For` lines; they concatenate
         // in order, so flatten them into one left-to-right list.
         let mut hops: Vec<IpAddr> = Vec::new();
@@ -404,13 +455,21 @@ impl TrustedProxies {
                 }
             }
         }
-        let first = *hops.first()?;
-        for hop in hops.iter().rev() {
-            if !self.is_trusted(*hop) {
-                return Some(*hop);
-            }
+        if hops.is_empty() {
+            return None;
         }
-        Some(first)
+        // The chain as it reached us: every forwarded hop, then the peer. The
+        // voucher for the hop at `i` is whoever is at `i + 1`.
+        hops.push(peer);
+        let last_forwarded = hops.len() - 2;
+        let at = (0..=last_forwarded)
+            .rev()
+            .find(|&i| !self.is_trusted(hops[i]))
+            .unwrap_or(0);
+        Some(Resolved {
+            client: hops[at],
+            vouched_by: hops[at + 1],
+        })
     }
 }
 
@@ -580,12 +639,11 @@ mod tests {
 
     // -- header precedence --------------------------------------------------
 
-    /// Cloudflare overwrites `CF-Connecting-IP` with the real visitor, so when
-    /// the peer is trusted it beats an `X-Forwarded-For` whose rightmost hop
-    /// is an unlisted Cloudflare edge.
+    /// Cloudflare overwrites `CF-Connecting-IP` with the real visitor, so on a
+    /// station that has named `cloudflare` it beats `X-Forwarded-For`.
     #[test]
     fn cf_connecting_ip_wins_over_forwarded_for() {
-        let t = TrustedProxies::default();
+        let t = TrustedProxies::parse("private, cloudflare").unwrap();
         let got = t.client_ip(
             &headers(&[
                 ("cf-connecting-ip", "9.9.9.9"),
@@ -609,6 +667,68 @@ mod tests {
             ip("203.0.113.5"),
         );
         assert_eq!(got, ip("203.0.113.5"));
+    }
+
+    /// Without `cloudflare` named, the header is the client's own claim: a
+    /// same-host Caddy passes it through untouched.
+    #[test]
+    fn cf_connecting_ip_is_not_believed_unless_cloudflare_is_named() {
+        let t = TrustedProxies::default();
+        let got = t.client_ip(
+            &headers(&[
+                ("cf-connecting-ip", "9.9.9.9"),
+                ("x-forwarded-for", "203.0.113.5"),
+            ]),
+            ip("127.0.0.1"),
+        );
+        assert_eq!(got, ip("203.0.113.5"));
+    }
+
+    /// The voucher is whoever sits to the client's right in the chain.
+    #[test]
+    fn the_voucher_is_the_hop_that_named_the_client() {
+        let t = TrustedProxies::default();
+        let r = |h: &[(&str, &str)], peer| t.resolve(&headers(h), ip(peer));
+        // nginx appending to a LAN host's forged header.
+        assert_eq!(
+            r(&[("x-forwarded-for", "9.9.9.9, 192.168.1.50")], "127.0.0.1"),
+            Resolved {
+                client: ip("9.9.9.9"),
+                vouched_by: ip("192.168.1.50")
+            }
+        );
+        // The LAN host directly.
+        assert_eq!(
+            r(&[("x-forwarded-for", "9.9.9.9")], "192.168.1.50"),
+            Resolved {
+                client: ip("9.9.9.9"),
+                vouched_by: ip("192.168.1.50")
+            }
+        );
+        // An honest same-host proxy.
+        assert_eq!(
+            r(&[("x-forwarded-for", "203.0.113.5")], "127.0.0.1"),
+            Resolved {
+                client: ip("203.0.113.5"),
+                vouched_by: ip("127.0.0.1")
+            }
+        );
+        // An all-trusted chain: the leftmost, vouched for by the next hop.
+        assert_eq!(
+            r(&[("x-forwarded-for", "10.0.0.2, 10.0.0.3")], "127.0.0.1"),
+            Resolved {
+                client: ip("10.0.0.2"),
+                vouched_by: ip("10.0.0.3")
+            }
+        );
+        // An untrusted peer vouches only for itself.
+        assert_eq!(
+            r(&[("x-forwarded-for", "9.9.9.9")], "203.0.113.5"),
+            Resolved {
+                client: ip("203.0.113.5"),
+                vouched_by: ip("203.0.113.5")
+            }
+        );
     }
 
     /// With the `cloudflare` name the edge ranges become trusted hops, so the

@@ -261,11 +261,17 @@ async fn quarantine_list_partial(
                 return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
             }
 
-            render_table_header(&mut html);
+            // "Load more" appends. It used to swap the next page *into* the
+            // list, throwing away the rows the reader had already scrolled
+            // through. A later page is now only rows, swapped in place of the
+            // button's own row at the foot of the table.
+            let continuation = offset > 0;
+            if !continuation {
+                render_table_header(&mut html);
+            }
             for row in &rows {
                 render_quarantine_row(&mut html, row, &filter_str(filter));
             }
-            html.push_str("</tbody></table>");
 
             // Pagination
             let shown = offset + u32::try_from(rows.len()).unwrap_or(limit);
@@ -274,18 +280,19 @@ async fn quarantine_list_partial(
             if shown < total_u {
                 let filter_param = filter_str(filter);
                 let remaining = total_u.saturating_sub(shown);
-                // hx-target="#quarantine-list" — use a variable so "# doesn't end an r# literal.
-                let target = "#quarantine-list";
                 let _ = write!(
                     html,
-                    "<div class=\"qz-loadmore-row\">\
+                    "<tr class=\"qz-loadmore-tr\"><td colspan=\"6\" class=\"qz-loadmore-row\">\
                     <button \
                     hx-get=\"/pages/quarantine-list?filter={filter_param}&offset={shown}&limit={limit}\" \
-                    hx-target=\"{target}\" hx-swap=\"innerHTML\" \
+                    hx-target=\"closest tr\" hx-swap=\"outerHTML\" \
                     class=\"qz-loadmore\">\
                       Load {limit} more ({remaining} remaining)\
-                    </button></div>",
+                    </button></td></tr>",
                 );
+            }
+            if !continuation {
+                html.push_str("</tbody></table>");
             }
 
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)

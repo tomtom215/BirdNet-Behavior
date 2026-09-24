@@ -130,11 +130,13 @@ async fn a_value_outside_its_range_is_refused_and_nothing_is_written() {
 /// handler that rejects everything.
 #[tokio::test]
 async fn a_value_inside_its_range_still_saves() {
+    // Not the form defaults (0.75, 1.25, 0.03): a submitted default for a key
+    // with no row is not a change, and is rightly not written.
     let in_range = [
-        ("confidence_threshold", "0.75"),
-        ("sensitivity", "1.25"),
+        ("confidence_threshold", "0.6"),
+        ("sensitivity", "1.1"),
         ("overlap", "1.5"),
-        ("sf_thresh", "0.03"),
+        ("sf_thresh", "0.05"),
         ("privacy_threshold", "0.02"),
         ("notify_confidence", "0.8"),
         ("email_min_confidence", "0.9"),

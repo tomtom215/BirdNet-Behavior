@@ -192,7 +192,7 @@
   function post(url, parts) {
     var body = 'date=' + encodeURIComponent(parts[0]) + '&time=' + encodeURIComponent(parts[1]) +
                '&sci_name=' + encodeURIComponent(parts[2]);
-    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
+    return fetch(window.bnbUrl(url), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
   }
   // Guards the same trap the live-audio button had: a bulk action over many
   // clips takes long enough on a Pi that the page looks inert, and a second
@@ -206,11 +206,16 @@
     bulkBusy = true;
     Promise.all(rows.map(function (r) { return post(url, keyOf(r)); }))
       .then(function (responses) {
-        var failed = responses.filter(function (r) { return !r.ok; }).length;
+        // A write the station refused answers 200 with `HX-Reswap: none`
+        // (htmx drops the body of an error status), so `ok` alone is not
+        // enough. And the others in the batch *were* changed: this used to say
+        // "Nothing else was changed", which was never true.
+        var failed = responses.filter(function (r) {
+          return !r.ok || r.headers.get('HX-Reswap') === 'none';
+        }).length;
         if (failed) {
-          bulkBusy = false;
-          window.alert(failed + ' of ' + responses.length + ' clips could not be updated. Nothing else was changed.');
-          return;
+          window.alert(failed + ' of ' + responses.length + ' clips could not be updated; ' +
+            (responses.length - failed) + ' were. The page will now show where each one stands.');
         }
         window.location.reload();
       })
@@ -252,14 +257,21 @@
   var W = 0, H = 200, lastFrame = 0, IDLE_AFTER_MS = 30000, pillState = '';
 
   function dark() { return document.documentElement.getAttribute('data-theme') === 'dark'; }
-  function setLive(on) {
-    if (!pill) return;
-    var next = on ? 'live' : 'idle';
-    if (pillState === next) return;
+  // Three states, as on the Today card: live, idle (reachable and quiet), and
+  // no signal (this browser cannot reach the stream at all). This view had
+  // only the first two, so a blocked or dropped socket read as a quiet yard.
+  var connected = false;
+  function setState(next) {
+    if (!pill || pillState === next) return;
     pillState = next;
-    if (on) { pill.classList.add('moss'); pill.innerHTML = '<span class="bnb-dot live"></span> live'; }
-    else { pill.classList.remove('moss'); pill.innerHTML = '<span class="bnb-dot"></span> idle'; }
+    pill.classList.toggle('moss', next === 'live');
+    pill.classList.toggle('rare', next === 'nosignal');
+    pill.innerHTML = next === 'live' ? '<span class="bnb-dot live"></span> live'
+      : next === 'nosignal' ? '<span class="bnb-dot"></span> no signal'
+      : '<span class="bnb-dot"></span> idle';
+    pill.title = next === 'nosignal' ? 'This browser could not reach the live stream' : '';
   }
+  function setLive(on) { setState(on ? 'live' : (connected ? 'idle' : 'nosignal')); }
   function cellColor(v) {
     v = Math.max(0, Math.min(1, v));
     return 'oklch(' + (35 + v * 55).toFixed(0) + '% ' + (0.04 + v * 0.16).toFixed(3) + ' ' + (160 - v * 70).toFixed(0) + ')';
@@ -350,17 +362,41 @@
     return !want || m.source === want;
   }
 
-  try {
-    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    var base = (document.body && document.body.dataset.basePath) || '';
-        var ws = new WebSocket(proto + '//' + location.host + base + '/api/v2/ws/spectrogram');
+  // Reconnecting, as on the Today card: it used to connect once and stay
+  // dead after a Wi-Fi blip or a station restart until the page was reloaded.
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var base = (document.body && document.body.dataset.basePath) || '';
+  var backoff = 1000, retry = null;
+  function scheduleReconnect() {
+    if (retry) return;
+    if (document.hidden) {
+      document.addEventListener('visibilitychange', function once() {
+        if (document.hidden) return;
+        document.removeEventListener('visibilitychange', once);
+        scheduleReconnect();
+      });
+      return;
+    }
+    var wait = backoff + Math.floor(Math.random() * 500);
+    backoff = Math.min(backoff * 2, 30000);
+    retry = setTimeout(function () { retry = null; connect(); }, wait);
+  }
+  function lost() { connected = false; setLive(false); drawIdle(); scheduleReconnect(); }
+  function connect() {
+    var ws;
+    try { ws = new WebSocket(proto + '//' + location.host + base + '/api/v2/ws/spectrogram'); }
+    catch (_) { lost(); return; }
+    ws.onopen = function () { connected = true; backoff = 1000; if (Date.now() - lastFrame > IDLE_AFTER_MS) setLive(false); };
     ws.onmessage = function (ev) {
       try {
         var m = JSON.parse(ev.data);
         if (m.event === 'spectrogram' && frameIsSelected(m)) drawFrame(m);
       } catch (_) {}
     };
-  } catch (_) {}
+    ws.onerror = function () { try { ws.close(); } catch (_) {} };
+    ws.onclose = lost;
+  }
+  connect();
 
   // Switching source mid-stream: clear immediately rather than leaving the
   // previous source's trace on screen until the next frame arrives (up to a
@@ -413,7 +449,7 @@
     if (v) q.push('source_id=' + encodeURIComponent(v));
     var hz = shiftHz();
     if (hz !== 0) q.push('freq_shift_hz=' + encodeURIComponent(String(hz)));
-    return q.length ? '/stream?' + q.join('&') : '/stream';
+    return window.bnbUrl(q.length ? '/stream?' + q.join('&') : '/stream');
   }
 
   // `play()` sets `audio.paused` to false synchronously, but its promise only

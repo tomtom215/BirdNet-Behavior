@@ -70,6 +70,78 @@ ask() {
     printf '%s' "${reply:-$default}"
 }
 
+# Coordinates as the installer reads them: a dotted or comma decimal, or a
+# "lat, lon" pair pasted from a map. Prints "LAT" or "LAT LON", or nothing when
+# the input is not a coordinate. A verbatim copy of installer/lib/70-station.sh
+# (this script is downloaded on its own); installer/test/quickstart-env.sh
+# fails if the two differ.
+parse_coords() {
+    awk -v s="$1" '
+        function strip(x) { sub(/,$/, "", x); return x }
+        function norm(x)  { gsub(/,/, ".", x); return x }
+        function ok(x, lo, hi) {
+            return x ~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ && x + 0 >= lo && x + 0 <= hi
+        }
+        BEGIN {
+            gsub(/^[ \t]+|[ \t]+$/, "", s)
+            n = split(s, tok, /[ \t]+/)
+
+            if (n == 2) {
+                a = norm(strip(tok[1])); b = norm(tok[2])
+                if (ok(a, -90, 90) && ok(b, -180, 180)) print a " " b
+                exit
+            }
+            if (n != 1) exit
+
+            t = tok[1]
+            if (index(t, ",") == 0) {            # a plain dotted decimal
+                if (ok(t, -90, 90)) print t
+                exit
+            }
+            m = split(t, p, ",")
+            if (m == 2) {
+                if (ok(p[1], -90, 90) && ok(p[2], -180, 180)) { print p[1] " " p[2]; exit }
+                c = p[1] "." p[2]                # so the comma was a decimal point
+                if (ok(c, -90, 90)) print c
+                exit
+            }
+            if (m == 4) {                        # "49,4521,8,6724"
+                a = p[1] "." p[2]; b = p[3] "." p[4]
+                if (ok(a, -90, 90) && ok(b, -180, 180)) print a " " b
+            }
+        }'
+}
+
+# Read an answer into LAT, and LON too when a pair was pasted. Returns 1 when
+# it does not parse. `BIRDNET_LATITUDE=42,36` or a pasted pair used to go into
+# .env as typed; the daemon's argument parser rejects both before it logs a
+# line, and the container restarted into the same error for ever.
+take_coords() {
+    local parsed
+    parsed="$(parse_coords "$1")"
+    [ -n "$parsed" ] || return 1
+    LAT="${parsed%% *}"
+    case "$parsed" in *" "*) LON="${parsed#* }" ;; esac
+}
+
+# Read a longitude alone into LON (through the pair path, which checks the
+# longitude's own range and its decimal comma).
+take_longitude() {
+    local parsed
+    parsed="$(parse_coords "0 $1")"
+    [ -n "$parsed" ] || return 1
+    LON="${parsed#* }"
+}
+
+# A value for .env that Compose takes literally. Unquoted and double-quoted
+# values are interpolated: `rtsp://u:pa$word@cam` reached the container as
+# `rtsp://u:pa@cam`. Single quotes are literal; a value holding one cannot be
+# written that way, so it is refused.
+env_quote() {
+    case "$1" in *"'"*) return 1 ;; esac
+    printf "'%s'" "$1"
+}
+
 # Yes/no prompt with a default. Returns 0 for yes, 1 for no.
 yesno() {
     local prompt="$1" default="${2:-y}" reply hint="[Y/n]"
@@ -223,7 +295,11 @@ if [ -z "$AUDIO_KIND" ]; then
     say "    rtsp://192.168.1.50:554/ch0_0.h264"
     say "    rtsp://user:pass@camera.lan:554/stream"
     say ""
-    rtsp_url=$(ask "RTSP URL (press Enter to skip audio entirely)" "")
+    while :; do
+        rtsp_url=$(ask "RTSP URL (press Enter to skip audio entirely)" "")
+        env_quote "$rtsp_url" >/dev/null && break
+        warn "An RTSP URL containing ' cannot be written to .env safely — percent-encode it as %27."
+    done
     if [ -n "$rtsp_url" ]; then
         AUDIO_KIND="rtsp"
         AUDIO_VALUE="$rtsp_url"
@@ -268,10 +344,26 @@ fi
 if [ -z "$LAT" ]; then
     say ""
     say "Tip: open https://www.openstreetmap.org, right-click your station,"
-    say "     and choose 'Show address' to read off the coordinates."
+    say "     and choose 'Show address'. You can paste the 'lat, lon' pair it"
+    say "     shows straight into the first prompt."
     say ""
-    LAT=$(ask "Latitude  (e.g. 42.3601)"  "")
-    LON=$(ask "Longitude (e.g. -71.0589)" "")
+    while :; do
+        raw=$(ask "Latitude, or a 'lat, lon' pair pasted from the map (Enter to skip)" "")
+        [ -z "$raw" ] && break
+        take_coords "$raw" && break
+        warn "'${raw}' is not a latitude between -90 and 90, or a pair — try again, or press Enter to skip."
+    done
+    if [ -n "$LAT" ] && [ -z "$LON" ]; then
+        while :; do
+            raw=$(ask "Longitude (e.g. -71.0589)" "")
+            if [ -z "$raw" ]; then LAT=""; break; fi
+            take_longitude "$raw" && break
+            warn "'${raw}' is not a longitude between -180 and 180 — try again, or press Enter to skip."
+        done
+    fi
+elif ! take_coords "${LAT} ${LON}"; then
+    warn "The detected coordinates (${LAT}, ${LON}) did not parse — leaving them unset."
+    LAT=""; LON=""
 fi
 
 if [ -z "$LAT" ] || [ -z "$LON" ]; then
@@ -298,14 +390,19 @@ hdr "Writing your .env"
     printf '# Edit any value and run:  docker compose up -d\n'
     printf '\n'
     printf '# --- Station location ---\n'
-    printf 'BIRDNET_LATITUDE=%s\n'  "$LAT"
-    printf 'BIRDNET_LONGITUDE=%s\n' "$LON"
+    if [ -n "$LAT" ] && [ -n "$LON" ]; then
+        printf 'BIRDNET_LATITUDE=%s\n'  "$LAT"
+        printf 'BIRDNET_LONGITUDE=%s\n' "$LON"
+    else
+        # Commented, not blank: a blank value is a supplied value (see .env.example).
+        printf '#BIRDNET_LATITUDE=\n#BIRDNET_LONGITUDE=\n'
+    fi
     printf '\n'
     printf '# --- Audio source ---\n'
     case "$AUDIO_KIND" in
         alsa)  printf 'BIRDNET_ALSA_DEVICE=%s\n'     "$AUDIO_VALUE" ;;
         pulse) printf 'BIRDNET_PIPEWIRE_DEVICE=%s\n' "$AUDIO_VALUE" ;;
-        rtsp)  printf 'BIRDNET_RTSP_URL=%s\n'        "$AUDIO_VALUE" ;;
+        rtsp)  printf 'BIRDNET_RTSP_URL=%s\n'        "$(env_quote "$AUDIO_VALUE")" ;;
         none)  printf '# (none set — add BIRDNET_ALSA_DEVICE / BIRDNET_RTSP_URL / BIRDNET_PIPEWIRE_DEVICE here)\n' ;;
     esac
     printf '\n'

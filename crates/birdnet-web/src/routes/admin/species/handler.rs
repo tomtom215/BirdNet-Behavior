@@ -219,24 +219,45 @@ pub struct ThresholdForm {
 
 /// Set a per-species confidence threshold and return the updated thresholds partial.
 ///
-/// # Errors
-///
-/// Returns `StatusCode::BAD_REQUEST` if the species name is empty or the threshold is out of range.
+/// A value that cannot be saved is answered with a toast and the page left as
+/// it was (`toast::not_applied`), never a bare `4xx`/`5xx`: htmx discards
+/// those, so the percentage slip — `75` in a 0–1 field — changed nothing and
+/// said nothing. A write the database refused used to be swallowed with
+/// `.ok()`, audited as a successful set, and answered with the list
+/// re-rendered as if it had worked.
 pub async fn set_threshold(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ThresholdForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> axum::response::Response {
+    use crate::routes::pages::toast::{Toast, not_applied};
+    use axum::response::IntoResponse as _;
     let sci_name = form.sci_name.trim().to_string();
-    let Ok(threshold) = birdnet_core::config::locale::parse_decimal(&form.threshold) else {
-        return Err(StatusCode::BAD_REQUEST);
-    };
-    if sci_name.is_empty() || !(0.0..=1.0).contains(&threshold) {
-        return Err(StatusCode::BAD_REQUEST);
+    if sci_name.is_empty() {
+        return not_applied(&Toast::error("Choose a species for the threshold."));
     }
-    state.with_db(|conn| {
-        birdnet_db::sqlite::set_species_threshold(conn, &sci_name, threshold).ok();
-    });
+    let threshold = match birdnet_core::config::locale::parse_decimal(&form.threshold) {
+        Ok(t) if (0.0..=1.0).contains(&t) => t,
+        Ok(t) if t > 1.0 && t <= 100.0 => {
+            return not_applied(&Toast::error(format!(
+                "A threshold is between 0 and 1 — for {t}%, enter {:.2}. Nothing was saved.",
+                t / 100.0
+            )));
+        }
+        _ => {
+            return not_applied(&Toast::error(
+                "A threshold is a number between 0 and 1, such as 0.35. Nothing was saved.",
+            ));
+        }
+    };
+    if let Err(e) =
+        state.with_db(|conn| birdnet_db::sqlite::set_species_threshold(conn, &sci_name, threshold))
+    {
+        tracing::warn!(error = %e, species = %sci_name, "species threshold not saved");
+        return not_applied(&Toast::error(format!(
+            "The threshold for {sci_name} was not saved: the database refused the write."
+        )));
+    }
     // The threshold *is* the metadata here, unlike a settings value: it is a
     // number that changes which detections are kept, and reconstructing "what
     // was it set to in April?" from anything else is impossible.
@@ -248,7 +269,7 @@ pub async fn set_threshold(
         Some(&format!("threshold={threshold}")),
     );
     let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
-    Ok(Html(render_thresholds_partial(&thresholds, &suggestions)))
+    Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
 }
 
 /// Form carrying the species whose per-species threshold should be removed.
@@ -260,17 +281,24 @@ pub struct ThresholdDeleteForm {
 
 /// Delete a per-species confidence threshold and return the updated thresholds partial.
 ///
-/// # Errors
-///
-/// Returns `StatusCode::INTERNAL_SERVER_ERROR` if the database operation fails.
+/// A refused delete says so in a toast and leaves the list as it was; see
+/// [`set_threshold`] for why not a `5xx`.
 pub async fn delete_threshold(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ThresholdDeleteForm>,
-) -> Result<Html<String>, StatusCode> {
-    state.with_db(|conn| {
-        birdnet_db::sqlite::delete_species_threshold(conn, &form.sci_name).ok();
-    });
+) -> axum::response::Response {
+    use crate::routes::pages::toast::{Toast, not_applied};
+    use axum::response::IntoResponse as _;
+    if let Err(e) =
+        state.with_db(|conn| birdnet_db::sqlite::delete_species_threshold(conn, &form.sci_name))
+    {
+        tracing::warn!(error = %e, species = %form.sci_name, "species threshold not removed");
+        return not_applied(&Toast::error(format!(
+            "The threshold for {} was not removed: the database refused the write.",
+            form.sci_name
+        )));
+    }
     crate::audit::audit(
         &state,
         Some(&request_user),
@@ -279,7 +307,7 @@ pub async fn delete_threshold(
         None,
     );
     let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
-    Ok(Html(render_thresholds_partial(&thresholds, &suggestions)))
+    Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
 }
 
 // ---------------------------------------------------------------------------

@@ -122,7 +122,10 @@ pub fn set_detection_review(
     status: ReviewStatus,
     notes: Option<&str>,
 ) -> Result<(), DbError> {
-    conn.execute(
+    // One transaction: a verdict whose mirror failed would show as reviewed in
+    // the queue while every analytic still counted the detection (DB8).
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO detection_reviews
             (date, time, sci_name, com_name, status, notes, reviewed_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
@@ -137,11 +140,12 @@ pub fn set_detection_review(
     // the record of who said what and when; this is the current verdict, in the
     // one place every analytic can filter on cheaply and identically in both
     // stores. Without it a verdict is recorded and applied to nothing.
-    conn.execute(
+    tx.execute(
         "UPDATE detections SET review_verdict = ?4
           WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
         params![date, time, sci_name, status.as_str()],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -156,17 +160,19 @@ pub fn clear_detection_review(
     time: &str,
     sci_name: &str,
 ) -> Result<(), DbError> {
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "DELETE FROM detection_reviews WHERE date = ?1 AND time = ?2 AND sci_name = ?3",
         params![date, time, sci_name],
     )?;
     // Return the detection to "unreviewed" in the denormalised copy too, or the
     // exclusion would outlive the verdict that justified it.
-    conn.execute(
+    tx.execute(
         "UPDATE detections SET review_verdict = NULL
           WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
         params![date, time, sci_name],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -408,6 +414,78 @@ mod tests {
             params![date, time, sci, com],
         )
         .unwrap();
+    }
+
+    /// DB8: the verdict and its mirror on the detection are one change.
+    ///
+    /// They were two statements with no transaction: if the `detections`
+    /// update failed (a busy database, a full disk), the review row stayed —
+    /// the queue showed the detection as reviewed while every analytic that
+    /// filters on `review_verdict` still counted it, and nothing reconciled
+    /// the two. A trigger makes the second statement fail on demand.
+    #[test]
+    fn a_verdict_and_its_mirror_are_written_together_or_not_at_all() {
+        let conn = db();
+        seed_detection(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+        );
+        conn.execute_batch(
+            "CREATE TRIGGER fail_mirror BEFORE UPDATE OF review_verdict ON detections
+             BEGIN SELECT RAISE(ABORT, 'mirror failed'); END;",
+        )
+        .unwrap();
+        let reviews = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM detection_reviews", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        let set = set_detection_review(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+            ReviewStatus::Rejected,
+            None,
+        );
+        assert!(
+            set.is_err(),
+            "precondition: the trigger made the mirror fail"
+        );
+        assert_eq!(reviews(&conn), 0, "a verdict was kept without its mirror");
+
+        // Clearing: the delete must not stand when the mirror is refused.
+        conn.execute_batch("DROP TRIGGER fail_mirror").unwrap();
+        set_detection_review(
+            &conn,
+            "2026-05-01",
+            "06:00:00",
+            "Turdus merula",
+            "Blackbird",
+            ReviewStatus::Rejected,
+            None,
+        )
+        .expect("counterpart: without the trigger the verdict is written");
+        assert_eq!(reviews(&conn), 1);
+        conn.execute_batch(
+            "CREATE TRIGGER fail_mirror BEFORE UPDATE OF review_verdict ON detections
+             BEGIN SELECT RAISE(ABORT, 'mirror failed'); END;",
+        )
+        .unwrap();
+        assert!(clear_detection_review(&conn, "2026-05-01", "06:00:00", "Turdus merula").is_err());
+        assert_eq!(
+            reviews(&conn),
+            1,
+            "a verdict was cleared without its mirror"
+        );
+        let verdict: Option<String> = conn
+            .query_row("SELECT review_verdict FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(verdict.as_deref(), Some("rejected"));
     }
 
     /// Every recorded verdict must be reachable, not just the newest page.

@@ -55,7 +55,7 @@
 
   function scheduleReconnect() {
     if (stopped || reconnectTimer !== null) return;
-    setStatus("reconnecting", "Reconnecting…");
+    setStatus("reconnecting", "Feed reconnecting…");
     var delay = backoffDelayMs();
     reconnectTimer = window.setTimeout(function () {
       reconnectTimer = null;
@@ -108,7 +108,7 @@
 
     socket.onopen = function () {
       attempt = 0;
-      setStatus("live", "Live");
+      setStatus("live", "Feed live");
     };
 
     socket.onmessage = function (ev) {
@@ -161,7 +161,11 @@
       }
     });
 
-    window.addEventListener("beforeunload", function () {
+    // `pagehide`/`pageshow`, not `beforeunload` (M14): a `beforeunload`
+    // listener keeps a page out of the back/forward cache, and the flag it set
+    // was never cleared — so a page the browser did restore came back with a
+    // dead feed. Stop on the way out; start again if the page is restored.
+    window.addEventListener("pagehide", function () {
       stopped = true;
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer);
@@ -174,6 +178,24 @@
           /* ignore */
         }
       }
+    });
+    window.addEventListener("pageshow", function (ev) {
+      if (!ev.persisted) return;
+      stopped = false;
+      attempt = 0;
+      // A socket whose close is still in flight would reconnect only after
+      // its backoff; detach it and connect now.
+      if (ws) {
+        var old = ws;
+        ws = null;
+        old.onclose = null;
+        try {
+          old.close();
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      if (reconnectTimer === null) connect();
     });
 
     connect();

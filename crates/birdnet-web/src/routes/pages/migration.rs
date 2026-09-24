@@ -110,14 +110,12 @@ fn collect_ridges(
     // and trough month over a multi-year window. Cheap heuristic — refine
     // with `birdnet_behavioral::ResidencyType::Migrant` when analytics
     // feature is on.
-    let mut stmt = conn.prepare(
-        "SELECT Com_Name, \
-                CAST(strftime('%W', Date) AS INTEGER) AS wk, \
-                COUNT(*) AS n \
+    let mut stmt = conn.prepare(&format!(
+        "SELECT Com_Name, {WEEK_COLUMN} AS wk, COUNT(*) AS n \
          FROM detections_analytic \
          WHERE Date LIKE ?1 \
-         GROUP BY Com_Name, wk",
-    )?;
+         GROUP BY Com_Name, wk"
+    ))?;
     let prefix = format!("{year}-%");
     let rows = stmt.query_map([&prefix], |r| {
         Ok((
@@ -131,7 +129,7 @@ fn collect_ridges(
     let mut by_species: HashMap<String, [f32; 52]> = HashMap::new();
     for row in rows.flatten() {
         let (name, wk, n) = row;
-        let w = wk.clamp(0, 51) as usize;
+        let w = wk.clamp(0, 51) as usize; // WEEK_COLUMN is already 0..=51
         let entry = by_species.entry(name).or_insert([0.0; 52]);
         entry[w] += n as f32;
     }
@@ -409,32 +407,41 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
 // Diversity strip
 // ---------------------------------------------------------------------------
 
+/// The chart column a `Date` falls in: `(day-of-year − 1) / 7`, the last
+/// column absorbing the year's final eight or nine days.
+///
+/// Every query on this page and [`week_of_year`] use this one definition
+/// (`ANA14b`). They used `%W`, which runs 0..=53 against 52 columns: the
+/// diversity strip dropped weeks 52 and 53, the ridgeline folded them into
+/// column 51, and the peak tile printed `w53` and `w54`.
+const WEEK_COLUMN: &str = "MIN((CAST(strftime('%j', Date) AS INTEGER) - 1) / 7, 51)";
+
+/// Distinct species per week of `year`, one slot per chart column.
+fn weekly_diversity(conn: &rusqlite::Connection, year: i32) -> rusqlite::Result<[i64; 52]> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {WEEK_COLUMN} AS wk, COUNT(DISTINCT Com_Name) \
+         FROM detections_analytic \
+         WHERE Date LIKE ?1 \
+         GROUP BY wk \
+         ORDER BY wk"
+    ))?;
+    let prefix = format!("{year}-%");
+    let rows = stmt.query_map([&prefix], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    let mut weekly = [0i64; 52];
+    for row in rows.flatten() {
+        let (w, n) = row;
+        if (0..52).contains(&w) {
+            weekly[w as usize] = n;
+        }
+    }
+    Ok(weekly)
+}
+
 fn compute_diversity(state: &AppState) -> Option<String> {
     let year = current_year();
-    let weekly = state
-        .with_db(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT CAST(strftime('%W', Date) AS INTEGER) AS wk, \
-                        COUNT(DISTINCT Com_Name) \
-                 FROM detections_analytic \
-                 WHERE Date LIKE ?1 \
-                 GROUP BY wk \
-                 ORDER BY wk",
-            )?;
-            let prefix = format!("{year}-%");
-            let rows = stmt.query_map([&prefix], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-            })?;
-            let mut weekly = [0i64; 52];
-            for row in rows.flatten() {
-                let (w, n) = row;
-                if (0..52).contains(&w) {
-                    weekly[w as usize] = n;
-                }
-            }
-            Ok::<_, rusqlite::Error>(weekly)
-        })
-        .ok()?;
+    let weekly = state.with_db(|conn| weekly_diversity(conn, year)).ok()?;
     // Same contract as `compute_ridgeline`: a year with nothing in it is data,
     // not a failure, and gets its own body rather than the error fallback.
     if weekly.iter().all(|&n| n == 0) {
@@ -517,74 +524,79 @@ fn render_diversity_svg(weekly: &[i64; 52], today_week: u8) -> String {
 // ---------------------------------------------------------------------------
 
 async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
-    if let Some(html) = state.analytics_cache().get("migration-stats") {
-        return ok_html(html);
-    }
-    let today = crate::routes::pages::today_date_string();
-    let year = year_of(&today);
-    let prior = year - 1;
-    let state_for_blocking = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        state_for_blocking.with_db(|conn| {
-            // First-of-year arrivals = species with first_date in this year so far.
-            let foy: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM ( \
-                   SELECT Com_Name, MIN(Date) AS first FROM detections_analytic GROUP BY Com_Name \
-                 ) WHERE first LIKE ?1",
-                [format!("{year}-%")],
-                |r| r.get(0),
-            )?;
-            // Peak diversity week.
-            let (peak_week, peak_n): (i64, i64) = conn
-                .query_row(
-                    "SELECT CAST(strftime('%W', Date) AS INTEGER) wk, COUNT(DISTINCT Com_Name) n \
-                     FROM detections_analytic WHERE Date LIKE ?1 GROUP BY wk ORDER BY n DESC LIMIT 1",
-                    [format!("{year}-%")],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .unwrap_or((0, 0));
-
-            // Earliest-vs-last-year: of species heard in both years, find the
-            // one with the most-negative (earlier) day-of-year delta vs prior.
-            // Returns (species_name, delta_days) — `delta_days` is negative
-            // when *this* year was earlier than last.
-            let earliest: Option<(String, i64)> = conn
-                .query_row(
-                    "WITH first_this AS ( \
-                       SELECT Com_Name, MIN(Date) d \
-                       FROM detections_analytic WHERE Date LIKE ?1 GROUP BY Com_Name \
-                     ), first_prior AS ( \
-                       SELECT Com_Name, MIN(Date) d \
-                       FROM detections_analytic WHERE Date LIKE ?2 GROUP BY Com_Name \
-                     ) \
-                     SELECT t.Com_Name, \
-                            CAST(julianday(t.d) - julianday(?3 || substr(p.d, 5)) AS INTEGER) AS delta \
-                     FROM first_this t JOIN first_prior p USING (Com_Name) \
-                     ORDER BY delta ASC LIMIT 1",
-                    [
-                        format!("{year}-%"),
-                        format!("{prior}-%"),
-                        format!("{year}"),
-                    ],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .ok();
-
-            // Still expected = species that arrived in the prior year within
-            // the next six weeks of today, but we haven't heard them yet this
-            // year. Six weeks from mid-November lands in January, so the window
-            // has to be able to cross the year boundary.
-            let still_expected = still_expected_count(conn, &today).unwrap_or(0);
-
-            Ok::<_, rusqlite::Error>((foy, peak_week, peak_n, earliest, still_expected))
-        })
+    // A failed read renders `FRAGMENT_ERR` and is not cached. It used to be
+    // defaulted to `(0, 0, 0, None, 0)` and cached, so one database error read
+    // "First-of-year arrivals 0 · w0 · no overdue migrants" as fact, and kept
+    // saying so after the database recovered.
+    let html = cached_fragment(&state, "migration-stats".to_string(), FRAGMENT_ERR, |s| {
+        let today = crate::routes::pages::today_date_string();
+        s.with_db(|conn| stats_fragment(conn, &today)).ok()
     })
     .await;
+    ok_html(html)
+}
 
-    let (foy, peak_week, peak_n, earliest, still_expected) = result
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or((0, 0, 0, None, 0));
+/// The four KPI tiles, as of the local date `today`.
+///
+/// Every query propagates its error: the tiles are claims about the reader's
+/// data, and a count that failed is not a count of zero.
+fn stats_fragment(conn: &rusqlite::Connection, today: &str) -> rusqlite::Result<String> {
+    use rusqlite::OptionalExtension as _;
+    let year = year_of(today);
+    let prior = year - 1;
+
+    // First-of-year arrivals = species with first_date in this year so far.
+    let foy: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ( \
+           SELECT Com_Name, MIN(Date) AS first FROM detections_analytic GROUP BY Com_Name \
+         ) WHERE first LIKE ?1",
+        [format!("{year}-%")],
+        |r| r.get(0),
+    )?;
+    // Peak diversity week; `None` is a year with no detections yet.
+    let peak: Option<(i64, i64)> = conn
+        .query_row(
+            &format!(
+                "SELECT {WEEK_COLUMN} wk, COUNT(DISTINCT Com_Name) n \
+                 FROM detections_analytic WHERE Date LIKE ?1 GROUP BY wk ORDER BY n DESC LIMIT 1"
+            ),
+            [format!("{year}-%")],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+
+    // Earliest-vs-last-year: of species heard in both years, the one with the
+    // most-negative (earlier) day-of-year delta vs prior. Negative when *this*
+    // year was earlier.
+    //
+    // Only where last year's first date means something: the station must
+    // have been recording a fortnight before it. A station installed on
+    // 1 June otherwise "first heard" every resident on 1 June, and this year's
+    // January detection of the same bird read as an arrival 151 days early.
+    let earliest: Option<(String, i64)> = conn
+        .query_row(
+            "WITH first_this AS ( \
+               SELECT Com_Name, MIN(Date) d \
+               FROM detections_analytic WHERE Date LIKE ?1 GROUP BY Com_Name \
+             ), first_prior AS ( \
+               SELECT Com_Name, MIN(Date) d \
+               FROM detections_analytic WHERE Date LIKE ?2 GROUP BY Com_Name \
+             ), since AS ( \
+               SELECT MIN(Date) d FROM detections WHERE date(Date) IS NOT NULL \
+             ) \
+             SELECT t.Com_Name, \
+                    CAST(julianday(t.d) - julianday(?3 || substr(p.d, 5)) AS INTEGER) AS delta \
+             FROM first_this t JOIN first_prior p USING (Com_Name), since \
+             WHERE since.d <= date(p.d, '-14 days') \
+             ORDER BY delta ASC LIMIT 1",
+            [format!("{year}-%"), format!("{prior}-%"), format!("{year}")],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+
+    // Still expected = species that arrived in the prior year within the next
+    // six weeks of today, but not heard yet this year.
+    let still_expected = still_expected_count(conn, today)?;
 
     let earliest_html = match earliest {
         Some((species, delta)) if delta < 0 => format!(
@@ -612,16 +624,25 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
             .to_string()
     };
 
-    let html = format!(
+    // The column is 0-based; the ridgeline on this page prints its peak as
+    // `w{pw + 1}`, and the tile printed the raw number, so one week had two
+    // names on one page.
+    let peak_html = peak.map_or_else(
+        || r#"<span class="value mig-peak-val">—</span><span class="bnb-meta mono">no detections yet</span>"#.to_string(),
+        |(wk, n)| {
+            format!(
+                r#"<span class="value mig-peak-val">w{w}</span><span class="bnb-meta mono">{n} species</span>"#,
+                w = wk + 1
+            )
+        },
+    );
+
+    Ok(format!(
         r#"<div class="stat-tile"><span class="label">First-of-year arrivals</span><span class="value">{foy}</span></div>
-<div class="stat-tile"><span class="label">Peak diversity week</span><span class="value mig-peak-val">w{peak_week}</span><span class="bnb-meta mono">{peak_n} species</span></div>
+<div class="stat-tile"><span class="label">Peak diversity week</span>{peak_html}</div>
 <div class="stat-tile"><span class="label">Earliest vs last year</span>{earliest_html}</div>
 <div class="stat-tile"><span class="label">Still expected</span>{expected_html}</div>"#,
-    );
-    state
-        .analytics_cache()
-        .put("migration-stats".to_string(), html.clone());
-    ok_html(html)
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -814,27 +835,23 @@ fn year_of(date: &str) -> i32 {
     date.get(0..4).and_then(|s| s.parse().ok()).unwrap_or(1970)
 }
 
-/// Week-of-year of a `YYYY-MM-DD` date, matching `SQLite`'s `%W`.
+/// Chart column of a `YYYY-MM-DD` date, matching [`WEEK_COLUMN`].
 ///
-/// This has to agree with `%W` because that is what every query on this page
-/// buckets by, and the value positions the "today" marker against those
-/// buckets. It did not: the marker was placed by `(unix_days % 365) / 7`, which
+/// This has to agree with [`WEEK_COLUMN`] because that is what every query on
+/// this page buckets by, and the value positions the "today" marker against
+/// those buckets. It did not: the marker was placed by `(unix_days % 365) / 7`, which
 /// is not a week number in any calendar. It ignores leap days, so it had
 /// drifted a fortnight by 2026, and it counts from 1 January 1970 rather than
 /// from the current year, so on 31 December it returned week 1 and drew the
 /// marker at the far left of a chart whose data ends at the far right.
 ///
-/// Clamped to 51 because the callers index 52-slot arrays.
 #[allow(clippy::cast_possible_truncation)]
 fn week_of_year(date: &str) -> u8 {
     let days = crate::routes::pages::date_to_epoch_days(date);
-    // 1970-01-01 was a Thursday, so `(days + 4) % 7` is 0 = Sunday; shift to
-    // 0 = Monday, which is the week start `%W` uses.
-    let monday_based = (((days + 4) % 7) + 6) % 7;
     let (y, _, _) = crate::routes::pages::days_to_date(days);
     let jan1 = crate::routes::pages::date_to_epoch_days(&format!("{y}-01-01"));
     let day_of_year_zero_based = days.saturating_sub(jan1);
-    ((day_of_year_zero_based + 7 - monday_based) / 7).min(51) as u8
+    (day_of_year_zero_based / 7).min(51) as u8
 }
 
 /// The station's current **local** year.
@@ -848,7 +865,7 @@ fn current_year() -> i32 {
     year_of(&crate::routes::pages::today_date_string())
 }
 
-/// The station's current **local** week-of-year, on `SQLite`'s `%W` scale.
+/// The station's current **local** chart column ([`WEEK_COLUMN`]).
 fn current_week() -> u8 {
     week_of_year(&crate::routes::pages::today_date_string())
 }
@@ -920,6 +937,65 @@ mod tests {
         conn
     }
 
+    /// `ANA14b`: the last days of December are a week on the chart like any
+    /// other, named the way the chart names it.
+    ///
+    /// `%W` runs 0..=53 and every chart has 52 columns. The diversity strip
+    /// dropped weeks 52 and 53 (from 28 December 2026, a Monday, on), the
+    /// ridgeline folded them into column 51, and the "Peak diversity week"
+    /// tile printed `w53` — a week the chart does not have.
+    #[test]
+    fn the_last_days_of_december_are_on_the_chart() {
+        let conn = station(&[
+            ("Bohemian Waxwing", "2026-12-29"),
+            ("Common Redpoll", "2026-12-29"),
+            ("Northern Shrike", "2026-12-30"),
+        ]);
+        let weekly = weekly_diversity(&conn, 2026).expect("diversity");
+        assert_eq!(weekly[51], 3, "the last week was dropped: {weekly:?}");
+        let html = stats_fragment(&conn, "2026-12-31").expect("tiles");
+        assert!(
+            html.contains(">w52<"),
+            "the peak week is off the chart: {html}"
+        );
+        assert_eq!(week_of_year("2026-12-31"), 51);
+
+        // Counterparts: the first days of January are the first column, and a
+        // mid-year date is where it always was.
+        let conn = station(&[("Snow Bunting", "2026-01-01")]);
+        assert_eq!(weekly_diversity(&conn, 2026).expect("diversity")[0], 1);
+        assert_eq!(week_of_year("2026-01-01"), 0);
+        assert_eq!(week_of_year("2026-07-02"), 26);
+    }
+
+    /// A first year that began mid-year is not a year of arrivals.
+    ///
+    /// A station installed on 2025-06-01 "first heard" its resident cardinal
+    /// that day, and hearing it on 2026-01-01 read as an arrival 151 days
+    /// early: the tile printed "−151 d". A species is compared only where the
+    /// station was already recording a fortnight before last year's date.
+    #[test]
+    fn a_partial_first_year_is_not_an_early_arrival() {
+        let conn = station(&[
+            ("Northern Cardinal", "2025-06-01"),
+            ("Northern Cardinal", "2026-01-01"),
+        ]);
+        let html = stats_fragment(&conn, "2026-03-01").expect("tiles");
+        assert!(!html.contains("-151 d"), "{html}");
+        assert!(html.contains("no prior-year data"), "{html}");
+
+        // Counterpart: a station that was running all of last year still
+        // reports a genuinely early arrival.
+        let conn = station(&[
+            ("House Wren", "2024-12-01"),
+            ("Barn Swallow", "2025-04-10"),
+            ("Barn Swallow", "2026-04-01"),
+        ]);
+        let html = stats_fragment(&conn, "2026-04-20").expect("tiles");
+        assert!(html.contains("-9 d"), "{html}");
+        assert!(html.contains("Barn Swallow"), "{html}");
+    }
+
     /// The six-week look-ahead must not empty itself in December.
     ///
     /// The window was expressed as a day-of-year `BETWEEN` against
@@ -984,7 +1060,7 @@ mod tests {
         assert_eq!(n, 1, "29 Feb 2024 falls inside 20 Feb - 3 Apr 2025");
     }
 
-    /// `week_of_year` must agree with the `%W` the queries bucket by.
+    /// `week_of_year` must agree with the [`WEEK_COLUMN`] the queries bucket by.
     ///
     /// The chart's "today" marker was placed by `(unix_days % 365) / 7`, which
     /// is not a week number: it ignores leap days, so it had drifted a fortnight
@@ -1005,17 +1081,13 @@ mod tests {
             "2021-01-03",
         ] {
             let sqlite: i64 = conn
-                .query_row("SELECT CAST(strftime('%W', ?1) AS INTEGER)", [date], |r| {
-                    r.get(0)
-                })
+                .query_row(
+                    &format!("SELECT {} FROM (SELECT ?1 AS Date)", super::WEEK_COLUMN),
+                    [date],
+                    |r| r.get(0),
+                )
                 .expect("strftime");
-            // The callers index 52-slot arrays, so weeks 52 and 53 clamp; the
-            // agreement being checked is below that.
-            assert_eq!(
-                i64::from(week_of_year(date)),
-                sqlite.min(51),
-                "week of {date}"
-            );
+            assert_eq!(i64::from(week_of_year(date)), sqlite, "week of {date}");
         }
     }
 

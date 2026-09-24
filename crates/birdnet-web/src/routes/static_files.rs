@@ -43,6 +43,11 @@ const THEME_GUARD_JS: &[u8] = include_bytes!("../../static/theme-guard.js");
 
 /// Reconnecting live-detection WebSocket client (embedded at compile time).
 const LIVE_DETECTIONS_JS: &[u8] = include_bytes!("../../static/live-detections.js");
+/// Keeps script-built URLs inside a reverse-proxy prefix (M8).
+const BASE_PATH_JS: &[u8] = include_bytes!("../../static/base-path.js");
+/// Holds `every` polls back while the tab is hidden (M13).
+const POLL_VISIBILITY_JS: &[u8] = include_bytes!("../../static/poll-visibility.js");
+const CLIP_PLAYER_JS: &[u8] = include_bytes!("../../static/clip-player.js");
 
 /// Type-to-filter for the admin settings page (embedded at compile time).
 const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
@@ -148,6 +153,9 @@ pub fn router() -> Router<AppState> {
         .route("/static/htmx-sse.js", get(htmx_sse_js))
         .route("/static/theme-guard.js", get(theme_guard_js))
         .route("/static/live-detections.js", get(live_detections_js))
+        .route("/static/poll-visibility.js", get(poll_visibility_js))
+        .route("/static/base-path.js", get(base_path_js))
+        .route("/static/clip-player.js", get(clip_player_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
         .route("/static/css/app.css", get(app_css))
@@ -251,6 +259,28 @@ async fn icon_maskable_512() -> impl IntoResponse {
     )
 }
 
+async fn base_path_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        BASE_PATH_JS,
+    )
+}
+
+async fn poll_visibility_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        POLL_VISIBILITY_JS,
+    )
+}
+
 async fn live_detections_js() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -283,6 +313,17 @@ async fn search_select_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         SEARCH_SELECT_JS,
+    )
+}
+
+async fn clip_player_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, IMMUTABLE),
+        ],
+        CLIP_PLAYER_JS,
     )
 }
 

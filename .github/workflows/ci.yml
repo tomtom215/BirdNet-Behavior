@@ -319,6 +319,7 @@ jobs:
         # every CI run while reporting `10 passed`.
         run: |
           cargo test --test inference_e2e --test pipeline_e2e --test species_filter_e2e \
+            --test a_lowered_species_threshold_reaches_the_model \
             -- --nocapture
 
   doc:

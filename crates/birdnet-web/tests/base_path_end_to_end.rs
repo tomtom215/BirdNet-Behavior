@@ -272,3 +272,54 @@ async fn a_redirect_stays_inside_the_prefix() {
         "the redirect left the prefix: {loc:?}"
     );
 }
+
+/// M8: htmx's redirect header stays inside the prefix too.
+///
+/// A write that needs signing in answers 401 with `HX-Redirect` — htmx does
+/// not follow a 303 on a POST — and only `Location` was rewritten. The browser
+/// was sent to `/login`, outside the application.
+#[tokio::test]
+async fn an_htmx_redirect_stays_inside_the_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = station(dir.path());
+    // The seed admin carries a placeholder until a password is set, and the
+    // gate is open until then; give it a real one.
+    let hash = birdnet_db::accounts::hash_password("a-real-password").expect("hash");
+    state.with_db(|c| {
+        c.execute(
+            "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
+            [&hash],
+        )
+        .expect("set the admin password")
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri(format!("{BASE}/pages/today-delete"))
+        .header("hx-request", "true")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from("date=2026-01-01&time=00:00:00&sci_name=x"))
+        .expect("request");
+    let res = build_router(state).oneshot(req).await.expect("response");
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "precondition: the gate is closed"
+    );
+    let hx = res
+        .headers()
+        .get("hx-redirect")
+        .and_then(|v| v.to_str().ok())
+        .expect("an HX-Redirect")
+        .to_owned();
+    assert!(
+        hx.starts_with(&format!("{BASE}/login")),
+        "HX-Redirect left the prefix: {hx:?}"
+    );
+    // Counterpart: Location, which was already rewritten, still is.
+    let loc = res
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(loc.starts_with(BASE), "{loc:?}");
+}

@@ -21,15 +21,25 @@
     if (toast.dataset.sticky === '1') return;
     var kind = toast.dataset.kind || 'info';
     var ms = parseInt(toast.dataset.timeoutMs, 10);
-    if (!Number.isFinite(ms) || ms < 0) ms = DEFAULT_TIMEOUT[kind] || 4000;
+    // `in`, not `||`: an error's default is 0 (sticky), and `0 || 4000` made
+    // every client-raised error vanish after four seconds.
+    if (!Number.isFinite(ms) || ms < 0) ms = (kind in DEFAULT_TIMEOUT) ? DEFAULT_TIMEOUT[kind] : 4000;
     if (ms === 0) return;
 
     var t = null;
-    function start() { t = window.setTimeout(dismiss, ms); }
+    function start() { stop(); t = window.setTimeout(dismiss, ms); }
     function stop()  { if (t) { window.clearTimeout(t); t = null; } }
     function dismiss() {
+      document.removeEventListener('visibilitychange', onVisibility);
       toast.setAttribute('data-leaving', '1');
       window.setTimeout(function () { toast.remove(); }, 200);
+    }
+    // One listener per toast, removed with it: added and never removed, they
+    // piled up over a long session and kept restarting timers for toasts that
+    // were already gone.
+    function onVisibility() {
+      if (!toast.isConnected) { document.removeEventListener('visibilitychange', onVisibility); return; }
+      if (document.hidden) stop(); else start();
     }
 
     toast.addEventListener('mouseenter', stop);
@@ -39,9 +49,7 @@
 
     // Pause when the tab is hidden so a toast doesn't time out while the user
     // is away.
-    document.addEventListener('visibilitychange', function () {
-      if (document.hidden) stop(); else start();
-    });
+    document.addEventListener('visibilitychange', onVisibility);
 
     start();
   }
@@ -64,18 +72,22 @@
   }
 
   // Initial-page toasts (rare — usually server-attached on the next response).
-  region.querySelectorAll('.bnb-toast').forEach(attach);
+  region.querySelectorAll('.bnb-toast').forEach(function (t) { t.dataset.bound = '1'; attach(t); });
 
-  // Any subsequent OOB swap into #bnb-toasts.
-  document.body.addEventListener('htmx:oobAfterSwap', function (e) {
-    if (e.target && e.target.id === 'bnb-toasts') {
-      // The OOB swap target is the region itself; new toasts are its tail children.
-      region.querySelectorAll('.bnb-toast:not([data-bound="1"])').forEach(function (t) {
-        t.dataset.bound = '1';
-        attach(t);
-      });
-    }
-  });
+  // Any toast the server swaps in out-of-band. htmx fires `htmx:oobAfterSwap`
+  // on the *main* swap's target, not on the region (the region arrives as
+  // `e.detail.target`), so a check on `e.target.id` never matched: every
+  // server toast stayed on screen for good, its × did nothing, and the stack
+  // cap never applied. Binding whatever is unbound after every OOB swap and
+  // every settle does not depend on which element the event lands on.
+  function bindNew() {
+    region.querySelectorAll('.bnb-toast:not([data-bound="1"])').forEach(function (t) {
+      t.dataset.bound = '1';
+      attach(t);
+    });
+  }
+  document.body.addEventListener('htmx:oobAfterSwap', bindNew);
+  document.body.addEventListener('htmx:afterSettle', bindNew);
 
   // Allow any inline script to fire a toast without going through the server:
   //   document.dispatchEvent(new CustomEvent('birdnet:toast',

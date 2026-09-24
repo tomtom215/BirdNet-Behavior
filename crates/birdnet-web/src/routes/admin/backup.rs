@@ -231,9 +231,15 @@ async fn download_backup(State(state): State<AppState>, Path(name): Path<String>
 // DELETE /admin/system/backups/{name} — delete a backup
 // ---------------------------------------------------------------------------
 
+/// Called by `hx-delete` on a row: a failure answers 200 with a toast and
+/// leaves the row (`toast::not_applied`). A bare `4xx`/`5xx` is discarded by
+/// htmx, so a delete that failed left the row there and said nothing.
 async fn delete_backup(State(state): State<AppState>, Path(name): Path<String>) -> Response {
+    use crate::routes::pages::toast::{Toast, not_applied};
     if !is_safe_backup_name(&name) {
-        return StatusCode::BAD_REQUEST.into_response();
+        return not_applied(&Toast::error(
+            "That is not a backup this station can delete.",
+        ));
     }
 
     let path = backup_dir(&state).join(&name);
@@ -245,7 +251,12 @@ async fn delete_backup(State(state): State<AppState>, Path(name): Path<String>) 
         }
         Err(e) => {
             tracing::warn!(file = %name, error = %e, "failed to delete backup");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            let why = if e.kind() == std::io::ErrorKind::NotFound {
+                "it is no longer there — reload the list"
+            } else {
+                "the file system refused"
+            };
+            not_applied(&Toast::error(format!("{name} was not deleted: {why}.")))
         }
     }
 }

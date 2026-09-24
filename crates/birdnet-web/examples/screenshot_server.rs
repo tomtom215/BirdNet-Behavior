@@ -695,7 +695,14 @@ fn write_wav16(path: &std::path::Path, sr: u32, samples: &[f32]) -> std::io::Res
 
 #[tokio::main]
 async fn main() {
-    let path = std::env::temp_dir().join("bnb_screenshots.db");
+    // Where the fixture keeps its files, and where it listens. Both default to
+    // what they always were; set them to run a second instance beside the
+    // first — the base-path gate serves one under a prefix (`BIRDNET_BASE_PATH`).
+    let dir = std::env::var_os("BNB_FIXTURE_DIR")
+        .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+    std::fs::create_dir_all(&dir).expect("fixture dir");
+    let addr = std::env::var("BNB_FIXTURE_ADDR").unwrap_or_else(|_| "127.0.0.1:8502".to_owned());
+    let path = dir.join("bnb_screenshots.db");
     let _ = std::fs::remove_file(&path);
 
     let conn = Connection::open(&path).expect("open sqlite");
@@ -739,7 +746,7 @@ async fn main() {
     #[cfg(feature = "analytics")]
     let state = {
         drop(conn);
-        let analytics_path = std::env::temp_dir().join("bnb_screenshots.duckdb");
+        let analytics_path = dir.join("bnb_screenshots.duckdb");
         let _ = std::fs::remove_file(&analytics_path);
         AppState::new_with_analytics(path, &analytics_path)
             .expect("open analytics database")
@@ -756,7 +763,7 @@ async fn main() {
     // are cached under a temp dir; if construction fails the server still runs,
     // just with placeholder thumbnails.
     let state = match birdnet_integrations::species_images::ImageCache::with_wikipedia(
-        &std::env::temp_dir().join("bnb_screenshots_images"),
+        &dir.join("bnb_screenshots_images"),
     ) {
         Ok(cache) => state.with_image_cache(cache),
         Err(e) => {
@@ -796,8 +803,7 @@ async fn main() {
         },
     );
 
-    let addr = "127.0.0.1:8502";
-    let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
+    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     eprintln!("screenshot server listening on http://{addr}/");
     axum::serve(listener, app).await.expect("serve");
 }

@@ -184,3 +184,78 @@ fn species_sparklines_are_keyed_to_the_local_day() {
          on the sparkline is not the station's today"
     );
 }
+
+/// "Detections in the last hour" must count the last hour of the station's
+/// clock.
+///
+/// `last_hour_count` compared the local `Date || Time` against
+/// `datetime('now', '-1 hour')`, which is UTC. West of UTC the count was always
+/// zero — so the dashboard read "0 in the last hour" through a dawn chorus and
+/// a `DetectionsPerHour` alert rule fired permanently; east of UTC it counted
+/// the last (1 + offset) hours. One row ten minutes old and one two and a half
+/// hours old: exactly one belongs.
+#[test]
+fn the_last_hour_is_the_stations_last_hour() {
+    if !in_skewed_timezone("the_last_hour_is_the_stations_last_hour") {
+        return;
+    }
+    let conn = rusqlite::Connection::open_in_memory().expect("open");
+    birdnet_db::migration::migrate(&conn).expect("migrate");
+    for minutes_ago in [10, 150] {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES (date('now','localtime', ?1), time('now','localtime', ?1),
+                     'Turdus merula', 'Eurasian Blackbird', 0.9)",
+            [format!("-{minutes_ago} minutes")],
+        )
+        .expect("insert");
+    }
+    assert_dates_really_differ(&conn);
+
+    assert_eq!(
+        birdnet_db::sqlite::last_hour_count(&conn).expect("count"),
+        1,
+        "the last-hour count is measured on a different clock from the rows"
+    );
+}
+
+/// A rolling "last N days" window starts N days before the station's today.
+///
+/// Nine queries — daily counts, the verdict and confidence trends, the three
+/// heat maps and the three co-occurrence queries — cut their window at
+/// `DATE('now', '-N days')`, a UTC date, against the local `Date` column. East
+/// of UTC the window reached a day too far back; west of UTC it dropped its
+/// oldest day. The row dated exactly N days ago is inside; the day before it
+/// is not.
+#[test]
+fn a_rolling_window_is_cut_on_the_stations_calendar() {
+    if !in_skewed_timezone("a_rolling_window_is_cut_on_the_stations_calendar") {
+        return;
+    }
+    let conn = rusqlite::Connection::open_in_memory().expect("open");
+    birdnet_db::migration::migrate(&conn).expect("migrate");
+    for days_ago in [3, 4] {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES (date('now','localtime', ?1), '12:00:00',
+                     'Turdus merula', 'Eurasian Blackbird', 0.9)",
+            [format!("-{days_ago} days")],
+        )
+        .expect("insert");
+    }
+    assert_dates_really_differ(&conn);
+
+    let inside: String = conn
+        .query_row("SELECT date('now','localtime','-3 days')", [], |r| r.get(0))
+        .expect("date");
+    let dates: Vec<String> = birdnet_db::sqlite::daily_counts(&conn, 3)
+        .expect("daily counts")
+        .into_iter()
+        .map(|d| d.date)
+        .collect();
+    assert_eq!(
+        dates,
+        vec![inside],
+        "the three-day window is cut on a different calendar from the rows"
+    );
+}

@@ -32,7 +32,7 @@ Two things are deliberately configured elsewhere:
 
 - **Confidence threshold** — the minimum score a detection must clear to be logged. Raise it to cut false positives; lower it to catch faint calls.
 - **Per-species thresholds** — override the global threshold for individual species (useful for a noisy local mimic, or to be stricter about a rare bird).
-- **Sensitivity (0.5–1.5)** — the BirdNET sensitivity parameter (also `SENSITIVITY` in `birdnet.conf` for BirdNET-Pi compatibility).
+- **Sensitivity (0.5–1.5)** — the BirdNET sensitivity parameter (also `SENSITIVITY` in `birdnet.conf`). Higher lets more borderline calls through. It only affects BirdNET V2.4 models; the bundled V3.0 model ignores it. The key has the same name as BirdNET-Pi's but not the same effect: BirdNET-Pi inverts it (at any confidence threshold above 0.5, a higher value means *fewer* detections there), so a value carried over from BirdNET-Pi does not reproduce that station's behaviour.
 - **Species-frequency filter** — uses your location and the week of the year to down-weight birds that shouldn't be present, with a configurable `SF_THRESH`.
 - **Quality pre-filter** — optionally drops segments dominated by rain, wind or other broadband noise before they reach the model.
 - **Analysis overlap (0–2.9 s)** — how far consecutive 3-second analysis windows overlap. Higher catches calls that straddle a window boundary, and costs CPU in proportion: `2.0` triples the inference work per recording.

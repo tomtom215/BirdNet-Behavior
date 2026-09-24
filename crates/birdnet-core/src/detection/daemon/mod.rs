@@ -595,6 +595,15 @@ pub struct DaemonConfig {
     /// unattended station being OOM-killed at three in the morning is a worse
     /// outcome than running with one model and saying so.
     pub extra_models: Vec<crate::inference::registry::ModelSpec>,
+    /// The primary classifier's id: recorded on its detections and named in
+    /// routes (`MODEL_ID`; `birdnet` when unset).
+    pub primary_id: String,
+    /// The primary's own confidence threshold (`MODEL_THRESHOLD`), or `None`
+    /// to use the station's.
+    pub primary_threshold: Option<f32>,
+    /// The primary's declared sample rate (`MODEL_SAMPLE_RATE`), or `None` to
+    /// derive it from the model's input shape.
+    pub primary_sample_rate: Option<u32>,
     /// Which classifiers judge which audio source, by source id.
     ///
     /// A source absent from this map is judged by the primary classifier —
@@ -637,6 +646,10 @@ pub struct DaemonConfig {
     pub shed: Option<ShedPolicy>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
+    /// How far a saved clip reaches beyond its detection, so the privacy
+    /// filter can check the whole of it for speech (`PIPE7`). The binary takes
+    /// it from `ExtractionConfig::clip_reach`.
+    pub privacy_clip_reach: crate::detection::privacy::ClipReach,
     /// Confidence at or above which a watched non-bird noise class suppresses
     /// its chunk (0.0 = disabled).
     pub noise_threshold: f32,
@@ -661,6 +674,77 @@ pub struct DaemonConfig {
     ///
     /// Species in this map use the specified threshold instead of the global one.
     pub species_thresholds: std::collections::HashMap<String, f64>,
+    /// The lowest confidence any species may be recorded at, kept current by
+    /// the detection processor. See [`ThresholdFloor`]. `None` runs every
+    /// classifier at its own threshold for the life of the daemon.
+    pub threshold_floor: Option<Arc<ThresholdFloor>>,
+}
+
+/// The lowest confidence any species may currently be recorded at.
+///
+/// # Why the inference loop needs to know
+///
+/// A classifier discards every score below its own threshold inside
+/// `predict_chunk`, before the processor that applies per-species thresholds
+/// ever sees it. The model ran at the global confidence, so an operator who
+/// followed the tuning guide and lowered one rare owl to 0.5 under a global
+/// 0.75 changed nothing: every 0.6 owl was dropped inside the model. The
+/// feature was on, configured, and inert.
+///
+/// The processor re-reads the per-species thresholds every 30 s and publishes
+/// the lowest one in force here; the inference loop runs each classifier at the
+/// lower of its own threshold and this floor before every file
+/// ([`apply_threshold_floor`]). Everything above the floor is still decided by
+/// the processor, per species, exactly as before — the floor only stops the
+/// model from deciding first.
+#[derive(Debug)]
+pub struct ThresholdFloor(std::sync::atomic::AtomicU32);
+
+impl ThresholdFloor {
+    /// A floor starting at `value`.
+    #[must_use]
+    pub const fn new(value: f32) -> Self {
+        Self(std::sync::atomic::AtomicU32::new(value.to_bits()))
+    }
+
+    /// The floor now.
+    #[must_use]
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+
+    /// Move the floor.
+    pub fn set(&self, value: f32) {
+        self.0.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// Run each classifier at the lower of its own threshold (`base[i]`, what it
+/// was loaded with) and the shared floor. A no-op without a floor.
+pub fn apply_threshold_floor(
+    registry: &mut crate::inference::registry::ClassifierRegistry,
+    base: &[f32],
+    floor: Option<&ThresholdFloor>,
+) {
+    let Some(floor) = floor else {
+        return;
+    };
+    let floor = floor.get();
+    for (idx, &own) in base.iter().enumerate() {
+        if let Some(registered) = registry.model_mut(idx) {
+            registered.model.set_confidence_threshold(own.min(floor));
+        }
+    }
+}
+
+/// Each classifier's own threshold, as loaded — the `base` for
+/// [`apply_threshold_floor`].
+#[must_use]
+pub fn loaded_thresholds(registry: &crate::inference::registry::ClassifierRegistry) -> Vec<f32> {
+    (0..registry.len())
+        .filter_map(|idx| registry.model(idx))
+        .map(|registered| registered.model.config().confidence_threshold)
+        .collect()
 }
 
 /// A detection event produced by the daemon.
@@ -678,6 +762,13 @@ pub struct DetectionEvent {
     /// operator can trace one audio file end-to-end with a single grep.
     /// Empty when the upstream call site did not set one (older API).
     pub correlation_id: String,
+    /// The source segment's in-flight claim, shared by every event from that
+    /// segment (`PIPE8a`). The processor reads the segment again to cut each
+    /// detection's clip, so the claim — which the stream directory's purge
+    /// honours — must outlive the analysis loop's hold on it and last until
+    /// the last of these events is dropped. `None` where nothing claims the
+    /// file (no lease table, or an event not made from a segment).
+    pub lease: Option<Arc<InFlightGuard>>,
 }
 
 /// Handle for controlling a running daemon.
@@ -779,6 +870,9 @@ mod tests {
             model_path: PathBuf::from("/opt/birdnet/model.onnx"),
             labels_path: PathBuf::from("/opt/birdnet/labels.txt"),
             extra_models: Vec::new(),
+            primary_id: "birdnet".to_owned(),
+            primary_threshold: None,
+            primary_sample_rate: None,
             model_routes: std::collections::HashMap::new(),
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
@@ -793,6 +887,7 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
             noise_remember_secs: 0.0,
@@ -800,6 +895,7 @@ mod tests {
             latitude: None,
             longitude: None,
             species_thresholds: std::collections::HashMap::new(),
+            threshold_floor: None,
         };
         assert_eq!(config.watch_dir, PathBuf::from("/tmp/StreamData"));
         assert!(!config.process_existing);
@@ -922,6 +1018,7 @@ mod tests {
             source_file: PathBuf::from("/tmp/x.wav"),
             latency_ms: 42,
             correlation_id: "e-12345-0001".to_owned(),
+            lease: None,
         };
         // Use the clone path even though we drop the original immediately —
         // the clippy::redundant_clone flag will fire, but pinning Clone is

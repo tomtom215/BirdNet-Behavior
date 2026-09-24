@@ -117,12 +117,13 @@ pub fn search_species(
     query: &str,
     limit: u32,
 ) -> Result<Vec<SpeciesCount>, DbError> {
-    let pattern = format!("%{query}%");
+    let pattern = super::detections::like_contains(query);
     let mut stmt = conn.prepare(&format!(
         "SELECT Com_Name, Sci_Name, SUM(detections) as count,
                 SUM(confidence_sum) / SUM(detections) as avg_conf
          FROM {}
-         WHERE Com_Name LIKE ?1 COLLATE NOCASE OR Sci_Name LIKE ?1 COLLATE NOCASE
+         WHERE Com_Name LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+            OR Sci_Name LIKE ?1 ESCAPE '\\' COLLATE NOCASE
          GROUP BY Com_Name, Sci_Name ORDER BY count DESC, Com_Name ASC LIMIT ?2",
         summary_source(conn)?
     ))?;
@@ -325,7 +326,7 @@ pub fn species_sparklines(
     let mut stmt = conn.prepare(
         "SELECT Com_Name, Date, COUNT(*) as count
          FROM detections_analytic
-         WHERE Date >= date('now', 'localtime', '-' || ?1 || ' days')
+         WHERE Date >= date('now', 'localtime', '-' || (?1 - 1) || ' days')
          GROUP BY Com_Name, Date
          ORDER BY Com_Name, Date",
     )?;

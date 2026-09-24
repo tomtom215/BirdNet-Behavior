@@ -7,13 +7,13 @@ use super::get_setting;
 
 #[allow(clippy::too_many_lines)]
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let apprise = get_setting(s, "apprise_url", "");
-    let apprise_cfg = get_setting(s, "apprise_config", "");
-    let notify_urls = get_setting(s, "notify_urls", "");
-    let bw = get_setting(s, "birdweather_token", "");
-    let nconf = get_setting(s, "notify_confidence", "0.80");
-    let ncool = get_setting(s, "notify_cooldown", "300");
-    let trigger = get_setting(s, "notify_trigger", "each");
+    let apprise = get_setting(s, "apprise_url");
+    let apprise_cfg = get_setting(s, "apprise_config");
+    let notify_urls = get_setting(s, "notify_urls");
+    let bw = get_setting(s, "birdweather_token");
+    let nconf = get_setting(s, "notify_confidence");
+    let ncool = get_setting(s, "notify_cooldown");
+    let trigger = get_setting(s, "notify_trigger");
     let t_each = if trigger == "each" { " selected" } else { "" };
     let t_new = if trigger == "new-species" {
         " selected"
@@ -25,17 +25,17 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     } else {
         ""
     };
-    let only = get_setting(s, "notify_species_only", "");
-    let nexcl = get_setting(s, "notify_species_exclude", "");
-    let title_tmpl = get_setting(s, "notify_title_template", "");
-    let body_tmpl = get_setting(s, "notify_body_template", "");
-    let weekly = get_setting(s, "weekly_report_schedule", "monday");
+    let only = get_setting(s, "notify_species_only");
+    let nexcl = get_setting(s, "notify_species_exclude");
+    let title_tmpl = get_setting(s, "notify_title_template");
+    let body_tmpl = get_setting(s, "notify_body_template");
+    let weekly = get_setting(s, "weekly_report_schedule");
     // Both were command-line only until 0.12.0, which put the two ways to find
     // out that a station has gone quiet out of reach of anyone not on a
     // terminal — the operators least likely to notice by other means.
-    let hb = get_setting(s, "heartbeat_url", "");
-    let deadman = get_setting(s, "deadman_hours", "24");
-    let weekly_opts = render_weekly_options(weekly);
+    let hb = get_setting(s, "heartbeat_url");
+    let deadman = get_setting(s, "deadman_hours");
+    let weekly_opts = render_weekly_options(&weekly);
     write!(out, r#"
   <section class="card" id="set-notifications" aria-labelledby="set-notifications-h">
     <h2 class="section-title" id="set-notifications-h">Notifications</h2>

@@ -34,7 +34,7 @@
         autocorrect="off"
         spellcheck="false"
         hx-get="/pages/cmdk"
-        hx-trigger="keyup changed delay:120ms, load"
+        hx-trigger="keyup changed delay:120ms, bnb:cmdk-open"
         hx-target="#bnb-cmdk-results"
         hx-swap="innerHTML"
         hx-include="this">
@@ -43,7 +43,7 @@
     </div>
 
     <ul id="bnb-cmdk-results" class="bnb-cmdk__results" role="listbox" aria-label="Results">
-      <!-- Filled by /pages/cmdk on load -->
+      <!-- Filled by /pages/cmdk when the palette opens -->
     </ul>
 
     <footer class="bnb-cmdk__foot mono">
@@ -97,8 +97,12 @@
     dlg.showModal();
     input.value = '';
     input.focus();
-    // Kick a default load so results aren't empty.
-    if (window.htmx) window.htmx.trigger(input, 'load');
+    // The default list, fetched now and fresh on every open. The input used to
+    // carry a `load` trigger, which fetched it on every page view whether or
+    // not anyone opened the palette, and this called
+    // `htmx.trigger(input, 'load')`, which fetches nothing: htmx fires `load`
+    // itself, once.
+    if (window.htmx) window.htmx.trigger(input, 'bnb:cmdk-open');
   }
   function close() { dlg.close(); }
 

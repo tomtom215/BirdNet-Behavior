@@ -106,8 +106,16 @@ internet-reachable, keep it set (and add TLS off-LAN).
   than an Argon2 hash per guess. Each refused attempt is in the audit log as
   `auth.login.throttled`; a successful sign-in clears the address, and a
   restart forgives everything. Behind a reverse proxy the address is the
-  visitor's only if the proxy is trusted (`--trusted-proxies`); otherwise every
+  visitor's only if the proxy is trusted (`BIRDNET_TRUSTED_PROXIES`; there is
+  no command-line flag for it); otherwise every
   visitor shares the proxy's bucket, which is the conservative failure.
+  An attempt counts from the moment it arrives, not when its password check
+  finishes, so twenty sent at once still get five checked. A trusted hop can
+  name any visitor it likes, so each hop other than this machine also has a
+  budget of its own — thirty failures a quarter-hour across every address it
+  names — and a LAN device that invents a new `X-Forwarded-For` per guess
+  runs out there. `CF-Connecting-IP` is believed only when `cloudflare` is in
+  `BIRDNET_TRUSTED_PROXIES`.
 
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. The password
   crosses the wire in clear text unless TLS is on — turn on `--tls-mode`, put a
@@ -116,6 +124,18 @@ internet-reachable, keep it set (and add TLS off-LAN).
   dashboard (delete a detection, relabel it, set a review verdict, approve or
   delete a quarantined record, save the onboarding wizard) — to anyone who can
   reach it. Reading stays open either way.
+
+  "Anyone who can reach it" means *by a local name*. With no password, the
+  admin panel answers only when the station is addressed by an IP address,
+  `localhost`, a one-word name (`birdnet`), or a name ending in `.local`,
+  `.lan`, `.home`, `.home.arpa`, `.internal` or `.localdomain`. Any other
+  name gets a page asking for a password to be set first. That closes **DNS
+  rebinding**: without it, a website anyone in the house visits could point
+  its own name at the Pi and operate the open panel through their browser,
+  because the browser's `Origin` and `Host` would agree. If you reach an open
+  station through your own domain and want that to keep working, list the
+  name in `BIRDNET_ALLOWED_HOSTS` — or, better, set a password, which makes
+  the check moot.
 - **Reverse-proxy auth** (recommended for internet exposure): terminate TLS and
   require a password at the proxy (Caddy `basic_auth`, nginx `auth_basic`), so
   credentials never cross the wire in clear text.
@@ -160,10 +180,11 @@ accounts (the `/station/access` tab) can see everything a signed-in admin
 can, and change nothing, so a private station can still be shared with the
 household.
 
-**Private mode needs a password.** A private station with no `CADDY_PWD`
-answers `503` to everything but the sign-in and the health probe — it does
-*not* fall back to the open station, because that is the one thing it was
-asked not to be. The startup log says so at `ERROR`, the page says so, and
+**Private mode needs a password.** A private station with no admin password
+(neither `CADDY_PWD` nor one set in the setup wizard or on the accounts page)
+answers `503` to everything but the sign-in and the health probe — the admin
+panel included — and does *not* fall back to the open station, because that
+is the one thing it was asked not to be. The startup log says so at `ERROR`, the page says so, and
 `--doctor` reports it under **Private mode**. An unknown name in
 `BIRDNET_PUBLIC_ACCESS` is reported and skipped (the station starts, with
 that surface closed); `--doctor` reports it too.
@@ -197,8 +218,9 @@ The station listens to a live microphone, so audio handling is privacy-relevant.
 - **Human-voice filter.** Set `BIRDNET_PRIVACY_THRESHOLD` (0.0–1.0; `0.02` is a
   usual start, and lower suppresses more) to suppress analysis windows in which
   the model's confidence for a human class reaches the value, and their
-  neighbours. `0.0` disables it. It binds independently of the detection
-  threshold.
+  neighbours, and any detection whose saved clip would reach such a window.
+  While it is on, clips are not extended into neighbouring segments. `0.0`
+  disables it. It binds independently of the detection threshold.
 - **Recording retention.** Extracted detection clips accumulate on disk; cap
   them with `BIRDNET_MAX_FILES_PER_SPECIES` and rely on the disk manager's
   purge threshold. Audio you never want persisted should be filtered at the
@@ -234,6 +256,11 @@ whose file has errors runs on that copy and reports `config_reverted` on
 web-only on the file as it is and reports `config_rejected`, so the diagnostics
 are reachable and show the errors.
 
+A revert never loosens access. If the file on disk turns private mode on or
+sets `CADDY_PWD`, the station keeps those even while running on the older
+copy, and when both files are private it opens only the `PUBLIC_ACCESS`
+carve-outs both of them name. A typo in the same edit cannot undo a lock-down.
+
 Change the file the safe way, which validates before anything is installed:
 
 ```bash
@@ -243,9 +270,12 @@ birdnet-behavior --doctor                                # the same checks, on d
 birdnet-behavior --doctor-json                           # exit code: 0 ok, 1 warn, 2 error
 ```
 
-The systemd unit still runs `--doctor` as an `ExecStartPre` gate for the
-journal's sake; a configuration error is reported there as a warning naming
-what the start will do, so the gate lets it happen.
+The systemd unit runs the doctor as an `ExecStartPre` gate
+(`--doctor-gate`) for the journal's sake. It blocks the start only for a
+failure the station cannot run past — an unreadable configuration file, an
+invalid listen address, an unwritable database directory, an unusable HTTPS
+setup. Every other failure, a configuration error included, is reported there
+and the start goes ahead; `/admin/doctor` shows the same report.
 
 ---
 

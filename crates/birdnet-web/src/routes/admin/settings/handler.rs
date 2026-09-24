@@ -24,9 +24,14 @@ use crate::state::AppState;
 /// # Errors
 ///
 /// Returns `StatusCode` on internal rendering failures.
-pub async fn settings_page(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
-    let settings_map = load_all_settings(&state);
-    Ok(Html(render_settings_page(&settings_map)))
+pub async fn settings_page(
+    State(state): State<AppState>,
+    user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
+) -> Result<Html<String>, StatusCode> {
+    Ok(Html(match load_settings_for(&state, user.as_deref()) {
+        Ok(settings_map) => render_settings_page(&settings_map),
+        Err(e) => crate::routes::admin::admin_shell("Settings", "settings", &unreadable_notice(&e)),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -38,9 +43,14 @@ pub async fn settings_page(State(state): State<AppState>) -> Result<Html<String>
 /// # Errors
 ///
 /// Returns `StatusCode` on internal rendering failures.
-pub async fn settings_partial(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
-    let settings_map = load_all_settings(&state);
-    Ok(Html(render_settings_form(&settings_map)))
+pub async fn settings_partial(
+    State(state): State<AppState>,
+    user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
+) -> Result<Html<String>, StatusCode> {
+    Ok(Html(match load_settings_for(&state, user.as_deref()) {
+        Ok(settings_map) => render_settings_form(&settings_map),
+        Err(e) => unreadable_notice(&e),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -164,8 +174,25 @@ pub async fn save_settings(
     // page's render-time defaults (e.g. `night_inhibit=false` when no row
     // exists) would silently overlay over the file config / env every
     // time *any* unrelated setting is saved.
-    let existing = load_all_settings(&state);
-    let items = build_settings_items(&form, &existing);
+    // Refuse outright when the current values cannot be read: the diff below
+    // would count every submitted field as changed and write all of them,
+    // render-time defaults included, over the operator's real configuration.
+    let existing = match load_all_settings(&state) {
+        Ok(existing) => existing,
+        Err(e) => {
+            let body = Html(format!(
+                r#"<div class="alert alert-error" id="settings-feedback" hx-swap-oob="true" role="alert">{}</div>"#,
+                crate::routes::pages::escape_html(&format!(
+                    "Nothing was saved: the station's current settings could not be read ({e})."
+                ))
+            ));
+            return Ok(toast::with(
+                body,
+                Toast::error("Nothing was saved: the current settings could not be read."),
+            ));
+        }
+    };
+    let items = build_settings_items(&form, &existing, Unset::AsShownByTheForm);
 
     // Reject before writing, and reject the whole submission: a partial save
     // would leave the form showing one thing and the station running another.
@@ -370,13 +397,80 @@ pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, Stri
 // Private helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
+/// Every credential in `raw` masked, by the project's one redaction rule:
+/// [`is_secret_key`](birdnet_core::config::redact::is_secret_key) by name, then
+/// [`redact_value`](birdnet_core::config::redact::redact_value) by value shape
+/// (an Apprise URL, a heartbeat URL, an RTSP password). The settings API and
+/// the forms a viewer sees both use this, so the two cannot disagree about
+/// which values are secret.
+#[must_use]
+pub(crate) fn mask_credentials(raw: &HashMap<String, String>) -> HashMap<String, String> {
+    use birdnet_core::config::redact::{REDACTED, is_secret_key, redact_value};
+    raw.iter()
+        .map(|(k, v)| {
+            let shown = if is_secret_key(k) {
+                REDACTED.to_owned()
+            } else {
+                redact_value(v)
+            };
+            (k.clone(), shown)
+        })
+        .collect()
+}
+
+/// The settings as `user` may see them in a form.
+///
+/// An admin sees every stored value — they are the one who types them in. A
+/// viewer is read-only on `/admin`, and "read-only" had meant "can read the
+/// SMTP password, the BirdWeather token and every notification URL in
+/// plaintext": the settings API has always masked them, the forms did not.
+///
+/// `None` — no identity on the request, which the admin gate never lets
+/// happen — is treated as a viewer: the safe default for a form that would
+/// otherwise print credentials.
+///
+/// # Errors
+///
+/// The settings could not be read; see [`load_all_settings`].
+pub(crate) fn load_settings_for(
+    state: &AppState,
+    user: Option<&crate::auth_middleware::RequestUser>,
+) -> Result<HashMap<String, String>, String> {
+    let raw = load_all_settings(state)?;
+    Ok(
+        if user.is_some_and(crate::auth_middleware::RequestUser::is_admin) {
+            raw
+        } else {
+            mask_credentials(&raw)
+        },
+    )
+}
+
+/// Every stored setting, by key.
+///
+/// # Errors
+///
+/// The read failed. It used to default to an empty map, and every caller
+/// then went on as if the station had no settings: the form rendered its
+/// defaults as the configuration, the save counted every field as changed
+/// and wrote all of them, and the API reported `{}`.
+pub(crate) fn load_all_settings(state: &AppState) -> Result<HashMap<String, String>, String> {
     state.with_db(|conn| {
         ensure_settings_table(conn).ok();
         list(conn, None)
             .map(|rows| rows.into_iter().map(|s| (s.key, s.value)).collect())
-            .unwrap_or_default()
+            .map_err(|e| e.to_string())
     })
+}
+
+/// What a settings form says in place of itself when the settings could not
+/// be read. The form is withheld, not rendered from defaults: saving a form of
+/// defaults would write them over the real configuration.
+pub(crate) fn unreadable_notice(detail: &str) -> String {
+    format!(
+        r#"<div class="alert alert-error" role="alert"><p><b>The station's settings could not be read</b>, so the form is not shown — saving it would write defaults over them. Nothing has changed. <a href="/admin/doctor">The doctor</a> can say what is wrong with the database.</p><p class="bnb-meta mono">{}</p></div>"#,
+        crate::routes::pages::escape_html(detail)
+    )
 }
 
 /// Whether a field carries a number whose decimal separator the
@@ -414,10 +508,34 @@ fn is_numeric_field(key: &str) -> bool {
     )
 }
 
-/// Look up `key` in the existing DB snapshot, treating `None` and `""`
-/// as the same thing — both mean "the operator hasn't set this".
-fn existing_or_empty<'a>(map: &'a std::collections::HashMap<String, String>, key: &str) -> &'a str {
-    map.get(key).map_or("", String::as_str)
+/// What a submitted value is compared with when the settings table has no row
+/// for its key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unset {
+    /// The settings page: a key with no row was shown at its form default, so
+    /// submitting that default back is not a change.
+    AsShownByTheForm,
+    /// The API: the client saw no form, so any non-empty value it sends for a
+    /// key with no row is a change.
+    AsEmpty,
+}
+
+/// Whether `value` is what the operator already had for `key`: the stored
+/// row when there is one (an empty row included — the form shows it empty),
+/// otherwise nothing, or the form default when `unset` says the form showed it.
+fn unchanged(
+    existing: &std::collections::HashMap<String, String>,
+    key: &str,
+    value: &str,
+    unset: Unset,
+) -> bool {
+    existing.get(key).map_or_else(
+        || {
+            value.is_empty()
+                || (unset == Unset::AsShownByTheForm && value == super::render::form_default(key))
+        },
+        |stored| value == stored,
+    )
 }
 
 /// Convert the flat form into a list of `(key, value, category)` triples
@@ -436,6 +554,7 @@ fn existing_or_empty<'a>(map: &'a std::collections::HashMap<String, String>, key
 pub(crate) fn build_settings_items(
     form: &SettingsForm,
     existing: &std::collections::HashMap<String, String>,
+    unset: Unset,
 ) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut items: Vec<(&'static str, String, SettingsCategory)> = Vec::new();
 
@@ -447,7 +566,7 @@ pub(crate) fn build_settings_items(
                 } else {
                     raw.clone()
                 };
-                if value != existing_or_empty(existing, $key) {
+                if !unchanged(existing, $key, &value, unset) {
                     items.push(($key, value, $cat));
                 }
             }
@@ -829,7 +948,7 @@ mod tests {
             latitude: Some("42,3601".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let lat = items
             .iter()
             .find(|(k, _, _)| *k == "latitude")
@@ -843,7 +962,7 @@ mod tests {
             longitude: Some("-71,0589".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let lon = items.iter().find(|(k, _, _)| *k == "longitude").unwrap();
         assert_eq!(lon.1, "-71.0589");
     }
@@ -854,7 +973,7 @@ mod tests {
             confidence_threshold: Some("0,75".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let conf = items
             .iter()
             .find(|(k, _, _)| *k == "confidence_threshold")
@@ -872,7 +991,7 @@ mod tests {
             latitude: Some("42.3601".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         assert!(
             !items.iter().any(|(k, _, _)| *k == "latitude"),
             "unchanged latitude should not be re-persisted"
@@ -890,7 +1009,7 @@ mod tests {
             latitude: Some("42,3601".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         assert!(!items.iter().any(|(k, _, _)| *k == "latitude"));
     }
 
@@ -906,17 +1025,13 @@ mod tests {
             night_inhibit: Some("false".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         assert!(!items.iter().any(|(k, _, _)| *k == "latitude"));
         assert!(!items.iter().any(|(k, _, _)| *k == "confidence_threshold"));
-        // night_inhibit defaults to "false" in the form render — and
-        // since there's no existing row, the empty-existing "" doesn't
-        // match form "false", so it WOULD pass through. That's a render
-        // problem, not a save problem; addressed by the form template
-        // change that prefixes the option with the saved value vs. the
-        // hard-coded default.
-        // The bug fix is the *general* mechanism: any field whose value
-        // hasn't changed is not re-written. Confirmed.
+        // Under `Unset::AsEmpty` (the API's baseline) `night_inhibit=false`
+        // with no row still counts as a change. The settings page uses
+        // `Unset::AsShownByTheForm`, where it does not — pinned end to end by
+        // tests/saving_the_settings_form_unchanged_writes_nothing.rs.
     }
 
     #[test]
@@ -927,7 +1042,7 @@ mod tests {
             latitude: Some("51.5074".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         let lat = items.iter().find(|(k, _, _)| *k == "latitude").unwrap();
         assert_eq!(lat.1, "51.5074");
     }
@@ -941,7 +1056,7 @@ mod tests {
             latitude: Some(String::new()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &existing);
+        let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         let lat = items
             .iter()
             .find(|(k, _, _)| *k == "latitude")
@@ -967,7 +1082,7 @@ mod tests {
             serde_json::from_value(serde_json::to_value(&submitted).expect("payload serialises"))
                 .expect("a payload of every declared key deserialises into the form");
 
-        let emitted: BTreeSet<&str> = build_settings_items(&form, &HashMap::new())
+        let emitted: BTreeSet<&str> = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty)
             .into_iter()
             .map(|(k, _, _)| k)
             .collect();
@@ -987,7 +1102,7 @@ mod tests {
             station_name: Some("Backyard, Boston".to_string()),
             ..empty_form()
         };
-        let items = build_settings_items(&form, &HashMap::new());
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
         let name = items.iter().find(|(k, _, _)| *k == "station_name").unwrap();
         assert_eq!(name.1, "Backyard, Boston");
     }

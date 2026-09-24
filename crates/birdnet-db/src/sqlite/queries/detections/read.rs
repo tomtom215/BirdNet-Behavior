@@ -8,7 +8,7 @@ use crate::sqlite::types::{
     ConcurrentDetection, DETECTION_COLS, DayCount, DetectionRow, SourceActivity, map_detection_row,
 };
 
-use super::search::{SearchTerm, parse_search_term};
+use super::search::{SearchTerm, like_contains, parse_search_term};
 
 /// SQL predicate for "this detection has audio you can actually play".
 ///
@@ -133,6 +133,26 @@ pub fn detection_count_for_species_date(
     .map_err(DbError::Sqlite)
 }
 
+/// Detections of one species with `Date` in `[from, to]` (inclusive).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_detection_count_between(
+    conn: &Connection,
+    sci_name: &str,
+    from: &str,
+    to: &str,
+) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections_analytic \
+         WHERE Sci_Name = ?1 AND Date >= ?2 AND Date <= ?3",
+        params![sci_name, from, to],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
 /// Query detections for a specific date, ordered by time descending.
 ///
 /// # Errors
@@ -143,6 +163,29 @@ pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<Detection
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![date], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// [`detections_by_date`], one page at a time: `limit` rows after the first
+/// `offset`, in the same order.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_by_date_page(
+    conn: &Connection,
+    date: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections WHERE Date = ?1 \
+         ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![date, limit, offset], map_detection_row)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -452,6 +495,29 @@ pub fn detections_by_species(
     Ok(rows)
 }
 
+/// [`detections_by_species`], one page at a time: `limit` rows after the
+/// first `offset`, in the same order.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_by_species_page(
+    conn: &Connection,
+    com_name: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections \
+         WHERE Com_Name = ?1 ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![com_name, limit, offset], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Category filter for the Today page's segmented control.
 ///
 /// The definitions reuse the vocabulary the UI already ships: "first today"
@@ -695,24 +761,24 @@ pub fn recent_clips(
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
+                let pattern = like_contains(&rest);
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND Com_Name NOT LIKE ?1{extra} \
+                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
                     vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
                 )
             }
             Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
+                let pattern = like_contains(&term);
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra} \
+                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'){extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
                     vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
@@ -753,23 +819,23 @@ pub fn recent_clips_count(
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
-                let pattern = format!("%{rest}%");
+                let pattern = like_contains(&rest);
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND Com_Name NOT LIKE ?1{extra}"
+                         AND Com_Name NOT LIKE ?1 ESCAPE '\\'{extra}"
                     ),
                     vec![Box::new(pattern)],
                 )
             }
             Some(SearchTerm::Include(term)) => {
-                let pattern = format!("%{term}%");
+                let pattern = like_contains(&term);
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
                          WHERE {CLIP_AVAILABLE} \
-                         AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra}"
+                         AND (Com_Name LIKE ?1 ESCAPE '\\' OR Sci_Name LIKE ?1 ESCAPE '\\'){extra}"
                     ),
                     vec![Box::new(pattern)],
                 )
@@ -2078,5 +2144,147 @@ mod tests {
             None,
             "no detection was recorded at 06:44"
         );
+    }
+
+    /// The `/api/v2` pagers and the species window count had coverage only
+    /// from `birdnet-web`, which the mutation gate does not run: replacing
+    /// any of these bodies with a constant left every `birdnet-db` unit test
+    /// green. These pin what each returns, with rows the tests choose.
+    mod pagers_and_window_count {
+        use super::super::*;
+        use crate::sqlite::queries::detections::test_support::{insert_test_detection, test_conn};
+
+        fn when(rows: &[DetectionRow]) -> Vec<(String, String)> {
+            rows.iter()
+                .map(|r| (r.date.clone(), r.time.clone()))
+                .collect()
+        }
+
+        fn pair(date: &str, time: &str) -> (String, String) {
+            (date.to_owned(), time.to_owned())
+        }
+
+        #[test]
+        fn species_count_between_is_inclusive_and_skips_rejected() {
+            let conn = test_conn();
+            for (date, time) in [
+                ("2026-03-01", "06:00:00"), // the lower bound itself
+                ("2026-03-04", "06:00:00"),
+                ("2026-03-07", "06:00:00"), // the upper bound itself
+                ("2026-02-28", "06:00:00"), // the day before
+                ("2026-03-08", "06:00:00"), // the day after
+                ("2026-03-05", "07:00:00"), // rejected below
+            ] {
+                insert_test_detection(&conn, date, time, "Robin", "Erithacus rubecula", 0.9);
+            }
+            insert_test_detection(
+                &conn,
+                "2026-03-04",
+                "08:00:00",
+                "Wren",
+                "Troglodytes troglodytes",
+                0.9,
+            );
+            let rejected = conn
+                .execute(
+                    "UPDATE detections SET review_verdict = 'rejected' WHERE Date = '2026-03-05'",
+                    [],
+                )
+                .unwrap();
+            assert_eq!(rejected, 1, "the fixture rejects one Robin detection");
+
+            assert_eq!(
+                species_detection_count_between(
+                    &conn,
+                    "Erithacus rubecula",
+                    "2026-03-01",
+                    "2026-03-07"
+                )
+                .unwrap(),
+                3
+            );
+            assert_eq!(
+                species_detection_count_between(
+                    &conn,
+                    "Erithacus rubecula",
+                    "2026-03-09",
+                    "2026-03-31"
+                )
+                .unwrap(),
+                0
+            );
+        }
+
+        #[test]
+        fn date_page_keeps_the_date_order_and_splits_it() {
+            let conn = test_conn();
+            for time in ["06:30:00", "07:00:00", "06:45:00"] {
+                insert_test_detection(
+                    &conn,
+                    "2026-03-11",
+                    time,
+                    "Robin",
+                    "Erithacus rubecula",
+                    0.9,
+                );
+            }
+            insert_test_detection(
+                &conn,
+                "2026-03-10",
+                "23:00:00",
+                "Robin",
+                "Erithacus rubecula",
+                0.9,
+            );
+
+            assert_eq!(
+                when(&detections_by_date_page(&conn, "2026-03-11", 2, 0).unwrap()),
+                vec![
+                    pair("2026-03-11", "07:00:00"),
+                    pair("2026-03-11", "06:45:00")
+                ]
+            );
+            assert_eq!(
+                when(&detections_by_date_page(&conn, "2026-03-11", 2, 2).unwrap()),
+                vec![pair("2026-03-11", "06:30:00")]
+            );
+            assert_eq!(
+                when(&detections_by_date_page(&conn, "2026-03-11", 10, 0).unwrap()),
+                when(&detections_by_date(&conn, "2026-03-11").unwrap()),
+                "one page that holds everything is the unpaged listing"
+            );
+        }
+
+        #[test]
+        fn species_page_orders_across_dates_and_splits_it() {
+            let conn = test_conn();
+            for (date, time) in [
+                ("2026-03-10", "08:00:00"),
+                ("2026-03-11", "06:00:00"),
+                ("2026-03-11", "09:00:00"),
+            ] {
+                insert_test_detection(&conn, date, time, "Robin", "Erithacus rubecula", 0.9);
+            }
+            insert_test_detection(
+                &conn,
+                "2026-03-12",
+                "10:00:00",
+                "Wren",
+                "Troglodytes troglodytes",
+                0.9,
+            );
+
+            assert_eq!(
+                when(&detections_by_species_page(&conn, "Robin", 2, 0).unwrap()),
+                vec![
+                    pair("2026-03-11", "09:00:00"),
+                    pair("2026-03-11", "06:00:00")
+                ]
+            );
+            assert_eq!(
+                when(&detections_by_species_page(&conn, "Robin", 2, 2).unwrap()),
+                vec![pair("2026-03-10", "08:00:00")]
+            );
+        }
     }
 }

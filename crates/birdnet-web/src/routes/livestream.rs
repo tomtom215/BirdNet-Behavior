@@ -65,6 +65,45 @@ const MAX_CONCURRENT_STREAMS: usize = 4;
 static STREAM_SLOTS: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_STREAMS)));
 
+/// How long a listener may stop reading before its stream is closed.
+///
+/// A client that stops reading — a suspended tab, a stalled connection, or one
+/// held open on purpose — fills the channel and then the socket buffers, and
+/// `send` waits. Without a limit it waited forever, holding the stream slot and
+/// an `ffmpeg` for as long as the connection stayed up, so four such clients
+/// took live audio away from everyone.
+const STALL_LIMIT: Duration = Duration::from_secs(30);
+
+/// Forward encoded chunks to the response until either side ends, and return
+/// how many bytes were delivered.
+async fn forward<S>(
+    mut chunks: S,
+    tx: &tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>,
+    stall: Duration,
+) -> u64
+where
+    S: tokio_stream::Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+{
+    let mut delivered = 0_u64;
+    while let Some(chunk) = chunks.next().await {
+        if let Ok(ref bytes) = chunk {
+            delivered += bytes.len() as u64;
+        }
+        match tokio::time::timeout(stall, tx.send(chunk.map_err(std::io::Error::other))).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => break, // client disconnected
+            Err(_) => {
+                tracing::info!(
+                    stall_secs = stall.as_secs(),
+                    "live audio listener stopped reading; closing its stream"
+                );
+                break;
+            }
+        }
+    }
+    delivered
+}
+
 /// Query parameters for the live audio stream.
 #[derive(Debug, Deserialize)]
 pub struct StreamParams {
@@ -414,16 +453,7 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     tokio::spawn(async move {
         let _permit = stream_permit;
         let _child = child;
-        let mut reader = ReaderStream::new(stdout);
-        let mut delivered = 0_u64;
-        while let Some(chunk) = reader.next().await {
-            if let Ok(ref bytes) = chunk {
-                delivered += bytes.len() as u64;
-            }
-            if tx.send(chunk.map_err(std::io::Error::other)).await.is_err() {
-                break; // client disconnected
-            }
-        }
+        let delivered = forward(ReaderStream::new(stdout), &tx, STALL_LIMIT).await;
         // The status line went out with the headers, long before ffmpeg could
         // fail, so a dead encoder reaches the browser as a successful but empty
         // stream — silence that looks exactly like a broken button. This cannot
@@ -1189,6 +1219,24 @@ mod tests {
     /// When the sink goes away — ffmpeg killed because the client disconnected
     /// — the pump must unwind rather than spin forever holding a blocking-pool
     /// thread and a stream permit.
+    /// A listener that stops reading must not hold its slot and its `ffmpeg`
+    /// forever. The receiver here is kept alive and never read; the source
+    /// never ends. The stall limit is shortened so the test runs in real time.
+    #[tokio::test]
+    async fn a_listener_that_stops_reading_is_let_go() {
+        let endless = tokio_stream::iter(std::iter::repeat_with(|| Ok(Bytes::from_static(b"mp3"))));
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            forward(endless, &tx, Duration::from_millis(200)),
+        )
+        .await;
+        assert!(
+            outcome.is_ok(),
+            "the stream kept its slot for a listener that stopped reading"
+        );
+    }
+
     #[tokio::test]
     async fn the_pump_stops_when_its_sink_closes() {
         use birdnet_core::audio::capture::{LiveTap, PcmSpec};

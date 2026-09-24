@@ -100,12 +100,14 @@ impl DiskCache {
 
     /// Write raw image bytes to disk and update the index.
     ///
-    /// If the cache is at capacity (`max_entries`), the write succeeds but the
-    /// entry is not added to the in-memory index and a warning is logged.
+    /// A cache at capacity (`max_entries`) refuses a new entry and writes
+    /// nothing. It used to write the file and leave it out of the index, which
+    /// bounded the index and not the disk — the disk the recordings live on.
     ///
     /// # Errors
     ///
-    /// Returns `ImageError::Io` on write failure.
+    /// Returns `ImageError::Io` on write failure, and `ImageError::CacheDir`
+    /// when the cache is full.
     #[allow(clippy::significant_drop_tightening)]
     pub fn store(&self, cache_key: &str, bytes: &[u8]) -> Result<PathBuf, ImageError> {
         let path = self.path_for(cache_key);
@@ -120,12 +122,12 @@ impl DiskCache {
                 tracing::debug!(
                     max = self.max_entries,
                     key = cache_key,
-                    "image cache at capacity, skipping store"
+                    "image cache at capacity, not storing"
                 );
-                // Still write the file (so it's on disk for future startups) but
-                // don't grow the in-memory index further.
-                std::fs::write(&path, bytes)?;
-                return Ok(path);
+                return Err(ImageError::CacheDir(format!(
+                    "image cache is full ({} entries)",
+                    self.max_entries
+                )));
             }
         }
 
@@ -290,6 +292,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let cache = DiskCache::new(&dir, 300).unwrap();
         assert!(!cache.contains("turdus_merula"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A full cache writes nothing. It used to write the file anyway and
+    /// leave it out of the index, so capacity bounded the index and nothing
+    /// bounded the disk.
+    #[test]
+    fn a_full_cache_writes_nothing_to_disk() {
+        let dir = std::env::temp_dir().join("birdnet_diskcache_full");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut cache = DiskCache::new(&dir, 300).unwrap();
+        cache.max_entries = 1;
+        cache.store("turdus_merula", b"fake-jpeg").unwrap();
+        assert!(cache.store("erithacus_rubecula", b"fake-jpeg").is_err());
+        assert!(
+            !cache.path_for("erithacus_rubecula").exists(),
+            "no file past capacity"
+        );
+        // Replacing an entry already held is not growth.
+        cache.store("turdus_merula", b"fake-jpeg-2").unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

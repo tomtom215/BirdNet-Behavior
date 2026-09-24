@@ -157,11 +157,20 @@ async fn page() -> axum::response::Redirect {
 /// tab (`crate::routes::pages::homes::station_tabs`). First paint resolves each
 /// pill through the same metrics-driven path the per-row `/probe` poll uses, so
 /// the initial status matches the 8 s self-poll.
-pub(crate) fn sources_body(state: &AppState) -> String {
-    let sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
+///
+/// `show_credentials` is `false` for a viewer: an RTSP address carries its
+/// camera's password, so a read-only account sees it with the password masked
+/// (`redact_value`), exactly as the settings API shows it.
+pub(crate) fn sources_body(state: &AppState, show_credentials: bool) -> String {
+    let mut sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
         tracing::error!(error = %err, "audio_sources list failed");
         Vec::new()
     });
+    if !show_credentials {
+        for s in &mut sources {
+            s.device_id = birdnet_core::config::redact::redact_value(&s.device_id);
+        }
+    }
     let listen_default = listen_default_id(state);
     render_body(&sources, |row| daemon_status(row, state), &listen_default)
 }

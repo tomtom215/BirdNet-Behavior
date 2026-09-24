@@ -91,10 +91,26 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/ws/spectrogram", get(ws_handler))
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+    State(state): State<AppState>,
+) -> axum::response::Response {
+    let permit = match state
+        .live_sockets()
+        .admit(crate::live_sockets::Kind::Spectrogram, &headers)
+    {
+        Ok(permit) => permit,
+        Err(refused) => return refused,
+    };
     let broadcast = state.spectrogram_broadcast();
     let shutdown = state.subscribe_shutdown();
-    ws.on_upgrade(move |socket| handle_ws_connection(socket, broadcast, shutdown))
+    ws.on_upgrade(move |socket| async move {
+        // Held until the connection ends, then the slot is free again.
+        let _permit = permit;
+        handle_ws_connection(socket, broadcast, shutdown).await;
+    })
+    .into_response()
 }
 
 async fn handle_ws_connection(

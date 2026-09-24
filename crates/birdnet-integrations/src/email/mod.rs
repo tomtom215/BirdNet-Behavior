@@ -81,7 +81,11 @@ impl EmailNotifier {
             return Ok(false);
         }
 
-        if self.is_in_cooldown(&detection.common_name) {
+        // Claimed before the send, not recorded after it: checked first and
+        // recorded after, every detection of the bird that arrived while the
+        // first email was in flight sent one too. A send that fails hands the
+        // claim back, so the next detection may try again.
+        if !self.claim(&detection.common_name) {
             debug!(
                 species = %detection.common_name,
                 "email suppressed: cooldown active"
@@ -89,11 +93,37 @@ impl EmailNotifier {
             return Ok(false);
         }
 
-        smtp::send_detection_email(&self.config, detection).await?;
-        self.record_sent(&detection.common_name);
+        if let Err(e) = smtp::send_detection_email(&self.config, detection).await {
+            self.reset_cooldown(&detection.common_name);
+            return Err(e);
+        }
         Ok(true)
     }
 
+    /// Take `species`' cooldown if it is free: `true` if the caller may send.
+    /// One lock, so two detections cannot both see it free.
+    fn claim(&self, species: &str) -> bool {
+        let cooldown = Duration::from_secs(self.config.cooldown_secs);
+        let mut map = self
+            .last_sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !cooldown.is_zero()
+            && map
+                .get(species)
+                .is_some_and(|last| last.elapsed() < cooldown)
+        {
+            return false;
+        }
+        // Prune entries whose cooldown has long expired (2x cooldown = guaranteed stale).
+        if map.len() > 100 {
+            map.retain(|_, instant| instant.elapsed() < cooldown * 2);
+        }
+        map.insert(species.to_owned(), Instant::now());
+        true
+    }
+
+    #[cfg(test)]
     /// Check whether a species is currently in the cooldown window.
     fn is_in_cooldown(&self, species: &str) -> bool {
         let cooldown = Duration::from_secs(self.config.cooldown_secs);
@@ -108,6 +138,7 @@ impl EmailNotifier {
             .is_some_and(|last| last.elapsed() < cooldown)
     }
 
+    #[cfg(test)]
     /// Record that an email was sent for `species` right now.
     ///
     /// Also prunes stale cooldown entries (older than 2x the cooldown period)

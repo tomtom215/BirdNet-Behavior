@@ -35,9 +35,33 @@ pub(super) fn check_environment_variables() -> Vec<Check> {
 }
 
 /// What a Raspberry Pi's firmware says about its power, now and since boot
-/// (NP-5). Not a Pi, or no `vcgencmd`: nothing to say.
+/// (NP-5). Not a Pi (no `vcgencmd`): nothing to say. `vcgencmd` present but
+/// unable to answer (CLI20): a warning, because the web health condition and
+/// the metric read it the same way and are silent too.
 pub(super) fn check_power() -> Vec<Check> {
-    birdnet_web::system_info::pi_throttled().map_or_else(Vec::new, |t| vec![power_check(t)])
+    power_checks(
+        birdnet_web::system_info::pi_throttled(),
+        tool_exists("vcgencmd"),
+    )
+}
+
+/// The power checks for a reading, split from `vcgencmd` so they can be tested.
+fn power_checks(
+    reading: Option<birdnet_web::system_info::PiThrottle>,
+    vcgencmd_installed: bool,
+) -> Vec<Check> {
+    match reading {
+        Some(t) => vec![power_check(t)],
+        None if vcgencmd_installed => vec![Check::warn(
+            "Power supply",
+            "vcgencmd is installed but could not read the power state, so under-voltage \
+             goes unreported here, on the health page and in the metrics",
+            "run `vcgencmd get_throttled` as the service user: it needs the `video` group \
+             and /dev/vcio. Under the systemd unit, DevicePolicy=closed may also hide \
+             /dev/vcio (not verified on a Pi)",
+        )],
+        None => Vec::new(),
+    }
 }
 
 /// The verdict for a mask, separated from `vcgencmd` so it can be tested.
@@ -104,7 +128,7 @@ fn check_temp_directory() -> Check {
 pub(super) fn check_optional_tools(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     let mut out = Vec::new();
 
-    let fmt = cli.audio_format.to_ascii_lowercase();
+    let fmt = crate::daemon::clip_format(cli, config).to_ascii_lowercase();
     if fmt != "wav" {
         let has_ff = tool_exists("ffmpeg");
         let has_sox = tool_exists("sox");
@@ -353,5 +377,28 @@ mod tests {
             Status::Warn
         );
         assert_eq!(power_check(PiThrottle { bits: 0 }).status, Status::Pass);
+    }
+
+    /// CLI20: `vcgencmd` installed but unable to answer is a Pi whose power
+    /// nobody is watching, not a machine that is not a Pi.
+    #[test]
+    fn an_unreadable_power_state_on_a_pi_is_a_warning() {
+        use crate::doctor::Status;
+        use birdnet_web::system_info::PiThrottle;
+        let checks = power_checks(None, true);
+        assert_eq!(checks.len(), 1, "{checks:?}");
+        assert_eq!(checks[0].name, "Power supply");
+        assert_eq!(checks[0].status, Status::Warn);
+        assert!(
+            checks[0].message.contains("could not read"),
+            "{}",
+            checks[0].message
+        );
+
+        // Counterparts: no vcgencmd is not a Pi, and a reading is graded.
+        assert!(power_checks(None, false).is_empty());
+        let graded = power_checks(Some(PiThrottle { bits: 0x50005 }), true);
+        assert_eq!(graded.len(), 1);
+        assert_eq!(graded[0].status, Status::Fail);
     }
 }

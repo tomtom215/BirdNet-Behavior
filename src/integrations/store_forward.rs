@@ -81,6 +81,10 @@ async fn drain_cycle(state: &AppState, client: &Client) {
         let disposition = match serde_json::from_str::<DetectionPost>(&item.payload) {
             Ok(post) => match client.post_detection(&post).await {
                 Ok(_) => Disposition::Delivered,
+                // Refused for its content: the identical replay cannot
+                // succeed, and treating it as an outage re-posted it 48 times
+                // over two days, ending every cycle it headed (INT13).
+                Err(e) if e.is_permanent() => Disposition::Poison(e.to_string()),
                 Err(e) => Disposition::Failed(e.to_string()),
             },
             // A payload that no longer deserializes (schema drift across an
@@ -117,7 +121,8 @@ enum Disposition {
     Delivered,
     /// Network/API failure — back off and keep it; stop this cycle.
     Failed(String),
-    /// Permanently undeliverable (unparseable) — remove and warn.
+    /// Permanently undeliverable (unparseable, or refused for its content) —
+    /// remove and warn.
     Poison(String),
 }
 
@@ -162,7 +167,7 @@ async fn apply_disposition(
             true
         }
         Disposition::Poison(error) => {
-            tracing::warn!(id, error = %error, "unparseable queued payload dropped");
+            tracing::warn!(id, error = %error, "undeliverable queued payload dropped");
             let state = state.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 state.with_db(|conn| {

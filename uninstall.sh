@@ -180,39 +180,69 @@ fi
 # Both helpers print the value or nothing, and always succeed: a missing key
 # makes grep exit non-zero, which under `set -e -o pipefail` would otherwise
 # kill the script mid-detection. The trailing `|| true` keeps them quiet.
-read_conf() { # $1=key  -> value or empty
+read_conf() { # $1=key  -> value or empty, read as the station's config parser reads it
   [ -f "$CONFIG_FILE" ] || return 0
-  { grep -E "^[[:space:]]*$1[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null \
-      | tail -1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; } || true
+  local v
+  v="$({ grep -E "^[[:space:]]*$1[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null \
+      | tail -1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; } || true)"
+  # A quoted value is the text between the quotes; an unquoted one ends at a
+  # `#` that follows whitespace. Kept quotes used to make the path relative,
+  # which rm_path refuses — stopping the uninstall half way under `set -e`.
+  case "$v" in
+    \"*) v="${v#\"}"; v="${v%%\"*}" ;;
+    \'*) v="${v#\'}"; v="${v%%\'*}" ;;
+    *) v="$(sed -E 's/[[:space:]]+#.*$//' <<<"$v")" ;;
+  esac
+  printf '%s\n' "$v"
 }
 svc_flag() { # $1=flag  -> value or empty (from ExecStart=)
   [ -f "$SERVICE_FILE" ] || return 0
   { grep -E '^ExecStart=' "$SERVICE_FILE" 2>/dev/null | tail -1 \
-      | grep -oE "$1[ =][^ ]+" | awk 'NR==1' | sed -E "s/^$1[ =]//"; } || true
+      | grep -oE -e "$1[ =][^ ]+" | awk 'NR==1' | sed -E "s/^$1[ =]//"; } || true
 }
 
-DB_PATH="$(read_conf DB_PATH)"
-RECS_DIR="$(read_conf RECS_DIR)"
-[ -z "$DB_PATH" ]  && DB_PATH="$(svc_flag --analytics-db)"   # analytics db sits in DATA_DIR too
-IMAGE_CACHE_DIR="$(svc_flag --image-cache-dir)"
-ANALYTICS_DB="$(svc_flag --analytics-db)"
-WATCH_DIR="$(svc_flag --watch-dir)"; [ -n "$WATCH_DIR" ] && STREAM_DIR="$WATCH_DIR"
+detect_paths() { # sets DB_PATH RECS_DIR DATA_DIR … from the config and the unit
+  DB_PATH="$(read_conf DB_PATH)"
+  RECS_DIR="$(read_conf RECS_DIR)"
+  IMAGE_CACHE_DIR="$(svc_flag --image-cache-dir)"
+  ANALYTICS_DB="$(svc_flag --analytics-db)"
+  WATCH_DIR="$(svc_flag --watch-dir)"; [ -n "$WATCH_DIR" ] && STREAM_DIR="$WATCH_DIR"
 
-# DATA_DIR: override > parent of DB_PATH > parent of recordings > best-effort default
-DATA_DIR="$DATA_DIR_OVERRIDE"
-if [ -z "$DATA_DIR" ] && [ -n "$DB_PATH" ];   then DATA_DIR="$(dirname "$DB_PATH")"; fi
-if [ -z "$DATA_DIR" ] && [ -n "$RECS_DIR" ];  then DATA_DIR="$(dirname "$RECS_DIR")"; fi
-if [ -z "$DATA_DIR" ]; then
-  _home="$(getent passwd "${SUDO_USER:-root}" 2>/dev/null | cut -d: -f6 || true)"; _home="${_home:-$HOME}"
-  DATA_DIR="${_home}/BirdNet-Behavior"
-  DATA_DIR_GUESSED=1
-fi
-[ -z "$RECS_DIR" ]        && RECS_DIR="${DATA_DIR}/recordings"
-[ -z "$IMAGE_CACHE_DIR" ] && IMAGE_CACHE_DIR="${DATA_DIR}/image_cache"
-[ -z "$ANALYTICS_DB" ]    && ANALYTICS_DB="${DATA_DIR}/analytics.db"
-MODEL_DIR="${DATA_DIR}/models"
-BACKUPS_DIR="${DATA_DIR}/backups"
-DB_PATH="${DB_PATH:-${DATA_DIR}/birds.db}"
+  # DATA_DIR: override > parent of DB_PATH > parent of recordings > best-effort default
+  DATA_DIR="$DATA_DIR_OVERRIDE"
+  if [ -z "$DATA_DIR" ] && [ -n "$DB_PATH" ];   then DATA_DIR="$(dirname "$DB_PATH")"; fi
+  if [ -z "$DATA_DIR" ] && [ -n "$RECS_DIR" ];  then DATA_DIR="$(dirname "$RECS_DIR")"; fi
+  if [ -z "$DATA_DIR" ] && [ -n "$ANALYTICS_DB" ]; then DATA_DIR="$(dirname "$ANALYTICS_DB")"; fi
+  if [ -z "$DATA_DIR" ]; then
+    _home="$(getent passwd "${SUDO_USER:-root}" 2>/dev/null | cut -d: -f6 || true)"; _home="${_home:-$HOME}"
+    DATA_DIR="${_home}/BirdNet-Behavior"
+    DATA_DIR_GUESSED=1
+  fi
+  [ -z "$RECS_DIR" ]        && RECS_DIR="${DATA_DIR}/recordings"
+  [ -z "$IMAGE_CACHE_DIR" ] && IMAGE_CACHE_DIR="${DATA_DIR}/image_cache"
+  [ -z "$ANALYTICS_DB" ]    && ANALYTICS_DB="${DATA_DIR}/analytics.db"
+  # The model: the installer's models/ directory when the configured model is
+  # in it, otherwise the configured model files by name. It used to be
+  # "<parent of DB_PATH>/models", whatever that held.
+  MODEL_DIR=""
+  MODEL_FILES=()
+  local model_path key file
+  model_path="$(read_conf MODEL_PATH)"
+  case "$model_path" in
+    "") ;;
+    "${DATA_DIR}/models/"*) MODEL_DIR="${DATA_DIR}/models" ;;
+    *)
+      for key in MODEL_PATH LABELS_PATH METADATA_MODEL_PATH METADATA_LABELS_PATH; do
+        file="$(read_conf "$key")"
+        if [ -n "$file" ]; then MODEL_FILES+=("$file"); fi
+      done
+      ;;
+  esac
+  BACKUPS_DIR="${DATA_DIR}/backups"
+  # Never the analytics file: with no DB_PATH the database is birds.db.
+  DB_PATH="${DB_PATH:-${DATA_DIR}/birds.db}"
+}
+detect_paths
 
 # Record whether a native (systemd) install is present, to advise Docker users.
 HAD_NATIVE=0
@@ -227,7 +257,7 @@ plan_line() { printf "    %-18s %s\n" "$1" "$2"; }
 plan_line "database"      "$([ "$REMOVE_DB" = 1 ] && echo REMOVE || echo keep)   (${DB_PATH}, ${ANALYTICS_DB}, ${BACKUPS_DIR})"
 plan_line "recordings"    "$([ "$REMOVE_RECS" = 1 ] && echo REMOVE || echo keep)   (${RECS_DIR})"
 plan_line "settings"      "$([ "$REMOVE_CONFIG" = 1 ] && echo REMOVE || echo keep)   (${CONFIG_DIR})"
-plan_line "model (~541MB)" "$([ "$REMOVE_MODELS" = 1 ] && echo REMOVE || echo keep)   (${MODEL_DIR})"
+plan_line "model (~541MB)" "$([ "$REMOVE_MODELS" = 1 ] && echo REMOVE || echo keep)   (${MODEL_DIR:-${MODEL_FILES[*]:-no MODEL_PATH in the config}})"
 plan_line "image cache"   "$([ "$REMOVE_IMAGE_CACHE" = 1 ] && echo REMOVE || echo keep)   (${IMAGE_CACHE_DIR})"
 plan_line "zram-swap"     "$([ "$REMOVE_ZRAM" = 1 ] && echo REMOVE || echo keep)   (${ZRAM_FILE})"
 echo
@@ -270,7 +300,10 @@ fi
 [ "$REMOVE_CONFIG" = 1 ]      && rm_path "$CONFIG_DIR" "settings"
 [ "$REMOVE_RECS" = 1 ]        && rm_path "$RECS_DIR" "recordings"
 [ "$REMOVE_IMAGE_CACHE" = 1 ] && rm_path "$IMAGE_CACHE_DIR" "image cache"
-[ "$REMOVE_MODELS" = 1 ]      && rm_path "$MODEL_DIR" "model"
+if [ "$REMOVE_MODELS" = 1 ]; then
+  if [ -n "$MODEL_DIR" ]; then rm_path "$MODEL_DIR" "model"; fi
+  for f in "${MODEL_FILES[@]}"; do rm_path "$f" "$(basename "$f")"; done
+fi
 if [ "$REMOVE_DB" = 1 ]; then
   for f in "$DB_PATH" "${DB_PATH}-wal" "${DB_PATH}-shm" "$ANALYTICS_DB" "${ANALYTICS_DB}-wal" "${ANALYTICS_DB}.wal"; do
     rm_path "$f" "$(basename "$f")"

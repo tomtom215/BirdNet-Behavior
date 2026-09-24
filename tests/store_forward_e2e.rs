@@ -62,6 +62,16 @@ fn spawn_stub_refusing() -> (u16, Captured) {
     )
 }
 
+/// An ingest that refuses the payload itself: `422 Unprocessable Entity`, the
+/// answer to a body the server will never accept however often it is sent.
+fn spawn_stub_rejecting() -> (u16, Captured) {
+    spawn_stub_with_response(
+        "HTTP/1.1 422 Unprocessable Entity\r\n\
+         Content-Length: 0\r\n\
+         Connection: close\r\n\r\n",
+    )
+}
+
 fn spawn_stub_with_response(response: &'static str) -> (u16, Captured) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub");
     let port = listener.local_addr().expect("stub addr").port();
@@ -293,5 +303,46 @@ fn refusing_endpoint_keeps_backlog_and_records_attempt() {
     assert!(
         !captured.lock().expect("stub log").is_empty(),
         "the refusal really did come from the stub, not a connect failure"
+    );
+}
+
+/// INT13: a payload the ingest refuses for its content is dropped, not
+/// replayed. A 422 was treated like an outage — the cycle stopped, the entry
+/// was re-armed, and the identical body was posted 48 times over about two
+/// days, ending every drain cycle it headed on the way. Each entry is now
+/// tried once, and the cycle carries on to the next.
+///
+/// The counterpart is [`refusing_endpoint_keeps_backlog_and_records_attempt`]:
+/// a 5xx must still keep every payload.
+#[test]
+fn a_payload_the_ingest_rejects_is_dropped_not_replayed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("birds.db");
+    seed_backlog(&db_path);
+
+    let (stub_port, captured) = spawn_stub_rejecting();
+    let _guard = spawn_station(dir.path(), &db_path, stub_port);
+
+    let drained = wait_for(Duration::from_secs(60), Duration::from_millis(200), || {
+        let conn = rusqlite::Connection::open(&db_path).ok()?;
+        let depth = birdnet_db::outbound_queue::depth(&conn, "birdweather").ok()?;
+        (depth == 0).then_some(())
+    });
+    let conn = rusqlite::Connection::open(&db_path).expect("open db");
+    let attempts: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(attempts), 0) FROM outbound_queue WHERE kind = 'birdweather'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("attempts");
+    assert!(
+        drained.is_some(),
+        "a rejected payload was kept for replay (max attempts so far: {attempts})"
+    );
+    assert_eq!(
+        captured.lock().expect("stub log").len(),
+        3,
+        "each rejected payload was posted exactly once"
     );
 }

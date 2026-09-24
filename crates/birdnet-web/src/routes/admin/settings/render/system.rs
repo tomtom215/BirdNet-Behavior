@@ -8,24 +8,24 @@ use super::get_setting;
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     // Default 0 = keep audio forever, which is what every station does
     // today; age-based retention is strictly opt-in.
-    let days = get_setting(s, "clip_retention_days", "0");
-    let imgcache = get_setting(s, "image_cache_dir", "");
-    let customimg = get_setting(s, "custom_image_dir", "");
-    let maxfiles = get_setting(s, "max_files_per_species", "0");
-    let purge = get_setting(s, "purge_threshold", "95");
-    let raw_spec = get_setting(s, "raw_spectrogram", "false");
+    let days = get_setting(s, "clip_retention_days");
+    let imgcache = get_setting(s, "image_cache_dir");
+    let customimg = get_setting(s, "custom_image_dir");
+    let maxfiles = get_setting(s, "max_files_per_species");
+    let purge = get_setting(s, "purge_threshold");
+    let raw_spec = get_setting(s, "raw_spectrogram");
     let raw_spec_checked = if raw_spec == "true" { " checked" } else { "" };
-    let rare_days = get_setting(s, "rare_species_days", "30");
-    let extract_len = get_setting(s, "extraction_length", "6");
+    let rare_days = get_setting(s, "rare_species_days");
+    let extract_len = get_setting(s, "extraction_length");
     // Defaults mirror `helpers::system::DEFAULT_STREAM_*` so the form shows what
     // the station is actually doing when nothing has been set.
-    let streamret = get_setting(s, "stream_retention_secs", "600");
-    let streammax = get_setting(s, "stream_max_mb", "512");
-    let site = get_setting(s, "site_name", "");
-    let isite = get_setting(s, "info_site", "ebird");
+    let streamret = get_setting(s, "stream_retention_secs");
+    let streammax = get_setting(s, "stream_max_mb");
+    let site = get_setting(s, "site_name");
+    let isite = get_setting(s, "info_site");
     // Command-line only until 0.12.0, so a non-English station could not pick
     // its own language from the UI at all.
-    let lang = get_setting(s, "database_lang", "en");
+    let lang = get_setting(s, "database_lang");
     let is_ebird = if isite == "ebird" { " selected" } else { "" };
     let is_aab = if isite == "allaboutbirds" {
         " selected"

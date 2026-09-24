@@ -21,6 +21,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use birdnet_core::audio::extraction::Extractor;
+use birdnet_core::inference::registry::ModelSpec;
 use birdnet_integrations::notification::{NotificationFilter, NotificationTemplate};
 
 use crate::cli::Cli;
@@ -42,7 +43,7 @@ mod config;
 /// of these rules was duplicated: a diagnostic that read the setting the
 /// runtime ignores reports on a station that does not exist.
 pub use config::{
-    resolve_confidence, resolve_confirmation_level, resolve_f32_with_default,
+    clip_format, resolve_confidence, resolve_confirmation_level, resolve_f32_with_default,
     resolve_station_coords,
 };
 mod daylight;
@@ -155,6 +156,34 @@ fn shed_policy() -> birdnet_core::detection::daemon::ShedPolicy {
     })
 }
 
+/// The plan's classifiers split for the daemon: the primary (always first),
+/// the rest, and each one's own threshold by id — the processor holds a
+/// detection to the threshold of the classifier that made it where one is set.
+fn split_plan(
+    specs: Vec<ModelSpec>,
+    model_path: &std::path::Path,
+    labels_path: &std::path::Path,
+) -> (
+    ModelSpec,
+    Vec<ModelSpec>,
+    std::collections::HashMap<String, f32>,
+) {
+    let thresholds = specs
+        .iter()
+        .filter_map(|s| s.threshold.map(|t| (s.id.clone(), t)))
+        .collect();
+    let mut specs = specs.into_iter();
+    // `plan` always puts the primary first; an empty plan is the defaults.
+    let primary = specs.next().unwrap_or_else(|| ModelSpec {
+        id: "birdnet".to_owned(),
+        model_path: model_path.to_path_buf(),
+        labels_path: labels_path.to_path_buf(),
+        threshold: None,
+        sample_rate: None,
+    });
+    (primary, specs.collect(), thresholds)
+}
+
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
@@ -164,6 +193,7 @@ fn shed_policy() -> birdnet_core::detection::daemon::ShedPolicy {
 /// file with dedicated unit-test coverage. See the module docs for the
 /// rationale.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 pub fn start_detection_daemon(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -333,14 +363,45 @@ pub fn start_detection_daemon(
     for note in &model_plan.notes {
         tracing::info!("{note}");
     }
+    let (primary, extra_models, model_thresholds) =
+        split_plan(model_plan.specs, &model_path, &labels_path);
+
+    // The floor the inference loop runs every classifier at or below: the
+    // model confidence, lowered to any per-species threshold under it, and kept
+    // current by the processor as the operator changes thresholds.
+    // Seeded from the thresholds already loaded, so the first files — analysed
+    // before the processor thread is up to publish — are not judged by the
+    // model alone.
+    let threshold_floor =
+        std::sync::Arc::new(birdnet_core::detection::daemon::ThresholdFloor::new(
+            processor::lowest_threshold(model_confidence, &species_thresholds),
+        ));
+    // Extract clips into the SAME dir the web serves recordings from
+    // (AppState::recording_dir) — one source of truth — so clips persist on the
+    // data disk and are found by the Recordings page and playback. They used to
+    // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
+    // on every restart and never matched where the app reads (Bug B).
+    let recordings_dir = state.recording_dir();
+    let mut extraction_config = build_extraction_config(cli, config, &recordings_dir);
+    // With the privacy filter on, a clip stays inside its own segment, and the
+    // filter is told how far a clip reaches so it can clear the whole of it
+    // (PIPE7). Both are fixed for the daemon's life, as the settings they come
+    // from are read once at start. "On" is the filter's own rule, so clips
+    // are kept in their segment exactly when the filter runs.
+    extraction_config.own_segment_only =
+        birdnet_core::detection::privacy::PrivacyFilter::new(privacy_threshold).is_enabled();
+    let privacy_clip_reach = extraction_config.clip_reach();
 
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
         labels_path,
         // The primary is built by the daemon from `model_path`/`labels_path`
-        // above, so only what the plan added beyond it travels here.
-        extra_models: model_plan.specs.into_iter().skip(1).collect(),
+        // above and the plan's three settings for it below.
+        extra_models,
+        primary_id: primary.id,
+        primary_threshold: primary.threshold,
+        primary_sample_rate: primary.sample_rate,
         model_routes: model_plan.routes,
         pipeline: build_pipeline_config(watch_dir, overlap),
         model: build_model_config(sensitivity, model_confidence),
@@ -375,6 +436,7 @@ pub fn start_detection_daemon(
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
+        privacy_clip_reach,
         noise_threshold,
         noise_classes,
         noise_remember_secs,
@@ -382,6 +444,7 @@ pub fn start_detection_daemon(
         latitude,
         longitude,
         species_thresholds,
+        threshold_floor: Some(std::sync::Arc::clone(&threshold_floor)),
     };
 
     let (event_tx, event_rx) = mpsc::sync_channel(DETECTION_EVENT_CHANNEL_CAP);
@@ -406,15 +469,10 @@ pub fn start_detection_daemon(
         sf_thresh: f64::from(sf_thresh),
         lat: latitude,
         lon: longitude,
+        model_thresholds,
     };
 
-    // Extract clips into the SAME dir the web serves recordings from
-    // (AppState::recording_dir) — one source of truth — so clips persist on the
-    // data disk and are found by the Recordings page and playback. They used to
-    // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
-    // on every restart and never matched where the app reads (Bug B).
-    let recordings_dir = state.recording_dir();
-    let extractor = Extractor::new(build_extraction_config(cli, config, &recordings_dir));
+    let extractor = Extractor::new(extraction_config);
 
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {
@@ -446,6 +504,7 @@ pub fn start_detection_daemon(
                         dynamic_config,
                     ),
                     provenance,
+                    Some((threshold_floor, model_confidence)),
                 );
             });
             Some(handle)

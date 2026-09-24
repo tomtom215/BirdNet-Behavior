@@ -146,7 +146,7 @@ It needs both `rsync` and `sftp` installed. rsync moves the bytes; `sftp` create
 
 `OFFSITE_KEEP` is how many backups stay at the destination; the oldest go when a new one arrives. `0` keeps everything.
 
-Retention only ever removes files this station wrote — names of the form `birds.db.backup.<timestamp>.bnb`. Anything else in the same bucket prefix or directory is left alone, so you can share a bucket without losing the other things in it.
+Retention only removes files named like the ones this station writes — `birds.db.backup.<timestamp>.bnb` — directly in its own prefix or directory. Anything else there is left alone, and so is anything in a folder below it, so you can share a bucket without losing the other things in it. Give every station its own prefix: two stations writing to the *same* prefix produce identical names, and each would prune the other's backups as its own.
 
 ### Checking it works
 

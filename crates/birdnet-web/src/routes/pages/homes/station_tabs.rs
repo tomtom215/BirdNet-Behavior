@@ -61,15 +61,25 @@ fn page(content: &str, headers: &HeaderMap) -> Html<String> {
 // Capture · "what am I recording?"
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn capture_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_capture(&state))
+async fn capture_page(
+    State(state): State<AppState>,
+    user: crate::auth_middleware::RequestUser,
+    headers: HeaderMap,
+) -> Html<String> {
+    let content = tokio::task::spawn_blocking(move || build_capture(&state, &user))
         .await
         .unwrap_or_default();
     page(&content, &headers)
 }
 
-fn build_capture(state: &AppState) -> String {
-    let settings = crate::routes::admin::settings::handler::load_all_settings(state);
+fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
+    let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
+    let section_form = |sections: &[Section]| {
+        settings.as_ref().map_or_else(
+            |e| crate::routes::admin::settings::handler::unreadable_notice(e),
+            |s| render_section_form(s, sections),
+        )
+    };
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>What your station is listening to, and which birds it keeps.</b> Add microphones or camera streams, tune which species count, and set how sure the model must be.</p>
@@ -81,13 +91,10 @@ fn build_capture(state: &AppState) -> String {
 {settings_css}
 {form}"#,
         tabs = station_subtabs("capture"),
-        sources = crate::routes::admin::audio::sources_body(state),
+        sources = crate::routes::admin::audio::sources_body(state, user.is_admin()),
         species = crate::routes::admin::species::handler::species_body(state),
         settings_css = SETTINGS_FORM_CSS,
-        form = render_section_form(
-            &settings,
-            &[Section::Audio, Section::Location, Section::Detection]
-        ),
+        form = section_form(&[Section::Audio, Section::Location, Section::Detection]),
     )
 }
 
@@ -95,15 +102,25 @@ fn build_capture(state: &AppState) -> String {
 // Alerts · "tell me when…"
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn alerts_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_alerts(&state))
+async fn alerts_page(
+    State(state): State<AppState>,
+    user: crate::auth_middleware::RequestUser,
+    headers: HeaderMap,
+) -> Html<String> {
+    let content = tokio::task::spawn_blocking(move || build_alerts(&state, &user))
         .await
         .unwrap_or_default();
     page(&content, &headers)
 }
 
-fn build_alerts(state: &AppState) -> String {
-    let settings = crate::routes::admin::settings::handler::load_all_settings(state);
+fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
+    let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
+    let section_form = |sections: &[Section]| {
+        settings.as_ref().map_or_else(
+            |e| crate::routes::admin::settings::handler::unreadable_notice(e),
+            |s| render_section_form(s, sections),
+        )
+    };
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Get a nudge when something special happens</b> — build a rule, pick where it goes, and send yourself a test before you rely on it.</p>
@@ -118,7 +135,7 @@ fn build_alerts(state: &AppState) -> String {
         rules = crate::routes::admin::rules::rules_body(),
         channels = crate::routes::admin::notification_test::channels_test_body(state),
         settings_css = SETTINGS_FORM_CSS,
-        form = render_section_form(&settings, &[Section::Notifications, Section::Email]),
+        form = section_form(&[Section::Notifications, Section::Email]),
         recent = crate::routes::admin::notifications::recent_body(state),
     )
 }
@@ -158,15 +175,25 @@ fn build_data(state: &AppState) -> String {
 // Settings · "my preferences"
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn settings_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
-    let content = tokio::task::spawn_blocking(move || build_settings(&state))
+async fn settings_page(
+    State(state): State<AppState>,
+    user: crate::auth_middleware::RequestUser,
+    headers: HeaderMap,
+) -> Html<String> {
+    let content = tokio::task::spawn_blocking(move || build_settings(&state, &user))
         .await
         .unwrap_or_default();
     page(&content, &headers)
 }
 
-fn build_settings(state: &AppState) -> String {
-    let settings = crate::routes::admin::settings::handler::load_all_settings(state);
+fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
+    let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
+    let section_form = |sections: &[Section]| {
+        settings.as_ref().map_or_else(
+            |e| crate::routes::admin::settings::handler::unreadable_notice(e),
+            |s| render_section_form(s, sections),
+        )
+    };
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Your preferences — the look, the station identity, and the wall display.</b></p>
@@ -183,7 +210,7 @@ fn build_settings(state: &AppState) -> String {
         tabs = station_subtabs("settings"),
         display = DISPLAY_PREFS_HTML,
         settings_css = SETTINGS_FORM_CSS,
-        form = render_section_form(&settings, &[Section::System]),
+        form = section_form(&[Section::System]),
     )
 }
 
@@ -239,9 +266,20 @@ mod tests {
         AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
     }
 
+    fn admin(state: &AppState) -> crate::auth_middleware::RequestUser {
+        use birdnet_db::accounts::UserStore as _;
+        crate::auth_middleware::RequestUser {
+            user: state
+                .with_db(|c| c.find_user_by_name("admin"))
+                .expect("seed admin"),
+            session_id: "test".into(),
+        }
+    }
+
     #[test]
     fn capture_folds_sources_species_and_the_detection_threshold() {
-        let html = build_capture(&test_state());
+        let state = test_state();
+        let html = build_capture(&state, &admin(&state));
         assert!(html.contains(r#"class="bnb-subtab active""#));
         assert!(html.contains(r#"href="/station/capture""#));
         // The detection threshold's single canonical home is here.
@@ -254,7 +292,8 @@ mod tests {
 
     #[test]
     fn alerts_folds_rules_channels_and_recent_sends() {
-        let html = build_alerts(&test_state());
+        let state = test_state();
+        let html = build_alerts(&state, &admin(&state));
         assert!(html.contains("Alert Rules"));
         assert!(html.contains(r#"hx-post="/admin/settings""#));
     }
@@ -268,7 +307,8 @@ mod tests {
 
     #[test]
     fn settings_folds_display_prefs_and_the_kiosk_launcher() {
-        let html = build_settings(&test_state());
+        let state = test_state();
+        let html = build_settings(&state, &admin(&state));
         assert!(html.contains("display-prefs"));
         assert!(html.contains(r#"href="/kiosk""#));
         // The detection threshold is NOT duplicated here — Capture owns it.

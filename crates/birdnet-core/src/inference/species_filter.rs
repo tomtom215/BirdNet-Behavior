@@ -497,6 +497,17 @@ impl SpeciesFilter {
         Ok(result)
     }
 
+    /// Every species in `labels` the operator's lists allow, with no
+    /// occurrence model.
+    ///
+    /// For a classifier whose vocabulary the geomodel was never trained on:
+    /// the lists are an explicit instruction and bind on every species, while
+    /// the geomodel can only judge the names it scores.
+    #[must_use]
+    pub fn allowed_by_lists(&self, labels: &LabelSet) -> HashSet<String> {
+        self.apply_lists(all_scientific_names(labels), labels)
+    }
+
     /// Apply include and exclude lists to a set of scientific names.
     ///
     /// `labels` is needed to resolve the operator's entries, which may be

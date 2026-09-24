@@ -297,3 +297,179 @@ fn interval_lookback_expressions_bind() {
         );
     }
 }
+
+/// ANA11: "average per day" for an hour divides by the days the station heard
+/// anything, not by the days that hour happened to be busy.
+///
+/// Ten days of one 06:00 detection each; two of them also have one at 03:00.
+/// 03:00 averages 2/10 = 0.2 a day. Dividing by that hour's own active days
+/// reported 1.0 — the same as 06:00, which is heard every day — so the chart
+/// drew a rare night call as tall as the dawn chorus.
+#[test]
+fn an_hours_daily_average_counts_the_days_it_was_quiet() {
+    let dir = TempDir::new().expect("temp dir");
+    let db = AnalyticsDb::open(&dir.path().join("ts.duckdb")).expect("open");
+    let conn = db.conn();
+    let today: String = conn
+        .query_row("SELECT CAST(CURRENT_DATE AS VARCHAR)", [], |r| r.get(0))
+        .expect("current date");
+    let parts: Vec<u32> = today.split('-').map(|p| p.parse().unwrap()).collect();
+    let today_days = days_from_civil(parts[0], parts[1], parts[2]);
+
+    let mut rows = Vec::new();
+    for back in 1..=10 {
+        let (y, m, d) = civil_from_days(today_days - back);
+        let date = format!("{y:04}-{m:02}-{d:02}");
+        let mut hours = vec![6];
+        if back <= 2 {
+            hours.push(3);
+        }
+        for h in hours {
+            rows.push(format!(
+                "('{date}','{h:02}:00:00','Strix aluco','Tawny Owl',0.9,epoch(TIMESTAMP '{date} {h:02}:00:00'))"
+            ));
+        }
+    }
+    conn.execute_batch(&format!(
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES {};",
+        rows.join(",")
+    ))
+    .expect("seed");
+
+    let ts = TimeSeriesDb::new(conn).expect("executor");
+    let heat = ts
+        .hourly_heatmap(&HourlyParams {
+            lookback_days: 30,
+            species: None,
+        })
+        .expect("heatmap");
+    let avg = |hour: u8| {
+        heat.iter()
+            .find(|r| u8::try_from(r.hour_of_day).ok() == Some(hour))
+            .map(|r| r.avg_detections_per_day)
+            .expect("hour present")
+    };
+    assert!((avg(3) - 0.2).abs() < 1e-9, "03:00 averaged {}", avg(3));
+    // Counterpart: an hour heard every day still averages one.
+    assert!((avg(6) - 1.0).abs() < 1e-9, "06:00 averaged {}", avg(6));
+}
+
+/// A store with `counts[i]` detections on the day `i + 1` days before today,
+/// plus `today` detections today.
+fn daily_store(counts: &[u32], today: u32) -> (AnalyticsDb, TempDir) {
+    let dir = TempDir::new().expect("temp dir");
+    let db = AnalyticsDb::open(&dir.path().join("ts.duckdb")).expect("open");
+    let conn = db.conn();
+    let t: String = conn
+        .query_row("SELECT CAST(CURRENT_DATE AS VARCHAR)", [], |r| r.get(0))
+        .expect("current date");
+    let parts: Vec<u32> = t.split('-').map(|p| p.parse().unwrap()).collect();
+    let today_days = days_from_civil(parts[0], parts[1], parts[2]);
+    let mut rows = Vec::new();
+    let days = counts
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (i64::try_from(i).unwrap() + 1, *n))
+        .chain(std::iter::once((0, today)));
+    for (back, n) in days {
+        let (y, m, d) = civil_from_days(today_days - back);
+        let date = format!("{y:04}-{m:02}-{d:02}");
+        for k in 0..n {
+            let time = format!("06:{:02}:00", k % 60);
+            rows.push(format!(
+                "('{date}','{time}','Parus major','Great Tit',0.9,epoch(TIMESTAMP '{date} {time}'))"
+            ));
+        }
+    }
+    if !rows.is_empty() {
+        conn.execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES {};",
+            rows.join(",")
+        ))
+        .expect("seed");
+    }
+    (db, dir)
+}
+
+/// The date `back` days before today, as DuckDB sees today.
+fn day_before(db: &AnalyticsDb, back: i64) -> String {
+    let t: String = db
+        .conn()
+        .query_row("SELECT CAST(CURRENT_DATE AS VARCHAR)", [], |r| r.get(0))
+        .expect("current date");
+    let parts: Vec<u32> = t.split('-').map(|p| p.parse().unwrap()).collect();
+    let (y, m, d) = civil_from_days(days_from_civil(parts[0], parts[1], parts[2]) - back);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Twenty days alternating 9 and 11 detections, except a silent day five days
+/// ago, a 3-detection day eight days ago, and one detection so far today.
+fn outage_fixture() -> (AnalyticsDb, TempDir) {
+    let counts: Vec<u32> = (1..=20)
+        .map(|back| match back {
+            5 => 0,
+            8 => 3,
+            b if b % 2 == 0 => 9,
+            _ => 11,
+        })
+        .collect();
+    daily_store(&counts, 1)
+}
+
+/// ANA13: a day with no detections at all is the quietest day there is.
+///
+/// Quiet days grouped the detections that exist, so a day with none — an
+/// outage, the thing the query's own doc says it is for — could never appear.
+/// And today, a few hours in, was listed as quiet every morning.
+#[test]
+fn a_silent_day_is_a_quiet_day() {
+    let (db, _dir) = outage_fixture();
+    let ts = TimeSeriesDb::new(db.conn()).expect("executor");
+    let quiet: Vec<String> = ts
+        .quiet_days(5, 30)
+        .expect("quiet days")
+        .into_iter()
+        .map(|r| r.window_start)
+        .collect();
+    assert!(
+        quiet.contains(&day_before(&db, 5)),
+        "the silent day is missing: {quiet:?}"
+    );
+    assert!(
+        !quiet.contains(&day_before(&db, 0)),
+        "today is not over: {quiet:?}"
+    );
+    // Counterpart: a low day with detections was already found.
+    assert!(quiet.contains(&day_before(&db, 8)), "{quiet:?}");
+    assert_eq!(quiet.len(), 2, "{quiet:?}");
+}
+
+/// ANA13: the anomaly detector sees the silent day and does not flag today.
+///
+/// It had the same blind spot — a day with no rows has no z-score — and its
+/// rolling statistics included the day being judged, so an outlier diluted
+/// its own baseline.
+#[test]
+fn a_silent_day_is_an_anomaly() {
+    let (db, _dir) = outage_fixture();
+    let ts = TimeSeriesDb::new(db.conn()).expect("executor");
+    let rows = ts
+        .anomalies(&AnomalyParams {
+            z_threshold: 2.0,
+            window_days: 7,
+            lookback_days: 30,
+        })
+        .expect("anomalies");
+    let flag = |back: i64| {
+        let date = day_before(&db, back);
+        rows.iter()
+            .find(|r| r.date == date)
+            .map(|r| r.anomaly_flag.clone())
+    };
+    assert_eq!(flag(5).as_deref(), Some("low"), "the silent day: {rows:?}");
+    assert_eq!(flag(0), None, "today is not over: {rows:?}");
+    // Counterparts: an ordinary day is normal, and the 3-detection day was
+    // already found low.
+    assert_eq!(flag(3).as_deref(), Some("normal"), "{rows:?}");
+    assert_eq!(flag(8).as_deref(), Some("low"), "{rows:?}");
+}

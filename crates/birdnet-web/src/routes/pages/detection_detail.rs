@@ -204,7 +204,8 @@ fn render_detail_page(
     );
 
     super::render_page_for_request(
-        &format!("{com} · {date} {time}"),
+        // Raw text: the layout escapes the title itself.
+        &format!("{} · {} {}", det.com_name, det.date, det.time),
         &content,
         "today",
         headers,

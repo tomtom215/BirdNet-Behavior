@@ -191,14 +191,39 @@ impl SpeciesFilter {
     /// Returns `true` if the species passes the filter.
     #[must_use]
     pub fn is_allowed(&self, sci_name: &str) -> bool {
-        if self.exclude.contains(sci_name) {
-            return false;
-        }
-        if !self.only.is_empty() && !self.only.contains(sci_name) {
-            return false;
-        }
-        true
+        self.allows(sci_name, sci_name)
     }
+
+    /// Whether a detection passes, matching every list entry against **either**
+    /// of its names, ignoring case.
+    ///
+    /// The settings form asks for common names ("European Robin, Great
+    /// Spotted Woodpecker") and BirdNET-Pi's `APPRISE_WATCHLIST` holds common
+    /// names; the command line and older configs hold scientific ones. This
+    /// filter compared scientific names only, while the Apprise client read the
+    /// same setting as common names only, and a detection had to pass both — so
+    /// a watchlist of common names silenced every notification, the watched
+    /// species included, and a watchlist of scientific names silenced Apprise.
+    #[must_use]
+    pub fn allows(&self, sci_name: &str, com_name: &str) -> bool {
+        if names_listed(&self.exclude, sci_name, com_name) {
+            return false;
+        }
+        self.only.is_empty() || names_listed(&self.only, sci_name, com_name)
+    }
+}
+
+/// Whether `list` names either `a` or `b`, ignoring case.
+pub(crate) fn names_listed<'a>(
+    list: impl IntoIterator<Item = &'a String>,
+    a: &str,
+    b: &str,
+) -> bool {
+    let (a, b) = (a.trim().to_lowercase(), b.trim().to_lowercase());
+    list.into_iter().any(|entry| {
+        let entry = entry.trim().to_lowercase();
+        entry == a || entry == b
+    })
 }
 
 /// Parse a comma-separated species list into a `HashSet`.
@@ -229,8 +254,24 @@ impl NotificationFilter {
     /// `counter` is used for `NewSpecies` and `NewSpeciesDaily` trigger modes
     /// to query historical detection counts.
     pub fn should_notify(&self, sci_name: &str, counter: Option<&dyn DetectionCounter>) -> bool {
+        self.should_notify_detection(sci_name, sci_name, counter)
+    }
+
+    /// [`Self::should_notify`] for a detection with both of its names, so the
+    /// species lists may hold either (see [`SpeciesFilter::allows`]).
+    ///
+    /// `counter` must count the detections **before** this one: the trigger
+    /// modes ask "is this the first today" and "has it been heard fewer than
+    /// five times this week", and without a counter both modes notify on every
+    /// detection, exactly like `each`.
+    pub fn should_notify_detection(
+        &self,
+        sci_name: &str,
+        com_name: &str,
+        counter: Option<&dyn DetectionCounter>,
+    ) -> bool {
         // Species filter check.
-        if !self.species_filter.is_allowed(sci_name) {
+        if !self.species_filter.allows(sci_name, com_name) {
             return false;
         }
 

@@ -700,6 +700,10 @@ fn set_first_admin_password(state: &AppState, password: &str) -> Result<i64, Str
         .with_db(|conn| {
             let admin = conn.find_user_by_name("admin")?;
             conn.set_password(admin.id, &hash)?;
+            // Sessions minted during the open window (any `POST /login`
+            // succeeds while there is no password) end here; the wizard mints
+            // the owner's own session after this returns.
+            accounts::SessionStore::revoke_others(conn, admin.id, "")?;
             Ok::<i64, accounts::AccountsError>(admin.id)
         })
         .map_err(|e| e.to_string())?;
@@ -723,7 +727,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BirdNet-Behavior · Set up your station</title>
 <link rel="stylesheet" href="/static/css/app.css?v={{version}}">
-<script src="/static/theme-guard.js"></script>
+<script src="/static/theme-guard.js?v={{version}}"></script>
 <style>
   body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }
   .ob-root { max-width:980px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; padding:0 24px; }

@@ -26,7 +26,10 @@
     </div>
     <div class="pill-row" id="today-pills"
          hx-get="/pages/today-pills" hx-trigger="load, every 60s" hx-swap="innerHTML">
-      <span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>
+      <!-- Neutral until the partial answers: only it reads the capture gauge.
+           A literal green "recording" here stood for as long as that request
+           was slow or failed, whatever the microphone was doing. -->
+      <span class="bnb-pill"><span class="bnb-dot"></span> …</span>
     </div>
   </div>
   <aside aria-label="Live signal">
@@ -34,9 +37,30 @@
   </aside>
 </section>
 
+<!-- Not a live region: it is re-fetched every minute, and as one it read the
+     same "6 rare sightings are waiting" out again each time — and an outage
+     banner whose minutes change on every tick. #td-nudge-status below says it
+     once, when the nudge's data-announce sentence changes. -->
 <div id="today-nudge"
-     hx-get="/pages/today-nudge" hx-trigger="load, every 60s" hx-swap="innerHTML"
-     aria-live="polite"></div>
+     hx-get="/pages/today-nudge" hx-trigger="load, every 60s" hx-swap="innerHTML"></div>
+<p class="sr-only" id="td-nudge-status" role="status" aria-live="polite"></p>
+<script>
+(function () {
+  var nudge = document.getElementById('today-nudge');
+  var out = document.getElementById('td-nudge-status');
+  if (!nudge || !out) return;
+  var last = null;
+  document.body.addEventListener('htmx:afterSettle', function (e) {
+    if (e.target !== nudge) return;
+    var el = nudge.querySelector('[data-announce]');
+    var now = el ? el.getAttribute('data-announce') : '';
+    // The first answer after load is announced like any change; a strip
+    // that went away says nothing.
+    if (now && now !== last) out.textContent = now;
+    last = now;
+  });
+})();
+</script>
 
 <!-- Day strip — the one picture of the day's shape; stats live in the header -->
 <div class="bnb-card pad" data-screen-label="Day strip">
@@ -66,15 +90,24 @@
         <div class="bnb-eyebrow">Live feed</div>
         <h2 class="sh-h">Detections as they happen</h2>
       </div>
-      <span class="bnb-pill moss"><span class="bnb-dot live"></span> Listening</span>
+      <!-- What this card can promise is its own refresh. It said "Listening"
+           as literal text, beside the hero's "not recording · the microphone
+           has stopped"; capture state is the hero pill row's to report. -->
+      <span class="bnb-meta">updates every 15 s</span>
     </div>
-    <form id="search-form" class="td-logbar">
+    <!-- The form, not only the input, is an htmx request: Enter submits a
+         form, and a form with no handler navigates — to `/?search=…`, a full
+         reload that collapsed the day and lost the results. -->
+    <form id="search-form" class="td-logbar"
+          hx-get="/pages/today-list" hx-trigger="submit"
+          hx-target="#today-full" hx-swap="innerHTML">
       <span class="nav-search td-search-wrap">
+        <label class="sr-only" for="today-search">Search today's detections</label>
         <input type="search" name="search" id="today-search"
                placeholder="Search species… (try NOT Robin)"
                class="td-search-input"
                hx-get="/pages/today-list"
-               hx-trigger="input changed delay:300ms, search"
+               hx-trigger="input changed delay:300ms"
                hx-target="#today-full"
                hx-swap="innerHTML"
                hx-include="#search-form">
@@ -94,7 +127,7 @@
          below, which is written only when the newest detection is actually a
          different one. -->
     <div id="detections-table" class="feed"
-         hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML"
+         hx-get="/pages/detections" hx-trigger="load, every 15s, birdnet:detection from:document throttle:2s" hx-swap="innerHTML"
          aria-label="Detections as they happen">
       {{skel_detections}}
     </div>
@@ -219,60 +252,29 @@
     if (this.value.trim() !== '') openFull();
   });
 
-  // ── Shared clip player for [data-play-src] buttons ─────────────────────
-  var player = null;
-  var playingBtn = null;
-  function stopCurrent() {
-    if (player) { player.pause(); }
-    // The label moves with the glyph: `aria-label="Play clip"` is written into
-    // the row once by the renderer and aria-label wins over text content, so a
-    // playing clip's button went on announcing "Play clip".
-    if (playingBtn) {
-      playingBtn.classList.remove('playing');
-      playingBtn.textContent = '▶';
-      playingBtn.setAttribute('aria-label', 'Play clip');
-    }
-    playingBtn = null;
-  }
-  document.addEventListener('click', function (e) {
-    var btn = e.target.closest('[data-play-src]');
-    if (!btn) return;
-    e.preventDefault();
-    if (btn === playingBtn) { stopCurrent(); return; }
-    stopCurrent();
-    if (!player) {
-      player = new Audio();
-      player.preload = 'none';
-      player.addEventListener('ended', stopCurrent);
-      player.addEventListener('error', stopCurrent);
-    }
-    player.src = btn.getAttribute('data-play-src');
-    player.play().then(function () {
-      playingBtn = btn;
-      btn.classList.add('playing');
-      btn.textContent = '⏸';
-      btn.setAttribute('aria-label', 'Pause clip');
-    }).catch(stopCurrent);
-  });
+  // The [data-play-src] clip player is /static/clip-player.js, shared by
+  // every page (it used to live here, which left Recordings → Live with none).
 
   // ── Source picker: live audio per source lives on Recordings → Live ───
   var src = document.getElementById('td-source');
   if (src) src.addEventListener('change', function () {
-    if (this.value) window.location.href = '/recordings?view=live&source=' + encodeURIComponent(this.value);
-    else window.location.href = '/recordings?view=live';
+    if (this.value) window.location.href = window.bnbUrl('/recordings?view=live&source=' + encodeURIComponent(this.value));
+    else window.location.href = window.bnbUrl('/recordings?view=live');
   });
 
   // ── Live nudges ────────────────────────────────────────────────────────
   // A websocket detection refreshes the feed immediately (instead of waiting
-  // for the 15s poll); on a first-run page the whole layout graduates, so
+  // for the 15s poll) through the feed's own `birdnet:detection from:document`
+  // trigger — `htmx.trigger(feed, 'load')` fetched nothing, because htmx fires
+  // `load` itself, once. On a first-run page the whole layout graduates, so
   // reload once the first call lands.
   var stack = document.querySelector('.td-stack');
   var firstrun = stack && stack.getAttribute('data-firstrun') === 'true';
-  document.addEventListener('birdnet:detection', function () {
-    if (firstrun) { window.location.reload(); return; }
-    var feed = document.getElementById('detections-table');
-    if (feed) htmx.trigger(feed, 'load');
-  });
+  if (firstrun) {
+    document.addEventListener('birdnet:detection', function () {
+      window.location.reload();
+    });
+  }
 })();
 </script>
 
@@ -456,33 +458,74 @@
     // paint's own handling is in `drawFrame` above. (This comment used to
     // open by claiming the drawer "honours prefers-reduced-motion", which read
     // as though the whole canvas did.)
+    // Whether the stream is reachable at all. "Idle" means reachable and quiet;
+    // this loop used to decide between live and idle only, so it overwrote
+    // "no signal" with "idle" within a second of the socket failing — the
+    // exact conflation the three states exist to prevent.
+    var connected = false;
     function idleLoop() {
-        if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
+        if (!connected) {
+            setState('nosignal');
+        } else if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
             setLive(false);
             drawIdle();
         }
         setTimeout(idleLoop, 1000);
     }
-    setLive(false);
+    setState('nosignal');
     drawIdle();
     setTimeout(idleLoop, 1000);
 
-    // WebSocket consumer. Failures (no producer, --web-only, WS blocked
-    // by a reverse proxy) fall back silently to the idle baseline.
-    try {
-        var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        var base = (document.body && document.body.dataset.basePath) || '';
-        var ws = new WebSocket(proto + '//' + location.host + base + '/api/v2/ws/spectrogram');
+    // WebSocket consumer, reconnecting. It used to connect once: after a
+    // Wi-Fi blip or a station restart the card stayed dead until the page was
+    // reloaded. Backoff doubles to 30 s with jitter, and waits while the tab
+    // is hidden rather than retrying at a station nobody is looking at.
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var base = (document.body && document.body.dataset.basePath) || '';
+    var backoff = 1000;
+    var retry = null;
+    function scheduleReconnect() {
+        if (retry) return;
+        if (document.hidden) {
+            document.addEventListener('visibilitychange', function once() {
+                if (document.hidden) return;
+                document.removeEventListener('visibilitychange', once);
+                scheduleReconnect();
+            });
+            return;
+        }
+        var wait = backoff + Math.floor(Math.random() * 500);
+        backoff = Math.min(backoff * 2, 30000);
+        retry = setTimeout(function () { retry = null; connect(); }, wait);
+    }
+    function lost() {
+        // A stream we cannot reach is not a quiet yard — say so rather than
+        // drawing the same flat line under the word "idle".
+        connected = false;
+        setState('nosignal');
+        drawIdle();
+        scheduleReconnect();
+    }
+    function connect() {
+        var ws;
+        try {
+            ws = new WebSocket(proto + '//' + location.host + base + '/api/v2/ws/spectrogram');
+        } catch (_) { lost(); return; }
+        ws.onopen = function () {
+            connected = true;
+            backoff = 1000;
+            // Reachable; "live" arrives with the first frame.
+            if (Date.now() - lastFrameTime > IDLE_AFTER_MS) setLive(false);
+        };
         ws.onmessage = function (ev) {
             try {
                 var msg = JSON.parse(ev.data);
                 if (msg.event === 'spectrogram') drawFrame(msg);
             } catch (_) { /* ignore non-JSON */ }
         };
-        // A stream we cannot reach is not a quiet yard — say so rather than
-        // drawing the same flat line under the word "idle".
-        ws.onerror = function () { setState('nosignal'); drawIdle(); };
-        ws.onclose = function () { setState('nosignal'); drawIdle(); };
-    } catch (_) { setState('nosignal'); drawIdle(); }
+        ws.onerror = function () { try { ws.close(); } catch (_) { /* already closed */ } };
+        ws.onclose = lost;
+    }
+    connect();
 })();
 </script>

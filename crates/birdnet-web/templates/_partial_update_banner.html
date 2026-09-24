@@ -89,7 +89,7 @@
 
     var link = document.createElement('a');
     link.className = 'bnb-btn ghost';
-    link.href = '/system/changelog';
+    link.href = window.bnbUrl('/system/changelog');
     link.textContent = 'See all changes →';
 
     var close = document.createElement('button');
@@ -110,7 +110,7 @@
   // minimal "updated" banner instead of silently skipping. Distinguish an
   // intentional empty body (server has no released version to announce — leave
   // the page quiet) from a genuine failure (non-OK, offline, or malformed).
-  fetch('/system/changelog/latest', { credentials: 'same-origin' })
+  fetch(window.bnbUrl('/system/changelog/latest'), { credentials: 'same-origin' })
     .then(function (res) {
       if (!res.ok) { fallbackBanner(); return; }
       return res.text().then(function (html) {

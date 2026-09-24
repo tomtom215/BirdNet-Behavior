@@ -52,7 +52,7 @@ pub use private_mode::{PrivateModeSetting, init_private_mode, resolve_private_mo
 pub use secret_files::resolve_secret_files;
 pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
 pub use state::{
-    init_i18n, init_image_cache, init_site_name, init_species_codes, init_taxonomy,
+    info_site, init_i18n, init_image_cache, init_site_name, init_species_codes, init_taxonomy,
     run_refresh_extension, run_verify_extension,
 };
 pub use system::{

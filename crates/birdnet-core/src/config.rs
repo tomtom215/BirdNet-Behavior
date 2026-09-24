@@ -40,7 +40,11 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/birdnet/birdnet.conf";
 /// Settings → Detection, or the wizard's Accuracy step.
 pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
-/// Default detection sensitivity, matching BirdNET-Pi's `SENSITIVITY` default.
+/// Default detection sensitivity: BirdNET-Pi's default value.
+///
+/// The value (1.25, BirdNET-Pi's `scripts/install_config.sh`), though not its
+/// meaning: BirdNET-Pi maps it to a sigmoid slope of `2 − value`, this project
+/// uses the value itself (see `inference::model::compute_confidence`).
 ///
 /// Like [`DEFAULT_CONFIDENCE_THRESHOLD`], this is shared by the daemon and the
 /// settings form so they cannot drift. Sensitivity is a pre-sigmoid scale factor
@@ -192,15 +196,7 @@ impl Config {
                 )));
             }
 
-            // Strip surrounding double quotes (PHP-style config values)
-            let value = value.trim();
-            let value = value
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .unwrap_or(value)
-                .to_string();
-
-            values.insert(key, value);
+            values.insert(key, parse_value(value));
         }
 
         Ok(Self { values })
@@ -232,10 +228,23 @@ impl Config {
         T::Err: fmt::Display,
     {
         let value = self.require(key)?;
-        value.parse::<T>().map_err(|e| ConfigError::InvalidValue {
-            key: key.into(),
-            message: e.to_string(),
-        })
+        value
+            .parse::<T>()
+            // A decimal comma (`52,52`), which `validate()` accepts through the
+            // same `locale::normalize_decimal`. Without this the file passed
+            // `--doctor` and the number was then silently not read.
+            .or_else(|e| {
+                let normalised = locale::normalize_decimal(value);
+                if normalised == value.trim() {
+                    Err(e)
+                } else {
+                    normalised.parse::<T>().map_err(|_| e)
+                }
+            })
+            .map_err(|e| ConfigError::InvalidValue {
+                key: key.into(),
+                message: e.to_string(),
+            })
     }
 
     /// Get a value with a default if the key is missing.
@@ -254,7 +263,9 @@ impl Config {
         let mut out: Vec<UnknownKey> = self
             .values
             .keys()
-            .filter(|k| !known_keys::is_known(k))
+            .filter(|k| {
+                !known_keys::is_known(k) && !known_keys::INSTALLER_KEYS.contains(&k.as_str())
+            })
             .map(|k| UnknownKey {
                 key: k.clone(),
                 did_you_mean: known_keys::did_you_mean(k),
@@ -280,9 +291,105 @@ impl Config {
     }
 }
 
+/// One value from a `KEY=value` line, read the way `bash` — which BirdNET-Pi
+/// sources this file with — would, as far as it matters here.
+///
+/// * `"…"` or `'…'`: the text between the quotes, verbatim, with anything
+///   after the closing quote ignored if it is a `# comment`. A `#` inside the
+///   quotes is data.
+/// * Unquoted: everything up to a `#` that follows whitespace, trimmed. A `#`
+///   with no whitespace before it is data (`ntfy://host/topic#frag`), and so
+///   are spaces inside the value, which this reader has always kept.
+///
+/// A value whose quotes do not close, or have more than a comment after them,
+/// is read as unquoted text.
+fn parse_value(raw: &str) -> String {
+    let raw = raw.trim();
+    for quote in ['"', '\''] {
+        if let Some(inner) = raw.strip_prefix(quote)
+            && let Some(end) = inner.find(quote)
+        {
+            let rest = inner[end + 1..].trim_start();
+            if rest.is_empty() || rest.starts_with('#') {
+                return inner[..end].to_string();
+            }
+        }
+    }
+    let bytes = raw.as_bytes();
+    let cut = (1..bytes.len())
+        .find(|&i| bytes[i] == b'#' && bytes[i - 1].is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    raw[..cut].trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The keys the installer writes into every config it creates are not
+    /// "unknown". `BIRDNET_LISTEN=` (read back by the installer on re-run) and
+    /// `CADDY_USER=` (read from the environment by the sign-in form) drew an
+    /// unknown-key warning on every start of every fresh install, and kept
+    /// `--doctor` from ever exiting 0. A typo is still reported.
+    #[test]
+    fn the_installers_own_keys_are_not_unknown() {
+        let c = Config::parse("BIRDNET_LISTEN=0.0.0.0:8502\nCADDY_USER=admin\nCONFIDENC=0.8\n")
+            .expect("parses");
+        let unknown: Vec<String> = c.unknown_keys().into_iter().map(|u| u.key).collect();
+        assert_eq!(unknown, vec!["CONFIDENC".to_owned()]);
+    }
+
+    /// The installer's template documents each key on a commented-out line,
+    /// with its range after a `#` on the same line. Uncommenting the key the
+    /// obvious way used to keep the comment as part of the value:
+    /// `CONFIDENCE=0.75          # 0.0–1.0, …` parsed as the whole tail,
+    /// `validate()` rejected it, and the station fell back to its last-good
+    /// configuration — or, with none, ran web-only and recorded nothing.
+    /// `bash`, which BirdNET-Pi sources this file with, reads `0.75`.
+    #[test]
+    fn an_inline_comment_is_not_part_of_the_value() {
+        let c = Config::parse(
+            "CONFIDENCE=0.75          # 0.0–1.0, default 0.75\n\
+             SENSITIVITY=1.25\t# V2.4 only\n\
+             SITE_NAME=\"Back # garden\"   # quoted: the hash is data\n\
+             CADDY_PWD='pa$$ word'  # single quotes, as bash reads them\n\
+             APPRISE_URL=ntfy://host/topic#frag\n\
+             LABEL=two words  # unquoted, spaces kept\n",
+        )
+        .expect("parse");
+        assert_eq!(c.get("CONFIDENCE"), Some("0.75"));
+        assert_eq!(c.get("SENSITIVITY"), Some("1.25"));
+        assert_eq!(c.get("SITE_NAME"), Some("Back # garden"));
+        assert_eq!(c.get("CADDY_PWD"), Some("pa$$ word"));
+        // Counterpart: a `#` with no whitespace before it is data (a URL
+        // fragment, a password), exactly as in bash.
+        assert_eq!(c.get("APPRISE_URL"), Some("ntfy://host/topic#frag"));
+        assert_eq!(c.get("LABEL"), Some("two words"));
+    }
+
+    /// `validate()` accepts a decimal comma (`LATITUDE=52,52`, and its own
+    /// remediation text suggests one), so the runtime must read one too. It
+    /// did not: every consumer used a plain `str::parse`, so a comma latitude
+    /// passed `--doctor` and then silently switched off the occurrence filter,
+    /// the solar schedule and the BirdWeather location, and `CONFIDENCE=0,9`
+    /// quietly ran at the default 0.75.
+    #[test]
+    fn a_value_validate_accepts_is_a_value_the_runtime_reads() {
+        let c = Config::parse("LATITUDE=52,52\nCONFIDENCE=0,9\nSEGMENT=15\n").expect("parse");
+        assert!(
+            super::validate::validate(&c)
+                .iter()
+                .all(|f| f.key != "LATITUDE" && f.key != "CONFIDENCE"),
+            "validate() must accept the comma form for this gate to mean anything"
+        );
+        assert_eq!(c.get_parsed::<f64>("LATITUDE").ok(), Some(52.52));
+        assert_eq!(c.get_parsed::<f32>("CONFIDENCE").ok(), Some(0.9));
+        // Counterpart: integers are untouched, and a comma is not a way to
+        // smuggle a fraction into one.
+        assert_eq!(c.get_parsed::<u32>("SEGMENT").ok(), Some(15));
+        let c = Config::parse("SEGMENT=1,5\n").expect("parse");
+        assert!(c.get_parsed::<u32>("SEGMENT").is_err());
+    }
 
     #[test]
     fn parse_basic_config() {

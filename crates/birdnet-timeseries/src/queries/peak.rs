@@ -87,65 +87,6 @@ LIMIT {limit}"
     }
 }
 
-/// Dawn chorus peak: the single busiest window between sunrise hours.
-#[derive(Debug, Clone)]
-pub struct DawnChorusPeak {
-    /// Date to analyse (ISO-8601).
-    pub date: String,
-    /// Window width in minutes (default: 15).
-    pub window_minutes: u32,
-    /// Start of the dawn window in hours (default: 4).
-    pub hour_start: u32,
-    /// End of the dawn window in hours (default: 9).
-    pub hour_end: u32,
-}
-
-impl DawnChorusPeak {
-    /// Create for a specific date with defaults.
-    pub const fn for_date(date: String) -> Self {
-        Self {
-            date,
-            window_minutes: 15,
-            hour_start: 4,
-            hour_end: 9,
-        }
-    }
-}
-
-impl QueryPlan for DawnChorusPeak {
-    fn sql(&self) -> String {
-        let date = self.date.replace('\'', "''");
-        let wm = self.window_minutes;
-        let hs = self.hour_start;
-        let he = self.hour_end;
-        format!(
-            "WITH windows AS (
-    SELECT
-        range                         AS window_start,
-        range + INTERVAL {wm} MINUTE  AS window_end
-    FROM range(
-        ('{date} 0{hs}:00:00')::TIMESTAMP,
-        ('{date} {he}:00:00')::TIMESTAMP,
-        INTERVAL 5 MINUTE
-    )
-)
-SELECT
-    strftime(w.window_start, '%Y-%m-%d %H:%M:%S') AS window_start,
-    strftime(w.window_end, '%Y-%m-%d %H:%M:%S') AS window_end,
-    COUNT(d.Com_Name)          AS detection_count,
-    COUNT(DISTINCT d.Com_Name) AS species_count,
-    list(DISTINCT d.Com_Name ORDER BY d.Com_Name) AS species_list
-FROM windows w
-LEFT JOIN detections_ts d
-    ON d.detection_timestamp >= w.window_start
-   AND d.detection_timestamp <  w.window_end
-GROUP BY w.window_start, w.window_end
-ORDER BY detection_count DESC
-LIMIT 5"
-        )
-    }
-}
-
 /// Species-specific peak: when is a given species most active?
 #[derive(Debug, Clone)]
 pub struct SpeciesPeak {

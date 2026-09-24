@@ -256,6 +256,14 @@ Corollaries, each learned the same way:
 - **`cargo check` does not build test cfg.** A struct field added for a page
   render compiled clean and broke three `#[cfg(test)]` constructors in the
   same file. Use `cargo check --all-targets`.
+- **A gitignored build output makes a browser gate pass locally only.** The
+  root crate's `build.rs` renders `docs/book` into `docs/book/_generated/html`,
+  which `/help/*` serves; the a11y job builds only `birdnet-web`, so in CI
+  every `/help` page is a 404. The help-drawer gate passed locally on a render
+  left by an earlier root build, and failed on its first CI run. Its link check
+  had also passed on the 404, because an empty list has no stray links. Serve a
+  page a gate depends on from a `page.route` fixture, and assert the fixture
+  was actually used. To reproduce the CI result, move the render aside first.
 - **`No space left on device` surfaces as unrelated test failures.** A full
   disk inside a `cc-rs` build script reported as four failing `birdnet-behavioral`
   ICU/extension tests, in a crate that had not been touched. `df -h /` reads

@@ -40,6 +40,18 @@ resolve_listen_addr() {
 install_service() {
     info "Installing systemd service…"
 
+    # The one unit edit the unit's own comment invites: --analytics-db "" to run
+    # without analytics. This function rewrites the unit on every update, so
+    # the choice has to be read back from the unit it replaces, or the next
+    # update turns analytics on again. Any other path is not carried: a custom
+    # location belongs in a drop-in (`systemctl edit`), which updates keep.
+    local analytics_arg="${DATA_DIR}/analytics.db"
+    if [ -f "${SERVICE_FILE}" ] &&
+        grep -qE -e '^ExecStart=.*--analytics-db (""|'"''"')( |$)' "${SERVICE_FILE}"; then
+        analytics_arg='""'
+        info "Keeping analytics off (--analytics-db \"\" in the existing unit)."
+    fi
+
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=BirdNet-Behavior bird detection and analytics
@@ -102,17 +114,23 @@ Environment=BNB_HELP_DIR=${HELP_DIR}
 # writable, so the watch dir does not need to be in ReadWritePaths.
 ExecStartPre=/bin/mkdir -p ${STREAM_DIR}
 
-# Preflight: run the doctor before starting the main service so a broken
-# install fails fast with an actionable report in the journal, rather than
-# entering a restart loop that fills the disk with logs.
-# Exit 0 (pass) or 1 (warnings only) are both accepted — only exit 2
-# (errors that will prevent operation) keeps the service from starting.
-ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor --config ${CONFIG_FILE} || [ \$? -le 1 ]'
+# Preflight: run the doctor before starting the main service, so its full
+# report is in the journal for every start. --doctor-gate exits 2 only for a
+# failure the station cannot run past (an unreadable config, an invalid listen
+# address, an unwritable database directory, an unusable HTTPS setup); every
+# other failure is reported and the service starts, running without what it
+# names, with the same report at /admin/doctor. Exit 0 and 1 are accepted.
+ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --config ${CONFIG_FILE} || [ \$? -le 1 ]'
 # DuckDB behavioral analytics is compiled into every release binary and enabled
 # here by default (the database is created on first run). To run without it
 # (e.g. on a very low-RAM board), change the flag below to --analytics-db "":
-# removing it does not turn analytics off, it falls back to <database>.duckdb.
-ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${DATA_DIR}/analytics.db
+# an update keeps that choice. Removing the flag does not turn analytics off, it
+# falls back to <database>.duckdb. Any other change to this line is replaced by
+# the next update; make it with `sudo systemctl edit birdnet-behavior` instead.
+ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${analytics_arg}
+# `systemctl reload birdnet-behavior` re-reads LOG_LEVEL / LOG_MODULES from
+# the config and applies them without a restart (the SIGHUP handler in main.rs).
+ExecReload=/bin/kill -HUP \$MAINPID
 
 # Restart policy. panic=abort means panics show up as SIGABRT exits;
 # Restart=always covers panics, OOM kills, and any non-zero exit.
@@ -139,8 +157,9 @@ WatchdogSec=120
 
 # Resource ceilings — cap a runaway process without starving the workload.
 # The bundled DuckDB analytics engine is on by default and its queries can be
-# memory-hungry under load; 1 GiB leaves that headroom (the FP32 model is
-# mmap'd, so its pages are reclaimable and don't count as anonymous RSS). On a
+# memory-hungry under load. The FP32 model is NOT mmap'd: ONNX Runtime loads
+# its weights into anonymous memory, measured at ~575 MB idle and ~650 MB
+# while analysing with analytics on, so 1 GiB is headroom, not slack. On a
 # multi-GB Pi this is the binding limit; on a 512 MB board physical RAM + zram
 # bind first, so raising the cgroup ceiling here is harmless there.
 MemoryHigh=768M

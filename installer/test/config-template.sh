@@ -60,7 +60,8 @@ render() {
     (
         set -uo pipefail
         # shellcheck disable=SC1090
-        source <(sed -n '/^write_config()/,/^}/p' "${REPO_ROOT}/installer/lib/62-config-file.sh")
+        source <(sed -n '/^enable_geomodel_in_kept_config()/,/^}/p;/^write_config()/,/^}/p' \
+            "${REPO_ROOT}/installer/lib/62-config-file.sh")
 
         info()    { :; }
         success() { :; }
@@ -155,6 +156,58 @@ if grep -qE "^# METADATA_MODEL_PATH=" "${OFF}" &&
 else
     fail "GEOMODEL_INSTALLED=0 must not point the station at absent files; got:"
     grep -n "METADATA_" "${OFF}" | sed 's/^/        /'
+fi
+
+echo "=== 3. an upgrade turns the filter on in the config it keeps ==="
+# write_config keeps an existing config, so a station installed before the
+# geomodel shipped downloaded it on update, was told "occurrence filtering is
+# ON", and ran without it: nothing added METADATA_* to the file it kept.
+
+LIVE_MODEL="METADATA_MODEL_PATH=/var/lib/birdnet/models/Geomodel.onnx"
+LIVE_LABELS="METADATA_LABELS_PATH=/var/lib/birdnet/models/Geomodel_Labels.txt"
+
+OLD="${WORK}/pre-geomodel.conf"
+printf 'DB_PATH=/var/lib/birdnet/birds.db\nLATITUDE=51.5\n' > "${OLD}"
+render 1 "${OLD}"
+if grep -qx "${LIVE_MODEL}" "${OLD}" && grep -qx "${LIVE_LABELS}" "${OLD}" &&
+    grep -qx "LATITUDE=51.5" "${OLD}"; then
+    pass "a config with no METADATA_* line gains both, and keeps its own settings"
+else
+    fail "an upgraded pre-geomodel config was left without the filter; got:"
+    sed 's/^/        /' "${OLD}"
+fi
+
+PLACEHOLDER="${WORK}/placeholder.conf"
+printf 'DB_PATH=/var/lib/birdnet/birds.db\n# METADATA_MODEL_PATH=\n# METADATA_LABELS_PATH=\n' > "${PLACEHOLDER}"
+render 1 "${PLACEHOLDER}"
+if grep -qx "${LIVE_MODEL}" "${PLACEHOLDER}" && grep -qx "${LIVE_LABELS}" "${PLACEHOLDER}" &&
+    ! grep -qE "^# METADATA_" "${PLACEHOLDER}"; then
+    pass "the template's empty placeholders (a failed first download) are filled in"
+else
+    fail "the template's own placeholders were not filled in; got:"
+    grep -n "METADATA_" "${PLACEHOLDER}" | sed 's/^/        /'
+fi
+
+# Counterparts: the operator's own commented line is theirs, and nothing is
+# added when the geomodel is not installed.
+CHOSEN="${WORK}/chosen.conf"
+printf '# METADATA_MODEL_PATH=/var/lib/birdnet/models/Geomodel.onnx\n# METADATA_LABELS_PATH=/var/lib/birdnet/models/Geomodel_Labels.txt\n' > "${CHOSEN}"
+before="$(cat "${CHOSEN}")"
+render 1 "${CHOSEN}"
+if [ "$(cat "${CHOSEN}")" = "${before}" ]; then
+    pass "a METADATA_* line the operator commented out is left alone"
+else
+    fail "an operator's commented-out setting was re-enabled; got:"
+    sed 's/^/        /' "${CHOSEN}"
+fi
+
+NONE="${WORK}/none.conf"
+printf 'DB_PATH=/var/lib/birdnet/birds.db\n' > "${NONE}"
+render 0 "${NONE}"
+if ! grep -q "METADATA_" "${NONE}"; then
+    pass "without the geomodel an existing config gains nothing"
+else
+    fail "METADATA_* written with no geomodel installed"
 fi
 
 if [ "${FAILED}" -eq 0 ]; then

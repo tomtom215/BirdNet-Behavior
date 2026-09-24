@@ -828,6 +828,31 @@ pub struct Reconciliation {
     /// `.part` files older than [`STALE_PART_AGE`] removed from the recordings
     /// directory: what a kill mid-write leaves behind (S-4).
     pub stale_parts_removed: usize,
+    /// Detections stamped as pruned whose clip is on disk again — the
+    /// recordings drive came back after a pass that could not see it. The
+    /// stamp is cleared so they play, and are managed by retention, again.
+    pub restored: usize,
+    /// The pass stamped nothing because the directory looked absent rather
+    /// than thinned: unreadable, empty while detections reference clips, or
+    /// missing most of them at once (see [`looks_unmounted`]).
+    pub refused: bool,
+}
+
+/// How many referenced clips must be missing, and what share of them, before
+/// the pass reads it as a missing *drive* rather than missing *clips*.
+const MASS_MISSING_MIN: usize = 20;
+
+/// Whether `missing` of `referenced` clips being absent looks like a
+/// recordings drive that is not there, rather than clips that are not.
+///
+/// A USB or network recordings drive that is unmounted at boot leaves an empty
+/// mountpoint (the disk manager even creates it), and a card returning EIO
+/// makes every `exists()` false. Stamping on that evidence marked the whole
+/// archive pruned — permanently, since retention then skips stamped rows — the
+/// moment a drive was late to mount.
+const fn looks_unmounted(dir_entries: usize, referenced: usize, missing: usize) -> bool {
+    (dir_entries == 0 && referenced > 0)
+        || (missing >= MASS_MISSING_MIN && missing.saturating_mul(2) > referenced)
 }
 
 /// How old a `.part` file must be before it is taken for abandoned. A clip is
@@ -867,13 +892,32 @@ async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Recon
         drop(stmt);
 
         let mut out = Reconciliation::default();
-        for file_name in referenced {
-            let Some(base) = Path::new(&file_name).file_name() else {
-                continue;
-            };
-            if recordings_dir.join(base).exists() {
-                continue;
-            }
+        let dir_entries = std::fs::read_dir(&recordings_dir)
+            .map_err(|e| format!("the recordings directory cannot be read: {e}"))?
+            .count();
+
+        // A clip is missing only when the filesystem says so. An error (EIO,
+        // a stale NFS handle) is not evidence of absence.
+        let missing: Vec<&String> = referenced
+            .iter()
+            .filter(|file_name| {
+                Path::new(file_name.as_str())
+                    .file_name()
+                    .is_some_and(|base| recordings_dir.join(base).try_exists().is_ok_and(|e| !e))
+            })
+            .collect();
+        if looks_unmounted(dir_entries, referenced.len(), missing.len()) {
+            tracing::error!(
+                dir = %recordings_dir.display(),
+                referenced = referenced.len(),
+                missing = missing.len(),
+                "most recorded clips are missing from the recordings directory at once — \
+                 is the recordings drive mounted? Stamping nothing"
+            );
+            out.refused = true;
+        }
+        let to_stamp = if out.refused { Vec::new() } else { missing };
+        for file_name in to_stamp {
             match conn.execute(
                 "UPDATE detections SET Clip_Pruned_At = ?2 \
                  WHERE File_Name = ?1 AND Clip_Pruned_At IS NULL",
@@ -885,6 +929,37 @@ async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Recon
                     error = %e,
                     "clip is missing from disk but the detection could not be stamped"
                 ),
+            }
+        }
+
+        // Undo any stamp whose clip is back: a pass that ran while the drive
+        // was away, before the guard above existed, or a card that answered
+        // EIO for a night.
+        let stamped: Vec<String> = conn
+            .prepare(
+                "SELECT DISTINCT File_Name FROM detections \
+                 WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                   AND Clip_Pruned_At IS NOT NULL",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|e| e.to_string())?;
+        for file_name in stamped {
+            let present = Path::new(&file_name)
+                .file_name()
+                .is_some_and(|base| recordings_dir.join(base).is_file());
+            if present
+                && conn
+                    .execute(
+                        "UPDATE detections SET Clip_Pruned_At = NULL \
+                         WHERE File_Name = ?1 AND Clip_Pruned_At IS NOT NULL",
+                        [&file_name],
+                    )
+                    .is_ok_and(|n| n > 0)
+            {
+                out.restored += 1;
             }
         }
 
@@ -912,10 +987,11 @@ async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Recon
         Ok(Ok(found)) => {
             if found == Reconciliation::default() {
                 tracing::debug!("clip reconciliation: every referenced clip is on disk");
-            } else {
+            } else if found.orphans_stamped > 0 || found.stale_parts_removed > 0 {
                 tracing::warn!(
                     orphans = found.orphans_stamped,
                     stale_parts = found.stale_parts_removed,
+                    restored = found.restored,
                     "clip reconciliation: detections referenced clips the disk no longer had; \
                      stamped as pruned so the clips browser stops offering them"
                 );
@@ -1332,9 +1408,15 @@ fn prune_old_backups_blocking(backup_dir: &Path, keep: usize) -> std::io::Result
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|n| n.contains(".backup."))
+            // Not the `-wal`/`-shm` a read-only check leaves beside a backup:
+            // newer than every backup they sit beside, they took the newest
+            // places in the retention and pushed real snapshots out of it.
+            e.file_name().to_str().is_some_and(|n| {
+                n.contains(".backup.")
+                    && !["-wal", "-shm", "-journal"]
+                        .iter()
+                        .any(|suffix| n.ends_with(suffix))
+            })
         })
         .filter_map(|e| {
             e.metadata()
@@ -1353,6 +1435,11 @@ fn prune_old_backups_blocking(backup_dir: &Path, keep: usize) -> std::io::Result
         match std::fs::remove_file(&path) {
             Ok(()) => tracing::debug!(file = %path.display(), "pruned old backup"),
             Err(e) => tracing::warn!(file = %path.display(), error = %e, "failed to prune backup"),
+        }
+        for sidecar in ["-wal", "-shm"] {
+            let mut name = path.clone().into_os_string();
+            name.push(sidecar);
+            let _ = std::fs::remove_file(PathBuf::from(name));
         }
     }
     if count > 0 {
@@ -1417,6 +1504,45 @@ mod tests {
         prune_old_backups_blocking(tmp.path(), 10).unwrap();
         let remaining: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().collect();
         assert_eq!(remaining.len(), 2);
+    }
+
+    /// The `-wal`/`-shm` a read-only check leaves beside a backup are not
+    /// backups. They are newer than every backup they sit beside, so counted
+    /// as backups they took the newest places in the retention and pushed
+    /// real snapshots out of it — here two of the three.
+    #[test]
+    fn a_checks_sidecars_do_not_push_backups_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let ago = |s| now - std::time::Duration::from_secs(s);
+        for (i, name) in ["1700000001", "1700000002", "1700000003"]
+            .iter()
+            .enumerate()
+        {
+            touch(
+                tmp.path(),
+                &format!("birds.db.backup.{name}"),
+                ago(3000 - 100 * i as u64),
+            );
+        }
+        touch(tmp.path(), "birds.db.backup.1700000003-wal", ago(10));
+        touch(tmp.path(), "birds.db.backup.1700000003-shm", ago(10));
+        prune_old_backups_blocking(tmp.path(), 3).unwrap();
+        let mut backups: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().into_string().unwrap())
+            .filter(|n| !n.ends_with("-wal") && !n.ends_with("-shm"))
+            .collect();
+        backups.sort();
+        assert_eq!(
+            backups,
+            [
+                "birds.db.backup.1700000001",
+                "birds.db.backup.1700000002",
+                "birds.db.backup.1700000003"
+            ]
+        );
     }
 
     #[test]
@@ -2298,7 +2424,8 @@ mod tests {
             found,
             Reconciliation {
                 orphans_stamped: 2,
-                stale_parts_removed: 1
+                stale_parts_removed: 1,
+                ..Reconciliation::default()
             }
         );
         let conn = rusqlite::Connection::open(&db).unwrap();
@@ -2327,6 +2454,108 @@ mod tests {
             run_clip_reconciliation(&db, &recs).await,
             Reconciliation::default()
         );
+    }
+
+    /// A recordings drive that is not mounted is an empty directory, not an
+    /// archive whose every clip was deleted. Stamping on that evidence marked
+    /// the whole history pruned — for good, since retention skips stamped rows
+    /// — the first night a USB drive was slow to mount.
+    #[tokio::test]
+    async fn an_empty_recordings_directory_is_not_read_as_every_clip_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            for (i, day) in ["2026-05-01", "2026-05-02", "2026-05-03"]
+                .iter()
+                .enumerate()
+            {
+                seed_clip(&conn, &recs, "European Robin", day, &format!("c{i}.wav"));
+            }
+        }
+        // The drive goes away: the mountpoint is left empty.
+        for i in 0..3 {
+            std::fs::remove_file(recs.join(format!("c{i}.wav"))).unwrap();
+        }
+
+        let found = run_clip_reconciliation(&db, &recs).await;
+        assert!(found.refused, "an empty mountpoint must be refused");
+        assert_eq!(found.orphans_stamped, 0);
+        let stamped: i64 = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Clip_Pruned_At IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stamped, 0,
+            "the archive was marked pruned while its drive was away"
+        );
+    }
+
+    /// Most clips vanishing at once, with the directory still holding
+    /// something, is the same event seen through a card returning EIO.
+    #[tokio::test]
+    async fn most_clips_missing_at_once_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            for i in 0..25 {
+                seed_clip(
+                    &conn,
+                    &recs,
+                    "European Robin",
+                    "2026-05-01",
+                    &format!("m{i}.wav"),
+                );
+            }
+        }
+        for i in 1..25 {
+            std::fs::remove_file(recs.join(format!("m{i}.wav"))).unwrap();
+        }
+        let found = run_clip_reconciliation(&db, &recs).await;
+        assert!(found.refused);
+        assert_eq!(found.orphans_stamped, 0);
+    }
+
+    /// A stamp is undone when its clip is back, so a pass that ran while the
+    /// drive was away is not permanent.
+    #[tokio::test]
+    async fn a_clip_that_is_back_is_unstamped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip(&conn, &recs, "European Robin", "2026-05-01", "back.wav");
+            conn.execute(
+                "UPDATE detections SET Clip_Pruned_At = 1 WHERE File_Name = 'back.wav'",
+                [],
+            )
+            .unwrap();
+        }
+        let found = run_clip_reconciliation(&db, &recs).await;
+        assert_eq!(found.restored, 1);
+        let pruned: Option<i64> = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT Clip_Pruned_At FROM detections WHERE File_Name = 'back.wav'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pruned, None, "a clip that is on disk must not stay stamped");
     }
 
     #[tokio::test]

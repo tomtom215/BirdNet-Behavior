@@ -136,12 +136,15 @@ EOF
         fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
+    derive_home_paths
+}
 
-    # Under sudo, $HOME is usually /root, not the service user's home — so the
-    # data dir computed at the top of this script can land in /root, which the
-    # non-root service user cannot reach (and ProtectHome=read-only would block
-    # it anyway). Re-derive every home-based path from the service user's actual
-    # home so the daemon can read its database, recordings, and model.
+# Under sudo, $HOME is usually /root, not the service user's home — so the
+# data dir computed at the top of this script can land in /root, which the
+# non-root service user cannot reach (and ProtectHome=read-only would block
+# it anyway). Re-derive every home-based path from the service user's actual
+# home so the daemon can read its database, recordings, and model.
+derive_home_paths() {
     local svc_home
     svc_home="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
     if [ -n "${svc_home}" ]; then

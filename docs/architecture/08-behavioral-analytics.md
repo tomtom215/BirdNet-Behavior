@@ -229,7 +229,7 @@ are still served as permanent redirects into those tabs — see
 CREATE OR REPLACE VIEW detections_ts AS
 SELECT *,
     TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
-    CAST(to_timestamp(detected_at_utc) AS TIMESTAMP) AS detection_instant,
+    make_timestamp(detected_at_utc * 1000000) AS detection_instant,
     TRY_CAST(Date AS DATE) AS detection_date
 FROM detections
 WHERE review_verdict IS DISTINCT FROM 'rejected';

@@ -81,15 +81,28 @@ impl QueryPlan for QuietDays {
         let max_d = self.max_detections;
         let days = self.lookback_days;
         format!(
-            "SELECT
-    strftime(detection_date, '%Y-%m-%d') AS date,
-    COUNT(*)                AS detection_count,
-    COUNT(DISTINCT Com_Name) AS species_count
-FROM detections_ts
-WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
-GROUP BY detection_date
-HAVING COUNT(*) <= {max_d}
-ORDER BY detection_date"
+            "WITH counts AS (
+    SELECT detection_date, COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS species
+    FROM detections_ts
+    WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+      AND detection_date < CURRENT_DATE
+    GROUP BY detection_date
+),
+spine AS (
+    SELECT CAST(range AS DATE) AS detection_date
+    FROM range(
+        (SELECT MIN(detection_date) FROM counts)::TIMESTAMP,
+        CURRENT_DATE::TIMESTAMP,
+        INTERVAL 1 DAY
+    )
+)
+SELECT
+    strftime(s.detection_date, '%Y-%m-%d') AS date,
+    COALESCE(c.n, 0)       AS detection_count,
+    COALESCE(c.species, 0) AS species_count
+FROM spine s LEFT JOIN counts c USING (detection_date)
+WHERE COALESCE(c.n, 0) <= {max_d}
+ORDER BY s.detection_date"
         )
     }
 }
@@ -226,13 +239,14 @@ mod tests {
     }
 
     #[test]
-    fn quiet_days_having_clause() {
+    fn quiet_days_threshold_clause() {
         let q = QuietDays {
             max_detections: 3,
             lookback_days: 14,
         };
         let sql = q.sql();
-        assert!(sql.contains("HAVING COUNT(*) <= 3"));
+        // Against the zero-filled count, so a silent day qualifies (ANA13).
+        assert!(sql.contains("WHERE COALESCE(c.n, 0) <= 3"));
     }
 
     #[test]

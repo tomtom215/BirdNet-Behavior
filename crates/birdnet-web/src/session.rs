@@ -91,9 +91,20 @@ pub const SESSION_ID_LEN: usize = 26;
 fn process_random_secret() -> &'static [u8] {
     static SECRET: OnceLock<[u8; 32]> = OnceLock::new();
     SECRET.get_or_init(|| {
-        // Same best-effort scramble routes::share uses for its per-process
-        // fallback. Quality is bounded by std-only entropy, so callers
-        // should set BNB_SESSION_SECRET in production.
+        let mut bytes = [0_u8; 32];
+        {
+            use password_hash::rand_core::{OsRng, RngCore};
+            if OsRng.try_fill_bytes(&mut bytes).is_ok() {
+                return bytes;
+            }
+        }
+        // The OS has no randomness to give, which on Linux means getrandom
+        // itself failed. What follows is a 64-bit seed from the clock and the
+        // pid — searchable offline — so it is said at error level. It was
+        // the only source here, and the share key's too.
+        tracing::error!(
+            "no OS randomness for the session secret; falling back to a clock-seeded one"
+        );
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0xDEAD_BEEF_u64, |d| {

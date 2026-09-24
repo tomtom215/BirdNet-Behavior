@@ -18,18 +18,23 @@ use super::{Check, tool_exists};
 use crate::cli::Cli;
 
 pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
-    let alsa = cli
+    // A blank value is an unset one, as it is to capture
+    // (`capture/sources.rs`). Read as a value, `RTSP_URL=` failed the RTSP
+    // probe, `ALSA_CARD=` failed the ALSA one, and the doctor's exit 2 kept
+    // the unit from starting at all over lines capture itself ignores.
+    let set = |v: Option<String>| v.filter(|v| !v.trim().is_empty());
+    let alsa = set(cli
         .alsa_device
         .clone()
-        .or_else(|| config?.get("ALSA_CARD").map(String::from));
-    let pulse = cli
+        .or_else(|| config?.get("ALSA_CARD").map(String::from)));
+    let pulse = set(cli
         .pipewire_device
         .clone()
-        .or_else(|| config?.get("PIPEWIRE_DEVICE").map(String::from));
-    let rtsp_single = cli
+        .or_else(|| config?.get("PIPEWIRE_DEVICE").map(String::from)));
+    let rtsp_single = set(cli
         .rtsp_url
         .clone()
-        .or_else(|| config?.get("RTSP_URL").map(String::from));
+        .or_else(|| config?.get("RTSP_URL").map(String::from)));
     let rtsp_multi = if cli.rtsp_urls.is_empty() {
         None
     } else {
@@ -483,6 +488,28 @@ mod tests {
         assert_eq!(checks[0].name, "Audio source");
         assert_eq!(checks[0].status, Status::Warn);
         assert!(checks[0].message.contains('2'));
+    }
+
+    /// A blank source key is an unset one, as it is to capture. `RTSP_URL=`
+    /// failed the RTSP probe ("does not start with rtsp://"), the doctor
+    /// exited 2, and the unit's `ExecStartPre` kept the station from starting
+    /// at all — no recording and no web UI to find out why — over a line
+    /// capture itself ignores.
+    #[test]
+    fn a_blank_source_key_does_not_fail_the_doctor() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let config =
+            birdnet_core::config::Config::parse("RTSP_URL=\nALSA_CARD=\nPIPEWIRE_DEVICE=\n")
+                .expect("parses");
+        let checks = check_audio_source(&cli, Some(&config));
+        assert!(
+            checks.iter().all(|c| c.status != Status::Fail),
+            "{:?}",
+            checks
+                .iter()
+                .map(|c| (&c.name, &c.status, &c.message))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

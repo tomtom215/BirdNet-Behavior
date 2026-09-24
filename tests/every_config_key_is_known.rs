@@ -106,6 +106,7 @@ const READ_SHAPES: &[&str] = &[
     "check_unit_range(config, \"",
     "check_bounded(config, \"",
     "check_positive_int(config, \"",
+    "value_of(config, \"",
     // The API token is read through a named constant.
     "pub const API_TOKEN_KEY: &str = \"",
     // The capture watchdog's knobs carry both their names in one table

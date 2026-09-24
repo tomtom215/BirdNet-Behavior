@@ -220,6 +220,14 @@ pub fn init_site_name(
     }
 }
 
+/// The species-information site the station links to.
+///
+/// `/admin/settings` lands in `INFO_SITE` via the overlay; an explicit
+/// `--info-site` still wins, as for every other bridged setting.
+pub fn info_site(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> String {
+    super::resolve::setting_str(cli, "info_site", &cli.info_site, config, "INFO_SITE")
+}
+
 /// Load the eBird species codes for the species page's "View on eBird" link
 /// (NP-1), from the metadata model's label file when one is configured.
 ///
@@ -499,6 +507,22 @@ pub fn run_refresh_extension(
 mod tests {
     use super::{init_i18n, init_image_cache, init_site_name, init_species_codes};
     use crate::helpers::test_support::{config_with, default_cli, test_state};
+
+    /// `/admin/settings` writes `info_site`, which the overlay turns into
+    /// `INFO_SITE`. The station read only `--info-site`, so the setting — and
+    /// the same line in `birdnet.conf` — changed nothing it linked to.
+    #[test]
+    fn the_info_site_setting_is_the_one_the_station_links_to() {
+        let config = config_with(&[("INFO_SITE", "allaboutbirds")]);
+        assert_eq!(
+            super::info_site(&default_cli(), Some(&config)),
+            "allaboutbirds"
+        );
+        // Counterparts: an explicit flag still wins, and nothing set is eBird.
+        let cli = crate::helpers::test_support::cli_with_explicit(&["info_site"]);
+        assert_eq!(super::info_site(&cli, Some(&config)), "ebird");
+        assert_eq!(super::info_site(&default_cli(), None), "ebird");
+    }
 
     // ── init_species_codes (NP-1) ─────────────────────────────────────
 

@@ -93,9 +93,10 @@ impl From<rusqlite::Error> for AccountsError {
 pub enum Role {
     /// Full mutation rights across the `/admin/*` panel.
     Admin,
-    /// Read-only access: can view overview, quality, notifications, system status, and the
-    /// audit log, but cannot reach settings, audio sources, alert rules, migrations, or
-    /// system controls.
+    /// Read-only access: can open every page behind the sign-in, the settings
+    /// forms included (credentials masked), and can change nothing. Refused the
+    /// reads that export credentials or the database — see
+    /// `birdnet_web::auth_middleware::viewer_may_read`.
     Viewer,
 }
 

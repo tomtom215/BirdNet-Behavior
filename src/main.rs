@@ -107,7 +107,7 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::SupportBundle
     } else if cli.install_model.is_some() {
         Action::InstallModel
-    } else if cli.doctor || cli.doctor_json || cli.fix {
+    } else if cli.doctor || cli.doctor_json || cli.fix || cli.doctor_gate {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
         // `--fix` alone implies the human-readable doctor.
@@ -149,6 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Use a reloadable filter so SIGHUP can change the log level at runtime.
+    let startup_rust_log = std::env::var("RUST_LOG").ok();
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(composed.clone()));
     let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
@@ -185,21 +186,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("{warning}");
     }
 
-    // Spawn SIGHUP handler for runtime log level changes.
-    // Usage: set RUST_LOG env var then `kill -HUP <pid>`.
+    // SIGHUP re-reads LOG_LEVEL / LOG_MODULES from the config file, so a
+    // log level can change without a restart: edit birdnet.conf, then
+    // `systemctl reload birdnet-behavior` (the unit's ExecReload sends it).
     #[cfg(unix)]
     {
         let handle = reload_handle;
-        let reload_default = composed.clone();
+        let reload_cli = cli.clone();
         tokio::spawn(async move {
             let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
                 .expect("failed to install SIGHUP handler");
             loop {
                 sighup.recv().await;
-                let new_filter = EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new(reload_default.clone()));
-                match handle.reload(new_filter) {
-                    Ok(()) => tracing::info!("log filter reloaded via SIGHUP"),
+                let (spec, warnings) = reload_filter_spec(&reload_cli, startup_rust_log.as_deref());
+                for warning in &warnings {
+                    tracing::warn!("{warning}");
+                }
+                match handle.reload(EnvFilter::new(&spec)) {
+                    Ok(()) => tracing::info!(filter = %spec, "log filter reloaded via SIGHUP"),
                     Err(e) => tracing::error!(error = %e, "failed to reload log filter"),
                 }
             }
@@ -294,6 +298,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Action::RunServer => app::run(cli, config, log_broadcaster).await,
     }
+}
+
+/// The log filter a `SIGHUP` applies: the startup rule, read again.
+///
+/// `RUST_LOG` as the process started with it wins outright, as it did at
+/// start; otherwise the flags beat the config file's `LOG_LEVEL` and
+/// `LOG_MODULES`, which are re-read now. The handler used to re-read only the
+/// process's own `RUST_LOG`, which nothing outside can change once it runs, so
+/// a SIGHUP re-applied the startup filter and changed nothing.
+fn reload_filter_spec(cli: &Cli, startup_rust_log: Option<&str>) -> (String, Vec<String>) {
+    if let Some(env) = startup_rust_log.filter(|v| !v.trim().is_empty()) {
+        return (env.to_owned(), Vec::new());
+    }
+    let config = birdnet_core::config::Config::load_from(&cli.config).ok();
+    log_filter::compose(
+        cli.log_level
+            .as_deref()
+            .or_else(|| config.as_ref().and_then(|c| c.get("LOG_LEVEL"))),
+        cli.log_modules
+            .as_deref()
+            .or_else(|| config.as_ref().and_then(|c| c.get("LOG_MODULES"))),
+    )
 }
 
 #[cfg(test)]
@@ -468,6 +494,34 @@ mod tests {
         assert_eq!(
             dispatch_subcommand(&cli(&["--web-only"])),
             Action::RunServer
+        );
+    }
+
+    /// A SIGHUP applies the log level the config file says now.
+    #[test]
+    fn a_sighup_applies_the_log_level_the_config_says_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("birdnet.conf");
+        let path = conf.to_str().unwrap();
+        std::fs::write(&conf, "LOG_LEVEL=info\n").unwrap();
+        let cli = cli(&["--config", path]);
+        let (before, _) = super::reload_filter_spec(&cli, None);
+        std::fs::write(&conf, "LOG_LEVEL=trace\n").unwrap();
+        let (after, _) = super::reload_filter_spec(&cli, None);
+        assert!(before.starts_with("info"), "{before}");
+        assert!(
+            after.starts_with("trace"),
+            "the edited level was not applied: {after}"
+        );
+
+        // Counterparts: RUST_LOG from the start still wins, and a flag still
+        // beats the file.
+        assert_eq!(super::reload_filter_spec(&cli, Some("warn")).0, "warn");
+        let flagged = self::cli(&["--config", path, "--log-level", "error"]);
+        assert!(
+            super::reload_filter_spec(&flagged, None)
+                .0
+                .starts_with("error")
         );
     }
 }

@@ -67,6 +67,20 @@ async fn apply_update(
         Some(&format!("from={current}")),
     );
 
+    // Before any network: the swap stages its files beside the running binary,
+    // and under the shipped systemd unit that directory is read-only to the
+    // service (ProtectSystem=strict, a non-root user). The download used to run
+    // first and fail after ~100 MB with an I/O error that named no remedy.
+    let current_binary = std::env::current_exe().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot determine current binary path: {e}"),
+        )
+    })?;
+    if let Some(refusal) = cannot_replace(&current_binary) {
+        return Err((StatusCode::CONFLICT, refusal));
+    }
+
     let info = tokio::task::spawn_blocking(move || auto_update::check_for_update(current))
         .await
         .map_err(|e| {
@@ -106,13 +120,6 @@ async fn apply_update(
         ));
     };
 
-    let current_binary = std::env::current_exe().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("cannot determine current binary path: {e}"),
-        )
-    })?;
-
     tokio::task::spawn_blocking(move || {
         auto_update::apply_update(&download_url, &current_binary, Some(&expected_sha256))
     })
@@ -130,4 +137,49 @@ async fn apply_update(
         "version": latest_version,
         "message": "Binary updated. Restart the service to use the new version.",
     })))
+}
+
+/// Why this process cannot replace `binary`, or `None` when it can.
+///
+/// Answered by creating (and removing) a file where the update stages its
+/// own, which is the question that matters: `access(2)` does not see a
+/// read-only mount namespace, a real create does.
+fn cannot_replace(binary: &std::path::Path) -> Option<String> {
+    let dir = binary.parent()?;
+    match tempfile::Builder::new()
+        .prefix(".birdnet-update-probe")
+        .tempfile_in(dir)
+    {
+        Ok(_) => None,
+        Err(e) => Some(format!(
+            "this station cannot replace its own binary: {} is not writable to it ({e}). \
+             Nothing was downloaded. Update from a shell instead: \
+             curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- update",
+            dir.display()
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Under the shipped unit the binary's directory is read-only to the
+    /// service, and the update learned that only after downloading the
+    /// release. The refusal comes first now, and says what to run instead.
+    #[test]
+    fn an_update_the_station_cannot_install_is_refused_before_downloading() {
+        // /proc refuses a new file even to root, which runs these tests here.
+        let refusal = super::cannot_replace(std::path::Path::new("/proc/birdnet-behavior"))
+            .expect("a directory the process cannot write is refused");
+        assert!(refusal.contains("install.sh"), "{refusal}");
+        assert!(refusal.contains("Nothing was downloaded"), "{refusal}");
+
+        // Counterpart: a writable directory is not refused, and the probe
+        // leaves nothing behind.
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            super::cannot_replace(&dir.path().join("birdnet-behavior")),
+            None
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
 }

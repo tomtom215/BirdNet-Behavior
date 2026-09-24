@@ -543,11 +543,14 @@ async fn rules_list_partial(State(state): State<AppState>) -> Html<String> {
     Html(render_rules_table(&rules))
 }
 
+/// A rule that could not be created says so in a toast; see
+/// [`delete_rule_handler`] for why not a `4xx`/`5xx`.
 async fn create_rule(
     State(state): State<AppState>,
     request_user: RequestUser,
     Form(form): Form<RuleForm>,
-) -> Result<Html<String>, StatusCode> {
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
     // Normalise empty strings to None
     let species_pattern = form
         .species_pattern
@@ -561,10 +564,11 @@ async fn create_rule(
 
     let action = match form.action_type.as_str() {
         "webhook" => {
-            let url = form
-                .action_webhook_url
-                .filter(|s| !s.trim().is_empty())
-                .ok_or(StatusCode::UNPROCESSABLE_ENTITY)?;
+            let Some(url) = form.action_webhook_url.filter(|s| !s.trim().is_empty()) else {
+                return crate::routes::pages::toast::not_applied(&Toast::error(
+                    "A webhook rule needs a URL to send to. The rule was not created.",
+                ));
+            };
             AlertAction::Webhook {
                 url: url.trim().to_string(),
                 method: form
@@ -597,10 +601,15 @@ async fn create_rule(
     };
 
     let audit_state = state.clone();
-    tokio::task::spawn_blocking(move || state.with_db(|conn| insert_rule(conn, &new_rule)))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let inserted =
+        tokio::task::spawn_blocking(move || state.with_db(|conn| insert_rule(conn, &new_rule)))
+            .await;
+    if !matches!(inserted, Ok(Ok(_))) {
+        tracing::warn!(rule = %rule_name, "alert rule not created");
+        return crate::routes::pages::toast::not_applied(&Toast::error(format!(
+            "The rule '{rule_name}' was not created: the database refused the write."
+        )));
+    }
     // A rule can suppress detections or POST to a webhook, so "who added the
     // one that has been swallowing owls since March?" is an audit question.
     crate::audit::audit(
@@ -618,10 +627,7 @@ async fn create_rule(
         "#rules-table-container"
     ));
     // O-18: toast the success outcome via OOB.
-    Ok(toast::with(
-        body,
-        Toast::success(format!("Rule '{rule_name}' enabled.")),
-    ))
+    toast::with(body, Toast::success(format!("Rule '{rule_name}' enabled."))).into_response()
 }
 
 /// A failure here answers 200 with a toast rather than a 5xx.

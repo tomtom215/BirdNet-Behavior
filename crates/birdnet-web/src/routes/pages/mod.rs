@@ -173,6 +173,9 @@ pub(crate) const SIGN_OUT_LINK_HTML: &str = r#"<form action="/logout" method="po
 /// Render a full page, populating the `{{sign_out_link}}` slot when the
 /// request carries a valid `bnb-session` cookie.
 ///
+/// `title` is plain text; it is HTML-escaped here, so callers must not escape
+/// it themselves.
+///
 /// The check is HMAC-only (see [`crate::session::looks_signed_in`]) — no
 /// DB round-trip, no extension lookup. A revoked-but-still-in-browser
 /// cookie may surface the sign-out link; the subsequent `POST /logout`
@@ -213,8 +216,11 @@ fn render_page_inner(
     // The partial *shells* (the `<dialog>`/`<nav>` chrome + their scripts) are
     // inlined first; the tab bar's `{{tabbar_slots}}` slot is filled by the
     // manifest-generated list in the same pass.
+    // Escaped here, once, for every caller: a title is text, and some callers
+    // build it from the URL (`/species/detail?name=`), where an unescaped
+    // `</title><script>` became a script the CSP nonce stamping then blessed.
     let html = LAYOUT_HTML
-        .replace("{{title}}", title)
+        .replace("{{title}}", &escape_html(title))
         .replace("{{active_nav}}", active_nav)
         .replace("{{content}}", content)
         .replace("{{topnav_links}}", &topnav_links)

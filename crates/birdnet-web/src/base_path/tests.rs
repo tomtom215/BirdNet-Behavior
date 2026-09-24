@@ -197,7 +197,7 @@ fn nothing_but_a_url_attribute_is_touched() {
         // A title that happens to contain a path.
         r#"<span title="/etc/passwd">x</span>"#,
         // An attribute whose name merely ends in a URL attribute's name.
-        r#"<div data-href="/today"></div>"#,
+        r#"<div data-prefetch-href="/today"></div>"#,
         r#"<div xhref="/today"></div>"#,
         // Another origin.
         r#"<a href="//cdn.example.com/lib.js">x</a>"#,
@@ -307,4 +307,45 @@ fn every_shipped_template_is_rewritten_completely() {
         seen_urls >= 80,
         "only {seen_urls} URLs prefixed across the templates; the scan is not seeing them"
     );
+}
+
+/// M8: the URL attributes this application's scripts read are rewritten too.
+///
+/// `data-href` (the command palette follows it), `data-play-src` (Recordings
+/// plays it), `data-help-drawer` (the help drawer fetches it) and
+/// `data-copy-url` (joined to `location.origin`) are site-root paths. Under a
+/// prefix each pointed outside the application.
+#[test]
+fn the_url_data_attributes_scripts_read_are_prefixed() {
+    let b = base("/birdnet");
+    for attr in [
+        "data-href",
+        "data-play-src",
+        "data-help-drawer",
+        "data-copy-url",
+    ] {
+        let html = format!(r#"<li {attr}="/today">x</li>"#);
+        assert_eq!(
+            rewrite_html(&html, &b),
+            format!(r#"<li {attr}="/birdnet/today">x</li>"#),
+            "{attr}"
+        );
+    }
+}
+
+/// M8: a single-quoted URL attribute is rewritten like a double-quoted one.
+///
+/// Some markup quotes `hx-get` with `'` (the weekly report, the history
+/// calendar); the scan anchored on `="/` only, so those requests left the
+/// prefix. A single-quoted `hx-vals` holds JSON, which starts with `{`, and is
+/// untouched.
+#[test]
+fn a_single_quoted_url_attribute_is_prefixed() {
+    let b = base("/birdnet");
+    assert_eq!(
+        rewrite_html("<div hx-get='/pages/weekly-content'></div>", &b),
+        "<div hx-get='/birdnet/pages/weekly-content'></div>"
+    );
+    let vals = r#"<button hx-vals='{"date":"/x"}'>x</button>"#;
+    assert_eq!(rewrite_html(vals, &b), vals);
 }

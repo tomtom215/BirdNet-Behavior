@@ -348,6 +348,14 @@ fn firstrun_checklist(
             (mark, detail.to_string(), format!("{pct:.0}% used"))
         },
     );
+    // The station listens only when the two rows that make it listen pass. A
+    // live "Listening for the first call…" under "Microphone not recording"
+    // promised what the rows above had just withdrawn.
+    let listening_row = if mic_mark == "done" && model_loaded {
+        r#"<div class="x-check-row"><span class="mk wait"><span class="bnb-dot live"></span></span><div class="c"><div class="t">Listening for the first call…</div><div class="d">this can take a few minutes</div></div><span class="v">—</span></div>"#
+    } else {
+        r#"<div class="x-check-row"><span class="mk wait"><span class="bnb-dot"></span></span><div class="c"><div class="t">Not listening yet</div><div class="d">starts once the microphone and detector above are ready</div></div><span class="v">—</span></div>"#
+    };
     format!(
         r#"<div class="bnb-card pad">
       <div class="bnb-eyebrow td-check-eb">Getting ready</div>
@@ -356,7 +364,7 @@ fn firstrun_checklist(
         <div class="x-check-row">{mic_mark_html}<div class="c"><div class="t">{mic_title}</div><div class="d">{mic_detail}</div></div><span class="v">{mic_value}</span></div>
         {model_row}
         <div class="x-check-row">{disk_mark_html}<div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>
-        <div class="x-check-row"><span class="mk wait"><span class="bnb-dot live"></span></span><div class="c"><div class="t">Listening for the first call…</div><div class="d">this can take a few minutes</div></div><span class="v">—</span></div>
+        {listening_row}
       </div>
     </div>"#
     )
@@ -654,13 +662,13 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
                     ("rare sightings are", "they're", "them")
                 };
                 return format!(
-                    r#"<div class="x-nudge" data-screen-label="Review nudge"><span class="ico">✦</span><div class="txt"><b>{pending} {noun} waiting for your eye.</b> Confirm {verb} real to add {obj} to your records.</div><a class="bnb-btn primary" href="/quarantine">Review →</a></div>"#
+                    r#"<div class="x-nudge" data-screen-label="Review nudge" data-announce="{pending} {noun} waiting for review."><span class="ico">✦</span><div class="txt"><b>{pending} {noun} waiting for your eye.</b> Confirm {verb} real to add {obj} to your records.</div><a class="bnb-btn primary" href="/quarantine">Review →</a></div>"#
                 );
             }
             if let Some((silent, last)) = capture_outage(conn) {
                 let dur = fmt_duration(silent);
                 return format!(
-                    r#"<div class="x-nudge" data-screen-label="Outage banner"><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
+                    r#"<div class="x-nudge" data-screen-label="Outage banner" data-announce="No detections recently: the microphone may be unplugged or the recorder stopped."><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
                 );
             }
             String::new()
@@ -850,13 +858,19 @@ async fn today_partial(
                 search.as_deref(),
                 filter,
             )?;
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, total))
+            // Which clips are locked, so each card offers the right toggle.
+            let locked: std::collections::HashSet<String> =
+                birdnet_db::sqlite::locked_file_names(conn)?
+                    .iter()
+                    .map(|f| super::recordings::base_name(f))
+                    .collect();
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, locked))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, total))) => {
+        Ok(Ok((detections, total, locked))) => {
             let mut html = String::with_capacity(4096);
 
             if detections.is_empty() && offset == 0 {
@@ -865,10 +879,13 @@ async fn today_partial(
             }
 
             for d in &detections {
-                render_detection_card(&mut html, d);
+                render_detection_card(&mut html, d, &locked);
             }
 
-            // "Load more" button if there are more results
+            // "Load more" button if there are more results. It replaces
+            // itself with the next page — rows and, if any remain, the next
+            // button — so the list grows; it used to swap the next page into
+            // the whole list, throwing away what the reader had scrolled past.
             let shown = offset + limit;
             #[allow(
                 clippy::cast_possible_truncation,
@@ -895,7 +912,7 @@ async fn today_partial(
                     html,
                     "<div class=\"tdl-more\">\
                      <button hx-get=\"/pages/today-list?offset={shown}&limit={limit}{search_param}{filter_param}\" \
-                     hx-target=\"#today-full\" hx-swap=\"innerHTML\" \
+                     hx-target=\"closest .tdl-more\" hx-swap=\"outerHTML\" \
                      class=\"tdl-more-btn\">\
                      Load {limit} more ({remaining} remaining)\
                      </button></div>",
@@ -1028,7 +1045,17 @@ fn parse_hour_fraction(t: &str) -> f64 {
 }
 
 /// Render a single detection row into the HTML buffer.
-fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
+///
+/// `locked` holds the base names of locked clips. The lock toggle is the one
+/// Recordings uses, in its real state, and only on a detection with a clip:
+/// every card used to carry the same "Lock" button, so a locked clip offered
+/// to be locked again, could not be unlocked here, and a detection with no
+/// clip offered a lock that protected nothing (M9).
+fn render_detection_card(
+    html: &mut String,
+    d: &birdnet_db::sqlite::DetectionRow,
+    locked: &std::collections::HashSet<String>,
+) {
     let enc_name = simple_url_encode(&d.com_name);
 
     // Fixed-size play affordance (shared clip player) — native <audio>
@@ -1050,6 +1077,15 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
         })
         .unwrap_or_default();
 
+    let lock = d
+        .file_name
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .map(|f| {
+            let is_locked = locked.contains(&super::recordings::base_name(f));
+            super::recordings::lock_button(&d.date, &d.time, &d.sci_name, is_locked)
+        })
+        .unwrap_or_default();
     let av = avatar(&d.com_name, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
     let com_name = escape_html(&d.com_name);
@@ -1075,10 +1111,7 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
          {audio}\
          </div>\
          <div class=\"tdl-card-actions\">\
-         <button class=\"bnb-btn ghost\" hx-post=\"/pages/today-lock\" \
-         hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
-         hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \
-         title=\"Lock this detection (protect from auto-purge)\">🔒</button>\
+         {lock}\
          <button class=\"bnb-btn danger\" hx-post=\"/pages/today-delete\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
          hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \
@@ -1098,11 +1131,33 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
 /// list (its container) with the current search/filter still applied.
 const RELOAD_LIST: &str = "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\"></div>";
 
+/// The list reloaded, and a toast that says what the write did.
+fn after_write(
+    write: super::toast::RowWrite,
+    done: &str,
+    failed: &str,
+) -> axum::response::Response {
+    use super::toast::{RowWrite, Toast};
+    match write {
+        RowWrite::Done => super::toast::with(
+            axum::response::Html(RELOAD_LIST.to_string()),
+            Toast::success(done),
+        )
+        .into_response(),
+        RowWrite::Gone => super::toast::with(
+            axum::response::Html(RELOAD_LIST.to_string()),
+            Toast::info("That detection is no longer there — it may have been removed elsewhere."),
+        )
+        .into_response(),
+        RowWrite::Failed => super::toast::not_applied(&Toast::error(failed)),
+    }
+}
+
 /// Delete a detection and re-render the list.
 async fn delete_detection(
     State(state): State<AppState>,
     Form(form): Form<DeleteForm>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let date = form.date;
     let time = form.time;
     let sci_name = form.sci_name;
@@ -1110,13 +1165,12 @@ async fn delete_detection(
     // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
     // copy is incremental and can never notice a removal on its own, so the
     // deletion has to be mirrored at the same moment.
-    let _ =
+    let result =
         tokio::task::spawn_blocking(move || state.delete_detection(&date, &time, &sci_name)).await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "delete detection"),
+        "Detection deleted.",
+        "The station could not delete that detection.",
     )
 }
 
@@ -1124,9 +1178,9 @@ async fn delete_detection(
 async fn relabel_detection(
     State(state): State<AppState>,
     Form(form): Form<RelabelForm>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Paired write — see `delete_detection` above.
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.relabel_detection(
             &form.date,
             &form.time,
@@ -1136,11 +1190,10 @@ async fn relabel_detection(
         )
     })
     .await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "relabel detection"),
+        "Detection relabelled.",
+        "The station could not relabel that detection.",
     )
 }
 
@@ -1148,18 +1201,17 @@ async fn relabel_detection(
 async fn lock_detection(
     State(state): State<AppState>,
     Form(form): Form<LockForm>,
-) -> impl IntoResponse {
-    let _ = tokio::task::spawn_blocking(move || {
+) -> axum::response::Response {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             birdnet_db::sqlite::lock_detection(conn, &form.date, &form.time, &form.sci_name)
         })
     })
     .await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "lock clip"),
+        "Clip locked — it will not be removed to free space.",
+        "The station could not lock that clip, so it is not protected.",
     )
 }
 
@@ -1167,18 +1219,17 @@ async fn lock_detection(
 async fn unlock_detection(
     State(state): State<AppState>,
     Form(form): Form<LockForm>,
-) -> impl IntoResponse {
-    let _ = tokio::task::spawn_blocking(move || {
+) -> axum::response::Response {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             birdnet_db::sqlite::unlock_detection(conn, &form.date, &form.time, &form.sci_name)
         })
     })
     .await;
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        RELOAD_LIST.to_string(),
+    after_write(
+        super::toast::RowWrite::from_result(result, "unlock clip"),
+        "Clip unlocked.",
+        "The station could not unlock that clip.",
     )
 }
 
@@ -1316,6 +1367,27 @@ mod tests {
             html.contains("/station/capture"),
             "must point at where to fix it"
         );
+    }
+
+    /// "Listening for the first call…" with a live dot sat under
+    /// "Microphone not recording" and "Detector not running": a promise the
+    /// two rows above it had just withdrawn.
+    #[test]
+    fn firstrun_checklist_listens_only_when_the_microphone_and_detector_are_up() {
+        let s = src("src_1");
+        for (capturing, model) in [(Some(false), true), (None, true), (Some(true), false)] {
+            let html = firstrun_checklist(&[&s], Some(38.0), capturing, true, model);
+            assert!(
+                !html.contains("bnb-dot live") && !html.contains("Listening for the first call"),
+                "capturing={capturing:?} model={model}: {html}"
+            );
+        }
+        let none = firstrun_checklist(&[], Some(38.0), None, true, true);
+        assert!(!none.contains("bnb-dot live"), "no microphone: {none}");
+
+        let html = firstrun_checklist(&[&s], Some(38.0), Some(true), true, true);
+        assert!(html.contains("Listening for the first call"), "{html}");
+        assert!(html.contains("bnb-dot live"), "{html}");
     }
 
     #[test]

@@ -491,3 +491,38 @@ fn a_retain_override_does_not_disturb_the_stations_own_setting() {
         "a detection still follows the station's setting"
     );
 }
+
+/// Two detections published at once are two clients, not one.
+///
+/// Each stateless publish opens its own connection, and the processor runs
+/// one per detection on the blocking pool — so several species in one
+/// segment overlap. They all sent the configured client ID, and MQTT 3.1.1
+/// §3.1.4 has the broker disconnect an existing client when another connects
+/// with its ID: the earlier publish's connection was cut, its `QoS` 0 message
+/// silently lost or its `QoS` 1 publish failed.
+#[test]
+fn concurrent_publishes_do_not_share_a_client_id() {
+    let (a, rx_a) = broker(Behaviour::default());
+    let (b, rx_b) = broker(Behaviour::default());
+    publish(&config_for(&a), "garden/detection/Blackbird", b"{}").expect("publish a");
+    publish(&config_for(&b), "garden/detection/Robin", b"{}").expect("publish b");
+    let (first, _) = rx_a.recv().expect("broker a reported");
+    let (second, _) = rx_b.recv().expect("broker b reported");
+    assert_ne!(first.client_id, second.client_id);
+    assert!(
+        first.client_id.starts_with("station-presence"),
+        "still recognisably the station's: {}",
+        first.client_id
+    );
+}
+
+/// The counterpart: the presence session keeps the configured ID, because
+/// its will — "offline" — is tied to it and must survive reconnects.
+#[test]
+fn the_presence_session_keeps_its_configured_id() {
+    let (addr, rx) = broker(Behaviour::default());
+    let session = PresenceSession::connect(&config_for(&addr)).expect("connect");
+    session.shutdown().expect("shutdown");
+    let (connect, _) = rx.recv().expect("broker reported");
+    assert_eq!(connect.client_id, "station-presence");
+}

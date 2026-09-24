@@ -203,6 +203,8 @@ struct AppStateInner {
     /// a GitHub Actions runner sets. See
     /// `routes::admin::system_controls::service::supervised_by_systemd`.
     supervised_by_systemd: bool,
+    /// Admission for the live `WebSockets` (origin and cap).
+    live_sockets: crate::live_sockets::LiveSockets,
     /// Failed sign-ins per client address (O-6), consulted before Argon2
     /// runs. Process-lifetime state: a restart forgives, which is the
     /// reference project's behaviour too.
@@ -313,6 +315,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
@@ -554,6 +557,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
@@ -608,6 +612,7 @@ impl AppState {
                 ingest_halted: Arc::new(AtomicBool::new(false)),
                 api_token: None,
                 supervised_by_systemd: false,
+                live_sockets: crate::live_sockets::LiveSockets::default(),
                 login_throttle: LoginThrottle::default(),
                 data_volume: std::sync::RwLock::new(None),
                 admin_bootstrap_failed: AtomicBool::new(false),
@@ -848,6 +853,23 @@ impl AppState {
         Self {
             inner: rebuild_inner(inner, |s| s.supervised_by_systemd = supervised),
         }
+    }
+
+    /// Cap each kind of live `WebSocket` at `limit` connections.
+    #[must_use]
+    pub fn with_live_socket_limit(self, limit: usize) -> Self {
+        let inner = unwrap_inner(self.inner, "with_live_socket_limit");
+        Self {
+            inner: rebuild_inner(inner, |s| {
+                s.live_sockets = crate::live_sockets::LiveSockets::with_limit(limit);
+            }),
+        }
+    }
+
+    /// Admission for the live `WebSockets`.
+    #[must_use]
+    pub fn live_sockets(&self) -> &crate::live_sockets::LiveSockets {
+        &self.inner.live_sockets
     }
 
     // -----------------------------------------------------------------------

@@ -203,6 +203,14 @@ CADDY_PWD=a-long-random-password
 
 After editing the config, restart the service (`sudo systemctl restart birdnet-behavior`). This is **still plain HTTP** — only rely on it behind TLS, or on a trusted LAN. **Clearing `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard; if the server binds to a non-loopback address (e.g. the default `0.0.0.0`) with no `CADDY_PWD` set, it logs a prominent warning at startup. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (they sit outside the gated router, and a browser cannot attach a session to a `WebSocket` handshake anyway), and are read-only in any case — restrict those at the network layer if you need to.
 
+### Admins and viewers {#roles}
+
+Each account on **Station → Access** is an **admin** or a **viewer**.
+
+- An **admin** can do everything the sign-in protects.
+- A **viewer** can open every page behind the sign-in, the settings forms included, but can change nothing: every save, delete, lock, review or other change is refused (`403`). The settings forms show a viewer every stored password, token and key masked.
+- A viewer is also refused the few pages that would hand over credentials or the whole database: the full backup and the backup files, the support bundle, the alert-rules export (webhook URLs carry their tokens), and an audio source's own settings (an RTSP URL carries its password). The source's status pill stays visible.
+
 ## Cross-origin requests (CORS)
 
 By default the API allows **no** cross-origin reads — a website you happen to visit can't read your station's data over the LAN. If you serve a separate dashboard from a different origin, allow it explicitly:
