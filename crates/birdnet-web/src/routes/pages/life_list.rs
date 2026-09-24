@@ -62,17 +62,92 @@ async fn life_accumulation_partial(
             return super::error_states::failed_partial("your life list's growth over time");
         }
     };
-    let mut cum: i64 = 0;
-    let points: Vec<(String, i64)> = monthly
-        .iter()
-        .map(|(month, &c)| {
-            cum += i64::from(c);
-            (month.get(2..).unwrap_or(month).to_string(), cum)
-        })
-        .collect();
+    let this_month = super::today_date_string()
+        .get(..7)
+        .unwrap_or_default()
+        .to_string();
+    let points = accumulation_points(&monthly, &this_month);
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
         super::viz::accumulation_curve(&points),
     )
+}
+
+/// The cumulative curve's points: every month from the first species through
+/// `this_month` (`YYYY-MM`), labelled `YY-MM`.
+///
+/// Every month, not only those that added a species (ANA14a): a plateau is
+/// part of the record, and without it the x-axis is not time. Through this
+/// month, so the curve ends at the present rather than at the last addition.
+fn accumulation_points(
+    monthly: &std::collections::BTreeMap<String, u32>,
+    this_month: &str,
+) -> Vec<(String, i64)> {
+    let parse = |m: &str| -> Option<(i32, u32)> {
+        let (y, mo) = m.split_once('-')?;
+        Some((y.parse().ok()?, mo.parse().ok()?))
+    };
+    let (Some(first), Some(last)) = (
+        monthly.keys().next().and_then(|m| parse(m)),
+        monthly.keys().next_back().and_then(|m| parse(m)),
+    ) else {
+        return Vec::new();
+    };
+    let end = parse(this_month).map_or(last, |now| now.max(last));
+    let mut out = Vec::new();
+    let mut cum: i64 = 0;
+    let (mut y, mut mo) = first;
+    while (y, mo) <= end {
+        let key = format!("{y:04}-{mo:02}");
+        cum += i64::from(monthly.get(&key).copied().unwrap_or(0));
+        out.push((key.get(2..).unwrap_or(&key).to_string(), cum));
+        (y, mo) = if mo == 12 { (y + 1, 1) } else { (y, mo + 1) };
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::accumulation_points;
+
+    /// `ANA14a`: a month with no new species is a flat step, not a missing one.
+    ///
+    /// The curve had one point per month that *added* a species, so January
+    /// then June drew as two adjacent points — five months of plateau erased,
+    /// and the x-axis no longer time. It also stopped at the last addition
+    /// rather than at the present.
+    #[test]
+    fn the_curve_has_every_month_through_this_one() {
+        let monthly = [("2026-01".to_string(), 3), ("2026-04".to_string(), 2)]
+            .into_iter()
+            .collect();
+        let points = accumulation_points(&monthly, "2026-06");
+        let expected: Vec<(String, i64)> = [
+            ("26-01", 3),
+            ("26-02", 3),
+            ("26-03", 3),
+            ("26-04", 5),
+            ("26-05", 5),
+            ("26-06", 5),
+        ]
+        .into_iter()
+        .map(|(m, n)| (m.to_string(), n))
+        .collect();
+        assert_eq!(points, expected);
+    }
+
+    /// Counterparts: across a year boundary, and with nothing to draw.
+    #[test]
+    fn the_curve_crosses_a_year_and_is_empty_without_data() {
+        let monthly = [("2025-11".to_string(), 1), ("2026-01".to_string(), 1)]
+            .into_iter()
+            .collect();
+        let months: Vec<String> = accumulation_points(&monthly, "2026-01")
+            .into_iter()
+            .map(|(m, _)| m)
+            .collect();
+        assert_eq!(months, ["25-11", "25-12", "26-01"]);
+        assert!(accumulation_points(&std::collections::BTreeMap::new(), "2026-01").is_empty());
+    }
 }
