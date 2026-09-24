@@ -598,6 +598,45 @@ async function helpDrawerDeepLink(page) {
   check('help: relative links resolve inside /help', stray.length === 0, JSON.stringify(stray.slice(0, 3)));
 }
 
+/** M13: a hidden tab does not poll; it catches up when shown.
+ *
+ * Every `hx-trigger="every …"` kept firing in a background tab — a Today page
+ * left open all day is a dozen database reads a minute that nobody sees. htmx
+ * filters (`[!document.hidden]`) need `eval`, which the CSP refuses.
+ */
+async function hiddenTabsDoNotPoll(page) {
+  let polls = 0;
+  page.on('request', (r) => {
+    if (r.url().includes('/pages/today-count?bare=1&zz=poll')) polls += 1;
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => {
+    window.__hidden = false;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__hidden });
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => (window.__hidden ? 'hidden' : 'visible'),
+    });
+    const d = document.createElement('div');
+    d.id = 'zz-poll';
+    d.setAttribute('hx-get', '/pages/today-count?bare=1&zz=poll');
+    d.setAttribute('hx-trigger', 'every 1s');
+    document.body.appendChild(d);
+    window.htmx.process(d);
+    window.__hidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(3500);
+  check('poll: a hidden tab does not poll', polls === 0, `${polls} poll(s) while hidden`);
+  const atShow = polls;
+  await page.evaluate(() => {
+    window.__hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(600);
+  check('poll: showing the tab refreshes at once', polls > atShow, `${polls - atShow} poll(s) after showing`);
+}
+
 const page404 = [];
 
 async function main() {
@@ -630,6 +669,7 @@ async function main() {
     ['palette loads on open', paletteLoadsOnOpen],
     ['co-occurrence range holds', correlationRangeHolds],
     ['help drawer deep link', helpDrawerDeepLink],
+    ['hidden tabs do not poll', hiddenTabsDoNotPoll],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();

@@ -215,6 +215,7 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Live Logs — BirdNet-Behavior Admin</title>
   <script src="/static/htmx.min.js?v={{version}}"></script>
+  <script src="/static/poll-visibility.js?v={{version}}"></script>
   <script src="/static/htmx-sse.js?v={{version}}"></script>
   <style>
     body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }
