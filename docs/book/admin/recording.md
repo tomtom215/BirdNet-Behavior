@@ -19,6 +19,10 @@ By default the station listens **all day**. To record only during chosen windows
 BIRDNET_RECORDING_SCHEDULE=all-day      # default
 ```
 
+The same choice is on **Settings → Location & Recording Schedule**. Set the
+variable only to pin it: an environment variable wins over the settings page,
+which then shows your choice while the station runs this one.
+
 The [scheduler](../reference/architecture.md) computes sunrise and sunset from your latitude/longitude, so schedules can be anchored to solar events (e.g. the dawn-chorus window) rather than fixed clock times. This is also what powers the day/night cues in the dashboard and the kiosk night mode.
 
 > Set your **location** accurately — sunrise/sunset, the species-frequency filter, and any solar-anchored schedule all depend on it.

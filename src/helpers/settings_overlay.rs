@@ -1551,4 +1551,105 @@ mod tests {
         }
         assert!(wrong.is_empty(), "{wrong:#?}");
     }
+
+    /// No shipped Docker file may set a variable that silently beats the
+    /// settings page.
+    ///
+    /// An environment variable counts as an explicit flag, and an explicit
+    /// flag wins over `/admin/settings` for every setting resolved through
+    /// `resolve::setting*`. `docker-compose.yml` gave
+    /// `BIRDNET_RECORDING_SCHEDULE` and `BIRDNET_SEGMENT_DURATION` defaults, and
+    /// `.env.example` — which the quick start copies to `.env` — set several
+    /// more, so choosing "solar" on the page still recorded all day. A variable
+    /// is a problem when it is set (not commented out), names a clap argument
+    /// resolved that way, and that argument is a settings-page key.
+    #[test]
+    fn no_shipped_docker_file_overrides_the_settings_page() {
+        use clap::CommandFactory as _;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        // Argument ids resolved with explicit-flag precedence.
+        let src_dir = root.join("src");
+        let mut stack = vec![src_dir];
+        let mut sources = String::new();
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    sources.push_str(&std::fs::read_to_string(&path).unwrap());
+                }
+            }
+        }
+        let squashed: String = sources.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut explicit = BTreeSet::new();
+        for marker in ["setting(", "setting_str(", "setting_bool(", "setting::<"] {
+            for (at, _) in squashed.match_indices(marker) {
+                let rest = &squashed[at..];
+                if let Some(q) = rest.find('"').filter(|q| *q < 80) {
+                    let id: String = rest[q + 1..].chars().take_while(|c| *c != '"').collect();
+                    if rest[..q].contains("cli") {
+                        explicit.insert(id);
+                    }
+                }
+            }
+        }
+        assert!(
+            explicit.contains("recording_schedule"),
+            "precondition: the scan sees the resolver: {explicit:?}"
+        );
+
+        let page_keys: BTreeSet<&str> = SETTING_SPECS.iter().map(|(k, _, _)| *k).collect();
+        let env_to_id: BTreeMap<String, String> = crate::cli::Cli::command()
+            .get_arguments()
+            .filter_map(|a| {
+                a.get_env()
+                    .map(|e| (e.to_string_lossy().into_owned(), a.get_id().to_string()))
+            })
+            .collect();
+
+        let mut set = Vec::new();
+        let example = std::fs::read_to_string(root.join(".env.example")).unwrap();
+        for line in example.lines() {
+            if let Some((name, _)) = line.trim().split_once('=')
+                && !line.trim_start().starts_with('#')
+            {
+                set.push((".env.example", name.trim().to_owned()));
+            }
+        }
+        for entry in std::fs::read_dir(root).unwrap().flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !(name.starts_with("docker-compose")
+                && path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("yml")))
+            {
+                continue;
+            }
+            for line in std::fs::read_to_string(&path).unwrap().lines() {
+                let t = line.trim();
+                if t.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = t.split_once(':')
+                    && key.starts_with("BIRDNET_")
+                    && !value.trim().is_empty()
+                {
+                    set.push(("docker-compose", key.trim().to_owned()));
+                }
+            }
+        }
+
+        let wrong: Vec<String> = set
+            .iter()
+            .filter_map(|(file, var)| {
+                let id = env_to_id.get(var)?;
+                (explicit.contains(id) && page_keys.contains(id.as_str()))
+                    .then(|| format!("{file}: {var} beats the page's {id}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 }
