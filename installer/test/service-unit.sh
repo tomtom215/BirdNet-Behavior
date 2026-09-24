@@ -41,7 +41,9 @@ trap 'rm -rf "${WORK}"' EXIT
 
 UNIT="${WORK}/birdnet-behavior.service"
 
-# Generate the unit with the real install_service, from the real module.
+# Generate a unit at $1 with the real install_service, from the real module.
+# A unit already at $1 is what install_service regenerates over, as an update.
+generate_unit() {
 (
     set -euo pipefail
     # shellcheck disable=SC1090
@@ -53,7 +55,7 @@ UNIT="${WORK}/birdnet-behavior.service"
     has_systemd() { return 1; }   # write the unit, do not touch systemctl
 
     # shellcheck disable=SC2034  # read by the sourced install_service
-    SERVICE_FILE="${UNIT}"
+    SERVICE_FILE="$1"
     # shellcheck disable=SC2034
     REPO="tomtom215/BirdNet-Behavior"
     # shellcheck disable=SC2034
@@ -81,6 +83,8 @@ UNIT="${WORK}/birdnet-behavior.service"
 
     install_service
 ) >/dev/null 2>&1
+}
+generate_unit "${UNIT}"
 
 if [ ! -s "${UNIT}" ]; then
     fail "install_service produced no unit file"
@@ -201,6 +205,26 @@ if grep -qE '^ExecStartPre=.*--doctor-gate' "${UNIT}"; then
     pass "ExecStartPre runs the doctor as a start gate"
 else
     fail "ExecStartPre runs the plain doctor — any Fail, however minor, stops the station starting"
+fi
+
+echo
+echo "=== 4c. an update keeps the documented analytics opt-out ==="
+# The unit's own comment says to run without analytics by changing the flag to
+# --analytics-db "". install_service rewrites the unit on every update, so that
+# edit was reverted at the next one and analytics came back on.
+KEPT="${WORK}/opted-out.service"
+printf '[Service]\nExecStart=/usr/local/bin/birdnet-behavior --config /etc/birdnet/birdnet.conf --analytics-db ""\n' > "${KEPT}"
+generate_unit "${KEPT}"
+if grep -qE '^ExecStart=.*--analytics-db ""( |$)' "${KEPT}"; then
+    pass "--analytics-db \"\" survives the regeneration"
+else
+    fail "an update turned analytics back on: $(grep -E '^ExecStart=' "${KEPT}")"
+fi
+# Counterpart: a unit with the default path keeps the default.
+if grep -qE '^ExecStart=.*--analytics-db /home/birdnet/BirdNet-Behavior/analytics.db( |$)' "${UNIT}"; then
+    pass "a fresh unit uses the default analytics path"
+else
+    fail "a fresh unit lost the default analytics path: $(grep -E '^ExecStart=' "${UNIT}")"
 fi
 
 echo

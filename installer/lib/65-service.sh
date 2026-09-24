@@ -40,6 +40,18 @@ resolve_listen_addr() {
 install_service() {
     info "Installing systemd service…"
 
+    # The one unit edit the unit's own comment invites: --analytics-db "" to run
+    # without analytics. This function rewrites the unit on every update, so
+    # the choice has to be read back from the unit it replaces, or the next
+    # update turns analytics on again. Any other path is not carried: a custom
+    # location belongs in a drop-in (`systemctl edit`), which updates keep.
+    local analytics_arg="${DATA_DIR}/analytics.db"
+    if [ -f "${SERVICE_FILE}" ] &&
+        grep -qE -e '^ExecStart=.*--analytics-db (""|'"''"')( |$)' "${SERVICE_FILE}"; then
+        analytics_arg='""'
+        info "Keeping analytics off (--analytics-db \"\" in the existing unit)."
+    fi
+
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=BirdNet-Behavior bird detection and analytics
@@ -112,8 +124,10 @@ ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --config ${
 # DuckDB behavioral analytics is compiled into every release binary and enabled
 # here by default (the database is created on first run). To run without it
 # (e.g. on a very low-RAM board), change the flag below to --analytics-db "":
-# removing it does not turn analytics off, it falls back to <database>.duckdb.
-ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${DATA_DIR}/analytics.db
+# an update keeps that choice. Removing the flag does not turn analytics off, it
+# falls back to <database>.duckdb. Any other change to this line is replaced by
+# the next update; make it with `sudo systemctl edit birdnet-behavior` instead.
+ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${analytics_arg}
 
 # Restart policy. panic=abort means panics show up as SIGABRT exits;
 # Restart=always covers panics, OOM kills, and any non-zero exit.
