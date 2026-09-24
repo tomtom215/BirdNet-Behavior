@@ -255,8 +255,30 @@ pub fn process_and_infer_filtered(
     // geomodel scored against a BirdNET label set; a second classifier with a
     // different vocabulary is filtered by its own thresholds and lists, not by
     // a geomodel that has never heard of its labels.
-    let allowed_species =
-        species_filter.filter_species(lat.zip(lon), week, registry.primary().model.labels())?;
+    let primary_labels = registry.primary().model.labels();
+    let allowed_species = species_filter.filter_species(lat.zip(lon), week, primary_labels)?;
+    // Species only another routed classifier knows: the operator's lists
+    // alone. Every detection used to be checked against the primary's set,
+    // so a species outside BirdNET's vocabulary was dropped whichever model
+    // heard it.
+    let primary_names: std::collections::HashSet<&str> = primary_labels
+        .iter()
+        .map(|l| l.scientific_name.as_str())
+        .collect();
+    let allowed_elsewhere: std::collections::HashSet<String> = route
+        .iter()
+        .filter(|&&idx| idx != 0)
+        .filter_map(|&idx| registry.model(idx))
+        .flat_map(|m| species_filter.allowed_by_lists(m.model.labels()))
+        .filter(|name| !primary_names.contains(name.as_str()))
+        .collect();
+    let allowed = |sci: &str| {
+        if primary_names.contains(sci) {
+            allowed_species.contains(sci)
+        } else {
+            allowed_elsewhere.contains(sci)
+        }
+    };
     if let Some(observer) = filter_observer {
         observer.report(
             species_filter.has_model(),
@@ -270,7 +292,7 @@ pub fn process_and_infer_filtered(
 
     for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
         for detection in detections {
-            if !allowed_species.contains(&detection.scientific_name) {
+            if !allowed(&detection.scientific_name) {
                 continue;
             }
 

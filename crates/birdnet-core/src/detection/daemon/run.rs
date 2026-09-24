@@ -1132,6 +1132,69 @@ mod tests {
         );
     }
 
+    /// A species only the second classifier knows is recorded, and the
+    /// operator's lists still apply to it.
+    ///
+    /// Every detection was checked against an allow-list built from the
+    /// primary's labels alone, so a species outside BirdNET's vocabulary — the
+    /// reason to run Perch in the tropics — was dropped whichever model heard
+    /// it, contradicting both the docs and the comment above that line.
+    #[test]
+    fn a_species_only_the_second_classifier_knows_is_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.model.confidence_threshold = 0.0;
+        let other_labels = tmp.path().join("other.txt");
+        std::fs::write(
+            &other_labels,
+            (0..11)
+                .map(|i| format!("Other{i}_Other bird {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        config
+            .extra_models
+            .push(crate::inference::registry::ModelSpec {
+                id: "second".to_owned(),
+                model_path: config.model_path.clone(),
+                labels_path: other_labels,
+                threshold: None,
+                sample_rate: None,
+            });
+        config.model_routes.insert(
+            "pond".to_owned(),
+            vec!["birdnet".to_owned(), "second".to_owned()],
+        );
+        config.species_filter.exclude_list = vec!["Other1".to_owned()];
+        let (event_tx, event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-pond-09:00:00.wav", 3);
+
+        let mut species = std::collections::BTreeSet::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            match event_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(ev) => {
+                    species.insert(ev.detection.scientific_name);
+                }
+                Err(_) if !species.is_empty() => break,
+                Err(_) => {}
+            }
+        }
+        handle.stop();
+        assert!(
+            species.iter().any(|s| s.starts_with("Species")),
+            "precondition: the primary's species are recorded: {species:?}"
+        );
+        assert!(
+            species.contains("Other0"),
+            "the second classifier's own species were dropped: {species:?}"
+        );
+        // Counterpart: the operator's exclude list still binds on them.
+        assert!(!species.contains("Other1"), "{species:?}");
+    }
+
     #[test]
     fn run_daemon_loop_advances_heartbeat() {
         // A healthy detection loop must keep advancing its heartbeat, so the
