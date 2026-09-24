@@ -499,10 +499,19 @@ pub(super) fn build_extraction_config(
     .filter(|v| (MIN_CEILING_DBFS..MAX_CEILING_DBFS).contains(v))
     .unwrap_or(birdnet_core::audio::extraction::DEFAULT_PEAK_CEILING_DBFS);
 
+    // `/admin/settings` lands in `AUDIOFMT` via the overlay; the flag alone
+    // used to decide, so the page's choice was never the format clips got.
+    let audio_format = crate::helpers::resolve::setting_str(
+        cli,
+        "audio_format",
+        &cli.audio_format,
+        config,
+        "AUDIOFMT",
+    );
     ExtractionConfig {
         extraction_length,
-        target_format: AudioFormat::parse(&cli.audio_format),
-        audio_format: cli.audio_format.clone(),
+        target_format: AudioFormat::parse(&audio_format),
+        audio_format,
         output_dir: recordings_dir.to_path_buf(),
         recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz,
@@ -1160,6 +1169,22 @@ mod tests {
         // Default still applies to extraction_length:
         let default = ExtractionConfig::default();
         assert!((cfg.extraction_length - default.extraction_length).abs() < f32::EPSILON);
+    }
+
+    /// `/admin/settings` writes `audio_format`, which the overlay turns into
+    /// `AUDIOFMT`. Clips were cut in `--audio-format` alone, so choosing FLAC
+    /// or MP3 on the page — or in `birdnet.conf` — still saved WAV.
+    #[test]
+    fn the_clip_format_setting_is_the_one_clips_are_saved_in() {
+        let config = config_with(&[("AUDIOFMT", "flac")]);
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = build_extraction_config(&cli, Some(&config), Path::new("/r"));
+        assert_eq!(cfg.audio_format, "flac");
+        assert_eq!(cfg.target_format, AudioFormat::Flac);
+        // Counterpart: an explicit flag still wins over the setting.
+        let cli = cli_with_explicit(&["audio_format"]);
+        let cfg = build_extraction_config(&cli, Some(&config), Path::new("/r"));
+        assert_eq!(cfg.audio_format, "wav");
     }
 
     #[test]

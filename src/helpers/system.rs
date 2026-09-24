@@ -10,18 +10,18 @@ use crate::cli::Cli;
 /// detection pipeline needs to read and extract them — so the RAM-backed stream
 /// dir (`--watch-dir`, typically `/tmp/birdnet-stream`) self-drains instead of
 /// filling to 100 %. Override with `STREAM_RETENTION_SECS` in the config.
-const DEFAULT_STREAM_RETENTION_SECS: u64 = 600;
+pub const DEFAULT_STREAM_RETENTION_SECS: u64 = 600;
 
 /// Default hard ceiling on the transient stream dir, in mebibytes — a backstop
 /// for many-stream / backed-up runs; oldest segments drop first. Override with
 /// `STREAM_MAX_MB` in the config.
-const DEFAULT_STREAM_MAX_MB: u64 = 512;
+pub const DEFAULT_STREAM_MAX_MB: u64 = 512;
 
 /// Default disk-usage percentage at which the oldest recordings start being
 /// purged. Override with `--disk-purge-threshold`,
 /// `BIRDNET_DISK_PURGE_THRESHOLD`, the `DISK_PURGE_THRESHOLD` config key, or
 /// the admin **Settings → System** form.
-const DEFAULT_PURGE_THRESHOLD: u8 = 95;
+pub const DEFAULT_PURGE_THRESHOLD: u8 = 95;
 
 /// Start the disk managers as background threads — one per directory that can
 /// fill up.

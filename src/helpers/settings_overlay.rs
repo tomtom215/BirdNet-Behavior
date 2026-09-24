@@ -1472,4 +1472,83 @@ mod tests {
         let cli = crate::helpers::test_support::default_cli();
         assert!(cli_station_settings(&cli).is_empty());
     }
+
+    /// What the settings form shows for a key with no row must be what the
+    /// station runs on for it.
+    ///
+    /// The two sunrise/sunset offsets showed `0` while the station ran on
+    /// `--twilight-offset`'s 30 minutes, so the page described a recording
+    /// window half an hour shorter at each end than the real one — and before
+    /// 9590ca9 one press of Save wrote those zeros in and made it so. Each
+    /// runtime value below is read from the same `Cli` default or constant the
+    /// runtime falls back to, never retyped.
+    #[test]
+    fn every_form_default_is_what_the_station_runs_on() {
+        use birdnet_web::routes::admin::settings::render::form_default;
+        let cli = crate::helpers::test_support::default_cli();
+        let numeric: &[(&str, f64)] = &[
+            ("pre_sunrise_offset", f64::from(cli.twilight_offset)),
+            ("post_sunset_offset", f64::from(cli.twilight_offset)),
+            ("segment_duration", f64::from(cli.segment_duration)),
+            ("freq_shift_hz", f64::from(cli.freq_shift_hz)),
+            ("notify_confidence", f64::from(cli.notify_confidence)),
+            ("overlap", f64::from(cli.overlap)),
+            ("sf_thresh", f64::from(cli.sf_thresh)),
+            ("privacy_threshold", f64::from(cli.privacy_threshold)),
+            (
+                "confidence_threshold",
+                f64::from(birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),
+            ),
+            (
+                "sensitivity",
+                f64::from(birdnet_core::config::DEFAULT_SENSITIVITY),
+            ),
+            (
+                "deadman_hours",
+                f64::from(crate::integrations::DEFAULT_DEADMAN_HOURS),
+            ),
+            (
+                "purge_threshold",
+                f64::from(crate::helpers::system::DEFAULT_PURGE_THRESHOLD),
+            ),
+            (
+                "stream_retention_secs",
+                f64::from(
+                    u32::try_from(crate::helpers::system::DEFAULT_STREAM_RETENTION_SECS).unwrap(),
+                ),
+            ),
+            (
+                "stream_max_mb",
+                f64::from(u32::try_from(crate::helpers::system::DEFAULT_STREAM_MAX_MB).unwrap()),
+            ),
+        ];
+        let text: &[(&str, &str)] = &[
+            ("audio_format", &cli.audio_format),
+            ("info_site", &cli.info_site),
+            ("recording_schedule", &cli.recording_schedule),
+            ("weekly_report_schedule", &cli.weekly_report_schedule),
+            ("notify_trigger", &cli.notify_trigger),
+            ("confirmation_level", &cli.confirmation_level),
+            ("database_lang", &cli.lang),
+        ];
+        let mut wrong = Vec::new();
+        for &(key, runtime) in numeric {
+            let shown = form_default(key);
+            match shown.parse::<f64>() {
+                Ok(v) if (v - runtime).abs() < 1e-6 => {}
+                _ => wrong.push(format!(
+                    "{key}: form shows {shown:?}, station runs on {runtime}"
+                )),
+            }
+        }
+        for &(key, runtime) in text {
+            let shown = form_default(key);
+            if shown != runtime {
+                wrong.push(format!(
+                    "{key}: form shows {shown:?}, station runs on {runtime:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 }

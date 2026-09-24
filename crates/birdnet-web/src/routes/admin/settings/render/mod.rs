@@ -103,7 +103,7 @@ pub(in crate::routes::admin::settings) fn get_setting(
 /// and pinned each default in the table, where it outranks a later
 /// `birdnet.conf` edit of the same key. Comparing with the value the form
 /// actually showed writes only what the operator changed.
-pub(in crate::routes::admin::settings) fn form_default(key: &str) -> String {
+pub fn form_default(key: &str) -> String {
     // The detection defaults mirror the daemon's shared constants, so the form
     // never advertises a value the station does not apply. `{:.2}` keeps the
     // familiar two-decimal form (0.70) from the shared 0.7 constant.
@@ -120,11 +120,10 @@ pub(in crate::routes::admin::settings) fn form_default(key: &str) -> String {
 fn fixed_form_default(key: &str) -> &'static str {
     match key {
         "audio_format" => "wav",
-        "clip_retention_days"
-        | "freq_shift_hz"
-        | "max_files_per_species"
-        | "post_sunset_offset"
-        | "pre_sunrise_offset" => "0",
+        "clip_retention_days" | "freq_shift_hz" | "max_files_per_species" => "0",
+        // The offsets: `--twilight-offset`'s default, which each end falls
+        // back to. rare_species_days: the reader's own default.
+        "post_sunset_offset" | "pre_sunrise_offset" | "rare_species_days" => "30",
         "confirmation_level" => "off",
         "database_lang" => "en",
         "deadman_hours" => "24",
@@ -139,7 +138,6 @@ fn fixed_form_default(key: &str) -> &'static str {
         "notify_trigger" => "each",
         "overlap" | "privacy_threshold" => "0.0",
         "purge_threshold" => "95",
-        "rare_species_days" => "30",
         "recording_schedule" => "all-day",
         "segment_duration" => "15",
         "sf_thresh" => "0.03",

@@ -2,6 +2,9 @@
 
 use std::sync::Arc;
 
+/// The sender name before one is set — the one the settings page shows.
+const DEFAULT_SENDER_NAME: &str = "BirdNet-Behavior";
+
 /// Type alias for the shared email notifier handle.
 pub type EmailHandle = Arc<birdnet_integrations::email::EmailNotifier>;
 
@@ -42,7 +45,6 @@ pub fn create_email_notifier(state: &birdnet_web::state::AppState) -> Option<Ema
             let cooldown_secs = s(get_or(conn, "email_cooldown_secs", "300"), "300")
                 .parse::<u64>()
                 .unwrap_or(300);
-            let from_name_str = s(get_or(conn, "email_from_name", ""), "");
             Ok::<EmailConfig, birdnet_db::settings::SettingsError>(EmailConfig {
                 smtp_host: smtp_host.clone(),
                 smtp_port,
@@ -50,11 +52,7 @@ pub fn create_email_notifier(state: &birdnet_web::state::AppState) -> Option<Ema
                 password: s(get_or(conn, "email_smtp_pass", ""), ""),
                 from_address: s(get_or(conn, "email_from", ""), ""),
                 to_address: s(get_or(conn, "email_to", ""), ""),
-                from_name: if from_name_str.is_empty() {
-                    None
-                } else {
-                    Some(from_name_str)
-                },
+                from_name: sender_name(conn),
                 use_starttls,
                 min_confidence,
                 cooldown_secs,
@@ -85,9 +83,46 @@ pub fn create_email_notifier(state: &birdnet_web::state::AppState) -> Option<Ema
     }
 }
 
+/// The display name alert mail is sent under: the settings page's default
+/// until one is set, and none if the operator cleared it.
+fn sender_name(conn: &rusqlite::Connection) -> Option<String> {
+    birdnet_db::settings::get_or(conn, "email_from_name", DEFAULT_SENDER_NAME)
+        .ok()
+        .filter(|name| !name.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::create_email_notifier;
+
+    /// The settings page shows "BirdNet-Behavior" as the sender name of a
+    /// station that has never set one, and mail went out with no name at all.
+    /// A name the operator cleared on purpose is still no name.
+    #[test]
+    fn mail_is_sent_under_the_name_the_settings_page_shows() {
+        use birdnet_db::settings::{SettingsCategory, ensure_settings_table, set};
+        let state = crate::integrations::test_support::test_state();
+        state.with_db(|conn| {
+            ensure_settings_table(conn).unwrap();
+            assert_eq!(
+                super::sender_name(conn).as_deref(),
+                Some(
+                    birdnet_web::routes::admin::settings::render::form_default("email_from_name")
+                        .as_str()
+                )
+            );
+            set(conn, "email_from_name", "", SettingsCategory::Notifications).unwrap();
+            assert_eq!(super::sender_name(conn), None);
+            set(
+                conn,
+                "email_from_name",
+                "Garden",
+                SettingsCategory::Notifications,
+            )
+            .unwrap();
+            assert_eq!(super::sender_name(conn).as_deref(), Some("Garden"));
+        });
+    }
     use crate::integrations::test_support::test_state;
 
     #[test]

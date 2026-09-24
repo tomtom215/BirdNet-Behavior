@@ -393,10 +393,11 @@ async fn serve(
         state
     };
     let state = helpers::init_site_name(state, &cli, config.as_ref());
-    let state = if cli.info_site == "ebird" {
+    let info_site = helpers::info_site(&cli, config.as_ref());
+    let state = if info_site == "ebird" {
         state
     } else {
-        state.with_info_site(cli.info_site.clone())
+        state.with_info_site(info_site)
     };
     let state = helpers::init_species_codes(state, &cli, config.as_ref());
     let state = helpers::init_taxonomy(state, &cli, config.as_ref());
