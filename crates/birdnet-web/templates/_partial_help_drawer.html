@@ -36,11 +36,22 @@
   var title = document.getElementById('bnb-help-drawer-title');
   var openFull = document.getElementById('bnb-help-drawer-openfull');
 
-  function stripChrome(html) {
+  function stripChrome(html, pageUrl) {
     // mdBook output wraps content in <main>…</main>; pull only that out so the
     // drawer doesn't import the docs site's own nav, theme picker, or search.
     var doc = new DOMParser().parseFromString(html, 'text/html');
     var main = doc.querySelector('main, #content, .page') || doc.body;
+    // The docs' links and images are relative to the docs page. Inside this
+    // page they would resolve against it (`/admin/...`) and lead nowhere, so
+    // they are made absolute against the page they came from. A bare
+    // `#fragment` stays as it is: it names a heading in the drawer.
+    main.querySelectorAll('[href], [src]').forEach(function (el) {
+      ['href', 'src'].forEach(function (attr) {
+        var v = el.getAttribute(attr);
+        if (!v || v.charAt(0) === '#') return;
+        try { el.setAttribute(attr, new URL(v, pageUrl).href); } catch (e) { /* leave it */ }
+      });
+    });
     // First <h1> becomes the drawer title.
     var h1 = main.querySelector('h1');
     if (h1) {
@@ -60,12 +71,18 @@
       var res = await fetch(url, { credentials: 'same-origin' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var html = await res.text();
-      body.innerHTML = stripChrome(html);
+      body.innerHTML = stripChrome(html, res.url || new URL(url, window.location.href).href);
       body.focus();
-      // Honour deep-link fragment if any.
+      // Honour deep-link fragment if any. By id, not `querySelector('#…')`:
+      // mdBook ids can start with a digit (`3-sensitivity`), which is not a
+      // valid selector, and the throw landed in the catch below and replaced
+      // the page that had just loaded with "Couldn't load help".
       var hash = (new URL(url, window.location.origin)).hash;
       if (hash) {
-        var t = body.querySelector(hash);
+        var id = decodeURIComponent(hash.slice(1));
+        var t = Array.prototype.find.call(body.querySelectorAll('[id]'), function (el) {
+          return el.id === id;
+        });
         if (t) t.scrollIntoView({ block: 'start' });
       }
     } catch (e) {

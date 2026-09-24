@@ -565,6 +565,39 @@ async function correlationRangeHolds(page) {
   );
 }
 
+/** M11: the help drawer shows the page it fetched, with working links.
+ *
+ * `body.querySelector(hash)` throws for an id that starts with a digit —
+ * mdBook's `3-sensitivity` — and the throw landed in the catch, which
+ * replaced the page it had just loaded with "Couldn't load help". And the
+ * docs' links are relative, so inside the host page they resolved against
+ * `/admin/...` and led nowhere.
+ */
+async function helpDrawerDeepLink(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  await page.evaluate(() => {
+    const b = document.createElement('button');
+    b.id = 'zz-help';
+    b.setAttribute('data-help-drawer', '/help/guides/tuning#3-sensitivity');
+    b.textContent = 'help';
+    document.body.appendChild(b);
+  });
+  await page.click('#zz-help');
+  await page.waitForFunction(
+    () => !/Loading/.test(document.getElementById('bnb-help-drawer-title').textContent),
+    null,
+    { timeout: 10000 },
+  );
+  const title = await page.textContent('#bnb-help-drawer-title');
+  check('help: a digit-leading anchor still shows the page', !/Couldn/.test(title), `title: ${title}`);
+  const stray = await page.evaluate((base) => {
+    return Array.from(document.querySelectorAll('#bnb-help-drawer-body a[href]'))
+      .map((a) => ({ raw: a.getAttribute('href'), abs: a.href }))
+      .filter((x) => !/^(#|https?:|mailto:)/.test(x.raw) && !x.abs.startsWith(`${base}/help/`));
+  }, BASE);
+  check('help: relative links resolve inside /help', stray.length === 0, JSON.stringify(stray.slice(0, 3)));
+}
+
 const page404 = [];
 
 async function main() {
@@ -596,6 +629,7 @@ async function main() {
     ['live detection refreshes the feed', liveDetectionRefreshesFeed],
     ['palette loads on open', paletteLoadsOnOpen],
     ['co-occurrence range holds', correlationRangeHolds],
+    ['help drawer deep link', helpDrawerDeepLink],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
