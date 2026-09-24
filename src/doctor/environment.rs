@@ -104,14 +104,7 @@ fn check_temp_directory() -> Check {
 pub(super) fn check_optional_tools(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     let mut out = Vec::new();
 
-    let fmt = crate::helpers::resolve::setting_str(
-        cli,
-        "audio_format",
-        &cli.audio_format,
-        config,
-        "AUDIOFMT",
-    )
-    .to_ascii_lowercase();
+    let fmt = crate::daemon::clip_format(cli, config).to_ascii_lowercase();
     if fmt != "wav" {
         let has_ff = tool_exists("ffmpeg");
         let has_sox = tool_exists("sox");

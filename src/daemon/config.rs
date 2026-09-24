@@ -369,6 +369,26 @@ pub fn resolve_station_coords(
     (lat, lon)
 }
 
+/// The format clips are saved in: an explicit `--audio-format`, else the
+/// config's `AUDIOFMT` — where `/admin/settings` lands via the overlay — or
+/// `AUDIO_FORMAT`, the spelling the validator also accepts, else WAV.
+///
+/// The flag alone used to decide, so neither the settings page's choice nor
+/// either config line was ever the format clips got. The doctor's encoder
+/// check calls this too, so it asks about the format the station will use.
+#[must_use]
+pub fn clip_format(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> String {
+    let key = if config
+        .and_then(|c| c.get("AUDIOFMT"))
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        "AUDIOFMT"
+    } else {
+        "AUDIO_FORMAT"
+    };
+    crate::helpers::resolve::setting_str(cli, "audio_format", &cli.audio_format, config, key)
+}
+
 /// Resolve the minimum-confidence threshold the daemon will enforce.
 ///
 /// `CONFIDENCE` from the config — which the settings overlay has already
@@ -380,8 +400,9 @@ pub fn resolve_station_coords(
 /// A `CONFIDENCE` that does not parse falls back to the default rather than to
 /// zero: an unusable value must not silently turn the station into a
 /// false-positive firehose. Out-of-range and non-numeric values are separately
-/// reported as errors by `birdnet_core::config::validate`, which `--doctor`
-/// runs from `ExecStartPre` — so in practice the daemon never starts on one.
+/// errors in `birdnet_core::config::validate`, so a file carrying one never
+/// reaches the daemon: `startup_config::choose` runs the last-good copy
+/// instead, or the web UI alone. A blank `CONFIDENCE=` is unset, not an error.
 ///
 /// Extracted from `start_detection_daemon` so the precedence rule and the
 /// default are observable in a unit test rather than only through a live run.
@@ -499,15 +520,7 @@ pub(super) fn build_extraction_config(
     .filter(|v| (MIN_CEILING_DBFS..MAX_CEILING_DBFS).contains(v))
     .unwrap_or(birdnet_core::audio::extraction::DEFAULT_PEAK_CEILING_DBFS);
 
-    // `/admin/settings` lands in `AUDIOFMT` via the overlay; the flag alone
-    // used to decide, so the page's choice was never the format clips got.
-    let audio_format = crate::helpers::resolve::setting_str(
-        cli,
-        "audio_format",
-        &cli.audio_format,
-        config,
-        "AUDIOFMT",
-    );
+    let audio_format = clip_format(cli, config);
     ExtractionConfig {
         extraction_length,
         target_format: AudioFormat::parse(&audio_format),
@@ -1185,6 +1198,21 @@ mod tests {
         let cli = cli_with_explicit(&["audio_format"]);
         let cfg = build_extraction_config(&cli, Some(&config), Path::new("/r"));
         assert_eq!(cfg.audio_format, "wav");
+    }
+
+    /// The validator reads `AUDIOFMT` or else `AUDIO_FORMAT`, and accepts
+    /// `AUDIO_FORMAT=flac`; the runtime read only `AUDIOFMT`, so a file using
+    /// the other spelling was validated and then saved WAV.
+    #[test]
+    fn the_validators_audio_format_spelling_is_honoured_too() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let config = config_with(&[("AUDIO_FORMAT", "flac")]);
+        let cfg = build_extraction_config(&cli, Some(&config), Path::new("/r"));
+        assert_eq!(cfg.audio_format, "flac");
+        // AUDIOFMT wins when both are set, as in the validator.
+        let both = config_with(&[("AUDIOFMT", "mp3"), ("AUDIO_FORMAT", "flac")]);
+        let cfg = build_extraction_config(&cli, Some(&both), Path::new("/r"));
+        assert_eq!(cfg.audio_format, "mp3");
     }
 
     #[test]
