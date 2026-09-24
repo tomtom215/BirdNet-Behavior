@@ -8,7 +8,7 @@ Plain-English definitions for the terms you'll meet around the dashboard.
 
 **BirdNET / BirdNET+** — the neural network that identifies birds from sound, developed by the Cornell Lab of Ornithology. "BirdNET+ V3.0" is the specific model version this app uses.
 
-**Co-occurrence (ρ)** — how often two species are detected together. The "ρ" (the Greek letter *rho*) is a correlation value from 0 to 1: higher means the two birds are heard together more than chance. See [Behavioral Analytics](../guide/analytics.md).
+**Co-occurrence** — how often two species are heard in the same five-minute block of the same day, as a share of the blocks in which either was heard (their *overlap*, from 0 to 1). Two birds that are merely common are not a strong pair; two that are nearly always heard together are. It is association, not a test against chance. See [Behavioral Analytics](../guide/analytics.md).
 
 **Confidence** — the model's certainty in an identification, from 0 to 1 (shown as a percentage). A detection is only logged if its confidence clears the [threshold](./tuning.md#1-confidence-threshold).
 

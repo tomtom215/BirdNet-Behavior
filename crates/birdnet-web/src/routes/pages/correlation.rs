@@ -24,6 +24,10 @@ use super::simple_url_encode;
 use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
 
+/// A pair needs this many shared five-minute blocks to be drawn. Below it, two
+/// birds heard once, together, would read as perfectly associated.
+const MIN_SHARED_BLOCKS: u32 = 3;
+
 /// Fallback served (uncached) when a co-occurrence query errors.
 const CORR_ERR: &str = r#"<p class="co-err">Co-occurrence data temporarily unavailable.</p>"#;
 
@@ -62,7 +66,7 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
     <div class="bnb-eyebrow">Behavioral analytics</div>
     <h1 class="display co-h1">Who sings with whom</h1>
     {{help_link}}
-    <p class="bnb-lede co-mt"><b>Species joined by a ribbon tend to be heard within five minutes of each other.</b> Thicker, brighter ribbons mean a stronger pairing; the arc length around the edge shows how connected each species is overall. It's correlation, not cause — they may just share the same good morning.</p>
+    <p class="bnb-lede co-mt"><b>Species joined by a ribbon are often heard in the same five-minute block.</b> Thicker, brighter ribbons mean more of the two birds' time is shared; the arc length around the edge shows how connected each species is overall. It's correlation, not cause — they may just share the same good morning.</p>
   </div>
   <!-- role/name/state: this row conveyed the selected range with a CSS
        class alone. `templates/today.html` already does the same control with
@@ -77,7 +81,7 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">ρ ≥ 0.20</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">same 5-min block</span></div>
   <div class="pt-viz" id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
   </div>
@@ -142,7 +146,7 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 
 fn compute_correlation_pairs(state: &AppState, days: u32) -> Option<String> {
     let pairs = state
-        .with_db(|conn| top_cooccurrence_pairs(conn, days, 25, 2))
+        .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 25, MIN_SHARED_BLOCKS))
         .ok()?;
     Some(render_pairs_table(&pairs, days))
 }
@@ -165,7 +169,7 @@ async fn correlation_pairs_partial(
 
 fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
     let pairs = state
-        .with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+        .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
         .ok()?;
     let (labels, matrix) = build_matrix(&pairs, 10);
     Some(super::viz::cooccurrence_matrix(&labels, &matrix))
@@ -189,7 +193,7 @@ async fn cooccurrence_matrix_partial(
 
 fn compute_acoustic_network(state: &AppState, days: u32) -> Option<String> {
     let pairs = state
-        .with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+        .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
         .ok()?;
     // Fewer arcs read more clearly as a chord than the 10-wide matrix.
     let (labels, matrix) = build_matrix(&pairs, 9);
@@ -209,23 +213,22 @@ async fn acoustic_network_partial(
 }
 
 /// Reduce co-occurrence pairs to a square matrix over the `max_species` most
-/// connected species. Cell strength is shared-days normalised to the global
-/// maximum so the grid reads as a relative heat-map.
-#[allow(clippy::cast_precision_loss)]
+/// connected species. Cell strength is the pair's overlap, scaled to the
+/// strongest pair shown so the grid reads as a relative heat-map.
 fn build_matrix(
     pairs: &[birdnet_db::sqlite::SpeciesPair],
     max_species: usize,
 ) -> (Vec<String>, Vec<Vec<f64>>) {
     use std::collections::HashMap;
 
-    // Total shared-days each species participates in → connectedness ranking.
-    let mut weight: HashMap<&str, i64> = HashMap::new();
+    // Summed overlap each species participates in → connectedness ranking.
+    let mut weight: HashMap<&str, f64> = HashMap::new();
     for p in pairs {
-        *weight.entry(p.species_a.as_str()).or_insert(0) += p.co_occurrence_days;
-        *weight.entry(p.species_b.as_str()).or_insert(0) += p.co_occurrence_days;
+        *weight.entry(p.species_a.as_str()).or_insert(0.0) += p.overlap;
+        *weight.entry(p.species_b.as_str()).or_insert(0.0) += p.overlap;
     }
-    let mut ranked: Vec<(&str, i64)> = weight.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let mut ranked: Vec<(&str, f64)> = weight.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
     let labels: Vec<String> = ranked
         .iter()
         .take(max_species)
@@ -239,19 +242,18 @@ fn build_matrix(
         .collect();
     let n = labels.len();
     let mut matrix = vec![vec![0.0_f64; n]; n];
-    let mut max_co = 1.0_f64;
+    let mut max_overlap = f64::MIN_POSITIVE;
     for p in pairs {
         if let (Some(&i), Some(&j)) = (idx.get(p.species_a.as_str()), idx.get(p.species_b.as_str()))
         {
-            let v = p.co_occurrence_days as f64;
-            matrix[i][j] = v;
-            matrix[j][i] = v;
-            max_co = max_co.max(v);
+            matrix[i][j] = p.overlap;
+            matrix[j][i] = p.overlap;
+            max_overlap = max_overlap.max(p.overlap);
         }
     }
     for row in &mut matrix {
         for cell in row.iter_mut() {
-            *cell /= max_co;
+            *cell /= max_overlap;
         }
     }
     (labels, matrix)
@@ -262,11 +264,10 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
         return super::empty_states::no_co_signal();
     }
 
-    let max_days = pairs
+    let max_overlap = pairs
         .iter()
-        .map(|p| p.co_occurrence_days)
-        .max()
-        .unwrap_or(1);
+        .map(|p| p.overlap)
+        .fold(f64::MIN_POSITIVE, f64::max);
 
     let mut html = String::from(
         r"<table>
@@ -274,22 +275,18 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
   <tr>
     <th>Species A</th>
     <th>Species B</th>
-    <th>Shared Days</th>
-    <th>Co-occurrence</th>
+    <th>5-min blocks together</th>
+    <th>Share of their time</th>
   </tr>
 </thead>
 <tbody>",
     );
 
     for pair in pairs {
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        let bar_pct = (pair.co_occurrence_days as f64 / max_days as f64 * 100.0).round() as u64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bar_pct = (pair.overlap / max_overlap * 100.0).round() as u64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let share_pct = (pair.overlap * 100.0).round() as u64;
         let enc_a = simple_url_encode(&pair.species_a);
         let enc_b = simple_url_encode(&pair.species_b);
         let _ = write!(
@@ -297,17 +294,17 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
             r#"<tr>
   <td><a class="species-link" href="/species/detail?name={enc_a}">{a}</a></td>
   <td><a class="species-link" href="/species/detail?name={enc_b}">{b}</a></td>
-  <td>{days}</td>
+  <td>{blocks}</td>
   <td>
     <div class="co-bar-row">
       <div class="bar" data-style="width:{bar_pct}%;min-width:4px;"></div>
-      <span class="co-bar-label">{days} days</span>
+      <span class="co-bar-label">{share_pct}%</span>
     </div>
   </td>
 </tr>"#,
             a = escape_html(&pair.species_a),
             b = escape_html(&pair.species_b),
-            days = pair.co_occurrence_days,
+            blocks = pair.shared_blocks,
         );
     }
 
@@ -441,14 +438,16 @@ mod tests {
         let pairs = vec![SpeciesPair {
             species_a: "Robin".into(),
             species_b: "Wren".into(),
-            co_occurrence_days: 5,
-            count_a: 10,
-            count_b: 8,
+            shared_blocks: 5,
+            blocks_a: 10,
+            blocks_b: 8,
+            overlap: 5.0 / 13.0,
         }];
         let html = render_pairs_table(&pairs, 30);
         assert!(html.contains("Robin"));
         assert!(html.contains("Wren"));
-        assert!(html.contains('5'));
+        assert!(html.contains("<td>5</td>"), "{html}");
+        assert!(html.contains(">38%<"), "5 of 13 blocks: {html}");
     }
 
     #[test]
@@ -456,9 +455,10 @@ mod tests {
         let pairs = vec![SpeciesPair {
             species_a: "<script>alert(1)</script>".into(),
             species_b: "Wren".into(),
-            co_occurrence_days: 1,
-            count_a: 1,
-            count_b: 1,
+            shared_blocks: 1,
+            blocks_a: 1,
+            blocks_b: 1,
+            overlap: 1.0,
         }];
         let html = render_pairs_table(&pairs, 30);
         assert!(!html.contains("<script>"));

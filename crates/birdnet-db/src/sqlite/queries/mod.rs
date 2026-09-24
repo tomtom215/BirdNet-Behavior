@@ -25,7 +25,7 @@ pub use analytics::{
     reviewed_detections_by_species, species_shapes, today_species_hour_heatmap,
     weekly_detection_count, weekly_new_species, weekly_top_species,
 };
-pub use correlation::{companion_species, temporal_cooccurrence, top_cooccurrence_pairs};
+pub use correlation::{companion_species, top_cooccurrence_pairs};
 pub use detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
     detection_review_counts, detection_review_total, detection_reviews_page, get_detection_review,
