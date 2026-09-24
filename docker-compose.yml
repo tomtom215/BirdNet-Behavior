@@ -136,13 +136,15 @@ services:
       - birdnet-data:/data
 
     # -------------------------------------------------------------------------
-    # Resource limits — conservative defaults suitable for Raspberry Pi 4
-    # Adjust or remove if running on a server with more headroom
+    # Resource limits — the same ceiling as the systemd unit's MemoryMax. The
+    # model is loaded into anonymous memory, which a limit cannot reclaim:
+    # measured with the V3.0 FP32 model and analytics on, ~575 MB at idle and
+    # ~650 MB while analysing. 512M killed the container as the model loaded.
     # -------------------------------------------------------------------------
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
         reservations:
           memory: 128M
 

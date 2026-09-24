@@ -203,10 +203,12 @@ The installer's systemd unit (`install.sh`) ships hardened by default:
   @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module` groups.
 - `MemoryHigh=768M`, `MemoryMax=1G`, `TasksMax=512`, `LimitNOFILE=65536`,
   `LimitNPROC=256` — bounded resource ceilings; runaway processes can't
-  take down the host. The 1 GiB ceiling is sized for the bundled DuckDB
-  analytics engine, whose queries are memory-hungry under load; the FP32
-  model is mmap'd, so its pages are reclaimable and don't count as
-  anonymous RSS. On a 512 MB board physical RAM plus zram binds first.
+  take down the host. The FP32 model is loaded into anonymous memory,
+  which a limit cannot reclaim — measured at about 575 MB idle and 650 MB
+  while analysing, with the bundled DuckDB analytics on — so the 1 GiB
+  ceiling is headroom for analytics queries, not slack. The Docker compose
+  files use the same limit. On a 512 MB board physical RAM plus zram binds
+  first.
 - `OOMPolicy=stop` — under memory pressure the unit stops cleanly
   instead of being killed mid-write.
 

@@ -62,10 +62,11 @@ services:
       # when PulseAudio cookie-based auth is enabled (uncomment if needed):
       # PULSE_COOKIE: /run/pulse/cookie
 
-    # PulseAudio/PipeWire capture adds minimal CPU overhead
+    # The base file's limit, restated so an edit to one is seen in both. The
+    # model alone needs ~575 MB of memory a limit cannot reclaim.
     deploy:
       resources:
         limits:
-          memory: 768M
+          memory: 1G
         reservations:
           memory: 128M
