@@ -293,6 +293,7 @@ download_geomodel() {
     chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}" "${labels_dest}"
     GEOMODEL_INSTALLED=1
     success "Geomodel installed to ${model_dest}"
-    success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
+    # Whether filtering is on depends on the config naming it, which
+    # write_config settles and reports (enable_geomodel_in_kept_config).
     return 0
 }

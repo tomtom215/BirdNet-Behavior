@@ -1351,7 +1351,8 @@ download_geomodel() {
     chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}" "${labels_dest}"
     GEOMODEL_INSTALLED=1
     success "Geomodel installed to ${model_dest}"
-    success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
+    # Whether filtering is on depends on the config naming it, which
+    # write_config settles and reports (enable_geomodel_in_kept_config).
     return 0
 }
 
@@ -1433,9 +1434,39 @@ MEOF
 # Write the default configuration file
 # ---------------------------------------------------------------------------
 
+# The geomodel, downloaded on an update or a repair, is used only once the
+# config names it — and write_config keeps an existing config. A station
+# installed before the geomodel shipped was told "occurrence filtering is ON"
+# and ran without it. Fill the settings in where that is certainly wanted:
+#   * no METADATA_MODEL_PATH line at all — a config from before the geomodel;
+#   * the template's own empty placeholders, written when a fresh install's
+#     download failed.
+# A line commented out with a path in it is the operator's choice; say so and
+# leave it.
+enable_geomodel_in_kept_config() {
+    [ "${GEOMODEL_INSTALLED:-0}" = "1" ] || return 0
+    local model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
+    local labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+    if ! grep -q 'METADATA_MODEL_PATH' "${CONFIG_FILE}"; then
+        printf '\n# --- Species occurrence filtering (added by install.sh) ---\n%s\n%s\n' \
+            "${model_line}" "${labels_line}" >>"${CONFIG_FILE}"
+        success "Species occurrence filtering is ON: added the geomodel to ${CONFIG_FILE}."
+    elif grep -qE '^# METADATA_MODEL_PATH=$' "${CONFIG_FILE}"; then
+        sed -i -e "s|^# METADATA_MODEL_PATH=\$|${model_line}|" \
+            -e "s|^# METADATA_LABELS_PATH=\$|${labels_line}|" "${CONFIG_FILE}"
+        success "Species occurrence filtering is ON: filled in the geomodel settings in ${CONFIG_FILE}."
+    elif grep -qE '^[[:space:]]*METADATA_MODEL_PATH=' "${CONFIG_FILE}"; then
+        success "Species occurrence filtering is configured in ${CONFIG_FILE}."
+    else
+        warn "The geomodel is installed, but METADATA_MODEL_PATH is commented out in"
+        warn "${CONFIG_FILE}, so species occurrence filtering stays OFF. Uncomment it to use it."
+    fi
+}
+
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
+        enable_geomodel_in_kept_config
         # Upgrade from a version that left the config world-readable: tighten it
         # without touching the user's settings.
         chown "root:${SERVICE_USER}" "${CONFIG_FILE}" 2>/dev/null || true
@@ -1595,6 +1626,9 @@ EOF
     chown "root:${SERVICE_USER}" "${CONFIG_FILE}"
     chmod 0640 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
+    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+        success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
+    fi
 }
 
 # ===== installer/lib/65-service.sh =====
