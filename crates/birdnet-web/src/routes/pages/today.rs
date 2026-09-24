@@ -858,13 +858,19 @@ async fn today_partial(
                 search.as_deref(),
                 filter,
             )?;
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, total))
+            // Which clips are locked, so each card offers the right toggle.
+            let locked: std::collections::HashSet<String> =
+                birdnet_db::sqlite::locked_file_names(conn)?
+                    .iter()
+                    .map(|f| super::recordings::base_name(f))
+                    .collect();
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, total, locked))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((detections, total))) => {
+        Ok(Ok((detections, total, locked))) => {
             let mut html = String::with_capacity(4096);
 
             if detections.is_empty() && offset == 0 {
@@ -873,7 +879,7 @@ async fn today_partial(
             }
 
             for d in &detections {
-                render_detection_card(&mut html, d);
+                render_detection_card(&mut html, d, &locked);
             }
 
             // "Load more" button if there are more results. It replaces
@@ -1039,7 +1045,17 @@ fn parse_hour_fraction(t: &str) -> f64 {
 }
 
 /// Render a single detection row into the HTML buffer.
-fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
+///
+/// `locked` holds the base names of locked clips. The lock toggle is the one
+/// Recordings uses, in its real state, and only on a detection with a clip:
+/// every card used to carry the same "Lock" button, so a locked clip offered
+/// to be locked again, could not be unlocked here, and a detection with no
+/// clip offered a lock that protected nothing (M9).
+fn render_detection_card(
+    html: &mut String,
+    d: &birdnet_db::sqlite::DetectionRow,
+    locked: &std::collections::HashSet<String>,
+) {
     let enc_name = simple_url_encode(&d.com_name);
 
     // Fixed-size play affordance (shared clip player) — native <audio>
@@ -1061,6 +1077,15 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
         })
         .unwrap_or_default();
 
+    let lock = d
+        .file_name
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .map(|f| {
+            let is_locked = locked.contains(&super::recordings::base_name(f));
+            super::recordings::lock_button(&d.date, &d.time, &d.sci_name, is_locked)
+        })
+        .unwrap_or_default();
     let av = avatar(&d.com_name, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
     let com_name = escape_html(&d.com_name);
@@ -1086,10 +1111,7 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
          {audio}\
          </div>\
          <div class=\"tdl-card-actions\">\
-         <button class=\"bnb-btn ghost\" hx-post=\"/pages/today-lock\" \
-         hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
-         hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \
-         title=\"Lock this detection (protect from auto-purge)\">🔒</button>\
+         {lock}\
          <button class=\"bnb-btn danger\" hx-post=\"/pages/today-delete\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
          hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \

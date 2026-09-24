@@ -421,7 +421,7 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
 /// The lock/unlock toggle button for a clip. Swaps itself out (`outerHTML`)
 /// for the opposite state after the POST, so the row reflects the new state
 /// without a full-list reload.
-fn lock_button(date: &str, time: &str, sci: &str, locked: bool) -> String {
+pub(super) fn lock_button(date: &str, time: &str, sci: &str, locked: bool) -> String {
     let date_raw = escape_html(date);
     let time_raw = escape_html(time);
     let sci_raw = escape_html(sci);
@@ -482,7 +482,7 @@ fn filter_chips(active: RecordingsFilter, search: Option<&str>) -> String {
 
 /// File path → bare file name (the form `/api/v2/recordings/{name}` and the
 /// locked-file set both key on).
-fn base_name(file: &str) -> String {
+pub(super) fn base_name(file: &str) -> String {
     Path::new(file)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
