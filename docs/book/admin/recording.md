@@ -31,6 +31,8 @@ The [scheduler](../reference/architecture.md) computes sunrise and sunset from y
 
 `BIRDNET_PRIVACY_THRESHOLD` (default `0.0`, disabled) discards every analysis window in which the model's confidence for a **human** class (speech, whistling, other human sounds) reaches the value, and the windows either side of it, so casual conversation near the mic isn't written to disk. The confidence is read from the model's output before the detection threshold applies, so the setting binds on its own: changing the detection threshold does not change what the privacy filter does. Lower values suppress more. `0.02` is a usual starting point; *lower* it (towards `0.01`) if the microphone is near a patio or path, and raise it if birdsong is being suppressed.
 
+A saved clip is longer than the window it was detected in (see `EXTRACTION_LENGTH` and `PRE_CAPTURE_SECS`), so the filter also drops any detection whose clip would reach a window where it heard a voice, however many windows away that is. And while the filter is on, a clip is cut from its own recording segment only, never extended into the segment before or after: the filter judges each segment on its own, so it cannot vouch for a neighbour's audio. A detection within a second or two of a segment's start or end therefore gets a shorter clip.
+
 ## Retention — how clips are purged
 
 Retention is **disk-based by default**, with an optional age limit on top:

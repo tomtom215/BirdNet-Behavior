@@ -15,12 +15,26 @@
 
 use crate::detection::types::{ChunkPrediction, Detection};
 
+/// How far a detection's saved clip reaches either side of the detection's
+/// own window, in seconds: the audio the clip exposes.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ClipReach {
+    /// Seconds of clip before the detection's start.
+    pub before: f32,
+    /// Seconds of clip after the detection's end.
+    pub after: f32,
+}
+
 /// Privacy filter that suppresses detections when human voice is detected.
 #[derive(Debug, Clone)]
 pub struct PrivacyFilter {
     /// The human score at or above which a chunk is suppressed.
     /// `0.0` disables the filter.
     threshold: f32,
+    /// How far a saved clip reaches beyond its detection.
+    reach: ClipReach,
+    /// Length of one analysed chunk, in seconds.
+    chunk_secs: f32,
 }
 
 impl PrivacyFilter {
@@ -28,7 +42,29 @@ impl PrivacyFilter {
     ///
     /// A threshold of 0.0 disables the filter entirely.
     pub const fn new(threshold: f32) -> Self {
-        Self { threshold }
+        Self {
+            threshold,
+            reach: ClipReach {
+                before: 0.0,
+                after: 0.0,
+            },
+            chunk_secs: 3.0,
+        }
+    }
+
+    /// The same filter, told how far a saved clip reaches (see
+    /// [`Self::filter_timed`]).
+    #[must_use]
+    pub const fn with_clip_reach(mut self, reach: ClipReach) -> Self {
+        self.reach = reach;
+        self
+    }
+
+    /// The same filter, for chunks `chunk_secs` long (default 3 s).
+    #[must_use]
+    pub const fn with_chunk_secs(mut self, chunk_secs: f32) -> Self {
+        self.chunk_secs = chunk_secs;
+        self
     }
 
     /// Whether the privacy filter is enabled (threshold > 0).
@@ -71,6 +107,57 @@ impl PrivacyFilter {
                 } else {
                     chunk
                 }
+            })
+            .collect()
+    }
+}
+
+impl PrivacyFilter {
+    /// [`Self::filter_predictions`], plus: a detection whose saved clip would
+    /// reach into a flagged chunk is suppressed too (`PIPE7`).
+    ///
+    /// The neighbour rule works by index; a clip reaches by time. With a long
+    /// extraction, a pre-capture lead-in, or overlapping chunks, a detection
+    /// two or more chunks from the speech has a clip that spans it. So each
+    /// surviving detection's clip window — its own span widened by the
+    /// configured [`ClipReach`] — is checked against every flagged chunk's
+    /// span. The window is the segment's own timeline: clips on a
+    /// privacy-filtered station are not extended into neighbouring segments,
+    /// whose speech this filter never saw.
+    ///
+    /// `starts[i]` is chunk `i`'s start in seconds.
+    pub fn filter_timed(&self, starts: &[f32], chunks: &[ChunkPrediction]) -> Vec<Vec<Detection>> {
+        let chunk_secs = self.chunk_secs;
+        let by_index = self.filter_predictions(chunks);
+        if !self.is_enabled() {
+            return by_index;
+        }
+        let speech: Vec<(f32, f32)> = chunks
+            .iter()
+            .zip(starts)
+            .filter(|(chunk, _)| self.flags(chunk))
+            .map(|(_, &start)| (start, start + chunk_secs))
+            .collect();
+        if speech.is_empty() {
+            return by_index;
+        }
+        by_index
+            .into_iter()
+            .map(|list| {
+                list.into_iter()
+                    .filter(|d| {
+                        let from = d.start - self.reach.before;
+                        let to = d.stop + self.reach.after;
+                        let reaches = speech.iter().any(|&(s, e)| from < e && s < to);
+                        if reaches {
+                            tracing::debug!(
+                                species = %d.common_name,
+                                "privacy filter: suppressing a detection whose clip would reach speech"
+                            );
+                        }
+                        !reaches
+                    })
+                    .collect()
             })
             .collect()
     }
@@ -153,6 +240,63 @@ mod tests {
         assert!(result[0].is_empty(), "the chunk before the voice");
         assert!(result[1].is_empty(), "the voice itself");
         assert!(result[2].is_empty(), "the chunk after the voice");
+    }
+
+    /// Chunks `0, step, 2·step, …`, each holding one blackbird detection
+    /// over its own span, with speech in the chunks listed.
+    fn timed(n: usize, step: f32, speech: &[usize]) -> (Vec<f32>, Vec<ChunkPrediction>) {
+        #[allow(clippy::cast_precision_loss)]
+        let starts: Vec<f32> = (0..n).map(|i| i as f32 * step).collect();
+        let chunks = starts
+            .iter()
+            .enumerate()
+            .map(|(i, &s)| ChunkPrediction {
+                detections: vec![Detection {
+                    start: s,
+                    stop: s + 3.0,
+                    ..make_detection("Turdus merula", "Blackbird", 0.9)
+                }],
+                human_score: if speech.contains(&i) { 0.8 } else { 0.0 },
+            })
+            .collect();
+        (starts, chunks)
+    }
+
+    /// PIPE7: a clip must not carry the speech its chunk was cleared of.
+    ///
+    /// The filter emptied the flagged chunk and its two neighbours by index,
+    /// but a saved clip reaches by time: with a 12-second extraction a
+    /// detection two chunks from the speech has a clip spanning it. The same
+    /// happens with chunk overlap, where "two chunks away" is 3 seconds.
+    #[test]
+    fn a_clip_that_would_reach_the_speech_is_suppressed() {
+        let wide = PrivacyFilter::new(0.03).with_clip_reach(ClipReach {
+            before: 4.5,
+            after: 4.5,
+        });
+        // Speech in chunk 0 (0–3 s). Chunk 2's clip is 1.5–13.5 s.
+        let (starts, chunks) = timed(5, 3.0, &[0]);
+        let kept = wide.filter_timed(&starts, &chunks);
+        assert!(
+            kept[2].is_empty(),
+            "chunk 2's clip reaches back into the speech"
+        );
+        // Counterpart: chunk 3's clip, 4.5–16.5 s, does not.
+        assert!(!kept[3].is_empty(), "chunk 3's clip is clear of it");
+        // And forwards: speech in chunk 4 (12–15 s) is inside chunk 2's clip.
+        let (starts, chunks) = timed(5, 3.0, &[4]);
+        assert!(wide.filter_timed(&starts, &chunks)[2].is_empty());
+
+        // Overlapping chunks at the default 6-second extraction: speech at
+        // 0–3 s, and chunk 2 (3–6 s) has a clip from 1.5 s.
+        let default = PrivacyFilter::new(0.03).with_clip_reach(ClipReach {
+            before: 1.5,
+            after: 1.5,
+        });
+        let (starts, chunks) = timed(6, 1.5, &[0]);
+        let kept = default.filter_timed(&starts, &chunks);
+        assert!(kept[2].is_empty(), "overlapping chunks leaked the speech");
+        assert!(!kept[4].is_empty(), "chunk 4's clip starts at 4.5 s");
     }
 
     #[test]

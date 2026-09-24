@@ -646,6 +646,10 @@ pub struct DaemonConfig {
     pub shed: Option<ShedPolicy>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
+    /// How far a saved clip reaches beyond its detection, so the privacy
+    /// filter can check the whole of it for speech (`PIPE7`). The binary takes
+    /// it from `ExtractionConfig::clip_reach`.
+    pub privacy_clip_reach: crate::detection::privacy::ClipReach,
     /// Confidence at or above which a watched non-bird noise class suppresses
     /// its chunk (0.0 = disabled).
     pub noise_threshold: f32,
@@ -883,6 +887,7 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
             noise_remember_secs: 0.0,

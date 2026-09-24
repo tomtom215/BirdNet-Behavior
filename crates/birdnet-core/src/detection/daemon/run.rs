@@ -311,7 +311,9 @@ pub fn run_daemon(
 
     // Create the whole-chunk filters.
     let chunk_filters = ChunkFilters {
-        privacy: PrivacyFilter::new(config.privacy_threshold),
+        privacy: PrivacyFilter::new(config.privacy_threshold)
+            .with_clip_reach(config.privacy_clip_reach)
+            .with_chunk_secs(config.pipeline.chunk_duration_secs),
         noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
             .remembering(config.noise_remember_secs),
         confirmation: config.confirmation,
@@ -877,6 +879,7 @@ mod tests {
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,
+            privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_remember_secs: 0.0,
             noise_classes: Vec::new(),

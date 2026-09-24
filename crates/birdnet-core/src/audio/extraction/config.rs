@@ -83,6 +83,37 @@ pub struct ExtractionConfig {
     /// A **sample** peak, not an ITU true peak; see
     /// [`super::loudness`]. Negative.
     pub peak_ceiling_dbfs: f64,
+    /// Cut every clip from its own segment only, never reaching into the
+    /// neighbouring segments (`PIPE7`).
+    ///
+    /// Set on a station with the privacy filter on. The filter judges speech
+    /// segment by segment, so it cannot know whether the tail of the previous
+    /// segment or the head of the next held a voice — and a clip spanning the
+    /// boundary could carry one. The cost is a shorter clip for a detection
+    /// within a lead-in of either end.
+    pub own_segment_only: bool,
+}
+
+impl ExtractionConfig {
+    /// Seconds a clip adds either side of a 3-second detection window before
+    /// any pre-capture: `(extraction_length − 3) / 2`. Negative when the
+    /// extraction is shorter than the window.
+    #[must_use]
+    pub fn spacer(&self) -> f32 {
+        (self.extraction_length - 3.0) / 2.0
+    }
+
+    /// How far a clip reaches beyond its detection: what the privacy filter
+    /// must check for speech (`PIPE7`). Never negative — a clip that shrinks
+    /// inside its detection reaches nothing beyond it.
+    #[must_use]
+    pub fn clip_reach(&self) -> crate::detection::privacy::ClipReach {
+        let spacer = self.spacer().max(0.0);
+        crate::detection::privacy::ClipReach {
+            before: spacer + self.pre_capture_secs.max(0.0),
+            after: spacer,
+        }
+    }
 }
 
 impl Default for ExtractionConfig {
@@ -97,6 +128,7 @@ impl Default for ExtractionConfig {
             pre_capture_secs: 0.0,
             target_lufs: None,
             peak_ceiling_dbfs: DEFAULT_PEAK_CEILING_DBFS,
+            own_segment_only: false,
         }
     }
 }

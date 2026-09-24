@@ -92,13 +92,19 @@ impl Extractor {
         //    which is what this did — silently produced a short clip with the
         //    call cut off, for two of every five detection windows at the
         //    default settings. See `super::span`.
-        let spacer = (self.config.extraction_length - 3.0) / 2.0;
+        let spacer = self.config.spacer();
         // `pre_capture_secs` lengthens the clip at the front only; a negative
         // value would shorten it, which is what `extraction_length` is for, so
         // it is floored at zero rather than silently inverted.
         let lead_in = spacer + self.config.pre_capture_secs.max(0.0);
-        let want_start = detection.start - lead_in;
-        let want_stop = (detection.stop + spacer).max(want_start);
+        let mut want_start = detection.start - lead_in;
+        let mut want_stop = (detection.stop + spacer).max(want_start);
+        // A privacy-filtered station keeps each clip inside its own segment:
+        // the filter never judged a neighbour's audio for speech (`PIPE7`).
+        if self.config.own_segment_only {
+            want_start = want_start.clamp(0.0, actual_duration_secs);
+            want_stop = want_stop.clamp(want_start, actual_duration_secs);
+        }
 
         let window = super::span::read_window(source_file, &audio, want_start, want_stop)?;
 
@@ -1207,6 +1213,93 @@ mod tests {
             .extract_detection_clip(&src, &det(0.5, 3.0))
             .expect("extraction succeeds without a predecessor");
         assert!((clip.pre_detection_secs - 0.5).abs() < 1e-4, "{clip:?}");
+    }
+
+    /// `clip_reach` is what the privacy filter checks for speech, so it must
+    /// be exactly the audio a clip exposes either side of its detection.
+    #[test]
+    fn clip_reach_is_the_window_the_extractor_cuts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:15.wav");
+        write_silent_wav(&src, 15.0, 48_000);
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            extraction_length: 8.0,
+            pre_capture_secs: 1.0,
+            ..ExtractionConfig::default()
+        };
+        let reach = cfg.clip_reach();
+        assert!(
+            (reach.before - 3.5).abs() < 1e-6 && (reach.after - 2.5).abs() < 1e-6,
+            "{reach:?}"
+        );
+        let clip = Extractor::new(cfg)
+            .extract_detection_clip(&src, &det(6.0, 9.0))
+            .unwrap();
+        assert!(
+            (clip.pre_detection_secs - reach.before).abs() < 1e-4,
+            "{clip:?}"
+        );
+        let reader = hound::WavReader::open(&clip.path).unwrap();
+        #[allow(clippy::cast_precision_loss)]
+        let secs = reader.duration() as f32 / reader.spec().sample_rate as f32;
+        assert!(
+            (secs - (3.0 + reach.before + reach.after)).abs() < 0.01,
+            "{secs}"
+        );
+        // An extraction shorter than the detection reaches nothing beyond it.
+        let short = ExtractionConfig {
+            extraction_length: 2.0,
+            ..ExtractionConfig::default()
+        };
+        assert_eq!(
+            short.clip_reach(),
+            crate::detection::privacy::ClipReach::default()
+        );
+    }
+
+    /// `PIPE7`: with `own_segment_only`, a clip never reaches into a
+    /// neighbouring segment, whose speech the privacy filter did not judge.
+    #[test]
+    fn a_privacy_station_cuts_clips_from_their_own_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&prev, 15.0, 48_000);
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:15.wav");
+        write_silent_wav(&src, 15.0, 48_000);
+        let next = tmp.path().join("2026-05-19-birdnet-09:00:30.wav");
+        write_silent_wav(&next, 15.0, 48_000);
+        let cfg = |own| ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            extraction_length: 6.0,
+            own_segment_only: own,
+            ..ExtractionConfig::default()
+        };
+
+        let private = Extractor::new(cfg(true));
+        let head = private
+            .extract_detection_clip(&src, &det(0.5, 3.0))
+            .expect("extraction succeeds");
+        assert!(
+            (head.pre_detection_secs - 0.5).abs() < 1e-4,
+            "the clip reached into the previous segment: {head:?}"
+        );
+        let tail = private
+            .extract_detection_clip(&src, &det(12.0, 14.5))
+            .expect("extraction succeeds");
+        let (_, end) = tail.detection_span();
+        let reader = hound::WavReader::open(&tail.path).unwrap();
+        #[allow(clippy::cast_precision_loss)]
+        let secs = reader.duration() as f32 / reader.spec().sample_rate as f32;
+        assert!(
+            (secs - (end + 0.5)).abs() < 0.05,
+            "the clip reached into the next segment: {secs} s, detection ends at {end}"
+        );
+
+        // Counterpart: without it, the lead-in still comes from the predecessor.
+        let open = Extractor::new(cfg(false));
+        let clip = open.extract_detection_clip(&src, &det(0.5, 3.0)).unwrap();
+        assert!((clip.pre_detection_secs - 1.5).abs() < 1e-4, "{clip:?}");
     }
 
     /// `format` is the format on disk. With a converter on PATH a FLAC target

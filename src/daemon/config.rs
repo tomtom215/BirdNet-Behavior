@@ -531,6 +531,9 @@ pub(super) fn build_extraction_config(
         pre_capture_secs,
         target_lufs,
         peak_ceiling_dbfs,
+        // Decided by the privacy threshold, which the caller holds
+        // (`daemon::start_detection_daemon`).
+        own_segment_only: false,
     }
 }
 

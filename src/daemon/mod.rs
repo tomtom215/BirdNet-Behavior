@@ -376,6 +376,20 @@ pub fn start_detection_daemon(
         std::sync::Arc::new(birdnet_core::detection::daemon::ThresholdFloor::new(
             processor::lowest_threshold(model_confidence, &species_thresholds),
         ));
+    // Extract clips into the SAME dir the web serves recordings from
+    // (AppState::recording_dir) — one source of truth — so clips persist on the
+    // data disk and are found by the Recordings page and playback. They used to
+    // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
+    // on every restart and never matched where the app reads (Bug B).
+    let recordings_dir = state.recording_dir();
+    let mut extraction_config = build_extraction_config(cli, config, &recordings_dir);
+    // With the privacy filter on, a clip stays inside its own segment, and the
+    // filter is told how far a clip reaches so it can clear the whole of it
+    // (PIPE7). Both are fixed for the daemon's life, as the settings they come
+    // from are read once at start.
+    extraction_config.own_segment_only = privacy_threshold > 0.0;
+    let privacy_clip_reach = extraction_config.clip_reach();
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
@@ -420,6 +434,7 @@ pub fn start_detection_daemon(
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
+        privacy_clip_reach,
         noise_threshold,
         noise_classes,
         noise_remember_secs,
@@ -455,13 +470,7 @@ pub fn start_detection_daemon(
         model_thresholds,
     };
 
-    // Extract clips into the SAME dir the web serves recordings from
-    // (AppState::recording_dir) — one source of truth — so clips persist on the
-    // data disk and are found by the Recordings page and playback. They used to
-    // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
-    // on every restart and never matched where the app reads (Bug B).
-    let recordings_dir = state.recording_dir();
-    let extractor = Extractor::new(build_extraction_config(cli, config, &recordings_dir));
+    let extractor = Extractor::new(extraction_config);
 
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {

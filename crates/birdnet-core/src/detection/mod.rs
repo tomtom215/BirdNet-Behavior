@@ -41,16 +41,18 @@ impl ChunkFilters {
     /// Apply every filter in order: privacy, noise, then corroboration.
     ///
     /// `starts[i]` is the start time in seconds of the chunk whose prediction
-    /// is `chunks[i]`; it is only read by the corroboration stage, which needs
-    /// to know which chunks are near each other. The privacy stage reads each
-    /// chunk's human score; the later stages read only its detections.
+    /// is `chunks[i]`. The corroboration stage reads it to know which chunks
+    /// are near each other, and the privacy stage to check each clip's reach
+    /// against the speech in time. The privacy
+    /// stage reads each chunk's human score; the later stages read only its
+    /// detections.
     #[must_use]
     pub fn apply(
         &self,
         starts: &[f32],
         chunks: &[types::ChunkPrediction],
     ) -> Vec<Vec<types::Detection>> {
-        let after_privacy = self.privacy.filter_predictions(chunks);
+        let after_privacy = self.privacy.filter_timed(starts, chunks);
         let after_noise = self.noise.filter_predictions(starts, &after_privacy);
         corroboration::corroborate(self.confirmation, starts, &after_noise)
     }
