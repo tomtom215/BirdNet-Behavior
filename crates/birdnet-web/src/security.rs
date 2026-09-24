@@ -361,7 +361,7 @@ fn is_state_changing(method: &Method) -> bool {
 /// browser origin information (a non-browser client — the CLI, a script, or
 /// `curl` — which a remote site cannot coerce into a cross-site request), or
 /// its `Origin`/`Referer` authority matches the `Host` it was sent to.
-fn is_same_origin(headers: &HeaderMap) -> bool {
+pub(crate) fn is_same_origin(headers: &HeaderMap) -> bool {
     let Some(host) = header_str(headers, &header::HOST) else {
         // No Host header to compare against; nothing we can verify.
         return true;

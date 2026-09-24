@@ -12,6 +12,7 @@ pub mod client_ip;
 pub mod data_volume;
 pub mod db_pool;
 pub mod diagnostics;
+pub mod live_sockets;
 pub mod login_throttle;
 pub mod metrics;
 pub mod notification_probes;
