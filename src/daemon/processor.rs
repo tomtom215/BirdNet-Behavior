@@ -516,6 +516,30 @@ pub(super) fn event_processor(
         let global_confidence =
             provenance.floor_for(detection.model_id.as_deref(), global_confidence);
 
+        // Decided once, before the clock and hour gates: a detection the
+        // global threshold drops is dropped, whatever the hour. The classifier
+        // runs at the lowest per-species threshold, so calls under the
+        // station's own bar reach this loop, and the gates below used to
+        // quarantine them — filling the night's review queue with detections
+        // daylight would never have recorded. A per-species miss still goes
+        // on to the gates, so an implausible hour stays the reason it is filed
+        // under.
+        let disposition = decide_disposition(
+            detection.confidence,
+            &detection.scientific_name,
+            species_thresholds,
+            global_confidence,
+            dynamic.tracker(),
+            now_ms,
+        );
+        if matches!(disposition, DispositionDecision::DropBelowGlobal) {
+            // Counted, not silent. "The station is detecting nothing" and
+            // "the station is discarding everything" look identical from
+            // outside, and the reason label is what tells them apart.
+            state.metrics().inc_detection_dropped("confidence");
+            continue;
+        }
+
         // Does this recording name a day the station could have recorded on?
         //
         // First of every gate, because a row with an impossible date is worse
@@ -654,14 +678,7 @@ pub(super) fn event_processor(
         // Detections that pass the global threshold but fail a stricter
         // per-species threshold are quarantined for manual review rather
         // than silently dropped.
-        let admitted_at = match decide_disposition(
-            detection.confidence,
-            &detection.scientific_name,
-            species_thresholds,
-            global_confidence,
-            dynamic.tracker(),
-            now_ms,
-        ) {
+        let admitted_at = match disposition {
             DispositionDecision::Quarantine { threshold } => {
                 tracing::debug!(
                     correlation_id,
@@ -708,13 +725,8 @@ pub(super) fn event_processor(
                 state.metrics().inc_detection_dropped("quarantine");
                 continue;
             }
-            DispositionDecision::DropBelowGlobal => {
-                // Counted, not silent. "The station is detecting nothing" and
-                // "the station is discarding everything" look identical from
-                // outside, and the reason label is what tells them apart.
-                state.metrics().inc_detection_dropped("confidence");
-                continue;
-            }
+            // Dropped above, before the clock and hour gates.
+            DispositionDecision::DropBelowGlobal => continue,
             DispositionDecision::Accept { threshold } => threshold,
         };
 
@@ -4099,6 +4111,41 @@ mod tests {
                 .unwrap_or_default()
         });
         assert_eq!(reason, "implausible_hour", "filed under the wrong reason");
+    }
+
+    /// A detection the global threshold would drop is dropped, whatever the
+    /// hour or the clock.
+    ///
+    /// The classifier runs at the lowest per-species threshold, so detections
+    /// under the station's own bar reach the processor, where the threshold
+    /// gate drops them. The night and clock gates ran first and quarantined
+    /// them instead — so after dark the review queue filled with calls that
+    /// would never have been recorded in daylight.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_sub_threshold_call_is_dropped_not_quarantined_at_night() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut faint = winter_event("Cyanistes caeruleus", "02:30:00", tmp.path());
+        faint.detection.confidence = 0.10;
+        let mut unset_clock = winter_event("Parus major", "13:00:00", tmp.path());
+        unset_clock.detection.date = "1970-01-01".into();
+        unset_clock.detection.confidence = 0.10;
+
+        run_processor_full(
+            &state,
+            vec![faint, unset_clock],
+            HashMap::new(),
+            0.25,
+            0,
+            greenwich_night(),
+        )
+        .await;
+
+        assert_eq!(
+            counts(&state),
+            (0, 0),
+            "a below-threshold call was quarantined"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
