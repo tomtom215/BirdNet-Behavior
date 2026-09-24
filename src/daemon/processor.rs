@@ -1259,6 +1259,24 @@ pub(super) fn event_processor(
                     );
                     return;
                 };
+                // Refused for its content: parking it would only replay the
+                // same refusal (INT13). Recorded as failed, with the reason.
+                if e.is_permanent() {
+                    tracing::warn!(
+                        error = %e,
+                        species = %post.common_name,
+                        "BirdWeather rejected the upload; not queued for replay"
+                    );
+                    record_notification(
+                        &log_state,
+                        "birdweather",
+                        &log_subject,
+                        NotifStatus::Failed,
+                        None,
+                        Some(&e.to_string()),
+                    );
+                    return;
+                }
                 // Recorded as `queued`, not `failed`: the payload is parked for
                 // the store-and-forward drainer, so "this did not reach
                 // BirdWeather yet" is a different fact from "this was lost", and

@@ -27,15 +27,51 @@ pub enum BirdWeatherError {
     Http(String),
     /// Invalid response from API.
     Api(String),
+    /// The API answered with a non-success HTTP status.
+    Status {
+        /// The HTTP status code.
+        status: u16,
+        /// `"<status>: <body>"`, as displayed.
+        detail: String,
+    },
     /// Station token not configured.
     NoToken,
+}
+
+impl BirdWeatherError {
+    /// Whether replaying the identical request can never succeed, so the
+    /// store-and-forward queue should drop it rather than park it (INT13).
+    ///
+    /// Only statuses that refuse the *body*: 400, 413, 415, 422. Not 401, 403
+    /// or 404 — the station token is in the URL, so those are what a wrong
+    /// token looks like, and a queued upload must survive the operator fixing
+    /// it. Not 429 or 5xx, which are the outages the queue exists for.
+    #[must_use]
+    pub const fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::Status {
+                status: 400 | 413 | 415 | 422,
+                ..
+            }
+        )
+    }
+
+    fn status(status: reqwest::StatusCode, text: &str) -> Self {
+        Self::Status {
+            status: status.as_u16(),
+            detail: format!("{status}: {text}"),
+        }
+    }
 }
 
 impl fmt::Display for BirdWeatherError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Http(msg) => write!(f, "BirdWeather HTTP error: {msg}"),
-            Self::Api(msg) => write!(f, "BirdWeather API error: {msg}"),
+            Self::Api(msg) | Self::Status { detail: msg, .. } => {
+                write!(f, "BirdWeather API error: {msg}")
+            }
             Self::NoToken => write!(f, "BirdWeather station token not configured"),
         }
     }
@@ -297,7 +333,7 @@ impl Client {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(BirdWeatherError::Api(format!("{status}: {text}")));
+            return Err(BirdWeatherError::status(status, &text));
         }
         let parsed = resp
             .json::<SoundscapeResponse>()
@@ -355,7 +391,7 @@ impl Client {
                     }
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
-                    last_error = BirdWeatherError::Api(format!("{status}: {text}"));
+                    last_error = BirdWeatherError::status(status, &text);
                     // A 4xx (other than 429) is a deterministic client error — a
                     // bad station token or malformed payload won't succeed on
                     // retry, so fail fast instead of burning the backoff budget
@@ -378,6 +414,27 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// INT13: only a refusal of the body is permanent. The rest — a wrong
+    /// token, a rate limit, an outage — must stay queued.
+    #[test]
+    fn only_a_refused_body_is_permanent() {
+        let err =
+            |code: u16| BirdWeatherError::status(reqwest::StatusCode::from_u16(code).unwrap(), "");
+        for code in [400, 413, 415, 422] {
+            assert!(err(code).is_permanent(), "{code}");
+        }
+        for code in [401, 403, 404, 408, 429, 500, 502, 503] {
+            assert!(!err(code).is_permanent(), "{code}");
+        }
+        assert!(!BirdWeatherError::Http("timed out".into()).is_permanent());
+        assert!(!BirdWeatherError::Api("bad json".into()).is_permanent());
+        assert_eq!(
+            err(422).to_string(),
+            "BirdWeather API error: 422 Unprocessable Entity: ",
+            "the displayed text is unchanged"
+        );
+    }
 
     /// The body carries the soundscape reference and algorithm only when
     /// they are known, and a parked payload from before either existed still
