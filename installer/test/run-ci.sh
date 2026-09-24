@@ -38,6 +38,7 @@ CI_TESTS=(
     location-notice.sh
     model-resume.sh
     pipefail-sigpipe.sh
+    quickstart-env.sh
     service-unit.sh
     uninstall-paths.sh
 )
