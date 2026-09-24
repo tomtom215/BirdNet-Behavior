@@ -410,9 +410,17 @@ ensure_geomodel_file() {
     expected="$3"
     desc="$4"
 
+    # Verify what is on the volume, not merely that something is — the
+    # classifier's cache branch above had the same presence-only check and the
+    # same reasons a bad file can sit here (a kill between the move and the
+    # verification, a truncated snapshot, a full disk).
     if [ -f "$dest" ]; then
-        log "${desc}: already cached — skipping download."
-        return 0
+        if verify_sha256 "$dest" "$expected"; then
+            log "${desc}: already cached and sha256 verified — skipping download."
+            return 0
+        fi
+        warn "${desc}: the cached file does not match its expected sha256 — discarding it and downloading again."
+        rm -f "$dest"
     fi
 
     for src in mirror upstream; do
