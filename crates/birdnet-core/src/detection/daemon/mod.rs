@@ -758,6 +758,13 @@ pub struct DetectionEvent {
     /// operator can trace one audio file end-to-end with a single grep.
     /// Empty when the upstream call site did not set one (older API).
     pub correlation_id: String,
+    /// The source segment's in-flight claim, shared by every event from that
+    /// segment (`PIPE8a`). The processor reads the segment again to cut each
+    /// detection's clip, so the claim — which the stream directory's purge
+    /// honours — must outlive the analysis loop's hold on it and last until
+    /// the last of these events is dropped. `None` where nothing claims the
+    /// file (no lease table, or an event not made from a segment).
+    pub lease: Option<Arc<InFlightGuard>>,
 }
 
 /// Handle for controlling a running daemon.
@@ -1006,6 +1013,7 @@ mod tests {
             source_file: PathBuf::from("/tmp/x.wav"),
             latency_ms: 42,
             correlation_id: "e-12345-0001".to_owned(),
+            lease: None,
         };
         // Use the clone path even though we drop the original immediately —
         // the clippy::redundant_clone flag will fire, but pinning Clone is

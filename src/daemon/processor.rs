@@ -1844,6 +1844,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "test-corr-notify".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -2481,6 +2482,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "test-corr-abc".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -2567,6 +2569,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "clock-gate".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -2670,6 +2673,7 @@ mod tests {
                 source_file: tmp.path().join("nonexistent.wav"),
                 latency_ms: 100,
                 correlation_id: "ps5-gate".into(),
+                lease: None,
             })
             .unwrap();
         drop(event_tx);
@@ -3311,6 +3315,7 @@ mod tests {
             source_file,
             latency_ms: 100,
             correlation_id: correlation_id.into(),
+            lease: None,
         }
     }
 

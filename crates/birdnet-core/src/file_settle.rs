@@ -56,6 +56,13 @@ impl PendingFiles {
         self.seen.len()
     }
 
+    /// Every path still waiting to settle, consuming the tracker — what a
+    /// stopping daemon leaves unanalysed.
+    #[must_use]
+    pub fn into_paths(self) -> Vec<PathBuf> {
+        self.seen.into_keys().collect()
+    }
+
     /// Record watcher activity on `path`. Repeated calls for a path already
     /// tracked are no-ops: the size poll in [`Self::drain_settled`] drives the
     /// settle timer, not the (bursty, backend-specific) event rate.

@@ -1,7 +1,7 @@
 //! The daemon run loop: watch the directory, debounce writes, and drive each
 //! settled clip through the processing pipeline.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -439,6 +439,12 @@ pub fn run_daemon(
         // draining by now, so a large backlog cannot block startup past the
         // systemd TimeoutStartSec, and with a bounded event channel it applies
         // backpressure instead of dead-locking an undrained queue.
+        // Debounce watcher events: a clip is decoded only once its size has
+        // been stable for FILE_SETTLE (see PendingFiles), so an in-progress
+        // ffmpeg/RTSP segment isn't decoded mid-write (which fails with
+        // "unexpected end of file" and reprocesses the same growing file).
+        let mut pending = PendingFiles::new();
+
         if process_existing {
             super::apply_threshold_floor(
                 &mut registry,
@@ -454,17 +460,13 @@ pub fn run_daemon(
                 &mut species_filter,
                 filter_observer.as_ref(),
                 throughput.as_ref(),
+                in_flight.as_ref(),
+                &mut pending,
                 lat,
                 lon,
                 &event_tx,
             );
         }
-
-        // Debounce watcher events: a clip is decoded only once its size has
-        // been stable for FILE_SETTLE (see PendingFiles), so an in-progress
-        // ffmpeg/RTSP segment isn't decoded mid-write (which fails with
-        // "unexpected end of file" and reprocesses the same growing file).
-        let mut pending = PendingFiles::new();
 
         // Track when the operator's species lists were last re-read, so a
         // change on /admin/species applies to the next file rather than the
@@ -472,14 +474,24 @@ pub fn run_daemon(
         // a 500 ms poll and the lists live in a database.
         let mut lists_refreshed = Instant::now();
 
+        // Segments a stop cut off mid-sweep (PIPE8b), reported on the way out
+        // with whatever is still settling.
+        let mut left: Vec<PathBuf> = Vec::new();
+        let mut stop_requested = false;
+
         loop {
             // Heartbeat: record that the loop is still cycling so a watchdog
             // can tell a hung pipeline from an idle one.
             heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
             // Check for stop signal (non-blocking)
-            if stop_rx.try_recv().is_ok() {
+            if stop_requested || stop_rx.try_recv().is_ok() {
                 tracing::info!("detection daemon stopping");
+                report_unanalysed(
+                    left.into_iter().chain(pending.into_paths()),
+                    process_existing,
+                    throughput.as_ref(),
+                );
                 break;
             }
 
@@ -559,7 +571,16 @@ pub fn run_daemon(
                 }
                 None => settled.ready,
             };
-            for path in ready {
+            let mut ready = ready.into_iter();
+            while let Some(path) = ready.next() {
+                // A stop between files, not only between sweeps: one sweep can
+                // hold a long backlog, and shutdown waits on this loop.
+                if stop_rx.try_recv().is_ok() {
+                    stop_requested = true;
+                    left.push(path);
+                    left.extend(ready);
+                    break;
+                }
                 // Keep the watchdog fed if a single sweep processes several files.
                 heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
@@ -598,8 +619,12 @@ pub fn run_daemon(
                 );
 
                 // Claimed for as long as the pipeline reads it (PR-1 / S-3):
-                // the stream directory's purge skips a claimed name.
-                let _lease = in_flight.as_ref().map(|table| table.claim(&path));
+                // the stream directory's purge skips a claimed name. Each
+                // event carries a share of the claim, so it lasts until the
+                // processor has cut the clips too (PIPE8a).
+                let lease = in_flight
+                    .as_ref()
+                    .map(|table| std::sync::Arc::new(table.claim(&path)));
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
@@ -621,7 +646,8 @@ pub fn run_daemon(
                         if let Some(observer) = throughput.as_ref() {
                             observer.analysed(&path);
                         }
-                        for event in events {
+                        for mut event in events {
+                            event.lease.clone_from(&lease);
                             if event_tx.send(event).is_err() {
                                 tracing::warn!(
                                     correlation_id = %correlation_id,
@@ -667,7 +693,49 @@ pub fn run_daemon(
     })
 }
 
+/// Say what a stopping daemon leaves unanalysed (`PIPE8b`).
+///
+/// Nothing reads the watch directory's backlog at the next start unless
+/// `process_existing` is set, so without it these segments are never analysed:
+/// each is reported as dropped, and one warning says how many. With it they
+/// are deferred, not lost, and are logged as such.
+fn report_unanalysed(
+    paths: impl Iterator<Item = PathBuf>,
+    process_existing: bool,
+    throughput: Option<&super::ThroughputObserver>,
+) {
+    let paths: Vec<PathBuf> = paths.filter(|p| is_audio_file(p)).collect();
+    if paths.is_empty() {
+        return;
+    }
+    if process_existing {
+        tracing::info!(
+            segments = paths.len(),
+            "stopping before these segments were analysed; the next start's backlog pass \
+             reads them if they are still there"
+        );
+        return;
+    }
+    tracing::warn!(
+        segments = paths.len(),
+        "stopping before these recorded segments were analysed, and nothing will analyse \
+         them later: the next start does not read the backlog unless --process-existing is set"
+    );
+    if let Some(observer) = throughput {
+        for path in &paths {
+            observer.dropped(path);
+        }
+    }
+}
+
 /// Process any audio files already present in the watch directory.
+///
+/// A file modified within [`FILE_SETTLE`] may still be being written, so it is
+/// handed to `pending` — the watcher's queue, which analyses it once it has
+/// settled — instead of being read now (`PIPE8c`). Read here, it was decoded
+/// part-written and then again by the watcher when the recorder finished it.
+/// Each file read here is claimed in `in_flight` like the loop's, and its
+/// events carry the claim.
 #[allow(clippy::too_many_arguments)]
 fn process_existing_files(
     dir: &Path,
@@ -678,6 +746,8 @@ fn process_existing_files(
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&super::SpeciesFilterObserver>,
     throughput: Option<&super::ThroughputObserver>,
+    in_flight: Option<&super::InFlight>,
+    pending: &mut PendingFiles,
     lat: Option<f64>,
     lon: Option<f64>,
     event_tx: &mpsc::SyncSender<DetectionEvent>,
@@ -705,6 +775,18 @@ fn process_existing_files(
             continue;
         }
 
+        let recently_written = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_none_or(|age| age < FILE_SETTLE);
+        if recently_written {
+            pending.note(path, Instant::now());
+            continue;
+        }
+
+        let lease = in_flight.map(|table| std::sync::Arc::new(table.claim(&path)));
         let correlation_id = new_event_correlation_id();
         match process_and_infer_filtered(
             &path,
@@ -722,7 +804,8 @@ fn process_existing_files(
                 if let Some(observer) = throughput {
                     observer.analysed(&path);
                 }
-                for event in events {
+                for mut event in events {
+                    event.lease.clone_from(&lease);
                     // Surface a closed receiver instead of swallowing it: with
                     // the prior `let _ =` a consumer that dropped mid-backlog
                     // left this loop spinning through the rest of the watch
@@ -829,6 +912,147 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::sync_channel(64);
         let handle = run_daemon(&config, event_tx).expect("a route to the configured primary");
         handle.stop();
+    }
+
+    /// Write `secs` seconds of low noise at 48 kHz into `dir/name`.
+    fn write_noise(dir: &std::path::Path, name: &str, secs: u32) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * secs {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            w.write_sample(((x >> 16) as i16) / 8).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    /// `PIPE8a`: a segment stays claimed until its detections have been handled.
+    ///
+    /// The claim was a local in the loop, dropped as soon as the file's events
+    /// were queued. The processor reads the segment again afterwards to cut
+    /// each detection's clip, and a disk-full purge — oldest first, which is
+    /// exactly a segment whose events are still queued behind a busy
+    /// processor — was free to delete it in between.
+    #[test]
+    fn a_segment_stays_claimed_while_its_events_are_queued() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.model.confidence_threshold = 0.0;
+        let table = super::super::InFlight::new();
+        config.in_flight = Some(table.clone());
+        let (event_tx, event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 3);
+
+        let first = event_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("precondition: the tiny model emits events at threshold 0");
+        // Let the loop finish the file and drop its own hold.
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert_eq!(
+            table.names(),
+            ["2026-05-19-birdnet-09:00:00.wav"],
+            "the segment was released while its events were still queued"
+        );
+
+        // Counterpart: once every event is handled, the claim is gone.
+        drop(first);
+        while event_rx.try_recv().is_ok() {}
+        assert!(table.names().is_empty(), "{:?}", table.names());
+        handle.stop();
+    }
+
+    /// Start a daemon, give it one segment, and stop it before the segment
+    /// settles. Returns the paths reported as dropped.
+    fn stop_with_a_segment_settling(process_existing: bool) -> Vec<std::path::PathBuf> {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.process_existing = process_existing;
+        let dropped = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let d = std::sync::Arc::clone(&dropped);
+        config.on_file_analysed = Some(
+            super::super::ThroughputObserver::new(|_| {})
+                .with_dropped(move |p| d.lock().unwrap().push(p.to_path_buf())),
+        );
+        let (event_tx, _event_rx) = mpsc::sync_channel(64);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        std::thread::sleep(Duration::from_millis(300));
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 1);
+        // Long enough for the watcher event, well short of FILE_SETTLE.
+        std::thread::sleep(Duration::from_millis(800));
+        handle.stop();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while handle.is_running() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!handle.is_running(), "the loop exits on stop");
+        dropped.lock().unwrap().clone()
+    }
+
+    /// `PIPE8b`: a segment the daemon stops before analysing is reported.
+    ///
+    /// On stop the loop broke out and discarded whatever was still settling,
+    /// without a word. Nothing reads the stream directory's backlog at the
+    /// next start unless `--process-existing` is set, so that audio was never
+    /// analysed and nothing said so.
+    #[test]
+    fn a_segment_left_at_stop_is_reported() {
+        let dropped = stop_with_a_segment_settling(false);
+        assert_eq!(dropped.len(), 1, "{dropped:?}");
+        // Counterpart: when the next start's backlog pass will read it, it is
+        // not lost, and not reported as lost.
+        assert!(stop_with_a_segment_settling(true).is_empty());
+    }
+
+    /// `PIPE8c`: the startup backlog pass leaves a segment still being written
+    /// to the watcher, so it is analysed once, whole.
+    ///
+    /// The pass analysed every file in the directory at once, with no settle
+    /// check and no claim. A segment the recorder was still writing was
+    /// decoded part-written, and then again by the watcher when it finished.
+    #[test]
+    fn a_segment_being_written_at_start_is_analysed_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.process_existing = true;
+        let analysed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let a = std::sync::Arc::clone(&analysed);
+        config.on_file_analysed = Some(super::super::ThroughputObserver::new(move |p| {
+            a.lock()
+                .unwrap()
+                .push(p.file_name().unwrap().to_string_lossy().into_owned());
+        }));
+        // An old, finished segment, and one the recorder has just started.
+        let old = write_noise(&config.watch_dir, "2026-05-19-birdnet-08:00:00.wav", 3);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 1);
+
+        let (event_tx, _event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        std::thread::sleep(Duration::from_millis(300));
+        // The recorder finishes the segment.
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 3);
+        std::thread::sleep(Duration::from_millis(4_000));
+        handle.stop();
+
+        let seen = analysed.lock().unwrap().clone();
+        let count = |n: &str| seen.iter().filter(|s| s.as_str() == n).count();
+        assert_eq!(count("2026-05-19-birdnet-09:00:00.wav"), 1, "{seen:?}");
+        // Counterpart: the finished backlog is still read, once.
+        assert_eq!(count("2026-05-19-birdnet-08:00:00.wav"), 1, "{seen:?}");
     }
 
     #[test]

@@ -164,6 +164,7 @@ pub fn process_and_infer(
                 source_file: path.to_path_buf(),
                 latency_ms: total_ms,
                 correlation_id: correlation_id.to_owned(),
+                lease: None,
             });
         }
     }
@@ -289,6 +290,7 @@ pub fn process_and_infer_filtered(
                 source_file: path.to_path_buf(),
                 latency_ms: total_ms,
                 correlation_id: correlation_id.to_owned(),
+                lease: None,
             });
         }
     }

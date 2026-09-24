@@ -1046,12 +1046,30 @@ async fn serve(
     // left to a SIGKILL.
     if let Some(handle) = daemon_handle.as_ref() {
         handle.stop();
+        // `stop` only signals. Returning at once ended the process under a
+        // file mid-analysis, and before the loop could say what it was leaving
+        // unanalysed (PIPE8b). Give it a bounded window: SHUTDOWN_GRACE above
+        // plus this stays inside the unit's TimeoutStopSec=30.
+        let deadline = tokio::time::Instant::now() + DAEMON_STOP_GRACE;
+        while handle.is_running() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        if handle.is_running() {
+            tracing::warn!(
+                grace_secs = DAEMON_STOP_GRACE.as_secs(),
+                "detection loop still analysing at shutdown; exiting without waiting for it"
+            );
+        }
     }
 
     sd_notify::stopping();
     tracing::info!("BirdNet-Behavior stopped");
     Ok(())
 }
+
+/// How long shutdown waits for the detection loop to finish the segment it is
+/// analysing and exit.
+const DAEMON_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// After a shutdown signal, allow in-flight connections a bounded window to
 /// drain before we stop waiting — so a long-lived WebSocket can't wedge
