@@ -525,6 +525,46 @@ async function paletteLoadsOnOpen(page) {
   );
 }
 
+/** M7: the co-occurrence range the reader picked is the range every part of
+ * the tab shows.
+ *
+ * The companion lookup sent `days-val`, which the server never reads, so it
+ * always answered for 30 days; and the two collapsed tables were fetched on
+ * first opening with a hard-coded `?days=30`, overwriting whatever range had
+ * been chosen before they were opened.
+ */
+async function correlationRangeHolds(page) {
+  const seen = [];
+  page.on('request', (r) => {
+    const u = new URL(r.url());
+    if (/cooccurrence-matrix|correlation-pairs|companion-species/.test(u.pathname)) {
+      seen.push({ path: u.pathname, days: u.searchParams.get('days') });
+    }
+  });
+  await page.goto(`${BASE}/patterns?tab=together`, { waitUntil: 'networkidle' });
+  await page.click('#range-controls [data-days="90"]');
+  await page.waitForTimeout(600);
+  const opened = seen.length;
+  await page.click('summary:has-text("co-occurrence matrix")');
+  await page.waitForTimeout(800);
+  const afterOpen = seen.slice(opened).filter((x) => x.path.endsWith('cooccurrence-matrix'));
+  check(
+    'range: opening the matrix keeps the chosen 90 days',
+    afterOpen.every((x) => x.days === '90'),
+    `requests on opening: ${JSON.stringify(afterOpen)}`,
+  );
+  // Typed, not filled: the input listens for `keyup`, which fill() never sends.
+  await page.click('#species-input');
+  await page.keyboard.type('Robin');
+  await page.waitForTimeout(900);
+  const companion = seen.filter((x) => x.path.endsWith('companion-species')).pop();
+  check(
+    'range: the companion lookup asks for the chosen 90 days',
+    companion && companion.days === '90',
+    `last companion request: ${JSON.stringify(companion)}`,
+  );
+}
+
 const page404 = [];
 
 async function main() {
@@ -555,6 +595,7 @@ async function main() {
     ['live feed after back/forward', liveFeedSurvivesBackForward],
     ['live detection refreshes the feed', liveDetectionRefreshesFeed],
     ['palette loads on open', paletteLoadsOnOpen],
+    ['co-occurrence range holds', correlationRangeHolds],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();

@@ -87,13 +87,13 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
   </div>
   <details class="pt-disc">
     <summary>See the numbers — the co-occurrence matrix</summary>
-    <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix?days=30" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
+    <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix" hx-include="#days-hidden" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
       <span class="htmx-indicator bnb-meta">Loading…</span>
     </div>
   </details>
   <details class="pt-disc">
     <summary>See the numbers — strongest co-occurring pairs</summary>
-    <div id="correlation-pairs" hx-get="/pages/correlation-pairs?days=30" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
+    <div id="correlation-pairs" hx-get="/pages/correlation-pairs" hx-include="#days-hidden" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
       <span class="htmx-indicator bnb-meta">Loading…</span>
     </div>
   </details>
@@ -108,9 +108,13 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
            hx-get="/pages/companion-species"
            hx-trigger="keyup changed delay:400ms"
            hx-target="#companion-results"
-           hx-include="[name='days-val']"
+           hx-include="#days-hidden"
            name="species">
-    <input type="hidden" name="days-val" id="days-hidden" value="30">
+    <!-- The range every lazily-loaded part of this tab asks for. Named `days`
+         because that is what the server reads: `days-val` was ignored, so the
+         companion lookup always answered for 30 days, and the two tables
+         below fetched a hard-coded `?days=30` on first opening. -->
+    <input type="hidden" name="days" id="days-hidden" value="30">
   </div>
   <div id="companion-results">
     <p class="bnb-meta">Type a species name above…</p>
