@@ -74,13 +74,13 @@ Every key also exists as `BIRDNET_MODEL_2_PATH` and so on in the environment; se
 
 ## Routing sources to classifiers
 
-By default every audio source is judged by every loaded classifier. To send particular microphones to particular classifiers:
+A second classifier runs only where a route sends it: every audio source is judged by the **primary alone** unless `MODEL_ROUTES` names it. That is deliberate — adding a classifier should not quietly double the inference cost of every microphone on a board that was keeping up. To send particular microphones to particular classifiers:
 
 ```ini
 MODEL_ROUTES=pond:perch,garden:birdnet+perch
 ```
 
-The source is its `audio_sources` row id — the same label `GET /api/v2/system/capture` lists. Use `+` for more than one classifier on one source, and commas between sources.
+The source is its `audio_sources` row id — the same label `GET /api/v2/system/capture` lists, and the one each source's recordings carry in their file names, which is how the detection loop knows where a recording came from. To run both classifiers on your only microphone, name that microphone's id: `MODEL_ROUTES=<id>:birdnet+perch`. That needs the microphone to be listed on the **Audio** page, which is what gives it an id; a single microphone set only in `birdnet.conf` records without one, and gets the primary alone. Use `+` for more than one classifier on one source, and commas between sources.
 
 Two rules here exist because a station runs unattended for months:
 

@@ -429,13 +429,6 @@ pub fn run_daemon(
         let _alive = running_guard;
         tracing::info!("detection daemon started");
 
-        // The registry moved in with this closure. Files arriving through the
-        // watch directory carry no audio-source id, so they are judged by the
-        // default route — the primary classifier — exactly as before Stage 2.
-        // Per-source routing applies where a source is known; this path is the
-        // file watcher, which only knows a path.
-        let route = ClassifierRegistry::default_route();
-
         // Process any pre-existing backlog here, on the loop thread, rather
         // than before signalling readiness. The event consumer is already
         // draining by now, so a large backlog cannot block startup past the
@@ -457,7 +450,6 @@ pub fn run_daemon(
                 &watch_dir,
                 &pipeline_config,
                 &mut registry,
-                &route,
                 &chunk_filters,
                 &mut species_filter,
                 filter_observer.as_ref(),
@@ -627,6 +619,7 @@ pub fn run_daemon(
                 let lease = in_flight
                     .as_ref()
                     .map(|table| std::sync::Arc::new(table.claim(&path)));
+                let route = route_for_segment(&registry, &path);
                 match process_and_infer_filtered(
                     &path,
                     &pipeline_config,
@@ -695,6 +688,23 @@ pub fn run_daemon(
     })
 }
 
+/// The classifiers that judge a segment: its source's `MODEL_ROUTES` entry.
+///
+/// A capture source names its segments with its id — the `audio_sources` row
+/// id, the key routes are written against — so the id is read back from the
+/// file name. A name without one (a lone microphone's BirdNET-Pi-style name, or
+/// a file dropped in by hand) gets the default route, the primary, as does a
+/// source with no route. Before this every segment got the default, whatever
+/// its source, and no route ever applied.
+fn route_for_segment(registry: &ClassifierRegistry, path: &Path) -> Vec<usize> {
+    let source = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(crate::detection::types::RecordingFile::parse)
+        .and_then(|f| f.rtsp_id);
+    registry.route_for(source.as_deref())
+}
+
 /// Say what a stopping daemon leaves unanalysed (`PIPE8b`).
 ///
 /// Nothing reads the watch directory's backlog at the next start unless
@@ -743,7 +753,6 @@ fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
     registry: &mut ClassifierRegistry,
-    route: &[usize],
     chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
     filter_observer: Option<&super::SpeciesFilterObserver>,
@@ -790,11 +799,12 @@ fn process_existing_files(
 
         let lease = in_flight.map(|table| std::sync::Arc::new(table.claim(&path)));
         let correlation_id = new_event_correlation_id();
+        let route = route_for_segment(registry, &path);
         match process_and_infer_filtered(
             &path,
             pipeline_config,
             registry,
-            route,
+            &route,
             chunk_filters,
             species_filter,
             filter_observer,
@@ -1056,6 +1066,70 @@ mod tests {
         assert_eq!(count("2026-05-19-birdnet-09:00:00.wav"), 1, "{seen:?}");
         // Counterpart: the finished backlog is still read, once.
         assert_eq!(count("2026-05-19-birdnet-08:00:00.wav"), 1, "{seen:?}");
+    }
+
+    /// A watched segment is judged by its source's route (`MODEL_ROUTES`).
+    ///
+    /// The loop gave every file the default route — the primary alone —
+    /// because "files arriving through the watch directory carry no
+    /// audio-source id". They do: a capture source's segments are named with
+    /// its `audio_sources` row id, the key `MODEL_ROUTES` uses. So no route
+    /// ever applied, and a second classifier never ran on anything.
+    #[test]
+    fn a_segment_is_judged_by_its_sources_route() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.model.confidence_threshold = 0.0;
+        config
+            .extra_models
+            .push(crate::inference::registry::ModelSpec {
+                id: "second".to_owned(),
+                model_path: config.model_path.clone(),
+                labels_path: config.labels_path.clone(),
+                threshold: None,
+                sample_rate: None,
+            });
+        config.model_routes.insert(
+            "pond".to_owned(),
+            vec!["birdnet".to_owned(), "second".to_owned()],
+        );
+        let (event_tx, event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-pond-09:00:00.wav", 3);
+        write_noise(
+            &config.watch_dir,
+            "2026-05-19-birdnet-garden-09:00:00.wav",
+            3,
+        );
+
+        let mut agreement: std::collections::HashMap<String, Option<u8>> =
+            std::collections::HashMap::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while agreement.len() < 2 && Instant::now() < deadline {
+            if let Ok(ev) = event_rx.recv_timeout(Duration::from_millis(200)) {
+                let name = ev
+                    .source_file
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                agreement
+                    .entry(name)
+                    .or_insert(ev.detection.agreeing_models);
+            }
+        }
+        handle.stop();
+        assert_eq!(
+            agreement.get("2026-05-19-birdnet-pond-09:00:00.wav"),
+            Some(&Some(2)),
+            "the routed source was not judged by both classifiers: {agreement:?}"
+        );
+        // Counterpart: an unrouted source gets the primary alone.
+        assert_eq!(
+            agreement.get("2026-05-19-birdnet-garden-09:00:00.wav"),
+            Some(&Some(1)),
+            "{agreement:?}"
+        );
     }
 
     #[test]
