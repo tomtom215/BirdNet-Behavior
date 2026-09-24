@@ -529,25 +529,34 @@ async fn htmx_activity_streamgraph_partial() {
     assert!(html.contains("<svg") || html.contains("Not enough data"));
 }
 
+/// `ANA10`: two partials nothing embedded are gone, not left to rot.
+///
+/// `/pages/dawn-chorus` drew the top five species' all-time hourly totals as a
+/// "dawn chorus", and `/pages/seasonal-phenology` labelled a rolling 364-day
+/// window January to December. No page, template or script requested either;
+/// only the prewarm computed them, on every refresh, for nobody. The Patterns
+/// home's Dawn tab (`/pages/dawn-polar`) and the Migration tab's ridgeline
+/// are the real surfaces.
 #[tokio::test]
-async fn htmx_dawn_chorus_partial() {
-    let app = app();
-    let response = app
+async fn the_orphaned_analytics_partials_are_gone() {
+    for uri in ["/pages/dawn-chorus", "/pages/seasonal-phenology"] {
+        let response = app()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+    // Counterpart: the real dawn-chorus chart still answers.
+    let response = app()
         .oneshot(
             Request::builder()
-                .uri("/pages/dawn-chorus")
+                .uri("/pages/dawn-polar")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 65536)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
-    // All-time top species exist in the fixture, so the polar renders.
-    assert!(html.contains("<svg") || html.contains("Not enough data"));
 }
 
 #[tokio::test]
@@ -557,29 +566,6 @@ async fn htmx_life_accumulation_partial() {
         .oneshot(
             Request::builder()
                 .uri("/pages/life-accumulation")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 65536)
-        .await
-        .unwrap();
-    let html = String::from_utf8_lossy(&body);
-    assert!(html.contains("<svg") || html.contains("Not enough data"));
-}
-
-#[tokio::test]
-async fn htmx_seasonal_phenology_partial() {
-    // The heatmap page's embedded ridgeline lives at /pages/seasonal-phenology;
-    // the dedicated /migration page owns /pages/migration-ridgeline (tested in
-    // all_redesigned_pages_render_ok).
-    let app = app();
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/pages/seasonal-phenology")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -657,8 +643,6 @@ async fn all_redesigned_pages_render_ok() {
         "/pages/cooccurrence-matrix",
         "/pages/acoustic-network",
         "/pages/activity-streamgraph",
-        "/pages/dawn-chorus",
-        "/pages/seasonal-phenology",
         "/pages/migration-ridgeline",
         "/pages/migration-stats",
         "/pages/migration-diversity",

@@ -15,7 +15,7 @@
 use std::fmt::Write as _;
 
 use super::{EMPTY, svg_a11y};
-use crate::routes::pages::atoms::{series_color, species_code};
+use crate::routes::pages::atoms::series_color;
 use crate::routes::pages::escape_html;
 
 /// Shift an ISO `YYYY-MM-DD` date by `days`, returning `MM-DD` for an axis
@@ -244,109 +244,6 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
         }
     }
     svg.push_str("</svg>");
-    svg
-}
-
-/// Joyplot of per-species seasonal abundance. Each series is
-/// `(common_name, weekly_counts)`; rows are stacked with overlap and each
-/// ridge is normalised to its own peak so arrival/departure *timing* reads
-/// clearly. Month ticks run along the bottom.
-#[must_use]
-pub fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
-    const MONTHS: [&str; 12] = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
-    let weeks = series.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
-    if series.is_empty() || weeks < 2 {
-        return EMPTY.to_string();
-    }
-    let n = series.len();
-    let w = 760.0_f64;
-    let left = 96.0_f64;
-    let right = 10.0_f64;
-    let plot_w = w - left - right;
-    let row_step = 30.0_f64;
-    let amp = 54.0_f64;
-    let top = amp;
-    let bottom = 22.0_f64;
-    let h = top + n as f64 * row_step + bottom;
-    let step_x = plot_w / (weeks - 1) as f64;
-    let wk_x = |wk: f64| left + wk * step_x;
-
-    // Per-species vertical gradients: saturated at the crest, fading to baseline.
-    let mut defs = String::from("<defs>");
-    for (i, (_name, _)) in series.iter().enumerate() {
-        let color = series_color(i, series.len());
-        let baseline = top + (i + 1) as f64 * row_step;
-        let _ = write!(
-            defs,
-            r#"<linearGradient id="ridge-{i}" gradientUnits="userSpaceOnUse" x1="0" y1="{y0:.1}" x2="0" y2="{y1:.1}"><stop offset="0%" stop-color="{color}" stop-opacity="0.78"/><stop offset="100%" stop-color="{color}" stop-opacity="0.07"/></linearGradient>"#,
-            y0 = baseline - amp,
-            y1 = baseline,
-        );
-    }
-    defs.push_str("</defs>");
-
-    let mut svg = format!(
-        r#"<div class="viz-scroll"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img">"#
-    );
-    svg.push_str(&svg_a11y(
-        "Migration phenology ridgeline",
-        "One ridge per species across the year; each ridge peaks in the weeks that species was most abundant, with spring and fall migration bands behind.",
-    ));
-    svg.push_str(&defs);
-
-    // Spring (~weeks 12–21) and fall (~weeks 30–43) migration bands, behind.
-    let yb = h - bottom;
-    for (w0, w1, tok, lbl) in [
-        (12.0, 21.0, "var(--moss)", "spring"),
-        (30.0, 43.0, "var(--dawn)", "fall"),
-    ] {
-        let x = wk_x(w0);
-        let bw = wk_x(w1) - x;
-        let _ = write!(
-            svg,
-            r#"<rect x="{x:.1}" y="{top:.1}" width="{bw:.1}" height="{bh:.1}" fill="{tok}" fill-opacity="0.06"/><text class="bnb-eyebrow" x="{tx:.1}" y="{top:.1}" font-size="8" fill="var(--fg-4)">{lbl}</text>"#,
-            bh = yb - top,
-            tx = x + 3.0,
-        );
-    }
-
-    // Month ticks + faint guides.
-    for (m, label) in MONTHS.iter().enumerate() {
-        let x = left + (m as f64 / 12.0) * plot_w;
-        let _ = write!(
-            svg,
-            r#"<line x1="{x:.1}" y1="{top:.1}" x2="{x:.1}" y2="{yb:.1}" stroke="var(--hairline)" stroke-width="0.5"/><text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="8" fill="var(--fg-4)">{label}</text>"#,
-            ty = h - 6.0,
-        );
-    }
-
-    // Ridges, top row first so lower rows overlap in front.
-    for (i, (name, vals)) in series.iter().enumerate() {
-        let row_max = vals.iter().copied().max().unwrap_or(1).max(1) as f64;
-        let baseline = top + (i + 1) as f64 * row_step;
-        let color = series_color(i, series.len());
-        let mut path = String::new();
-        for (wk, &v) in vals.iter().enumerate() {
-            let x = wk_x(wk as f64);
-            let y = baseline - (v as f64 / row_max) * amp;
-            let _ = write!(path, "{}{x:.1},{y:.1} ", if wk == 0 { "M" } else { "L" });
-        }
-        let area = format!(
-            "{path}L{xe:.1},{baseline:.1} L{x0:.1},{baseline:.1} Z",
-            xe = wk_x((vals.len() - 1) as f64),
-            x0 = left,
-        );
-        let _ = write!(
-            svg,
-            r#"<path data-species-fill="1" d="{area}" fill="url(#ridge-{i})" stroke="{color}" stroke-width="1.4" stroke-opacity="0.95"/><text class="mono" x="{lx:.1}" y="{ly:.1}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--fg-3)"><title>{full}</title>{code}</text>"#,
-            lx = left - 8.0,
-            ly = baseline - 4.0,
-            full = escape_html(name),
-            code = species_code(name),
-        );
-    }
-
-    svg.push_str("</svg></div>");
     svg
 }
 
@@ -594,23 +491,6 @@ mod tests {
         assert!(svg.contains("<title>Species accumulation over time</title>"));
         assert!(svg.contains("<desc>A rising line"));
         assert!(!svg.contains("aria-label"));
-    }
-
-    #[test]
-    fn ridgeline_empty_and_basic() {
-        assert!(ridgeline(&[]).contains("Not enough data"));
-        let s = vec![
-            ("Blue Jay".to_string(), vec![0, 1, 3, 5, 2, 0]),
-            ("Magnolia Warbler".to_string(), vec![0, 0, 0, 2, 6, 1]),
-        ];
-        let svg = ridgeline(&s);
-        assert!(svg.contains("<svg") && svg.contains("BLJA"));
-        assert!(svg.contains("<title>Migration phenology ridgeline</title>"));
-        assert!(svg.contains("<desc>One ridge per species"));
-        assert!(!svg.contains("aria-label"));
-        // <title>/<desc> precede <defs> so they are the SVG's first children.
-        let svg_open = svg.find("<svg").unwrap();
-        assert!(svg[svg_open..].find("<title>") < svg[svg_open..].find("<defs>"));
     }
 
     #[test]
