@@ -39,6 +39,7 @@ CI_TESTS=(
     model-resume.sh
     pipefail-sigpipe.sh
     service-unit.sh
+    uninstall-paths.sh
 )
 
 # Deliberately not run in CI. Each entry is "file|reason" and the reason is
