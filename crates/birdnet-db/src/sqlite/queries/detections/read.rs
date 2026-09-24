@@ -2145,4 +2145,146 @@ mod tests {
             "no detection was recorded at 06:44"
         );
     }
+
+    /// The `/api/v2` pagers and the species window count had coverage only
+    /// from `birdnet-web`, which the mutation gate does not run: replacing
+    /// any of these bodies with a constant left every `birdnet-db` unit test
+    /// green. These pin what each returns, with rows the tests choose.
+    mod pagers_and_window_count {
+        use super::super::*;
+        use crate::sqlite::queries::detections::test_support::{insert_test_detection, test_conn};
+
+        fn when(rows: &[DetectionRow]) -> Vec<(String, String)> {
+            rows.iter()
+                .map(|r| (r.date.clone(), r.time.clone()))
+                .collect()
+        }
+
+        fn pair(date: &str, time: &str) -> (String, String) {
+            (date.to_owned(), time.to_owned())
+        }
+
+        #[test]
+        fn species_count_between_is_inclusive_and_skips_rejected() {
+            let conn = test_conn();
+            for (date, time) in [
+                ("2026-03-01", "06:00:00"), // the lower bound itself
+                ("2026-03-04", "06:00:00"),
+                ("2026-03-07", "06:00:00"), // the upper bound itself
+                ("2026-02-28", "06:00:00"), // the day before
+                ("2026-03-08", "06:00:00"), // the day after
+                ("2026-03-05", "07:00:00"), // rejected below
+            ] {
+                insert_test_detection(&conn, date, time, "Robin", "Erithacus rubecula", 0.9);
+            }
+            insert_test_detection(
+                &conn,
+                "2026-03-04",
+                "08:00:00",
+                "Wren",
+                "Troglodytes troglodytes",
+                0.9,
+            );
+            let rejected = conn
+                .execute(
+                    "UPDATE detections SET review_verdict = 'rejected' WHERE Date = '2026-03-05'",
+                    [],
+                )
+                .unwrap();
+            assert_eq!(rejected, 1, "the fixture rejects one Robin detection");
+
+            assert_eq!(
+                species_detection_count_between(
+                    &conn,
+                    "Erithacus rubecula",
+                    "2026-03-01",
+                    "2026-03-07"
+                )
+                .unwrap(),
+                3
+            );
+            assert_eq!(
+                species_detection_count_between(
+                    &conn,
+                    "Erithacus rubecula",
+                    "2026-03-09",
+                    "2026-03-31"
+                )
+                .unwrap(),
+                0
+            );
+        }
+
+        #[test]
+        fn date_page_keeps_the_date_order_and_splits_it() {
+            let conn = test_conn();
+            for time in ["06:30:00", "07:00:00", "06:45:00"] {
+                insert_test_detection(
+                    &conn,
+                    "2026-03-11",
+                    time,
+                    "Robin",
+                    "Erithacus rubecula",
+                    0.9,
+                );
+            }
+            insert_test_detection(
+                &conn,
+                "2026-03-10",
+                "23:00:00",
+                "Robin",
+                "Erithacus rubecula",
+                0.9,
+            );
+
+            assert_eq!(
+                when(&detections_by_date_page(&conn, "2026-03-11", 2, 0).unwrap()),
+                vec![
+                    pair("2026-03-11", "07:00:00"),
+                    pair("2026-03-11", "06:45:00")
+                ]
+            );
+            assert_eq!(
+                when(&detections_by_date_page(&conn, "2026-03-11", 2, 2).unwrap()),
+                vec![pair("2026-03-11", "06:30:00")]
+            );
+            assert_eq!(
+                when(&detections_by_date_page(&conn, "2026-03-11", 10, 0).unwrap()),
+                when(&detections_by_date(&conn, "2026-03-11").unwrap()),
+                "one page that holds everything is the unpaged listing"
+            );
+        }
+
+        #[test]
+        fn species_page_orders_across_dates_and_splits_it() {
+            let conn = test_conn();
+            for (date, time) in [
+                ("2026-03-10", "08:00:00"),
+                ("2026-03-11", "06:00:00"),
+                ("2026-03-11", "09:00:00"),
+            ] {
+                insert_test_detection(&conn, date, time, "Robin", "Erithacus rubecula", 0.9);
+            }
+            insert_test_detection(
+                &conn,
+                "2026-03-12",
+                "10:00:00",
+                "Wren",
+                "Troglodytes troglodytes",
+                0.9,
+            );
+
+            assert_eq!(
+                when(&detections_by_species_page(&conn, "Robin", 2, 0).unwrap()),
+                vec![
+                    pair("2026-03-11", "09:00:00"),
+                    pair("2026-03-11", "06:00:00")
+                ]
+            );
+            assert_eq!(
+                when(&detections_by_species_page(&conn, "Robin", 2, 2).unwrap()),
+                vec![pair("2026-03-10", "08:00:00")]
+            );
+        }
+    }
 }
