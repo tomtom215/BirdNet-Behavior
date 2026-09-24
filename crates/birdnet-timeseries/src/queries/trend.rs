@@ -166,25 +166,36 @@ impl QueryPlan for AnomalyDetection {
         let lookback = self.lookback_days;
         let z = self.z_threshold;
         format!(
-            "WITH daily AS (
-    SELECT detection_date, COUNT(*) AS detections
+            "WITH counts AS (
+    SELECT detection_date, COUNT(*) AS n
     FROM detections_ts
     WHERE detection_date >= CURRENT_DATE - INTERVAL {lookback} DAYS
+      AND detection_date < CURRENT_DATE
     GROUP BY detection_date
+),
+spine AS (
+    SELECT CAST(range AS DATE) AS detection_date
+    FROM range(
+        (SELECT MIN(detection_date) FROM counts)::TIMESTAMP,
+        CURRENT_DATE::TIMESTAMP,
+        INTERVAL 1 DAY
+    )
+),
+daily AS (
+    SELECT s.detection_date, COALESCE(c.n, 0) AS detections
+    FROM spine s LEFT JOIN counts c USING (detection_date)
 ),
 with_stats AS (
     SELECT
         detection_date,
         detections,
-        AVG(detections) OVER (
-            ORDER BY detection_date
-            RANGE BETWEEN INTERVAL {window} DAYS PRECEDING AND CURRENT ROW
-        ) AS rolling_mean,
-        STDDEV_POP(detections) OVER (
-            ORDER BY detection_date
-            RANGE BETWEEN INTERVAL {window} DAYS PRECEDING AND CURRENT ROW
-        ) AS rolling_stddev
+        AVG(detections) OVER prior AS rolling_mean,
+        STDDEV_SAMP(detections) OVER prior AS rolling_stddev
     FROM daily
+    WINDOW prior AS (
+        ORDER BY detection_date
+        RANGE BETWEEN INTERVAL {window} DAYS PRECEDING AND INTERVAL 1 DAY PRECEDING
+    )
 )
 SELECT
     strftime(detection_date, '%Y-%m-%d') AS detection_date,
@@ -193,10 +204,9 @@ SELECT
     rolling_stddev,
     (detections - rolling_mean) / NULLIF(rolling_stddev, 0) AS z_score,
     CASE
-        WHEN detections > rolling_mean + {z} * COALESCE(rolling_stddev, 0)
-             THEN 'high'
-        WHEN detections < rolling_mean - {z} * COALESCE(rolling_stddev, 0)
-             THEN 'low'
+        WHEN rolling_stddev IS NULL THEN 'normal'
+        WHEN detections > rolling_mean + {z} * rolling_stddev THEN 'high'
+        WHEN detections < rolling_mean - {z} * rolling_stddev THEN 'low'
         ELSE 'normal'
     END AS anomaly_flag
 FROM with_stats
@@ -229,7 +239,9 @@ mod tests {
     fn anomaly_sql_has_stddev() {
         let q = AnomalyDetection::default();
         let sql = q.sql();
-        assert!(sql.contains("STDDEV_POP"));
+        // Sample deviation of the days *before* the one judged (ANA13).
+        assert!(sql.contains("STDDEV_SAMP"));
+        assert!(sql.contains("AND INTERVAL 1 DAY PRECEDING"));
         assert!(sql.contains("anomaly_flag"));
     }
 }
