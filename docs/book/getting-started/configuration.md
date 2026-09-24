@@ -114,7 +114,7 @@ configuration:
 
 | Host | Why | Turn it off with |
 |---|---|---|
-| `api.github.com` | Once 60 s after start and every 24 h after: checks whether a newer release exists and logs the answer. It never installs anything — updates are applied only from the admin panel. | `--no-update-check` / `BIRDNET_NO_UPDATE_CHECK=1` |
+| `api.github.com` | Once 60 s after start and every 24 h after: checks whether a newer release exists and logs the answer. It never installs anything; an update is applied with `sudo bash install.sh update` (a systemd station cannot replace its own binary, so the admin panel does not try). | `--no-update-check` / `BIRDNET_NO_UPDATE_CHECK=1` |
 | `en.wikipedia.org`, `upload.wikimedia.org` | Downloads a photo the first time a species is detected, then serves it from the local cache for ever. | `--image-cache-dir ""` |
 
 One more can happen **once, on a first run**: if the bundled
