@@ -96,6 +96,19 @@ jobs:
       - name: Interaction gate (controls do not undo their own work)
         working-directory: tools/visual-qa
         run: node interactions.mjs
+      - name: Base-path gate (served under a prefix, nothing leaves it)
+        working-directory: tools/visual-qa
+        run: |
+          set -euo pipefail
+          BIRDNET_BASE_PATH=/bn BNB_FIXTURE_ADDR=127.0.0.1:8503 \
+            BNB_FIXTURE_DIR="$RUNNER_TEMP/bnb-base-path" \
+            ../../target/debug/examples/screenshot_server \
+            > "$RUNNER_TEMP/screenshot-server-bp.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8503/bn/species >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          node base-path.mjs
 
       - name: Visual-QA sweep (overflow / console / broken images)
         working-directory: tools/visual-qa

@@ -192,7 +192,7 @@
   function post(url, parts) {
     var body = 'date=' + encodeURIComponent(parts[0]) + '&time=' + encodeURIComponent(parts[1]) +
                '&sci_name=' + encodeURIComponent(parts[2]);
-    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
+    return fetch(window.bnbUrl(url), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
   }
   // Guards the same trap the live-audio button had: a bulk action over many
   // clips takes long enough on a Pi that the page looks inert, and a second
@@ -449,7 +449,7 @@
     if (v) q.push('source_id=' + encodeURIComponent(v));
     var hz = shiftHz();
     if (hz !== 0) q.push('freq_shift_hz=' + encodeURIComponent(String(hz)));
-    return q.length ? '/stream?' + q.join('&') : '/stream';
+    return window.bnbUrl(q.length ? '/stream?' + q.join('&') : '/stream');
   }
 
   // `play()` sets `audio.paused` to false synchronously, but its promise only

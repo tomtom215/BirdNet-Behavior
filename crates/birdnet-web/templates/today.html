@@ -258,8 +258,8 @@
   // ── Source picker: live audio per source lives on Recordings → Live ───
   var src = document.getElementById('td-source');
   if (src) src.addEventListener('change', function () {
-    if (this.value) window.location.href = '/recordings?view=live&source=' + encodeURIComponent(this.value);
-    else window.location.href = '/recordings?view=live';
+    if (this.value) window.location.href = window.bnbUrl('/recordings?view=live&source=' + encodeURIComponent(this.value));
+    else window.location.href = window.bnbUrl('/recordings?view=live');
   });
 
   // ── Live nudges ────────────────────────────────────────────────────────

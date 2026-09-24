@@ -235,12 +235,23 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     // A redirect's target is not HTML and never reaches the body pass. Missed,
     // it sends the browser out of the prefix on every login and every form
     // that redirects — the single most visible way base-path support fails.
-    if !base.is_empty()
-        && let Some(loc) = parts.headers.get(header::LOCATION)
-        && let Ok(text) = loc.to_str()
-        && let Ok(v) = HeaderValue::from_str(&crate::base_path::rewrite_location(text, base))
-    {
-        parts.headers.insert(header::LOCATION, v);
+    // htmx's own redirect headers are the same thing for an htmx request: a
+    // sign-in-required write answers with `HX-Redirect`, and it was left at
+    // `/login` (M8).
+    if !base.is_empty() {
+        for name in [
+            header::LOCATION,
+            header::HeaderName::from_static("hx-redirect"),
+            header::HeaderName::from_static("hx-location"),
+        ] {
+            if let Some(loc) = parts.headers.get(&name)
+                && let Ok(text) = loc.to_str()
+                && let Ok(v) =
+                    HeaderValue::from_str(&crate::base_path::rewrite_location(text, base))
+            {
+                parts.headers.insert(name, v);
+            }
+        }
     }
 
     // Only rewrite HTML. Non-HTML responses — the audio `/stream`, the live

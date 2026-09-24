@@ -125,6 +125,7 @@ fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> 
 <link rel="stylesheet" href="/static/css/app.css?v={css_v}">
 <script src="/static/htmx.min.js?v={css_v}"></script>
 <script src="/static/poll-visibility.js?v={css_v}"></script>
+<script src="/static/base-path.js?v={css_v}"></script>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }}
   .admin-wrap {{ max-width:1180px; margin:0 auto; padding:1.5rem 1.25rem 3rem; }}
