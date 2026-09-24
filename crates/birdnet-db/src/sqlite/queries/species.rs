@@ -326,7 +326,7 @@ pub fn species_sparklines(
     let mut stmt = conn.prepare(
         "SELECT Com_Name, Date, COUNT(*) as count
          FROM detections_analytic
-         WHERE Date >= date('now', 'localtime', '-' || ?1 || ' days')
+         WHERE Date >= date('now', 'localtime', '-' || (?1 - 1) || ' days')
          GROUP BY Com_Name, Date
          ORDER BY Com_Name, Date",
     )?;
