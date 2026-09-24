@@ -309,13 +309,16 @@ impl DetectionFilter {
 
         match parse_search_term(self.text.as_deref()) {
             Some(SearchTerm::Include(term)) => {
-                parts.push(r"(Com_Name LIKE ? ESCAPE '\' OR Sci_Name LIKE ? ESCAPE '\')".into());
+                // `char(92)` is `\`, the escape `like_contains` uses. Written as
+                // an expression, not `'\'`, so this SQL stays free of quoted
+                // literals and counting its `?` placeholders stays sound.
+                parts.push("(Com_Name LIKE ? ESCAPE char(92) OR Sci_Name LIKE ? ESCAPE char(92))".into());
                 let pattern = like_contains(&term);
                 params.push(Box::new(pattern.clone()));
                 params.push(Box::new(pattern));
             }
             Some(SearchTerm::Exclude(rest)) => {
-                parts.push(r"Com_Name NOT LIKE ? ESCAPE '\'".into());
+                parts.push("Com_Name NOT LIKE ? ESCAPE char(92)".into());
                 params.push(Box::new(like_contains(&rest)));
             }
             None => {}
