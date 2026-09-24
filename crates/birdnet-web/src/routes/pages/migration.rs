@@ -110,14 +110,12 @@ fn collect_ridges(
     // and trough month over a multi-year window. Cheap heuristic — refine
     // with `birdnet_behavioral::ResidencyType::Migrant` when analytics
     // feature is on.
-    let mut stmt = conn.prepare(
-        "SELECT Com_Name, \
-                CAST(strftime('%W', Date) AS INTEGER) AS wk, \
-                COUNT(*) AS n \
+    let mut stmt = conn.prepare(&format!(
+        "SELECT Com_Name, {WEEK_COLUMN} AS wk, COUNT(*) AS n \
          FROM detections_analytic \
          WHERE Date LIKE ?1 \
-         GROUP BY Com_Name, wk",
-    )?;
+         GROUP BY Com_Name, wk"
+    ))?;
     let prefix = format!("{year}-%");
     let rows = stmt.query_map([&prefix], |r| {
         Ok((
@@ -131,7 +129,7 @@ fn collect_ridges(
     let mut by_species: HashMap<String, [f32; 52]> = HashMap::new();
     for row in rows.flatten() {
         let (name, wk, n) = row;
-        let w = wk.clamp(0, 51) as usize;
+        let w = wk.clamp(0, 51) as usize; // WEEK_COLUMN is already 0..=51
         let entry = by_species.entry(name).or_insert([0.0; 52]);
         entry[w] += n as f32;
     }
@@ -409,32 +407,41 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
 // Diversity strip
 // ---------------------------------------------------------------------------
 
+/// The chart column a `Date` falls in: `(day-of-year − 1) / 7`, the last
+/// column absorbing the year's final eight or nine days.
+///
+/// Every query on this page and [`week_of_year`] use this one definition
+/// (`ANA14b`). They used `%W`, which runs 0..=53 against 52 columns: the
+/// diversity strip dropped weeks 52 and 53, the ridgeline folded them into
+/// column 51, and the peak tile printed `w53` and `w54`.
+const WEEK_COLUMN: &str = "MIN((CAST(strftime('%j', Date) AS INTEGER) - 1) / 7, 51)";
+
+/// Distinct species per week of `year`, one slot per chart column.
+fn weekly_diversity(conn: &rusqlite::Connection, year: i32) -> rusqlite::Result<[i64; 52]> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {WEEK_COLUMN} AS wk, COUNT(DISTINCT Com_Name) \
+         FROM detections_analytic \
+         WHERE Date LIKE ?1 \
+         GROUP BY wk \
+         ORDER BY wk"
+    ))?;
+    let prefix = format!("{year}-%");
+    let rows = stmt.query_map([&prefix], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+    })?;
+    let mut weekly = [0i64; 52];
+    for row in rows.flatten() {
+        let (w, n) = row;
+        if (0..52).contains(&w) {
+            weekly[w as usize] = n;
+        }
+    }
+    Ok(weekly)
+}
+
 fn compute_diversity(state: &AppState) -> Option<String> {
     let year = current_year();
-    let weekly = state
-        .with_db(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT CAST(strftime('%W', Date) AS INTEGER) AS wk, \
-                        COUNT(DISTINCT Com_Name) \
-                 FROM detections_analytic \
-                 WHERE Date LIKE ?1 \
-                 GROUP BY wk \
-                 ORDER BY wk",
-            )?;
-            let prefix = format!("{year}-%");
-            let rows = stmt.query_map([&prefix], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-            })?;
-            let mut weekly = [0i64; 52];
-            for row in rows.flatten() {
-                let (w, n) = row;
-                if (0..52).contains(&w) {
-                    weekly[w as usize] = n;
-                }
-            }
-            Ok::<_, rusqlite::Error>(weekly)
-        })
-        .ok()?;
+    let weekly = state.with_db(|conn| weekly_diversity(conn, year)).ok()?;
     // Same contract as `compute_ridgeline`: a year with nothing in it is data,
     // not a failure, and gets its own body rather than the error fallback.
     if weekly.iter().all(|&n| n == 0) {
@@ -549,8 +556,10 @@ fn stats_fragment(conn: &rusqlite::Connection, today: &str) -> rusqlite::Result<
     // Peak diversity week; `None` is a year with no detections yet.
     let peak: Option<(i64, i64)> = conn
         .query_row(
-            "SELECT CAST(strftime('%W', Date) AS INTEGER) wk, COUNT(DISTINCT Com_Name) n \
-             FROM detections_analytic WHERE Date LIKE ?1 GROUP BY wk ORDER BY n DESC LIMIT 1",
+            &format!(
+                "SELECT {WEEK_COLUMN} wk, COUNT(DISTINCT Com_Name) n \
+                 FROM detections_analytic WHERE Date LIKE ?1 GROUP BY wk ORDER BY n DESC LIMIT 1"
+            ),
             [format!("{year}-%")],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -615,7 +624,7 @@ fn stats_fragment(conn: &rusqlite::Connection, today: &str) -> rusqlite::Result<
             .to_string()
     };
 
-    // `%W` is 0-based; the ridgeline on this page prints its peak as
+    // The column is 0-based; the ridgeline on this page prints its peak as
     // `w{pw + 1}`, and the tile printed the raw number, so one week had two
     // names on one page.
     let peak_html = peak.map_or_else(
@@ -826,27 +835,23 @@ fn year_of(date: &str) -> i32 {
     date.get(0..4).and_then(|s| s.parse().ok()).unwrap_or(1970)
 }
 
-/// Week-of-year of a `YYYY-MM-DD` date, matching `SQLite`'s `%W`.
+/// Chart column of a `YYYY-MM-DD` date, matching [`WEEK_COLUMN`].
 ///
-/// This has to agree with `%W` because that is what every query on this page
-/// buckets by, and the value positions the "today" marker against those
-/// buckets. It did not: the marker was placed by `(unix_days % 365) / 7`, which
+/// This has to agree with [`WEEK_COLUMN`] because that is what every query on
+/// this page buckets by, and the value positions the "today" marker against
+/// those buckets. It did not: the marker was placed by `(unix_days % 365) / 7`, which
 /// is not a week number in any calendar. It ignores leap days, so it had
 /// drifted a fortnight by 2026, and it counts from 1 January 1970 rather than
 /// from the current year, so on 31 December it returned week 1 and drew the
 /// marker at the far left of a chart whose data ends at the far right.
 ///
-/// Clamped to 51 because the callers index 52-slot arrays.
 #[allow(clippy::cast_possible_truncation)]
 fn week_of_year(date: &str) -> u8 {
     let days = crate::routes::pages::date_to_epoch_days(date);
-    // 1970-01-01 was a Thursday, so `(days + 4) % 7` is 0 = Sunday; shift to
-    // 0 = Monday, which is the week start `%W` uses.
-    let monday_based = (((days + 4) % 7) + 6) % 7;
     let (y, _, _) = crate::routes::pages::days_to_date(days);
     let jan1 = crate::routes::pages::date_to_epoch_days(&format!("{y}-01-01"));
     let day_of_year_zero_based = days.saturating_sub(jan1);
-    ((day_of_year_zero_based + 7 - monday_based) / 7).min(51) as u8
+    (day_of_year_zero_based / 7).min(51) as u8
 }
 
 /// The station's current **local** year.
@@ -860,7 +865,7 @@ fn current_year() -> i32 {
     year_of(&crate::routes::pages::today_date_string())
 }
 
-/// The station's current **local** week-of-year, on `SQLite`'s `%W` scale.
+/// The station's current **local** chart column ([`WEEK_COLUMN`]).
 fn current_week() -> u8 {
     week_of_year(&crate::routes::pages::today_date_string())
 }
@@ -930,6 +935,37 @@ mod tests {
             .expect("seed");
         }
         conn
+    }
+
+    /// `ANA14b`: the last days of December are a week on the chart like any
+    /// other, named the way the chart names it.
+    ///
+    /// `%W` runs 0..=53 and every chart has 52 columns. The diversity strip
+    /// dropped weeks 52 and 53 (from 28 December 2026, a Monday, on), the
+    /// ridgeline folded them into column 51, and the "Peak diversity week"
+    /// tile printed `w53` — a week the chart does not have.
+    #[test]
+    fn the_last_days_of_december_are_on_the_chart() {
+        let conn = station(&[
+            ("Bohemian Waxwing", "2026-12-29"),
+            ("Common Redpoll", "2026-12-29"),
+            ("Northern Shrike", "2026-12-30"),
+        ]);
+        let weekly = weekly_diversity(&conn, 2026).expect("diversity");
+        assert_eq!(weekly[51], 3, "the last week was dropped: {weekly:?}");
+        let html = stats_fragment(&conn, "2026-12-31").expect("tiles");
+        assert!(
+            html.contains(">w52<"),
+            "the peak week is off the chart: {html}"
+        );
+        assert_eq!(week_of_year("2026-12-31"), 51);
+
+        // Counterparts: the first days of January are the first column, and a
+        // mid-year date is where it always was.
+        let conn = station(&[("Snow Bunting", "2026-01-01")]);
+        assert_eq!(weekly_diversity(&conn, 2026).expect("diversity")[0], 1);
+        assert_eq!(week_of_year("2026-01-01"), 0);
+        assert_eq!(week_of_year("2026-07-02"), 26);
     }
 
     /// A first year that began mid-year is not a year of arrivals.
@@ -1024,7 +1060,7 @@ mod tests {
         assert_eq!(n, 1, "29 Feb 2024 falls inside 20 Feb - 3 Apr 2025");
     }
 
-    /// `week_of_year` must agree with the `%W` the queries bucket by.
+    /// `week_of_year` must agree with the [`WEEK_COLUMN`] the queries bucket by.
     ///
     /// The chart's "today" marker was placed by `(unix_days % 365) / 7`, which
     /// is not a week number: it ignores leap days, so it had drifted a fortnight
@@ -1045,17 +1081,13 @@ mod tests {
             "2021-01-03",
         ] {
             let sqlite: i64 = conn
-                .query_row("SELECT CAST(strftime('%W', ?1) AS INTEGER)", [date], |r| {
-                    r.get(0)
-                })
+                .query_row(
+                    &format!("SELECT {} FROM (SELECT ?1 AS Date)", super::WEEK_COLUMN),
+                    [date],
+                    |r| r.get(0),
+                )
                 .expect("strftime");
-            // The callers index 52-slot arrays, so weeks 52 and 53 clamp; the
-            // agreement being checked is below that.
-            assert_eq!(
-                i64::from(week_of_year(date)),
-                sqlite.min(51),
-                "week of {date}"
-            );
+            assert_eq!(i64::from(week_of_year(date)), sqlite, "week of {date}");
         }
     }
 
