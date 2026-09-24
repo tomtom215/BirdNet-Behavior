@@ -180,10 +180,11 @@ accounts (the `/station/access` tab) can see everything a signed-in admin
 can, and change nothing, so a private station can still be shared with the
 household.
 
-**Private mode needs a password.** A private station with no `CADDY_PWD`
-answers `503` to everything but the sign-in and the health probe — it does
-*not* fall back to the open station, because that is the one thing it was
-asked not to be. The startup log says so at `ERROR`, the page says so, and
+**Private mode needs a password.** A private station with no admin password
+(neither `CADDY_PWD` nor one set in the setup wizard or on the accounts page)
+answers `503` to everything but the sign-in and the health probe — the admin
+panel included — and does *not* fall back to the open station, because that
+is the one thing it was asked not to be. The startup log says so at `ERROR`, the page says so, and
 `--doctor` reports it under **Private mode**. An unknown name in
 `BIRDNET_PUBLIC_ACCESS` is reported and skipped (the station starts, with
 that surface closed); `--doctor` reports it too.
@@ -253,6 +254,11 @@ whose file has errors runs on that copy and reports `config_reverted` on
 `/api/v2/health` and the station page; a start with errors and no copy runs
 web-only on the file as it is and reports `config_rejected`, so the diagnostics
 are reachable and show the errors.
+
+A revert never loosens access. If the file on disk turns private mode on or
+sets `CADDY_PWD`, the station keeps those even while running on the older
+copy, and when both files are private it opens only the `PUBLIC_ACCESS`
+carve-outs both of them name. A typo in the same edit cannot undo a lock-down.
 
 Change the file the safe way, which validates before anything is installed:
 

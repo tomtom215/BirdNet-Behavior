@@ -310,6 +310,41 @@ async fn private_mode_without_a_password_fails_closed() {
     assert_eq!(status(&app, "/api/v2/health").await, StatusCode::OK);
 }
 
+/// The admin panel sits outside the public router's private gate, and its own
+/// gate grants the open-station bypass whenever there is no password — on a
+/// station the operator declared private too. So `/` answered 503 while
+/// `/admin/overview` and the whole-database download answered 200 to anyone
+/// who reached the station by its address.
+#[tokio::test]
+async fn a_private_station_with_no_password_keeps_its_admin_panel_closed() {
+    async fn admin_get(app: &axum::Router, path: &str) -> StatusCode {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(path)
+            .header(header::HOST, "192.168.1.20:8502")
+            .body(Body::empty())
+            .expect("build request");
+        app.clone()
+            .oneshot(req)
+            .await
+            .expect("router responds")
+            .status()
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let app = birdnet_web::server::build_router(private(station(false, tmp.path()), &[]));
+    for path in ["/admin/overview", "/admin/system/backup/full"] {
+        assert_eq!(
+            admin_get(&app, path).await,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "GET {path} on a private station with no password must fail closed"
+        );
+    }
+    // Counterpart: the same request to an open station still gets the
+    // open-station bypass, so the 503 above is about private mode.
+    let app = birdnet_web::server::build_router(station(false, tmp.path()));
+    assert_eq!(admin_get(&app, "/admin/overview").await, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn with_private_mode_off_nothing_changes() {
     let tmp = tempfile::tempdir().expect("tempdir");

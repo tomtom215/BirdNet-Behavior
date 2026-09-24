@@ -558,19 +558,42 @@ pub(super) fn check_api_surface(config: Option<&Config>) -> Check {
 /// config while the bootstrap read only the environment, so every bare-metal
 /// install (installer writes the password to the config; the unit sets no
 /// `EnvironmentFile`) served `/admin` unauthenticated while this reported it
-/// protected. Like the runtime warning it tracks the env/config knob: a
-/// password set only through the accounts UI also protects the panel but is not
-/// visible here, which the remediation text accounts for by naming
-/// `CADDY_PWD`.
+/// protected. A password set through the setup wizard or the accounts page
+/// counts too — see [`password_configured`].
 pub(super) fn check_admin_exposure(cli: &Cli, config: Option<&Config>) -> Check {
     // Delegate to the resolver the auth bootstrap itself uses, so the
     // diagnostic and the runtime cannot drift apart. They previously held two
     // copies of this rule and a comment claiming they agreed — the copies
     // differed (config-then-env here, env-only there), and the result was a
     // station serving /admin to the network while this check reported it safe.
-    let password_configured =
-        crate::helpers::resolve_admin_password(config, std::env::var("CADDY_PWD").ok()).is_some();
-    admin_exposure(&cli.listen, password_configured)
+    admin_exposure(&cli.listen, password_configured(config))
+}
+
+/// Whether the station has an admin password, counted the way the runtime
+/// counts it: `CADDY_PWD` (config, then environment — the auth bootstrap's
+/// own resolver), or a real hash on the seed admin row, which is where the
+/// setup wizard and the accounts page put a password. Reading only the first
+/// reported a wizard-protected private station as locked out.
+///
+/// The database read is best-effort and read-only: a missing or unreadable
+/// database counts as "no password here", and `check_database` owns its
+/// health.
+fn password_configured(config: Option<&Config>) -> bool {
+    use birdnet_db::accounts::UserStore as _;
+    if crate::helpers::resolve_admin_password(config, std::env::var("CADDY_PWD").ok()).is_some() {
+        return true;
+    }
+    let db_path = crate::helpers::db_path_from_config(config);
+    if !db_path.exists() {
+        return false;
+    }
+    rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()
+    .and_then(|conn| conn.find_user_by_name("admin").ok())
+    .is_some_and(|admin| !birdnet_db::accounts::is_legacy_password_hash(&admin.pwd_argon2))
 }
 
 /// Private mode (`O-4`): on, off, or on with nothing to sign in with.
@@ -583,9 +606,7 @@ pub(super) fn check_admin_exposure(cli: &Cli, config: Option<&Config>) -> Check 
 /// bootstrap uses, for the reason [`check_admin_exposure`] gives.
 pub(super) fn check_private_mode(cli: &Cli, config: Option<&Config>) -> Check {
     let setting = crate::helpers::resolve_private_mode(cli, config);
-    let password_configured =
-        crate::helpers::resolve_admin_password(config, std::env::var("CADDY_PWD").ok()).is_some();
-    private_mode(&setting, password_configured)
+    private_mode(&setting, password_configured(config))
 }
 
 fn private_mode(setting: &crate::helpers::PrivateModeSetting, password_configured: bool) -> Check {
@@ -670,6 +691,44 @@ mod tests {
             private_mode(&private_setting(false, &[]), true).status,
             Status::Pass
         );
+    }
+
+    /// The runtime counts a password held only on the seed admin row — the
+    /// setup wizard and the accounts page put it there — and the doctor read
+    /// only `CADDY_PWD`. A private station whose password was set in the
+    /// wizard was reported locked out: a Fail, which `ExecStartPre` turns into
+    /// a refusal to start.
+    #[test]
+    fn a_password_set_in_the_wizard_counts() {
+        use birdnet_db::accounts::UserStore as _;
+        assert!(
+            std::env::var("CADDY_PWD").is_err(),
+            "precondition: CADDY_PWD set in the environment decides this test on its own"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("birds.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let config =
+            Config::parse(&format!("DB_PATH={}\nPRIVATE_MODE=true", db.display())).unwrap();
+
+        // Counterpart first: the seed admin with no password is still none.
+        assert_eq!(
+            check_private_mode(&cli(), Some(&config)).status,
+            Status::Fail
+        );
+
+        let admin = conn.find_user_by_name("admin").unwrap();
+        let hash = birdnet_db::accounts::hash_password("wizard-chosen-password").unwrap();
+        conn.set_password(admin.id, &hash).unwrap();
+        drop(conn);
+
+        assert_eq!(
+            check_private_mode(&cli(), Some(&config)).status,
+            Status::Pass
+        );
+        let exposure = check_admin_exposure(&cli(), Some(&config));
+        assert_eq!(exposure.status, Status::Pass, "{}", exposure.message);
     }
 
     #[test]

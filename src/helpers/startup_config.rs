@@ -108,9 +108,61 @@ pub fn choose(loaded: Option<Config>, config_path: &Path) -> (Option<Config>, Co
     if let Ok(copy) = Config::load_from(&last_good)
         && is_usable(&validate(&copy))
     {
+        let copy = keep_access_as_tight_as(copy, &cfg);
         return (Some(copy), ConfigDecision::Reverted { errors, last_good });
     }
     (Some(cfg), ConfigDecision::Rejected { errors })
+}
+
+/// The last-good `copy`, with the file on disk's access controls wherever
+/// they are the tighter of the two.
+///
+/// A revert exists to keep a typo from stopping the station, not to undo a
+/// lock-down made in the same edit: the last-good file may predate the
+/// operator turning private mode on or setting a password. So:
+///
+/// - private mode on in either file is on. When only the file on disk turns
+///   it on, its carve-out list (`PUBLIC_ACCESS`) applies — none, if it names
+///   none; when both do, only the carve-outs both name;
+/// - a password the file on disk sets is the password.
+///
+/// Nothing here can make the station more open than the copy alone would.
+fn keep_access_as_tight_as(mut copy: Config, on_disk: &Config) -> Config {
+    let on = |c: &Config| {
+        c.get("PRIVATE_MODE").is_some_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "true" | "1" | "yes" | "on"
+            )
+        })
+    };
+    if on(on_disk) && !on(&copy) {
+        copy.set(
+            "PRIVATE_MODE",
+            on_disk.get("PRIVATE_MODE").unwrap_or("true"),
+        );
+        copy.set("PUBLIC_ACCESS", on_disk.get("PUBLIC_ACCESS").unwrap_or(""));
+    } else if on(on_disk) {
+        // Both private: only the carve-outs both files open.
+        let names = |c: &Config| -> Vec<String> {
+            c.get("PUBLIC_ACCESS")
+                .unwrap_or("")
+                .split(',')
+                .map(|n| n.trim().to_ascii_lowercase().replace('-', "_"))
+                .filter(|n| !n.is_empty())
+                .collect()
+        };
+        let disk = names(on_disk);
+        let both: Vec<String> = names(&copy)
+            .into_iter()
+            .filter(|n| disk.contains(n))
+            .collect();
+        copy.set("PUBLIC_ACCESS", both.join(","));
+    }
+    if let Some(pwd) = on_disk.get("CADDY_PWD").filter(|p| !p.trim().is_empty()) {
+        copy.set("CADDY_PWD", pwd);
+    }
+    copy
 }
 
 /// What a start with errors in its file would do, for the doctor to say
@@ -335,6 +387,67 @@ mod tests {
         assert_eq!(recovery_for(&path), None);
         let (_, decision) = choose(Some(Config::parse(BAD).unwrap()), &path);
         assert!(matches!(decision, ConfigDecision::Rejected { .. }));
+    }
+
+    /// Reverting runs the last-good file, and that file may predate the
+    /// operator locking the station down. An edit that turned private mode on
+    /// and set a password, with a typo somewhere else, brought the station up
+    /// open and without the password — the typo alone decided who could reach
+    /// it. The access keys are carried from the file on disk in the one
+    /// direction that is always safe: never less private, never without a
+    /// password the file sets.
+    #[test]
+    fn a_revert_is_never_less_protected_than_the_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("birdnet.conf");
+        std::fs::write(&path, format!("{GOOD}PUBLIC_ACCESS=share,metrics\n")).unwrap();
+        record_last_good(&path).unwrap();
+
+        let locked = format!("{BAD}PRIVATE_MODE=true\nCADDY_PWD=new-secret\n");
+        let (cfg, decision) = choose(Some(Config::parse(&locked).unwrap()), &path);
+        assert!(
+            matches!(decision, ConfigDecision::Reverted { .. }),
+            "{decision:?}"
+        );
+        let cfg = cfg.unwrap();
+        assert_eq!(cfg.get("SITENAME"), Some("Good"), "everything else reverts");
+        assert_eq!(cfg.get("PRIVATE_MODE"), Some("true"));
+        assert_eq!(cfg.get("CADDY_PWD"), Some("new-secret"));
+        assert!(
+            cfg.get("PUBLIC_ACCESS").is_none_or(str::is_empty),
+            "the file on disk opens no carve-out: {:?}",
+            cfg.get("PUBLIC_ACCESS")
+        );
+
+        // A last-good file that was private stays private under a broken edit
+        // that turns it off.
+        std::fs::write(&path, format!("{GOOD}PRIVATE_MODE=yes\nCADDY_PWD=old\n")).unwrap();
+        record_last_good(&path).unwrap();
+        let opened = format!("{BAD}PRIVATE_MODE=false\n");
+        let (cfg, _) = choose(Some(Config::parse(&opened).unwrap()), &path);
+        let cfg = cfg.unwrap();
+        assert_eq!(cfg.get("PRIVATE_MODE"), Some("yes"));
+        assert_eq!(cfg.get("CADDY_PWD"), Some("old"));
+
+        // Both private: a broken edit cannot widen the carve-outs.
+        std::fs::write(
+            &path,
+            format!("{GOOD}PRIVATE_MODE=true\nPUBLIC_ACCESS=share\n"),
+        )
+        .unwrap();
+        record_last_good(&path).unwrap();
+        let wider = format!("{BAD}PRIVATE_MODE=true\nPUBLIC_ACCESS=share,live_audio,metrics\n");
+        let (cfg, _) = choose(Some(Config::parse(&wider).unwrap()), &path);
+        assert_eq!(cfg.unwrap().get("PUBLIC_ACCESS"), Some("share"));
+
+        // Counterpart: a broken edit that touches no access key reverts to the
+        // copy exactly.
+        std::fs::write(&path, format!("{GOOD}PUBLIC_ACCESS=share\n")).unwrap();
+        record_last_good(&path).unwrap();
+        let (cfg, _) = choose(Some(Config::parse(BAD).unwrap()), &path);
+        let cfg = cfg.unwrap();
+        assert_eq!(cfg.get("PRIVATE_MODE"), None);
+        assert_eq!(cfg.get("PUBLIC_ACCESS"), Some("share"));
     }
 
     /// `--apply-config` refuses a candidate with errors and leaves the target

@@ -628,17 +628,13 @@ async fn serve(
 
     // Start the web server.
     //
-    // Warn if the admin UI is exposed off-loopback without a configured
-    // password. Keys on `CADDY_PWD` (config or env) — the same knob the
-    // cookie middleware's "no admin password → open access" bypass and the
-    // `helpers::auth` bootstrap read. (A password set directly via the
-    // accounts UI also protects the panel; this loopback warning tracks the
-    // env/config knob, matching the pre-cookie-flip behaviour.)
-    let admin_password_configured = config
-        .as_ref()
-        .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
-        .or_else(|| std::env::var("CADDY_PWD").ok())
-        .is_some_and(|pwd| !pwd.is_empty());
+    // Warn if the admin UI is exposed off-loopback without a password. The
+    // predicate is the gate's own, so a password set through the setup wizard
+    // or the accounts page counts, as it does for every request: reading only
+    // `CADDY_PWD` here announced a lockout on a wizard-protected private
+    // station that did not have one. The bootstrap above has already put a
+    // configured `CADDY_PWD` on the seed admin row.
+    let admin_password_configured = birdnet_web::auth_middleware::admin_password_configured(&state);
     // O-4: a private station with no password fails closed — every request
     // outside the sign-in and the probe gets a 503 — so say so where the
     // operator will look first. `--doctor` reports the same.

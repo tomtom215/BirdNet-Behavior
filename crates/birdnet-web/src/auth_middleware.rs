@@ -242,6 +242,14 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
         return next.run(request).await;
     }
 
+    // A private station with no password fails closed here as it does on the
+    // public router. This router is not behind that gate, and the open bypass
+    // below would otherwise hand a station its operator declared private —
+    // whole-database download included — to anyone who reached its address.
+    if state.private_mode() && !admin_password_configured(state) {
+        return private_without_password();
+    }
+
     // No admin password configured → open access. Synthesise a
     // RequestUser pointing at the seed admin so downstream handlers
     // still see an identity.

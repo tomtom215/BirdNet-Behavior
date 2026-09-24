@@ -455,7 +455,7 @@ fn check_public_access(config: &Config, out: &mut Vec<Finding>) {
     for name in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         let normalised = name.to_ascii_lowercase().replace('-', "_");
         if !PUBLIC_ACCESS_NAMES.contains(&normalised.as_str()) {
-            out.push(Finding::error(
+            out.push(Finding::warn(
                 "PUBLIC_ACCESS",
                 format!(
                     "PUBLIC_ACCESS names {name:?}, which is not a carve-out; the station skips it"
@@ -776,7 +776,12 @@ mod tests {
 
     /// `PUBLIC_ACCESS` names only the carve-outs the web crate implements.
     /// Hyphens, case, spaces and a trailing comma are forgiven; an unknown
-    /// name is an error that quotes it, one finding per unknown name.
+    /// name is a warning that quotes it, one finding per unknown name.
+    ///
+    /// A warning, not an error: the station skips the name, which closes that
+    /// one surface — the safe direction. As an error it made the whole file
+    /// unusable, so a misspelt carve-out reverted every other setting in the
+    /// edit to the last-good copy, or ran the station web-only.
     #[test]
     fn public_access_names_only_the_carve_outs_that_exist() {
         let findings = validate(&cfg(&[(
@@ -790,8 +795,12 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .all(|f| f.severity == Severity::Error && f.key == "PUBLIC_ACCESS"),
+                .all(|f| f.severity == Severity::Warning && f.key == "PUBLIC_ACCESS"),
             "{findings:?}"
+        );
+        assert!(
+            is_usable(&findings),
+            "a misspelt carve-out must not revert the file"
         );
         assert!(findings[0].message.contains("live_audo"), "{findings:?}");
         assert!(findings[1].message.contains("dashboard"), "{findings:?}");
