@@ -331,6 +331,17 @@ fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> 
     html
 }
 
+/// Shannon H′ for a table cell. A day with one species has H′ = −(1 · ln 1),
+/// which DuckDB returns as −0.0 and `{:.3}` prints as "-0.000" (`ANA14d`).
+/// H′ is never negative, so anything at or below zero is shown as 0.000.
+#[cfg(feature = "analytics")]
+fn shannon_cell(h: Option<f64>) -> String {
+    h.map_or_else(
+        || "—".to_string(),
+        |v| format!("{:.3}", if v <= 0.0 { 0.0 } else { v }),
+    )
+}
+
 #[cfg(feature = "analytics")]
 fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityRow]) -> String {
     if rows.is_empty() {
@@ -340,9 +351,7 @@ fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityR
         r"<table><thead><tr><th>Date</th><th>Richness</th><th>Shannon H′</th><th>Evenness</th></tr></thead><tbody>",
     );
     for row in rows.iter().rev().take(14).rev() {
-        let h = row
-            .shannon_h
-            .map_or_else(|| "—".to_string(), |v| format!("{v:.3}"));
+        let h = shannon_cell(row.shannon_h);
         let ev = row
             .pielou_evenness
             .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
@@ -473,3 +482,15 @@ pub fn prewarm(state: &AppState) {
 /// No-op pre-warm when analytics is not compiled in.
 #[cfg(not(feature = "analytics"))]
 pub const fn prewarm(_state: &AppState) {}
+
+#[cfg(all(test, feature = "analytics"))]
+mod tests {
+    /// `ANA14d`: a one-species day reads 0.000, not -0.000.
+    #[test]
+    fn a_one_species_day_has_zero_diversity_not_negative() {
+        assert_eq!(super::shannon_cell(Some(-0.0)), "0.000");
+        // Counterparts: an ordinary value and a missing one are unchanged.
+        assert_eq!(super::shannon_cell(Some(std::f64::consts::LN_2)), "0.693");
+        assert_eq!(super::shannon_cell(None), "—");
+    }
+}
