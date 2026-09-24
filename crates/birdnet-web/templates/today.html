@@ -127,7 +127,7 @@
          below, which is written only when the newest detection is actually a
          different one. -->
     <div id="detections-table" class="feed"
-         hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML"
+         hx-get="/pages/detections" hx-trigger="load, every 15s, birdnet:detection from:document throttle:2s" hx-swap="innerHTML"
          aria-label="Detections as they happen">
       {{skel_detections}}
     </div>
@@ -264,15 +264,17 @@
 
   // ── Live nudges ────────────────────────────────────────────────────────
   // A websocket detection refreshes the feed immediately (instead of waiting
-  // for the 15s poll); on a first-run page the whole layout graduates, so
+  // for the 15s poll) through the feed's own `birdnet:detection from:document`
+  // trigger — `htmx.trigger(feed, 'load')` fetched nothing, because htmx fires
+  // `load` itself, once. On a first-run page the whole layout graduates, so
   // reload once the first call lands.
   var stack = document.querySelector('.td-stack');
   var firstrun = stack && stack.getAttribute('data-firstrun') === 'true';
-  document.addEventListener('birdnet:detection', function () {
-    if (firstrun) { window.location.reload(); return; }
-    var feed = document.getElementById('detections-table');
-    if (feed) htmx.trigger(feed, 'load');
-  });
+  if (firstrun) {
+    document.addEventListener('birdnet:detection', function () {
+      window.location.reload();
+    });
+  }
 })();
 </script>
 

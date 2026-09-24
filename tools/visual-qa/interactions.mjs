@@ -461,6 +461,70 @@ async function liveFeedSurvivesBackForward(page) {
   );
 }
 
+/** M5: a live detection refreshes Today's feed at once.
+ *
+ * The listener called `htmx.trigger(feed, 'load')`. htmx fires its `load`
+ * trigger itself, once, and does not listen for a `load` event, so the call
+ * fetched nothing and a new bird waited for the 15-second poll.
+ */
+async function liveDetectionRefreshesFeed(page) {
+  let fetches = 0;
+  page.on('request', (r) => {
+    if (r.url().includes('/pages/detections')) fetches += 1;
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  const before = fetches;
+  await page.evaluate(() => {
+    document.dispatchEvent(
+      new CustomEvent('birdnet:detection', { detail: { event: 'detection' } }),
+    );
+  });
+  await page.waitForTimeout(1500);
+  check(
+    'feed: a live detection refreshes the feed',
+    fetches > before,
+    `no /pages/detections request within 1.5 s of the event (${fetches} total)`,
+  );
+}
+
+/** M5: the command palette loads when it is opened, and fresh each time.
+ *
+ * Its input carried `hx-trigger="…, load"`, so every page view fetched
+ * /pages/cmdk (a database read) for a palette nobody opened; and reopening
+ * it called `htmx.trigger(input, 'load')`, which fetches nothing — the input
+ * was cleared and the last query's results stayed under it.
+ */
+async function paletteLoadsOnOpen(page) {
+  const queries = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/pages/cmdk')) queries.push(new URL(r.url()).searchParams.get('q'));
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  check('palette: a page view does not query it', queries.length === 0, `${queries.length} request(s)`);
+
+  const beforeOpen = queries.length;
+  await page.keyboard.press('Control+k');
+  await page.waitForTimeout(600);
+  check(
+    'palette: opening it loads the default list',
+    queries.length === beforeOpen + 1,
+    `${queries.length - beforeOpen} request(s) caused by opening it`,
+  );
+
+  await page.keyboard.type('zzzz');
+  await page.waitForTimeout(800);
+  await page.keyboard.press('Escape');
+  const before = queries.length;
+  await page.keyboard.press('Control+k');
+  await page.waitForTimeout(800);
+  const reloaded = queries.length > before && (queries[queries.length - 1] || '') === '';
+  check(
+    'palette: reopening it shows the default list, not the last query',
+    reloaded,
+    `requests after reopen: ${JSON.stringify(queries.slice(before))}`,
+  );
+}
+
 const page404 = [];
 
 async function main() {
@@ -489,6 +553,8 @@ async function main() {
     ['live signal', liveSignal],
     ['nudge announces once', nudgeAnnouncesOnce],
     ['live feed after back/forward', liveFeedSurvivesBackForward],
+    ['live detection refreshes the feed', liveDetectionRefreshesFeed],
+    ['palette loads on open', paletteLoadsOnOpen],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
