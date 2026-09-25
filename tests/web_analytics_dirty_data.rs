@@ -180,15 +180,22 @@ async fn placeable_rows_still_reach_the_dashboards() {
         body.contains("<table"),
         "the daily trend must render a real table, not an empty state:\n{body}"
     );
-    // A row for today proves the well-formed history survived rather than being
-    // filtered out alongside the unplaceable rows.
-    let today: String = rusqlite::Connection::open_in_memory()
+    // A row for yesterday proves the well-formed history survived rather than
+    // being filtered out alongside the unplaceable rows. Yesterday, because the
+    // trend is of complete days: today's partial count is not a row.
+    let (yesterday, today): (String, String) = rusqlite::Connection::open_in_memory()
         .unwrap()
-        .query_row("SELECT date('now')", [], |r| r.get(0))
+        .query_row("SELECT date('now','-1 day'), date('now')", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .unwrap();
     assert!(
-        body.contains(&today),
-        "today's detections are missing from the trend table (looking for \
-         {today}):\n{body}"
+        body.contains(&yesterday),
+        "yesterday's detections are missing from the trend table (looking for \
+         {yesterday}):\n{body}"
+    );
+    assert!(
+        !body.contains(&today),
+        "the trend table has a row for today, whose count is partial:\n{body}"
     );
 }

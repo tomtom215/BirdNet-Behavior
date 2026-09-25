@@ -123,6 +123,11 @@ const READ_SHAPES: &[&str] = &[
     "id_key: \"",
     "threshold_key: \"",
     "sample_rate_key: \"",
+    // The primary classifier's threshold and sample rate go through the same
+    // validating readers the extra classifiers use (`src/helpers/models.rs`),
+    // which take the key as their second argument.
+    "model_threshold(get, \"",
+    "model_sample_rate(get, \"",
 ];
 
 /// Keys read in `src`, by shape. `get_parsed::<T>("KEY")` is matched
