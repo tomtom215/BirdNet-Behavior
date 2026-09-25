@@ -128,3 +128,48 @@ fn removing_an_unknown_batch_is_harmless() {
     assert_eq!(db.delete_import_batch(99).expect("delete"), 0);
     assert_eq!(count(&db, "TRUE"), 21);
 }
+
+/// `SQLite` keeps an import's locked rows when the import is removed; this
+/// copy has no lock column, so it is told which rows to keep. Deleting the
+/// whole batch here left the two stores disagreeing until a restart.
+#[test]
+fn undoing_an_import_keeps_the_rows_sqlite_kept() {
+    let (db, _dir) = seeded();
+    // Batch 1 is 07 rows at 00:10..00:16; say SQLite kept the one at 00:12.
+    let keep = vec![(
+        "2026-06-15".to_owned(),
+        "00:12:00".to_owned(),
+        "Erithacus rubecula".to_owned(),
+        Some("rec.wav".to_owned()),
+    )];
+    let removed = db.delete_import_batch_keeping(1, &keep).unwrap();
+    assert_eq!(removed, 6);
+    assert_eq!(count(&db, "import_batch_id = 1"), 1);
+    assert_eq!(count(&db, "import_batch_id = 1 AND Time = '00:12:00'"), 1);
+    // Nothing kept: the whole batch goes, as before.
+    assert_eq!(db.delete_import_batch_keeping(2, &[]).unwrap(), 4);
+}
+
+/// A key with a clip names one row, where the triple names one per source.
+#[test]
+fn a_keyed_delete_removes_only_the_row_it_names() {
+    let (db, _dir) = seeded();
+    db.conn()
+        .execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-06-15','00:00:00','Erithacus rubecula','European Robin',0.8,'cam2.wav'),
+                    ('2026-06-15','00:00:00','Erithacus rubecula','European Robin',0.8,NULL);",
+        )
+        .unwrap();
+    let key = |f: Option<&str>| {
+        db.delete_detection_at("2026-06-15", "00:00:00", "Erithacus rubecula", f)
+            .unwrap()
+    };
+    assert_eq!(key(Some("cam2.wav")), 1);
+    assert_eq!(key(None), 1, "None names the row with no clip");
+    assert_eq!(
+        count(&db, "Time = '00:00:00'"),
+        1,
+        "the seeded rec.wav row at 00:00 is untouched"
+    );
+}

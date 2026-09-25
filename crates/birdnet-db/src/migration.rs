@@ -2531,7 +2531,11 @@ fn collect_preview(conn: &Connection, sql: &str) -> Result<Vec<(String, String)>
 /// The backup needs as much free space as the database itself, and a station
 /// whose disk is too full for it would otherwise be unable to start at all.
 /// Setting this is the operator saying they accept an unrecoverable rewrite.
-const SKIP_BACKUP_ENV: &str = "BIRDNET_SKIP_MIGRATION_BACKUP";
+///
+/// Public so the binary's unknown-variable check knows it: the error that
+/// tells an operator to set it must not be followed, at the next start, by a
+/// warning that the variable is not one the station reads.
+pub const SKIP_BACKUP_ENV: &str = "BIRDNET_SKIP_MIGRATION_BACKUP";
 
 /// Whether the operator has waived the pre-migration backup.
 ///
