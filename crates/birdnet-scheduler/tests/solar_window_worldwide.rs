@@ -126,3 +126,63 @@ fn the_allowed_minutes_are_the_daylight_ones_not_their_complement() {
         "the middle of the night is not daylight"
     );
 }
+
+/// Minutes allowed at `(lat, lon)` on `y-m-d` with explicit twilight offsets.
+fn allowed_minutes_with_offsets(
+    lat: f64,
+    lon: f64,
+    ymd: (u32, u32, u32),
+    pre: u32,
+    post: u32,
+) -> usize {
+    let cfg = ScheduleConfig {
+        location: Some(Location::new(lat, lon).expect("valid coordinates")),
+        pre_sunrise_offset_min: pre,
+        post_sunset_offset_min: post,
+        night_inhibit: true,
+        fixed_window: None,
+    };
+    let sched = DailySchedule::for_date(&cfg, ymd.0, ymd.1, ymd.2);
+    (0..1440).filter(|&mm| sched.is_allowed(mm)).count()
+}
+
+/// Reykjavik at midsummer: sunrise ~02:55 UTC, sunset ~00:03 UTC the *next*
+/// day, so the wrapped sunset minute is smaller than the sunrise one. The day
+/// is ~21 h long; with the settings form's maximum two hours of pre- and
+/// post-roll the window covers more than the whole clock and must mean
+/// "always". Measuring the span on the wrapped minutes (`sunset - sunrise`,
+/// negative here) instead read it as a 67-minute window around 01:00 UTC —
+/// the station recorded barely an hour a day at the brightest time of year.
+#[test]
+fn a_wrapped_high_latitude_day_with_wide_offsets_records_all_day() {
+    let (lat, lon) = (64.13, -21.94);
+    let solar = SolarDay::for_date(Location::new(lat, lon).expect("Reykjavik"), 2026, 6, 21)
+        .expect("solar day");
+    let (rise, set) = (
+        solar.sunrise_utc_min.expect("sunrise"),
+        solar.sunset_utc_min.expect("sunset"),
+    );
+    assert!(rise > set, "this fixture only means anything if it wraps");
+    assert_eq!(
+        allowed_minutes_with_offsets(lat, lon, (2026, 6, 21), 120, 120),
+        1440,
+        "a >24 h window (sunrise {rise}, sunset {set}, 120+120 min offsets) must record all day"
+    );
+}
+
+/// The counterpart: the same wrapped day with offsets that do *not* reach
+/// round the clock still gates, and allows exactly day length + offsets.
+#[test]
+fn a_wrapped_high_latitude_day_with_small_offsets_still_gates() {
+    let (lat, lon) = (64.13, -21.94);
+    let solar = SolarDay::for_date(Location::new(lat, lon).expect("Reykjavik"), 2026, 6, 21)
+        .expect("solar day");
+    let (rise, set) = (
+        solar.sunrise_utc_min.expect("sunrise"),
+        solar.sunset_utc_min.expect("sunset"),
+    );
+    let day_len = (set + 1440 - rise) % 1440;
+    let mins = allowed_minutes_with_offsets(lat, lon, (2026, 6, 21), 10, 10);
+    assert_eq!(mins, usize::try_from(day_len + 20).expect("fits"));
+    assert!(mins < 1440, "still gates the short night");
+}
