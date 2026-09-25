@@ -191,10 +191,31 @@ fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioDat
 
     // 0.6: `next_packet` returns `Result<Option<Packet>>` (EOF is now `None`
     // rather than a sentinel `UnexpectedEof` error).
-    while let Some(packet) = format
-        .next_packet()
-        .map_err(|e| DecodeError::Format(e.to_string()))?
-    {
+    //
+    // A header that claims more data than the file holds still surfaces as an
+    // `UnexpectedEof` I/O error, though. That is exactly what a crash leaves
+    // behind: `SegmentWriter` declares the segment's expected length up front
+    // and only corrects it on close, and ffmpeg's `0xFFFFFFFF` placeholder is
+    // never back-patched if it is killed. Failing the file there discarded
+    // every sample already decoded — the whole recording — so once at least
+    // one packet has decoded, a short read ends the stream instead.
+    loop {
+        let packet = match format.next_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => break,
+            Err(SymphoniaError::IoError(e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof && !samples.is_empty() =>
+            {
+                tracing::warn!(
+                    path = %path.display(),
+                    decoded_samples = samples.len(),
+                    "audio file is shorter than its header claims (truncated write?); \
+                     using the samples that exist"
+                );
+                break;
+            }
+            Err(e) => return Err(DecodeError::Format(e.to_string())),
+        };
         // `track_id` is a struct field now, not a method call.
         if packet.track_id != track_id {
             continue;
@@ -290,6 +311,78 @@ mod tests {
             decode_file_capped(&path, 50_000).unwrap().samples.len(),
             10_000
         );
+    }
+
+    /// Write a 1 s, 48 kHz mono WAV and then overwrite the `data` chunk's
+    /// length field (and the RIFF size to match) with `claimed_len`, as a
+    /// crash-truncated segment (header
+    /// written with the expected size up front) or an ffmpeg stream killed
+    /// before it could back-patch its `0xFFFFFFFF` placeholder would look.
+    fn write_wav_with_claimed_data_len(path: &Path, claimed_len: u32) {
+        use hound::{SampleFormat, WavSpec, WavWriter};
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(path, spec).unwrap();
+        for i in 0..48_000_i32 {
+            #[allow(clippy::cast_possible_truncation)]
+            writer.write_sample(((i % 200) - 100) as i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        let mut bytes = std::fs::read(path).unwrap();
+        let pos = bytes
+            .windows(4)
+            .position(|w| w == b"data")
+            .expect("data chunk present");
+        let actual = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap());
+        assert_eq!(actual, 96_000, "fixture: 48 000 16-bit samples");
+        bytes[pos + 4..pos + 8].copy_from_slice(&claimed_len.to_le_bytes());
+        // Keep the RIFF size consistent with the claim, as both writers do:
+        // `SegmentWriter` writes `data + 36`, ffmpeg writes `-1` to both.
+        let riff = if claimed_len == u32::MAX {
+            u32::MAX
+        } else {
+            claimed_len + 36
+        };
+        bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn decode_wav_claiming_more_data_than_exists_keeps_its_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        // Header claims 15 s of 16-bit mono at 48 kHz; only 1 s is on disk.
+        let fifteen = dir.path().join("claims_15s.wav");
+        write_wav_with_claimed_data_len(&fifteen, 15 * 48_000 * 2);
+        let audio = decode_file(&fifteen).expect("truncated WAV decodes what exists");
+        assert_eq!(audio.samples.len(), 48_000);
+        assert_eq!(audio.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn decode_wav_with_unpatched_placeholder_length_keeps_its_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        // ffmpeg's streaming placeholder, never back-patched.
+        let placeholder = dir.path().join("placeholder.wav");
+        write_wav_with_claimed_data_len(&placeholder, 0xFFFF_FFFF);
+        let audio = decode_file(&placeholder).expect("placeholder-length WAV decodes");
+        assert_eq!(audio.samples.len(), 48_000);
+    }
+
+    /// The counterpart: a file that ends before *any* audio is still an error,
+    /// not an empty recording analysed as silence.
+    #[test]
+    fn decode_wav_with_header_but_no_audio_is_still_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("header_only.wav");
+        write_wav_with_claimed_data_len(&path, 15 * 48_000 * 2);
+        let bytes = std::fs::read(&path).unwrap();
+        let pos = bytes.windows(4).position(|w| w == b"data").unwrap();
+        std::fs::write(&path, &bytes[..pos + 8]).unwrap();
+        assert!(decode_file(&path).is_err());
     }
 
     #[test]

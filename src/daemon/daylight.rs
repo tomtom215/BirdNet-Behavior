@@ -50,8 +50,14 @@ pub(super) struct DaylightFilter {
     location: Option<Location>,
     /// Minutes after sunset / before sunrise before the window opens.
     margin_mins: i64,
-    /// The station's offset from UTC, in seconds.
+    /// The station's offset from UTC, in seconds, as known at startup. The
+    /// fallback when [`Self::offset_on_day`] is unset or cannot answer.
     utc_offset_secs: i64,
+    /// The offset in force on a given local date (see
+    /// [`super::local_offset::utc_offset_on_day`]). A fixed offset applied to
+    /// every day put sunrise an hour late after the autumn change, and the
+    /// hour before it — the dawn chorus — was quarantined until a restart.
+    offset_on_day: Option<fn(&str) -> Option<i64>>,
     /// Genera or scientific names the operator always allows at night.
     extra_nocturnal: Vec<String>,
 }
@@ -70,8 +76,17 @@ impl DaylightFilter {
             location,
             margin_mins,
             utc_offset_secs,
+            offset_on_day: None,
             extra_nocturnal,
         }
+    }
+
+    /// The same filter, reading each day's offset from `lookup` rather than
+    /// using the fixed one, which stays the fallback.
+    #[must_use]
+    pub(super) const fn with_offset_on_day(mut self, lookup: fn(&str) -> Option<i64>) -> Self {
+        self.offset_on_day = Some(lookup);
+        self
     }
 
     /// Whether the filter will quarantine anything.
@@ -113,7 +128,11 @@ impl DaylightFilter {
         // station-local. Convert the solar events rather than the detection so
         // the comparison stays in the operator's own clock, which is the one
         // the margin was chosen against.
-        let offset_min = self.utc_offset_secs / 60;
+        let offset_secs = self
+            .offset_on_day
+            .and_then(|lookup| lookup(date))
+            .unwrap_or(self.utc_offset_secs);
+        let offset_min = offset_secs / 60;
         let sunrise = i64::from(day.sunrise_utc_min?) + offset_min;
         let sunset = i64::from(day.sunset_utc_min?) + offset_min;
 
@@ -364,6 +383,60 @@ mod tests {
             west.verdict("Cyanistes caeruleus", "2026-01-15", "16:00:00"),
             DaylightVerdict::Quarantine,
             "16:00 is after local sunset at UTC-3 and should be night"
+        );
+    }
+
+    /// Berlin-like zone rules: CEST (+2) up to 2026-10-24, CET (+1) after.
+    #[allow(clippy::unnecessary_wraps)] // the lookup's signature, as a fn pointer
+    fn berlin_autumn(date: &str) -> Option<i64> {
+        Some(if date <= "2026-10-24" { 7200 } else { 3600 })
+    }
+
+    /// The night window follows the offset of the detection's own day, not
+    /// the one the process started with.
+    ///
+    /// Berlin (52.52 N, 13.40 E), 2026-10-26: sunrise is about 06:0x UTC,
+    /// 07:0x CET. A station started under CEST (+2) placed it at 08:0x and,
+    /// with an hour of margin, held the night open until 07:0x — so a blue
+    /// tit at 06:30, half an hour before the real sunrise and squarely in
+    /// the dawn chorus, was quarantined as an implausible hour.
+    #[test]
+    fn a_daylight_saving_change_after_startup_moves_the_window_with_it() {
+        let started_in_summer = DaylightFilter::new(
+            Some(Location::new_unchecked(52.52, 13.40)),
+            60,
+            7200,
+            Vec::new(),
+        )
+        .with_offset_on_day(berlin_autumn);
+        assert_eq!(
+            started_in_summer.verdict("Cyanistes caeruleus", "2026-10-26", "06:30:00"),
+            DaylightVerdict::Keep,
+            "the dawn chorus after the change was quarantined"
+        );
+        // Counterpart: the same filter still finds the night, and still
+        // uses summer time for a summer date.
+        assert_eq!(
+            started_in_summer.verdict("Cyanistes caeruleus", "2026-10-26", "03:00:00"),
+            DaylightVerdict::Quarantine
+        );
+        assert_eq!(
+            started_in_summer.verdict("Cyanistes caeruleus", "2026-10-23", "07:30:00"),
+            DaylightVerdict::Keep,
+            "summer-time dawn chorus"
+        );
+        // A lookup that cannot answer falls back to the fixed offset.
+        let blind = DaylightFilter::new(
+            Some(Location::new_unchecked(52.52, 13.40)),
+            60,
+            7200,
+            Vec::new(),
+        )
+        .with_offset_on_day(|_| None);
+        assert_eq!(
+            blind.verdict("Cyanistes caeruleus", "2026-10-26", "06:30:00"),
+            DaylightVerdict::Quarantine,
+            "the fallback is the startup offset"
         );
     }
 

@@ -67,6 +67,13 @@ impl PrivacyFilter {
         self
     }
 
+    /// Length of one analysed chunk, in seconds, as this filter measures a
+    /// flagged chunk's span.
+    #[must_use]
+    pub const fn chunk_secs(&self) -> f32 {
+        self.chunk_secs
+    }
+
     /// Whether the privacy filter is enabled (threshold > 0).
     pub fn is_enabled(&self) -> bool {
         self.threshold > 0.0
@@ -218,6 +225,7 @@ mod tests {
         ChunkPrediction {
             detections: vec![make_detection("Turdus merula", "Eurasian Blackbird", 0.9)],
             human_score,
+            loudest_noise: None,
         }
     }
 
@@ -257,6 +265,7 @@ mod tests {
                     ..make_detection("Turdus merula", "Blackbird", 0.9)
                 }],
                 human_score: if speech.contains(&i) { 0.8 } else { 0.0 },
+                loudest_noise: None,
             })
             .collect();
         (starts, chunks)
@@ -344,6 +353,7 @@ mod tests {
         let human_in_list = vec![ChunkPrediction {
             detections: vec![make_detection("Homo sapiens", "Human", 0.02)],
             human_score: 0.02,
+            loudest_noise: None,
         }];
         assert!(
             !PrivacyFilter::new(0.05).filter_predictions(&human_in_list)[0].is_empty(),

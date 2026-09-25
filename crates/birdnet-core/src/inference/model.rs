@@ -97,6 +97,9 @@ pub struct BirdNetModel {
     /// Output indices whose label names a human class, found once at load so
     /// the per-chunk human score is a lookup rather than a scan of every label.
     human_indices: Vec<usize>,
+    /// Output indices of the noise classes the noise filter watches (see
+    /// [`Self::watch_noise_classes`]). Empty until asked.
+    noise_indices: Vec<usize>,
 }
 
 impl fmt::Debug for BirdNetModel {
@@ -206,6 +209,7 @@ impl BirdNetModel {
             is_probability_output,
             warned_label_count_mismatch: false,
             human_indices,
+            noise_indices: Vec::new(),
         })
     }
 
@@ -236,6 +240,7 @@ impl BirdNetModel {
             is_probability_output,
             warned_label_count_mismatch: false,
             human_indices,
+            noise_indices: Vec::new(),
         })
     }
 
@@ -434,9 +439,41 @@ impl BirdNetModel {
             })
             .fold(0.0_f32, f32::max);
 
+        // The watched noise classes, likewise before either cut: the noise
+        // filter has its own threshold, and a list already cut at the
+        // detection threshold cannot answer for one set below it.
+        let loudest_noise = self
+            .noise_indices
+            .iter()
+            .filter_map(|&i| Some((i, *flat_logits.get(i)?)))
+            .map(|(i, raw)| {
+                (
+                    i,
+                    compute_confidence(raw, self.config.sensitivity, self.is_probability_output),
+                )
+            })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .and_then(|(i, confidence)| {
+                let label = self.labels.get(i)?;
+                Some(Detection {
+                    date: date.clone(),
+                    time: time.clone(),
+                    scientific_name: label.scientific_name.clone(),
+                    common_name: label.common_name.clone(),
+                    confidence,
+                    start: start_secs,
+                    stop: end_secs,
+                    week,
+                    file_name_extr: None,
+                    model_id: None,
+                    agreeing_models: None,
+                })
+            });
+
         Ok(ChunkPrediction {
             detections,
             human_score,
+            loudest_noise,
         })
     }
 
@@ -675,6 +712,29 @@ impl BirdNetModel {
     /// never fire, which an operator who enabled it needs to be told.
     pub const fn has_human_labels(&self) -> bool {
         !self.human_indices.is_empty()
+    }
+
+    /// Score these noise classes on every chunk, whatever the detection
+    /// threshold, and report the loudest as
+    /// [`ChunkPrediction::loudest_noise`]. Classes are matched to labels by the
+    /// noise filter's own rule (exact common or scientific name). Returns how
+    /// many labels matched, so a caller can say when none did.
+    pub fn watch_noise_classes(&mut self, classes: &[String]) -> usize {
+        self.noise_indices = self
+            .labels
+            .iter()
+            .filter(|label| {
+                classes.iter().any(|class| {
+                    crate::detection::noise::names_label(
+                        class,
+                        &label.scientific_name,
+                        &label.common_name,
+                    )
+                })
+            })
+            .map(|label| label.index)
+            .collect();
+        self.noise_indices.len()
     }
 
     /// Get the model configuration.
@@ -1967,6 +2027,52 @@ mod tests {
             "the detection threshold changed the human score: {} vs {}",
             strict.human_score,
             lenient.human_score
+        );
+    }
+
+    /// A watched noise class is scored before the detection threshold and the
+    /// top-N cut, as the human score is, so `NOISE_THRESHOLD` below the
+    /// detection threshold has something to read.
+    #[test]
+    fn a_watched_noise_class_is_scored_below_the_detection_threshold() {
+        let labels = LabelSet::from_entries(
+            (0..11)
+                .map(|i| {
+                    if i == 3 {
+                        ("Dog".to_string(), "Dog".to_string())
+                    } else {
+                        (format!("Species_{i}"), format!("Bird {i}"))
+                    }
+                })
+                .collect(),
+        );
+        let mut m = BirdNetModel::load_from_bytes(
+            TINY_V30_MODEL,
+            labels,
+            ModelConfig {
+                confidence_threshold: 0.9,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("tiny V3.0 model loads");
+        let audio = audio_with_human_at(0.3); // output 3 (Dog) at 0.3
+        let unwatched = m
+            .predict_chunk(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
+            .expect("predict");
+        assert!(unwatched.detections.is_empty());
+        assert!(unwatched.loudest_noise.is_none(), "nothing watched");
+
+        assert_eq!(m.watch_noise_classes(&["dog".to_owned()]), 1);
+        let watched = m
+            .predict_chunk(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
+            .expect("predict");
+        assert!(watched.detections.is_empty(), "{:?}", watched.detections);
+        let noise = watched.loudest_noise.expect("the dog is scored");
+        assert_eq!(noise.common_name, "Dog");
+        assert!(
+            (noise.confidence - 0.3).abs() < 1e-6,
+            "{}",
+            noise.confidence
         );
     }
 

@@ -49,6 +49,7 @@ pub use config::{
 mod daylight;
 pub mod disposition;
 mod duplicate;
+mod local_offset;
 mod processor;
 mod run;
 

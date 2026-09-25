@@ -127,6 +127,8 @@ pub(super) fn build_daylight_filter(
         config.and_then(|c| c.get_parsed::<i64>("NIGHT_MARGIN_MINS").ok()),
     );
 
+    // Each day is read in its own offset (the startup one is only the
+    // fallback): the process outlives daylight-saving changes.
     crate::daemon::daylight::DaylightFilter::new(
         location,
         margin_mins,
@@ -136,6 +138,7 @@ pub(super) fn build_daylight_filter(
             config.and_then(|c| c.get("NIGHT_EXTRA_NOCTURNAL")),
         ),
     )
+    .with_offset_on_day(crate::daemon::local_offset::utc_offset_on_day)
 }
 
 /// Split the operator's extra-nocturnal list on commas.

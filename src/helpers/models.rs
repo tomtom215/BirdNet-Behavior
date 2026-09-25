@@ -186,8 +186,8 @@ pub fn plan_with(
         id: get("MODEL_ID").unwrap_or_else(|| "birdnet".to_owned()),
         model_path: primary_model,
         labels_path: primary_labels,
-        threshold: get("MODEL_THRESHOLD").and_then(|v| v.parse().ok()),
-        sample_rate: get("MODEL_SAMPLE_RATE").and_then(|v| v.parse().ok()),
+        threshold: model_threshold(get, "MODEL_THRESHOLD", &mut notes),
+        sample_rate: model_sample_rate(get, "MODEL_SAMPLE_RATE", &mut notes),
     }];
 
     // Budget in MiB for every classifier together, or `None` when the machine
@@ -249,8 +249,8 @@ pub fn plan_with(
                     id,
                     model_path: path,
                     labels_path: PathBuf::from(labels),
-                    threshold: get(keys.threshold_key).and_then(|v| v.parse().ok()),
-                    sample_rate: get(keys.sample_rate_key).and_then(|v| v.parse().ok()),
+                    threshold: model_threshold(get, keys.threshold_key, &mut notes),
+                    sample_rate: model_sample_rate(get, keys.sample_rate_key, &mut notes),
                 });
             }
         }
@@ -269,6 +269,90 @@ pub fn plan_with(
         specs,
         routes,
         notes,
+    }
+}
+
+/// Highest sample rate a declared `MODEL_*_SAMPLE_RATE` may name: the top of
+/// what any capture hardware this runs on produces (ultrasonic bat
+/// recorders). Anything above is a typo, not a model.
+const MAX_DECLARED_SAMPLE_RATE: u32 = 384_000;
+
+/// Lowest declared sample rate accepted. Zero divides the chunk arithmetic by
+/// nothing; single-digit rates are a slipped key, not a classifier.
+const MIN_DECLARED_SAMPLE_RATE: u32 = 1_000;
+
+/// Read a per-classifier threshold, refusing what cannot be one.
+///
+/// Parsed with the decimal comma accepted (`0,8`), as
+/// [`birdnet_core::config::Config::get_parsed`] does: `.parse()` alone read
+/// that as nothing and silently ran the classifier at the station threshold.
+/// Outside `[0, 1]` — `75`, the percentage slip in a 0–1 field — was accepted
+/// and put that classifier's bar above any confidence it can produce, so it
+/// detected nothing, for good, with no word anywhere.
+///
+/// Refused here, with a note naming the key, rather than as a `validate()`
+/// error: an error makes the whole configuration unusable and
+/// `startup_config::choose` then reverts *every* setting to the last-good
+/// file. A mistyped per-model threshold is worth one classifier falling back
+/// to the station's threshold, not a silent rollback of everything else.
+fn model_threshold(
+    get: &dyn Fn(&str) -> Option<String>,
+    key: &str,
+    notes: &mut Vec<String>,
+) -> Option<f32> {
+    let raw = get(key)?;
+    let parsed = raw.parse::<f32>().ok().or_else(|| {
+        birdnet_core::config::locale::normalize_decimal(&raw)
+            .parse()
+            .ok()
+    });
+    match parsed {
+        Some(t) if t.is_finite() && (0.0..=1.0).contains(&t) => Some(t),
+        Some(t) => {
+            notes.push(format!(
+                "{key}={raw} is not a confidence between 0 and 1{hint}; ignoring it, so that \
+                 classifier runs at the station threshold",
+                hint = if (1.0..=100.0).contains(&t) {
+                    format!(" (a percentage? {} would be {:.2})", raw, t / 100.0)
+                } else {
+                    String::new()
+                }
+            ));
+            None
+        }
+        None => {
+            notes.push(format!(
+                "{key}={raw} is not a number; ignoring it, so that classifier runs at the \
+                 station threshold"
+            ));
+            None
+        }
+    }
+}
+
+/// Read a per-classifier declared sample rate, refusing what cannot be one.
+///
+/// `0` was accepted and became the rate the pipeline resampled to and divided
+/// its chunk length by. Refused with a note, and the rate is then derived
+/// from the model's input shape as if nothing had been declared.
+fn model_sample_rate(
+    get: &dyn Fn(&str) -> Option<String>,
+    key: &str,
+    notes: &mut Vec<String>,
+) -> Option<u32> {
+    let raw = get(key)?;
+    match raw.parse::<u32>() {
+        Ok(rate) if (MIN_DECLARED_SAMPLE_RATE..=MAX_DECLARED_SAMPLE_RATE).contains(&rate) => {
+            Some(rate)
+        }
+        _ => {
+            notes.push(format!(
+                "{key}={raw} is not a sample rate in Hz between {MIN_DECLARED_SAMPLE_RATE} and \
+                 {MAX_DECLARED_SAMPLE_RATE}; ignoring it, so that classifier's rate is derived \
+                 from its input shape"
+            ));
+            None
+        }
     }
 }
 
@@ -376,6 +460,93 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), v.clone()))
             .collect()
+    }
+
+    fn primary_plan(pairs: &[(&str, &str)]) -> super::ModelPlan {
+        let s: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        plan_with(
+            &|k| s.get(k).cloned(),
+            PathBuf::from("/nonexistent/p.onnx"),
+            PathBuf::from("p.txt"),
+            None,
+        )
+    }
+
+    /// `MODEL_THRESHOLD=75` — the percentage slip in a 0–1 field — put the
+    /// classifier's bar above anything it can score, and the station stopped
+    /// detecting with no word anywhere. Refused, named, and the station
+    /// threshold stands (`None`).
+    #[test]
+    fn an_out_of_range_model_threshold_is_refused_and_named() {
+        let p = primary_plan(&[("MODEL_THRESHOLD", "75")]);
+        assert_eq!(p.specs[0].threshold, None);
+        assert!(
+            p.notes
+                .iter()
+                .any(|n| n.contains("MODEL_THRESHOLD=75") && n.contains("0.75")),
+            "{:?}",
+            p.notes
+        );
+        let p = primary_plan(&[("MODEL_THRESHOLD", "-0.2")]);
+        assert_eq!(p.specs[0].threshold, None);
+        let p = primary_plan(&[("MODEL_THRESHOLD", "high")]);
+        assert_eq!(p.specs[0].threshold, None);
+        assert!(p.notes.iter().any(|n| n.contains("MODEL_THRESHOLD=high")));
+    }
+
+    /// `0,8` (a decimal comma) was silently read as nothing. Counterpart to
+    /// the refusal above: an ordinary value, in either spelling, is kept.
+    #[test]
+    fn a_model_threshold_with_a_decimal_comma_is_read() {
+        let p = primary_plan(&[("MODEL_THRESHOLD", "0,8")]);
+        assert_eq!(p.specs[0].threshold, Some(0.8));
+        let p = primary_plan(&[("MODEL_THRESHOLD", "0.8")]);
+        assert_eq!(p.specs[0].threshold, Some(0.8));
+        assert!(p.notes.is_empty(), "{:?}", p.notes);
+    }
+
+    /// A declared rate of zero was accepted, and became the rate the
+    /// pipeline resampled to and divided its window by.
+    #[test]
+    fn a_zero_sample_rate_is_refused_and_named() {
+        let p = primary_plan(&[("MODEL_SAMPLE_RATE", "0")]);
+        assert_eq!(p.specs[0].sample_rate, None);
+        assert!(
+            p.notes.iter().any(|n| n.contains("MODEL_SAMPLE_RATE=0")),
+            "{:?}",
+            p.notes
+        );
+        let p = primary_plan(&[("MODEL_SAMPLE_RATE", "32000")]);
+        assert_eq!(p.specs[0].sample_rate, Some(32_000));
+        assert!(p.notes.is_empty(), "{:?}", p.notes);
+    }
+
+    /// The extra classifiers read their threshold through the same rule.
+    #[test]
+    fn a_second_classifiers_threshold_is_bounded_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let primary = model_of(dir.path(), "p.onnx", 1);
+        let second = model_of(dir.path(), "s.onnx", 1);
+        let s = settings(&[
+            ("MODEL_2_PATH", second.display().to_string()),
+            ("MODEL_2_LABELS", "s.txt".to_owned()),
+            ("MODEL_2_THRESHOLD", "75".to_owned()),
+            ("MODEL_2_SAMPLE_RATE", "0".to_owned()),
+        ]);
+        let p = plan_with(
+            &|k| s.get(k).cloned(),
+            primary,
+            PathBuf::from("p.txt"),
+            Some(8192),
+        );
+        assert_eq!(p.specs.len(), 2, "{:?}", p.notes);
+        assert_eq!(p.specs[1].threshold, None);
+        assert_eq!(p.specs[1].sample_rate, None);
+        assert!(p.notes.iter().any(|n| n.contains("MODEL_2_THRESHOLD=75")));
+        assert!(p.notes.iter().any(|n| n.contains("MODEL_2_SAMPLE_RATE=0")));
     }
 
     /// **The station is always in the plan.** Whatever the memory says, the

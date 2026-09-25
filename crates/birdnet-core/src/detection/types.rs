@@ -63,6 +63,16 @@ pub struct ChunkPrediction {
     /// whistling, other human sounds) for this chunk, on the same scale as
     /// [`Detection::confidence`]. `0.0` when the label set has no human class.
     pub human_score: f32,
+    /// The highest-scoring watched noise class (see
+    /// [`crate::inference::model::BirdNetModel::watch_noise_classes`]) in this
+    /// chunk, read like [`Self::human_score`] from the model output *before*
+    /// the detection threshold and the top-N cut. `None` when no noise class
+    /// is watched or the label set has none.
+    ///
+    /// The noise filter used to read only [`Self::detections`], so a
+    /// `NOISE_THRESHOLD` below the detection threshold could never fire: the
+    /// bark it was set to catch had already been cut from the list.
+    pub loudest_noise: Option<Detection>,
 }
 
 impl Detection {
@@ -127,10 +137,15 @@ impl RecordingFile {
     pub fn parse(path: &str) -> Option<Self> {
         // Extract just the filename (without directory or extension)
         let basename = path.rsplit('/').next().unwrap_or(path);
-        let filename = basename
-            .strip_suffix(".wav")
-            .or_else(|| basename.strip_suffix(".flac"))
-            .or_else(|| basename.strip_suffix(".mp3"))?;
+        // Case-insensitive, like the watcher's `is_audio_file`: a `.WAV` it
+        // admitted and this refused failed on every pass, for ever.
+        let (filename, ext) = basename.rsplit_once('.')?;
+        if !["wav", "flac", "mp3"]
+            .iter()
+            .any(|known| ext.eq_ignore_ascii_case(known))
+        {
+            return None;
+        }
 
         let parts: Vec<&str> = filename.splitn(5, '-').collect();
 
@@ -195,6 +210,21 @@ impl RecordingFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The watcher admits `.WAV` (its `is_audio_file` ignores case), so the
+    /// parser must too: a card recorder writing upper-case names had every
+    /// file picked up and then refused, for ever, as unparseable.
+    #[test]
+    fn upper_case_extensions_parse_like_lower_case_ones() {
+        for ext in ["WAV", "Wav", "FLAC", "MP3"] {
+            let path = format!("/recs/2026-05-19-birdnet-09:00:00.{ext}");
+            let rec = RecordingFile::parse(&path).unwrap_or_else(|| panic!("{path} did not parse"));
+            assert_eq!(rec.date, "2026-05-19");
+            assert_eq!(rec.time, "09:00:00");
+        }
+        // Counterpart: something that is not audio still is not.
+        assert!(RecordingFile::parse("/recs/2026-05-19-birdnet-09:00:00.txt").is_none());
+    }
 
     #[test]
     fn detection_confidence_pct() {
