@@ -222,7 +222,6 @@ fn render_page_inner(
     let html = LAYOUT_HTML
         .replace("{{title}}", &escape_html(title))
         .replace("{{active_nav}}", active_nav)
-        .replace("{{content}}", content)
         .replace("{{topnav_links}}", &topnav_links)
         .replace("{{footer}}", FOOTER_HTML)
         .replace("{{tabbar}}", TABBAR_HTML)
@@ -243,7 +242,13 @@ fn render_page_inner(
         // Second `{{version}}` substitution pass — picks up any `{{version}}`
         // tokens that landed via the partials inlined above (currently the
         // update banner's `data-current-version`).
-        .replace("{{version}}", version);
+        .replace("{{version}}", version)
+        // Last, so nothing is ever substituted *into* the page body. A chained
+        // replace re-scans what it has already inserted, and the body carries
+        // text the reader typed: `/species?q={{help_drawer}}` echoed the query
+        // into the search box, and the pass after it expanded the whole help
+        // drawer inside `value="…"` — a broken page with duplicated ids.
+        .replace("{{content}}", content);
     Html(html)
 }
 
@@ -651,6 +656,41 @@ mod tests {
         assert!(html.0.contains(r#"data-home="today""#));
         // The uptime pill slot is always substituted (wired, never left literal).
         assert!(!html.0.contains("{{uptime_short}}"));
+    }
+
+    #[test]
+    fn text_in_the_page_body_is_never_expanded_as_a_layout_slot() {
+        use axum::http::HeaderMap;
+        // What `/species?q={{help_drawer}}` puts in the search box.
+        let body = r#"<input value="{{help_drawer}} {{footer}} {{version}}">"#;
+        let html = render_page_for_request("Test", body, "species", &HeaderMap::new()).0;
+        assert!(
+            html.contains(body),
+            "the body must arrive exactly as written"
+        );
+        assert_eq!(html.matches(r#"id="bnb-help-drawer""#).count(), 1);
+        // The element, not the text: the footer partial's own comment quotes
+        // `<footer role="contentinfo">`, so a bare `<footer` counts four.
+        assert_eq!(
+            html.matches(r#"<footer role="contentinfo" class="bnb-footer">"#)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_footer_does_not_claim_the_station_is_listening() {
+        use axum::http::HeaderMap;
+        // The footer knows only that the process is up. It said "listening"
+        // beside a green dot on a station with no microphone, while the header
+        // of the same page said "No microphone".
+        let html = render_page_for_request("Test", "", "today", &HeaderMap::new()).0;
+        let start = html
+            .find(r#"<footer role="contentinfo" class="bnb-footer">"#)
+            .expect("the footer element");
+        let footer = &html[start..start + html[start..].find("</footer>").unwrap()];
+        assert!(footer.contains("running"), "{footer}");
+        assert!(!footer.contains("listening"), "{footer}");
     }
 
     #[test]

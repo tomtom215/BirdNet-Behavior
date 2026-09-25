@@ -26,7 +26,7 @@
   <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="/static/css/app.css?v={{version}}">
   <link rel="stylesheet" href="/static/css/print.css?v={{version}}" media="print">
-  <script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
+  <script>(function(){var t=null;try{t=localStorage.getItem('theme')}catch(e){}if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
 </head>
 <body data-screen-label="Share · {{species_name}}">
 <a href="#main-content" class="skip-link">Skip to content</a>
@@ -123,7 +123,7 @@
   if(!b)return;
   b.addEventListener('click',function(){
     var u=window.location.href;
-    if(navigator.clipboard){navigator.clipboard.writeText(u).then(function(){var p=b.textContent;b.textContent='Copied ✓';setTimeout(function(){b.textContent=p;},1400);});}
+    if(navigator.clipboard){navigator.clipboard.writeText(u).then(function(){if(b.__copyLabel===undefined)b.__copyLabel=b.textContent;b.textContent='Copied ✓';clearTimeout(b.__copyTimer);b.__copyTimer=setTimeout(function(){b.textContent=b.__copyLabel;},1400);});}
     else{window.prompt('Copy permalink:',u);}
   });
 })();

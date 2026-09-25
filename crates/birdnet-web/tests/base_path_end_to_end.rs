@@ -323,3 +323,28 @@ async fn an_htmx_redirect_stays_inside_the_prefix() {
         .unwrap_or("");
     assert!(loc.starts_with(BASE), "{loc:?}");
 }
+
+/// Search puts its page URL in the address bar with `HX-Push-Url`. Under a
+/// prefix it wrote `/search?q=…`, so a reload or a shared search left the app.
+#[tokio::test]
+async fn a_pushed_url_stays_inside_the_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state = station(dir.path());
+    let req = Request::builder()
+        .uri(format!("{BASE}/pages/search-results?q=robin"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .expect("request");
+    let res = build_router(state).oneshot(req).await.expect("response");
+    assert_eq!(res.status(), StatusCode::OK);
+    let pushed = res
+        .headers()
+        .get("hx-push-url")
+        .and_then(|v| v.to_str().ok())
+        .expect("an HX-Push-Url")
+        .to_owned();
+    assert!(
+        pushed.starts_with(&format!("{BASE}/search?")),
+        "HX-Push-Url left the prefix: {pushed:?}"
+    );
+}

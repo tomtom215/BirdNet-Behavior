@@ -3076,6 +3076,8 @@ a.spp-inherit    { color: inherit; }
    the correlation-id <code> keeps its DOM id (referenced by the copy script);
    only their static style attributes move to classes. */
 .dd-h1           { font-size: 40px; line-height: 1.05; }
+.dd-col          { display: flex; flex-direction: column; gap: var(--pad-3); min-width: 0; }
+.dd-aside        { align-self: start; }
 .dd-sci          { color: var(--fg-3); font-style: italic; margin-top: 4px; }
 .dd-actions      { display: flex; gap: 8px; flex-wrap: wrap; }
 .dd-mb8          { margin-bottom: 8px; }
@@ -3736,7 +3738,6 @@ select.ls-select { font-family: var(--font-mono); font-size: 13px; padding: 8px 
 
 /* Cross-cutting partials (footer / tabbar / topnav-more / cmdk / update-banner
    / help-drawer / confirm-modal / audio-source-row / display-prefs). */
-.ft-dot          { background: var(--moss); }
 .tb-h2           { font-size: 22px; line-height: 1.15; margin: 0; }
 .tm-h2           { font-size: 20px; line-height: 1.15; margin: 0; letter-spacing: -0.01em; }
 .ck-sr           { position: absolute; width: 1px; height: 1px; clip: rect(0 0 0 0); overflow: hidden; }
@@ -4266,6 +4267,14 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .rc-floatdock.show { transform: translateX(-50%) translateY(0); }
 .rc-floatdock .rc-hp { box-shadow: var(--shadow-lg); }
 @media (prefers-reduced-motion: reduce) { .rc-floatdock { transition: none; } }
+/* On a phone the bottom tab bar (z-index 55, ~64px plus the safe-area inset)
+   covered the lower 48px of the dock — its scrub bar and time — because the
+   dock sat 16px from the bottom beneath it. It rides above the bar instead.
+   After the rule above, not in the tab bar's media block: an equal-specificity
+   rule later in the sheet would win over a media query earlier in it. */
+@media (max-width: 720px) {
+  .rc-floatdock { bottom: calc(76px + env(safe-area-inset-bottom)); }
+}
 
 /* Live view */
 .rc-live { background: linear-gradient(180deg, var(--surface), var(--surface-2)); border: 0.5px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md); overflow: hidden; }

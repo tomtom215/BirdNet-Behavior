@@ -44,12 +44,30 @@ async fn notifications_page() -> axum::response::Redirect {
 
 async fn notifications_partial(State(state): State<AppState>) -> Html<String> {
     let entries = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| recent_notifications(conn, 100, 0).unwrap_or_default())
+        state.with_db(|conn| recent_notifications(conn, 100, 0))
     })
-    .await
-    .unwrap_or_default();
+    .await;
+    // A failed read is not "No notifications yet": the log is what an
+    // operator opens to ask why an alert did not arrive.
+    match entries {
+        Ok(Ok(entries)) => Html(render_table_rows(&entries)),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "notification log could not be read");
+            Html(failed_rows())
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "notification log read panicked");
+            Html(failed_rows())
+        }
+    }
+}
 
-    Html(render_table_rows(&entries))
+/// The table's body when the log could not be read.
+fn failed_rows() -> String {
+    format!(
+        r#"<tr><td colspan="6">{}</td></tr>"#,
+        crate::routes::pages::error_states::inline("the notification log")
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -58,12 +76,21 @@ async fn notifications_partial(State(state): State<AppState>) -> Html<String> {
 
 async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
     let deleted = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            birdnet_db::notifications::prune_old_notifications(conn, 90).unwrap_or(0)
-        })
+        state.with_db(|conn| birdnet_db::notifications::prune_old_notifications(conn, 90))
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // "Pruned 0" for a prune that failed reads as "there was nothing old".
+    let deleted = match deleted {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!(error = %e, "notification prune failed");
+            return Ok(Html(
+                r#"<div class="prune-err" role="alert">The station could not prune the log. Nothing was deleted.</div>"#
+                    .to_owned(),
+            ));
+        }
+    };
 
     Ok(Html(format!(
         r#"<div class="prune-ok">
@@ -147,6 +174,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
     td.col-muted {{ color:var(--fg-3); }}
     .row-error {{ color:var(--rare); font-size:0.75rem; }}
     .prune-ok {{ color:var(--moss); padding:0.5rem 0; }}
+    .prune-err {{ color:var(--rare); padding:0.5rem 0; }}
   </style>
 
   <div class="page-head">

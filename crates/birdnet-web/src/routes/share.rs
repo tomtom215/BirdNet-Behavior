@@ -214,11 +214,15 @@ fn lookup(
          FROM detections_analytic WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
     )
     // O-07: rare birds shared from the quarantine queue are not in `detections`
-    // until approved, so fall back to the quarantine table.
+    // until approved, so fall back to the quarantine table — for rows still
+    // awaiting review, and only those. A rejected row is a withdrawn claim, and
+    // an approved one now lives in `detections`, where the view above applies
+    // any later verdict; reading the quarantine row regardless served both.
     .or_else(|| {
         query(
             "SELECT com_name, sci_name, date, time, confidence \
-             FROM quarantine WHERE date = ?1 AND time = ?2 AND com_name = ?3 LIMIT 1",
+             FROM quarantine WHERE date = ?1 AND time = ?2 AND com_name = ?3 \
+             AND reviewed = 0 LIMIT 1",
         )
     })
 }
@@ -338,7 +342,8 @@ async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> 
             .or_else(|| {
                 conn.query_row(
                     "SELECT file_name FROM quarantine \
-                     WHERE date = ?1 AND time = ?2 AND com_name = ?3 LIMIT 1",
+                     WHERE date = ?1 AND time = ?2 AND com_name = ?3 \
+                     AND reviewed = 0 LIMIT 1",
                     rusqlite::params![d, t, c],
                     |row| row.get::<_, Option<String>>(0),
                 )
@@ -397,15 +402,30 @@ fn gone_page() -> Response {
         .into_response()
 }
 
-/// Best-effort relative-time phrase ("13 minutes ago"). Treats the stored
-/// civil time as UTC, which is what the rest of the app assumes for a
-/// single-station feed.
+/// Best-effort relative-time phrase ("13 minutes ago").
+///
+/// The stored `Date`/`Time` are the station's **local** civil time, as every
+/// segment filename is. Read as UTC, a clip from ten minutes ago on a UTC-5
+/// station was "5 hours ago", and on a UTC+2 one "just now" for two hours.
+fn ago_phrase(date: &str, time: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    ago_phrase_at(
+        date,
+        time,
+        now,
+        crate::routes::pages::local_utc_offset_secs(),
+    )
+}
+
+/// [`ago_phrase`] at a given UTC instant, for a station at `offset_secs`.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-fn ago_phrase(date: &str, time: &str) -> String {
+fn ago_phrase_at(date: &str, time: &str, now: u64, offset_secs: i64) -> String {
     let parse = || -> Option<u64> {
         let mut dp = date.split('-');
         let y = dp.next()?.parse::<i64>().ok()?;
@@ -427,10 +447,9 @@ fn ago_phrase(date: &str, time: &str) -> String {
         Some((days as u64) * 86_400 + (hh as u64) * 3600 + (mm as u64) * 60 + ss as u64)
     };
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let then = parse().unwrap_or(now);
+    let then = parse()
+        .and_then(|local| u64::try_from(local as i64 - offset_secs).ok())
+        .unwrap_or(now);
     let elapsed = now.saturating_sub(then);
     match elapsed {
         0..=59 => "just now".to_string(),
@@ -444,6 +463,22 @@ fn ago_phrase(date: &str, time: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_share_says_how_long_ago_in_the_stations_own_time() {
+        // A clip recorded at 07:50 local, read at 12:00 UTC.
+        let now = 1_790_251_200; // 2026-09-24 12:00:00 UTC
+        // New York (UTC-4): 07:50 local is 11:50 UTC — ten minutes ago.
+        assert_eq!(
+            ago_phrase_at("2026-09-24", "07:50:00", now, -14_400),
+            "10 minutes ago"
+        );
+        // Berlin (UTC+2): 13:50 local is 11:50 UTC — also ten minutes ago.
+        assert_eq!(
+            ago_phrase_at("2026-09-24", "13:50:00", now, 7_200),
+            "10 minutes ago"
+        );
+    }
 
     #[test]
     fn a_placeholder_or_short_share_secret_is_not_used() {

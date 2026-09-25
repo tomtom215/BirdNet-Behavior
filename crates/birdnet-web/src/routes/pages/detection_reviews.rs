@@ -392,13 +392,13 @@ fn render_verdict_row(html: &mut String, r: &birdnet_db::sqlite::DetectionReview
 async fn detection_review_set(
     State(state): State<AppState>,
     Form(form): Form<ReviewForm>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
         // `state.set_detection_review`, not `with_db(set_detection_review)`:
         // both `detections_analytic` and `detections_ts` filter on the verdict,
         // so one that reached only SQLite would change the species totals and
         // leave every behavioural dashboard still counting the reject.
-        let _ = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             state.set_detection_review(
                 &form.date,
                 &form.time,
@@ -409,23 +409,49 @@ async fn detection_review_set(
             )
         })
         .await;
+        if let Some(refused) = refused_review(result, "save that verdict") {
+            return refused;
+        }
     } else {
         tracing::warn!(status = %form.status, "ignoring detection review with unknown status");
     }
-    reload_queue()
+    reload_queue().into_response()
+}
+
+/// The page left as it was and a toast saying why, when a review write failed.
+///
+/// These handlers discarded the result and answered as if it had worked, so a
+/// verdict the database refused showed as recorded — and a rejection is what
+/// withdraws a detection from every count and every share link.
+fn refused_review<T, E: std::fmt::Display>(
+    result: Result<Result<T, E>, tokio::task::JoinError>,
+    what: &str,
+) -> Option<axum::response::Response> {
+    let detail = match result {
+        Ok(Ok(_)) => return None,
+        Ok(Err(e)) => e.to_string(),
+        Err(e) => e.to_string(),
+    };
+    tracing::warn!(error = %detail, "detection review write failed: {what}");
+    Some(super::toast::not_applied(&super::toast::Toast::error(
+        format!("The station could not {what}. Nothing was changed."),
+    )))
 }
 
 async fn detection_review_clear(
     State(state): State<AppState>,
     Form(form): Form<ClearForm>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     // Paired write — see `detection_review_set`. Clearing must reach both
     // stores or the exclusion outlives the verdict that justified it.
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.clear_detection_review(&form.date, &form.time, &form.sci_name)
     })
     .await;
-    reload_queue()
+    if let Some(refused) = refused_review(result, "undo that verdict") {
+        return refused;
+    }
+    reload_queue().into_response()
 }
 
 /// Inline verdict handler for the detection-detail page. Writes the verdict
@@ -433,7 +459,7 @@ async fn detection_review_clear(
 async fn detection_review_inline(
     State(state): State<AppState>,
     Form(form): Form<ReviewForm>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let current = if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
         let (date, time, sci, com) = (
             form.date.clone(),
@@ -442,10 +468,13 @@ async fn detection_review_inline(
             form.com_name.clone(),
         );
         // Paired write — see `detection_review_set`.
-        let _ = tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             state.set_detection_review(&date, &time, &sci, &com, status, None)
         })
         .await;
+        if let Some(refused) = refused_review(result, "save that verdict") {
+            return refused;
+        }
         Some(status.as_str())
     } else {
         None
@@ -462,6 +491,7 @@ async fn detection_review_inline(
         [(header::CONTENT_TYPE, "text/html")],
         widget,
     )
+        .into_response()
 }
 
 /// The self-replacing "Review this detection" widget shown on the

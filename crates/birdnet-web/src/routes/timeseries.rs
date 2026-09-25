@@ -27,8 +27,9 @@ use axum::extract::Query;
 use helpers::{handle_ts_result, ts_unavailable};
 #[cfg(feature = "analytics")]
 use params::{
-    AccumulationQuery, AnomalyQuery, DailyQuery, DiversityQuery, GapsQuery, HourlyQuery, PeakQuery,
-    SessionQuery, TrendQuery, WeeklyQuery,
+    AccumulationQuery, AnomalyQuery, DailyQuery, DiversityQuery, GapsQuery, HourlyQuery,
+    MAX_GAP_MINUTES, MAX_LIMIT, MAX_LOOKBACK_DAYS, MAX_LOOKBACK_WEEKS, MAX_WINDOW_DAYS, PeakQuery,
+    SessionQuery, TrendQuery, WeeklyQuery, bounded, peak_bounds, z_threshold,
 };
 
 // Stub handlers when analytics feature is not compiled.
@@ -82,7 +83,7 @@ async fn hourly(
         return ts_unavailable("hourly activity");
     }
     let params = birdnet_timeseries::types::params::HourlyParams {
-        lookback_days: q.days.unwrap_or(7),
+        lookback_days: bounded(q.days, 7, MAX_LOOKBACK_DAYS),
         species: q.species,
     };
     let result = tokio::task::spawn_blocking(move || {
@@ -101,7 +102,7 @@ async fn daily(
         return ts_unavailable("daily activity");
     }
     let params = birdnet_timeseries::types::params::DailyParams {
-        lookback_days: q.days.unwrap_or(30),
+        lookback_days: bounded(q.days, 30, MAX_LOOKBACK_DAYS),
         species: q.species,
     };
     let result =
@@ -119,7 +120,7 @@ async fn weekly(
         return ts_unavailable("weekly activity");
     }
     let params = birdnet_timeseries::types::params::WeeklyParams {
-        lookback_weeks: q.weeks.unwrap_or(52),
+        lookback_weeks: bounded(q.weeks, 52, MAX_LOOKBACK_WEEKS),
     };
     let result = tokio::task::spawn_blocking(move || {
         state.with_timeseries(|ts| ts.weekly_activity(&params))
@@ -137,7 +138,7 @@ async fn heatmap(
         return ts_unavailable("hourly heatmap");
     }
     let params = birdnet_timeseries::types::params::HourlyParams {
-        lookback_days: q.days.unwrap_or(90),
+        lookback_days: bounded(q.days, 90, MAX_LOOKBACK_DAYS),
         species: q.species,
     };
     let result =
@@ -172,7 +173,7 @@ async fn trend(
         None => None,
     };
     let params = birdnet_timeseries::types::params::TrendParams {
-        window_days: q.window.unwrap_or(7),
+        window_days: bounded(q.window, 7, MAX_WINDOW_DAYS),
         from_date,
         to_date,
         species: q.species,
@@ -192,9 +193,9 @@ async fn anomalies(
         return ts_unavailable("anomaly detection");
     }
     let params = birdnet_timeseries::types::params::AnomalyParams {
-        z_threshold: q.z.unwrap_or(2.0),
-        window_days: q.window.unwrap_or(30),
-        lookback_days: q.days.unwrap_or(180),
+        z_threshold: z_threshold(q.z),
+        window_days: bounded(q.window, 30, MAX_WINDOW_DAYS),
+        lookback_days: bounded(q.days, 180, MAX_LOOKBACK_DAYS),
     };
     let result =
         tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.anomalies(&params)))
@@ -211,7 +212,7 @@ async fn year_over_year(
         return ts_unavailable("year-over-year");
     }
     let params = birdnet_timeseries::types::params::WeeklyParams {
-        lookback_weeks: q.weeks.unwrap_or(52),
+        lookback_weeks: bounded(q.weeks, 52, MAX_LOOKBACK_WEEKS),
     };
     let result =
         tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.year_over_year(&params)))
@@ -228,7 +229,7 @@ async fn diversity(
         return ts_unavailable("diversity");
     }
     let params = birdnet_timeseries::types::params::DiversityParams {
-        lookback_days: q.days.unwrap_or(90),
+        lookback_days: bounded(q.days, 90, MAX_LOOKBACK_DAYS),
         include_shannon: q.shannon.unwrap_or(true),
     };
     let result =
@@ -272,11 +273,12 @@ async fn peak_windows(
     if !state.has_analytics() {
         return ts_unavailable("peak windows");
     }
+    let (window_minutes, hop_minutes, lookback_days, limit) = peak_bounds(&q);
     let params = birdnet_timeseries::types::params::PeakParams {
-        window_minutes: q.window.unwrap_or(15),
-        hop_minutes: q.hop.unwrap_or(5),
-        lookback_days: q.days.unwrap_or(1),
-        limit: q.limit.unwrap_or(10),
+        window_minutes,
+        hop_minutes,
+        lookback_days,
+        limit,
     };
     let result =
         tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.peak_windows(&params)))
@@ -298,10 +300,10 @@ async fn sessions(
         return bad_date("date");
     }
     let params = birdnet_timeseries::types::params::SessionParams {
-        gap_minutes: q.gap.unwrap_or(30),
+        gap_minutes: bounded(q.gap, 30, MAX_GAP_MINUTES),
         date_filter: q.date,
-        lookback_days: q.days.unwrap_or(7),
-        limit: q.limit.unwrap_or(100),
+        lookback_days: bounded(q.days, 7, MAX_LOOKBACK_DAYS),
+        limit: bounded(q.limit, 100, MAX_LIMIT),
     };
     let result = tokio::task::spawn_blocking(move || {
         state.with_timeseries(|ts| ts.activity_sessions(&params))
@@ -318,8 +320,8 @@ async fn gaps(
     if !state.has_analytics() {
         return ts_unavailable("gap detection");
     }
-    let threshold = q.threshold.unwrap_or(30);
-    let lookback = q.days.unwrap_or(7);
+    let threshold = bounded(q.threshold, 30, MAX_GAP_MINUTES);
+    let lookback = bounded(q.days, 7, MAX_LOOKBACK_DAYS);
 
     if let Some(ref d) = q.date
         && !super::is_valid_date(d)

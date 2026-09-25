@@ -214,9 +214,19 @@ pub(super) fn render_thread(
     sci_name: &str,
     problem: Option<&str>,
 ) -> String {
-    let comments = state
-        .with_db(|conn| detection_comments::list(conn, date, time, sci_name))
-        .unwrap_or_default();
+    // A failed read is said, not shown as "No comments yet" — which invites
+    // someone to write again the note that is already there.
+    let comments = match state.with_db(|conn| detection_comments::list(conn, date, time, sci_name))
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "detection comments could not be read");
+            return format!(
+                r#"<div id="{ANCHOR}" class="bnb-card pad">{}</div>"#,
+                super::error_states::inline("the comments on this detection")
+            );
+        }
+    };
 
     let date_e = escape_html(date);
     let time_e = escape_html(time);

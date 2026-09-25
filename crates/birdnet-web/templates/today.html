@@ -256,10 +256,18 @@
   // every page (it used to live here, which left Recordings → Live with none).
 
   // ── Source picker: live audio per source lives on Recordings → Live ───
+  // Choosing a source picks what the Live signal card draws, and where
+  // "Listen live" goes. It used to navigate away on `change`, which fires on
+  // every arrow key in a closed select on some platforms, so a keyboard user
+  // stepping through the list was taken to another page (WCAG 3.2.2).
   var src = document.getElementById('td-source');
+  var listen = document.querySelector('.x-listen');
   if (src) src.addEventListener('change', function () {
-    if (this.value) window.location.href = window.bnbUrl('/recordings?view=live&source=' + encodeURIComponent(this.value));
-    else window.location.href = window.bnbUrl('/recordings?view=live');
+    if (listen) {
+      listen.href = window.bnbUrl('/recordings?view=live' +
+        (this.value ? '&source=' + encodeURIComponent(this.value) : ''));
+    }
+    document.dispatchEvent(new CustomEvent('bnb:source-changed'));
   });
 
   // ── Live nudges ────────────────────────────────────────────────────────
@@ -506,6 +514,22 @@
         drawIdle();
         scheduleReconnect();
     }
+    // One picture, one input. Every client receives every source's frames,
+    // and this card drew them all, so a two-microphone station's "live
+    // signal" was both inputs interleaved. A chosen source is followed by id;
+    // with none chosen, the card follows the first source it hears.
+    var picker = document.getElementById('td-source');
+    var followed = null;
+    function isFollowed(m) {
+        var want = picker ? picker.value : '';
+        if (want) return m.source === want;
+        if (followed === null) followed = m.source;
+        return m.source === followed;
+    }
+    document.addEventListener('bnb:source-changed', function () {
+        followed = null;
+        drawIdle();
+    });
     function connect() {
         var ws;
         try {
@@ -520,7 +544,7 @@
         ws.onmessage = function (ev) {
             try {
                 var msg = JSON.parse(ev.data);
-                if (msg.event === 'spectrogram') drawFrame(msg);
+                if (msg.event === 'spectrogram' && isFollowed(msg)) drawFrame(msg);
             } catch (_) { /* ignore non-JSON */ }
         };
         ws.onerror = function () { try { ws.close(); } catch (_) { /* already closed */ } };

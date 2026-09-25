@@ -1365,3 +1365,40 @@ async fn a_job_that_just_ran_is_not_reported_as_due() {
         .expect("present");
     assert_eq!(prune["due"], serde_json::json!(true), "{prune}");
 }
+
+/// The API writes through the same range check as the settings page. It used
+/// to skip it, so `{"confidence_threshold": 75}` — the percentage slip — was
+/// stored with a 200 and every detection was discarded from then on.
+#[tokio::test]
+async fn the_api_refuses_a_value_the_station_cannot_use() {
+    let (_dir, state) = station(true);
+    seed_settings(&state);
+
+    for body in [
+        r#"{"confidence_threshold":75}"#,
+        r#"{"sensitivity":"9"}"#,
+        r#"{"latitude":"515"}"#,
+    ] {
+        let (status, reply) =
+            call_method(&state, "PUT", "/api/v2/settings", Some(TOKEN), body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body} -> {reply}");
+        assert!(reply.contains("problems"), "{reply}");
+    }
+    assert_eq!(setting(&state, "confidence_threshold"), None);
+    assert_eq!(setting(&state, "latitude").as_deref(), Some("51.0"));
+
+    // The counterpart: a value inside the range is still written.
+    let (status, reply) = call_method(
+        &state,
+        "PUT",
+        "/api/v2/settings",
+        Some(TOKEN),
+        r#"{"confidence_threshold":"0.75"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(
+        setting(&state, "confidence_threshold").as_deref(),
+        Some("0.75")
+    );
+}

@@ -76,15 +76,22 @@
       b.textContent = symbol;
       b.setAttribute('aria-label', label);
     });
-    if (playBtn) {
-      playBtn.textContent = symbol === '⏸' ? '⏸' : '▶';
-      playBtn.setAttribute('aria-label', label + ' this clip');
-    }
+    if (playBtn) rowGlyph(playBtn, symbol);
+  }
+  // A row's button names its bird ("Play Eurasian Wren"), and keeps doing so:
+  // it was rewritten to "Play this clip" on first use.
+  function rowGlyph(btn, symbol) {
+    var name = btn.getAttribute('data-clip-name') || 'this clip';
+    btn.textContent = symbol === '⏸' ? '⏸' : '▶';
+    btn.setAttribute('aria-label', (symbol === '⏸' ? 'Pause ' : 'Play ') + name);
   }
 
   function stop() {
     if (player) player.pause();
-    if (playBtn) playBtn.classList.remove('playing');
+    // The row that was playing goes back to ▶. Only its class was cleared, so
+    // after playing A then B, A still showed ⏸ and still said "Pause" — two
+    // rows claiming to be playing.
+    if (playBtn) { playBtn.classList.remove('playing'); rowGlyph(playBtn, '▶'); }
   }
   // True between calling play() and playback actually beginning. `paused` goes
   // false the instant play() is called, so without this a second click on a
@@ -188,10 +195,13 @@
     e.preventDefault(); toggleRow(ch.closest('.rc-row'));
   });
 
+  // `date|time|clip|species` (see `search::row_key`): the clip is what makes
+  // the key name this row and not every source's row of the same bird.
   function keyOf(row) { return (row.getAttribute('data-key') || '').split('|'); }
   function post(url, parts) {
     var body = 'date=' + encodeURIComponent(parts[0]) + '&time=' + encodeURIComponent(parts[1]) +
-               '&sci_name=' + encodeURIComponent(parts[2]);
+               '&file_name=' + encodeURIComponent(parts[2]) +
+               '&sci_name=' + encodeURIComponent(parts.slice(3).join('|'));
     return fetch(window.bnbUrl(url), { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
   }
   // Guards the same trap the live-audio button had: a bulk action over many

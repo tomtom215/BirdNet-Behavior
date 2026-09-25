@@ -76,6 +76,10 @@ const BOUNDED_FIELDS: &[(&str, &str, f64, f64)] = &[
     ("privacy_threshold", "Privacy Threshold", 0.0, 1.0),
     ("notify_confidence", "Notification Min Confidence", 0.0, 1.0),
     ("email_min_confidence", "Alert Min Confidence", 0.0, 1.0),
+    // `validate()` refuses these in the config file, but a value typed here
+    // is overlaid after that check has run — the same gap as the thresholds.
+    ("latitude", "Latitude", -90.0, 90.0),
+    ("longitude", "Longitude", -180.0, 180.0),
 ];
 
 /// The form key each bounded field maps to in the runtime configuration, for
@@ -107,7 +111,7 @@ const CONFIG_KEY_OF: &[(&str, &str)] = &[
 /// people think in percent. `75` parses, stores, and is then compared against a
 /// score that can never exceed `1`. Every detection is discarded, for good,
 /// and nothing anywhere says why — the station just goes quiet.
-fn range_problems(form: &SettingsForm) -> Vec<String> {
+pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
     // Read from the submission rather than from the changed-values list.
     // `build_settings_items` drops any field whose value already matches the
     // database, so validating that list would wave through a bad value that is
@@ -123,6 +127,8 @@ fn range_problems(form: &SettingsForm) -> Vec<String> {
         ("privacy_threshold", form.privacy_threshold.as_ref()),
         ("notify_confidence", form.notify_confidence.as_ref()),
         ("email_min_confidence", form.email_min_confidence.as_ref()),
+        ("latitude", form.latitude.as_ref()),
+        ("longitude", form.longitude.as_ref()),
     ];
     let mut problems = Vec::new();
     for (key, value) in submitted {

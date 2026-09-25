@@ -195,11 +195,15 @@ pub(super) async fn export_raven(
     }
 }
 
+/// A failed read, logged here and not handed to the caller. This route is
+/// public on an open station, and the error text carried file paths and schema
+/// to anyone who asked.
 fn db_error(detail: &str) -> Response {
+    let message = crate::routes::log_internal("raven export failed", &detail);
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         [(header::CONTENT_TYPE, "application/json")],
-        json!({ "error": "database error", "detail": detail }).to_string(),
+        json!({ "error": message }).to_string(),
     )
         .into_response()
 }
@@ -261,6 +265,19 @@ pub(super) async fn clip_labels(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The body names no detail of what failed; the log has it.
+    #[tokio::test]
+    async fn a_failed_export_does_not_tell_the_caller_why() {
+        let res = db_error("no such table: detections (/var/lib/birdnet/birds.db)");
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(!body.contains("birds.db"), "{body}");
+        assert!(!body.contains("no such table"), "{body}");
+    }
 
     fn row(
         clip: Option<&str>,

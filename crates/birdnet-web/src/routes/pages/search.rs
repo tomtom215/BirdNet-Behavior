@@ -349,36 +349,49 @@ pub fn parse_bulk_form(body: &[u8]) -> BulkForm {
     form
 }
 
-/// A detection identified by the triple the UI carries.
-#[derive(Debug, PartialEq, Eq)]
-pub struct RowKey {
-    /// Local date, `YYYY-MM-DD`.
-    pub date: String,
-    /// Local time, `HH:MM:SS`.
-    pub time: String,
-    /// Scientific name.
-    pub sci_name: String,
+/// A detection as the checkboxes name it; see [`crate::state::RowRef`].
+pub type RowKey = crate::state::RowRef;
+
+/// The key a checkbox carries for `d`: `date|time|clip|sci_name`.
+///
+/// The clip is what makes it name one row — the date, time and species name
+/// one row per source that heard the bird in that second — and it sits before
+/// the species so the species stays the remainder, as it always was.
+#[must_use]
+pub fn row_key(d: &birdnet_db::sqlite::DetectionRow) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        d.date,
+        d.time,
+        d.file_name.as_deref().unwrap_or(""),
+        d.sci_name
+    )
 }
 
-/// Parse the `date|time|sci_name` triple the checkboxes carry.
+/// Parse a checkbox key: `date|time|clip|sci_name`, or the older
+/// `date|time|sci_name`, which names no clip.
 ///
-/// `splitn(3, …)` rather than `split`: a scientific name cannot contain `|`
-/// today, but a future label set is not this function's to promise, and
-/// silently dropping everything after a second separator would delete the wrong
-/// row rather than none.
+/// `splitn` rather than `split`: a scientific name cannot contain `|` today,
+/// but a future label set is not this function's to promise, and silently
+/// dropping everything after a separator would delete the wrong row rather
+/// than none. The species is the remainder in both forms.
 #[must_use]
 pub fn parse_row_key(raw: &str) -> Option<RowKey> {
-    let mut it = raw.splitn(3, '|');
-    let date = it.next()?.trim();
-    let time = it.next()?.trim();
-    let sci_name = it.next()?.trim();
-    if date.is_empty() || time.is_empty() || sci_name.is_empty() {
+    let parts: Vec<&str> = raw.splitn(4, '|').collect();
+    let (date, time, file, sci) = match parts.as_slice() {
+        [d, t, s] => (*d, *t, None, *s),
+        [d, t, f, s] => (*d, *t, Some(f.trim().to_owned()), *s),
+        _ => return None,
+    };
+    let (date, time, sci) = (date.trim(), time.trim(), sci.trim());
+    if date.is_empty() || time.is_empty() || sci.is_empty() {
         return None;
     }
     Some(RowKey {
         date: date.to_owned(),
         time: time.to_owned(),
-        sci_name: sci_name.to_owned(),
+        sci_name: sci.to_owned(),
+        file_name: file,
     })
 }
 
@@ -456,13 +469,9 @@ async fn bulk_action(
         let mut done = 0_usize;
         for k in &keys {
             let ok = match action {
-                BulkAction::Delete => state.delete_detection(&k.date, &k.time, &k.sci_name)?,
-                BulkAction::Lock => state.with_db(|conn| {
-                    birdnet_db::sqlite::lock_detection(conn, &k.date, &k.time, &k.sci_name)
-                })?,
-                BulkAction::Unlock => state.with_db(|conn| {
-                    birdnet_db::sqlite::unlock_detection(conn, &k.date, &k.time, &k.sci_name)
-                })?,
+                BulkAction::Delete => state.delete_detection(k)?,
+                BulkAction::Lock => state.set_detection_lock(k, true)?,
+                BulkAction::Unlock => state.set_detection_lock(k, false)?,
                 BulkAction::Confirm | BulkAction::Reject => {
                     // The common name comes from the row, not from the
                     // checkbox: `set_detection_review` stores it for display,
@@ -699,7 +708,7 @@ fn render_results(
     );
 
     for d in rows {
-        let key = format!("{}|{}|{}", d.date, d.time, d.sci_name);
+        let key = row_key(d);
         let conf = (d.confidence * 100.0).round();
         let verdict = match d.review_verdict.as_deref() {
             Some("confirmed") => "<span class=\"sr-verdict sr-confirmed\">confirmed</span>",
@@ -942,23 +951,32 @@ mod tests {
 
     #[test]
     fn a_row_key_round_trips() {
-        let k = parse_row_key("2026-05-01|06:30:00|Turdus merula").expect("parses");
+        let k =
+            parse_row_key("2026-05-01|06:30:00|robin-cam2.wav|Erithacus rubecula").expect("parses");
         assert_eq!(
             k,
             RowKey {
                 date: "2026-05-01".into(),
                 time: "06:30:00".into(),
-                sci_name: "Turdus merula".into(),
+                sci_name: "Erithacus rubecula".into(),
+                file_name: Some("robin-cam2.wav".into()),
             }
         );
+        // A row with no clip names that, not "unknown".
+        let k = parse_row_key("2026-05-01|06:30:00||Turdus merula").expect("parses");
+        assert_eq!(k.file_name.as_deref(), Some(""));
+        // The older three-part key names no clip at all.
+        let k = parse_row_key("2026-05-01|06:30:00|Turdus merula").expect("parses");
+        assert_eq!((k.sci_name.as_str(), k.file_name), ("Turdus merula", None));
     }
 
     #[test]
-    fn a_row_key_keeps_everything_after_the_second_separator() {
-        // `split` rather than `splitn(3, …)` would truncate the name here and
-        // act on a different row — or, worse, on none while reporting success.
-        let k = parse_row_key("2026-05-01|06:30:00|Genus species|odd").expect("parses");
+    fn a_row_key_keeps_everything_after_the_clip_as_the_species() {
+        // `split` rather than `splitn` would truncate the name here and act on
+        // a different row — or, worse, on none while reporting success.
+        let k = parse_row_key("2026-05-01|06:30:00|a.wav|Genus species|odd").expect("parses");
         assert_eq!(k.sci_name, "Genus species|odd");
+        assert_eq!(k.file_name.as_deref(), Some("a.wav"));
     }
 
     #[test]

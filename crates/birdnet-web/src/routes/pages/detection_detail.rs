@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Html;
+use axum::response::{Html, IntoResponse as _};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
@@ -40,7 +40,7 @@ async fn detection_detail_page(
     State(state): State<AppState>,
     Query(query): Query<DetectionDetailQuery>,
     headers: HeaderMap,
-) -> Result<Html<String>, StatusCode> {
+) -> Result<axum::response::Response, StatusCode> {
     let date = query.date.unwrap_or_default();
     let time = query.time.unwrap_or_default();
     let com_name = query.name.unwrap_or_default();
@@ -57,14 +57,23 @@ async fn detection_detail_page(
     // and before `state` is moved into the closure below.
     let nearby = state.nearby();
 
+    // The detection and its verdict are propagated, not defaulted: a failed
+    // read rendered "Detection not found" (with a 200), which tells someone
+    // following a shared link that the bird was deleted, and a failed verdict
+    // read showed a rejected detection as unreviewed. The corroboration list
+    // below is decoration and still defaults.
     let found = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let det = find_detection(conn, &date2, &time2, &com2)?;
-            let verdict =
-                birdnet_db::sqlite::get_detection_review(conn, &det.date, &det.time, &det.sci_name)
-                    .ok()
-                    .flatten()
-                    .map(|r| r.status);
+            let Some(det) = find_detection(conn, &date2, &time2, &com2)? else {
+                return Ok(None);
+            };
+            let verdict = birdnet_db::sqlite::get_detection_review(
+                conn,
+                &det.date,
+                &det.time,
+                &det.sci_name,
+            )?
+            .map(|r| r.status);
             // Multi-stream corroboration: other sources that heard this species
             // near the same time. Only meaningful for rows with a known source
             // (historical / imported rows are NULL → no corroboration shown).
@@ -80,14 +89,30 @@ async fn detection_detail_page(
                 )
                 .unwrap_or_default()
             });
-            Some((det, verdict, corroboration))
+            Ok::<_, birdnet_db::sqlite::DbError>(Some((det, verdict, corroboration)))
         })
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let Some((det, verdict, corroboration)) = found else {
-        return Ok(not_found_page(&date, &time, &headers));
+    let (det, verdict, corroboration) = match found {
+        Ok(Some(found)) => found,
+        Ok(None) => {
+            return Ok((
+                StatusCode::NOT_FOUND,
+                not_found_page(&date, &time, &headers),
+            )
+                .into_response());
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "detection detail could not be read");
+            let content = super::error_states::could_not_load("this detection");
+            return Ok((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                super::render_page_for_request("Detection", &content, "today", &headers),
+            )
+                .into_response());
+        }
     };
 
     Ok(render_detail_page(
@@ -96,7 +121,8 @@ async fn detection_detail_page(
         &corroboration,
         nearby.as_deref(),
         &headers,
-    ))
+    )
+    .into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +134,7 @@ fn find_detection(
     date: &str,
     time: &str,
     com_name: &str,
-) -> Option<birdnet_db::sqlite::DetectionRow> {
+) -> Result<Option<birdnet_db::sqlite::DetectionRow>, birdnet_db::sqlite::DbError> {
     // One query, one mapper, both owned by `birdnet-db`. This used to be two
     // hand-written copies of the fifteen-column projection and its row mapper,
     // living outside the drift gate that exists inside that crate to stop
@@ -116,8 +142,6 @@ fn find_detection(
     // was added to `DetectionRow` and both copies failed to compile.
     let name = (!com_name.is_empty()).then_some(com_name);
     birdnet_db::sqlite::detection_at(conn, date, time, name)
-        .ok()
-        .flatten()
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +203,7 @@ fn render_detail_page(
 </div>
 
 <div class="grid-2">
-  <div>
+  <div class="dd-col">
     {audio_section}
     <div class="bnb-card pad">
       <div class="section-header"><div><div class="bnb-eyebrow">Details</div><h2 class="sh-h">This detection</h2></div>{conf}</div>
@@ -195,7 +219,7 @@ fn render_detail_page(
     {comments}
     {correlation_section}
   </div>
-  <div class="bnb-card pad">
+  <div class="bnb-card pad dd-aside">
     <div class="section-header"><div><div class="bnb-eyebrow">Related</div><h3>Explore</h3></div></div>
     <p class="dd-mb8"><a href="/species/detail?name={enc_name}">All detections of {com} →</a></p>
     <p><a href="/api/v2/species/image/{enc_sci}/file">Species photo (Wikipedia) →</a></p>
@@ -227,7 +251,7 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     let safe = escape_html(&basename);
     format!(
         r#"<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Recording</div><h2 class="sh-h">The 3-second clip</h2></div></div>
+  <div class="section-header"><div><div class="bnb-eyebrow">Recording</div><h2 class="sh-h">The clip</h2></div></div>
   <img src="/api/v2/spectrogram/{safe}"
        alt="Spectrogram"
        class="dd-spectrogram"
@@ -366,12 +390,21 @@ fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     )
 }
 
+/// `42.3601°N, 71.0589°W`. West longitudes were printed as negative east
+/// ("-71.0589°E"), south latitudes as negative north.
+fn coordinates(lat: f64, lon: f64) -> String {
+    let ns = if lat < 0.0 { 'S' } else { 'N' };
+    let ew = if lon < 0.0 { 'W' } else { 'E' };
+    format!("{:.4}°{ns}, {:.4}°{ew}", lat.abs(), lon.abs())
+}
+
 fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
     let mut out = String::new();
     if let (Some(lat), Some(lon)) = (det.lat, det.lon) {
         let _ = write!(
             out,
-            "<tr><td>Location</td><td>{lat:.4}°N, {lon:.4}°E</td></tr>"
+            "<tr><td>Location</td><td>{}</td></tr>",
+            coordinates(lat, lon)
         );
     }
     if let Some(sens) = det.sens {
@@ -405,7 +438,13 @@ fn not_found_page(date: &str, time: &str, headers: &HeaderMap) -> Html<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_correlation_section, build_corroboration_section};
+    use super::{build_correlation_section, build_corroboration_section, coordinates};
+
+    #[test]
+    fn coordinates_name_their_hemisphere() {
+        assert_eq!(coordinates(42.3601, -71.0589), "42.3601°N, 71.0589°W");
+        assert_eq!(coordinates(-33.8688, 151.2093), "33.8688°S, 151.2093°E");
+    }
     use birdnet_db::sqlite::{ConcurrentDetection, DetectionRow};
 
     #[test]

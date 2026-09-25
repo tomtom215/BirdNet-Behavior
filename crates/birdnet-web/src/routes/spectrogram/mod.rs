@@ -327,9 +327,12 @@ async fn serve_spectrogram(
 fn png_response(bytes: Bytes) -> Response {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    // `private`, like the recording it is drawn from: on a private station a
+    // shared cache licensed by `public` could hand a signed-in reader's image
+    // to the next person who asked for the same URL.
     headers.insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=3600"),
+        HeaderValue::from_static("private, max-age=3600"),
     );
     (StatusCode::OK, headers, Body::from(bytes)).into_response()
 }

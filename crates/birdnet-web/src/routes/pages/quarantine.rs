@@ -490,7 +490,9 @@ async fn quarantine_approve(
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
-    let filter_param = form.filter.as_deref().unwrap_or("pending").to_owned();
+    // Normalised, never echoed: this is written into an `hx-get` attribute,
+    // where a raw `"` ended the attribute and `&` added query parameters.
+    let filter_param = filter_str(parse_filter(form.filter.as_deref()));
     let offset = form.offset.unwrap_or(0);
 
     // `state.approve_quarantine`, not `with_db(approve_quarantine)`: the row is
@@ -523,16 +525,32 @@ async fn quarantine_reject(
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
-    let filter_param = form.filter.as_deref().unwrap_or("pending").to_owned();
+    // Normalised, never echoed: this is written into an `hx-get` attribute,
+    // where a raw `"` ended the attribute and `&` added query parameters.
+    let filter_param = filter_str(parse_filter(form.filter.as_deref()));
     let offset = form.offset.unwrap_or(0);
 
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::reject_quarantine(conn, id))
     })
     .await;
 
-    // O-18: outcome toast (reject is best-effort; surface the action either way).
-    reload_list_response(&filter_param, offset, Some(Toast::success("Rejected.")))
+    // The outcome, not the intent. This answered "Rejected." whatever the
+    // database said, and a rejection is what withdraws a shared rare-bird
+    // link — so a refused write told the operator a claim was withdrawn
+    // while the link went on serving it.
+    let toast = match result {
+        Ok(Ok(())) => Toast::success("Rejected."),
+        Ok(Err(e)) => {
+            tracing::warn!(id, error = %e, "failed to reject quarantine entry");
+            Toast::error("Not rejected: the station could not save that.")
+        }
+        Err(e) => {
+            tracing::warn!(id, error = %e, "task panic rejecting quarantine entry");
+            Toast::error("Not rejected: the station could not save that.")
+        }
+    };
+    reload_list_response(&filter_param, offset, Some(toast))
 }
 
 async fn quarantine_delete(
@@ -540,20 +558,28 @@ async fn quarantine_delete(
     Form(form): Form<ActionForm>,
 ) -> impl IntoResponse {
     let id = form.id;
-    let filter_param = form.filter.as_deref().unwrap_or("pending").to_owned();
+    // Normalised, never echoed: this is written into an `hx-get` attribute,
+    // where a raw `"` ended the attribute and `&` added query parameters.
+    let filter_param = filter_str(parse_filter(form.filter.as_deref()));
     let offset = form.offset.unwrap_or(0);
 
-    let _ = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::delete_quarantine(conn, id))
     })
     .await;
 
-    // O-18: outcome toast.
-    reload_list_response(
-        &filter_param,
-        offset,
-        Some(Toast::success("Quarantine entry deleted.")),
-    )
+    let toast = match result {
+        Ok(Ok(())) => Toast::success("Quarantine entry deleted."),
+        Ok(Err(e)) => {
+            tracing::warn!(id, error = %e, "failed to delete quarantine entry");
+            Toast::error("Not deleted: the station could not save that.")
+        }
+        Err(e) => {
+            tracing::warn!(id, error = %e, "task panic deleting quarantine entry");
+            Toast::error("Not deleted: the station could not save that.")
+        }
+    };
+    reload_list_response(&filter_param, offset, Some(toast))
 }
 
 /// Return an HTMX-trigger div that reloads the quarantine list.

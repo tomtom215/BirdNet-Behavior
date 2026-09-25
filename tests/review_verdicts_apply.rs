@@ -900,3 +900,94 @@ async fn a_share_link_to_an_unreviewed_detection_keeps_working() {
     assert_eq!(status, axum::http::StatusCode::OK);
     assert!(body.contains("Eurasian Blackbird"), "{body}");
 }
+
+/// A share link to a bird still in the quarantine queue resolves from the
+/// queue — and stops resolving once the operator rejects it there, or approves
+/// it and later rejects the detection. The fallback read the quarantine row
+/// whatever its review state, so both withdrawn claims went on being served.
+#[tokio::test]
+async fn a_share_link_from_the_quarantine_queue_follows_the_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let quarantined = |time: &str| {
+        state.with_db(|conn| {
+            let record = birdnet_db::sqlite::QuarantineRecord {
+                date: &today,
+                time,
+                sci_name: "Bubo scandiacus",
+                com_name: "Snowy Owl",
+                confidence: 0.91,
+                sf_probability: Some(0.001),
+                reason: birdnet_db::sqlite::QuarantineReason::BelowSfThresh,
+                file_name: Some(&format!("{today}-birdnet-{time}.wav")),
+                lat: None,
+                lon: None,
+                week: None,
+                run_id: None,
+                cutoff: None,
+                sensitivity: None,
+                overlap: None,
+            };
+            birdnet_db::sqlite::insert_quarantine(conn, &record).unwrap();
+            conn.query_row("SELECT id FROM quarantine WHERE time = ?1", [time], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+        })
+    };
+    let link = |time: &str| {
+        format!(
+            "/r/{}",
+            birdnet_web::routes::share::encode_share_token(&today, time, "Snowy Owl", expiry)
+        )
+    };
+
+    // Awaiting review: the queue is the only place the bird exists, and the
+    // link must work — a fallback that never matched would pass the rest.
+    let rejected_in_queue = quarantined("04:10:00");
+    let clip = state
+        .recording_dir()
+        .join(format!("{today}-birdnet-04:10:00.wav"));
+    std::fs::create_dir_all(clip.parent().unwrap()).unwrap();
+    std::fs::write(&clip, b"RIFF....WAVE").unwrap();
+    let (status, body) = get(&state, &link("04:10:00")).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert!(body.contains("Snowy Owl"), "{body}");
+    let (status, _) = get(&state, &format!("{}/audio.wav", link("04:10:00"))).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "fixture: the clip is served before"
+    );
+
+    state
+        .with_db(|conn| birdnet_db::sqlite::reject_quarantine(conn, rejected_in_queue))
+        .unwrap();
+    let (status, _) = get(&state, &link("04:10:00")).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_FOUND,
+        "rejected in the queue"
+    );
+    let (status, _) = get(&state, &format!("{}/audio.wav", link("04:10:00"))).await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "its audio too");
+
+    // Approved, then rejected on review: the quarantine row still says
+    // `approved = 1`, and must not resurrect the detection.
+    let approved = quarantined("04:20:00");
+    state
+        .with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, approved))
+        .unwrap();
+    reject(&state, &today, "04:20:00", "Bubo scandiacus", "Snowy Owl");
+    let (status, _) = get(&state, &link("04:20:00")).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_FOUND,
+        "approved, then rejected"
+    );
+}

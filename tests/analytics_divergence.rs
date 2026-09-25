@@ -38,7 +38,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use birdnet_web::server::build_router;
-use birdnet_web::state::AppState;
+use birdnet_web::state::{AppState, RowRef};
 use tower::ServiceExt as _;
 
 /// A station with three detections, synced into `DuckDB`.
@@ -100,6 +100,16 @@ fn olap_count_of(state: &AppState, sci_name: &str) -> i64 {
         .expect("analytics is configured")
 }
 
+/// A row named the way a caller that does not know the clip names it.
+fn triple(date: &str, time: &str, sci_name: &str) -> RowRef {
+    RowRef {
+        date: date.to_owned(),
+        time: time.to_owned(),
+        sci_name: sci_name.to_owned(),
+        file_name: None,
+    }
+}
+
 /// Deleting a detection must remove it from the analytics copy too.
 #[test]
 fn deleting_a_detection_removes_it_from_the_olap_copy() {
@@ -108,7 +118,7 @@ fn deleting_a_detection_removes_it_from_the_olap_copy() {
     assert_eq!(olap_count(&state), 3, "fixture");
 
     let deleted = state
-        .delete_detection(&today, "07:15:00", "Erithacus rubecula")
+        .delete_detection(&triple(&today, "07:15:00", "Erithacus rubecula"))
         .expect("delete");
     assert!(deleted, "the row was there to delete");
 
@@ -129,9 +139,7 @@ fn relabelling_a_detection_updates_the_olap_copy() {
 
     let relabelled = state
         .relabel_detection(
-            &today,
-            "08:15:00",
-            "Parus major",
+            &triple(&today, "08:15:00", "Parus major"),
             "Cyanistes caeruleus",
             "Eurasian Blue Tit",
         )
@@ -613,8 +621,8 @@ fn effort_corrected_abundance_returns_a_rate() {
                 .query_row(&sql, [], |r| {
                     Ok((
                         r.get::<_, i64>(2)?,
-                        r.get::<_, f64>(3)?,
                         r.get::<_, f64>(4)?,
+                        r.get::<_, f64>(5)?,
                     ))
                 })
                 .expect("the effort-corrected query must run against the real schema")

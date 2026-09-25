@@ -237,12 +237,16 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     // that redirects — the single most visible way base-path support fails.
     // htmx's own redirect headers are the same thing for an htmx request: a
     // sign-in-required write answers with `HX-Redirect`, and it was left at
-    // `/login` (M8).
+    // `/login` (M8). `HX-Push-Url` / `HX-Replace-Url` put a URL in the address
+    // bar: left unprefixed, every search wrote `/search?q=…` there, and a
+    // reload or a shared link reached the proxy's 404 instead of the station.
     if !base.is_empty() {
         for name in [
             header::LOCATION,
             header::HeaderName::from_static("hx-redirect"),
             header::HeaderName::from_static("hx-location"),
+            header::HeaderName::from_static("hx-push-url"),
+            header::HeaderName::from_static("hx-replace-url"),
         ] {
             if let Some(loc) = parts.headers.get(&name)
                 && let Ok(text) = loc.to_str()

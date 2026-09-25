@@ -494,15 +494,26 @@ async fn set_password(
             // signing secret now persisted (DD-15) this is the mechanism that
             // keeps the promise. The rotating session stays, so an operator
             // changing their own password is not logged out by it.
-            let revoked = state
-                .with_db(|conn| conn.revoke_others(id, &request_user.session_id))
-                .unwrap_or(0);
-            let message = if revoked == 0 {
-                "Password rotated.".to_string()
-            } else {
-                format!("Password rotated; {revoked} other session(s) signed out.")
-            };
-            toast::oob_only(Toast::success(message)).into_response()
+            //
+            // A failed revoke is said, not folded into "0 signed out": this is
+            // the button an operator presses after a suspected compromise, and
+            // the sessions it was meant to end are still valid.
+            match state.with_db(|conn| conn.revoke_others(id, &request_user.session_id)) {
+                Ok(0) => toast::oob_only(Toast::success("Password rotated.")).into_response(),
+                Ok(revoked) => toast::oob_only(Toast::success(format!(
+                    "Password rotated; {revoked} other session(s) signed out."
+                )))
+                .into_response(),
+                Err(e) => {
+                    tracing::error!(error = %e, "password rotated but other sessions were not revoked");
+                    toast::oob_only(Toast::error(
+                        "Password rotated, but the station could not sign this account's \
+                         other sessions out — anyone signed in elsewhere still is. \
+                         Revoke them from the sessions list.",
+                    ))
+                    .into_response()
+                }
+            }
         }
         Err(AccountsError::NotFound(_)) => {
             toast::oob_only(Toast::warn("User no longer exists.")).into_response()
@@ -901,6 +912,69 @@ mod tests {
         let html = render_user_rows(&users);
         assert!(html.contains("Reset password"), "{html}");
         assert!(!html.contains("Set password"), "{html}");
+    }
+
+    /// A rotation whose sign-out of the other sessions failed says so. The
+    /// error was folded into "0 signed out" and the toast read "Password
+    /// rotated." — after a suspected compromise, with the intruder's session
+    /// still valid.
+    #[tokio::test]
+    async fn a_rotation_that_could_not_sign_others_out_says_so() {
+        let rotate = |refuse: bool| async move {
+            let (dir, state) = fixture();
+            let admin = state.with_db(UserStore::list_users).unwrap().remove(0);
+            let hash = accounts::hash_password("a-real-password-here").unwrap();
+            state
+                .with_db(|conn| {
+                    conn.set_password(admin.id, &hash)?;
+                    conn.create_session("sess-me", admin.id, "2099-01-01 00:00:00", None, None)?;
+                    conn.create_session(
+                        "sess-intruder",
+                        admin.id,
+                        "2099-01-01 00:00:00",
+                        None,
+                        None,
+                    )?;
+                    Ok::<(), AccountsError>(())
+                })
+                .unwrap();
+            if refuse {
+                state.with_db(|conn| {
+                    conn.execute_batch(
+                        "CREATE TRIGGER refuse BEFORE DELETE ON sessions \
+                         BEGIN SELECT RAISE(ABORT, 'database is locked'); END;",
+                    )
+                    .unwrap();
+                });
+            }
+            let admin = state.with_db(UserStore::list_users).unwrap().remove(0);
+            let id = admin.id;
+            let res = set_password(
+                State(state),
+                RequestUser {
+                    user: admin,
+                    session_id: "sess-me".to_owned(),
+                },
+                None,
+                axum::http::HeaderMap::new(),
+                Path(id),
+                Form(PasswordForm {
+                    password: "another-long-password".to_owned(),
+                }),
+            )
+            .await;
+            let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            drop(dir);
+            String::from_utf8_lossy(&body).into_owned()
+        };
+        let refused = rotate(true).await;
+        assert!(refused.contains("could not sign"), "{refused}");
+        assert!(!refused.contains("Password rotated."), "{refused}");
+        // Counterpart: a working store signs the other session out and says so.
+        let done = rotate(false).await;
+        assert!(done.contains("1 other session(s) signed out"), "{done}");
     }
 
     #[test]

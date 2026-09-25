@@ -47,3 +47,40 @@ async fn recordings_and_feeds_are_private_to_the_reader() {
         assert!(cc.contains("private"), "{uri}: {cc}");
     }
 }
+
+/// One second of 16-bit mono silence at 48 kHz: the smallest file the
+/// spectrogram renderer will draw.
+fn silent_wav() -> Vec<u8> {
+    let rate: u32 = 48_000;
+    let data_len: u32 = rate * 2;
+    let mut w = Vec::with_capacity(44 + data_len as usize);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + data_len).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());
+    w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    w.extend_from_slice(&1u16.to_le_bytes()); // mono
+    w.extend_from_slice(&rate.to_le_bytes());
+    w.extend_from_slice(&(rate * 2).to_le_bytes());
+    w.extend_from_slice(&2u16.to_le_bytes());
+    w.extend_from_slice(&16u16.to_le_bytes());
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&data_len.to_le_bytes());
+    w.resize(44 + data_len as usize, 0);
+    w
+}
+
+/// The spectrogram of a recording is as private as the recording: it went out
+/// `public, max-age=3600` after the audio itself had been made `private`.
+#[tokio::test]
+async fn a_recordings_spectrogram_is_private_too() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("clip.wav"), silent_wav()).unwrap();
+    let conn = rusqlite::Connection::open_in_memory().expect("open");
+    birdnet_db::migration::migrate(&conn).expect("migrate");
+    let st = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+        .with_recording_dir(dir.path().to_path_buf());
+    let cc = cache_control(&st, "/api/v2/spectrogram/clip.wav").await;
+    assert!(!cc.contains("public"), "{cc}");
+    assert!(cc.contains("private"), "{cc}");
+}

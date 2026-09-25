@@ -178,10 +178,8 @@
       Object.keys(DEFAULTS).forEach(function (k) {
         APPLIERS[k](DEFAULTS[k]);
         var group = root.querySelector('[data-prefs-key="' + k + '"]');
-        if (!group) return;
-        group.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
-        var match = group.querySelector('[data-value="' + DEFAULTS[k] + '"]');
-        if (match) match.classList.add('active');
+        if (!group || !group.__prefsSelect) return;
+        group.__prefsSelect(group.querySelector('[data-value="' + DEFAULTS[k] + '"]'));
       });
     });
   }
