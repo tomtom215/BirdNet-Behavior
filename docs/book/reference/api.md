@@ -19,7 +19,7 @@ curl http://localhost:8502/api/v2/health
 ```json
 {
   "status": "healthy",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "database": "ok",
   "analytics": true,
   "detection_daemon": "running",
