@@ -10,7 +10,7 @@
 //! |-----------|---------------------------------------------|
 //! | Tumbling  | Hourly/daily/weekly detection summaries     |
 //! | Hopping   | Peak activity detection (overlapping)       |
-//! | Sliding   | Moving averages and smooth trend lines      |
+//! | Sliding   | Moving averages (`queries::trend`)          |
 //! | Session   | Activity gaps and continuous-presence spans |
 //!
 //! # Features

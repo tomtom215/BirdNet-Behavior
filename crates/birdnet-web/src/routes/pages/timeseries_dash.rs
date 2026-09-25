@@ -424,10 +424,19 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
 
 #[cfg(feature = "analytics")]
 fn render_peak_table(rows: &[birdnet_timeseries::types::results::PeakWindowRow]) -> String {
+    // The range is the 24 hours up to the newest detection, not "today"; the
+    // card said today, which at 07:00 is mostly yesterday and on a station
+    // that stopped last week is last week.
+    //
+    // Anchored to the newest detection, the range is empty only when there
+    // are no detections at all.
     if rows.is_empty() {
-        return r#"<p class="tsd-muted">No peak window data today.</p>"#.to_string();
+        return r#"<p class="tsd-muted">No detections to rank yet.</p>"#.to_string();
     }
     let mut html = String::from(
+        r#"<p class="tsd-muted">Busiest separate windows in the 24 hours up to the latest detection.</p>"#,
+    );
+    html.push_str(
         r"<table><thead><tr><th>Window Start</th><th>Window End</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
     );
     for row in rows {
@@ -487,6 +496,29 @@ pub const fn prewarm(_state: &AppState) {}
 
 #[cfg(all(test, feature = "analytics"))]
 mod tests {
+    /// The peak card's range is the 24 hours up to the newest detection
+    /// (`peak_windows` anchors to the data, not the clock), which is not
+    /// "today": at 07:00 it is mostly yesterday, and on a station that stopped
+    /// last week it is last week. Its text must not say "today".
+    #[test]
+    fn the_peak_card_does_not_claim_today() {
+        let row = birdnet_timeseries::types::results::PeakWindowRow {
+            window_start: "2026-05-01 05:00:00".into(),
+            window_end: "2026-05-01 05:15:00".into(),
+            detection_count: 3,
+            species_count: 1,
+            peak_confidence: None,
+        };
+        let empty = super::render_peak_table(&[]);
+        assert!(!empty.contains("today"), "{empty}");
+        let html = super::render_peak_table(&[row]);
+        assert!(!html.contains("today"), "{html}");
+        assert!(
+            html.contains("24 hours up to the latest detection"),
+            "{html}"
+        );
+    }
+
     /// `ANA14d`: a one-species day reads 0.000, not -0.000.
     #[test]
     fn a_one_species_day_has_zero_diversity_not_negative() {

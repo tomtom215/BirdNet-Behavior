@@ -157,3 +157,26 @@ pub struct PeakWindowRow {
     /// Peak confidence in this window.
     pub peak_confidence: Option<f64>,
 }
+
+/// One species' totals over a look-back window (see
+/// [`crate::executor::TimeSeriesDb::top_species`]).
+///
+/// Its own type because the rows used to be squeezed into [`PeakWindowRow`],
+/// which has nowhere to put a species name: the first- and last-seen dates went
+/// into `window_start`/`window_end` and the name was dropped, so a "top species"
+/// list could not say which species it was listing.
+#[derive(Debug, Clone, Serialize)]
+pub struct TopSpeciesRow {
+    /// Species common name.
+    pub species: String,
+    /// Detections in the window.
+    pub detection_count: i64,
+    /// Mean confidence of those detections.
+    pub avg_confidence: Option<f64>,
+    /// First date in the window the species was detected (`YYYY-MM-DD`).
+    pub first_seen: String,
+    /// Last date in the window the species was detected (`YYYY-MM-DD`).
+    pub last_seen: String,
+    /// Distinct dates in the window the species was detected on.
+    pub active_days: i64,
+}

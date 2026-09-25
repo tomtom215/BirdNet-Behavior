@@ -215,8 +215,11 @@ impl Default for SessionizeParams {
 pub struct RetentionParams {
     /// Day intervals to measure retention at.
     pub intervals: Vec<u32>,
-    /// Minimum number of distinct detection days to include a species. (It
-    /// counts days, not detections: the query groups by day before counting.)
+    /// Minimum number of detections for a species to be listed.
+    ///
+    /// Detections, as the name says. It used to count distinct detection
+    /// days, which at the default of five kept almost every Rarity — one to a
+    /// few days of presence by definition — off the table.
     pub min_detections: u32,
 }
 

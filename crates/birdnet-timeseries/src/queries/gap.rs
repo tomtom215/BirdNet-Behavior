@@ -13,13 +13,15 @@ use super::QueryPlan;
 
 /// Detect inactivity gaps within a single day.
 ///
-/// Returns all pairs of consecutive detections where the gap between
-/// them exceeded `threshold_minutes`.
+/// Returns all pairs of consecutive detections where the silence between
+/// them was *longer* than `threshold_minutes` of elapsed time — exactly the
+/// silences that start a new activity session at the same threshold (see
+/// [`crate::window::SessionSpec`]), so the two views of a day agree.
 #[derive(Debug, Clone)]
 pub struct IntraDay {
     /// Calendar date to analyse (ISO-8601).
     pub date: String,
-    /// Minimum gap in minutes to report (default: 30).
+    /// Report silences longer than this many minutes (default: 30).
     pub threshold_minutes: u32,
 }
 
@@ -36,20 +38,27 @@ impl IntraDay {
 impl QueryPlan for IntraDay {
     fn sql(&self) -> String {
         let date = self.date.replace('\'', "''");
-        let thresh = self.threshold_minutes;
+        let thresh_us = u64::from(self.threshold_minutes) * 60_000_000;
+        // Elapsed microseconds between instants, not `date_diff('minute', …)`:
+        // that counts minute *boundaries* crossed, so 05:00:59 → 05:30:00 —
+        // 29 minutes and a second — read as 30 and was reported as a 30-minute
+        // gap. Reported minutes are whole minutes elapsed, rounded down.
         format!(
-            "SELECT
+            "WITH gaps AS (
+    SELECT
+        detection_timestamp,
+        LAG(detection_timestamp) OVER (ORDER BY detection_instant) AS prev_local,
+        epoch_us(detection_instant)
+            - epoch_us(LAG(detection_instant) OVER (ORDER BY detection_instant)) AS gap_us
+    FROM detections_ts
+    WHERE detection_date = '{date}'
+)
+SELECT
     strftime(detection_timestamp, '%Y-%m-%d %H:%M:%S') AS gap_end,
-    strftime(LAG(detection_timestamp) OVER (
-        ORDER BY detection_instant
-    ), '%Y-%m-%d %H:%M:%S')          AS gap_start,
-    date_diff('minute',
-        LAG(detection_instant) OVER (ORDER BY detection_instant),
-        detection_instant
-    )                               AS gap_minutes
-FROM detections_ts
-WHERE detection_date = '{date}'
-QUALIFY gap_minutes >= {thresh}
+    strftime(prev_local, '%Y-%m-%d %H:%M:%S')          AS gap_start,
+    gap_us // 60000000                                  AS gap_minutes
+FROM gaps
+WHERE gap_us > {thresh_us}
 ORDER BY gap_start"
         )
     }
@@ -112,9 +121,10 @@ ORDER BY s.detection_date"
 /// Surfaces the date(s) with the worst daily silence, for diagnostics.
 #[derive(Debug, Clone)]
 pub struct DailyMaxGap {
-    /// Look back this many days (default: 30).
+    /// Look back this many dates, today included (default: 30).
     pub lookback_days: u32,
-    /// Minimum gap in minutes to include a day in the results (default: 10).
+    /// Include a day only when its longest silence is longer than this many
+    /// minutes (default: 10).
     pub min_gap_minutes: u32,
 }
 
@@ -129,31 +139,33 @@ impl Default for DailyMaxGap {
 
 impl QueryPlan for DailyMaxGap {
     fn sql(&self) -> String {
-        let days = self.lookback_days;
-        let min_gap = self.min_gap_minutes;
+        let window = super::last_days(self.lookback_days);
+        let min_us = u64::from(self.min_gap_minutes) * 60_000_000;
+        // The longest gap is reported with the two detections that bound it
+        // (`gap_start`, `gap_end`), as local wall-clock times. Elapsed time is
+        // measured between instants, in microseconds — see `IntraDay`.
         format!(
             "WITH gaps AS (
     SELECT
         detection_date,
         detection_timestamp,
-        date_diff('minute',
-            LAG(detection_instant) OVER (
-                PARTITION BY detection_date
-                ORDER BY detection_instant
-            ),
-            detection_instant
-        ) AS gap_minutes
+        LAG(detection_timestamp) OVER day_order AS prev_local,
+        epoch_us(detection_instant)
+            - epoch_us(LAG(detection_instant) OVER day_order) AS gap_us
     FROM detections_ts
-    WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+    WHERE {window}
+    WINDOW day_order AS (PARTITION BY detection_date ORDER BY detection_instant)
 )
 SELECT
     strftime(detection_date, '%Y-%m-%d') AS date,
-    MAX(gap_minutes)           AS max_gap_minutes,
+    MAX(gap_us) // 60000000    AS max_gap_minutes,
     COUNT(*)                   AS detection_count,
-    COUNT(CASE WHEN gap_minutes >= {min_gap} THEN 1 END) AS gap_count
+    COUNT(*) FILTER (WHERE gap_us > {min_us}) AS gap_count,
+    strftime(arg_max(prev_local, gap_us), '%Y-%m-%d %H:%M:%S') AS gap_start,
+    strftime(arg_max(detection_timestamp, gap_us), '%Y-%m-%d %H:%M:%S') AS gap_end
 FROM gaps
 GROUP BY detection_date
-HAVING MAX(gap_minutes) >= {min_gap}
+HAVING MAX(gap_us) > {min_us}
 ORDER BY max_gap_minutes DESC"
         )
     }
@@ -231,10 +243,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn intra_day_uses_qualify() {
+    fn intra_day_measures_elapsed_time() {
         let q = IntraDay::for_date("2026-03-12".into());
         let sql = q.sql();
-        assert!(sql.contains("QUALIFY gap_minutes"));
+        assert!(sql.contains("epoch_us(detection_instant)"));
         assert!(sql.contains("2026-03-12"));
     }
 

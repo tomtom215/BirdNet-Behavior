@@ -45,7 +45,7 @@ impl super::TimeSeriesDb<'_> {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// Inactivity gaps within a day exceeding the threshold.
+    /// Inactivity gaps within a day longer than `threshold_minutes`.
     ///
     /// # Errors
     ///
@@ -99,7 +99,9 @@ impl super::TimeSeriesDb<'_> {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// Daily maximum inactivity gaps.
+    /// Each day's longest inactivity gap, with the local times of the two
+    /// detections that bound it, for days whose longest gap is longer than
+    /// `min_gap_minutes`, over the last `lookback_days` dates.
     ///
     /// # Errors
     ///
@@ -117,8 +119,8 @@ impl super::TimeSeriesDb<'_> {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], |row| {
             Ok(GapRow {
-                gap_end: row.get::<_, String>(0)?,
-                gap_start: None,
+                gap_start: row.get(4)?,
+                gap_end: row.get(5)?,
                 gap_minutes: row.get(1)?,
             })
         })?;
@@ -126,54 +128,16 @@ impl super::TimeSeriesDb<'_> {
     }
 
     /// Build a date-range session query without SQL injection risk
-    /// (all interpolated values are validated u32 integers).
+    /// (all interpolated values are validated u32 integers): sessions over the
+    /// last `lookback_days` dates, today included.
     ///
-    /// Two rules shared with [`SessionSpec`] (ANA12): a session's longest gap
-    /// excludes the row that opens it, whose gap is the silence *before* the
-    /// session; and `limit` keeps the newest sessions, returned oldest-first.
+    /// The same SQL as [`SessionSpec`] — see
+    /// [`crate::window::session::session_sql`] for its rules — over a look-back
+    /// rather than a single date. A session that started before the look-back
+    /// and ran into it is cut at the boundary, as a single-date query cuts at
+    /// midnight.
     pub(super) fn build_daterange_session_sql(params: &SessionParams) -> String {
-        let threshold = params.gap_minutes;
-        let days = params.lookback_days;
-        let limit = params.limit;
-        format!(
-            "WITH ordered AS (
-    SELECT
-        detection_timestamp,
-        detection_instant,
-        detection_date,
-        Com_Name,
-        Confidence,
-        LAG(detection_instant) OVER (ORDER BY detection_instant) AS prev_ts,
-        date_diff('minute', prev_ts, detection_instant) AS gap_minutes
-    FROM detections_ts
-    WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
-),
-with_session_id AS (
-    SELECT
-        detection_timestamp, detection_instant, detection_date, Com_Name, Confidence,
-        gap_minutes,
-        SUM(CASE WHEN gap_minutes >= {threshold} OR gap_minutes IS NULL THEN 1 ELSE 0 END)
-            OVER (ORDER BY detection_instant ROWS UNBOUNDED PRECEDING) AS session_id
-    FROM ordered
-),
-sessions AS (
-    SELECT
-        session_id,
-        strftime(detection_date, '%Y-%m-%d') AS d,
-        strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS s_start,
-        strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS s_end,
-        COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS species,
-        date_diff('minute', MIN(detection_instant), MAX(detection_instant)) AS duration,
-        MAX(gap_minutes) FILTER (WHERE gap_minutes < {threshold}) AS max_gap,
-        MIN(detection_instant) AS start_instant
-    FROM with_session_id
-    GROUP BY session_id, detection_date
-    ORDER BY start_instant DESC
-    LIMIT {limit}
-)
-SELECT session_id, d, s_start, s_end, n, species, duration, max_gap
-FROM sessions
-ORDER BY start_instant"
-        )
+        let where_sql = format!("WHERE {}", crate::queries::last_days(params.lookback_days));
+        crate::window::session::session_sql(&where_sql, params.gap_minutes, params.limit)
     }
 }

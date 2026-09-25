@@ -256,7 +256,30 @@ pub fn weekly_richness_sql(year: u32) -> String {
 /// effort bias.
 ///
 /// **Requires:** A `recording_effort` table with columns `date` (TEXT
-/// `YYYY-MM-DD`, local civil date) and `seconds` (REAL).
+/// `YYYY-MM-DD`, local civil date), `source` and `seconds` (REAL).
+///
+/// Columns: `species`, `iso_week`, `raw_count` (every detection that week),
+/// `effort_count` (those on days with recorded effort — the numerator),
+/// `effort_hours`, `detections_per_hour`. Species-weeks with fewer than
+/// `min_weekly_count` detections are left out.
+///
+/// # What is divided by what
+///
+/// The rate divides the detections made *on days with recorded effort* by the
+/// station time recorded on those days. It divided every detection of the ISO
+/// week by whatever effort the week had, so a week whose sampler ran on two
+/// days of seven had seven days of detections over two days of listening —
+/// and every week before the sampler existed, or with any day it was not
+/// running, was inflated the same way.
+///
+/// A day's station time is its **longest** single source, not the sum across
+/// sources. Detections are not per source, so two microphones listening to
+/// the same garden for an hour are an hour of listening for the station's one
+/// list of detections; summed, they were two, and a two-microphone station's
+/// rate read half a one-microphone station's for the same birds. The longest
+/// source is a lower bound on the day's coverage — sources that ran at
+/// *different* times of one day are under-counted — and the per-day record
+/// cannot say more than that.
 pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
     // `recording_effort.date` is TEXT (local civil date, matching the
     // detections it will be divided into), so it is cast here rather than read
@@ -266,13 +289,10 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
     // module's own tests, which is a large part of why the whole module had no
     // production consumer. It now reads `recording_effort`, populated by the
     // station's own sampler (migration 27, `integrations::effort`).
-    // ISO week and ISO year, matching `WEEK_EXPR` / `ISO_YEAR_EXPR` on the
-    // detections side. The join below is `w.iso_week = e.iso_week`, so the two
-    // sides have to agree on what a week *is*; a mismatch would divide one
-    // week's detections by a different week's listening hours and the error
-    // would be largest at the year boundary, where the buckets differ most.
-    let effort_week = "CAST(strftime(TRY_CAST(date AS DATE), '%V') AS INTEGER)";
-    let effort_year = "CAST(strftime(TRY_CAST(date AS DATE), '%G') AS INTEGER)";
+    //
+    // ISO week and ISO year, matching `WEEK_EXPR` / `ISO_YEAR_EXPR`: both sides
+    // are keyed by the *date*, and the week is derived from it once, so the two
+    // cannot disagree on what a week is.
     let where_sql = where_clause(&[
         Some("d.detection_date IS NOT NULL".to_string()),
         params
@@ -289,32 +309,50 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
             params.year
         )),
     ]);
+    let min_clause = if params.min_weekly_count > 1 {
+        format!("HAVING COUNT(*) >= {}", params.min_weekly_count)
+    } else {
+        String::new()
+    };
 
     format!(
-        "WITH effort AS (
+        "WITH effort_days AS (
             SELECT
-                {effort_week}                           AS iso_week,
-                SUM(seconds) / 3600.0                   AS hours
+                TRY_CAST(date AS DATE)                  AS day,
+                MAX(seconds)                            AS seconds
             FROM recording_effort
-            WHERE {effort_year} = {year}
+            WHERE TRY_CAST(date AS DATE) IS NOT NULL
+            GROUP BY day
+            HAVING MAX(seconds) > 0
+        ),
+        effort AS (
+            SELECT
+                CAST(strftime(day, '%V') AS INTEGER)    AS iso_week,
+                SUM(seconds) / 3600.0                   AS hours
+            FROM effort_days
+            WHERE CAST(strftime(day, '%G') AS INTEGER) = {year}
             GROUP BY iso_week
         ),
         weekly AS (
             SELECT
                 d.Com_Name                                      AS species,
                 CAST(strftime(d.detection_date, '%V') AS INTEGER) AS iso_week,
-                COUNT(*)                                        AS raw_count
+                COUNT(*)                                        AS raw_count,
+                COUNT(e.day)                                    AS effort_count
             FROM detections_ts d
+            LEFT JOIN effort_days e ON e.day = d.detection_date
             {where_sql}
             GROUP BY species, iso_week
+            {min_clause}
         )
         SELECT
             w.species,
             w.iso_week,
             w.raw_count,
+            w.effort_count,
             e.hours                                             AS effort_hours,
             ROUND(
-                CAST(w.raw_count AS REAL) / NULLIF(e.hours, 0),
+                CAST(w.effort_count AS REAL) / NULLIF(e.hours, 0),
                 4
             )                                                   AS detections_per_hour
         FROM weekly w
