@@ -254,3 +254,91 @@ fn a_station_with_no_imports_is_unaffected() {
     );
     assert_eq!(count(&conn, "SELECT COUNT(*) FROM detections"), 1);
 }
+
+/// Finding 12: removing an import is a bulk action, and a bulk action keeps
+/// what the operator locked. The batch record stays while a locked row still
+/// points at it — and says how many.
+#[test]
+fn removing_an_import_keeps_its_locked_rows_and_their_batch() {
+    let (conn, a, _b) = station_with_two_imports();
+    conn.execute(
+        "UPDATE detections SET is_locked = 1
+          WHERE rowid = (SELECT MIN(rowid) FROM detections WHERE import_batch_id = ?1)",
+        [a],
+    )
+    .expect("lock one imported row");
+
+    let removal = birdnet_db::sqlite::remove_import_batch(&conn, a).expect("remove");
+    assert_eq!(removal.deleted, 6);
+    assert_eq!(removal.kept_locked, 1);
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM detections WHERE is_locked = 1"),
+        1,
+        "the locked record survives"
+    );
+    assert_eq!(
+        count(
+            &conn,
+            &format!("SELECT COUNT(*) FROM import_batches WHERE id = {a}")
+        ),
+        1,
+        "and stays attributable to its import"
+    );
+
+    // Unlocked, a second removal finishes the job and drops the record.
+    conn.execute("UPDATE detections SET is_locked = 0", [])
+        .expect("unlock");
+    let removal = birdnet_db::sqlite::remove_import_batch(&conn, a).expect("remove again");
+    assert_eq!((removal.deleted, removal.kept_locked), (1, 0));
+    assert_eq!(
+        count(
+            &conn,
+            &format!("SELECT COUNT(*) FROM import_batches WHERE id = {a}")
+        ),
+        0
+    );
+}
+
+/// Finding 12: a verdict on a removed imported detection goes with it — left
+/// behind it was listed on the review page and judged nothing. A verdict on a
+/// detection this station recorded itself, at another key, is untouched.
+#[test]
+fn removing_an_import_takes_the_verdicts_on_its_rows() {
+    let (conn, a, _b) = station_with_two_imports();
+    let review = |date: &str, time: &str, sci: &str| {
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES (?1, ?2, ?3, 'x', 'rejected')",
+            rusqlite::params![date, time, sci],
+        )
+        .expect("review");
+    };
+    let (d, t): (String, String) = conn
+        .query_row(
+            "SELECT Date, Time FROM detections WHERE import_batch_id = ?1 LIMIT 1",
+            [a],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("an imported row");
+    review(&d, &t, "Erithacus rubecula");
+    let (ld, lt): (String, String) = conn
+        .query_row(
+            "SELECT Date, Time FROM detections WHERE import_batch_id IS NULL LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("a local row");
+    review(&ld, &lt, "Erithacus rubecula");
+
+    birdnet_db::sqlite::delete_import_batch(&conn, a).expect("delete");
+
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM detection_reviews"),
+        1,
+        "only the verdict on the station's own detection remains"
+    );
+    let left: String = conn
+        .query_row("SELECT date FROM detection_reviews", [], |r| r.get(0))
+        .expect("the survivor");
+    assert_eq!(left, ld);
+}

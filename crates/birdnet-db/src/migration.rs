@@ -2137,6 +2137,133 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "ALTER TABLE detections ADD COLUMN model_id TEXT;
                  ALTER TABLE detections ADD COLUMN model_agreement INTEGER;",
     },
+    Migration {
+        version: 51,
+        description: "Carry verdicts recorded before migration 24 onto the detections it moved",
+        // ## The verdicts migration 24 left behind
+        //
+        // Migration 24 moved every chunk with a non-zero `chunk_offset_secs`
+        // onto the second it was heard, and did not touch `detection_reviews`
+        // — which keys on `(date, time, sci_name)` and so still named the
+        // *file's* start second. Migration 26 then copied verdicts onto
+        // detections by that key, and for every moved chunk found nothing.
+        //
+        // So on a station upgraded from schema 13–23, a detection the operator
+        // had rejected came back: it counted in every aggregate again, while
+        // the review page still listed the rejection — and "Clear" on that
+        // verdict cleared nothing, because the key it deletes by names no
+        // detection.
+        //
+        // ## What this does
+        //
+        // A detection moved by migration 24 is recognised by its own columns:
+        // `Date`/`Time` minus the whole seconds of `chunk_offset_secs` is the
+        // key it had before (the same truncation migration 24 applied). Only
+        // verdicts recorded **before migration 24 ran** are matched: after it,
+        // a new detection is stamped the same way, and a verdict on the
+        // first chunk of a file recorded today must not spread to the file's
+        // other chunks.
+        //
+        // 1. Every such detection still without a verdict gets its review's.
+        //    A pre-24 verdict covered every chunk that shared its key — they
+        //    were indistinguishable then — so every chunk gets it back. A
+        //    verdict set on a detection since is left alone.
+        // 2. A review that no longer names any detection is re-keyed onto the
+        //    earliest chunk it covered, so the review page links to something
+        //    and clearing it clears a detection. Skipped where that key
+        //    already has a review of its own, or two orphans would land on
+        //    one key: the table is unique on the triple, and one verdict
+        //    staying where it was is better than a migration that cannot run.
+        //
+        // The `Date` range bounds the join to the review's day and the next
+        // (an offset can roll a chunk past midnight) so it walks
+        // `idx_detections_datetime` rather than every row of the species.
+        up_sql: "CREATE TEMP TABLE m51_moved AS
+            SELECT r.id AS rid, r.sci_name AS sci, r.status AS status,
+                   d.rowid AS drow, d.Date AS date, d.Time AS time,
+                   d.chunk_offset_secs AS off
+              FROM detection_reviews r
+              JOIN detections d
+                ON d.Date BETWEEN r.date AND date(r.date, '+1 day')
+               AND d.Sci_Name = r.sci_name
+               AND d.chunk_offset_secs >= 1
+               AND d.Date || ' ' || d.Time = datetime(r.date || ' ' || r.time,
+                       '+' || CAST(d.chunk_offset_secs AS INTEGER) || ' seconds')
+             WHERE r.reviewed_at <= (SELECT applied_at FROM schema_version WHERE version = 24);
+
+        UPDATE detections
+           SET review_verdict = (SELECT m.status FROM m51_moved m WHERE m.drow = detections.rowid)
+         WHERE review_verdict IS NULL
+           AND rowid IN (SELECT drow FROM m51_moved);
+
+        CREATE TEMP TABLE m51_rekey AS
+            SELECT rid, sci, date, time FROM (
+                SELECT m.rid, m.sci, m.date, m.time,
+                       ROW_NUMBER() OVER (PARTITION BY m.rid ORDER BY m.off, m.drow) AS rn
+                  FROM m51_moved m
+                  JOIN detection_reviews r ON r.id = m.rid
+                 WHERE NOT EXISTS (
+                         SELECT 1 FROM detections x
+                          WHERE x.Date = r.date AND x.Time = r.time AND x.Sci_Name = r.sci_name))
+             WHERE rn = 1;
+
+        DELETE FROM m51_rekey
+         WHERE EXISTS (SELECT 1 FROM detection_reviews y
+                        WHERE y.date = m51_rekey.date AND y.time = m51_rekey.time
+                          AND y.sci_name = m51_rekey.sci)
+            OR EXISTS (SELECT 1 FROM m51_rekey k
+                        WHERE k.date = m51_rekey.date AND k.time = m51_rekey.time
+                          AND k.sci = m51_rekey.sci AND k.rid < m51_rekey.rid);
+
+        UPDATE detection_reviews
+           SET date = (SELECT k.date FROM m51_rekey k WHERE k.rid = detection_reviews.id),
+               time = (SELECT k.time FROM m51_rekey k WHERE k.rid = detection_reviews.id)
+         WHERE id IN (SELECT rid FROM m51_rekey);
+
+        DROP TABLE m51_rekey;
+        DROP TABLE m51_moved;",
+    },
+    Migration {
+        version: 52,
+        description: "Index detections by source, now that the search page filters and lists by it",
+        // Migration 33 dropped `idx_detections_source` because nothing read
+        // it: "there is no `WHERE Source` anywhere". There is now. The search
+        // page offers a source picker filled by `known_sources` —
+        // `SELECT DISTINCT Source` — on every load, and filters by
+        // `Source = ?`. Both scanned the whole table.
+        //
+        // Measured on a synthetic 1 000 000-row station (three sources,
+        // `ANALYZE` run, bundled SQLite 3.53, NVMe, release build):
+        //
+        //   | query                         | no index            | this index |
+        //   |-------------------------------|---------------------|------------|
+        //   | `known_sources`               | 250 ms, SCAN + sort | 0.06 ms    |
+        //   | `COUNT(*) WHERE Source = ?`   | 85 ms, SCAN         | 3.6 ms     |
+        //   | page of 50, newest first      | 0.2 ms              | 0.06 ms    |
+        //
+        // A three-year station is three times that, and a Pi's SD card is
+        // slower than NVMe by more than that again: seconds per page load.
+        //
+        // **Why `(Source, Date, Time)` and not `(Source)`.** A bare `Source`
+        // index was measured first and made the common case worse: with
+        // statistics the planner seeks it for `Source = ?` and then sorts
+        // every matching row for `ORDER BY Date DESC, Time DESC` — the page
+        // query went from 0.2 ms to 94 ms. Carrying the sort key lets it read
+        // the page straight off the index.
+        //
+        // **Why partial.** An imported history has no `Source` (NULL), and
+        // every `Source` predicate in the tree implies `Source IS NOT NULL`,
+        // which SQLite recognises for `Source = ?` — so those rows would be
+        // index entries nothing reads.
+        //
+        // **Cost.** 34 MB per million rows (8 % of that database), one more
+        // B-tree per insert — a few thousand a day — and ~2 s per million
+        // rows to build, once. Migration 33's objection was to an index that
+        // cost space and was never read; this one is read on a page an
+        // operator opens.
+        up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_source_datetime
+                     ON detections(Source, Date, Time) WHERE Source IS NOT NULL;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -2157,11 +2284,34 @@ struct HistoryRewrite {
     /// A `SELECT` returning `(label, value)` text pairs describing what the
     /// migration would do, evaluated against the database *before* it runs.
     preview_sql: &'static str,
+    /// A `SELECT` returning one integer: how many rows the migration would
+    /// rewrite. Zero means it rewrites nothing, and there is nothing a backup
+    /// could restore — so none is taken. Without this every brand-new station
+    /// wrote a `birds.db.pre-migration-24.backup` of its own empty schema on
+    /// first boot, and every station paid a whole-database copy for a
+    /// rewrite that matched no row.
+    ///
+    /// Zero must mean the migration changes nothing. It may over-count — that
+    /// only costs a backup nobody needed — but never under-count to zero.
+    /// Gated by tests that run each rewrite and compare.
+    affects_sql: &'static str,
+    /// The schema version both queries need the database to be at. A rewrite
+    /// that reads a column an earlier pending migration adds cannot be
+    /// previewed until that one has run; `preview_pending` says so rather
+    /// than guessing. When `migrate` reaches the rewrite this always holds.
+    ready_at: u32,
 }
 
 /// Every migration that rewrites existing rows. Add to this when writing one.
-const HISTORY_REWRITES: &[HistoryRewrite] = &[HistoryRewrite {
+const HISTORY_REWRITES: &[HistoryRewrite] = &[
+    HistoryRewrite {
     version: 24,
+    // Reads only columns migrations 1 and 11 add; on a database without them
+    // the preview's own error handling applies, as it always has.
+    ready_at: 0,
+    affects_sql: "SELECT COUNT(*) FROM detections
+                   WHERE chunk_offset_secs > 0
+                     AND datetime(Date || ' ' || Time) IS NOT NULL",
     // Deliberately mirrors migration 24's own WHERE clauses rather than
     // approximating them: a preview that counts a different set of rows than
     // the migration moves is worse than no preview, because it is believed.
@@ -2206,7 +2356,74 @@ const HISTORY_REWRITES: &[HistoryRewrite] = &[HistoryRewrite {
                     FROM detections
                    WHERE chunk_offset_secs > 0
                      AND datetime(Date || ' ' || Time) IS NOT NULL",
-}];
+    },
+    HistoryRewrite {
+        version: 51,
+        // Reads `review_verdict` (26) and migration 24's `applied_at`.
+        ready_at: 50,
+        // The detections it gives a verdict plus the reviews it may re-key —
+        // the same two sets its statements select. The re-key count is an
+        // upper bound (a collision keeps a review where it is), which errs
+        // toward taking a backup; zero still means nothing changes.
+        affects_sql: M51_AFFECTS_SQL,
+        preview_sql: "WITH m51_moved AS (
+                         SELECT r.id AS rid, d.rowid AS drow, d.review_verdict AS verdict
+                           FROM detection_reviews r
+                           JOIN detections d
+                             ON d.Date BETWEEN r.date AND date(r.date, '+1 day')
+                            AND d.Sci_Name = r.sci_name
+                            AND d.chunk_offset_secs >= 1
+                            AND d.Date || ' ' || d.Time = datetime(r.date || ' ' || r.time,
+                                    '+' || CAST(d.chunk_offset_secs AS INTEGER) || ' seconds')
+                          WHERE r.reviewed_at <= (SELECT applied_at FROM schema_version WHERE version = 24))
+                      SELECT 'detections that get back a verdict recorded before migration 24',
+                             CAST(COUNT(DISTINCT drow) AS TEXT)
+                        FROM m51_moved WHERE verdict IS NULL
+                      UNION ALL
+                      SELECT 'verdicts that name no detection and are re-keyed (at most)',
+                             CAST(COUNT(DISTINCT m.rid) AS TEXT)
+                        FROM m51_moved m JOIN detection_reviews r ON r.id = m.rid
+                       WHERE NOT EXISTS (SELECT 1 FROM detections x
+                                          WHERE x.Date = r.date AND x.Time = r.time
+                                            AND x.Sci_Name = r.sci_name)",
+    },
+];
+
+/// How many rows migration 51 may change. Its own statements are the spec;
+/// this selects the same sets.
+const M51_AFFECTS_SQL: &str = "WITH m51_moved AS (
+        SELECT r.id AS rid, d.rowid AS drow, d.review_verdict AS verdict
+          FROM detection_reviews r
+          JOIN detections d
+            ON d.Date BETWEEN r.date AND date(r.date, '+1 day')
+           AND d.Sci_Name = r.sci_name
+           AND d.chunk_offset_secs >= 1
+           AND d.Date || ' ' || d.Time = datetime(r.date || ' ' || r.time,
+                   '+' || CAST(d.chunk_offset_secs AS INTEGER) || ' seconds')
+         WHERE r.reviewed_at <= (SELECT applied_at FROM schema_version WHERE version = 24))
+    SELECT (SELECT COUNT(DISTINCT drow) FROM m51_moved WHERE verdict IS NULL)
+         + (SELECT COUNT(DISTINCT m.rid) FROM m51_moved m JOIN detection_reviews r ON r.id = m.rid
+             WHERE NOT EXISTS (SELECT 1 FROM detections x
+                                WHERE x.Date = r.date AND x.Time = r.time
+                                  AND x.Sci_Name = r.sci_name))";
+
+/// Whether a history rewrite would change any row, and so has anything a
+/// backup could restore.
+///
+/// A query that fails because a table it reads does not exist yet means the
+/// database is too young to hold the rows — nothing to rewrite. Any other
+/// failure propagates: "no backup needed" must never be the answer to a
+/// question that could not be asked.
+fn rewrite_touches_rows(
+    conn: &Connection,
+    rewrite: &HistoryRewrite,
+) -> Result<bool, MigrationError> {
+    match conn.query_row(rewrite.affects_sql, [], |r| r.get::<_, i64>(0)) {
+        Ok(n) => Ok(n > 0),
+        Err(ref e) if preview_target_missing(e) => Ok(false),
+        Err(e) => Err(MigrationError::Sqlite(e)),
+    }
+}
 
 /// One pending history-rewriting migration, and what it would do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2249,6 +2466,20 @@ pub fn preview_pending(conn: &Connection) -> Result<Vec<MigrationPreview>, Migra
             .map_or("(unknown migration)", |m| m.description)
             .to_owned();
 
+        if current < rewrite.ready_at {
+            out.push(MigrationPreview {
+                version: rewrite.version,
+                description,
+                rows: vec![(
+                    "rows affected".to_owned(),
+                    format!(
+                        "not countable until migrations up to {} have applied",
+                        rewrite.ready_at
+                    ),
+                )],
+            });
+            continue;
+        }
         let rows = match collect_preview(conn, rewrite.preview_sql) {
             Ok(rows) => rows,
             // A fresh database has no `detections` table yet, so the preview
@@ -2402,7 +2633,7 @@ fn backup_before_rewrite(
 /// `VACUUM`, which is `resilience::ensure_incremental_vacuum`'s job at
 /// startup. Setting it here is what makes every database this binary creates
 /// reclaim its free pages a step at a time rather than by a weekly rewrite.
-fn set_incremental_vacuum_on_empty(conn: &Connection) -> Result<(), MigrationError> {
+pub(crate) fn set_incremental_vacuum_on_empty(conn: &Connection) -> Result<(), MigrationError> {
     let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get(0))?;
     if tables == 0 {
         conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
@@ -2525,11 +2756,18 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
         // INTO` cannot run inside one. That ordering is also the correct one —
         // the backup must capture the state before the rewrite, and a rollback
         // of the transaction simply leaves an unused copy behind.
-        if HISTORY_REWRITES
+        if let Some(rewrite) = HISTORY_REWRITES
             .iter()
-            .any(|r| r.version == migration.version)
+            .find(|r| r.version == migration.version)
         {
-            backup_before_rewrite(conn, migration.version)?;
+            if rewrite_touches_rows(conn, rewrite)? {
+                backup_before_rewrite(conn, migration.version)?;
+            } else {
+                tracing::debug!(
+                    version = migration.version,
+                    "history-rewriting migration matches no row; no backup needed"
+                );
+            }
         }
 
         // Apply the migration's DDL and record its version atomically. SQLite
@@ -3583,5 +3821,264 @@ mod tests {
             )
             .unwrap();
         assert_eq!(indexes, 3, "the rebuild dropped the quarantine indexes");
+    }
+
+    /// Backups sitting beside `dir`'s database.
+    fn backups_in(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".pre-migration-"))
+            .collect()
+    }
+
+    /// Finding 13: a brand-new database has no history for a rewrite to
+    /// destroy, so first boot must not leave a copy of an empty schema
+    /// beside it.
+    #[test]
+    fn a_fresh_database_is_not_backed_up_before_a_history_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = Connection::open(dir.path().join("birds.db")).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(backups_in(dir.path()), Vec::<String>::new());
+    }
+
+    /// Counterpart to the above: an existing station whose rows migration 24
+    /// does move still gets its copy. (`migration_24_leaves_a_restorable_backup`
+    /// checks the copy's contents; this checks the gate did not shut it.)
+    #[test]
+    fn a_database_with_rows_to_move_is_still_backed_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, conn) = file_db_at_version(dir.path(), 23);
+        migrate(&conn).unwrap();
+        assert_eq!(
+            backups_in(dir.path()),
+            vec!["birds.db.pre-migration-24.backup".to_string()]
+        );
+    }
+
+    /// The backup gate for migration 24 counts exactly the rows it moves.
+    #[test]
+    fn migration_24_affects_count_matches_what_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, conn) = file_db_at_version(dir.path(), 23);
+        // A row that names no point in time is left alone by both.
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('', '08:30:00', 'Turdus merula', 'Blackbird', 0.9, 'x.wav', 3.0)",
+            [],
+        )
+        .unwrap();
+        let rewrite = HISTORY_REWRITES.iter().find(|r| r.version == 24).unwrap();
+        let predicted: i64 = conn
+            .query_row(rewrite.affects_sql, [], |r| r.get(0))
+            .unwrap();
+        let m24 = MIGRATIONS.iter().find(|m| m.version == 24).unwrap();
+        conn.execute_batch(m24.up_sql).unwrap();
+        assert_eq!(predicted, 4, "the four non-zero offsets of seg.wav");
+        assert_eq!(u64::try_from(predicted).unwrap(), conn.changes());
+    }
+
+    /// An in-memory database at `up_to`, with its `schema_version` rows.
+    fn memory_db_at_version(up_to: u32) -> Connection {
+        let conn = memory_db();
+        ensure_version_table(&conn).unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version <= up_to) {
+            conn.execute_batch(m.up_sql).unwrap();
+            conn.execute(
+                "INSERT INTO schema_version (version, description) VALUES (?1, ?2)",
+                rusqlite::params![m.version, m.description],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    fn verdict_at(conn: &Connection, time: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT review_verdict FROM detections WHERE Time = ?1",
+            [time],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Finding 4: a station at schema 23 rejected a detection from the third
+    /// chunk of a file. Migration 24 moved the detection six seconds on and
+    /// left the review naming the file's start; migration 26 then found
+    /// nothing to copy the verdict onto. The rejected detection must stay
+    /// rejected, and its review must name it.
+    #[test]
+    fn a_verdict_recorded_before_migration_24_survives_the_move() {
+        let conn = memory_db_at_version(23);
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Blackbird', 0.9, 'seg.wav', 6.0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status, reviewed_at)
+             VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Blackbird', 'rejected',
+                     datetime('now', '-1 day'))",
+            [],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(verdict_at(&conn, "08:30:06").as_deref(), Some("rejected"));
+        let analytic: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections_analytic", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            analytic, 0,
+            "a rejected detection must not reach the analytics"
+        );
+        let review_time: String = conn
+            .query_row("SELECT time FROM detection_reviews", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            review_time, "08:30:06",
+            "the review must name the detection it judged"
+        );
+    }
+
+    /// Finding 4, the chunks that were not orphaned: before migration 24 all
+    /// five chunks shared the file's second, so one verdict covered all five.
+    /// Migration 26 gave it back to the first chunk only.
+    #[test]
+    fn a_pre_24_verdict_reaches_every_chunk_it_covered() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, conn) = file_db_at_version(dir.path(), 23);
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status, reviewed_at)
+             VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Blackbird', 'rejected',
+                     datetime('now', '-1 day'))",
+            [],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        for time in ["08:30:00", "08:30:03", "08:30:06", "08:30:09", "08:30:12"] {
+            assert_eq!(
+                verdict_at(&conn, time).as_deref(),
+                Some("rejected"),
+                "{time}"
+            );
+        }
+        let review_time: String = conn
+            .query_row("SELECT time FROM detection_reviews", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            review_time, "08:30:00",
+            "a review that still names a detection stays put"
+        );
+    }
+
+    /// Counterpart: a verdict recorded *after* migration 24, on the first
+    /// chunk of a file, is about that chunk alone — the later chunks of the
+    /// same file were stamped on their own seconds and nobody judged them.
+    #[test]
+    fn a_verdict_recorded_after_migration_24_does_not_spread() {
+        let conn = memory_db_at_version(50);
+        conn.execute(
+            "UPDATE schema_version SET applied_at = datetime('now', '-30 days') WHERE version = 24",
+            [],
+        )
+        .unwrap();
+        for (time, offset) in [("08:30:00", 0.0), ("08:30:03", 3.0)] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                 VALUES ('2026-03-11', ?1, 'Turdus merula', 'Blackbird', 0.9, 'seg.wav', ?2)",
+                rusqlite::params![time, offset],
+            )
+            .unwrap();
+        }
+        crate::sqlite::queries::detection_reviews::set_detection_review(
+            &conn,
+            "2026-03-11",
+            "08:30:00",
+            "Turdus merula",
+            "Blackbird",
+            crate::sqlite::queries::detection_reviews::ReviewStatus::Rejected,
+            None,
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(verdict_at(&conn, "08:30:00").as_deref(), Some("rejected"));
+        assert_eq!(verdict_at(&conn, "08:30:03"), None);
+    }
+
+    /// Two orphaned reviews that would land on one key: the migration must
+    /// still run (the review table is unique on the triple), keeping one where
+    /// it was.
+    #[test]
+    fn migration_51_survives_two_orphans_landing_on_one_key() {
+        let conn = memory_db_at_version(23);
+        for (time, file, offset) in [("08:30:00", "a.wav", 6.0), ("08:30:03", "b.wav", 3.0)] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                 VALUES ('2026-03-11', ?1, 'Turdus merula', 'Blackbird', 0.9, ?2, ?3)",
+                rusqlite::params![time, file, offset],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO detection_reviews (date, time, sci_name, com_name, status, reviewed_at)
+                 VALUES ('2026-03-11', ?1, 'Turdus merula', 'Blackbird', 'rejected',
+                         datetime('now', '-1 day'))",
+                [time],
+            )
+            .unwrap();
+        }
+        migrate(&conn).unwrap();
+        let times: Vec<String> = conn
+            .prepare("SELECT time FROM detection_reviews ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(times, vec!["08:30:06".to_string(), "08:30:03".to_string()]);
+    }
+
+    /// The backup gate for migration 51 is zero exactly when it has nothing
+    /// to do, and non-zero when it has.
+    #[test]
+    fn migration_51_affects_count_is_zero_only_when_nothing_changes() {
+        let rewrite = HISTORY_REWRITES.iter().find(|r| r.version == 51).unwrap();
+        let conn = memory_db_at_version(50);
+        let n: i64 = conn
+            .query_row(rewrite.affects_sql, [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
+
+        let conn = memory_db_at_version(23);
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Blackbird', 0.9, 'seg.wav', 6.0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status, reviewed_at)
+             VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Blackbird', 'rejected',
+                     datetime('now', '-1 day'))",
+            [],
+        )
+        .unwrap();
+        for m in MIGRATIONS.iter().filter(|m| (24..=50).contains(&m.version)) {
+            conn.execute_batch(m.up_sql).unwrap();
+            conn.execute(
+                "INSERT INTO schema_version (version, description) VALUES (?1, ?2)",
+                rusqlite::params![m.version, m.description],
+            )
+            .unwrap();
+        }
+        let n: i64 = conn
+            .query_row(rewrite.affects_sql, [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "one detection gets a verdict, one review is re-keyed");
     }
 }

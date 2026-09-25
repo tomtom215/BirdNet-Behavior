@@ -76,7 +76,93 @@ pub fn set_birdweather_soundscape(
     Ok(changed > 0)
 }
 
+/// One detection row, named precisely enough to tell it from its neighbours.
+///
+/// `(Date, Time, Sci_Name)` is what most of the UI has carried, and it is not
+/// a key. The table is unique on `(Date, Time, Sci_Name,
+/// COALESCE(File_Name, ''), chunk_offset_secs)`: two microphones that hear the
+/// same bird in the same second write two rows that share the triple and
+/// differ only in the clip they point at. A write keyed on the triple reached
+/// both, so deleting the one on screen also deleted the other — including a
+/// row its owner had locked.
+///
+/// Adding the clip name separates them. Since migration 24 folded the chunk
+/// offset into `Time`, two chunks of one recording land on different seconds,
+/// so the four columns here name one row on every path this station writes.
+/// `file_name` is compared the way the unique index compares it —
+/// `COALESCE(File_Name, '')` — so `None` names a row with no clip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetectionKey<'a> {
+    /// Detection date (`YYYY-MM-DD`).
+    pub date: &'a str,
+    /// Detection time (`HH:MM:SS`).
+    pub time: &'a str,
+    /// Scientific name.
+    pub sci_name: &'a str,
+    /// The row's `File_Name`, as read back; `None` for a row with no clip.
+    pub file_name: Option<&'a str>,
+}
+
+/// The `WHERE` clause a [`DetectionKey`] binds as `?1`–`?4`.
+pub(super) const KEY_WHERE: &str = "Date = ?1 AND Time = ?2 AND Sci_Name = ?3 \
+     AND COALESCE(File_Name, '') = COALESCE(?4, '')";
+
+/// Delete the one detection `key` names.
+///
+/// Deliberately does not consult the lock: the operator is looking at the
+/// row they named (see `birdnet-web`'s `admin/species/manage.rs`). What the
+/// lock protects against is a delete that reaches rows nobody named, and a
+/// precise key is what stops that.
+///
+/// Returns `true` if a row was deleted, `false` if no row matched.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn delete_detection_at(conn: &Connection, key: &DetectionKey<'_>) -> Result<bool, DbError> {
+    let changed = conn.execute(
+        &format!("DELETE FROM detections WHERE {KEY_WHERE}"),
+        params![key.date, key.time, key.sci_name, key.file_name],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Re-label the one detection `key` names.
+///
+/// Returns `true` if a row was updated, `false` if no row matched.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn relabel_detection_at(
+    conn: &Connection,
+    key: &DetectionKey<'_>,
+    new_sci_name: &str,
+    new_com_name: &str,
+) -> Result<bool, DbError> {
+    let changed = conn.execute(
+        &format!("UPDATE detections SET Sci_Name = ?5, Com_Name = ?6 WHERE {KEY_WHERE}"),
+        params![
+            key.date,
+            key.time,
+            key.sci_name,
+            key.file_name,
+            new_sci_name,
+            new_com_name
+        ],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Delete a detection by date, time, and scientific name.
+///
+/// **Superseded by [`delete_detection_at`]**, which names one row. The triple
+/// is not unique — two sources hearing one bird in the same second share it —
+/// so this can match more than the row the caller meant. When it does, rows
+/// that are locked are kept: a lock is the operator saying "not this one",
+/// and a delete aimed at a different row is exactly what it is for. When the
+/// triple names a single row it is deleted whether locked or not, as before —
+/// then the caller did name it.
 ///
 /// Returns `true` if a row was deleted, `false` if no match was found.
 ///
@@ -90,13 +176,19 @@ pub fn delete_detection(
     sci_name: &str,
 ) -> Result<bool, DbError> {
     let changed = conn.execute(
-        "DELETE FROM detections WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        "DELETE FROM detections WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3 \
+           AND (COALESCE(is_locked, 0) = 0 \
+                OR (SELECT COUNT(*) FROM detections \
+                     WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3) = 1)",
         params![date, time, sci_name],
     )?;
     Ok(changed > 0)
 }
 
 /// Re-label a detection by changing its species identification.
+///
+/// **Superseded by [`relabel_detection_at`]**: the triple can match a second
+/// source's row of the same second, and this re-labels both.
 ///
 /// Returns `true` if a row was updated, `false` if no match was found.
 ///
@@ -269,6 +361,117 @@ mod tests {
         assert_eq!(
             by_time["06:00:01"], None,
             "untagged row must read back NULL"
+        );
+    }
+
+    /// Two sources, one bird, one second: the rows share `(Date, Time,
+    /// Sci_Name)` and differ only in their clip. Returns the connection with
+    /// `cam1`'s row locked.
+    fn two_sources_one_second() -> (tempfile::NamedTempFile, Connection) {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        for (file, source) in [("cam1.wav", "cam1"), ("cam2.wav", "cam2")] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, Source)
+                 VALUES ('2026-05-01', '06:00:00', 'Turdus merula', 'Blackbird', 0.9, ?1, ?2)",
+                params![file, source],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "UPDATE detections SET is_locked = 1 WHERE File_Name = 'cam1.wav'",
+            [],
+        )
+        .unwrap();
+        (tmp, conn)
+    }
+
+    fn files_left(conn: &Connection) -> Vec<String> {
+        conn.prepare("SELECT File_Name FROM detections ORDER BY File_Name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    const CAM2: DetectionKey<'static> = DetectionKey {
+        date: "2026-05-01",
+        time: "06:00:00",
+        sci_name: "Turdus merula",
+        file_name: Some("cam2.wav"),
+    };
+
+    /// Finding 1: deleting one source's row must not delete the other's.
+    #[test]
+    fn a_keyed_delete_removes_only_the_row_it_names() {
+        let (_tmp, conn) = two_sources_one_second();
+        assert!(delete_detection_at(&conn, &CAM2).unwrap());
+        assert_eq!(files_left(&conn), vec!["cam1.wav".to_string()]);
+        // Counterpart: a key that names nothing deletes nothing.
+        assert!(!delete_detection_at(&conn, &CAM2).unwrap());
+        assert_eq!(files_left(&conn), vec!["cam1.wav".to_string()]);
+    }
+
+    /// Finding 1: the legacy triple delete, aimed at the unlocked row, must
+    /// keep the locked sibling it cannot tell apart.
+    #[test]
+    fn a_triple_delete_keeps_a_locked_sibling() {
+        let (_tmp, conn) = two_sources_one_second();
+        assert!(delete_detection(&conn, "2026-05-01", "06:00:00", "Turdus merula").unwrap());
+        assert_eq!(files_left(&conn), vec!["cam1.wav".to_string()]);
+    }
+
+    /// Counterpart: when the triple names exactly one row, the operator named
+    /// it, and a lock does not stop them (the documented single-row rule).
+    #[test]
+    fn a_triple_delete_of_a_lone_locked_row_still_deletes_it() {
+        let (_tmp, conn) = two_sources_one_second();
+        assert!(delete_detection_at(&conn, &CAM2).unwrap());
+        assert!(delete_detection(&conn, "2026-05-01", "06:00:00", "Turdus merula").unwrap());
+        assert!(files_left(&conn).is_empty());
+    }
+
+    /// Finding 1: re-labelling one source's row leaves the other's species.
+    #[test]
+    fn a_keyed_relabel_changes_only_the_row_it_names() {
+        let (_tmp, conn) = two_sources_one_second();
+        assert!(relabel_detection_at(&conn, &CAM2, "Turdus philomelos", "Song Thrush").unwrap());
+        let species: Vec<(String, String)> = conn
+            .prepare("SELECT File_Name, Sci_Name FROM detections ORDER BY File_Name")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            species,
+            vec![
+                ("cam1.wav".to_string(), "Turdus merula".to_string()),
+                ("cam2.wav".to_string(), "Turdus philomelos".to_string()),
+            ]
+        );
+    }
+
+    /// A clip-less row is named with `file_name: None`, as the unique index
+    /// names it, and not confused with a row that has a clip.
+    #[test]
+    fn a_key_without_a_clip_names_the_clipless_row() {
+        let (_tmp, conn) = two_sources_one_second();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES ('2026-05-01', '06:00:00', 'Turdus merula', 'Blackbird', 0.9)",
+            [],
+        )
+        .unwrap();
+        let clipless = DetectionKey {
+            file_name: None,
+            ..CAM2
+        };
+        assert!(delete_detection_at(&conn, &clipless).unwrap());
+        assert_eq!(
+            files_left(&conn),
+            vec!["cam1.wav".to_string(), "cam2.wav".to_string()]
         );
     }
 
