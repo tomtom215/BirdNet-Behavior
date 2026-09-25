@@ -132,93 +132,17 @@ pub fn run_daemon(
         "labels loaded"
     );
 
-    // Auto-detect the sample rate the model expects from its input shape.
-    // V2.4 → [1, 144_000] = 48 kHz × 3 s; V3.0 → [1, 96_000] = 32 kHz × 3 s.
-    let model_sample_rate = model.infer_sample_rate();
-
+    // The pipeline is fitted to the classifiers as the *registry* sees them,
+    // i.e. after any declared `MODEL_SAMPLE_RATE` has replaced the rate the
+    // model's shape suggests. See `fit_pipeline_to_classifiers`.
     tracing::info!(
         model_path = %config.model_path.display(),
         input_shape = ?model.input_shape(),
-        sample_rate = model_sample_rate,
+        sample_rate = registry.primary().spec.sample_rate,
         "model loaded, starting daemon"
     );
-
-    // Build pipeline config, overriding sample rate and input mode to match the model.
     let mut pipeline_config = config.pipeline.clone();
-    if pipeline_config.target_sample_rate != model_sample_rate {
-        tracing::info!(
-            configured = pipeline_config.target_sample_rate,
-            model = model_sample_rate,
-            "adjusting pipeline sample rate to match model"
-        );
-        pipeline_config.target_sample_rate = model_sample_rate;
-    }
-    // Asked of the model rather than guessed from its sample rate (`G-10`
-    // Stage 1). The guess here was `infer_sample_rate() == 32_000`, which read
-    // "32 kHz" as "waveform" — true of V3.0 by coincidence, and false of V2.4,
-    // which is a 48 kHz waveform model that was therefore sent a mel
-    // spectrogram zero-padded to three-quarters of its input tensor.
-    let spec = model.input_spec();
-    let raw_mode = spec.is_waveform();
-    if raw_mode != pipeline_config.raw_audio_input {
-        tracing::info!(
-            raw_audio_input = raw_mode,
-            "adjusting pipeline input mode to match model"
-        );
-        pipeline_config.raw_audio_input = raw_mode;
-    }
-
-    // Adopt the model's recommended chunk length when it differs from the
-    // pipeline default. This matters most for V3.0 preview3 (dynamic input
-    // shape): with 3.0 s × 32 kHz = 96 000 samples the Magpie reference
-    // confidence on the bundled WAV is ~0.52, but at 4.5 s × 32 kHz =
-    // 144 000 samples it rises to ~0.72. The model accepts variable length
-    // so this is purely a per-chunk accuracy tuning. Fixed-shape V2.4 keeps
-    // its trained 3.0 s window.
-    //
-    // With more than one classifier the chunk is cut to the longest window
-    // and stepped by the shortest (`G-10` Stage 4). One classifier leaves both
-    // equal, so this is the single-model arithmetic unchanged.
-    let (longest, shortest) = registry.window_bounds();
-    #[allow(clippy::cast_precision_loss)]
-    let longest_secs = longest as f32 / spec.sample_rate as f32;
-    #[allow(clippy::cast_precision_loss)]
-    let shortest_secs = shortest as f32 / spec.sample_rate as f32;
-    if longest != shortest {
-        #[allow(clippy::cast_precision_loss)]
-        let ratio = longest as f32 / shortest as f32;
-        tracing::info!(
-            longest_window_secs = longest_secs,
-            shortest_window_secs = shortest_secs,
-            extra_inference_ratio = ratio,
-            "classifiers want different windows: chunking to the longest and stepping by the \
-             shortest, so no classifier sees less than it would alone. Classifiers with the \
-             longer window run proportionally more inferences"
-        );
-        pipeline_config.chunk_step_secs = Some(shortest_secs);
-    }
-
-    // The longest window across the loaded classifiers. For the one classifier
-    // every station runs today this is exactly `model.recommended_chunk_secs()`
-    // — the call this line made before Stage 4 — on any waveform shape,
-    // because `input_spec`'s window and `recommended_chunk_samples` derive the
-    // same number from the same shape. Gated by
-    // `the_window_and_the_chunk_recommendation_agree_on_every_waveform_shape`.
-    //
-    // A mel shape is the one place the two part, and there the window is the
-    // right of them: `recommended_chunk_samples` would read a count of
-    // spectrogram columns as a sample count and ask for a six-millisecond
-    // chunk. No model here takes mel input today.
-    let model_chunk_secs = longest_secs;
-    let configured_chunk_secs = pipeline_config.chunk_duration_secs;
-    if (model_chunk_secs - configured_chunk_secs).abs() > 0.01 {
-        tracing::info!(
-            configured_chunk_secs = configured_chunk_secs,
-            model_chunk_secs,
-            "adjusting pipeline chunk duration to match model recommendation"
-        );
-        pipeline_config.chunk_duration_secs = model_chunk_secs;
-    }
+    fit_pipeline_to_classifiers(&mut pipeline_config, &registry);
 
     // Load the species occurrence filter (the metadata / "geo" model).
     //
@@ -310,14 +234,7 @@ pub fn run_daemon(
     }
 
     // Create the whole-chunk filters.
-    let chunk_filters = ChunkFilters {
-        privacy: PrivacyFilter::new(config.privacy_threshold)
-            .with_clip_reach(config.privacy_clip_reach)
-            .with_chunk_secs(config.pipeline.chunk_duration_secs),
-        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
-            .remembering(config.noise_remember_secs),
-        confirmation: config.confirmation,
-    };
+    let chunk_filters = chunk_filters(config, &pipeline_config);
 
     if chunk_filters.privacy.is_enabled() {
         tracing::info!(
@@ -350,8 +267,8 @@ pub fn run_daemon(
         );
     }
     if chunk_filters.confirmation.enabled() {
-        let overlap = config.pipeline.chunk_overlap_secs;
-        let chunk_secs = config.pipeline.chunk_duration_secs;
+        let overlap = pipeline_config.chunk_overlap_secs;
+        let chunk_secs = pipeline_config.chunk_duration_secs;
         if chunk_filters
             .confirmation
             .is_effective_at(overlap, chunk_secs)
@@ -377,6 +294,18 @@ pub fn run_daemon(
                  a single window is already the whole neighbourhood it is asked to \
                  agree with. Raise the analysis overlap or the confirmation level."
             );
+        }
+    }
+
+    // Every classifier scores the watched noise classes before its detection
+    // threshold, so the noise filter's own threshold binds even below it.
+    if chunk_filters.noise.is_enabled() {
+        for idx in 0..registry.len() {
+            if let Some(registered) = registry.model_mut(idx) {
+                registered
+                    .model
+                    .watch_noise_classes(chunk_filters.noise.classes());
+            }
         }
     }
 
@@ -688,6 +617,118 @@ pub fn run_daemon(
     })
 }
 
+/// The whole-chunk filters, sized to the chunks the pipeline actually cuts.
+///
+/// `pipeline_config` is the one [`fit_pipeline_to_classifiers`] adjusted, not
+/// `config.pipeline`: for BirdNET+ V3.0 the configured 3.0 s chunk is replaced
+/// by 4.5 s, and a privacy filter told 3.0 s measured every flagged chunk's
+/// speech span a second and a half short, so a clip reaching into the tail of
+/// a chunk with a human in it was kept.
+fn chunk_filters(config: &DaemonConfig, pipeline_config: &PipelineConfig) -> ChunkFilters {
+    ChunkFilters {
+        privacy: PrivacyFilter::new(config.privacy_threshold)
+            .with_clip_reach(config.privacy_clip_reach)
+            .with_chunk_secs(pipeline_config.chunk_duration_secs),
+        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
+            .remembering(config.noise_remember_secs),
+        confirmation: config.confirmation,
+    }
+}
+
+/// Fit the pipeline's resample rate, input mode and chunk arithmetic to the
+/// loaded classifiers.
+///
+/// Read from the **registry's** effective specs, never from
+/// [`crate::inference::model::BirdNetModel::input_spec`] /
+/// `infer_sample_rate`: the model can only derive its rate from the input
+/// shape, and a declared `MODEL_SAMPLE_RATE` is applied by the registry on top
+/// of that derivation. Reading the model directly resampled every recording to
+/// the shape-guessed rate and cut chunks from it, so a declared rate changed
+/// the log line and nothing else — the classifier was fed audio at the wrong
+/// rate, with a window of the wrong length in seconds.
+fn fit_pipeline_to_classifiers(
+    pipeline_config: &mut PipelineConfig,
+    registry: &ClassifierRegistry,
+) {
+    let spec = registry.primary().spec;
+    // V2.4 → [1, 144_000] = 48 kHz × 3 s; V3.0 → [1, 96_000] = 32 kHz × 3 s,
+    // unless the operator declared otherwise.
+    let model_sample_rate = spec.sample_rate;
+    if pipeline_config.target_sample_rate != model_sample_rate {
+        tracing::info!(
+            configured = pipeline_config.target_sample_rate,
+            model = model_sample_rate,
+            "adjusting pipeline sample rate to match model"
+        );
+        pipeline_config.target_sample_rate = model_sample_rate;
+    }
+    // Asked of the model rather than guessed from its sample rate (`G-10`
+    // Stage 1). The guess here was `infer_sample_rate() == 32_000`, which read
+    // "32 kHz" as "waveform" — true of V3.0 by coincidence, and false of V2.4,
+    // which is a 48 kHz waveform model that was therefore sent a mel
+    // spectrogram zero-padded to three-quarters of its input tensor.
+    let raw_mode = spec.is_waveform();
+    if raw_mode != pipeline_config.raw_audio_input {
+        tracing::info!(
+            raw_audio_input = raw_mode,
+            "adjusting pipeline input mode to match model"
+        );
+        pipeline_config.raw_audio_input = raw_mode;
+    }
+
+    // Adopt the model's recommended chunk length when it differs from the
+    // pipeline default. This matters most for V3.0 preview3 (dynamic input
+    // shape): with 3.0 s × 32 kHz = 96 000 samples the Magpie reference
+    // confidence on the bundled WAV is ~0.52, but at 4.5 s × 32 kHz =
+    // 144 000 samples it rises to ~0.72. The model accepts variable length
+    // so this is purely a per-chunk accuracy tuning. Fixed-shape V2.4 keeps
+    // its trained 3.0 s window.
+    //
+    // With more than one classifier the chunk is cut to the longest window
+    // and stepped by the shortest (`G-10` Stage 4). One classifier leaves both
+    // equal, so this is the single-model arithmetic unchanged.
+    let (longest, shortest) = registry.window_bounds();
+    #[allow(clippy::cast_precision_loss)]
+    let longest_secs = longest as f32 / spec.sample_rate as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let shortest_secs = shortest as f32 / spec.sample_rate as f32;
+    if longest != shortest {
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = longest as f32 / shortest as f32;
+        tracing::info!(
+            longest_window_secs = longest_secs,
+            shortest_window_secs = shortest_secs,
+            extra_inference_ratio = ratio,
+            "classifiers want different windows: chunking to the longest and stepping by the \
+             shortest, so no classifier sees less than it would alone. Classifiers with the \
+             longer window run proportionally more inferences"
+        );
+        pipeline_config.chunk_step_secs = Some(shortest_secs);
+    }
+
+    // The longest window across the loaded classifiers. For the one classifier
+    // every station runs today this is exactly `model.recommended_chunk_secs()`
+    // — the call this line made before Stage 4 — on any waveform shape,
+    // because `input_spec`'s window and `recommended_chunk_samples` derive the
+    // same number from the same shape. Gated by
+    // `the_window_and_the_chunk_recommendation_agree_on_every_waveform_shape`.
+    //
+    // A mel shape is the one place the two part, and there the window is the
+    // right of them: `recommended_chunk_samples` would read a count of
+    // spectrogram columns as a sample count and ask for a six-millisecond
+    // chunk. No model here takes mel input today.
+    let model_chunk_secs = longest_secs;
+    let configured_chunk_secs = pipeline_config.chunk_duration_secs;
+    if (model_chunk_secs - configured_chunk_secs).abs() > 0.01 {
+        tracing::info!(
+            configured_chunk_secs = configured_chunk_secs,
+            model_chunk_secs,
+            "adjusting pipeline chunk duration to match model recommendation"
+        );
+        pipeline_config.chunk_duration_secs = model_chunk_secs;
+    }
+}
+
 /// The classifiers that judge a segment: its source's `MODEL_ROUTES` entry.
 ///
 /// A capture source names its segments with its id — the `audio_sources` row
@@ -925,6 +966,67 @@ mod tests {
         let (event_tx, _event_rx) = mpsc::sync_channel(64);
         let handle = run_daemon(&config, event_tx).expect("a route to the configured primary");
         handle.stop();
+    }
+
+    /// A declared `MODEL_SAMPLE_RATE` has to reach the pipeline, not only the
+    /// registry. The daemon fitted the pipeline from the model's own
+    /// `infer_sample_rate()` / `input_spec()`, which derive the rate from the
+    /// tensor shape, so the declared rate was logged and then ignored: the
+    /// tiny V2.4-shaped model ([1, 144 000]) declared at 32 kHz was fed audio
+    /// resampled to 48 kHz, in 3.0 s chunks instead of 4.5 s.
+    #[test]
+    fn a_declared_sample_rate_reaches_the_pipeline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.primary_sample_rate = Some(32_000);
+        let registry = ClassifierRegistry::load(
+            &classifier_specs(&config),
+            &config.model_routes,
+            &config.model,
+        )
+        .expect("loads");
+
+        let mut pipeline_config = config.pipeline.clone();
+        fit_pipeline_to_classifiers(&mut pipeline_config, &registry);
+        assert_eq!(pipeline_config.target_sample_rate, 32_000);
+        assert!(
+            (pipeline_config.chunk_duration_secs - 4.5).abs() < 1e-4,
+            "144 000 samples at 32 kHz is 4.5 s, got {}",
+            pipeline_config.chunk_duration_secs
+        );
+        assert!(pipeline_config.raw_audio_input);
+
+        // Counterpart: without a declaration the shape-derived 48 kHz / 3.0 s
+        // stands, so the assertion above is about the declaration.
+        config.primary_sample_rate = None;
+        let registry = ClassifierRegistry::load(
+            &classifier_specs(&config),
+            &config.model_routes,
+            &config.model,
+        )
+        .expect("loads");
+        let mut pipeline_config = config.pipeline;
+        fit_pipeline_to_classifiers(&mut pipeline_config, &registry);
+        assert_eq!(pipeline_config.target_sample_rate, 48_000);
+        assert!((pipeline_config.chunk_duration_secs - 3.0).abs() < 1e-4);
+    }
+
+    /// The privacy filter measures a flagged chunk's span with the chunk
+    /// length the pipeline actually cuts. It was given the configured 3.0 s
+    /// after the pipeline had been moved to the model's 4.5 s, so the last
+    /// second and a half of every chunk with a human in it was outside the
+    /// span a saved clip was checked against.
+    #[test]
+    fn the_privacy_filter_is_sized_to_the_fitted_chunk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.privacy_threshold = 0.5;
+        assert!((config.pipeline.chunk_duration_secs - 3.0).abs() < 1e-6);
+        let mut fitted = config.pipeline.clone();
+        fitted.chunk_duration_secs = 4.5;
+
+        let filters = chunk_filters(&config, &fitted);
+        assert!((filters.privacy.chunk_secs() - 4.5).abs() < 1e-6);
     }
 
     /// Write `secs` seconds of low noise at 48 kHz into `dir/name`.

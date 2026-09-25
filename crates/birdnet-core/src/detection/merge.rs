@@ -48,49 +48,102 @@ use crate::detection::types::Detection;
 pub struct ModelVerdict {
     /// The classifier's id, as configured.
     pub model_id: String,
-    /// What it reported, already filtered by its own threshold.
+    /// What it reported. Filtered by whatever threshold the model ran at,
+    /// which is the lower of [`Self::threshold`] and the station's published
+    /// per-species floor — so it can include detections below the model's own
+    /// bar.
     pub detections: Vec<Detection>,
+    /// The classifier's own bar: its per-model threshold, else the station's.
+    /// The downstream processor judges the merged detection against the
+    /// threshold of the model that is named on it, so this decides which of
+    /// the models' detections may be that one.
+    pub threshold: f32,
 }
 
 /// Combine the verdicts of every classifier that judged one chunk.
 ///
-/// Returns one detection per species, carrying the highest confidence any
-/// classifier gave it, the id of the classifier that gave that confidence, and
-/// how many classifiers reported the species at all.
+/// Returns one detection per species, carrying the highest confidence among
+/// the classifiers whose detection **cleared that classifier's own threshold**,
+/// the id of the classifier that gave it, and how many classifiers cleared
+/// their own threshold for the species.
+///
+/// Each model runs at the lower of its own threshold and the station's
+/// per-species floor, so a verdict can carry a detection below its model's own
+/// bar. The processor judges the merged detection against the threshold of
+/// the model named on it; choosing the winner by confidence alone let a model
+/// that scored higher but *below its own bar* displace one that cleared its
+/// own — and the detection was then dropped, although a classifier had
+/// reported it. Only when no model cleared its own bar (the species reached
+/// the processor through the per-species floor alone) is the winner the
+/// highest confidence overall, and the agreement then counts every model that
+/// reported it, as before.
 ///
 /// The output is sorted by confidence descending, then by scientific name, so
 /// it is deterministic — two classifiers finishing in a different order must
 /// not reorder a station's detections.
 #[must_use]
 pub fn merge_verdicts(verdicts: &[ModelVerdict]) -> Vec<Detection> {
-    // Species → (best detection so far, which model gave it, how many models
-    // reported this species).
-    let mut best: HashMap<String, (Detection, String, u8)> = HashMap::new();
+    /// Per species: the best detection so far, which model gave it, whether
+    /// it cleared its model's own bar, and how many distinct models reported
+    /// the species at all / above their own bar.
+    struct Best {
+        detection: Detection,
+        winner: String,
+        cleared: bool,
+        reported: u8,
+        reported_clearing: u8,
+    }
+    let mut best: HashMap<String, Best> = HashMap::new();
 
     for verdict in verdicts {
         // One classifier reporting the same species twice in a chunk — a
         // label file with a duplicate row, say — must not count as agreement
         // with itself. Agreement means *independent* classifiers.
         let mut seen_here: Vec<&str> = Vec::new();
+        let mut cleared_here: Vec<&str> = Vec::new();
 
         for detection in &verdict.detections {
             let key = detection.scientific_name.clone();
+            let cleared = detection.confidence >= verdict.threshold;
             let first_from_this_model = !seen_here.contains(&detection.scientific_name.as_str());
             if first_from_this_model {
                 seen_here.push(&detection.scientific_name);
             }
+            let first_clearing_from_this_model =
+                cleared && !cleared_here.contains(&detection.scientific_name.as_str());
+            if first_clearing_from_this_model {
+                cleared_here.push(&detection.scientific_name);
+            }
 
             match best.get_mut(&key) {
                 None => {
-                    best.insert(key, (detection.clone(), verdict.model_id.clone(), 1));
+                    best.insert(
+                        key,
+                        Best {
+                            detection: detection.clone(),
+                            winner: verdict.model_id.clone(),
+                            cleared,
+                            reported: 1,
+                            reported_clearing: u8::from(cleared),
+                        },
+                    );
                 }
-                Some((existing, winner, count)) => {
+                Some(b) => {
                     if first_from_this_model {
-                        *count = count.saturating_add(1);
+                        b.reported = b.reported.saturating_add(1);
                     }
-                    if detection.confidence > existing.confidence {
-                        *existing = detection.clone();
-                        winner.clone_from(&verdict.model_id);
+                    if first_clearing_from_this_model {
+                        b.reported_clearing = b.reported_clearing.saturating_add(1);
+                    }
+                    // A detection that cleared its own bar beats one that did
+                    // not, whatever the confidences; within a tier, the higher
+                    // confidence wins.
+                    let better =
+                        (cleared, detection.confidence) > (b.cleared, b.detection.confidence);
+                    if better {
+                        b.detection = detection.clone();
+                        b.winner.clone_from(&verdict.model_id);
+                        b.cleared = cleared;
                     }
                 }
             }
@@ -99,9 +152,14 @@ pub fn merge_verdicts(verdicts: &[ModelVerdict]) -> Vec<Detection> {
 
     let mut merged: Vec<Detection> = best
         .into_values()
-        .map(|(mut detection, model_id, count)| {
-            detection.model_id = Some(model_id);
-            detection.agreeing_models = Some(count);
+        .map(|b| {
+            let mut detection = b.detection;
+            detection.model_id = Some(b.winner);
+            detection.agreeing_models = Some(if b.cleared {
+                b.reported_clearing
+            } else {
+                b.reported
+            });
             detection
         })
         .collect();
@@ -140,9 +198,14 @@ mod tests {
     }
 
     fn verdict(id: &str, dets: Vec<Detection>) -> ModelVerdict {
+        judged(id, 0.0, dets)
+    }
+
+    fn judged(id: &str, threshold: f32, dets: Vec<Detection>) -> ModelVerdict {
         ModelVerdict {
             model_id: id.to_owned(),
             detections: dets,
+            threshold,
         }
     }
 
@@ -242,6 +305,52 @@ mod tests {
         ]);
         assert_eq!(out[0].model_id.as_deref(), Some("perch"));
         assert!((out[0].confidence - 0.95).abs() < 1e-6);
+        assert_eq!(out[0].agreeing_models, Some(2));
+    }
+
+    /// A detection that cleared its own classifier's bar is not displaced by a
+    /// more confident one that did not clear its own.
+    ///
+    /// Both models run at the station's per-species floor, so `strict` (own
+    /// bar 0.7) passes a 0.6 and `loose` (own bar 0.4) passes a 0.5. The
+    /// processor judges the merged row against the named model's threshold:
+    /// naming `strict` meant 0.6 < 0.7 and the detection was dropped, although
+    /// `loose` had reported it above its own bar.
+    #[test]
+    fn a_detection_that_cleared_its_own_bar_beats_a_louder_one_that_did_not() {
+        let out = merge_verdicts(&[
+            judged("strict", 0.7, vec![det("Turdus merula", 0.6)]),
+            judged("loose", 0.4, vec![det("Turdus merula", 0.5)]),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].model_id.as_deref(), Some("loose"));
+        assert!((out[0].confidence - 0.5).abs() < 1e-6);
+        assert_eq!(
+            out[0].agreeing_models,
+            Some(1),
+            "only one model reported it above its own bar"
+        );
+    }
+
+    /// Counterpart: when every model cleared its own bar, the most confident
+    /// still wins and both count; and when none did, the most confident still
+    /// wins (the species is being judged by a per-species threshold), with
+    /// every report counted as before.
+    #[test]
+    fn within_a_tier_the_most_confident_classifier_still_wins() {
+        let out = merge_verdicts(&[
+            judged("a", 0.3, vec![det("Turdus merula", 0.6)]),
+            judged("b", 0.4, vec![det("Turdus merula", 0.5)]),
+        ]);
+        assert_eq!(out[0].model_id.as_deref(), Some("a"));
+        assert_eq!(out[0].agreeing_models, Some(2));
+
+        let out = merge_verdicts(&[
+            judged("a", 0.9, vec![det("Turdus merula", 0.6)]),
+            judged("b", 0.8, vec![det("Turdus merula", 0.5)]),
+        ]);
+        assert_eq!(out[0].model_id.as_deref(), Some("a"));
+        assert!((out[0].confidence - 0.6).abs() < 1e-6);
         assert_eq!(out[0].agreeing_models, Some(2));
     }
 

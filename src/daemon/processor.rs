@@ -854,10 +854,18 @@ pub(super) fn event_processor(
             // Everything else — imports, the backfill — falls back to migration
             // 32's trigger and a tz-database lookup, which is right for the date
             // and cannot tell those two apart.
-            detected_at_utc: birdnet_core::civil::unix_secs_from_local(
+            //
+            // A detection analysed *late* — the backlog at startup, a queue
+            // that ran across a daylight-saving change — is not live, and the
+            // offset in force now is an hour out for it. So the date's own
+            // offset is used unless it would put the detection in the future,
+            // which is how the first pass of the repeated hour shows itself.
+            detected_at_utc: crate::daemon::local_offset::detection_instant(
                 &detection.date,
                 &detection.time,
+                now_ms / 1000,
                 birdnet_db::clock::local_utc_offset_secs(),
+                crate::daemon::local_offset::utc_offset_at(&detection.date, &detection.time),
             ),
             // Which model made it (R-1): the run registered before this
             // processor consumed its first event.

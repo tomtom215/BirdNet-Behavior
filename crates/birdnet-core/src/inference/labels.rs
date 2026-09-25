@@ -172,6 +172,9 @@ impl LabelSet {
     ///
     /// Returns `LabelError::Format` if any line cannot be parsed.
     pub fn parse(content: &str) -> Result<Self, LabelError> {
+        // A byte-order mark is not whitespace to `trim`; left in, it becomes
+        // part of the first species' scientific name.
+        let content = content.strip_prefix('\u{feff}').unwrap_or(content);
         let mut labels = Vec::new();
         let mut blank_since_label = false;
 
@@ -233,6 +236,9 @@ impl LabelSet {
     /// Returns [`LabelError::Format`] if a row has fewer than two non-empty
     /// columns, or if the file contains no labels at all.
     pub fn parse_tsv(content: &str) -> Result<Self, LabelError> {
+        // As in `parse`: strip a byte-order mark before it joins the first
+        // column of the first row.
+        let content = content.strip_prefix('\u{feff}').unwrap_or(content);
         let mut labels = Vec::new();
         let mut blank_since_label = false;
 
@@ -495,6 +501,29 @@ mod tests {
         assert_eq!(LabelSet::parse(ok).unwrap().len(), 2);
         let ok_csv = "sci_name;com_name\nTurdus merula;Blackbird\nErithacus rubecula;Robin\n\n";
         assert_eq!(LabelSet::parse_csv(ok_csv).unwrap().len(), 2);
+    }
+
+    /// A byte-order mark must not become part of the first species' name —
+    /// the first label (index 0) would otherwise never match its own species
+    /// by name anywhere: lists, geomodel alignment, the database.
+    #[test]
+    fn a_byte_order_mark_does_not_corrupt_the_first_label() {
+        let txt = LabelSet::load_from_str(
+            "\u{feff}Turdus merula_Eurasian Blackbird\nErithacus rubecula_European Robin\n",
+        )
+        .unwrap();
+        assert_eq!(txt.get(0).unwrap().scientific_name, "Turdus merula");
+        let direct = LabelSet::parse("\u{feff}Turdus merula_Eurasian Blackbird\n").unwrap();
+        assert_eq!(direct.get(0).unwrap().scientific_name, "Turdus merula");
+
+        let tsv = LabelSet::load_from_str(
+            "\u{feff}Turdus merula\tEurasian Blackbird\nErithacus rubecula\tEuropean Robin\n",
+        )
+        .unwrap();
+        assert_eq!(tsv.get(0).unwrap().scientific_name, "Turdus merula");
+        let tsv3 =
+            LabelSet::parse_tsv("\u{feff}tumer\tTurdus merula\tEurasian Blackbird\n").unwrap();
+        assert_eq!(tsv3.get(0).unwrap().scientific_name, "Turdus merula");
     }
 
     #[test]

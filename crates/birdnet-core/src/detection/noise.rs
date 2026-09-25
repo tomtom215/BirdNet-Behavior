@@ -208,6 +208,26 @@ impl NoiseFilter {
         starts: &[f32],
         predictions: &[Vec<Detection>],
     ) -> Vec<Vec<Detection>> {
+        self.filter_with_evidence(starts, predictions, &[])
+    }
+
+    /// [`Self::filter_predictions`], also firing on `loudest[i]` — chunk `i`'s
+    /// highest-scoring watched noise class read from the model output before
+    /// the detection threshold and the top-N cut
+    /// ([`crate::detection::types::ChunkPrediction::loudest_noise`]).
+    ///
+    /// The detection lists alone hold only what cleared the *detection*
+    /// threshold and the top-N cut, so a noise threshold set below the
+    /// detection threshold could never be reached, and a bark ranked
+    /// eleventh in a busy chunk was invisible. A shorter or empty `loudest`
+    /// judges the remaining chunks on their lists alone.
+    #[must_use]
+    pub fn filter_with_evidence(
+        &self,
+        starts: &[f32],
+        predictions: &[Vec<Detection>],
+        loudest: &[Option<Detection>],
+    ) -> Vec<Vec<Detection>> {
         if !self.is_enabled() {
             return predictions.to_vec();
         }
@@ -218,7 +238,11 @@ impl NoiseFilter {
         let mut suppressed_at: Vec<(f32, Vec<String>)> = Vec::new();
         let mut out: Vec<Vec<Detection>> = Vec::with_capacity(predictions.len());
         for (i, chunk) in predictions.iter().enumerate() {
-            if let Some(noise) = self.offending(chunk) {
+            let unlisted = loudest.get(i).and_then(Option::as_ref).filter(|d| {
+                d.confidence >= self.threshold
+                    && self.classes.iter().any(|class| names_detection(class, d))
+            });
+            if let Some(noise) = self.offending(chunk).or(unlisted) {
                 tracing::debug!(
                     class = %noise.common_name,
                     confidence = noise.confidence,
@@ -300,10 +324,16 @@ impl NoiseFilter {
 /// resulting silence is invisible — the detections simply never appear.
 #[must_use]
 fn names_detection(class: &str, detection: &Detection) -> bool {
+    names_label(class, &detection.scientific_name, &detection.common_name)
+}
+
+/// [`names_detection`] on a label's two names, for finding a watched class's
+/// output index before any detection exists.
+pub(crate) fn names_label(class: &str, scientific_name: &str, common_name: &str) -> bool {
     let class = class.trim();
     !class.is_empty()
-        && (class.eq_ignore_ascii_case(detection.common_name.trim())
-            || class.eq_ignore_ascii_case(detection.scientific_name.trim()))
+        && (class.eq_ignore_ascii_case(common_name.trim())
+            || class.eq_ignore_ascii_case(scientific_name.trim()))
 }
 
 #[cfg(test)]
