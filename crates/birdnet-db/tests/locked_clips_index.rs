@@ -181,6 +181,9 @@ fn the_retired_indexes_are_gone_and_the_earning_ones_remain() {
         "idx_detections_locked",
         "idx_detections_import_batch",
         "idx_detections_utc",
+        // Migration 52: read by the search page's source picker and filter,
+        // which did not exist when migration 33 retired the bare one.
+        "idx_detections_source_datetime",
     ] {
         assert!(
             names.iter().any(|n| n == kept),

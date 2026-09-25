@@ -473,15 +473,17 @@ pub fn search_detection_count(conn: &Connection, filter: &DetectionFilter) -> Re
 ///
 /// Returns [`DbError`] on query failure.
 pub fn known_sources(conn: &Connection) -> Result<Vec<String>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT Source FROM detections \
-         WHERE Source IS NOT NULL AND Source <> '' ORDER BY Source",
-    )?;
+    let mut stmt = conn.prepare(KNOWN_SOURCES_SQL)?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
+
+/// The statement [`known_sources`] runs. Read off
+/// `idx_detections_source_datetime` (migration 52) — a gate below checks.
+const KNOWN_SOURCES_SQL: &str = "SELECT DISTINCT Source FROM detections \
+         WHERE Source IS NOT NULL AND Source <> '' ORDER BY Source";
 
 #[cfg(test)]
 mod tests {
@@ -1015,6 +1017,31 @@ mod tests {
             3,
             "two on 05-01 plus the blackbird's first on 05-03"
         );
+    }
+
+    fn plan_of(conn: &Connection, sql: &str) -> String {
+        conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join(" | ")
+    }
+
+    /// Finding 6: the source picker and a source filter read the index, not
+    /// the whole history (migration 52).
+    #[test]
+    fn source_queries_read_the_source_index() {
+        let conn = seeded();
+        let plan = plan_of(&conn, KNOWN_SOURCES_SQL);
+        assert!(plan.contains("idx_detections_source_datetime"), "{plan}");
+        assert!(!plan.contains("SCAN detections"), "{plan}");
+        let plan = plan_of(
+            &conn,
+            "SELECT COUNT(*) FROM detections WHERE (Source = 'cam2')",
+        );
+        assert!(plan.contains("idx_detections_source_datetime"), "{plan}");
     }
 
     #[test]

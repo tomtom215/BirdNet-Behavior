@@ -643,14 +643,21 @@ pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)
 ///
 /// Returns `DbError` on query failure.
 pub fn last_hour_count(conn: &Connection) -> Result<i64, DbError> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM detections_analytic
-         WHERE datetime(Date || ' ' || Time) >= datetime('now', 'localtime', '-1 hour')",
-        [],
-        |row| row.get(0),
-    )
-    .map_err(DbError::Sqlite)
+    conn.query_row(LAST_HOUR_COUNT_SQL, [], |row| row.get(0))
+        .map_err(DbError::Sqlite)
 }
+
+/// The statement [`last_hour_count`] runs.
+///
+/// The `Date >=` bound is implied by the `datetime` one — a row inside the
+/// last hour is dated no earlier than the day the hour began — and is there
+/// for the planner. `datetime(Date || ' ' || Time)` is an expression over
+/// every row, so on its own the query read the whole history: this runs every
+/// five minutes and on every dashboard load. The date prefix lets it seek
+/// `idx_detections_date` to one or two days of rows first.
+pub(crate) const LAST_HOUR_COUNT_SQL: &str = "SELECT COUNT(*) FROM detections_analytic
+         WHERE Date >= date('now', 'localtime', '-1 hour')
+           AND datetime(Date || ' ' || Time) >= datetime('now', 'localtime', '-1 hour')";
 
 /// Per-species, per-hour detection counts for the top `limit` species on `date`.
 ///
@@ -865,6 +872,56 @@ mod tests {
         let total: i64 = by_hour.iter().map(|(_, cnt, _)| cnt).sum();
         // 4 total detections
         assert_eq!(total, 4);
+    }
+
+    /// Finding 6: the rolling-hour count seeks the date index rather than
+    /// evaluating `datetime()` over the whole history.
+    #[test]
+    fn the_last_hour_count_does_not_scan_the_history() {
+        let (_tmp, conn) = temp_db_with_data();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {LAST_HOUR_COUNT_SQL}"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let plan = plan.join(" | ");
+        assert!(plan.contains("SEARCH detections USING"), "{plan}");
+        assert!(plan.contains("Date>?"), "{plan}");
+    }
+
+    /// Counterpart: the added bound drops nothing inside the hour, including
+    /// across midnight, and still excludes what is outside it.
+    #[test]
+    fn the_last_hour_count_counts_the_last_hour() {
+        let (_tmp, conn) = temp_db_with_data();
+        for (ago, sci) in [
+            ("-10 minutes", "Parus major"),
+            ("-59 minutes", "Turdus merula"),
+            ("-61 minutes", "Erithacus rubecula"),
+            ("-1 day", "Pica pica"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (date('now', 'localtime', ?1), time('now', 'localtime', ?1), ?2, 'x', 0.9)",
+                rusqlite::params![ago, sci],
+            )
+            .unwrap();
+        }
+        assert_eq!(last_hour_count(&conn).unwrap(), 2);
+        // A window that straddles midnight: the date bound is the day the
+        // hour began, not today.
+        let straddling: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT '2026-03-10' AS Date, '23:30:00' AS Time)
+                  WHERE Date >= date('2026-03-11 00:20:00', '-1 hour')
+                    AND datetime(Date || ' ' || Time) >= datetime('2026-03-11 00:20:00', '-1 hour')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(straddling, 1);
     }
 
     #[test]

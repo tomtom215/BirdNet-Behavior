@@ -96,11 +96,18 @@ impl BirdNetPiImporter {
         let (imported, skipped) =
             import_batched_tagged(&src_conn, &mut dst_conn, total, progress, options, batch_id)?;
 
+        // Propagated, as the CSV path does. The count is what the import
+        // list shows for this batch; `let _ =` left it at 0 on failure and
+        // reported success, so the record of the import disagreed with the
+        // import. The rows are committed and a re-run skips them, so the
+        // error costs a retry, not data.
         if let Some(id) = batch_id {
-            let _ = dst_conn.execute(
-                "UPDATE import_batches SET row_count = ?1 WHERE id = ?2",
-                params![i64::try_from(imported).unwrap_or(i64::MAX), id],
-            );
+            dst_conn
+                .execute(
+                    "UPDATE import_batches SET row_count = ?1 WHERE id = ?2",
+                    params![i64::try_from(imported).unwrap_or(i64::MAX), id],
+                )
+                .map_err(MigrateError::DataTransfer)?;
         }
 
         progress.update(MigrationProgress {
@@ -371,13 +378,14 @@ fn import_batched_tagged(
 ) -> Result<(u64, u64), MigrateError> {
     let mut imported = 0_u64;
     let mut skipped = 0_u64;
-    let mut offset = 0_u64;
+    let mut after = i64::MIN;
 
     loop {
-        let mut batch = fetch_batch(src, offset, BATCH_SIZE)?;
+        let (mut batch, last) = fetch_batch(src, after, BATCH_SIZE)?;
         if batch.is_empty() {
             break;
         }
+        after = last;
         if options.shifts_time() {
             for row in &mut batch {
                 // The source's offset wins when it is given: it drives a real
@@ -395,7 +403,6 @@ fn import_batched_tagged(
         let (ins, sk) = insert_batch_tagged(dst, &batch, batch_id)?;
         imported += ins;
         skipped += sk;
-        offset += batch_len;
 
         progress.update(MigrationProgress {
             stage: MigrationStage::Importing,
@@ -424,19 +431,19 @@ fn import_batched(
 ) -> Result<(u64, u64), MigrateError> {
     let mut imported = 0_u64;
     let mut skipped = 0_u64;
-    let mut offset = 0_u64;
+    let mut after = i64::MIN;
 
     loop {
-        let batch = fetch_batch(src, offset, BATCH_SIZE)?;
+        let (batch, last) = fetch_batch(src, after, BATCH_SIZE)?;
         if batch.is_empty() {
             break;
         }
+        after = last;
 
         let batch_len = batch.len() as u64;
         let (ins, sk) = insert_batch(dst, &batch)?;
         imported += ins;
         skipped += sk;
-        offset += batch_len;
 
         progress.update(MigrationProgress {
             stage: MigrationStage::Importing,
@@ -495,50 +502,74 @@ fn lenient_i64(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Option<i
     })
 }
 
-/// Fetch a page of rows from the source.
+/// The page query [`fetch_batch`] runs: keyset on `rowid`.
+///
+/// It was `ORDER BY Date, Time LIMIT ? OFFSET ?`. `OFFSET n` reads and throws
+/// away `n` rows, and BirdNET-Pi has no index on `(Date, Time)` to read them
+/// from, so every page sorted the whole table again: a three-year source is
+/// thousands of pages, each costing a full scan and sort — quadratic in the
+/// history, on the SD card the station is also recording to. A tie on
+/// `(Date, Time)` also had no defined order between two separately sorted
+/// pages. `rowid > ?` seeks, and is a total order.
+pub(crate) const FETCH_SQL: &str =
+    "SELECT rowid, Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
+            Cutoff, Week, Sens, Overlap, File_Name
+     FROM detections
+     WHERE rowid > ?1
+     ORDER BY rowid
+     LIMIT ?2";
+
+/// Fetch the page of rows after `after_rowid`, and the last rowid in it.
 fn fetch_batch(
     conn: &Connection,
-    offset: u64,
+    after_rowid: i64,
     limit: usize,
-) -> Result<Vec<DetectionRow>, MigrateError> {
+) -> Result<(Vec<DetectionRow>, i64), MigrateError> {
     let mut stmt = conn
-        .prepare(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
-                    Week, Sens, Overlap, File_Name
-             FROM detections
-             ORDER BY Date, Time
-             LIMIT ?1 OFFSET ?2",
-        )
+        .prepare(FETCH_SQL)
         .map_err(MigrateError::DataTransfer)?;
 
+    let mut last = after_rowid;
     let rows = stmt
         .query_map(
-            params![
-                i64::try_from(limit).unwrap_or(i64::MAX),
-                i64::try_from(offset).unwrap_or(i64::MAX)
-            ],
+            params![after_rowid, i64::try_from(limit).unwrap_or(i64::MAX)],
             |row| {
-                Ok(DetectionRow {
-                    date: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                    time: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    sci_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    com_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                    confidence: lenient_f64(row, 4)?.unwrap_or(0.0).clamp(0.0, 1.0),
-                    lat: lenient_f64(row, 5)?,
-                    lon: lenient_f64(row, 6)?,
-                    cutoff: lenient_f64(row, 7)?,
-                    week: lenient_i64(row, 8)?,
-                    sens: lenient_f64(row, 9)?,
-                    overlap: lenient_f64(row, 10)?,
-                    file_name: row.get(11)?,
-                })
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    DetectionRow {
+                        date: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                        time: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                        sci_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                        com_name: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                        // `NaN` survives `clamp` and binds as NULL into a
+                        // NOT NULL column, aborting the import mid-way; a
+                        // non-finite confidence is treated as absent.
+                        confidence: lenient_f64(row, 5)?
+                            .filter(|c| c.is_finite())
+                            .unwrap_or(0.0)
+                            .clamp(0.0, 1.0),
+                        lat: lenient_f64(row, 6)?,
+                        lon: lenient_f64(row, 7)?,
+                        cutoff: lenient_f64(row, 8)?,
+                        week: lenient_i64(row, 9)?,
+                        sens: lenient_f64(row, 10)?,
+                        overlap: lenient_f64(row, 11)?,
+                        file_name: row.get(12)?,
+                    },
+                ))
             },
         )
         .map_err(MigrateError::DataTransfer)?
+        .map(|r| {
+            r.map(|(id, row)| {
+                last = id;
+                row
+            })
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(MigrateError::DataTransfer)?;
 
-    Ok(rows)
+    Ok((rows, last))
 }
 
 /// Insert a batch into the destination inside a single transaction.
@@ -736,6 +767,117 @@ mod tests {
             )
             .unwrap();
         assert_eq!(unparseable, 3);
+    }
+
+    /// A source of `n` distinct detections, one second apart.
+    fn distinct_source(n: usize) -> NamedTempFile {
+        let tmp = make_source(0);
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute(
+            "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1)
+             INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             SELECT '2026-01-01', time('06:00:00', '+' || i || ' seconds'),
+                    'Turdus merula', 'Blackbird', 0.9, 'rec.wav'
+               FROM k",
+            params![i64::try_from(n).unwrap()],
+        )
+        .unwrap();
+        drop(conn);
+        tmp
+    }
+
+    /// Finding 10: each page seeks to where the last ended instead of
+    /// re-sorting the table and discarding `OFFSET` rows of it.
+    #[test]
+    fn the_source_is_paged_by_seeking_not_by_offset() {
+        let src = distinct_source(3);
+        let conn = Connection::open(src.path()).unwrap();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {FETCH_SQL}"))
+            .unwrap()
+            .query_map(params![0_i64, 500_i64], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let plan = plan.join(" | ");
+        assert!(plan.contains("INTEGER PRIMARY KEY"), "{plan}");
+        assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+        assert!(!FETCH_SQL.contains("OFFSET"), "{FETCH_SQL}");
+    }
+
+    /// Counterpart: paging still reaches every row across several pages.
+    #[test]
+    fn every_page_of_a_large_source_is_imported() {
+        let n = BATCH_SIZE * 2 + 7;
+        let src = distinct_source(n);
+        let dst = NamedTempFile::new().unwrap();
+        let summary = BirdNetPiImporter
+            .migrate_with_options(
+                src.path(),
+                dst.path(),
+                &ProgressHandle::new(),
+                &ImportOptions::default(),
+                (None, None),
+            )
+            .unwrap();
+        assert_eq!(summary.imported_rows, n as u64);
+        let dc = Connection::open(dst.path()).unwrap();
+        let (count, distinct): (i64, i64) = dc
+            .query_row(
+                "SELECT COUNT(*), COUNT(DISTINCT Time) FROM detections",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let n = i64::try_from(n).unwrap();
+        assert_eq!((count, distinct), (n, n));
+        let recorded: i64 = dc
+            .query_row("SELECT row_count FROM import_batches", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recorded, n, "the batch records what it wrote");
+    }
+
+    /// A `NaN` confidence in the source (a TEXT cell) must not abort the
+    /// import half-way: it binds as NULL, and `Confidence` is NOT NULL.
+    #[test]
+    fn a_nan_confidence_does_not_abort_the_import() {
+        let src = distinct_source(2);
+        Connection::open(src.path())
+            .unwrap()
+            .execute(
+                "UPDATE detections SET Confidence = 'NaN' WHERE rowid = 1",
+                [],
+            )
+            .unwrap();
+        let dst = NamedTempFile::new().unwrap();
+        let summary = BirdNetPiImporter
+            .migrate(src.path(), dst.path(), &ProgressHandle::new())
+            .expect("a NaN cell degrades like any other unreadable number");
+        assert_eq!(summary.imported_rows, 2);
+    }
+
+    /// Finding 12: a batch record that could not be given its row count is
+    /// reported, not left at 0 behind a successful-looking import.
+    #[test]
+    fn a_batch_count_that_cannot_be_recorded_is_an_error() {
+        let src = distinct_source(2);
+        let dst = NamedTempFile::new().unwrap();
+        {
+            let dc = birdnet_db::sqlite::open_or_create(dst.path()).unwrap();
+            dc.execute_batch(
+                "CREATE TRIGGER refuse_count BEFORE UPDATE OF row_count ON import_batches
+                 BEGIN SELECT RAISE(ABORT, 'row_count refused'); END;",
+            )
+            .unwrap();
+        }
+        let result = BirdNetPiImporter.migrate_with_options(
+            src.path(),
+            dst.path(),
+            &ProgressHandle::new(),
+            &ImportOptions::default(),
+            (None, None),
+        );
+        assert!(result.is_err(), "{result:?}");
     }
 
     #[test]

@@ -22,7 +22,10 @@ pub use filter::{
     DateRange, DetectionFilter, HourWindow, LockFilter, SortOrder, VerdictFilter, known_sources,
     search_detection_count, search_detections,
 };
-pub use locks::{is_detection_locked, lock_detection, locked_file_names, unlock_detection};
+pub use locks::{
+    is_detection_locked, is_detection_locked_at, lock_detection, lock_detection_at,
+    locked_file_names, unlock_detection, unlock_detection_at,
+};
 pub use read::{
     CLIP_AVAILABLE, RecordingsFilter, TodayFilter, analytic_detection_count,
     analytic_detection_count_for_date, analytic_detections, analytic_detections_above,
@@ -37,5 +40,6 @@ pub use read::{
 };
 pub use search::{SearchTerm, like_contains, parse_search_term};
 pub use write::{
-    delete_detection, insert_detection, relabel_detection, set_birdweather_soundscape,
+    DetectionKey, delete_detection, delete_detection_at, insert_detection, relabel_detection,
+    relabel_detection_at, set_birdweather_soundscape,
 };

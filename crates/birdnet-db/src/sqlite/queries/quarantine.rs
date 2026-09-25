@@ -300,6 +300,24 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
         params![id],
     )?;
 
+    // The verdict the row now carries has to be on record where every other
+    // verdict is. `review_verdict = 'confirmed'` alone left the approved
+    // detection in the review queue (which lists detections with no
+    // `detection_reviews` row) as though nobody had looked at it, and absent
+    // from the verdict list and counts. `DO NOTHING` on the triple: a verdict
+    // already recorded there is someone's, and is not overwritten here.
+    if inserted > 0 {
+        tx.execute(
+            "INSERT INTO detection_reviews
+                (date, time, sci_name, com_name, status, notes, reviewed_at)
+             SELECT date, time, sci_name, com_name, 'confirmed',
+                    'Approved from quarantine', datetime('now')
+               FROM quarantine WHERE id = ?1
+             ON CONFLICT(date, time, sci_name) DO NOTHING",
+            params![id],
+        )?;
+    }
+
     // Mark as reviewed + approved.
     tx.execute(
         "UPDATE quarantine SET reviewed = 1, approved = 1 WHERE id = ?1",
@@ -600,6 +618,47 @@ mod tests {
         assert_eq!((cutoff, sens, overlap), (Some(0.8), Some(1.25), Some(0.5)));
         let row = get_quarantine(&conn, id).unwrap().unwrap();
         assert_eq!(row.cutoff, Some(0.8), "the quarantine row keeps them too");
+    }
+
+    /// Finding 7: an approved detection carries a `confirmed` verdict, so
+    /// the verdict must be on record — not left in the review queue as
+    /// unreviewed while the analytics treat it as confirmed.
+    #[test]
+    fn an_approved_detection_is_not_back_in_the_review_queue() {
+        use crate::sqlite::queries::detection_reviews::{
+            detection_review_counts, get_detection_review, unreviewed_recent_detections,
+        };
+        let conn = open();
+        insert_quarantine(&conn, &sample(QuarantineReason::LowConfidence)).unwrap();
+        let id = list_quarantine(&conn, QuarantineFilter::Pending, 10, 0).unwrap()[0].id;
+        assert!(approve_quarantine(&conn, id).unwrap());
+        assert!(unreviewed_recent_detections(&conn, 10).unwrap().is_empty());
+        let review = get_detection_review(&conn, "2026-03-27", "07:15:30", "Upupa epops")
+            .unwrap()
+            .expect("a verdict on record");
+        assert_eq!(review.status, "confirmed");
+        assert_eq!(detection_review_counts(&conn).unwrap(), (1, 0));
+    }
+
+    /// Counterpart: approving a detection that was already admitted records
+    /// nothing new — and never overwrites a verdict someone else gave.
+    #[test]
+    fn approving_over_an_existing_verdict_keeps_it() {
+        use crate::sqlite::queries::detection_reviews::get_detection_review;
+        let conn = open();
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES ('2026-03-27', '07:15:30', 'Upupa epops', 'Eurasian Hoopoe', 'rejected')",
+            [],
+        )
+        .unwrap();
+        insert_quarantine(&conn, &sample(QuarantineReason::LowConfidence)).unwrap();
+        let id = list_quarantine(&conn, QuarantineFilter::Pending, 10, 0).unwrap()[0].id;
+        approve_quarantine(&conn, id).unwrap();
+        let review = get_detection_review(&conn, "2026-03-27", "07:15:30", "Upupa epops")
+            .unwrap()
+            .unwrap();
+        assert_eq!(review.status, "rejected");
     }
 
     #[test]

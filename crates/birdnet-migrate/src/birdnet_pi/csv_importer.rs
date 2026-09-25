@@ -199,6 +199,7 @@ impl CsvImporter {
         let mut skipped = 0u64;
         let mut unparseable = 0u64;
         let mut data_lines = 0u64;
+        let mut first_error: Option<String> = None;
         let mut batch: Vec<CsvRow> = Vec::with_capacity(BATCH_SIZE);
 
         let mut buf: Vec<u8> = Vec::with_capacity(512);
@@ -218,6 +219,8 @@ impl CsvImporter {
                 skipped += 1;
                 continue;
             };
+            // A header-less file's first *data* line carries the mark.
+            let line = strip_bom(line);
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
@@ -245,6 +248,9 @@ impl CsvImporter {
                 }
                 Err(e) => {
                     tracing::warn!(err = %e, line = %line, "skipping unparseable CSV line");
+                    if first_error.is_none() {
+                        first_error = Some(e.to_string());
+                    }
                     skipped += 1;
                     unparseable += 1;
                 }
@@ -253,8 +259,10 @@ impl CsvImporter {
         if data_lines > 0 && unparseable == data_lines {
             return Err(MigrateError::CsvParse(format!(
                 "none of the {data_lines} lines could be read as a detection \
-                 (expected {} columns: Date, Time, Sci_Name, Com_Name, Confidence, …)",
-                layout.describe()
+                 (expected {} columns: Date, Time, Sci_Name, Com_Name, Confidence, …); \
+                 the first was refused because: {}",
+                layout.describe(),
+                first_error.as_deref().unwrap_or("(no reason recorded)")
             )));
         }
 
@@ -325,6 +333,12 @@ pub(crate) struct Layout {
 impl Layout {
     /// Read the layout from a file's first line.
     pub(crate) fn detect(first_line: &str) -> Self {
+        // A file saved by Excel or Notepad starts with a UTF-8 byte-order
+        // mark. Only the first field's `date` test used to strip it, so the
+        // header was recognised and then its first column was named
+        // "\u{feff}date" — no `Date` column, every row "missing date", and
+        // the whole import refused.
+        let first_line = strip_bom(first_line);
         // The separator that occurs most, among the three any of these files
         // uses. `BirdDB.txt` has eleven `;` and at most a comma or two in a
         // species name; a CSV has eleven or more `,`.
@@ -334,11 +348,9 @@ impl Layout {
             .max_by_key(|&c| (count(c), c == ';'))
             .unwrap_or(',');
         let fields = split_fields(first_line, delim);
-        let is_header = fields.first().is_some_and(|f| {
-            f.trim()
-                .trim_start_matches('\u{feff}')
-                .eq_ignore_ascii_case("date")
-        });
+        let is_header = fields
+            .first()
+            .is_some_and(|f| f.trim().eq_ignore_ascii_case("date"));
         let positions = is_header.then(|| {
             let names: Vec<String> = fields
                 .iter()
@@ -420,6 +432,99 @@ fn unguard(s: &str) -> &str {
     }
 }
 
+/// Drop a leading UTF-8 byte-order mark.
+fn strip_bom(s: &str) -> &str {
+    s.strip_prefix('\u{feff}').unwrap_or(s)
+}
+
+/// Refuse a confidence that is not a probability.
+///
+/// Every reader of `Confidence` — thresholds, the quality dashboard, the
+/// `0.7` cutoff comparisons — assumes `0.0..=1.0`. The CSV path stored what it
+/// parsed: `85` from a sheet kept in percent sat above every threshold as a
+/// certainty of 8 500 %; `inf` stored as-is; `NaN` binds as NULL, which the
+/// `NOT NULL` column refused — aborting the import mid-file with the batches
+/// before it already committed.
+///
+/// Refused rather than rescaled or clamped. Clamping (the database importer's
+/// choice for a column that is *usually* right) would turn `85` into a
+/// certain `1.0`, and dividing by 100 cannot be decided per row — `1` is a
+/// valid probability and a valid percentage. A refused row is counted in
+/// `skipped_rows`, and a file whose every row is refused fails with this
+/// reason, so a percent-scale export is told why rather than imported wrong.
+fn check_confidence(confidence: f64, raw: &str) -> Result<(), MigrateError> {
+    if confidence.is_finite() && (0.0..=1.0).contains(&confidence) {
+        return Ok(());
+    }
+    let hint = if confidence.is_finite() && confidence > 1.0 && confidence <= 100.0 {
+        " — a percentage? confidence must be a fraction between 0 and 1"
+    } else {
+        " — confidence must be a number between 0 and 1"
+    };
+    Err(MigrateError::CsvParse(format!(
+        "confidence out of range: '{raw}'{hint}"
+    )))
+}
+
+/// Split `s` on `sep` into exactly `N` all-digit parts of 1..=`max_len` digits.
+fn digit_parts<const N: usize>(s: &str, sep: char, max_len: usize) -> Option<[u32; N]> {
+    let mut out = [0u32; N];
+    let mut parts = s.split(sep);
+    for slot in &mut out {
+        let p = parts.next()?;
+        if p.is_empty() || p.len() > max_len || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        *slot = p.parse().ok()?;
+    }
+    parts.next().is_none().then_some(out)
+}
+
+/// `YYYY-M-D` → `YYYY-MM-DD`, or `None` if it names no calendar day.
+///
+/// `Date` is compared as text everywhere — `Date = ?`, `BETWEEN`, the unique
+/// key — so `2026-4-1` was a different day from `2026-04-01`: it matched no
+/// date filter, and a re-import of the same row in canonical form was not
+/// recognised as a duplicate.
+fn normalise_date(raw: &str) -> Option<String> {
+    let [y, m, d] = digit_parts::<3>(raw, '-', 4)?;
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (y >= 1000 && (1..=days).contains(&d)).then(|| format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// `H:MM[:SS[.fff]]` → `HH:MM:SS`, or `None` if it names no time of day.
+///
+/// Fractional seconds are truncated, as the pipeline truncates them; a
+/// missing seconds field is `:00`. `6:00:00` is otherwise a different string
+/// from `06:00:00`, and sorted before `10:00:00` is the least of its problems:
+/// `datetime()` returns NULL for it, so it had no `detected_at_utc`, no place
+/// in any hour bucket, and no way to be shifted by the clock reconciliation.
+fn normalise_time(raw: &str) -> Option<String> {
+    let whole = raw.split_once('.').map_or(raw, |(w, frac)| {
+        if !frac.is_empty() && frac.bytes().all(|b| b.is_ascii_digit()) {
+            w
+        } else {
+            // Not a fraction: leave it to fail below.
+            raw
+        }
+    });
+    let (h, m, s) = match whole.matches(':').count() {
+        1 => {
+            let [h, m] = digit_parts::<2>(whole, ':', 2)?;
+            (h, m, 0)
+        }
+        2 => digit_parts::<3>(whole, ':', 2)?.into(),
+        _ => return None,
+    };
+    (h < 24 && m < 60 && s < 60).then(|| format!("{h:02}:{m:02}:{s:02}"))
+}
+
 /// Parse one data line into a `CsvRow`.
 #[allow(clippy::similar_names)]
 fn parse_line(line: &str, layout: &Layout) -> Result<CsvRow, MigrateError> {
@@ -457,10 +562,19 @@ fn parse_line(line: &str, layout: &Layout) -> Result<CsvRow, MigrateError> {
     let confidence: f64 = raw_confidence
         .parse()
         .map_err(|_| MigrateError::CsvParse(format!("invalid confidence: '{raw_confidence}'")))?;
+    check_confidence(confidence, raw_confidence)?;
+    let raw_date = required(0)?;
+    let date = normalise_date(raw_date).ok_or_else(|| {
+        MigrateError::CsvParse(format!("invalid date: '{raw_date}' (want YYYY-MM-DD)"))
+    })?;
+    let raw_time = required(1)?;
+    let time = normalise_time(raw_time).ok_or_else(|| {
+        MigrateError::CsvParse(format!("invalid time: '{raw_time}' (want HH:MM:SS)"))
+    })?;
 
     Ok(CsvRow {
-        date: required(0)?.to_string(),
-        time: required(1)?.to_string(),
+        date,
+        time,
         sci_name: required(2)?.to_string(),
         com_name: required(3)?.to_string(),
         confidence,
@@ -527,7 +641,33 @@ fn flush_batch(
     let mut inserted = 0u64;
     let mut skipped = 0u64;
 
+    // A row already held under any chunk offset is this row. The unique key
+    // includes `chunk_offset_secs`, which no CSV carries — this station's own
+    // export has no such column — so every row read here is offered with the
+    // default 0.0. Against the key alone, re-importing an export duplicated
+    // every detection that was not the first chunk of its recording: all of
+    // them, on a station with several chunks a clip. `(Date, Time, Sci_Name,
+    // File_Name)` names one detection since migration 24 put each chunk on
+    // its own second, so matching on it regardless of the offset is exact.
+    let mut held = tx
+        .prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM detections
+                WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3
+                  AND COALESCE(File_Name, '') = COALESCE(?4, ''))",
+        )
+        .map_err(MigrateError::DataTransfer)?;
+
     for row in batch {
+        let exists: bool = held
+            .query_row(
+                rusqlite::params![row.date, row.time, row.sci_name, row.file_name],
+                |r| r.get(0),
+            )
+            .map_err(MigrateError::DataTransfer)?;
+        if exists {
+            skipped += 1;
+            continue;
+        }
         let rows_changed = tx
             .execute(
                 "INSERT INTO detections
@@ -550,6 +690,7 @@ fn flush_batch(
         }
     }
 
+    drop(held);
     tx.commit().map_err(MigrateError::DataTransfer)?;
     Ok((inserted, skipped))
 }
@@ -809,5 +950,177 @@ Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256\n\
             .unwrap();
         assert_eq!(summary.imported_rows, 2);
         assert_eq!(summary.schema_name, "BirdNET-Pi CSV");
+    }
+
+    /// Import `text` into an existing destination.
+    fn import_into(text: &str, dst: &NamedTempFile) -> MigrationSummary {
+        let src = make_csv(text);
+        CsvImporter
+            .migrate(
+                src.path(),
+                dst.path(),
+                &crate::progress::ProgressHandle::new(),
+            )
+            .expect("import")
+    }
+
+    fn rows(dst: &NamedTempFile) -> Vec<(String, String, f64)> {
+        let conn = rusqlite::Connection::open(dst.path()).unwrap();
+        conn.prepare("SELECT Date, Time, Confidence FROM detections ORDER BY Date, Time")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    const HEADER: &str =
+        "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name\n";
+
+    /// Finding 2: this station's export carries no `chunk_offset_secs`, so a
+    /// re-import offered every chunk after a clip's first at offset 0 — a
+    /// different unique key — and duplicated it.
+    #[test]
+    fn re_importing_the_export_does_not_duplicate_later_chunks() {
+        let dst = NamedTempFile::new().unwrap();
+        {
+            let conn = birdnet_db::sqlite::open_or_create(dst.path()).unwrap();
+            for (time, offset) in [("06:00:00", 0.0), ("06:00:03", 3.0), ("06:00:06", 6.0)] {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                     VALUES ('2026-05-01', ?1, 'Turdus merula', 'Blackbird', 0.9, 'seg.wav', ?2)",
+                    rusqlite::params![time, offset],
+                )
+                .unwrap();
+            }
+        }
+        let export = format!(
+            "{HEADER}2026-05-01,06:00:00,Turdus merula,Blackbird,0.9000,,,,,,,seg.wav\n\
+             2026-05-01,06:00:03,Turdus merula,Blackbird,0.9000,,,,,,,seg.wav\n\
+             2026-05-01,06:00:06,Turdus merula,Blackbird,0.9000,,,,,,,seg.wav\n"
+        );
+        let summary = import_into(&export, &dst);
+        assert_eq!(summary.imported_rows, 0, "every row is already held");
+        assert_eq!(summary.skipped_rows, 3);
+        assert_eq!(rows(&dst).len(), 3);
+    }
+
+    /// Counterpart: a detection of the same second from another clip is a
+    /// different detection, and still lands.
+    #[test]
+    fn a_row_from_another_clip_at_the_same_second_is_still_imported() {
+        let dst = NamedTempFile::new().unwrap();
+        import_into(
+            &format!("{HEADER}2026-05-01,06:00:03,Turdus merula,Blackbird,0.9,,,,,,,cam1.wav\n"),
+            &dst,
+        );
+        let summary = import_into(
+            &format!("{HEADER}2026-05-01,06:00:03,Turdus merula,Blackbird,0.9,,,,,,,cam2.wav\n"),
+            &dst,
+        );
+        assert_eq!(summary.imported_rows, 1);
+    }
+
+    /// Finding 3: a confidence that is not a probability is refused and
+    /// counted — not stored as 85, not stored as infinity, and not allowed to
+    /// abort the import half-way (NaN binds as NULL into a NOT NULL column).
+    #[test]
+    fn a_confidence_outside_zero_to_one_is_refused_and_counted() {
+        let dst = NamedTempFile::new().unwrap();
+        let summary = import_into(
+            &format!(
+                "{HEADER}2026-05-01,06:00:00,Turdus merula,Blackbird,0.9,,,,,,,a.wav\n\
+                 2026-05-01,06:00:01,Turdus merula,Blackbird,85,,,,,,,b.wav\n\
+                 2026-05-01,06:00:02,Turdus merula,Blackbird,NaN,,,,,,,c.wav\n\
+                 2026-05-01,06:00:03,Turdus merula,Blackbird,inf,,,,,,,d.wav\n\
+                 2026-05-01,06:00:04,Turdus merula,Blackbird,-0.1,,,,,,,e.wav\n\
+                 2026-05-01,06:00:05,Turdus merula,Blackbird,1,,,,,,,f.wav\n"
+            ),
+            &dst,
+        );
+        assert_eq!(summary.imported_rows, 2, "0.9 and 1 are probabilities");
+        assert_eq!(summary.skipped_rows, 4);
+        assert!(rows(&dst).iter().all(|(_, _, c)| (0.0..=1.0).contains(c)));
+    }
+
+    /// A file kept in percent is refused whole, and says why.
+    #[test]
+    fn a_percent_scale_file_is_refused_with_the_reason() {
+        let err = import(&format!(
+            "{HEADER}2026-05-01,06:00:00,Turdus merula,Blackbird,85,,,,,,,a.wav\n"
+        ))
+        .map(|(s, _)| s)
+        .expect_err("a percent file must not import");
+        assert!(err.to_string().contains("a percentage?"), "{err}");
+    }
+
+    /// Finding 8: a byte-order mark in front of the header named the first
+    /// column "\u{feff}date", so no row had a date and the import failed.
+    #[test]
+    fn a_byte_order_mark_does_not_hide_the_date_column() {
+        let (summary, dst) = import(&format!(
+            "\u{feff}{HEADER}2026-05-01,06:00:00,Turdus merula,Blackbird,0.9,,,,,,,a.wav\n"
+        ))
+        .expect("a BOM-prefixed export imports");
+        assert_eq!(summary.imported_rows, 1);
+        assert_eq!(rows(&dst)[0].0, "2026-05-01");
+
+        // And on a header-less file it is not stored inside the first date.
+        let (summary, dst) =
+            import("\u{feff}2026-05-01;06:00:00;Turdus merula;Blackbird;0.9;;;;;;;a.wav\n")
+                .expect("a BOM-prefixed BirdDB.txt imports");
+        assert_eq!(summary.imported_rows, 1);
+        assert_eq!(rows(&dst)[0].0, "2026-05-01");
+    }
+
+    /// Finding 9: `6:00:00`, `06:00`, `2026-5-1` are stored canonically, so
+    /// they match date filters, sort, convert with `datetime()`, and collide
+    /// with the same row written the canonical way.
+    #[test]
+    fn dates_and_times_are_stored_canonically() {
+        let dst = NamedTempFile::new().unwrap();
+        let summary = import_into(
+            &format!(
+                "{HEADER}2026-5-1,6:00:00,Turdus merula,Blackbird,0.9,,,,,,,a.wav\n\
+                 2026-05-01,07:30,Turdus merula,Blackbird,0.9,,,,,,,b.wav\n\
+                 2026-05-01,08:15:42.750,Turdus merula,Blackbird,0.9,,,,,,,c.wav\n"
+            ),
+            &dst,
+        );
+        assert_eq!(summary.imported_rows, 3);
+        let got: Vec<(String, String)> = rows(&dst).into_iter().map(|(d, t, _)| (d, t)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("2026-05-01".into(), "06:00:00".into()),
+                ("2026-05-01".into(), "07:30:00".into()),
+                ("2026-05-01".into(), "08:15:42".into()),
+            ]
+        );
+        // The canonical spelling of the first row is the same detection.
+        let again = import_into(
+            &format!("{HEADER}2026-05-01,06:00:00,Turdus merula,Blackbird,0.9,,,,,,,a.wav\n"),
+            &dst,
+        );
+        assert_eq!(again.imported_rows, 0);
+    }
+
+    /// Counterpart: a date or time that names nothing is refused, not stored.
+    #[test]
+    fn a_date_or_time_that_names_nothing_is_refused() {
+        for bad in [
+            "2026-02-30,06:00:00",
+            "2026-13-01,06:00:00",
+            "01/05/2026,06:00:00",
+            "2026-05-01,24:00:00",
+            "2026-05-01,06:60:00",
+            "2026-05-01,6",
+            "2026-05-01,06:00:00pm",
+        ] {
+            let text = format!("{HEADER}{bad},Turdus merula,Blackbird,0.9,,,,,,,a.wav\n");
+            assert!(import(&text).is_err(), "{bad} was accepted");
+        }
+        assert_eq!(normalise_date("2024-02-29").as_deref(), Some("2024-02-29"));
+        assert_eq!(normalise_date("2100-02-29"), None);
     }
 }
