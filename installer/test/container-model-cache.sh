@@ -182,6 +182,51 @@ else
     sed 's/^/        /' "${OUT}"
 fi
 
+# run_setup_geomodel <labels-env-value> — drive setup_geomodel with the fetch
+# stubbed to succeed; prints the two variables it leaves for the daemon.
+run_setup_geomodel() {
+    (
+        set -eu
+        log()  { :; }
+        warn() { :; }
+        # shellcheck disable=SC1090
+        source <(sed -n '/^setup_geomodel()/,/^}/p' "${ENTRYPOINT}")
+        ensure_geomodel_file() { : >"$1"; return 0; }
+        # shellcheck disable=SC2034  # read by the sourced function
+        { MODEL_DIR="$(mktemp -d)"; GEOMODEL_FILE="geo.onnx"; GEOMODEL_LABELS_FILE="geo_labels.txt"
+          GEOMODEL_SHA256=x; GEOMODEL_LABELS_SHA256=x; GEOMODEL_USER_SET=0; }
+        unset BIRDNET_METADATA_MODEL BIRDNET_SKIP_MODEL_DOWNLOAD
+        if [ -n "$1" ]; then export BIRDNET_METADATA_LABELS="$1"; else unset BIRDNET_METADATA_LABELS; fi
+        if ! declare -F setup_geomodel >/dev/null; then echo "NO_FUNCTION"; exit 0; fi
+        setup_geomodel
+        printf 'MODEL=%s\nLABELS=%s\n' "${BIRDNET_METADATA_MODEL:-}" "${BIRDNET_METADATA_LABELS:-}"
+        rm -rf "${MODEL_DIR}"
+    ) 2>&1
+}
+
+echo "=== an operator's BIRDNET_METADATA_LABELS survives the geomodel download ==="
+# Setting only the labels (a translated or site-edited label file, with the
+# geomodel the container fetches) used to be overwritten with the default path.
+out="$(run_setup_geomodel /data/my-labels.txt)"
+if grep -qx 'LABELS=/data/my-labels.txt' <<<"${out}"; then
+    pass "the operator's label file is kept"
+else
+    fail "the operator's label file was replaced: ${out}"
+fi
+if grep -qE '^MODEL=.+/geo\.onnx$' <<<"${out}"; then
+    pass "and the downloaded geomodel is still configured"
+else
+    fail "the downloaded geomodel was not configured: ${out}"
+fi
+
+echo "=== counterpart: with nothing set, both point at the downloaded pair ==="
+out="$(run_setup_geomodel "")"
+if grep -qE '^LABELS=.+/geo_labels\.txt$' <<<"${out}" && grep -qE '^MODEL=.+/geo\.onnx$' <<<"${out}"; then
+    pass "both default to the downloaded files"
+else
+    fail "the defaults were not applied: ${out}"
+fi
+
 echo "=== verify_sha256 must not report success when it cannot check ==="
 rc=0
 (

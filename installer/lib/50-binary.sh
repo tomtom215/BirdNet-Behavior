@@ -9,6 +9,33 @@
 # single SHA256SUMS file is attached to each GitHub Release for verification.
 # ---------------------------------------------------------------------------
 
+# Temp dirs to remove however the run ends.
+#
+# install_binary used `trap "rm -rf …" RETURN`, which fires only when the
+# function returns — and every refusal inside it is a `fatal`, which exits. So
+# each failed download, missing SHA256SUMS or checksum mismatch left its
+# workdir (the ~100 MB archive, and the extracted binary) behind in /tmp, and
+# on a Pi whose /tmp is a small tmpfs a few retries filled it.
+#
+# One EXIT handler owns both jobs that must happen on the way out — this, and
+# restarting a service stopped for the swap (77-manage.sh) — so arming one can
+# never replace the other: both places install the same handler.
+track_tmpdir() { # $1=dir to remove at exit
+    INSTALLER_TMPDIRS+=("$1")
+    trap installer_on_exit EXIT
+}
+remove_tracked_tmpdirs() {
+    local d
+    for d in "${INSTALLER_TMPDIRS[@]+"${INSTALLER_TMPDIRS[@]}"}"; do
+        rm -rf -- "${d}"
+    done
+    INSTALLER_TMPDIRS=()
+}
+installer_on_exit() {
+    local rc=$?
+    remove_tracked_tmpdirs
+    restore_service_if_we_stopped_it "${rc}"
+}
 
 # Put the new binary in place without the path ever being absent or short.
 #
@@ -103,6 +130,9 @@ install_binary() {
 
     local workdir
     workdir="$(mktemp -d)"
+    # RETURN removes it as soon as the install is done; the tracked copy is for
+    # every `fatal` below, which exits without returning.
+    track_tmpdir "${workdir}"
     # shellcheck disable=SC2064
     trap "rm -rf '${workdir}'" RETURN
 

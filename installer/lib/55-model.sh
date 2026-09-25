@@ -73,7 +73,15 @@ fetch_verified_model() {
                 continue
             fi
         else
-            if ! download "${url}" "${dest}"; then
+            local rc=0
+            download_or_absent "${url}" "${dest}" || rc=$?
+            if [ "${rc}" -eq 4 ]; then
+                # Not a failure: the origin answered that it does not carry the
+                # file (the geomodel before it is mirrored; see RELEASING.md).
+                info "  ${human}: not published at ${label}; trying the next source."
+                continue
+            fi
+            if [ "${rc}" -ne 0 ]; then
                 warn "  ${human}: download from ${label} failed; trying the next source."
                 continue
             fi

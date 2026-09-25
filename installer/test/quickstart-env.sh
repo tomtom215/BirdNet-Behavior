@@ -97,6 +97,32 @@ else
     fail "the writer does not guard the coordinates"
 fi
 
+echo "=== the host's timezone reaches .env, so the container does not run on UTC ==="
+# shellcheck disable=SC1090
+source <(extract detect_host_tz "${QS}"; extract tz_name_ok "${QS}")
+if ! declare -F detect_host_tz >/dev/null; then
+    fail "quickstart.sh has no detect_host_tz — nothing writes TZ, so compose's container runs on UTC"
+else
+    tzroot="$(mktemp -d)"
+    mkdir -p "${tzroot}/a/etc" "${tzroot}/b/etc" "${tzroot}/c/etc" "${tzroot}/d/etc" "${tzroot}/e/etc"
+    printf 'Europe/Berlin\n' > "${tzroot}/a/etc/timezone"
+    ln -s /usr/share/zoneinfo/America/New_York "${tzroot}/b/etc/localtime"
+    ln -s /var/db/timezone/zoneinfo/Australia/Sydney "${tzroot}/c/etc/localtime"
+    printf '\n' > "${tzroot}/d/etc/timezone"; ln -s /etc/zz-not-a-zone "${tzroot}/d/etc/localtime"
+    printf '../../etc/passwd\n' > "${tzroot}/e/etc/timezone"
+    check "$(detect_host_tz "${tzroot}/a")" "Europe/Berlin"      "Debian / Raspberry Pi OS /etc/timezone"
+    check "$(detect_host_tz "${tzroot}/b")" "America/New_York"   "a systemd /etc/localtime symlink"
+    check "$(detect_host_tz "${tzroot}/c")" "Australia/Sydney"   "a macOS /etc/localtime symlink"
+    check "$(detect_host_tz "${tzroot}/d")" ""                   "nothing usable detects nothing, not a guess"
+    check "$(detect_host_tz "${tzroot}/e")" ""                   "a value that is not a zone name is refused"
+    rm -rf "${tzroot}"
+fi
+if grep -qE "^[[:space:]]*printf 'TZ=%s\\\\n' \"\\\$STATION_TZ\"" "${QS}"; then
+    pass "the .env writer writes TZ"
+else
+    fail "the .env writer does not write TZ"
+fi
+
 if [ "${FAILED}" -ne 0 ]; then
     echo "quickstart-env: FAILED"
     exit 1

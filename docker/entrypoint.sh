@@ -106,6 +106,14 @@ remote_size() {
                END{print v+0}'
 }
 
+# The final HTTP status for a URL (after redirects), from a HEAD request;
+# "000" when the host could not be reached at all.
+remote_status() {
+    url="$1"
+    curl --silent --location --head --output /dev/null --write-out '%{http_code}' \
+        --max-time 15 --retry 2 --retry-delay 3 "$url" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------------------
 # Model paths
 # ---------------------------------------------------------------------------
@@ -220,7 +228,11 @@ fetch_one() {
     log "  to:    ${dest}"
     log "  This runs only on first start. The model is cached in the"
     log "  Docker volume so subsequent container starts are instant."
-    log "  Typical download: 1–3 min on fibre, 5–15 min on home broadband."
+    # The timing is the ~541 MB classifier's; a 14 MB geomodel was told the
+    # same. Say it only for a large (or unknown-size) file.
+    if [ "${total}" -eq 0 ] || [ "${total}" -ge 100000000 ]; then
+        log "  Typical download: 1–3 min on fibre, 5–15 min on home broadband."
+    fi
     rule
 
     tmpfile="${dest}.tmp"
@@ -432,6 +444,16 @@ ensure_geomodel_file() {
             origin="upstream birdnet-team/geomodel ${GEOMODEL_VERSION}"
         fi
 
+        # The models release may not carry the geomodel yet (RELEASING.md), and
+        # falling through to upstream is then the expected path. Ask first, so
+        # that answer is one line rather than a download banner, curl's 404,
+        # and two warnings. Only a definite 404 is taken as "not there": any
+        # other answer goes through fetch_one and is reported if it fails.
+        if [ "$src" = "mirror" ] && [ "$(remote_status "$url")" = "404" ]; then
+            log "${desc}: not published in ${origin} — fetching it from upstream."
+            continue
+        fi
+
         log "Fetching ${desc} from ${origin}…"
         if ! fetch_one "$dest" "$url" "$desc"; then
             warn "${desc}: ${origin} download failed — trying the next source."
@@ -451,33 +473,42 @@ ensure_geomodel_file() {
     return 1
 }
 
-if [ "${GEOMODEL_USER_SET}" = "1" ]; then
-    log "BIRDNET_METADATA_MODEL is set explicitly — leaving the geomodel alone."
-elif [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
-    log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping the geomodel download too."
-else
-    mkdir -p "${MODEL_DIR}"
-    geomodel_path="${MODEL_DIR}/${GEOMODEL_FILE}"
-    geolabels_path="${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
-
-    if ensure_geomodel_file "${geomodel_path}" "${GEOMODEL_FILE}" \
-        "${GEOMODEL_SHA256}" "geomodel (~14 MB)" &&
-        ensure_geomodel_file "${geolabels_path}" "${GEOMODEL_LABELS_FILE}" \
-            "${GEOMODEL_LABELS_SHA256}" "geomodel labels"; then
-        BIRDNET_METADATA_MODEL="${geomodel_path}"
-        BIRDNET_METADATA_LABELS="${geolabels_path}"
-        export BIRDNET_METADATA_MODEL BIRDNET_METADATA_LABELS
-        log "Species occurrence filtering: ON (set BIRDNET_SF_THRESH to tune; default 0.03)."
+# Decide the geomodel: leave an operator's alone, or fetch ours and point the
+# daemon at it. A function so installer/test/container-model-cache.sh can
+# drive it.
+setup_geomodel() {
+    if [ "${GEOMODEL_USER_SET}" = "1" ]; then
+        log "BIRDNET_METADATA_MODEL is set explicitly — leaving the geomodel alone."
+    elif [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
+        log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping the geomodel download too."
     else
-        # The model alone is unusable — the station refuses a geomodel it cannot
-        # align — so neither is left behind to be half-configured next start.
-        rm -f "${geomodel_path}" "${geolabels_path}"
-        warn "Geomodel unavailable — species occurrence filtering is OFF."
-        warn "Every species the classifier knows stays a candidate wherever this"
-        warn "station is. Restart the container to retry, then check with:"
-        warn "  docker exec <container> birdnet-behavior --doctor"
+        mkdir -p "${MODEL_DIR}"
+        geomodel_path="${MODEL_DIR}/${GEOMODEL_FILE}"
+        geolabels_path="${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+
+        if ensure_geomodel_file "${geomodel_path}" "${GEOMODEL_FILE}" \
+            "${GEOMODEL_SHA256}" "geomodel (~14 MB)" &&
+            ensure_geomodel_file "${geolabels_path}" "${GEOMODEL_LABELS_FILE}" \
+                "${GEOMODEL_LABELS_SHA256}" "geomodel labels"; then
+            BIRDNET_METADATA_MODEL="${geomodel_path}"
+            # Only a default: an operator who set the labels alone (a translated
+            # or edited label file for the geomodel we fetch) keeps theirs. This
+            # used to overwrite it; the station checks the pair at startup.
+            BIRDNET_METADATA_LABELS="${BIRDNET_METADATA_LABELS:-${geolabels_path}}"
+            export BIRDNET_METADATA_MODEL BIRDNET_METADATA_LABELS
+            log "Species occurrence filtering: ON (set BIRDNET_SF_THRESH to tune; default 0.03)."
+        else
+            # The model alone is unusable — the station refuses a geomodel it cannot
+            # align — so neither is left behind to be half-configured next start.
+            rm -f "${geomodel_path}" "${geolabels_path}"
+            warn "Geomodel unavailable — species occurrence filtering is OFF."
+            warn "Every species the classifier knows stays a candidate wherever this"
+            warn "station is. Restart the container to retry, then check with:"
+            warn "  docker exec <container> birdnet-behavior --doctor"
+        fi
     fi
-fi
+}
+setup_geomodel
 
 # ---------------------------------------------------------------------------
 # Container defaults

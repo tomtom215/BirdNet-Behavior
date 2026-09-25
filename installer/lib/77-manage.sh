@@ -4,14 +4,16 @@
 # ---------------------------------------------------------------------------
 
 # Put a service we stopped back, if the run is ending without having restarted
-# it. Installed as an EXIT trap by stop_running_service_for_swap.
+# it. Run from the shared EXIT handler (installer_on_exit, 50-binary.sh) that
+# stop_running_service_for_swap arms.
 #
 # Every `fatal` between the stop and maybe_start_service used to leave a working
 # station switched off: a failed model download, an unwritable directory, and —
 # since verification became mandatory — an unreachable SHA256SUMS. An update
 # that cannot proceed must leave the station exactly as it found it, running.
 restore_service_if_we_stopped_it() {
-    local rc=$?
+    # Called by installer_on_exit (50-binary.sh), which passes the exit status.
+    local rc="${1:-$?}"
     if [ "${SERVICE_WAS_RUNNING:-0}" = "1" ] && has_systemd; then
         if [ "${rc}" -ne 0 ]; then
             warn "The run is ending unsuccessfully; restarting the service that was stopped for the swap."
@@ -32,7 +34,10 @@ stop_running_service_for_swap() {
     has_systemd || return 0
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         SERVICE_WAS_RUNNING=1
-        trap restore_service_if_we_stopped_it EXIT
+        # The shared handler, not this function alone: a bare
+        # `trap restore_service_if_we_stopped_it EXIT` would replace the one
+        # install_binary armed to remove its workdir.
+        trap installer_on_exit EXIT
         info "Stopping the running service to swap the binary safely…"
         systemctl stop "${SERVICE_NAME}" || true
     fi

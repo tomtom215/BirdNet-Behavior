@@ -22,7 +22,8 @@
 #   5. Asks for your station coordinates (or auto-detects via opt-in IP
 #      geolocation through ipapi.co — off by default, you have to say yes).
 #   6. (DuckDB behavioral analytics is built into every image and on by default.)
-#   7. Writes a minimal 6-line .env with only your chosen values.
+#   7. Detects the host's timezone and writes a minimal .env with only your
+#      chosen values.
 #   8. Starts the container with the matching compose overlay.
 #   9. Tails the logs so you can watch the first-run model download, and
 #      stops tailing automatically as soon as the web server reports healthy.
@@ -140,6 +141,38 @@ take_longitude() {
 env_quote() {
     case "$1" in *"'"*) return 1 ;; esac
     printf "'%s'" "$1"
+}
+
+# The host's IANA timezone (e.g. Europe/Berlin), or nothing. Same order the
+# station's `--doctor` reads it in: TZ, then /etc/timezone (Debian, Raspberry
+# Pi OS), then the /etc/localtime symlink into a zoneinfo tree (systemd hosts,
+# macOS). `timedatectl` is the fallback for a copied rather than linked
+# localtime. $1 is a root to read the files under (tests only).
+#
+# Without this the container got no TZ: compose defaulted it to UTC, and every
+# Docker station filed its detections under UTC hours with nothing saying so.
+detect_host_tz() {
+    local root="${1:-}" tz="" link
+    if [ -z "$root" ] && [ -n "${TZ:-}" ]; then tz="${TZ#:}"; fi
+    if [ -z "$tz" ] && [ -r "${root}/etc/timezone" ]; then
+        tz="$(awk 'NF{print $1; exit}' "${root}/etc/timezone" 2>/dev/null || true)"
+    fi
+    if [ -z "$tz" ] && link="$(readlink "${root}/etc/localtime" 2>/dev/null)"; then
+        case "$link" in */zoneinfo/?*) tz="${link#*/zoneinfo/}" ;; esac
+    fi
+    if [ -z "$tz" ] && [ -z "$root" ] && command -v timedatectl >/dev/null 2>&1; then
+        tz="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+    fi
+    if tz_name_ok "$tz"; then printf '%s\n' "$tz"; fi
+}
+
+# Is $1 shaped like an IANA zone name (Europe/Berlin, UTC)? Not empty, not a
+# path, nothing .env or Compose would read specially. Whether the image knows
+# the zone is the entrypoint's check, which warns at every start if not.
+tz_name_ok() {
+    case "$1" in
+        ""|/*|*..*|*[!A-Za-z0-9_/+-]*) return 1 ;;
+    esac
 }
 
 # Yes/no prompt with a default. Returns 0 for yes, 1 for no.
@@ -372,6 +405,22 @@ if [ -z "$LAT" ] || [ -z "$LON" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Timezone — detections are filed under the container's local hours
+# ---------------------------------------------------------------------------
+STATION_TZ="$(detect_host_tz)"
+if [ -n "$STATION_TZ" ]; then
+    info "Timezone: ${STATION_TZ} (from this host — change TZ in .env if the station is elsewhere)"
+else
+    warn "Could not detect this host's timezone."
+    while :; do
+        STATION_TZ=$(ask "Timezone as Area/City, e.g. Europe/Berlin (Enter for UTC)" "")
+        if [ -z "$STATION_TZ" ] || tz_name_ok "$STATION_TZ"; then break; fi
+        warn "'${STATION_TZ}' is not an IANA name like Europe/Berlin — try again, or press Enter for UTC."
+    done
+    [ -n "$STATION_TZ" ] || STATION_TZ="UTC"
+fi
+
+# ---------------------------------------------------------------------------
 # Image tag
 # ---------------------------------------------------------------------------
 # Every image includes DuckDB behavioral analytics (activity sessions,
@@ -397,6 +446,9 @@ hdr "Writing your .env"
         # Commented, not blank: a blank value is a supplied value (see .env.example).
         printf '#BIRDNET_LATITUDE=\n#BIRDNET_LONGITUDE=\n'
     fi
+    printf '\n'
+    printf '# --- Timezone (IANA name) — detections are filed under these local hours ---\n'
+    printf 'TZ=%s\n' "$STATION_TZ"
     printf '\n'
     printf '# --- Audio source ---\n'
     case "$AUDIO_KIND" in

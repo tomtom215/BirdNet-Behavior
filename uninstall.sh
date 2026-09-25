@@ -197,8 +197,18 @@ read_conf() { # $1=key  -> value or empty, read as the station's config parser r
 }
 svc_flag() { # $1=flag  -> value or empty (from ExecStart=)
   [ -f "$SERVICE_FILE" ] || return 0
-  { grep -E '^ExecStart=' "$SERVICE_FILE" 2>/dev/null | tail -1 \
-      | grep -oE -e "$1[ =][^ ]+" | awk 'NR==1' | sed -E "s/^$1[ =]//"; } || true
+  local v
+  v="$({ grep -E '^ExecStart=' "$SERVICE_FILE" 2>/dev/null | tail -1 \
+      | grep -oE -e "$1[ =][^ ]+" | awk 'NR==1' | sed -E "s/^$1[ =]//"; } || true)"
+  # Quotes are systemd's syntax, not part of the path. `--analytics-db ""` is
+  # the documented way to turn analytics off, and kept verbatim it became the
+  # two-character path `""`, which rm_path refuses — aborting --remove-db under
+  # `set -e` after birds.db and the unit were gone but before backups/.
+  case "$v" in
+    \"*\") v="${v#\"}"; v="${v%\"}" ;;
+    \'*\') v="${v#\'}"; v="${v%\'}" ;;
+  esac
+  printf '%s\n' "$v"
 }
 
 detect_paths() { # sets DB_PATH RECS_DIR DATA_DIR … from the config and the unit
@@ -206,7 +216,14 @@ detect_paths() { # sets DB_PATH RECS_DIR DATA_DIR … from the config and the un
   RECS_DIR="$(read_conf RECS_DIR)"
   IMAGE_CACHE_DIR="$(svc_flag --image-cache-dir)"
   ANALYTICS_DB="$(svc_flag --analytics-db)"
-  WATCH_DIR="$(svc_flag --watch-dir)"; [ -n "$WATCH_DIR" ] && STREAM_DIR="$WATCH_DIR"
+  # The installer only ever creates ${STREAM_DIR}; that is the one watch dir
+  # this script removes. A --watch-dir the operator pointed elsewhere is their
+  # directory (a NAS share, a recorder's drop folder) and is only reported.
+  WATCH_DIR="$(svc_flag --watch-dir)"
+  FOREIGN_WATCH_DIR=""
+  if [ -n "$WATCH_DIR" ] && [ "${WATCH_DIR%/}" != "${STREAM_DIR%/}" ]; then
+    FOREIGN_WATCH_DIR="$WATCH_DIR"
+  fi
 
   # DATA_DIR: override > parent of DB_PATH > parent of recordings > best-effort default
   DATA_DIR="$DATA_DIR_OVERRIDE"
@@ -252,6 +269,7 @@ if [ -f "$SERVICE_FILE" ] || [ -e "$BIN_PATH" ]; then HAD_NATIVE=1; fi
 echo
 info "${B}BirdNet-Behavior uninstaller${Z}${DRY_LABEL}"
 echo "  Software (always removed): systemd service, tmpfs mount unit, ${STREAM_DIR}$([ "$KEEP_BINARY" = 1 ] && echo "" || echo ", binary, operator manual")"
+[ -n "$FOREIGN_WATCH_DIR" ] && echo "  Watch dir (never removed):  ${FOREIGN_WATCH_DIR}  (your --watch-dir; delete it by hand if you want it gone)"
 echo "  Detected data dir:         ${DATA_DIR}$([ "${DATA_DIR_GUESSED:-0}" = 1 ] && echo "  (guessed — config already gone)")"
 plan_line() { printf "    %-18s %s\n" "$1" "$2"; }
 plan_line "database"      "$([ "$REMOVE_DB" = 1 ] && echo REMOVE || echo keep)   (${DB_PATH}, ${ANALYTICS_DB}, ${BACKUPS_DIR})"
@@ -335,6 +353,7 @@ KEPT=()
 [ "$REMOVE_RECS" = 0 ]       && KEPT+=("recordings ($RECS_DIR)")
 [ "$REMOVE_CONFIG" = 0 ] && [ -d "$CONFIG_DIR" ] && KEPT+=("settings ($CONFIG_DIR)")
 [ "$REMOVE_MODELS" = 0 ] && [ -d "$MODEL_DIR" ] && KEPT+=("model ($MODEL_DIR)")
+[ -n "$FOREIGN_WATCH_DIR" ] && [ -d "$FOREIGN_WATCH_DIR" ] && KEPT+=("watch dir ($FOREIGN_WATCH_DIR) — not created by the installer, never removed here")
 if [ "${#KEPT[@]}" -gt 0 ]; then
   echo "  Kept (reinstall reuses these):"
   for k in "${KEPT[@]}"; do echo "    • $k"; done

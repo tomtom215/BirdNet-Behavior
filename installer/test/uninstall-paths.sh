@@ -90,6 +90,69 @@ MODEL_PATH=/home/pi/BirdNet-Behavior/models/BirdNET+_V3.0.onnx' \
 expect "$out" "DB_PATH=/home/pi/BirdNet-Behavior/birds.db" "installer DB_PATH"
 expect "$out" "MODEL_DIR=/home/pi/BirdNet-Behavior/models" "installer model dir"
 
+# ── end to end: run the whole script against a sandboxed filesystem ─────────
+# The detection checks above cannot see what the *execution* half does with the
+# paths, so these run uninstall.sh itself. Its system paths are constants, so a
+# copy has them pointed into ${WORK}; `id` and `systemctl` are stubbed so it
+# runs unprivileged and touches no real unit.
+E2E="${WORK}/e2e"
+run_uninstall() { # $1=ExecStart line  $@(rest)=uninstall flags; prints output, returns its status
+    local unit="$1"; shift
+    rm -rf "${E2E}"
+    mkdir -p "${E2E}/etc/birdnet" "${E2E}/systemd" "${E2E}/bin" "${E2E}/stubs" \
+        "${E2E}/data/backups" "${E2E}/data/recordings" "${E2E}/stream" "${E2E}/incoming"
+    printf 'DB_PATH=%s/data/birds.db\nRECS_DIR=%s/data/recordings\n' "${E2E}" "${E2E}" \
+        > "${E2E}/etc/birdnet/birdnet.conf"
+    printf '[Service]\n%s\n' "${unit}" > "${E2E}/systemd/birdnet-behavior.service"
+    : > "${E2E}/data/birds.db"; : > "${E2E}/data/backups/birds-1.db"
+    : > "${E2E}/incoming/operator-file.wav"; : > "${E2E}/bin/birdnet-behavior"
+    printf '#!/bin/sh\n[ "$1" = "-u" ] && echo 0 || command id "$@"\n' > "${E2E}/stubs/id"
+    printf '#!/bin/sh\nexit 1\n' > "${E2E}/stubs/systemctl"
+    chmod +x "${E2E}/stubs/id" "${E2E}/stubs/systemctl"
+    sed -e "s|^BIN_PATH=.*|BIN_PATH=\"${E2E}/bin/birdnet-behavior\"|" \
+        -e "s|^HELP_DIR=.*|HELP_DIR=\"${E2E}/share/help\"|" \
+        -e "s|^CONFIG_DIR=.*|CONFIG_DIR=\"${E2E}/etc/birdnet\"|" \
+        -e "s|^SERVICE_FILE=.*|SERVICE_FILE=\"${E2E}/systemd/birdnet-behavior.service\"|" \
+        -e "s|^TMPFS_UNIT_FILE=.*|TMPFS_UNIT_FILE=\"${E2E}/systemd/tmpfs.mount\"|" \
+        -e "s|^ZRAM_FILE=.*|ZRAM_FILE=\"${E2E}/systemd/zram-swap.service\"|" \
+        -e "s|^STREAM_DIR=.*|STREAM_DIR=\"${E2E}/stream\"|" \
+        "${REPO_ROOT}/uninstall.sh" > "${E2E}/uninstall.sh"
+    # Every constant must have been redirected, or this would touch the host.
+    local k
+    for k in BIN_PATH HELP_DIR CONFIG_DIR SERVICE_FILE TMPFS_UNIT_FILE ZRAM_FILE STREAM_DIR; do
+        if ! grep -qE "^${k}=\"${E2E}/" "${E2E}/uninstall.sh"; then
+            echo "sandbox rewrite missed ${k} — not running"; return 97
+        fi
+    done
+    PATH="${E2E}/stubs:${PATH}" bash "${E2E}/uninstall.sh" "$@" 2>&1
+}
+
+echo "=== --analytics-db \"\" (analytics off, as the unit documents) does not abort --remove-db ==="
+out="$(run_uninstall "ExecStart=/usr/local/bin/birdnet-behavior --watch-dir ${E2E}/stream --analytics-db \"\"" --remove-db -y)"
+rc=$?
+if [ "$rc" -eq 0 ]; then pass "uninstall exits 0"; else fail "uninstall exited ${rc}: $(tail -3 <<<"$out")"; fi
+if grep -q "Uninstall complete" <<<"$out"; then pass "it reaches 'Uninstall complete'"; else fail "it stopped before 'Uninstall complete'"; fi
+if [ ! -e "${E2E}/data/backups" ]; then pass "backups/ is removed"; else fail "backups/ was left behind"; fi
+if [ ! -e "${E2E}/data/birds.db" ]; then pass "birds.db is removed"; else fail "birds.db was left behind"; fi
+
+echo "=== counterpart: a quoted real --analytics-db path is still read and removed ==="
+: # (the detection half) — quotes are part of the unit's syntax, not the path
+out="$(detect 'DB_PATH=/srv/bn/birds.db' 'ExecStart=/usr/local/bin/birdnet-behavior --analytics-db "/srv/bn/a.duckdb"')"
+expect "$out" "ANALYTICS_DB=/srv/bn/a.duckdb" "a quoted --analytics-db loses its quotes"
+
+echo "=== an operator's own --watch-dir is never deleted by a plain uninstall ==="
+out="$(run_uninstall "ExecStart=/usr/local/bin/birdnet-behavior --watch-dir ${E2E}/incoming --analytics-db ${E2E}/data/analytics.db" -y)"
+rc=$?
+if [ "$rc" -eq 0 ]; then pass "uninstall exits 0"; else fail "uninstall exited ${rc}: $(tail -3 <<<"$out")"; fi
+if [ -e "${E2E}/incoming/operator-file.wav" ]; then pass "the operator's watch dir and its files are kept"; else fail "the operator's watch dir was deleted"; fi
+if grep -qF "${E2E}/incoming" <<<"$out"; then pass "the kept watch dir is named in the output"; else fail "the kept watch dir is not mentioned"; fi
+if [ ! -e "${E2E}/stream" ]; then pass "the installer's own stream dir is still removed"; else fail "the installer's stream dir was left behind"; fi
+
+echo "=== counterpart: the installer's default watch dir is still removed ==="
+out="$(run_uninstall "ExecStart=/usr/local/bin/birdnet-behavior --watch-dir ${E2E}/stream --analytics-db ${E2E}/data/analytics.db" -y)"
+if [ ! -e "${E2E}/stream" ]; then pass "the default stream dir is removed"; else fail "the default stream dir was left behind"; fi
+if [ ! -e "${E2E}/bin/birdnet-behavior" ]; then pass "the binary is removed"; else fail "the binary was left behind"; fi
+
 if [ "$FAILED" -ne 0 ]; then
     echo "uninstall-paths: FAILED"
     exit 1

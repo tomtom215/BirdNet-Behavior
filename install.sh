@@ -570,6 +570,39 @@ download() {
     fi
 }
 
+# `download`, except that "not there" (HTTP 404) is an answer rather than an
+# error: it returns 4 and prints nothing, so a caller with another origin to
+# try can say so in its own words. Any other failure is reported as before.
+#
+# Why: the models release may not carry the geomodel yet (RELEASING.md), and
+# that documented fallback to upstream printed curl's "The requested URL
+# returned error: 404" and a [WARN] on every install — an expected path dressed
+# as a fault, which teaches operators to skim past real ones.
+download_or_absent() {
+    local url="$1"
+    local dest="$2"
+    local code
+    if ! command -v curl &>/dev/null; then
+        download "${url}" "${dest}"
+        return
+    fi
+    # No -f: an HTTP error is read from the status code instead of printed.
+    # -S still reports transport failures (DNS, TLS, timeouts).
+    if ! code="$(curl -sSL --retry 3 --retry-delay 2 -o "${dest}" -w '%{http_code}' "${url}")"; then
+        rm -f "${dest}"
+        return 1
+    fi
+    case "${code}" in
+        2??) return 0 ;;
+        404) rm -f "${dest}"; return 4 ;;
+        *)
+            rm -f "${dest}"
+            warn "HTTP ${code} from ${url}"
+            return 1
+            ;;
+    esac
+}
+
 # Large-file download helper — resumes on interrupt, shows a progress bar
 # so the operator sees something is happening during the ~541 MB model pull.
 #
@@ -875,6 +908,33 @@ describe_existing_install() {
 # single SHA256SUMS file is attached to each GitHub Release for verification.
 # ---------------------------------------------------------------------------
 
+# Temp dirs to remove however the run ends.
+#
+# install_binary used `trap "rm -rf …" RETURN`, which fires only when the
+# function returns — and every refusal inside it is a `fatal`, which exits. So
+# each failed download, missing SHA256SUMS or checksum mismatch left its
+# workdir (the ~100 MB archive, and the extracted binary) behind in /tmp, and
+# on a Pi whose /tmp is a small tmpfs a few retries filled it.
+#
+# One EXIT handler owns both jobs that must happen on the way out — this, and
+# restarting a service stopped for the swap (77-manage.sh) — so arming one can
+# never replace the other: both places install the same handler.
+track_tmpdir() { # $1=dir to remove at exit
+    INSTALLER_TMPDIRS+=("$1")
+    trap installer_on_exit EXIT
+}
+remove_tracked_tmpdirs() {
+    local d
+    for d in "${INSTALLER_TMPDIRS[@]+"${INSTALLER_TMPDIRS[@]}"}"; do
+        rm -rf -- "${d}"
+    done
+    INSTALLER_TMPDIRS=()
+}
+installer_on_exit() {
+    local rc=$?
+    remove_tracked_tmpdirs
+    restore_service_if_we_stopped_it "${rc}"
+}
 
 # Put the new binary in place without the path ever being absent or short.
 #
@@ -969,6 +1029,9 @@ install_binary() {
 
     local workdir
     workdir="$(mktemp -d)"
+    # RETURN removes it as soon as the install is done; the tracked copy is for
+    # every `fatal` below, which exits without returning.
+    track_tmpdir "${workdir}"
     # shellcheck disable=SC2064
     trap "rm -rf '${workdir}'" RETURN
 
@@ -1157,7 +1220,15 @@ fetch_verified_model() {
                 continue
             fi
         else
-            if ! download "${url}" "${dest}"; then
+            local rc=0
+            download_or_absent "${url}" "${dest}" || rc=$?
+            if [ "${rc}" -eq 4 ]; then
+                # Not a failure: the origin answered that it does not carry the
+                # file (the geomodel before it is mirrored; see RELEASING.md).
+                info "  ${human}: not published at ${label}; trying the next source."
+                continue
+            fi
+            if [ "${rc}" -ne 0 ]; then
                 warn "  ${human}: download from ${label} failed; trying the next source."
                 continue
             fi
@@ -2474,14 +2545,16 @@ validate_install() {
 # ---------------------------------------------------------------------------
 
 # Put a service we stopped back, if the run is ending without having restarted
-# it. Installed as an EXIT trap by stop_running_service_for_swap.
+# it. Run from the shared EXIT handler (installer_on_exit, 50-binary.sh) that
+# stop_running_service_for_swap arms.
 #
 # Every `fatal` between the stop and maybe_start_service used to leave a working
 # station switched off: a failed model download, an unwritable directory, and —
 # since verification became mandatory — an unreachable SHA256SUMS. An update
 # that cannot proceed must leave the station exactly as it found it, running.
 restore_service_if_we_stopped_it() {
-    local rc=$?
+    # Called by installer_on_exit (50-binary.sh), which passes the exit status.
+    local rc="${1:-$?}"
     if [ "${SERVICE_WAS_RUNNING:-0}" = "1" ] && has_systemd; then
         if [ "${rc}" -ne 0 ]; then
             warn "The run is ending unsuccessfully; restarting the service that was stopped for the swap."
@@ -2502,7 +2575,10 @@ stop_running_service_for_swap() {
     has_systemd || return 0
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         SERVICE_WAS_RUNNING=1
-        trap restore_service_if_we_stopped_it EXIT
+        # The shared handler, not this function alone: a bare
+        # `trap restore_service_if_we_stopped_it EXIT` would replace the one
+        # install_binary armed to remove its workdir.
+        trap installer_on_exit EXIT
         info "Stopping the running service to swap the binary safely…"
         systemctl stop "${SERVICE_NAME}" || true
     fi
@@ -3143,6 +3219,7 @@ macos_install() {
     if [ -n "${version}" ] && curl -fsIL "${url}" >/dev/null 2>&1; then
         info "Downloading prebuilt macOS binary (v${version})…"
         tmp="$(mktemp -d)"
+        track_tmpdir "${tmp}"
         download_large "${url}" "${tmp}/${asset}" "${asset}"
         tar -xzf "${tmp}/${asset}" -C "${tmp}"
         inner="${tmp}/${BINARY_NAME}-${version}-aarch64-apple-darwin/${BINARY_NAME}"
