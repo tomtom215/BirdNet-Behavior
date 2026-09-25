@@ -23,7 +23,6 @@ use std::fmt::Write as _;
 use axum::Form;
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
@@ -1263,28 +1262,22 @@ fn synth_id(kind: SourceKind) -> String {
 // Error rendering
 // ---------------------------------------------------------------------------
 
+// Each answers `200` with `HX-Reswap: none` and the reason in a toast, never
+// a `4xx`/`5xx`: every form on the audio page is an `hx-post`, and htmx
+// discards the body of an error response. Answered with `422`, adding the
+// same microphone twice showed nothing at all — the form just stayed open —
+// and so did "Device id is required." and every other refusal here.
+
 fn validation_response(message: &str) -> Response {
-    (
-        StatusCode::UNPROCESSABLE_ENTITY,
-        toast::oob_only(Toast::warn(message)),
-    )
-        .into_response()
+    toast::not_applied(&Toast::warn(message))
 }
 
 fn internal_response(message: &str) -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        toast::oob_only(Toast::error(message)),
-    )
-        .into_response()
+    toast::not_applied(&Toast::error(message))
 }
 
 fn not_found_row(id: &str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        toast::oob_only(Toast::warn(format!("Source {id} no longer exists."))),
-    )
-        .into_response()
+    toast::not_applied(&Toast::warn(format!("Source {id} no longer exists.")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1294,8 +1287,21 @@ fn not_found_row(id: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
     use birdnet_db::audio_sources::{Channels, PipelineFlags};
     use tempfile::TempDir;
+
+    /// A refusal the page can show: `200`, nothing swapped, a toast out of
+    /// band. htmx drops the body of a `4xx`/`5xx`, so asserting `422` here
+    /// asserted the very response that left the form silent.
+    #[track_caller]
+    fn assert_refused(res: &Response) {
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get("hx-reswap").and_then(|v| v.to_str().ok()),
+            Some("none")
+        );
+    }
 
     fn fixture() -> (TempDir, AppState) {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1445,7 +1451,7 @@ mod tests {
             Form(bad),
         )
         .await;
-        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_refused(&refused);
         assert_eq!(
             stored_chain(&state, "plughw:3,0"),
             "highpass:120; notch:50:20",
@@ -1476,7 +1482,7 @@ mod tests {
         form.sample_rate = Some(8_000);
         form.eq_chain = Some("peaking:6000:1:3".to_string());
         let refused = create(State(state.clone()), actor(&state), Form(form)).await;
-        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_refused(&refused);
 
         // The counterpart: the same stage on a source that *can* carry it is
         // accepted, so the rejection is about the rate and not about the stage.
@@ -1520,11 +1526,8 @@ mod tests {
         down.sample_rate = Some(8_000);
         down.eq_chain = Some("peaking:6000:1:3".to_string());
         let refused = update(State(state.clone()), actor(&state), Path(id), Form(down)).await;
-        assert_eq!(
-            refused.status(),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "the check must use the rate this PATCH sets, not the stored one"
-        );
+        // The check must use the rate this PATCH sets, not the stored one.
+        assert_refused(&refused);
         assert_eq!(stored_chain(&state, "plughw:6,0"), "peaking:6000:1:3");
     }
 
@@ -1688,7 +1691,7 @@ mod tests {
             Form(half),
         )
         .await;
-        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_refused(&refused);
         assert_eq!(
             stored(&state),
             Some(("22:00".to_string(), "06:00".to_string())),
@@ -1734,11 +1737,8 @@ mod tests {
         let first = create(State(state.clone()), actor(&state), Form(form())).await;
         assert_eq!(first.status(), StatusCode::OK, "first add succeeds");
         let second = create(State(state.clone()), actor(&state), Form(form())).await;
-        assert_eq!(
-            second.status(),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "the same device cannot be added twice"
-        );
+        // The same device cannot be added twice.
+        assert_refused(&second);
         let count = state.with_db(AudioSourceStore::list).unwrap().len();
         assert_eq!(count, 1, "only one row persisted");
     }
@@ -1750,7 +1750,7 @@ mod tests {
         let found = row(State(state.clone()), Path("src_u".to_string())).await;
         assert_eq!(found.status(), StatusCode::OK);
         let missing = row(State(state.clone()), Path("nope".to_string())).await;
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_refused(&missing);
     }
 
     #[test]
@@ -2236,7 +2236,7 @@ mod tests {
             Path("src_old".to_owned()),
         )
         .await;
-        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_refused(&res);
         assert_eq!(
             stored_listen_default(&state),
             "",
@@ -2309,7 +2309,7 @@ mod tests {
             Path("src_ghost".to_owned()),
         )
         .await;
-        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_refused(&res);
         assert!(!is_restart_pending(&control, "src_ghost"));
     }
 

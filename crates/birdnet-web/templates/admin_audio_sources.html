@@ -50,7 +50,7 @@
         <form hx-post="/admin/audio/sources"
               hx-target="#local-list"
               hx-swap="beforeend"
-              hx-on::after-request="if(event.detail.successful){this.reset();document.getElementById('add-local').open=false;}">
+              data-reset-on-success="add-local">
           <input type="hidden" name="scope" value="local">
 
           <h4>Source type</h4>
@@ -135,7 +135,7 @@
         <form hx-post="/admin/audio/sources"
               hx-target="#rtsp-list"
               hx-swap="beforeend"
-              hx-on::after-request="if(event.detail.successful){this.reset();document.getElementById('add-rtsp').open=false;}">
+              data-reset-on-success="add-rtsp">
           <input type="hidden" name="scope" value="rtsp">
           <input type="hidden" name="kind" value="rtsp">
 

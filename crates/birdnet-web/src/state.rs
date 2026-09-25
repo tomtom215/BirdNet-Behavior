@@ -1024,34 +1024,96 @@ impl AppState {
     // check (see `new_with_analytics`) to repair rather than failing the
     // operator's action, which has already succeeded in the source of truth.
 
-    /// Delete a detection from `SQLite` **and** the analytics copy.
+    /// Delete a detection from `SQLite` **and** the analytics copy, and its
+    /// clip when no other detection still names it.
+    ///
+    /// `row.file_name` decides how precisely the row is named. Known (a page
+    /// or an API caller that sent it), it names exactly one row. Unknown (an
+    /// older API client), the date, time and species can name one row per
+    /// source that heard the bird in that second; then the rule is
+    /// `birdnet_db`'s own — a lone row is deleted, and among several the
+    /// locked ones are kept — applied here row by row so the analytics copy
+    /// loses exactly the rows `SQLite` did.
     ///
     /// Returns whether a row was deleted from `SQLite`.
     ///
     /// # Errors
     ///
     /// Returns `DbError` if the `SQLite` delete fails. A failure to mirror the
-    /// delete into `DuckDB` is logged, not returned: the authoritative delete
-    /// has happened, and the startup drift check repairs the copy.
-    pub fn delete_detection(
-        &self,
-        date: &str,
-        time: &str,
-        sci_name: &str,
-    ) -> Result<bool, birdnet_db::sqlite::DbError> {
-        let deleted =
-            self.with_db(|conn| birdnet_db::sqlite::delete_detection(conn, date, time, sci_name))?;
-        #[cfg(feature = "analytics")]
-        if deleted
-            && let Some(Err(e)) =
-                self.with_analytics(|adb| adb.delete_detection(date, time, sci_name))
-        {
-            tracing::warn!(error = %e, "detection deleted from SQLite but not from the analytics copy");
+    /// delete into `DuckDB`, or to remove the clip, is logged, not returned:
+    /// the authoritative delete has happened, and the startup drift check
+    /// repairs the copy.
+    pub fn delete_detection(&self, row: &RowRef) -> Result<bool, birdnet_db::sqlite::DbError> {
+        let deleted: Vec<Option<String>> = self.with_db(|conn| {
+            let targets = match row.clip() {
+                Clip::Named(file) => vec![file.map(str::to_owned)],
+                Clip::Unsaid => triple_delete_targets(conn, row)?,
+            };
+            let tx = conn.unchecked_transaction()?;
+            let mut gone = Vec::new();
+            for file in targets {
+                let key = row.key_with(file.as_deref());
+                if birdnet_db::sqlite::delete_detection_at(&tx, &key)? {
+                    gone.push(file);
+                }
+            }
+            tx.commit()?;
+            Ok::<_, birdnet_db::sqlite::DbError>(gone)
+        })?;
+        for file in &deleted {
+            #[cfg(feature = "analytics")]
+            if let Some(Err(e)) = self.with_analytics(|adb| {
+                adb.delete_detection_at(&row.date, &row.time, &row.sci_name, file.as_deref())
+            }) {
+                tracing::warn!(error = %e, "detection deleted from SQLite but not from the analytics copy");
+            }
+            if let Some(file) = file.as_deref().filter(|f| !f.is_empty()) {
+                self.remove_orphaned_clip(file);
+            }
         }
-        Ok(deleted)
+        Ok(!deleted.is_empty())
+    }
+
+    /// Remove a clip no detection names any more.
+    ///
+    /// Deleting a detection left its audio in the recordings directory, where
+    /// `GET /api/v2/recordings` still listed it and anyone who could reach
+    /// the station could still download it — the operator had deleted the
+    /// clip of a neighbour's conversation, and it was still public. A clip
+    /// that another detection shares (two species in one segment) stays.
+    fn remove_orphaned_clip(&self, file_name: &str) {
+        let still_named = self.with_db(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM detections WHERE File_Name = ?1)",
+                [file_name],
+                |r| r.get::<_, bool>(0),
+            )
+        });
+        match still_named {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, file = file_name, "could not tell whether a clip is still used; kept");
+                return;
+            }
+        }
+        let Some(base) = std::path::Path::new(file_name).file_name() else {
+            return;
+        };
+        let path = self.recording_dir().join(base);
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(path = %path.display(), "clip removed with its detection"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "detection deleted but its clip could not be removed");
+            }
+        }
     }
 
     /// Re-label a detection in `SQLite` **and** the analytics copy.
+    ///
+    /// With `row.file_name` unknown this re-labels every row the date, time
+    /// and species name, as it always has; with it known, only that row.
     ///
     /// Returns whether a row was updated in `SQLite`.
     ///
@@ -1061,31 +1123,78 @@ impl AppState {
     /// [`Self::delete_detection`] for why a mirror failure is not returned.
     pub fn relabel_detection(
         &self,
-        date: &str,
-        time: &str,
-        old_sci_name: &str,
+        row: &RowRef,
         new_sci_name: &str,
         new_com_name: &str,
     ) -> Result<bool, birdnet_db::sqlite::DbError> {
-        let relabelled = self.with_db(|conn| {
-            birdnet_db::sqlite::relabel_detection(
+        let relabelled = self.with_db(|conn| match row.clip() {
+            Clip::Named(file) => birdnet_db::sqlite::relabel_detection_at(
                 conn,
-                date,
-                time,
-                old_sci_name,
+                &row.key_with(file),
                 new_sci_name,
                 new_com_name,
-            )
+            ),
+            Clip::Unsaid => birdnet_db::sqlite::relabel_detection(
+                conn,
+                &row.date,
+                &row.time,
+                &row.sci_name,
+                new_sci_name,
+                new_com_name,
+            ),
         })?;
         #[cfg(feature = "analytics")]
         if relabelled
-            && let Some(Err(e)) = self.with_analytics(|adb| {
-                adb.relabel_detection(date, time, old_sci_name, new_sci_name, new_com_name)
+            && let Some(Err(e)) = self.with_analytics(|adb| match row.clip() {
+                Clip::Named(file) => adb.relabel_detection_at(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                    file,
+                    new_sci_name,
+                    new_com_name,
+                ),
+                Clip::Unsaid => adb.relabel_detection(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                    new_sci_name,
+                    new_com_name,
+                ),
             })
         {
             tracing::warn!(error = %e, "detection relabelled in SQLite but not in the analytics copy");
         }
         Ok(relabelled)
+    }
+
+    /// Lock or unlock a detection's clip against the purge.
+    ///
+    /// With `row.file_name` known, only that row: locking one source's clip
+    /// used to lock every source's clip of the same bird in the same second.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the update fails.
+    pub fn set_detection_lock(
+        &self,
+        row: &RowRef,
+        locked: bool,
+    ) -> Result<bool, birdnet_db::sqlite::DbError> {
+        self.with_db(|conn| match (row.clip(), locked) {
+            (Clip::Named(file), true) => {
+                birdnet_db::sqlite::lock_detection_at(conn, &row.key_with(file))
+            }
+            (Clip::Named(file), false) => {
+                birdnet_db::sqlite::unlock_detection_at(conn, &row.key_with(file))
+            }
+            (Clip::Unsaid, true) => {
+                birdnet_db::sqlite::lock_detection(conn, &row.date, &row.time, &row.sci_name)
+            }
+            (Clip::Unsaid, false) => {
+                birdnet_db::sqlite::unlock_detection(conn, &row.date, &row.time, &row.sci_name)
+            }
+        })
     }
 
     /// Admit a quarantined detection to `SQLite` **and** the analytics copy.
@@ -1625,6 +1734,94 @@ impl AppState {
     pub fn detection_daemon_running(&self) -> bool {
         self.inner.detection_daemon_running.load(Ordering::Relaxed)
     }
+}
+
+/// Which detection a page action or API call names.
+///
+/// `file_name` is tri-state on purpose. `None`: the caller did not say (an
+/// API client written before it could), and the date, time and species are
+/// all there is. `Some("")`: the row has no clip. `Some(name)`: that clip's
+/// row. The date, time and species alone name one row *per source* that
+/// heard the bird in the same second, which is how deleting one
+/// microphone's detection used to delete the camera's too, locked or not.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct RowRef {
+    /// Local date, `YYYY-MM-DD`.
+    pub date: String,
+    /// Local time, `HH:MM:SS`.
+    pub time: String,
+    /// Scientific name.
+    pub sci_name: String,
+    /// The row's `File_Name` as rendered, `""` for none; absent when unknown.
+    #[serde(default)]
+    pub file_name: Option<String>,
+}
+
+impl From<&birdnet_db::sqlite::DetectionRow> for RowRef {
+    fn from(d: &birdnet_db::sqlite::DetectionRow) -> Self {
+        Self {
+            date: d.date.clone(),
+            time: d.time.clone(),
+            sci_name: d.sci_name.clone(),
+            file_name: Some(d.file_name.clone().unwrap_or_default()),
+        }
+    }
+}
+
+impl RowRef {
+    /// The clip, as far as the caller said.
+    fn clip(&self) -> Clip<'_> {
+        self.file_name
+            .as_deref()
+            .map_or(Clip::Unsaid, |f| Clip::Named((!f.is_empty()).then_some(f)))
+    }
+
+    /// The database key for this row with `file` as its clip.
+    fn key_with<'a>(&'a self, file: Option<&'a str>) -> birdnet_db::sqlite::DetectionKey<'a> {
+        birdnet_db::sqlite::DetectionKey {
+            date: &self.date,
+            time: &self.time,
+            sci_name: &self.sci_name,
+            file_name: file,
+        }
+    }
+}
+
+/// What a [`RowRef`] says about its clip.
+#[derive(Clone, Copy)]
+enum Clip<'a> {
+    /// The caller did not say which clip, so the row is known only by date,
+    /// time and species.
+    Unsaid,
+    /// The caller named the row's clip: `None` for a row that has none.
+    Named(Option<&'a str>),
+}
+
+/// The rows a delete that names only date, time and species removes: a lone
+/// row whatever its lock, and among several only the unlocked ones — the rule
+/// `birdnet_db::sqlite::delete_detection` applies, resolved to rows so the
+/// analytics copy can be told exactly which went.
+fn triple_delete_targets(
+    conn: &rusqlite::Connection,
+    row: &RowRef,
+) -> Result<Vec<Option<String>>, birdnet_db::sqlite::DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT File_Name, is_locked FROM detections \
+         WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+    )?;
+    let rows: Vec<(Option<String>, bool)> = stmt
+        .query_map(rusqlite::params![row.date, row.time, row.sci_name], |r| {
+            Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)? != 0))
+        })?
+        .collect::<Result<_, _>>()?;
+    if rows.len() == 1 {
+        return Ok(rows.into_iter().map(|(f, _)| f).collect());
+    }
+    Ok(rows
+        .into_iter()
+        .filter(|(_, locked)| !locked)
+        .map(|(f, _)| f)
+        .collect())
 }
 
 #[cfg(test)]

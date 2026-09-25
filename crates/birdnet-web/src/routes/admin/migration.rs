@@ -207,15 +207,30 @@ async fn delete_batch_handler(
     let list_state = state.clone();
 
     let removed = tokio::task::spawn_blocking(move || {
-        let sqlite_rows =
-            state.with_db(|conn| birdnet_db::sqlite::delete_import_batch(conn, batch_id));
+        // Locked rows stay (every bulk action spares them), and so does the
+        // batch record they point at. They are read first so the analytics
+        // copy — which has no lock column — can be told which rows to keep;
+        // deleting the whole batch there left the two stores disagreeing.
+        let result = state.with_db(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT Date, Time, Sci_Name, File_Name FROM detections \
+                 WHERE import_batch_id = ?1 AND COALESCE(is_locked, 0) = 1",
+            )?;
+            let kept = stmt
+                .query_map([batch_id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect::<Result<Vec<(String, String, String, Option<String>)>, _>>()?;
+            drop(stmt);
+            let removal = birdnet_db::sqlite::remove_import_batch(conn, batch_id)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((removal, kept))
+        });
 
-        // Mirror into the analytics copy whatever happened to SQLite — including
-        // a partial result, because the two disagreeing is worse than either
-        // being wrong alone.
+        // Mirror into the analytics copy whatever happened to SQLite.
         #[cfg(feature = "analytics")]
-        if let Some(result) = state.with_analytics(|adb| adb.delete_import_batch(batch_id))
-            && let Err(e) = result
+        if let Ok((_, kept)) = &result
+            && let Some(Err(e)) =
+                state.with_analytics(|adb| adb.delete_import_batch_keeping(batch_id, kept))
         {
             tracing::warn!(
                 error = %e,
@@ -225,17 +240,49 @@ async fn delete_batch_handler(
             );
         }
 
-        sqlite_rows
+        result.map(|(removal, _)| removal)
     })
     .await;
 
-    match removed {
-        Ok(Ok(rows)) => tracing::info!(batch_id, rows, "import batch removed"),
-        Ok(Err(e)) => tracing::warn!(error = %e, batch_id, "import batch removal failed"),
-        Err(e) => tracing::warn!(error = %e, batch_id, "import batch removal task panicked"),
-    }
+    let toast = match removed {
+        Ok(Ok(removal)) => {
+            tracing::info!(
+                batch_id,
+                deleted = removal.deleted,
+                kept_locked = removal.kept_locked,
+                "import batch removed"
+            );
+            if removal.kept_locked > 0 {
+                Some(crate::routes::pages::toast::Toast::info(format!(
+                    "Removed {} detections. {} locked ones were kept, so the import is still listed — unlock them to remove it completely.",
+                    removal.deleted, removal.kept_locked
+                )))
+            } else {
+                Some(crate::routes::pages::toast::Toast::success(format!(
+                    "Removed the import ({} detections).",
+                    removal.deleted
+                )))
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, batch_id, "import batch removal failed");
+            Some(crate::routes::pages::toast::Toast::error(
+                "The station could not remove that import. Nothing was removed.",
+            ))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, batch_id, "import batch removal task panicked");
+            Some(crate::routes::pages::toast::Toast::error(
+                "The station could not remove that import.",
+            ))
+        }
+    };
 
-    Html(render_batches(list_state).await)
+    let body = Html(render_batches(list_state).await);
+    match toast {
+        Some(t) => crate::routes::pages::toast::with(body, t),
+        None => body,
+    }
 }
 
 /// Whether imported detections should count as this station's data.

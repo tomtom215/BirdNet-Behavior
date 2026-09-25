@@ -168,3 +168,87 @@ fn guard_itself_classifies_correctly() {
     assert!(disallowed_inline_styles(r#"format!("<b data-style=\"width:{p}%\">")"#).is_empty());
     assert!(disallowed_inline_styles(r#"format!("<b data-confirm-style=\"danger\">")"#).is_empty());
 }
+
+/// Files whose inline-handler text is a *test fixture* — an escaping test
+/// feeding `"Evil" onload="x"` to a renderer to prove it comes out inert.
+const HANDLER_FIXTURES: &[&str] = &[
+    "src/routes/admin/species/manage.rs",
+    "src/routes/admin/species/render.rs",
+    "src/routes/admin/quality.rs",
+];
+
+/// Script the CSP will not run, written into markup.
+///
+/// `script-src` carries a nonce and no `'unsafe-inline'` or `'unsafe-eval'`,
+/// so an `onclick="…"` attribute never fires, and neither does htmx's
+/// `hx-on:…="…"`, which htmx compiles with `new Function`. Both render, look
+/// wired, and do nothing but log a violation. Three forms carried
+/// `hx-on::after-request` to reset themselves after a save; not one ever
+/// reset. Comment lines are skipped — they describe the rule.
+fn blocked_script_attributes(src: &str) -> Vec<(usize, String)> {
+    let mut hits = Vec::new();
+    for (lineno, line) in src.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("<!--") || t.starts_with('*') {
+            continue;
+        }
+        for (i, _) in line.match_indices("hx-on") {
+            let next = line[i + 5..].chars().next();
+            if matches!(next, Some(':' | '-')) {
+                hits.push((lineno + 1, line.trim().to_owned()));
+            }
+        }
+        for (i, _) in line.match_indices(" on") {
+            let name: String = line[i + 3..]
+                .chars()
+                .take_while(char::is_ascii_lowercase)
+                .collect();
+            let after = &line[i + 3 + name.len()..];
+            if !name.is_empty() && (after.starts_with("=\"") || after.starts_with("=\\\"")) {
+                hits.push((lineno + 1, line.trim().to_owned()));
+            }
+        }
+    }
+    hits
+}
+
+#[test]
+fn no_script_attributes_the_csp_will_not_run() {
+    let root = crate_root();
+    let exempt: Vec<PathBuf> = HANDLER_FIXTURES.iter().map(|r| root.join(r)).collect();
+    let mut failures = Vec::new();
+    for path in collect_sources(&root) {
+        if exempt.contains(&path) {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).unwrap_or_default();
+        let rel = path.strip_prefix(&root).unwrap_or(&path).display();
+        for (lineno, text) in blocked_script_attributes(&src) {
+            failures.push(format!("  {rel}:{lineno}  {text}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "inline script attributes the CSP blocks — move the behaviour into a nonce'd \
+         script (see `data-reset-on-success` in layout.html):\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn the_script_attribute_guard_classifies_correctly() {
+    assert_eq!(
+        blocked_script_attributes(r#"<form hx-on::after-request="x()">"#).len(),
+        1
+    );
+    assert_eq!(
+        blocked_script_attributes(r#"<b hx-on-click="x()">"#).len(),
+        1
+    );
+    assert_eq!(blocked_script_attributes(r#"<a onclick="x()">"#).len(), 1);
+    assert_eq!(blocked_script_attributes(r#"<a onclick=\"x()\">"#).len(), 1);
+    // Not handlers: prose, a data attribute, a comment.
+    assert!(blocked_script_attributes("carry on reading").is_empty());
+    assert!(blocked_script_attributes(r#"<form data-reset-on-success="add">"#).is_empty());
+    assert!(blocked_script_attributes(r#"  // `hx-on::after-request="…"` is blocked"#).is_empty());
+}

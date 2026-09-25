@@ -3,16 +3,16 @@
 <h1 class="display tsh-h1">Time series</h1>
 {{help_link}}
 <p class="bnb-lede tsh-lede">
-    <b>Is your yard getting busier?</b> Detections per week and how many different
-    species you're hearing, over the last six months. A rising species count often
+    <b>Is your yard getting busier?</b> Detections per day over the last two
+    weeks, and how many different species you've heard over the last month. A rising species count often
     matters more than raw detections — it means more kinds of birds are finding your patch.
 </p>
 
 <!-- The two headline trends this tab leads with: busier? and more varied? -->
 <div class="grid-2 tsh-row">
     <div class="card">
-        <h2>Detections per week
-            <span class="tsh-badge">last 60 days · 7-day moving avg</span>
+        <h2>Detections per day
+            <span class="tsh-badge">last 14 complete days · 7-day moving avg</span>
         </h2>
         <div hx-get="/pages/ts-daily"
              hx-trigger="load"

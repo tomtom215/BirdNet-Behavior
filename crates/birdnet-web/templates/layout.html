@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <!-- FOUC guard: resolve theme before first paint. -->
-    <script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=localStorage.getItem('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');var m=localStorage.getItem('bnb-motion');if(m==='reduced')document.documentElement.setAttribute('data-motion','reduced');var c=localStorage.getItem('bnb-contrast');if(c==='high')document.documentElement.setAttribute('data-contrast','high');})();</script>
+    <script>(function(){var read=function(k){try{return localStorage.getItem(k)}catch(e){return null}};var t=read('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=read('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');var m=read('bnb-motion');if(m==='reduced')document.documentElement.setAttribute('data-motion','reduced');var c=read('bnb-contrast');if(c==='high')document.documentElement.setAttribute('data-contrast','high');})();</script>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{title}} · BirdNet-Behavior</title>
@@ -109,10 +109,15 @@
             if (icon) icon.textContent = theme === 'dark' ? LIGHT_ICON : DARK_ICON;
         }
         apply(current());
+        // Applied first, saved second, and the save may fail: with site data
+        // blocked `localStorage` throws, and it used to throw before `apply`,
+        // so the button did nothing at all. The pre-paint guard above reads
+        // the same way, so a blocked store falls back to the OS theme rather
+        // than aborting the guard and dropping every preference with it.
         if (btn) btn.addEventListener('click', function() {
             var next = current() === 'dark' ? 'light' : 'dark';
-            localStorage.setItem('theme', next);
             apply(next);
+            try { localStorage.setItem('theme', next); } catch (e) { /* not remembered */ }
         });
     })();
     </script>
@@ -137,8 +142,15 @@
                 ? location.origin + b.getAttribute('data-copy-url')
                 : ((document.getElementById(b.getAttribute('data-copy-from')) || {}).textContent || '');
             var label = b.getAttribute('data-copied-label') || 'Copied!';
-            var orig = b.textContent;
-            var done = function () { b.textContent = label; setTimeout(function () { b.textContent = orig; }, 1500); };
+            // The label to come back to is read once: a second click inside
+            // the 1.5 s window would otherwise take "Copied!" as the label and
+            // restore to it for good.
+            if (b.__copyLabel === undefined) b.__copyLabel = b.textContent;
+            var done = function () {
+                b.textContent = label;
+                clearTimeout(b.__copyTimer);
+                b.__copyTimer = setTimeout(function () { b.textContent = b.__copyLabel; }, 1500);
+            };
             if (navigator.clipboard) {
                 navigator.clipboard.writeText(txt).then(done, function () { window.prompt('Copy this:', txt); });
             } else {
@@ -204,6 +216,22 @@
       document.body.addEventListener('htmx:responseError', function (evt) {
         var xhr = evt.detail && evt.detail.xhr;
         failed(evt, xhr && xhr.status ? ' (HTTP ' + xhr.status + ')' : '');
+      });
+      // `<form data-reset-on-success[="details-id"]>`: clear the form (and
+      // close the named <details>) once the station has taken it. This was
+      // `hx-on::after-request="…"`, which htmx compiles with `new Function`
+      // and this page's CSP blocks — so no form ever reset, and each submit
+      // logged a script-src violation. A refusal answers 200 with
+      // `HX-Reswap: none`; the form is left as typed so it can be corrected.
+      document.body.addEventListener('htmx:afterRequest', function (evt) {
+        var form = evt.detail && evt.detail.elt;
+        if (!form || !form.matches || !form.matches('form[data-reset-on-success]')) return;
+        var xhr = evt.detail.xhr;
+        if (!evt.detail.successful || (xhr && xhr.getResponseHeader('HX-Reswap') === 'none')) return;
+        form.reset();
+        var close = form.getAttribute('data-reset-on-success');
+        var details = close ? document.getElementById(close) : null;
+        if (details) details.open = false;
       });
       document.body.addEventListener('htmx:sendError', function (evt) {
         failed(evt, ' — the station did not answer');

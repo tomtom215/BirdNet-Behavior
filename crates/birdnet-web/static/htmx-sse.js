@@ -27,11 +27,15 @@
             while (tmp.firstChild) elt.appendChild(tmp.firstChild);
             htmx.trigger(document.body, 'htmx:afterSwap', {elt: elt});
           });
-          // Cleanup on remove
-          api.onElRemoved(elt, function() {
-            if (elt._htmxSSE) { elt._htmxSSE.close(); delete elt._htmxSSE; }
-          });
         }
+      }
+      // Close the stream when htmx removes the element. htmx 2 has no
+      // `api.onElRemoved`: calling it logged a TypeError on every connect
+      // (htmx caught it) and registered nothing, so the stream was never
+      // closed. Listen for the cleanup event htmx 2 does fire.
+      if (name === 'htmx:beforeCleanupElement') {
+        var gone = evt.detail.elt;
+        if (gone && gone._htmxSSE) { gone._htmxSSE.close(); delete gone._htmxSSE; }
       }
     }
   });

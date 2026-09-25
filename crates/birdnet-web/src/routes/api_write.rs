@@ -264,14 +264,30 @@ fn comment_error(e: &birdnet_db::detection_comments::CommentError) -> (StatusCod
 
 /// The composite key that identifies a detection.
 ///
-/// `(Date, Time, Sci_Name, File_Name, chunk_offset_secs)` is this schema's
-/// identity; the first three are what a caller can reasonably know, and are
-/// what every page handler already keys on.
+/// `(Date, Time, Sci_Name, File_Name)` names one row. `file_name` is
+/// optional so a client written before it keeps working: without it the
+/// date, time and species can name one row per source that heard the bird in
+/// that second, and then a delete removes a lone row but spares locked
+/// siblings (see [`crate::state::RowRef`]). Send it (`""` for a row with no
+/// clip) and exactly that row is acted on.
 #[derive(Debug, Deserialize)]
 struct Key {
     date: String,
     time: String,
     sci_name: String,
+    #[serde(default)]
+    file_name: Option<String>,
+}
+
+impl Key {
+    fn row(&self) -> crate::state::RowRef {
+        crate::state::RowRef {
+            date: self.date.clone(),
+            time: self.time.clone(),
+            sci_name: self.sci_name.clone(),
+            file_name: self.file_name.clone(),
+        }
+    }
 }
 
 /// A review verdict to record, or `None` to clear one.
@@ -427,13 +443,7 @@ fn set_lock(state: &AppState, key: &Key, locked: bool) -> (StatusCode, Json<Valu
     if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
         return e;
     }
-    let changed = state.with_db(|conn| {
-        if locked {
-            birdnet_db::sqlite::lock_detection(conn, &key.date, &key.time, &key.sci_name)
-        } else {
-            birdnet_db::sqlite::unlock_detection(conn, &key.date, &key.time, &key.sci_name)
-        }
-    });
+    let changed = state.set_detection_lock(&key.row(), locked);
     let target = target_of(&key.date, &key.time, &key.sci_name);
     match changed {
         Ok(true) => {
@@ -463,7 +473,7 @@ async fn delete(State(state): State<AppState>, Json(key): Json<Key>) -> (StatusC
         return e;
     }
     let target = target_of(&key.date, &key.time, &key.sci_name);
-    match state.delete_detection(&key.date, &key.time, &key.sci_name) {
+    match state.delete_detection(&key.row()) {
         Ok(true) => {
             crate::audit::audit(
                 &state,
@@ -523,9 +533,21 @@ struct BatchKey {
     date: String,
     time: String,
     sci_name: String,
+    /// As on the single-detection endpoints: optional, and exact when given.
+    #[serde(default)]
+    file_name: Option<String>,
     /// Read only when `op` is `review`; defaults to `sci_name`, as the
     /// single-detection endpoint does.
     com_name: Option<String>,
+}
+
+fn batch_row(key: &BatchKey) -> crate::state::RowRef {
+    crate::state::RowRef {
+        date: key.date.clone(),
+        time: key.time.clone(),
+        sci_name: key.sci_name.clone(),
+        file_name: key.file_name.clone(),
+    }
 }
 
 /// What a batch does to each of its detections.
@@ -676,13 +698,9 @@ async fn batch(
                     .clear_detection_review(&key.date, &key.time, &key.sci_name)
                     .map(|()| true),
             },
-            BatchOp::Lock => state.with_db(|conn| {
-                birdnet_db::sqlite::lock_detection(conn, &key.date, &key.time, &key.sci_name)
-            }),
-            BatchOp::Unlock => state.with_db(|conn| {
-                birdnet_db::sqlite::unlock_detection(conn, &key.date, &key.time, &key.sci_name)
-            }),
-            BatchOp::Delete => state.delete_detection(&key.date, &key.time, &key.sci_name),
+            BatchOp::Lock => state.set_detection_lock(&batch_row(key), true),
+            BatchOp::Unlock => state.set_detection_lock(&batch_row(key), false),
+            BatchOp::Delete => state.delete_detection(&batch_row(key)),
         };
 
         match outcome {
@@ -889,6 +907,17 @@ async fn write_settings(
     ) else {
         return bad_request("the body could not be read as a settings payload");
     };
+
+    // The settings page's own range check, on the submission. The API skipped
+    // it, so `{"confidence_threshold": 75}` — the percentage slip the page
+    // exists to catch — stored cleanly and the station stopped recording.
+    let problems = crate::routes::admin::settings::handler::range_problems(&form);
+    if !problems.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "nothing was written", "problems": problems })),
+        );
+    }
 
     // Refused when the current values cannot be read: diffed against nothing,
     // every submitted field would count as changed and be written.
