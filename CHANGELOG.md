@@ -103,6 +103,41 @@ Read these before updating. Each one changes what an existing station does.
 - **`/admin/update/apply` answers 409** when the binary cannot be replaced in
   place, instead of downloading first.
 
+- **Stations with a custom MQTT topic prefix register as a new Home Assistant
+  device.** Each station's discovery device ID now follows its
+  `MQTT_TOPIC_PREFIX`, so two stations on one broker stop overwriting each
+  other's entities. The default prefix (`birdnet`) keeps the old ID; a custom
+  prefix gives `birdnet_behavior_<prefix>`, and the old device keeps receiving
+  the same state topics until it is deleted in Home Assistant.
+- **Docker: `TZ` has no compose default.** `quickstart.sh` writes the host's
+  zone into `.env`; without it the container runs on UTC and says so at every
+  start. It used to run on UTC silently.
+- **`uninstall.sh` never deletes a `--watch-dir` it did not create**; it is
+  listed as kept.
+- **Migration 51** gives back verdicts recorded before migration 24 to the
+  detections 24 moved (stations upgraded from schema 13–23), and **migration
+  52** restores an index on `Source`. Both run once at the next start.
+- **The API's detection key takes an optional `file_name`.** Without it,
+  `lock`/`unlock` still act on every source's detection of a bird in the same
+  second, and `delete` now spares locked ones among them.
+- **`PUT /api/v2/settings` refuses out-of-range values** (400, with the
+  reasons), as the settings page does; latitude and longitude are now bounded
+  in both.
+- **`/api/v2/timeseries/*` parameters are held to ranges**: look-backs to ten
+  years, limits to 1 000, and `peak-windows` to 31 days, windows of 5–240
+  minutes and a hop of at least 5.
+- **Trends and Behavior numbers change** — see *Analytics* below: moving
+  averages and year-over-year compare like with like, sessions break only on a
+  gap longer than the threshold, "N days" is N dates, and residency classes
+  can now include genuine rarities.
+- **The Today hero compares with the same time of day.** It says nothing
+  comparative until a station has a week of history.
+- **The RSS/iCal feeds answer 503** when their read fails, instead of an empty
+  feed.
+- **A per-model threshold (`MODEL_THRESHOLD`, …) outside 0–1 is refused** at
+  startup with a message naming it, and the station threshold is used; a
+  decimal comma is read.
+
 ### Security
 
 - **Script injection through a species name in the URL.**
@@ -167,6 +202,28 @@ Read these before updating. Each one changes what an existing station does.
 - **Search text was a `LIKE` pattern**: `NOT _` hid every detection.
   (`a_search_term_is_matched_literally.rs`)
 
+- **Viewer accounts saw alert-rule webhook URLs**, up to 30 characters — most
+  of an ntfy topic, or `user:pass@` outright. The rule list now shows only the
+  scheme and host. (`rules::tests::a_webhook_is_shown_by_its_host_and_never_its_credentials`)
+- **A deleted detection's clip stayed public.** Deleting a detection left its
+  audio in the recordings directory, still listed by `GET /api/v2/recordings`
+  and downloadable by anyone who could reach the station. The clip is removed
+  once no detection names it. (`a_delete_names_one_row_and_takes_its_clip.rs`)
+- **A share link went on serving a rare bird rejected in the quarantine
+  queue**, or approved and then rejected. (`review_verdicts_apply.rs::a_share_link_from_the_quarantine_queue_follows_the_review`)
+- **One request could hold the analytics engine for minutes.**
+  `peak-windows?window=1440&hop=1&days=365` took 139.8 s on a 4-core x86 box,
+  public on an open station. (`timeseries::params::tests`)
+- **The auto-update URL check could be fooled with a backslash**
+  (`https://evil.com\@github.com/…`). (`version::tests::validate_release_url_rejects_backslash_host_spoof`)
+- **The Raven export returned raw database errors** to unauthenticated
+  callers. (`raven::tests::a_failed_export_does_not_tell_the_caller_why`)
+- **Spectrograms were sent `Cache-Control: public`** after recordings had been
+  made `private`. (`a_recordings_spectrogram_is_private_too`)
+- **A password rotation whose sign-out of other sessions failed said
+  "Password rotated."** The intruder's session stayed valid.
+  (`accounts::tests::a_rotation_that_could_not_sign_others_out_says_so`)
+
 ### Fixed
 
 #### Detection and audio
@@ -199,6 +256,34 @@ Read these before updating. Each one changes what an existing station does.
   They now say what the setting does here, and that BirdNET-Pi applies it the
   other way round. Behaviour is unchanged.
 
+- **A recording cut short by a crash lost every sample.** A WAV whose header
+  claims more audio than the file holds — what a power cut or a killed ffmpeg
+  leaves — failed as a whole. The audio that exists is analysed.
+  (`decode::tests::decode_wav_claiming_more_data_than_exists_keeps_its_samples`)
+- **After a daylight-saving change the dawn chorus was quarantined** as
+  "night-time" until the service restarted: the night filter used the UTC
+  offset of the day it started. Each day now uses its own offset, and a
+  backlog analysed across a change is stamped correctly.
+  (`daylight::tests::a_daylight_saving_change_after_startup_moves_the_window_with_it`)
+- **`MODEL_THRESHOLD=75` stopped a classifier detecting** and `0,8` was
+  silently ignored. (`models::tests::an_out_of_range_model_threshold_is_refused_and_named`)
+- **A declared `MODEL_SAMPLE_RATE` never reached the pipeline.**
+  (`run::tests::a_declared_sample_rate_reaches_the_pipeline`)
+- **With two classifiers, a detection one of them reported above its own
+  threshold could be dropped** because the other scored it higher but below
+  its stricter one. (`merge::tests::a_detection_that_cleared_its_own_bar_beats_a_louder_one_that_did_not`)
+- **The privacy filter was sized to 3-second chunks** on the 4.5-second V3.0
+  model. (`run::tests::the_privacy_filter_is_sized_to_the_fitted_chunk`)
+- **A geomodel failure at run time stopped all detection**; it now falls back
+  to no location filtering, as a failure at load already did.
+- **`NOISE_THRESHOLD` below the detection threshold never fired.**
+  (`noise::tests::a_bark_below_the_detection_threshold_still_trips_the_noise_filter`)
+- **A byte-order mark hid the first config key or label**, and **`.WAV`
+  files were picked up and then refused for ever.**
+- **At high latitude in summer, wide twilight offsets shrank recording to
+  about an hour a day** (Reykjavik, 21 June: 68 minutes).
+  (`solar_window_worldwide.rs`)
+
 #### Notifications and integrations
 
 - **A watchlist of common names silenced every notification**, and a list of
@@ -223,6 +308,9 @@ Read these before updating. Each one changes what an existing station does.
 - **A BirdWeather upload refused for its content was retried for two days.**
   (`store_forward_e2e.rs`)
 
+- **Two stations on one MQTT broker overwrote each other in Home Assistant.**
+  See the upgrade notes. (`discovery::tests::two_stations_with_different_prefixes_get_different_config_topics`)
+
 #### Data, backups and migration
 
 - **A database error while reading the locked clips let the disk-full purge
@@ -246,6 +334,27 @@ Read these before updating. Each one changes what an existing station does.
   (`a_verdict_and_its_mirror_are_written_together_or_not_at_all`)
 - **Bulk delete and bulk review from Search skipped the analytics copy.**
   (`analytics_divergence.rs`)
+
+- **Deleting or locking one source's detection reached every source's
+  detection of the same bird in the same second**, locked or not. Every page
+  and API write now names the detection by its clip as well.
+  (`a_delete_names_one_row_and_takes_its_clip.rs`, `write::tests::a_keyed_delete_removes_only_the_row_it_names`)
+- **Rejections recorded before migration 24 were lost for the chunks it
+  moved**, so those detections counted again. Migration 51 restores them.
+- **A brand-new database was backed up before a history rewrite** it did not
+  need. (`a_fresh_database_is_not_backed_up_before_a_history_rewrite`)
+- **Incremental auto-vacuum never took on a new database**, so the weekly
+  reclaim failed until a restart. (`a_database_open_or_create_makes_is_incremental_from_its_first_table`)
+- **Re-importing this station's own CSV export duplicated detections**; CSV
+  confidences outside 0–1 were stored (or aborted the import on `NaN`); a
+  byte-order mark hid the date column; times like `6:00:00` were stored as
+  typed. (`csv_importer::tests`)
+- **Removing an import deleted its locked detections**, and the analytics copy
+  lost them too. They are kept, and the page says so.
+  (`import_undo::removing_an_import_keeps_its_locked_rows_and_their_batch`,
+  `import_undo_mirror::undoing_an_import_keeps_the_rows_sqlite_kept`)
+- **The Search page scanned every detection for its source list** (250 ms per
+  million rows); migration 52 indexes it (0.06 ms).
 
 #### Analytics
 
@@ -273,6 +382,18 @@ Read these before updating. Each one changes what an existing station does.
 - **The life-list curve skipped months**, and the migration charts dropped or
   mislabelled the last days of December.
 - **Shannon H′ read −0.000** on a one-species day.
+
+- **Moving averages skipped silent days and averaged today's partial count**;
+  **anomalies flagged a day "high" with no z-score**; **sessions split on
+  minute boundaries** (a 29 m 01 s gap was 30) and **at midnight**; **"7 days"
+  was 8 dates**; **year-over-year compared a partial week with a full one**;
+  **the five peak windows were one burst five times**; the heatmap ignored
+  `?species=`. (`what_the_numbers_mean.rs`)
+- **A genuine rarity could never be classed Rarity**: the filter counted days,
+  not detections. **Effort-corrected rates were inflated by days without
+  effort and halved by a second microphone.** (`effort_rate_counts_what_was_listened_to.rs`)
+- **The dawn funnel and "your dawn opens…" disagreed** about the same
+  morning.
 
 #### Web interface
 
@@ -318,6 +439,48 @@ Read these before updating. Each one changes what an existing station does.
   and URLs built in scripts. A new `base-path.mjs` gate drives the pages
   under a prefix.
 
+- **The Display preferences did nothing.** A heading carried the card's id,
+  so Theme, Density, Motion and Contrast were all dead.
+  (`interactions.mjs: display preferences`; `qa.mjs` now fails any page with a
+  duplicate id — axe no longer checks for them)
+- **Forms never reset after a save, and refused audio-source edits were
+  silent.** `hx-on` handlers are blocked by the page's CSP, and a 422 body is
+  discarded by htmx. (`inline_style_guard.rs::no_script_attributes_the_csp_will_not_run`,
+  `interactions.mjs: audio source add`)
+- **The Today hero said "right around typical vs your last 30 days"** on a
+  station an hour old, ranked a morning's partial count against whole days,
+  and printed "21th percentile". (`today_phrase::tests`)
+- **The hero's date and "busy evening" were UTC**, and the share page's "10
+  minutes ago" read "5 hours ago" west of Greenwich.
+  (`the_hero_date_is_the_stations_local_date`, `a_share_says_how_long_ago_in_the_stations_own_time`)
+- **The Today signal card drew every source's audio interleaved**, and its
+  source picker navigated away on each arrow key.
+  (`interactions.mjs: today signal follows one source`, `today source picker stays`)
+- **Failed reads rendered as empty facts**: an empty rule-export backup, "No
+  notifications yet", "Pruned 0", an empty feed, "No comments yet", and
+  "Detection not found" for a detection that exists.
+  (`a_failed_read_is_not_reported_as_nothing.rs`)
+- **Quarantine and review actions announced writes the database refused.**
+  (`a_refused_write_is_not_shown_as_done.rs`)
+- **The footer said "listening" on a station with no microphone.**
+- **A filtered day list said nothing was heard today**; **the previously
+  played clip kept its ⏸**; **the now-playing dock sat under the phone tab
+  bar**; **blocked site storage lost the dark theme and the theme button**;
+  **44.1 kHz read "44 kHz"**; **west longitudes read "-71.0589°E"**.
+- **Text typed into the page could expand into layout partials**
+  (`/species?q={{help_drawer}}`).
+- **Searches under a reverse-proxy prefix put an unprefixed URL in the address
+  bar.** (`base_path_end_to_end.rs::a_pushed_url_stays_inside_the_prefix`)
+- **A share button clicked twice stayed on "Link copied" for good.**
+  (`interactions.mjs: copy button returns to its label`)
+- **The live log viewer logged `TypeError: api.onElRemoved is not a
+  function` on every connect** and so never closed its stream when htmx
+  removed it. htmx 2 has no such method; the extension now listens for
+  `htmx:beforeCleanupElement`. (`interactions.mjs: live logs connect cleanly`)
+- **The Trends card said "Detections per week · last 60 days"** over a table
+  of the last fourteen days, one row per day; the lede promised six months.
+  Both now say what is shown.
+
 #### Configuration, installer and doctor
 
 - **An inline comment became part of a config value**, and decimal commas
@@ -346,6 +509,16 @@ Read these before updating. Each one changes what an existing station does.
   analytics opt-out.
 - **A cached geomodel was used without checking its hash.**
 - **The doctor was silent when `vcgencmd` could not read the power state.**
+
+- **`uninstall.sh --remove-db` stopped half way** on a station that disabled
+  analytics with `--analytics-db ""`, and **a plain uninstall deleted a custom
+  `--watch-dir`**. (`installer/test/uninstall-paths.sh`)
+- **A failed install left ~100 MB in `/tmp`**; the expected geomodel fallback
+  printed a curl error and warnings on every fresh install; a local arm64
+  `docker build` embedded amd64 analytics extensions; setting only
+  `BIRDNET_METADATA_LABELS` in Docker was overwritten.
+- **`BIRDNET_SKIP_MIGRATION_BACKUP`**, which the migration error tells an
+  operator to set, was reported as an unknown variable at the next start.
 
 ## [0.16.1] - 2026-09-20
 

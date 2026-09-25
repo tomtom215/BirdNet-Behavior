@@ -144,7 +144,11 @@ Corollaries, each learned the same way:
   *previous* build's HTML. Kill by full command line (`pgrep -f '[s]creenshot_server'`),
   and have the restart refuse to report success when the running process
   predates the binary it just built:
-  `ps -o lstart= -p "$PID"` against `stat -c %Y "$BIN"`.
+  `ps -o lstart= -p "$PID"` against `stat -c %Y "$BIN"`. Timestamps are not
+  enough on their own: when the base-path fixture runs the *same* copied
+  binary, `cp` over it fails with `Text file busy`, and the restart serves the
+  old build with a fresh start time. Give a mutant its own binary path, and
+  confirm the served bytes (`curl … | grep` the mutated line) before grading.
 - **A green a11y gate can mean the rule never ran.** `axe.mjs` gates on a tag
   list, and with only the four WCAG A/AA tags, 36 of axe's 105 rules do not
   execute at all — `heading-order`, `landmark-one-main`, `region`,
@@ -269,6 +273,33 @@ Corollaries, each learned the same way:
   ICU/extension tests, in a crate that had not been touched. `df -h /` reads
   "Avail 1.9M" with "Used 38G" — the allowance is spent, not the machine. The
   cheapest ~3–6 GB back is `rm -rf target/debug/incremental`.
+
+- **`pgrep -f` / `pkill -f` match the shell that runs them.** A command line
+  that contains the pattern — `kill $(pgrep -f "listen 127.0.0.1:8601")`, or
+  a loop over `pgrep -f '[s]creenshot_server'` in a command that also copies
+  `screenshot_server` — matches its own shell and kills it (exit 144). Start
+  long-lived processes from a script that writes a pid file, or select by
+  `readlink /proc/$pid/exe`.
+- **A gate route that names a record the fixture does not have grades the
+  not-found page.** `qa.mjs` opened `/detections/detail` at a hard-coded time
+  the fixture never seeds, so the sweep — and axe, which imports its routes —
+  graded "Detection not found" and never the detection page; it looked green
+  because that page answered 200. Resolve the record from the fixture's API.
+- **axe has no duplicate-id rule any more.** Two elements with one id made
+  every Display-preference control dead while axe was clean; `qa.mjs` counts
+  duplicate ids itself now.
+- **`hx-on:*` never runs here.** htmx compiles it with `new Function`, and the
+  CSP has no `'unsafe-eval'`, so the handler renders, looks wired, and only
+  logs a violation. `inline_style_guard.rs` refuses it; use a nonce'd
+  listener (`data-reset-on-success` in `layout.html`).
+- **The daemon consumes its watch directory.** A real-model run deletes each
+  recording it has processed, so copying the watch dir for a second run copies
+  nothing — a rerun "found 0 detections" for that reason alone. Stage the
+  inputs fresh for every run.
+- **Every feature set is its own copy of the target dir.** Default,
+  `--all-features` and per-crate `--features analytics` each built bundled
+  libduckdb (482 MB an rlib) and filled the disk twice in one session. Pick one
+  (`--all-features`) and set `CARGO_INCREMENTAL=0`, as CI does.
 
 ### Key Dependencies
 

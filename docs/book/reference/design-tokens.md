@@ -54,8 +54,8 @@ A four-step text hierarchy, brightest (most important) to faintest.
 |---|---|---|---|
 | `--fg` | `oklch(22% 0.008 70)` | `oklch(97% 0.004 240)` | Primary text. |
 | `--fg-2` | `oklch(40% 0.008 70)` | `oklch(80% 0.008 240)` | Secondary text. |
-| `--fg-3` | `oklch(55% 0.008 70)` | `oklch(60% 0.010 240)` | Muted / metadata. |
-| `--fg-4` | `oklch(70% 0.008 70)` | `oklch(42% 0.012 240)` | Faint / disabled. |
+| `--fg-3` | `oklch(49% 0.008 70)` | `oklch(64% 0.010 240)` | Muted / metadata. |
+| `--fg-4` | `oklch(55% 0.012 70)` | `oklch(62% 0.014 240)` | Faint / disabled. |
 
 ## Colour — semantic hues
 
@@ -64,13 +64,13 @@ tint (for fills/badges) and most have an `-ink` (for text/icons on a soft fill).
 
 | Token | Light | Dark | Meaning |
 |---|---|---|---|
-| `--moss` | `oklch(55% 0.09 150)` | `oklch(78% 0.18 150)` | Primary / healthy / success — the "green" of a thriving yard. |
+| `--moss` | `oklch(52% 0.09 150)` | `oklch(78% 0.18 150)` | Primary / healthy / success — the "green" of a thriving yard. |
 | `--moss-soft` | `oklch(92% 0.04 150)` | `oklch(26% 0.10 150)` | Soft green fill (e.g. high-confidence background). |
 | `--moss-ink` | `oklch(35% 0.09 150)` | `oklch(90% 0.16 150)` | Green text/ink on a soft fill. |
 | `--dawn` | `oklch(68% 0.12 60)` | `oklch(82% 0.18 65)` | Morning / dawn chorus / warning — amber. |
 | `--dawn-soft` | `oklch(94% 0.05 65)` | `oklch(28% 0.10 60)` | Soft amber fill (mid-confidence background). |
 | `--dawn-ink` | `oklch(42% 0.12 55)` | `oklch(92% 0.16 60)` | Amber text/ink. |
-| `--rare` | `oklch(58% 0.16 28)` | `oklch(74% 0.20 25)` | Rare bird / alert / danger — red. |
+| `--rare` | `oklch(50% 0.16 28)` | `oklch(74% 0.20 25)` | Rare bird / alert / danger — red. |
 | `--rare-soft` | `oklch(94% 0.05 28)` | `oklch(28% 0.12 25)` | Soft red fill (low-confidence / rare badge background). |
 
 ## Colour — special surfaces
@@ -79,6 +79,17 @@ tint (for fills/badges) and most have an `-ink` (for text/icons on a soft fill).
 |---|---|---|---|
 | `--paper` | `oklch(96% 0.012 75)` | `oklch(18% 0.010 250)` | Warm "paper" surface for editorial recaps (Reports). |
 | `--night` | `oklch(28% 0.04 270)` | `oklch(8% 0.020 250)` | Deep night surface (e.g. live spectrogram backdrop). |
+
+## Colour — text on a filled surface
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `--on-moss` | `oklch(100% 0 0)` | `oklch(18% 0.02 150)` | Text on a `--moss` fill (primary buttons). |
+| `--on-fill` | `#fff` | `oklch(15% 0.02 150)` | Text on any saturated fill (badges, hovered amber buttons). |
+| `--sp-ink` | `oklch(10% 0 0)` | `oklch(98% 0 0)` | What a species colour is mixed toward for its own text, so the hue stays and the contrast holds. |
+| `--accent-rgb` | `60, 120, 80` | `120, 200, 150` | The accent as an `r, g, b` triple, for `rgba()` tints. |
+| `--conf-mid-bg` | `var(--dawn-soft)` | `var(--dawn-soft)` | Background of a middling-confidence badge. |
+| `--conf-low-bg` | `var(--rare-soft)` | `var(--rare-soft)` | Background of a low-confidence badge. |
 
 ## Elevation — shadows
 

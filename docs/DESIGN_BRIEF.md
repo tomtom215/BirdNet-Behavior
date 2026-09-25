@@ -29,7 +29,7 @@ users**, with deep analytics underneath for enthusiasts.
   classes in one stylesheet; the few dynamic values use a `data-style`
   attribute promoted by a nonce'd `<style>` block. Do not propose inline styles.
 - **One hand-written stylesheet** (`crates/birdnet-web/static/css/app.css`,
-  ~4.3k lines) and **self-hosted fonts** (offline-capable — air-gapped Pi
+  ~4.6k lines) and **self-hosted fonts** (offline-capable — air-gapped Pi
   installs are supported). No CDNs, no runtime-fetched web fonts, no new JS
   dependencies.
 - **Performance-conscious for a Pi** and **fully responsive** (a phone
@@ -42,8 +42,8 @@ users**, with deep analytics underneath for enthusiasts.
 
 - **Neutrals:** `--bg`, `--bg-2`, `--surface`, `--surface-2`, `--hairline`,
   `--text`, `--text-muted`.
-- **Brand / semantic ramps**, each with a `-soft` (pale fill) and `-ink` (dark
-  text) variant:
+- **Brand / semantic ramps**, each with a `-soft` (pale fill) variant, and
+  `--moss` / `--dawn` with an `-ink` (dark text) variant too:
   - `--moss` (calm green) = primary / accent / **success** / "live" / recording.
   - `--dawn` (amber) = **warning** / "today" highlights.
   - `--rare` (red) = **danger** / **rare-bird** accent.
@@ -66,9 +66,9 @@ users**, with deep analytics underneath for enthusiasts.
   entries, identical on desktop and the mobile tab bar): **Today** (`/`: live
   "right now" hero + live-signal spectrogram + stat tiles + live feed + day
   log), **Species** (`/species`, views: list / photos / life list, + species
-  detail), **Patterns** (`/patterns`, tabs: grid / together (co-occurrence) /
-  trends (time series) / behavior (sessions / retention / funnel /
-  next-species) / dawn / migration), **Recordings** (`/recordings`: clips +
+  detail), **Patterns** (`/patterns`, tabs: when active / dawn chorus /
+  migration / who sings together (co-occurrence) / trends (time series) /
+  behavior (sessions / retention / funnel / next-species)), **Recordings** (`/recordings`: clips +
   live audio), **Reports** (`/reports`: weekly / year in review / history),
   **Settings** (`/station`: CPU / mem / temp / disk gauges, DB / audio status;
   tabs: health / capture / alerts / data / settings / access).
@@ -125,10 +125,15 @@ users**, with deep analytics underneath for enthusiasts.
    a design pass and a home on the surfaces that do not yet show it, not
    inventing. Still to design: source **filtering**, **per-source badges /
    legends**, and — as an advanced, off-by-default option — a
-   **duplicate-collapse** affordance for explicitly co-located mics. Note for
-   whoever implements filtering: `idx_detections_source` was dropped in
-   migration 33 on the reasoning that nothing filters on `Source`, so a real
-   `WHERE Source = ?` needs that index back. The full,
+   **duplicate-collapse** affordance for explicitly co-located mics. The index
+   filtering needs is back: migration 52 adds
+   `idx_detections_source_datetime (Source, Date, Time)`, after migration 33
+   had dropped the Source index on the reasoning that nothing filtered on it.
+   Two more pieces are in place: every page write now names a detection by
+   its clip as well as date, time and species, so acting on one source's
+   detection no longer reaches another source's detection of the same bird in
+   the same second; and the Today signal card follows the chosen source
+   instead of drawing every source's frames interleaved. The full,
    corroboration-first design rationale is in
    [`book/field/multistream.md`](book/field/multistream.md); design these as
    one coherent surface.

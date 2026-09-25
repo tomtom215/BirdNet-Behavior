@@ -1,6 +1,6 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the eight token-gated endpoints — seven writes and one read — under [Changing a station](#changing-a-station).
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the fifteen token-gated endpoints — ten writes and five reads — under [Changing a station](#changing-a-station).
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
@@ -8,7 +8,7 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 >
 > The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
-> **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It is not yet complete: eight routed paths are absent from it — the index `/api/v2/`, `/api/v2/analytics/abundance`, `/api/v2/analytics/phenology`, `/api/v2/soundlevel`, `/api/v2/species/tracking`, the live audio `/api/v2/stream`, and the two WebSockets `/api/v2/ws/detections` and `/api/v2/ws/spectrogram` — and the test that guards it (`every_documented_path_is_routed`) checks only that every *documented* path is routed, not the reverse.
+> **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It is not yet complete: ten routed paths are absent from it — the index `/api/v2/`, `/api/v2/analytics/abundance`, `/api/v2/analytics/phenology`, `/api/v2/soundlevel`, `/api/v2/species/tracking`, the three verification exports `/api/v2/detections/export/raven`, `/api/v2/recordings/{clip}/raven.txt` and `/api/v2/recordings/{clip}/labels.txt`, and the two WebSockets `/api/v2/ws/detections` and `/api/v2/ws/spectrogram` (the live audio is at `/stream`, outside `/api/v2`) — and the test that guards it (`every_documented_path_is_routed`) checks only that every *documented* path is routed, not the reverse.
 
 ## Health & metrics
 
@@ -247,14 +247,17 @@ For verification tools: `GET /api/v2/detections/export/raven?from=&to=` is a Rav
 
 ## Changing a station
 
-Eight method-and-path pairs across seven routes, and they are the only ones in
-`/api/v2` that change anything.
+Ten method-and-path pairs, and they are the only ones in `/api/v2` that change
+anything.
 They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-An eighth, `GET /api/v2/settings`, is a *read* that lives behind the same token:
-a station's configuration is not public even with its credentials taken out.
+Five *reads* live behind the same token, because what they return is not public:
+`GET /api/v2/settings` (the configuration, credentials taken out),
+`GET /api/v2/system/capture` and `GET /api/v2/system/jobs` (operational detail
+about the station and its sources), `GET /api/v2/models/catalog`, and
+`GET /api/v2/detections/comments`.
 
 ### Turning them on
 
@@ -265,7 +268,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all eight answer `404`: the write surface does not exist rather
+Until you do, all fifteen answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
@@ -274,11 +277,21 @@ with a warning in the log and a warning from `birdnet-behavior --doctor`.
 ### Identifying a detection
 
 There is no surrogate id. A detection is identified the way the database
-identifies it — by date, time and scientific name:
+identifies it — by date, time, scientific name and clip:
 
 ```json
-{ "date": "2026-09-03", "time": "06:12:44", "sci_name": "Erithacus rubecula" }
+{ "date": "2026-09-03", "time": "06:12:44", "sci_name": "Erithacus rubecula",
+  "file_name": "European_Robin-91-2026-09-03-birdnet-06:12:44.wav" }
 ```
+
+`file_name` is the detection's `file_name` as `GET /api/v2/detections`
+returns it (`""` for a detection with no clip). It is optional, and worth
+sending: on a station with more than one microphone or camera, two sources
+that hear the same bird in the same second record two detections with the
+same date, time and species, and only the clip tells them apart. Without it,
+`lock` and `unlock` act on every such detection, and `delete` removes a lone
+one but leaves any that are locked. A `review` applies to all of them either
+way: verdicts are still recorded per date, time and species.
 
 A malformed key is `400`; a well-formed key matching no row is `404`.
 
@@ -297,6 +310,10 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `GET` | `/api/v2/settings` | Read every setting, with credentials redacted |
 | `PUT` | `/api/v2/settings` | Change one or more settings |
 | `POST` | `/api/v2/control/restart` | Restart the station |
+| `POST` | `/api/v2/control/restart-source` | Restart one audio source's capture |
+| `GET` | `/api/v2/system/capture` | Per-source capture health, as Station Health draws it |
+| `GET` | `/api/v2/system/jobs` | Every scheduled maintenance job and its state |
+| `GET` | `/api/v2/models/catalog` | The classifiers this build can install |
 
 ```bash
 curl -X POST http://localhost:8502/api/v2/detections/review \

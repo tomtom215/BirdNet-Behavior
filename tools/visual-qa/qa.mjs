@@ -16,6 +16,8 @@
 //   CONTRAST  high|"" (default "")
 //   ONLY      substring filter on route name
 //
+// Also flags duplicate element ids (see diagnose()).
+//
 // Run from this directory after `npm i playwright && npx playwright install chromium`.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
@@ -56,6 +58,21 @@ const VPS = (process.env.VPS || 'desktop,mobile')
 const T = new Date();
 const TODAY = `${T.getUTCFullYear()}-${String(T.getUTCMonth() + 1).padStart(2, '0')}-${String(T.getUTCDate()).padStart(2, '0')}`;
 const enc = encodeURIComponent;
+
+// A detection that exists. The route below named a hard-coded time that the
+// fixture never seeds, so the page answered "Detection not found" — with a
+// 200, until that became an honest 404 — and both this sweep and axe (which
+// imports ROUTES) graded the not-found page and never the detection page.
+async function realDetectionPath() {
+  try {
+    const r = await fetch(`${BASE}/api/v2/detections?limit=1`);
+    const d = (await r.json()).detections[0];
+    return `/detections/detail?date=${d.date}&time=${d.time}&name=${enc(d.com_name)}`;
+  } catch (e) {
+    throw new Error(`qa: no detection to open at ${BASE}/api/v2/detections — is the fixture up? (${e})`);
+  }
+}
+const DETECTION_DETAIL = await realDetectionPath();
 
 export const ROUTES = [
   // ── The six homes of the v3 spine, by their real URLs ──────────────────
@@ -104,7 +121,7 @@ export const ROUTES = [
   // redirect — so no gate had ever loaded it.
   ['login', '/login'],
   ['onboarding', '/onboarding'],
-  ['detection-detail', `/detections/detail?date=${TODAY}&time=05:14:08&name=${enc('Eurasian Magpie')}`],
+  ['detection-detail', DETECTION_DETAIL],
   ['species-detail', `/species/detail?name=${enc('European Robin')}`],
   ['detection-reviews', '/detection-reviews'],
   ['notifications', '/notifications'],
@@ -159,7 +176,17 @@ async function diagnose(page) {
       .map((i) => i.currentSrc || i.src);
     const speciesImgs = imgs.filter((i) => isSpeciesPhoto(i.currentSrc || i.src));
     const broken = brokenAll.filter((u) => !isSpeciesPhoto(u));
+    // Two elements with one id: `getElementById` returns the first, so the
+    // script that owns the second binds to the wrong element and does nothing.
+    // /station/settings shipped exactly that — a heading and the Display card
+    // both `id="display-prefs"` — and every Theme / Density / Motion button
+    // was dead. axe no longer has a duplicate-id rule, so nothing else in the
+    // suite can see it. Read after htmx has swapped the page's fragments in.
+    const seen = new Map();
+    document.querySelectorAll('[id]').forEach((el) => { seen.set(el.id, (seen.get(el.id) || 0) + 1); });
+    const dupIds = [...seen].filter(([, c]) => c > 1).map(([id, c]) => `${id}x${c}`);
     return {
+      dupIds,
       overflowX, scrollW: de.scrollWidth, clientW: de.clientWidth,
       stuck: [...new Set(stuck)].slice(0, 8),
       imgTotal: imgs.length, imgBroken: [...new Set(broken)].slice(0, 12),
@@ -253,7 +280,7 @@ async function main() {
             bad: badF,
             ...diag,
           };
-          const flag = (report[key].overflowX ? 'OVERFLOW ' : '') + (report[key].consoleErrs.length ? `ERR(${report[key].consoleErrs.length}) ` : '') + (report[key].imgBroken.length ? `IMG(${report[key].imgBroken.length}) ` : '') + (report[key].stuck.length ? 'STUCK ' : '');
+          const flag = (report[key].overflowX ? 'OVERFLOW ' : '') + (report[key].consoleErrs.length ? `ERR(${report[key].consoleErrs.length}) ` : '') + (report[key].imgBroken.length ? `IMG(${report[key].imgBroken.length}) ` : '') + (report[key].stuck.length ? 'STUCK ' : '') + (report[key].dupIds.length ? `DUPID(${report[key].dupIds.length}) ` : '');
           process.stdout.write(`${flag ? '! ' : '. '}${key} ${flag}\n`);
           n++;
         } catch (err) {
@@ -279,7 +306,7 @@ async function main() {
   const probs = Object.entries(report).filter(([, v]) =>
     v.error || v.overflowX || (v.consoleErrs && v.consoleErrs.length) ||
     (v.pageErrs && v.pageErrs.length) || (v.imgBroken && v.imgBroken.length) ||
-    (v.stuck && v.stuck.length) || (v.bad && v.bad.length) || allPhotosFailed(v));
+    (v.stuck && v.stuck.length) || (v.bad && v.bad.length) || (v.dupIds && v.dupIds.length) || allPhotosFailed(v));
   console.log(`\nCaptured ${n} screenshots into ${OUT}/`);
   console.log(`\n=== ${probs.length} pages with issues ===`);
   for (const [k, v] of probs) {
@@ -292,6 +319,7 @@ async function main() {
     if (v.imgBroken?.length) parts.push(`brokenImg=${JSON.stringify(v.imgBroken)}`);
     if (allPhotosFailed(v)) parts.push(`allSpeciesPhotosFailed(${v.speciesImgBroken}/${v.speciesImgTotal})`);
     if (v.stuck?.length) parts.push(`stuck=${JSON.stringify(v.stuck)}`);
+    if (v.dupIds?.length) parts.push(`duplicateIds=${JSON.stringify(v.dupIds)}`);
     console.log(`  ${k}: ${parts.join(' | ')}`);
   }
 

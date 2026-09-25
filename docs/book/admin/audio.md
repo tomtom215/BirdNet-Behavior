@@ -275,7 +275,7 @@ Two things follow from this that are worth knowing:
   say why.
 
 The source picker on the Live view chooses what *you* hear. What everyone else
-hears when they arrive without choosing — and what `/api/v2/stream` serves with
+hears when they arrive without choosing — and what `/stream` serves with
 no `?source_id=` — is the station's **listen default**, set with the **Make
 listen default** button on a source's row on this page. Unset, the first
 working source serves, which is the whole story on a one-microphone station.

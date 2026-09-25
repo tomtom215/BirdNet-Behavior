@@ -26,7 +26,9 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
 | `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` / `RTSP_URLS` | — |
 | `BIRDNET_LISTEN` | `--listen` | — | `0.0.0.0:8502` |
-| `TZ` | — | — | UTC in the container. An IANA zone name (`Europe/Berlin`); the container files detections under this zone's local hours, and warns at start when it is unset or not a zone the image knows. On a host, the zone comes from the system (`timedatectl set-timezone`). |
+| `TZ` | — | — | UTC in the container. An IANA zone name (`Europe/Berlin`); the container files detections under this zone's local hours, and warns at start when it is unset or not a zone the image knows. `quickstart.sh` writes the host's zone into `.env`; compose sets no default of its own. On a host, the zone comes from the system (`timedatectl set-timezone`). |
+| `BIRDNET_ANALYTICS_DB` | `--analytics-db` | `ANALYTICS_DB_PATH` | `<database>.duckdb` beside the SQLite file; `--analytics-db ""` turns analytics off |
+| `BIRDNET_SKIP_MIGRATION_BACKUP` | — | — | unset. Any value but empty or `0` lets a history-rewriting migration run without the backup it otherwise takes first — for a station whose disk has no room for a copy of the database, accepting that the previous timestamps cannot be recovered |
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | `RECORDING_SCHEDULE` | `all-day` |
 | `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
@@ -69,7 +71,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_NIGHT_EXTRA_NOCTURNAL` | `--night-extra-nocturnal` | `NIGHT_EXTRA_NOCTURNAL` | — |
 | `BIRDNET_NOTIFY_URLS` | `--notify-urls` | `NOTIFY_URLS` | — |
 | `BIRDNET_APPRISE_URL` | `--apprise-url` | `APPRISE_URL` | — |
-| `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | — | `0.8` |
+| `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | `APPRISE_MIN_CONFIDENCE` | `0.8` |
 | `BIRDNET_DEADMAN_HOURS` | `--deadman-hours` | `DEADMAN_HOURS` | `24` (`0` = off) |
 | `BIRDNET_BIRDWEATHER_TOKEN` | `--birdweather-token` | `BIRDWEATHER_TOKEN` | — |
 | `BIRDNET_BIRDWEATHER_URL` | — | `BIRDWEATHER_URL` | public BirdWeather |
@@ -149,11 +151,11 @@ connections**, so you can confirm it rather than infer it.
 
 ## Web-UI-only settings
 
-These are stored in the SQLite settings table and have **no** environment variable or `birdnet.conf` equivalent. Set them at `/admin/settings` — see [Settings & Detection](../admin/settings.md).
+These are stored in the SQLite settings table and have no environment variable or command-line flag; a few also have a `birdnet.conf` key, noted beside them. That key is copied into the settings table on the station's first run; after that the value saved on the page is the one the station uses. Set them at `/admin/settings` — see [Settings & Detection](../admin/settings.md).
 
 | Setting | Where | Note |
 |---|---|---|
-| Detection confidence threshold | Detection | Per-species overrides also live here |
+| Detection confidence threshold | Detection | Also `CONFIDENCE` in `birdnet.conf`; per-species overrides also live here |
 | Detection sensitivity (0.5–1.5) | Detection | Also `SENSITIVITY` in `birdnet.conf`; read as written, which is not how BirdNET-Pi applies it — see [Settings](../admin/settings.md) |
 | Email / SMTP notifications | Notifications | |
 | Rare-bird quarantine rules | Species | |

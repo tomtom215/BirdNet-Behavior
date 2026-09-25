@@ -353,9 +353,11 @@ COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 #   /data/model        — BirdNET+ ONNX model + labels (downloaded on first run)
 #   /data/recordings   — audio segments captured by the detection pipeline
 #   /data/cache        — Wikipedia species image cache
-#   /data/BirdNet-Behavior/birds.db     — SQLite detections database
-#                                          ($HOME/BirdNet-Behavior; HOME=/data)
-#   /data/BirdNet-Behavior/birds.duckdb — DuckDB analytics, on by default
+#   /data/BirdNet-Behavior/birds.db — SQLite detections database
+#                                      ($HOME/BirdNet-Behavior; HOME=/data)
+#   /data/analytics.db — DuckDB analytics, where compose points
+#                        BIRDNET_ANALYTICS_DB; a bare `docker run` without it
+#                        puts birds.duckdb beside birds.db
 RUN mkdir -p /data/model /data/recordings /data/cache \
     && chown -R birdnet:birdnet /data
 

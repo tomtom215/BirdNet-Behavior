@@ -667,7 +667,252 @@ async function hiddenTabsDoNotPoll(page) {
   check('poll: showing the tab refreshes at once', polls > atShow, `${polls - atShow} poll(s) after showing`);
 }
 
+// The Display card on /station/settings. A heading above it carried the
+// card's own id, so its script bound to the heading and every button was
+// inert — the page rendered perfectly and axe was clean. Drive the buttons.
+async function displayPrefs(page) {
+  await page.goto(`${BASE}/station/settings`, { waitUntil: 'networkidle' });
+  const dark = page.locator('#display-prefs [data-prefs-key="theme"] [data-value="dark"]');
+  if (!(await dark.count())) {
+    check('prefs: theme control exists', false, 'no Dark button in #display-prefs');
+    return;
+  }
+  await dark.click();
+  const theme = await page.evaluate(() => document.documentElement.dataset.theme);
+  check('prefs: Dark switches the theme', theme === 'dark', `data-theme is "${theme}"`);
+  check('prefs: Dark is marked chosen', (await dark.getAttribute('aria-checked')) === 'true', 'aria-checked is not "true"');
+  const compact = page.locator('#display-prefs [data-prefs-key="bnb-density"] [data-value="compact"]');
+  await compact.click();
+  const density = await page.evaluate(() => document.documentElement.style.getPropertyValue('--density'));
+  check('prefs: Compact changes the density', density.trim() === '0.78', `--density is "${density}"`);
+  await page.click('#display-prefs [data-prefs-reset]');
+  const auto = page.locator('#display-prefs [data-prefs-key="theme"] [data-value="auto"]');
+  check(
+    'prefs: Reset moves the screen-reader state too',
+    (await auto.getAttribute('aria-checked')) === 'true' && (await dark.getAttribute('aria-checked')) === 'false',
+    `auto aria-checked=${await auto.getAttribute('aria-checked')}, dark=${await dark.getAttribute('aria-checked')}`,
+  );
+}
+
+// Adding a microphone. The form reset itself through `hx-on::after-request`,
+// which the CSP blocks, so it never reset; and a refused add (the same device
+// twice) answered 422, whose body htmx discards, so nothing said why.
+async function audioSourceAdd(page) {
+  await page.addInitScript(() => {
+    window.__csp = [];
+    document.addEventListener('securitypolicyviolation', (e) => window.__csp.push(e.violatedDirective));
+  });
+  await page.goto(`${BASE}/admin/audio`, { waitUntil: 'networkidle' });
+  if (!(await page.locator('#add-local form').count())) {
+    check('audio: add form exists', false, 'no #add-local form on /admin/audio');
+    return;
+  }
+  const dev = `plughw:7,${Date.now() % 100000}`;
+  const submit = async () => {
+    await page.evaluate(() => { document.getElementById('add-local').open = true; });
+    await page.fill('#lt-id', dev);
+    const done = page.waitForResponse((r) => r.url().endsWith('/admin/audio/sources') && r.request().method() === 'POST');
+    await page.click('#add-local form button[type=submit]');
+    await done;
+    await page.waitForTimeout(500);
+    return page.evaluate(() => ({
+      open: document.getElementById('add-local').open,
+      value: document.getElementById('lt-id').value,
+      toasts: [...document.querySelectorAll('#bnb-toasts .bnb-toast')].map((t) => t.textContent),
+      csp: window.__csp.length,
+    }));
+  };
+  const first = await submit();
+  check('audio: a saved add closes and clears the form', !first.open && first.value === '', JSON.stringify(first));
+  check('audio: no CSP violation', first.csp === 0, `${first.csp} violation(s)`);
+  await page.evaluate(() => document.querySelectorAll('#bnb-toasts .bnb-toast').forEach((t) => t.remove()));
+  const second = await submit();
+  check(
+    'audio: a refused add says why',
+    second.toasts.some((t) => /already/i.test(t)),
+    `toasts: ${JSON.stringify(second.toasts)}`,
+  );
+  check('audio: a refused add keeps what was typed', second.open && second.value === dev, JSON.stringify(second));
+}
+
+// Playing clip A then clip B. `stop()` cleared only A's class, so A kept its
+// ⏸ and its "Pause" name: two rows claiming to play, one of them silent.
+async function clipGlyphsFollowPlayback(page) {
+  await page.addInitScript(STUB_MEDIA);
+  await page.goto(`${BASE}/recordings`, { waitUntil: 'domcontentloaded' });
+  const rows = page.locator('#rc-clips [data-play-src]');
+  if ((await rows.count()) < 2) {
+    check('clip glyphs: two playable clips exist', false, `${await rows.count()} on /recordings`);
+    return;
+  }
+  for (const i of [0, 1]) {
+    await rows.nth(i).click();
+    await page.evaluate(() => window.__media.resolve && window.__media.resolve());
+    await page.waitForTimeout(150);
+  }
+  const state = await page.evaluate(() =>
+    [...document.querySelectorAll('#rc-clips [data-play-src]')].slice(0, 2).map((b) => ({
+      glyph: b.textContent.trim(),
+      label: b.getAttribute('aria-label'),
+      name: b.getAttribute('data-clip-name'),
+    })),
+  );
+  check('clip glyphs: only the playing row shows pause', state[0].glyph === '▶' && state[1].glyph === '⏸', JSON.stringify(state));
+  check(
+    'clip glyphs: each row still names its bird',
+    state[0].label === `Play ${state[0].name}` && state[1].label === `Pause ${state[1].name}`,
+    JSON.stringify(state),
+  );
+}
+
+// On a phone the now-playing dock slid up beneath the bottom tab bar, which
+// hid its scrub bar and time. Measured, not read from the CSS: a media query
+// earlier in the sheet can lose to a later rule (CLAUDE.md).
+async function floatDockClearsTheTabBar(page) {
+  await page.addInitScript(STUB_MEDIA);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${BASE}/recordings`, { waitUntil: 'networkidle' });
+  // The dock is built the first time a clip plays.
+  const play = page.locator('#rc-clips [data-play-src]').first();
+  if (await play.count()) {
+    await play.click();
+    await page.evaluate(() => window.__media.resolve && window.__media.resolve());
+    await page.waitForTimeout(200);
+  }
+  const geo = await page.evaluate(() => {
+    const dock = document.querySelector('.rc-floatdock');
+    const bar = document.querySelector('.bnb-tabbar');
+    if (!dock || !bar) return null;
+    dock.classList.add('show');
+    dock.style.transition = 'none';
+    const d = dock.getBoundingClientRect();
+    const b = bar.getBoundingClientRect();
+    return { dockBottom: d.bottom, barTop: b.top, barShown: getComputedStyle(bar).display !== 'none' };
+  });
+  if (!geo) {
+    check('dock: dock and tab bar exist', false, 'no .rc-floatdock or .bnb-tabbar on /recordings');
+    return;
+  }
+  check('dock: the tab bar is shown at phone width', geo.barShown, JSON.stringify(geo));
+  check('dock: the dock sits above the tab bar', geo.dockBottom <= geo.barTop + 0.5, JSON.stringify(geo));
+}
+
+// With site data blocked, every `localStorage` access throws. The pre-paint
+// guard read it unguarded, so it aborted before setting a theme — a dark-OS
+// reader got the light page — and the toggle threw before applying, so the
+// button did nothing.
+async function themeWithStorageBlocked(page) {
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.addInitScript(() => {
+    const deny = () => { throw new DOMException('blocked', 'SecurityError'); };
+    Storage.prototype.getItem = deny;
+    Storage.prototype.setItem = deny;
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  const first = await page.evaluate(() => document.documentElement.dataset.theme);
+  check('storage blocked: the OS theme still applies', first === 'dark', `data-theme is "${first}"`);
+  await page.click('#theme-toggle');
+  const after = await page.evaluate(() => document.documentElement.dataset.theme);
+  check('storage blocked: the theme toggle still works', !!after && after !== first, `was "${first}", is "${after}"`);
+}
+
+// The Today source picker navigated to Recordings on `change`, which some
+// platforms fire for every arrow key in a closed select (WCAG 3.2.2). It now
+// chooses what the card draws and where "Listen live" goes, and stays put.
+async function todaySourcePickerStays(page) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  const opts = await page.locator('#td-source option:not([disabled])').evaluateAll((os) => os.map((o) => o.value));
+  const pick = opts.find((v) => v);
+  if (!pick) {
+    check('source picker: a source to pick exists', false, `options: ${JSON.stringify(opts)}`);
+    return;
+  }
+  const before = page.url();
+  await page.selectOption('#td-source', pick);
+  await page.waitForTimeout(400);
+  check('source picker: choosing a source stays on the page', page.url() === before, `navigated to ${page.url()}`);
+  const href = await page.getAttribute('.x-listen', 'href');
+  check('source picker: Listen live carries the choice', (href || '').includes(`source=${encodeURIComponent(pick)}`), `href ${href}`);
+}
+
+// Every client receives every source's spectrogram frames. The Today card
+// drew them all, so a two-source station's "live signal" was two inputs
+// interleaved. Feed it A, B, A, B and count repaints (paintFrame clears the
+// canvas once per frame it draws).
+async function todaySignalFollowsOneSource(page) {
+  await page.addInitScript(() => {
+    window.__sockets = [];
+    const Real = window.WebSocket;
+    window.WebSocket = function (url) {
+      if (!String(url).includes('/ws/spectrogram')) return new Real(url);
+      const fake = { readyState: 1, close() {}, send() {} };
+      window.__sockets.push(fake);
+      setTimeout(() => fake.onopen && fake.onopen({}), 0);
+      return fake;
+    };
+    window.__paints = 0;
+    const clear = CanvasRenderingContext2D.prototype.clearRect;
+    CanvasRenderingContext2D.prototype.clearRect = function (...a) {
+      if (window.__counting && this.canvas && this.canvas.id === 'hero-pulse') window.__paints += 1;
+      return clear.apply(this, a);
+    };
+  });
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' });
+  if (!(await page.locator('#hero-pulse').count())) {
+    check('signal: the live signal card is on the page', false, 'no #hero-pulse on /');
+    return;
+  }
+  const paints = await page.evaluate(() => {
+    const ws = window.__sockets[window.__sockets.length - 1];
+    if (!ws || !ws.onmessage) return -1;
+    window.__counting = true;
+    for (const source of ['src_a', 'src_b', 'src_a', 'src_b']) {
+      ws.onmessage({ data: JSON.stringify({ event: 'spectrogram', source, n_mels: 1, n_frames: 1, data: [1] }) });
+    }
+    window.__counting = false;
+    return window.__paints;
+  });
+  check('signal: the card draws one source, not every source interleaved', paints === 2, `${paints} repaint(s) for A,B,A,B`);
+}
+
 const page404 = [];
+
+// A copy button read its own label when clicked, so a second click inside
+// the "Copied!" window took "Copied!" as the label and restored to it for
+// good. The clipboard is stubbed: this is about the label, not the platform.
+async function copyButtonReturnsToItsLabel(page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.resolve() } });
+  });
+  const r = await page.request.get(`${BASE}/api/v2/detections?limit=1`);
+  const d = (await r.json()).detections[0];
+  await page.goto(`${BASE}/detections/detail?date=${d.date}&time=${d.time}&name=${encodeURIComponent(d.com_name)}`, { waitUntil: 'domcontentloaded' });
+  const btn = page.locator('[data-copy-url]').first();
+  if (!(await btn.count())) {
+    check('copy button: the detection page has one', false, 'no [data-copy-url] on the page');
+    return;
+  }
+  const label = (await btn.textContent()).trim();
+  await btn.click();
+  await page.waitForTimeout(200);
+  await btn.click();
+  await page.waitForTimeout(1900);
+  const after = (await btn.textContent()).trim();
+  check('copy button: a double click still returns to its label', after === label, `was "${label}", is "${after}"`);
+}
+
+// htmx 2 has no `api.onElRemoved`; the SSE extension called it on connect,
+// which logged a TypeError on the live log page and closed nothing.
+async function liveLogsConnectCleanly(page) {
+  const errs = [];
+  page.on('pageerror', (e) => errs.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await page.goto(`${BASE}/admin/system/logs/page`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => /Connected/.test(document.getElementById('conn-status').textContent), null, { timeout: 5000 }).catch(() => {});
+  const status = await page.textContent('#conn-status');
+  check('live logs: the stream connects', /Connected/.test(status), `status "${status}"`);
+  check('live logs: connecting logs no error', errs.length === 0, JSON.stringify(errs).slice(0, 300));
+}
 
 async function main() {
   const browser = await chromium.launch({
@@ -682,6 +927,8 @@ async function main() {
   for (const [name, fn] of [
     ['live audio button', liveAudioButton],
     ['clip player', clipPlayer],
+    ['clip glyphs follow playback', clipGlyphsFollowPlayback],
+    ['float dock clears the tab bar', floatDockClearsTheTabBar],
     ['bulk actions', bulkActions],
     ['destructive controls', destructiveControlDisables],
     ['wizard cards by keyboard', wizardCardsByKeyboard],
@@ -700,6 +947,13 @@ async function main() {
     ['co-occurrence range holds', correlationRangeHolds],
     ['help drawer deep link', helpDrawerDeepLink],
     ['hidden tabs do not poll', hiddenTabsDoNotPoll],
+    ['display preferences', displayPrefs],
+    ['theme with storage blocked', themeWithStorageBlocked],
+    ['today source picker stays', todaySourcePickerStays],
+    ['today signal follows one source', todaySignalFollowsOneSource],
+    ['audio source add', audioSourceAdd],
+    ['copy button returns to its label', copyButtonReturnsToItsLabel],
+    ['live logs connect cleanly', liveLogsConnectCleanly],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
