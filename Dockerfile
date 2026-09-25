@@ -168,9 +168,30 @@ COPY . .
 # cannot parse and records what they target, and `docker.yml` boots the built
 # image with networking disabled and asserts the extension loads.
 ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.5"
-ARG BEHAVIORAL_EXTENSION_TARGET="linux_amd64"
+# The platform whose extension builds are embedded. Empty by default, so it is
+# derived from the platform this stage builds for: BuildKit sets TARGETARCH
+# (amd64 / arm64 — DuckDB's linux_amd64 / linux_arm64), and without BuildKit
+# the stage's own `uname -m` is that platform. It used to default to
+# linux_amd64, so a local `docker compose build` on a Pi embedded amd64
+# extensions the arm64 engine cannot LOAD, and the "offline" image needed the
+# network at first run after all. docker.yml still passes it explicitly.
+ARG TARGETARCH
+ARG BEHAVIORAL_EXTENSION_TARGET=""
 RUN set -eu; \
-    url="https://community-extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${BEHAVIORAL_EXTENSION_TARGET}/behavioral.duckdb_extension.gz"; \
+    ext_target="${BEHAVIORAL_EXTENSION_TARGET}"; \
+    if [ -z "$ext_target" ]; then \
+        arch="${TARGETARCH:-}"; \
+        if [ -z "$arch" ]; then \
+            case "$(uname -m)" in \
+                x86_64) arch=amd64 ;; \
+                aarch64|arm64) arch=arm64 ;; \
+                *) arch="$(uname -m)" ;; \
+            esac; \
+        fi; \
+        ext_target="linux_${arch}"; \
+    fi; \
+    echo "embedding DuckDB extensions for ${ext_target}"; \
+    url="https://community-extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${ext_target}/behavioral.duckdb_extension.gz"; \
     if curl -fsSL --max-time 30 -o /tmp/behavioral.duckdb_extension.gz "$url"; then \
         gunzip -f /tmp/behavioral.duckdb_extension.gz; \
         echo "embedding behavioral extension from $url"; \
@@ -178,7 +199,7 @@ RUN set -eu; \
     else \
         echo "WARNING: behavioral extension NOT fetched ($url) — this image has no offline analytics; docker.yml asserts against exactly this"; \
     fi; \
-    icu_url="https://extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${BEHAVIORAL_EXTENSION_TARGET}/icu.duckdb_extension.gz"; \
+    icu_url="https://extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${ext_target}/icu.duckdb_extension.gz"; \
     if curl -fsSL --max-time 120 -o /tmp/icu.duckdb_extension.gz "$icu_url"; then \
         gunzip -f /tmp/icu.duckdb_extension.gz; \
         echo "embedding icu extension from $icu_url"; \
@@ -332,8 +353,9 @@ COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 #   /data/model        — BirdNET+ ONNX model + labels (downloaded on first run)
 #   /data/recordings   — audio segments captured by the detection pipeline
 #   /data/cache        — Wikipedia species image cache
-#   /data/birds.db     — SQLite detections database (the binary's default name)
-#   /data/analytics.db — DuckDB behavioral analytics database (optional)
+#   /data/BirdNet-Behavior/birds.db     — SQLite detections database
+#                                          ($HOME/BirdNet-Behavior; HOME=/data)
+#   /data/BirdNet-Behavior/birds.duckdb — DuckDB analytics, on by default
 RUN mkdir -p /data/model /data/recordings /data/cache \
     && chown -R birdnet:birdnet /data
 

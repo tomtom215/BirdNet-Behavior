@@ -34,6 +34,8 @@ CI_TESTS=(
     config-template.sh
     container-model-cache.sh
     coord-parse.sh
+    dockerfile-extension-target.sh
+    geomodel-fallback-quiet.sh
     geomodel-resume.sh
     location-notice.sh
     model-resume.sh

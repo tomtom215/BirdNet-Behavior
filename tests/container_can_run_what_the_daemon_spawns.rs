@@ -439,18 +439,36 @@ fn the_image_carries_zoneinfo_and_compose_passes_tz_through() {
         runtime_stage_packages().contains("tzdata"),
         "the runtime stage must install tzdata, or TZ resolves to UTC whatever it says"
     );
+    // TZ reaches the container from `.env` (which quickstart.sh writes from the
+    // host's zone), and compose must not paper over its absence. It used to
+    // say `TZ: ${TZ:-UTC}`, which made the entrypoint's "TZ is not set"
+    // warning unreachable: every Docker station nobody told its zone filed
+    // detections under UTC hours, and nothing said so.
     let compose = std::fs::read_to_string(repo_root().join("docker-compose.yml")).unwrap();
-    // Assembled from two halves so no literal holds a brace pair the
-    // formatting-argument lint would read as one.
-    let tz_line = ["TZ: ${", "TZ:-UTC}"].concat();
+    let defaulted: Vec<&str> = compose
+        .lines()
+        .filter(|l| {
+            let l = l.trim_start();
+            !l.starts_with('#') && l.starts_with("TZ:")
+        })
+        .collect();
     assert!(
-        compose.contains(&tz_line),
-        "docker-compose.yml must pass TZ into the container (defaulting to UTC, never blank)"
+        defaulted.is_empty(),
+        "docker-compose.yml must not set TZ itself — a default there hides the \
+         entrypoint's unset-TZ warning; TZ belongs in .env: {defaulted:?}"
+    );
+    assert!(
+        compose.contains("env_file:") && compose.contains("path: .env"),
+        "with no TZ line, TZ reaches the container only through env_file .env"
     );
     let entrypoint = std::fs::read_to_string(repo_root().join("docker/entrypoint.sh")).unwrap();
     assert!(
         entrypoint.contains("/usr/share/zoneinfo/$TZ"),
         "the entrypoint must check TZ names a zone the image knows"
+    );
+    assert!(
+        entrypoint.contains("TZ is not set"),
+        "the entrypoint must warn when TZ is unset — the case compose now leaves visible"
     );
     let env_example = std::fs::read_to_string(repo_root().join(".env.example")).unwrap();
     assert!(

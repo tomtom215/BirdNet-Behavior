@@ -109,6 +109,7 @@ macos_install() {
     if [ -n "${version}" ] && curl -fsIL "${url}" >/dev/null 2>&1; then
         info "Downloading prebuilt macOS binary (v${version})…"
         tmp="$(mktemp -d)"
+        track_tmpdir "${tmp}"
         download_large "${url}" "${tmp}/${asset}" "${asset}"
         tar -xzf "${tmp}/${asset}" -C "${tmp}"
         inner="${tmp}/${BINARY_NAME}-${version}-aarch64-apple-darwin/${BINARY_NAME}"

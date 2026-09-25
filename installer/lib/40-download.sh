@@ -14,6 +14,39 @@ download() {
     fi
 }
 
+# `download`, except that "not there" (HTTP 404) is an answer rather than an
+# error: it returns 4 and prints nothing, so a caller with another origin to
+# try can say so in its own words. Any other failure is reported as before.
+#
+# Why: the models release may not carry the geomodel yet (RELEASING.md), and
+# that documented fallback to upstream printed curl's "The requested URL
+# returned error: 404" and a [WARN] on every install — an expected path dressed
+# as a fault, which teaches operators to skim past real ones.
+download_or_absent() {
+    local url="$1"
+    local dest="$2"
+    local code
+    if ! command -v curl &>/dev/null; then
+        download "${url}" "${dest}"
+        return
+    fi
+    # No -f: an HTTP error is read from the status code instead of printed.
+    # -S still reports transport failures (DNS, TLS, timeouts).
+    if ! code="$(curl -sSL --retry 3 --retry-delay 2 -o "${dest}" -w '%{http_code}' "${url}")"; then
+        rm -f "${dest}"
+        return 1
+    fi
+    case "${code}" in
+        2??) return 0 ;;
+        404) rm -f "${dest}"; return 4 ;;
+        *)
+            rm -f "${dest}"
+            warn "HTTP ${code} from ${url}"
+            return 1
+            ;;
+    esac
+}
+
 # Large-file download helper — resumes on interrupt, shows a progress bar
 # so the operator sees something is happening during the ~541 MB model pull.
 #
