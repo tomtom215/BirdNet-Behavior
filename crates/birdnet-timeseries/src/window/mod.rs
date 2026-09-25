@@ -2,15 +2,20 @@
 //!
 //! A `WindowSpec` knows how to emit the SQL fragment that defines
 //! the time boundary for one type of `DuckDB` window.
+//!
+//! There is no sliding-window spec. One existed (`SlidingSpec`), unused, with
+//! a centred `RANGE` frame over only the days that had detections — the same
+//! three defects the moving average had (silent days skipped, today's partial
+//! day averaged in, windows truncated at the edges). The moving average is
+//! [`crate::queries::trend::MovingAverage`]; a second copy of it here was only
+//! a second place for those defects to survive a fix.
 
 pub mod hopping;
 pub mod session;
-pub mod sliding;
 pub mod tumbling;
 
 pub use hopping::HoppingSpec;
 pub use session::SessionSpec;
-pub use sliding::SlidingSpec;
 pub use tumbling::TumblingSpec;
 
 /// The temporal granularity used when bucketing detections.

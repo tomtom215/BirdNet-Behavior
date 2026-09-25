@@ -123,7 +123,8 @@ pub struct AbundanceParams {
     pub species: Option<String>,
     /// Calendar year to analyse.
     pub year: u32,
-    /// Minimum weekly count to include in results.
+    /// Minimum detections in a species-week for it to be included. Honoured by
+    /// `weekly_abundance_sql` and `effort_corrected_abundance_sql`.
     pub min_weekly_count: u32,
 }
 

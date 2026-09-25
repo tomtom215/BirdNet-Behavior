@@ -9,7 +9,9 @@ use crate::types::{
 };
 
 impl super::TimeSeriesDb<'_> {
-    /// N-day centred moving average of daily detections.
+    /// N-day trailing moving average of daily detections, over a zero-filled
+    /// series of complete days — see [`MovingAverage`] for what that rules
+    /// out. `moving_avg_detections` is `None` where the window is incomplete.
     ///
     /// # Errors
     ///
@@ -35,7 +37,8 @@ impl super::TimeSeriesDb<'_> {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// Year-over-year weekly comparison.
+    /// Year-over-year weekly comparison, each week against the same days 52
+    /// weeks earlier — see [`YearOverYear`].
     ///
     /// # Errors
     ///
@@ -62,7 +65,8 @@ impl super::TimeSeriesDb<'_> {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// Anomaly detection: days with unusually high or low activity.
+    /// Anomaly detection: complete days with unusually high or low activity
+    /// against the days before them — see [`AnomalyDetection`].
     ///
     /// # Errors
     ///

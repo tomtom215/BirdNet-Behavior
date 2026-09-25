@@ -103,6 +103,27 @@ FROM detections
 WHERE review_verdict IS DISTINCT FROM 'rejected';
 ";
 
+/// "The last `days` days": `days` calendar dates ending with today.
+///
+/// `detection_date >= CURRENT_DATE - INTERVAL n DAYS` — the spelling every
+/// query here used — includes both ends, so "the last 3 days" was four dates.
+/// A strict `>` makes N days mean N dates. Today is included, partial as it
+/// is: for a list of counts, the newest row being the day in progress is what
+/// a reader expects. Anything that *averages* over days must use
+/// [`last_complete_days`] instead.
+pub(crate) fn last_days(days: u32) -> String {
+    format!("detection_date > CURRENT_DATE - INTERVAL {days} DAYS")
+}
+
+/// The `days` complete dates before today — today, a few hours in, is not a
+/// day yet, and averaging it in drags every per-day figure toward zero each
+/// morning.
+pub(crate) fn last_complete_days(days: u32) -> String {
+    format!(
+        "detection_date >= CURRENT_DATE - INTERVAL {days} DAYS AND detection_date < CURRENT_DATE"
+    )
+}
+
 /// A trait for query builders that produce a single runnable SQL string.
 ///
 /// All query builder structs implement this to support uniform test patterns

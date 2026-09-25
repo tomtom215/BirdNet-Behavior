@@ -1,14 +1,28 @@
 //! Session window specification using LAG + cumulative SUM.
 //!
 //! A session window groups consecutive events separated by inactivity gaps
-//! shorter than a configurable threshold. When the gap between two detections
-//! exceeds the threshold a new session begins.
+//! no longer than a configurable threshold. When the silence between two
+//! detections is *longer* than the threshold a new session begins — the rule
+//! the behavioral extension's `sessionize` applies (probed against v0.9.1:
+//! 30:00 apart at a 30-minute gap is one session, 30:01 is two), so the
+//! Behaviour and Trends pages cut the same day the same way.
 //!
 //! Implementation follows the `DuckDB` pattern:
-//! 1. Compute `LAG(detection_instant)` for each row
-//! 2. Mark rows where the gap ≥ threshold as session boundaries
+//! 1. Compute the elapsed time since the previous detection, from
+//!    `detection_instant`, in microseconds
+//! 2. Mark rows where that gap exceeds the threshold as session boundaries
 //! 3. Assign a monotonically increasing `session_id` via cumulative SUM
-//! 4. Aggregate each session to its `[start, end]` extent and count
+//! 4. Aggregate each session — and only each session, not each session *and
+//!    date*, which cut every session through midnight in two — to its
+//!    `[start, end]` extent and count
+//!
+//! # Elapsed time, not minute boundaries
+//!
+//! `date_diff('minute', a, b)` counts minute boundaries crossed, not minutes
+//! elapsed: 05:00:59 → 05:30:00 is 29 minutes and a second, and it reads 30.
+//! Against a 30-minute threshold that split a session that never broke. Gaps
+//! and durations are therefore differences of `epoch_us`, and reported
+//! minutes are whole minutes elapsed, rounded down.
 //!
 //! # Which clock each step asks
 //!
@@ -34,7 +48,7 @@ use super::WindowSpec;
 /// Specification for a session window query on `detections_ts`.
 #[derive(Debug, Clone)]
 pub struct SessionSpec {
-    /// Minimum gap in minutes that creates a new session boundary.
+    /// A silence longer than this many minutes starts a new session.
     pub gap_threshold_minutes: u32,
     /// Restrict to a single calendar date (ISO-8601 string), or `None` for all dates.
     pub date_filter: Option<String>,
@@ -86,8 +100,6 @@ impl SessionSpec {
 
 impl WindowSpec for SessionSpec {
     fn build_sql(&self) -> String {
-        let threshold = self.gap_threshold_minutes;
-
         let mut where_clauses = Vec::new();
         if let Some(date) = &self.date_filter {
             let escaped = date.replace('\'', "''");
@@ -106,33 +118,46 @@ impl WindowSpec for SessionSpec {
         } else {
             format!("WHERE {}", where_clauses.join(" AND "))
         };
+        session_sql(&where_sql, self.gap_threshold_minutes, self.limit)
+    }
 
-        let limit = self.limit;
-        format!(
-            "WITH ordered AS (
+    fn description(&self) -> &'static str {
+        "Session window: events grouped by inactivity gap threshold"
+    }
+}
+
+/// The session query over the rows `where_sql` selects from `detections_ts`.
+///
+/// Shared by [`SessionSpec`] and the executor's date-range builder, which used
+/// to carry a second, near-identical copy of this text — and so a second place
+/// for every fix to be missed. Columns, in order: `session_id`,
+/// `detection_date` (the date the session *started*), `session_start`,
+/// `session_end`, `detection_count`, `species_count`, `duration_minutes`,
+/// `max_internal_gap_minutes`.
+///
+/// Two rules from ANA12: a session's longest gap excludes the row that opens
+/// it, whose gap is the silence *before* the session; and `limit` keeps the
+/// newest sessions, returned oldest-first.
+pub(crate) fn session_sql(where_sql: &str, gap_threshold_minutes: u32, limit: u32) -> String {
+    let threshold_us = u64::from(gap_threshold_minutes) * 60_000_000;
+    format!(
+        "WITH ordered AS (
     SELECT
         detection_timestamp,
         detection_instant,
         detection_date,
         Com_Name,
-        Confidence,
-        LAG(detection_instant) OVER (
+        epoch_us(detection_instant) - epoch_us(LAG(detection_instant) OVER (
             ORDER BY detection_instant
-        ) AS prev_ts,
-        date_diff('minute', prev_ts, detection_instant) AS gap_minutes
+        )) AS gap_us
     FROM detections_ts
     {where_sql}
 ),
 with_session_id AS (
     SELECT
-        detection_timestamp,
-        detection_instant,
-        detection_date,
-        Com_Name,
-        Confidence,
-        gap_minutes,
+        *,
         SUM(
-            CASE WHEN gap_minutes >= {threshold} OR gap_minutes IS NULL
+            CASE WHEN gap_us > {threshold_us} OR gap_us IS NULL
                  THEN 1 ELSE 0 END
         ) OVER (
             ORDER BY detection_instant
@@ -143,20 +168,20 @@ with_session_id AS (
 sessions AS (
     SELECT
         session_id,
-        strftime(detection_date, '%Y-%m-%d') AS detection_date,
-        strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_start,
-        strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_end,
+        strftime(arg_min(detection_date, detection_instant), '%Y-%m-%d') AS detection_date,
+        strftime(arg_min(detection_timestamp, detection_instant), '%Y-%m-%d %H:%M:%S')
+                                 AS session_start,
+        strftime(arg_max(detection_timestamp, detection_instant), '%Y-%m-%d %H:%M:%S')
+                                 AS session_end,
         COUNT(*)                 AS detection_count,
         COUNT(DISTINCT Com_Name) AS species_count,
-        date_diff('minute',
-            MIN(detection_instant),
-            MAX(detection_instant)
-        )                        AS duration_minutes,
-        MAX(gap_minutes) FILTER (WHERE gap_minutes < {threshold})
+        (epoch_us(MAX(detection_instant)) - epoch_us(MIN(detection_instant))) // 60000000
+                                 AS duration_minutes,
+        MAX(gap_us) FILTER (WHERE gap_us <= {threshold_us}) // 60000000
                                  AS max_internal_gap_minutes,
         MIN(detection_instant)   AS start_instant
     FROM with_session_id
-    GROUP BY session_id, detection_date
+    GROUP BY session_id
     ORDER BY start_instant DESC
     LIMIT {limit}
 )
@@ -164,12 +189,7 @@ SELECT session_id, detection_date, session_start, session_end, detection_count,
        species_count, duration_minutes, max_internal_gap_minutes
 FROM sessions
 ORDER BY start_instant"
-        )
-    }
-
-    fn description(&self) -> &'static str {
-        "Session window: events grouped by inactivity gap threshold"
-    }
+    )
 }
 
 #[cfg(test)]
@@ -197,7 +217,7 @@ mod tests {
     fn the_gap_is_elapsed_time_and_the_reported_extent_is_local() {
         let sql = SessionSpec::default().build_sql();
         assert!(
-            sql.contains("date_diff('minute', prev_ts, detection_instant)"),
+            sql.contains("epoch_us(detection_instant) - epoch_us(LAG(detection_instant)"),
             "the gap between detections is elapsed time"
         );
         assert!(
@@ -209,12 +229,12 @@ mod tests {
             "a session's duration is elapsed time"
         );
         assert!(
-            sql.contains("strftime(MIN(detection_timestamp)"),
+            sql.contains("arg_min(detection_timestamp, detection_instant)"),
             "but the start time shown to a human is their own clock"
         );
         assert!(
-            !sql.contains("date_diff('minute', prev_ts, detection_timestamp)"),
-            "no duration may be left on the wall clock"
+            !sql.contains("date_diff('minute'"),
+            "minute boundaries are not minutes"
         );
     }
 
