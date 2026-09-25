@@ -62,6 +62,10 @@ pub fn known_env_names() -> BTreeSet<String> {
     out.extend(DIRECT_ENV_KEYS.iter().map(|k| (*k).to_owned()));
     // Read through a constant rather than a literal.
     out.insert(birdnet_web::api_token::API_TOKEN_KEY.to_owned());
+    // Read by the migration runner in `birdnet-db`, which this file's source
+    // scan does not cover — so it was reported as unknown at the start after
+    // the migration error had told the operator to set it.
+    out.insert(birdnet_db::migration::SKIP_BACKUP_ENV.to_owned());
     // The offsite backup reads `BIRDNET_<key>` for each of its config keys.
     out.extend(
         birdnet_core::config::known_keys::KNOWN_CONFIG_KEYS
@@ -384,6 +388,13 @@ mod tests {
             dead.is_empty(),
             "in .env.example and read by nothing: {dead:?}"
         );
+    }
+
+    #[test]
+    fn the_migration_backup_waiver_is_a_known_variable() {
+        assert!(known_env_names().contains("BIRDNET_SKIP_MIGRATION_BACKUP"));
+        // Counterpart: the check still reports a variable nothing reads.
+        assert!(!known_env_names().contains("BIRDNET_SKIP_MIGRATION_BACKUPS"));
     }
 
     #[test]

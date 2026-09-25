@@ -708,6 +708,104 @@ impl AnalyticsDb {
         Ok(n as u64)
     }
 
+    /// Delete the one detection a `(date, time, sci_name, file_name)` key
+    /// names, mirroring `SQLite`'s `delete_detection_at`.
+    ///
+    /// The triple alone names every source that heard the same bird in the
+    /// same second; the clip is what tells them apart, matched through
+    /// `COALESCE(File_Name, '')` exactly as `SQLite`'s unique index does
+    /// (`None` is the row with no clip).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the delete fails.
+    pub fn delete_detection_at(
+        &self,
+        date: &str,
+        time: &str,
+        sci_name: &str,
+        file_name: Option<&str>,
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "DELETE FROM detections WHERE Date = ? AND Time = ? AND Sci_Name = ? \
+             AND COALESCE(File_Name, '') = COALESCE(?, '')",
+            params![date, time, sci_name, file_name],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Re-label the one detection a key names; see
+    /// [`Self::delete_detection_at`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails.
+    pub fn relabel_detection_at(
+        &self,
+        date: &str,
+        time: &str,
+        old_sci_name: &str,
+        file_name: Option<&str>,
+        new_sci_name: &str,
+        new_com_name: &str,
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "UPDATE detections SET Sci_Name = ?, Com_Name = ? \
+             WHERE Date = ? AND Time = ? AND Sci_Name = ? \
+             AND COALESCE(File_Name, '') = COALESCE(?, '')",
+            params![
+                new_sci_name,
+                new_com_name,
+                date,
+                time,
+                old_sci_name,
+                file_name
+            ],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Remove an import batch's rows except `keep`, mirroring `SQLite`'s
+    /// `remove_import_batch`, which keeps the batch's locked rows.
+    ///
+    /// This copy has no lock column, so the caller names the rows `SQLite`
+    /// kept, as `(date, time, sci_name, file_name)`. Deleting the whole batch
+    /// here, as [`Self::delete_import_batch`] does, left the two stores
+    /// disagreeing until the next start's repair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a statement fails.
+    pub fn delete_import_batch_keeping(
+        &self,
+        batch_id: i64,
+        keep: &[(String, String, String, Option<String>)],
+    ) -> Result<u64, AnalyticsError> {
+        if keep.is_empty() {
+            return self.delete_import_batch(batch_id);
+        }
+        self.conn.execute_batch(
+            "CREATE OR REPLACE TEMP TABLE import_keep (d TEXT, t TEXT, s TEXT, f TEXT);",
+        )?;
+        {
+            let mut stmt = self
+                .conn
+                .prepare("INSERT INTO import_keep VALUES (?, ?, ?, ?)")?;
+            for (d, t, s, f) in keep {
+                stmt.execute(params![d, t, s, f])?;
+            }
+        }
+        let n = self.conn.execute(
+            "DELETE FROM detections WHERE import_batch_id = ? AND NOT EXISTS ( \
+                 SELECT 1 FROM import_keep k WHERE k.d = detections.Date \
+                 AND k.t = detections.Time AND k.s = detections.Sci_Name \
+                 AND COALESCE(k.f, '') = COALESCE(detections.File_Name, ''))",
+            params![batch_id],
+        )?;
+        self.conn.execute_batch("DROP TABLE import_keep;")?;
+        Ok(n as u64)
+    }
+
     /// Rebuild `detections_ts` to match the provenance rule `SQLite` is
     /// currently applying.
     ///
