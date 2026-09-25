@@ -108,7 +108,17 @@ impl DailySchedule {
                         config.post_sunset_offset_min,
                     )
                 } else {
-                    // Polar condition — allow all day.
+                    // Polar condition — allow all day, for polar night as well
+                    // as polar day, deliberately. With no sunrise or sunset
+                    // there is no window to anchor the offsets to, and the
+                    // alternatives both silence a station for weeks: "the sun
+                    // never rose, so record nothing" turns a winter at 70° N
+                    // into a dead station with nothing on the dashboard saying
+                    // why, and the midday twilight is when those birds call.
+                    // The schedule fails open on every other condition it
+                    // cannot resolve (an unsynced clock, no coordinates), and
+                    // `--doctor` reports "the sun neither rises nor sets here
+                    // today" so the operator can see which case applies.
                     NightInhibit::disabled()
                 };
             return Self {
