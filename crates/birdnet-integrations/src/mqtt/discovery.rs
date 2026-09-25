@@ -76,7 +76,9 @@ pub struct HaDiscoveryConfig {
     pub station_name: String,
     /// Unique device identifier (must be stable across restarts).
     ///
-    /// Defaults to `birdnet_behavior`.
+    /// Defaults to `birdnet_behavior`. Every entity's `unique_id` and config
+    /// topic is built from it, so two stations on one broker must not share
+    /// it — see [`Self::device_id_for_topic_prefix`].
     pub device_id: String,
     /// Software version string shown in the HA device info panel.
     pub sw_version: String,
@@ -87,11 +89,52 @@ impl Default for HaDiscoveryConfig {
         Self {
             discovery_prefix: "homeassistant".to_string(),
             station_name: "BirdNet-Behavior".to_string(),
-            device_id: "birdnet_behavior".to_string(),
+            device_id: DEFAULT_DEVICE_ID.to_string(),
             sw_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
 }
+
+impl HaDiscoveryConfig {
+    /// The device ID for a station publishing under `topic_prefix`.
+    ///
+    /// Two stations on one broker must already use different topic prefixes —
+    /// otherwise their detections land on the same state topics — so the prefix
+    /// is what tells their Home Assistant devices apart. With one shared device
+    /// ID both stations published to the same `homeassistant/.../config` topics
+    /// and each overwrote the other's entities.
+    ///
+    /// The default prefix (`birdnet`) keeps the historical `birdnet_behavior`,
+    /// so an existing single station's entities (and their history, dashboards
+    /// and automations) are not orphaned by an upgrade. Any other prefix gives
+    /// `birdnet_behavior_<prefix>`, with every character Home Assistant does
+    /// not accept in an ID replaced by `_`. Changing the prefix of a running
+    /// station therefore creates a new device in Home Assistant, as changing
+    /// its state topics already implied.
+    #[must_use]
+    pub fn device_id_for_topic_prefix(topic_prefix: &str) -> String {
+        let prefix = topic_prefix.trim_matches('/');
+        if prefix.is_empty() || prefix == DEFAULT_TOPIC_PREFIX {
+            return DEFAULT_DEVICE_ID.to_string();
+        }
+        let safe: String = prefix
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        format!("{DEFAULT_DEVICE_ID}_{safe}")
+    }
+}
+
+/// The device ID a station on the default topic prefix has always used.
+const DEFAULT_DEVICE_ID: &str = "birdnet_behavior";
+/// The station's default MQTT topic prefix (`--mqtt-topic-prefix`).
+const DEFAULT_TOPIC_PREFIX: &str = "birdnet";
 
 // ---------------------------------------------------------------------------
 // HaDiscovery
@@ -391,6 +434,60 @@ mod tests {
         assert_eq!(
             d.config_topic("sensor", "birdnet_behavior_confidence"),
             "homeassistant/sensor/birdnet_behavior_confidence/config"
+        );
+    }
+
+    fn discovery_for_prefix(prefix: &str) -> HaDiscovery {
+        HaDiscovery::new(
+            MqttConfig {
+                topic_prefix: prefix.to_string(),
+                ..MqttConfig::default()
+            },
+            HaDiscoveryConfig {
+                device_id: HaDiscoveryConfig::device_id_for_topic_prefix(prefix),
+                ..HaDiscoveryConfig::default()
+            },
+        )
+    }
+
+    /// Two stations on one broker, told apart by their topic prefixes, must
+    /// not publish to the same discovery config topics — or each overwrites
+    /// the other's entities in Home Assistant.
+    #[test]
+    fn two_stations_with_different_prefixes_get_different_config_topics() {
+        let garden = discovery_for_prefix("birdnet/garden").all_config_topics();
+        let meadow = discovery_for_prefix("birdnet/meadow").all_config_topics();
+        for topic in &garden {
+            assert!(
+                !meadow.contains(topic),
+                "both stations publish discovery to {topic}"
+            );
+        }
+        // Every topic segment is one Home Assistant accepts in an ID.
+        assert!(
+            garden
+                .iter()
+                .all(|t| t.contains("/birdnet_behavior_birdnet_garden_")),
+            "{garden:?}"
+        );
+    }
+
+    /// Counterpart: a station on the default prefix keeps the IDs it has
+    /// always had, so an upgrade does not orphan its existing entities.
+    #[test]
+    fn the_default_prefix_keeps_the_historical_device_id() {
+        assert_eq!(
+            HaDiscoveryConfig::device_id_for_topic_prefix("birdnet"),
+            "birdnet_behavior"
+        );
+        assert_eq!(
+            HaDiscoveryConfig::device_id_for_topic_prefix(&MqttConfig::default().topic_prefix),
+            HaDiscoveryConfig::default().device_id
+        );
+        assert!(
+            discovery_for_prefix("birdnet")
+                .all_config_topics()
+                .contains(&"homeassistant/sensor/birdnet_behavior_last_species/config".to_string())
         );
     }
 

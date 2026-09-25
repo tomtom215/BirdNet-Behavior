@@ -188,10 +188,7 @@ pub fn publish_ha_discovery(
 
     let discovery = birdnet_integrations::mqtt::HaDiscovery::new(
         client.config().clone(),
-        birdnet_integrations::mqtt::HaDiscoveryConfig {
-            station_name: station_name.clone(),
-            ..birdnet_integrations::mqtt::HaDiscoveryConfig::default()
-        },
+        ha_discovery_config(client.config(), station_name.clone()),
     );
 
     match discovery.publish_all() {
@@ -206,10 +203,59 @@ pub fn publish_ha_discovery(
     }
 }
 
+/// The Home Assistant discovery settings for a station publishing with `mqtt`.
+///
+/// The device ID follows the topic prefix, so two stations sharing a broker
+/// (which must already use different prefixes) register as two devices rather
+/// than overwriting each other's entities. The default prefix keeps the
+/// historical `birdnet_behavior` ID, so a single station's existing entities
+/// survive the upgrade.
+fn ha_discovery_config(
+    mqtt: &birdnet_integrations::mqtt::MqttConfig,
+    station_name: String,
+) -> birdnet_integrations::mqtt::HaDiscoveryConfig {
+    birdnet_integrations::mqtt::HaDiscoveryConfig {
+        station_name,
+        device_id: birdnet_integrations::mqtt::HaDiscoveryConfig::device_id_for_topic_prefix(
+            &mqtt.topic_prefix,
+        ),
+        ..birdnet_integrations::mqtt::HaDiscoveryConfig::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{create_mqtt_client, get_mqtt_client_ref};
+    use super::{create_mqtt_client, get_mqtt_client_ref, ha_discovery_config};
     use crate::integrations::test_support::{config_with, default_cli};
+
+    /// Two stations on one broker with different `MQTT_TOPIC_PREFIX`es must
+    /// register as two Home Assistant devices. The station used to leave the
+    /// device ID at its default, so both published discovery under
+    /// `birdnet_behavior` and overwrote each other's entities.
+    #[test]
+    fn two_stations_on_one_broker_register_as_two_devices() {
+        let station = |prefix: &str| {
+            let mut cli = default_cli();
+            cli.mqtt_host = Some("mqtt.local".to_owned());
+            let cfg = config_with(&[("MQTT_TOPIC_PREFIX", prefix)]);
+            let client = get_mqtt_client_ref(&cli, Some(&cfg)).expect("client");
+            ha_discovery_config(client.config(), "Station".to_owned()).device_id
+        };
+        assert_ne!(station("birdnet/garden"), station("birdnet/meadow"));
+    }
+
+    /// Counterpart: the default prefix keeps the ID an existing station's
+    /// entities were registered under.
+    #[test]
+    fn the_default_prefix_keeps_the_existing_device_id() {
+        let mut cli = default_cli();
+        cli.mqtt_host = Some("mqtt.local".to_owned());
+        let client = get_mqtt_client_ref(&cli, None).expect("client");
+        assert_eq!(
+            ha_discovery_config(client.config(), "Station".to_owned()).device_id,
+            "birdnet_behavior"
+        );
+    }
 
     #[test]
     fn mqtt_none_when_no_host_configured() {
