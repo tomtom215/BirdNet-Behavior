@@ -11,7 +11,7 @@
 #     "download from GitHub release … failed";
 #   * the container's fetch printed its whole first-run banner for the missing
 #     file ("Typical download: 1–3 min on fibre…", for a 14 MB file that was
-#     not there), then curl's 404 and two WARNINGs.
+#     not there), then curl's 404 and two WARNING lines.
 #
 # The counterpart matters as much: an origin that answers 500 is a real
 # failure and must still be reported as one, so "quiet" cannot mean "mute".
