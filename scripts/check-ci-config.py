@@ -120,12 +120,25 @@ def skip(msg: str) -> None:
 
 
 def mutant_count(package: str, file_glob: str, shard: str | None = None) -> int:
-    """Enumerate mutants for one matrix row. `--list` does not build."""
+    """Enumerate mutants for one matrix row. `--list` does not build.
+
+    A `cargo` that fails lists nothing, and an empty list reads as "this path
+    matches no source". It once failed for every row at once — on a runner
+    whose first `cargo` call was also installing the toolchain — and the log
+    said only "generates 0 mutants", ten times, with the reason discarded. So
+    a failed command is reported as one, with what `cargo` said.
+    """
     cmd = ["cargo", "mutants", "--list", "--package", package,
            "--file", file_glob, "--no-shuffle"]
     if shard:
         cmd += ["--shard", shard]
     out = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if out.returncode != 0:
+        # The cause leads; a backtrace may follow it, so stop there.
+        lines = out.stderr.strip().splitlines()
+        cut = next((i for i, ln in enumerate(lines) if ln.startswith("Stack backtrace")), len(lines))
+        said = "\n        ".join(lines[:min(cut, 10)]) or "(no stderr)"
+        check(False, f"`{' '.join(cmd)}` exited {out.returncode}:\n        {said}")
     return len([ln for ln in out.stdout.splitlines() if ln.strip()])
 
 
