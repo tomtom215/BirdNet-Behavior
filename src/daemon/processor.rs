@@ -863,7 +863,7 @@ pub(super) fn event_processor(
             detected_at_utc: crate::daemon::local_offset::detection_instant(
                 &detection.date,
                 &detection.time,
-                now_ms / 1000,
+                now_ms,
                 birdnet_db::clock::local_utc_offset_secs(),
                 crate::daemon::local_offset::utc_offset_at(&detection.date, &detection.time),
             ),

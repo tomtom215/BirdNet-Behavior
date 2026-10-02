@@ -451,6 +451,9 @@ mod tests {
                 ("cam2.wav".to_string(), "Turdus philomelos".to_string()),
             ]
         );
+        // Counterpart: the key still names the old species, which no row has
+        // now, so it re-labels nothing and says so.
+        assert!(!relabel_detection_at(&conn, &CAM2, "Turdus philomelos", "Song Thrush").unwrap());
     }
 
     /// A clip-less row is named with `file_name: None`, as the unique index

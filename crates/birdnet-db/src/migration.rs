@@ -2811,6 +2811,35 @@ mod tests {
         conn
     }
 
+    /// `rewrite_touches_rows` answers "nothing to back up" only when the rows
+    /// cannot exist yet. A query that fails for any other reason is an error:
+    /// "no backup needed" must never answer a question that could not be
+    /// asked. cargo-mutants replaced the `no such table` guard with `true`
+    /// and with `false` and no unit test noticed either.
+    #[test]
+    fn a_rewrite_count_that_cannot_run_is_an_error_unless_its_table_is_missing() {
+        let conn = memory_db();
+        let rewrite = |affects_sql: &'static str| HistoryRewrite {
+            version: 0,
+            preview_sql: "",
+            affects_sql,
+            ready_at: 0,
+        };
+        // Too young to hold the rows: nothing to rewrite.
+        assert!(
+            !rewrite_touches_rows(&conn, &rewrite("SELECT COUNT(*) FROM not_created_yet")).unwrap()
+        );
+        // Any other failure propagates.
+        conn.execute_batch("CREATE TABLE t (a INTEGER)").unwrap();
+        assert!(
+            rewrite_touches_rows(&conn, &rewrite("SELECT COUNT(no_such_column) FROM t")).is_err()
+        );
+        // Counterparts: a count that runs is the answer, both ways.
+        assert!(!rewrite_touches_rows(&conn, &rewrite("SELECT COUNT(*) FROM t")).unwrap());
+        conn.execute("INSERT INTO t VALUES (1)", []).unwrap();
+        assert!(rewrite_touches_rows(&conn, &rewrite("SELECT COUNT(*) FROM t")).unwrap());
+    }
+
     /// PS-3: a database this binary creates is in incremental auto-vacuum
     /// from before its first table, so its free pages are reclaimed a step at
     /// a time; one that already has tables is left as it is, because the

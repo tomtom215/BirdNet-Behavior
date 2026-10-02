@@ -186,6 +186,9 @@ mod tests {
         assert!(is_detection_locked_at(&conn, &key("cam1.wav")).unwrap());
         assert!(!is_detection_locked_at(&conn, &key("cam2.wav")).unwrap());
         assert!(!is_detection_locked_at(&conn, &key("nope.wav")).unwrap());
+        // Counterpart: a key that names no row changes nothing and says so.
+        assert!(!lock_detection_at(&conn, &key("nope.wav")).unwrap());
+        assert!(!unlock_detection_at(&conn, &key("nope.wav")).unwrap());
     }
 
     #[test]

@@ -65,14 +65,17 @@ pub(super) fn utc_offset_on_day(date: &str) -> Option<i64> {
 /// reading is right and the live one is an hour out.
 ///
 /// So: the date-derived reading, unless it is in the future.
+///
+/// `now_ms` is the processor's clock, in milliseconds since the epoch.
 #[must_use]
 pub(super) fn detection_instant(
     date: &str,
     time: &str,
-    now_secs: i64,
+    now_ms: i64,
     offset_now: i64,
     offset_on_date: Option<i64>,
 ) -> Option<i64> {
+    let now_secs = now_ms / 1000;
     let live = birdnet_core::civil::unix_secs_from_local(date, time, offset_now)?;
     let Some(offset) = offset_on_date else {
         return Some(live);
@@ -97,22 +100,32 @@ mod tests {
     /// March to the last Sunday of October at 03:00 local.
     const BERLIN: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
 
+    /// New York's rules, likewise: EST (-5), EDT (-4) from the second Sunday
+    /// of March to the first Sunday of November. West of UTC the offset is
+    /// negative, which Berlin never exercises.
+    const NEW_YORK: &str = "EST5EDT,M3.2.0,M11.1.0";
+
     /// Re-run `test_name` in a child with `TZ` set. Returns `true` in the
     /// child (carry on and assert), `false` in the parent after the child
     /// passed. `std::env::set_var` is `unsafe` in edition 2024 and `unsafe`
     /// is forbidden here, so the zone is set on a fresh process.
     fn in_berlin(test_name: &str) -> bool {
+        in_zone(BERLIN, test_name)
+    }
+
+    /// [`in_berlin`] for any `TZ` value.
+    fn in_zone(tz: &str, test_name: &str) -> bool {
         if std::env::var_os(CHILD_MARKER).is_some() {
             return true;
         }
         let exe = std::env::current_exe().expect("test binary path");
         let status = std::process::Command::new(exe)
             .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
-            .env("TZ", BERLIN)
+            .env("TZ", tz)
             .env(CHILD_MARKER, "1")
             .status()
             .expect("re-exec the test binary");
-        assert!(status.success(), "{test_name} failed under TZ={BERLIN}");
+        assert!(status.success(), "{test_name} failed under TZ={tz}");
         false
     }
 
@@ -132,6 +145,22 @@ mod tests {
         assert_eq!(utc_offset_at("not a date", "12:00:00"), None);
     }
 
+    /// West of UTC the offset is negative and still real. The sanity bound
+    /// is +/-14 h; cargo-mutants turned its lower end into -14 + 3600 and
+    /// into -14 / 3600, which drop every negative offset, and no test noticed
+    /// because the only zone here was east of UTC.
+    #[test]
+    fn a_station_west_of_utc_gets_its_negative_offset() {
+        if !in_zone(
+            NEW_YORK,
+            "daemon::local_offset::tests::a_station_west_of_utc_gets_its_negative_offset",
+        ) {
+            return;
+        }
+        assert_eq!(utc_offset_on_day("2026-01-15"), Some(-5 * 3600), "EST");
+        assert_eq!(utc_offset_on_day("2026-07-15"), Some(-4 * 3600), "EDT");
+    }
+
     // Berlin, 2026-10-25: +2 -> +1 at 01:00Z. Local 02:30 is 00:30Z (CEST
     // pass) and 01:30Z (CET pass).
     const CEST_PASS: i64 = 1_792_888_200;
@@ -143,11 +172,11 @@ mod tests {
     fn a_backlog_from_before_the_change_gets_its_own_dates_offset() {
         // 2026-10-24 12:00 CEST is 10:00Z; analysed two days later under CET.
         let now = 1_793_010_000; // 2026-10-26, well after
-        let instant = detection_instant("2026-10-24", "12:00:00", now, 3600, Some(7200));
+        let instant = detection_instant("2026-10-24", "12:00:00", now * 1000, 3600, Some(7200));
         assert_eq!(instant, Some(1_792_836_000));
         // Without a date-derived offset, the live one is all there is.
         assert_eq!(
-            detection_instant("2026-10-24", "12:00:00", now, 3600, None),
+            detection_instant("2026-10-24", "12:00:00", now * 1000, 3600, None),
             Some(1_792_839_600)
         );
     }
@@ -158,9 +187,56 @@ mod tests {
     /// hour apart.
     #[test]
     fn the_first_pass_of_the_repeated_hour_keeps_the_live_offset() {
-        let first = detection_instant("2026-10-25", "02:30:00", CEST_PASS + 20, 7200, Some(3600));
+        let first = detection_instant(
+            "2026-10-25",
+            "02:30:00",
+            (CEST_PASS + 20) * 1000,
+            7200,
+            Some(3600),
+        );
         assert_eq!(first, Some(CEST_PASS));
-        let second = detection_instant("2026-10-25", "02:30:00", CET_PASS + 20, 3600, Some(3600));
+        let second = detection_instant(
+            "2026-10-25",
+            "02:30:00",
+            (CET_PASS + 20) * 1000,
+            3600,
+            Some(3600),
+        );
         assert_eq!(second, Some(CET_PASS));
+    }
+
+    /// The slack is inclusive: a date-derived instant exactly
+    /// `FUTURE_SLACK_SECS` ahead is still believed, one second more is not.
+    /// The clock arrives in milliseconds. cargo-mutants turned the `>` into
+    /// `>=`, and the processor's `/ 1000` into `%` and `*`, and no test
+    /// noticed any of them; this pins both sides of the edge, in the unit the
+    /// processor passes.
+    #[test]
+    fn the_future_slack_is_inclusive() {
+        let slack = super::FUTURE_SLACK_SECS;
+        let at_edge = detection_instant(
+            "2026-10-25",
+            "02:30:00",
+            (CET_PASS - slack) * 1000,
+            7200,
+            Some(3600),
+        );
+        assert_eq!(
+            at_edge,
+            Some(CET_PASS),
+            "exactly at the slack: the date's offset"
+        );
+        let past_edge = detection_instant(
+            "2026-10-25",
+            "02:30:00",
+            (CET_PASS - slack - 1) * 1000,
+            7200,
+            Some(3600),
+        );
+        assert_eq!(
+            past_edge,
+            Some(CEST_PASS),
+            "past the slack: the live offset"
+        );
     }
 }
