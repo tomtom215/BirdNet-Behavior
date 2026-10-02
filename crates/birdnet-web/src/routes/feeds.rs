@@ -126,7 +126,9 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     })
     .await;
 
-    let rows = result.ok().and_then(Result::ok).unwrap_or_default();
+    let Some(rows) = result.ok().and_then(Result::ok) else {
+        return feed_unavailable();
+    };
     let body = build_rss(
         &rows,
         &base,
@@ -165,7 +167,9 @@ async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) ->
     })
     .await;
 
-    let rows = result.ok().and_then(Result::ok).unwrap_or_default();
+    let Some(rows) = result.ok().and_then(Result::ok) else {
+        return feed_unavailable();
+    };
     let body = build_rss(
         &rows,
         &base,
@@ -174,6 +178,25 @@ async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) ->
         "Every detection from this station today.",
     );
     rss_response(body)
+}
+
+/// A feed whose read failed: `503`, uncached.
+///
+/// A failed read became a valid, empty feed with a five-minute cache, and a
+/// feed reader told "nothing" replaces what it had with nothing. A `503` makes
+/// the reader keep its last good copy and try again.
+fn feed_unavailable() -> Response {
+    tracing::error!("feed read failed");
+    let mut resp = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "feed temporarily unavailable",
+    )
+        .into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    resp.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("300"));
+    resp
 }
 
 fn rss_response(body: String) -> Response {
@@ -218,7 +241,9 @@ async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     })
     .await;
 
-    let rows = result.ok().and_then(Result::ok).unwrap_or_default();
+    let Some(rows) = result.ok().and_then(Result::ok) else {
+        return feed_unavailable();
+    };
     let body = build_ics(&rows, &base);
 
     let mut resp = (StatusCode::OK, body).into_response();

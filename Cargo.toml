@@ -16,7 +16,7 @@ resolver = "2"
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.16.1"
+version = "0.17.0"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -211,6 +211,15 @@ multiple_crate_versions = "allow"
 # in favour of `from_mins(5)` etc. across ~20 pre-existing call sites. The
 # explicit-seconds form is intentional here, so we opt out of the suggestion.
 duration_suboptimal_units = "allow"
+# Under the 1.99 toolchain, `assert_is_empty` flags 105 pre-existing sites, and
+# `suboptimal_flops` and `branches_sharing_code` flag four and one that 1.98
+# passed. Opted out so a stable-channel bump does not fail every branch at
+# once; adopting them is its own change, because two of the
+# `suboptimal_flops` sites are per-sample DSP loops where `mul_add` changes
+# the rounding and, without FMA, the speed.
+assert_is_empty = "allow"
+suboptimal_flops = "allow"
+branches_sharing_code = "allow"
 
 [workspace.lints.rust]
 # `forbid`, not `deny`: deny can be overridden by a stray `#[allow]`; forbid

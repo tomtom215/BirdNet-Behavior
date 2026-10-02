@@ -23,14 +23,14 @@ impl Default for DailyRichness {
 
 impl QueryPlan for DailyRichness {
     fn sql(&self) -> String {
-        let days = self.lookback_days;
+        let window = super::last_days(self.lookback_days);
         format!(
             "SELECT
     strftime(detection_date, '%Y-%m-%d') AS date,
     COUNT(DISTINCT Com_Name)    AS species_richness,
     COUNT(*)                    AS total_detections
 FROM detections_ts
-WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+WHERE {window}
 GROUP BY detection_date
 ORDER BY detection_date"
         )
@@ -56,7 +56,7 @@ impl Default for DailyShannon {
 
 impl QueryPlan for DailyShannon {
     fn sql(&self) -> String {
-        let days = self.lookback_days;
+        let window = super::last_days(self.lookback_days);
         // Manual Shannon: -SUM(p * ln(p)) where p = count/total per species-day
         format!(
             "WITH species_daily AS (
@@ -65,7 +65,7 @@ impl QueryPlan for DailyShannon {
         Com_Name,
         COUNT(*) AS n
     FROM detections_ts
-    WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+    WHERE {window}
     GROUP BY detection_date, Com_Name
 ),
 totals AS (
@@ -161,7 +161,7 @@ impl Default for TopSpeciesByCount {
 
 impl QueryPlan for TopSpeciesByCount {
     fn sql(&self) -> String {
-        let days = self.lookback_days;
+        let window = super::last_days(self.lookback_days);
         let limit = self.limit;
         format!(
             "SELECT
@@ -172,7 +172,7 @@ impl QueryPlan for TopSpeciesByCount {
     strftime(MAX(detection_date), '%Y-%m-%d') AS last_seen,
     COUNT(DISTINCT detection_date) AS active_days
 FROM detections_ts
-WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+WHERE {window}
 GROUP BY Com_Name
 ORDER BY detection_count DESC
 LIMIT {limit}"

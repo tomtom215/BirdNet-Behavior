@@ -76,7 +76,16 @@ impl NightInhibit {
         // Offsets generous enough to cover the whole clock mean "always", which
         // a wrapped window cannot express: `from == until` is one instant, not
         // one day. Measure the span before wrapping and special-case it.
-        if raw_until - raw_from >= 1440 {
+        //
+        // The day length is measured *round the clock* from sunrise to the
+        // next sunset, not as `sunset - sunrise`: both minutes arrive already
+        // wrapped into `[0, 1440)`, so a day that ends on the next UTC day has
+        // the smaller sunset minute, and the plain difference is negative.
+        // Reykjavik on 21 June (sunrise 02:55 UTC, sunset 00:03 UTC) with the
+        // settings form's maximum 120 + 120 minutes is a ~25 h window; the
+        // plain difference read it as 68 minutes around 01:00 UTC.
+        let day_len = (i64::from(sunset_min) - i64::from(sunrise_min)).rem_euclid(1440);
+        if day_len + i64::from(pre_offset_min) + i64::from(post_offset_min) >= 1440 {
             return Self::disabled();
         }
         Self {
@@ -200,6 +209,39 @@ mod tests {
                 "minute {m} should be allowed by a >24h window"
             );
         }
+    }
+
+    /// A day whose wrapped sunset is *smaller* than its wrapped sunrise (it
+    /// ends on the next UTC day) and whose offsets push it past 24 h is
+    /// "always". Reykjavik, 21 June: sunrise 02:55 UTC, sunset 00:03 UTC.
+    /// Measuring `sunset - sunrise` on the wrapped minutes made this a
+    /// 68-minute window.
+    #[test]
+    fn a_wrapped_day_whose_offsets_cover_the_clock_is_always() {
+        let inhibit = NightInhibit::new(175, 3, 120, 120);
+        for m in [0, 54, 124, 600, 1439] {
+            assert!(
+                inhibit.is_recording_allowed(m),
+                "minute {m} is inside a >24 h window"
+            );
+        }
+        // Nothing bounds the offsets outside the settings form (the CLI and
+        // the config file take any u32), so the span must not overflow.
+        let huge = NightInhibit::new(175, 3, u32::MAX, u32::MAX);
+        assert!(huge.is_recording_allowed(100) && huge.is_recording_allowed(1000));
+    }
+
+    /// Counterpart: the same wrapped day with offsets that leave a night
+    /// still has one.
+    #[test]
+    fn a_wrapped_day_whose_offsets_leave_a_night_still_gates() {
+        let inhibit = NightInhibit::new(175, 3, 60, 60);
+        assert_eq!(inhibit.allow_from_min, 115);
+        assert_eq!(inhibit.allow_until_min, 63);
+        assert!(inhibit.is_recording_allowed(115));
+        assert!(inhibit.is_recording_allowed(62));
+        assert!(!inhibit.is_recording_allowed(63));
+        assert!(!inhibit.is_recording_allowed(114));
     }
 
     /// The band either side of the boundary, so the fix cannot be a

@@ -256,6 +256,12 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
 /// and last detection — what [`crate::types::ResidencyType::classify`]
 /// reads.
 ///
+/// A species is listed when it has at least `min_detections` *detections*.
+/// The filter was `HAVING COUNT(*)` over cohort anchors — one per distinct
+/// detection day — so the default of five demanded five days of presence, and a
+/// Rarity (every detection within one week) could almost never be listed: a
+/// vagrant heard all morning on one day had one anchor.
+///
 /// Callers must pass at least one interval and at most 31 (the aggregate
 /// accepts 2..=32 conditions including the anchor); [`crate::connection`]
 /// enforces this before building the SQL.
@@ -283,11 +289,15 @@ pub fn retention_sql(params: &RetentionParams) -> String {
             FROM sd a JOIN sd b ON a.Com_Name = b.Com_Name
             GROUP BY a.Com_Name, a.d
         ),
+        detections AS (
+            SELECT Com_Name AS species, COUNT(*) AS n
+            FROM detections_ts
+            GROUP BY Com_Name
+        ),
         rates AS (
             SELECT species, [{rates}] AS retention_rates
             FROM cohort
             GROUP BY species
-            HAVING COUNT(*) >= {min}
         ),
         presence AS (
             SELECT Com_Name AS species,
@@ -302,7 +312,9 @@ pub fn retention_sql(params: &RetentionParams) -> String {
         SELECT r.species, r.retention_rates, p.weeks_present, s.weeks, p.span_days
         FROM rates r
         JOIN presence p ON p.species = r.species
+        JOIN detections n ON n.species = r.species
         CROSS JOIN station s
+        WHERE n.n >= {min}
         ORDER BY p.weeks_present DESC, r.species",
         conditions = conditions.join(", "),
         rates = rate_exprs.join(", "),

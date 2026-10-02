@@ -197,7 +197,7 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Your preferences — the look, the station identity, and the wall display.</b></p>
-<h2 class="st-h3" id="display-prefs">Display <span class="st-h3-note">· saved on this device only</span></h2>
+<h2 class="st-h3">Display <span class="st-h3-note">· saved on this device only</span></h2>
 {display}
 <h2 class="st-h3" id="station-system">Station &amp; system</h2>
 {settings_css}
@@ -309,7 +309,11 @@ mod tests {
     fn settings_folds_display_prefs_and_the_kiosk_launcher() {
         let state = test_state();
         let html = build_settings(&state, &admin(&state));
-        assert!(html.contains("display-prefs"));
+        // Exactly once: the card's script finds its root with
+        // `getElementById`, which returns the first match. A heading above
+        // the card carried the same id, so every control bound to the
+        // heading and none of them did anything.
+        assert_eq!(html.matches(r#"id="display-prefs""#).count(), 1);
         assert!(html.contains(r#"href="/kiosk""#));
         // The detection threshold is NOT duplicated here — Capture owns it.
         assert!(!html.contains("confidence_threshold"));

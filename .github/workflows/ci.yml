@@ -88,7 +88,9 @@ jobs:
   test:
     name: Tests (x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45  # observed 29m53s
+    # 60, not 45: the 2026-09-24 `main` run took 35.6m, 79% of 45 and over
+    # the 75% headroom limit `CI config` enforces; it is 59% of 60.
+    timeout-minutes: 60  # observed 29m53s
     env:
       # Whether the extension-gated tests are allowed to skip.
       #

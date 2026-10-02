@@ -92,16 +92,23 @@ async fn export_rules(
     axum::extract::Query(q): axum::extract::Query<ExportQuery>,
 ) -> Result<axum::response::Response, StatusCode> {
     let include_secrets = matches!(q.secrets.as_deref(), Some("1" | "true" | "yes" | "on"));
+    // Propagated, not defaulted. An export is what an operator keeps as the
+    // backup of their rules, and a failed read produced a well-formed file
+    // with `"rules": []` in it — a backup that restores to nothing.
     let (rules, metric_rules) = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            (
-                list_rules(conn).unwrap_or_default(),
-                birdnet_db::metric_rules::list(conn).unwrap_or_default(),
-            )
+            Ok::<_, String>((
+                list_rules(conn).map_err(|e| e.to_string())?,
+                birdnet_db::metric_rules::list(conn).map_err(|e| e.to_string())?,
+            ))
         })
     })
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .map_err(|e| {
+        tracing::error!(error = %e, "alert rule export could not read the rules");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let set = RuleSet {
         version: EXPORT_VERSION,
@@ -620,7 +627,7 @@ async fn create_rule(
         None,
     );
 
-    // Return a success message; HTMX will trigger a reload of the list via hx-on
+    // Return a success message and a loader that re-fetches the rule list.
     let body = Html(format!(
         "<div class=\"rule-success\">Rule created successfully.</div>\
          <div hx-get=\"/admin/rules/list\" hx-trigger=\"load\" hx-target=\"{}\" hx-swap=\"innerHTML\"></div>",
@@ -1001,7 +1008,7 @@ pub(crate) fn rules_body() -> String {
     <form hx-post="/admin/rules"
           hx-target="#form-result"
           hx-swap="innerHTML"
-          hx-on::after-request="if(event.detail.successful) this.reset()">
+          data-reset-on-success>
 
       <label for="name">Rule Name</label>
       <input id="name" name="name" type="text" placeholder="e.g. Rare owl webhook" required>
@@ -1268,12 +1275,25 @@ fn metric_options() -> String {
 /// multibyte UTF-8 (an IRI or a Unicode path), and a `&url[..30]` byte-slice
 /// would panic if one straddled byte 30 — which, with `panic = "abort"` in the
 /// release profile, crashes the whole process when the admin page renders.
-fn truncate_url_display(url: &str) -> String {
-    if url.chars().count() > 30 {
-        format!("{}…", url.chars().take(30).collect::<String>())
-    } else {
-        url.to_string()
-    }
+/// Where a webhook goes, without the part that lets anyone else use it.
+///
+/// The list is readable by viewer accounts, and a webhook URL's credential is
+/// usually in the URL itself: `user:pass@` in the authority, the topic of an
+/// ntfy URL, the token path of a Discord or Slack hook. The list showed the
+/// first 30 characters — `https://ntfy.sh/kxq-secret-top` is most of a topic
+/// — while the export was refused to viewers for exactly this reason. Now it
+/// shows the scheme and host only, and `/…` when there is more; the full URL
+/// stays in the admin-only export.
+fn webhook_display(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return "…".to_owned();
+    };
+    let end = rest.find(['/', '?', '#', '\\']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host: String = host.chars().take(60).collect();
+    let more = if end < rest.len() { "/…" } else { "" };
+    format!("{scheme}://{host}{more}")
 }
 
 fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
@@ -1326,7 +1346,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
         let action_badge = match &rule.action {
             AlertAction::Webhook { url, method, .. } => {
-                let url_short = truncate_url_display(url);
+                let url_short = webhook_display(url);
                 format!(
                     r#"<span class="badge badge-blue">{method}</span> <span class="url-frag">{}</span>"#,
                     escape_html(&url_short)
@@ -1389,35 +1409,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn truncate_url_display_short_url_unchanged() {
+    fn a_webhook_is_shown_by_its_host_and_never_its_credentials() {
         assert_eq!(
-            truncate_url_display("https://example.com/hook"),
-            "https://example.com/hook"
+            webhook_display("https://ntfy.sh/kxq-secret-topic"),
+            "https://ntfy.sh/…"
+        );
+        assert_eq!(
+            webhook_display("https://user:hunter2@hooks.example/x?token=abc"),
+            "https://hooks.example/…"
+        );
+        assert_eq!(
+            webhook_display("https://example.com"),
+            "https://example.com"
+        );
+        assert_eq!(webhook_display("not a url"), "…");
+        // A backslash is a path separator to a browser's URL parser.
+        assert_eq!(
+            webhook_display("https://h.example\\secret"),
+            "https://h.example/…"
         );
     }
 
     #[test]
-    fn truncate_url_display_long_url_ellipsized() {
-        let url = "https://example.com/very/long/webhook/path/that/exceeds";
-        let out = truncate_url_display(url);
-        assert_eq!(out.chars().filter(|&c| c != '…').count(), 30);
-        assert!(out.ends_with('…'));
-    }
-
-    #[test]
-    fn truncate_url_display_does_not_panic_on_multibyte_boundary() {
-        // Regression: byte-slicing `&url[..30]` panics when a multibyte char
-        // straddles byte 30; with `panic = "abort"` that crashes the process.
-        // 29 ASCII bytes then a 2-byte 'é' put the char across byte 30.
-        let url = format!("{}\u{e9}tail", "a".repeat(29));
-        assert!(
-            !url.is_char_boundary(30),
-            "test setup: byte 30 must split the multibyte char"
+    fn a_webhook_host_is_cut_on_a_character_boundary() {
+        // 70 two-byte characters: a byte slice at 60 would panic mid-character.
+        let url = format!("https://{}/x", "\u{e9}".repeat(70));
+        let out = webhook_display(&url);
+        assert_eq!(
+            out.chars().count(),
+            "https://".len() + 60 + "/…".chars().count()
         );
-        let out = truncate_url_display(&url);
-        // No panic; 30 characters kept plus the ellipsis.
-        assert!(out.ends_with('…'));
-        assert_eq!(out.chars().filter(|&c| c != '…').count(), 30);
     }
 
     // ── webhook authentication, from the form ───────────────────────────

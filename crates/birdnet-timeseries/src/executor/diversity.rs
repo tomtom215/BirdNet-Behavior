@@ -7,7 +7,7 @@ use crate::queries::diversity::{
 };
 use crate::types::{
     params::DiversityParams,
-    results::{AccumulationRow, DiversityRow, PeakWindowRow},
+    results::{AccumulationRow, DiversityRow, TopSpeciesRow},
 };
 
 impl super::TimeSeriesDb<'_> {
@@ -81,7 +81,8 @@ impl super::TimeSeriesDb<'_> {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// Top species by detection count over a date window.
+    /// Top species by detection count over the last `lookback_days` dates,
+    /// today included.
     ///
     /// # Errors
     ///
@@ -90,7 +91,7 @@ impl super::TimeSeriesDb<'_> {
         &self,
         lookback_days: u32,
         limit: u32,
-    ) -> Result<Vec<PeakWindowRow>, TimeSeriesError> {
+    ) -> Result<Vec<TopSpeciesRow>, TimeSeriesError> {
         let q = TopSpeciesByCount {
             lookback_days,
             limit,
@@ -98,12 +99,13 @@ impl super::TimeSeriesDb<'_> {
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], |row| {
-            Ok(PeakWindowRow {
-                window_start: row.get::<_, String>(3)?,
-                window_end: row.get::<_, String>(4)?,
+            Ok(TopSpeciesRow {
+                species: row.get(0)?,
                 detection_count: row.get(1)?,
-                species_count: 1,
-                peak_confidence: row.get(2)?,
+                avg_confidence: row.get(2)?,
+                first_seen: row.get(3)?,
+                last_seen: row.get(4)?,
+                active_days: row.get(5)?,
             })
         })?;
         rows.map(|r| r.map_err(Into::into)).collect()

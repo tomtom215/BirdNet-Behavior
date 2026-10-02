@@ -53,7 +53,9 @@ impl super::TimeSeriesDb<'_> {
         self.run_window_query(&q.sql())
     }
 
-    /// Hourly activity heatmap (average detections per hour-of-day).
+    /// Hourly activity heatmap (average detections per hour-of-day), over the
+    /// last `params.lookback_days` complete days, for `params.species` when
+    /// given.
     ///
     /// # Errors
     ///
@@ -64,6 +66,7 @@ impl super::TimeSeriesDb<'_> {
     ) -> Result<Vec<HourlyHeatmapRow>, TimeSeriesError> {
         let q = HourlyHeatmap {
             lookback_days: params.lookback_days,
+            species: params.species.clone(),
         };
         let sql = q.sql();
         let mut stmt = self.conn.prepare(&sql)?;

@@ -343,7 +343,7 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
     let sci_name = escape_html(&d.sci_name);
     let time = escape_html(&d.time);
     let date = escape_html(&d.date);
-    let key = escape_html(&format!("{}|{}|{}", d.date, d.time, d.sci_name));
+    let key = escape_html(&super::search::row_key(d));
     // `recordings.html` puts this straight into `.rc-hp-meta` when a clip
     // starts, so `0.87` was a bare decimal on an unnamed scale in the player
     // strip — the same thing the rest of this release replaced with a
@@ -355,11 +355,9 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
 
     let av = avatar(&d.com_name, &d.sci_name, "");
     let conf = conf_bar(d.confidence);
-    let lock = lock_button(&d.date, &d.time, &d.sci_name, is_locked);
-
-    let date_raw = escape_html(&d.date);
-    let time_raw = escape_html(&d.time);
-    let sci_raw = escape_html(&d.sci_name);
+    let row = crate::state::RowRef::from(d);
+    let lock = lock_button(&row, is_locked);
+    let row_vals = row_vals(&row);
 
     // The saved clip's length (migration 20), shown under the time. Omitted —
     // not faked — for rows with no recorded duration (historical / imported).
@@ -412,19 +410,35 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
     <button type="button" class="x-fplay rc-play" data-play-src="/api/v2/recordings/{safe_file}" data-clip-name="{com_name}" data-clip-meta="{meta}" title="Play clip" aria-label="Play {com_name}">▶</button>
     <a class="rc-iact" href="/api/v2/recordings/{safe_file}" download title="Download clip" aria-label="Download {com_name}">↓</a>
     {lock}
-    <button type="button" class="rc-iact rc-del" hx-post="/pages/recordings-delete" hx-vals='{{"date":"{date_raw}","time":"{time_raw}","sci_name":"{sci_raw}"}}' hx-target="closest .rc-row" hx-swap="outerHTML" hx-confirm="Delete this clip of {com_name}?" data-confirm-action="hx-post" data-confirm-url="/pages/recordings-delete" data-confirm-title="Delete clip" data-confirm-body="Delete this clip of {com_name}?" data-confirm-confirm-label="Delete" data-confirm-style="danger" title="Delete clip" aria-label="Delete {com_name}">✕</button>
+    <button type="button" class="rc-iact rc-del" hx-post="/pages/recordings-delete" hx-vals='{row_vals}' hx-target="closest .rc-row" hx-swap="outerHTML" hx-confirm="Delete this clip of {com_name}?" data-confirm-action="hx-post" data-confirm-url="/pages/recordings-delete" data-confirm-title="Delete clip" data-confirm-body="Delete this clip of {com_name}?" data-confirm-confirm-label="Delete" data-confirm-style="danger" title="Delete clip" aria-label="Delete {com_name}">✕</button>
   </span>
 </div>"#,
     );
 }
 
+/// The `hx-vals` a row's write buttons post: the row's date, time, species
+/// and clip, as JSON escaped for a single-quoted attribute.
+///
+/// The clip is what makes the key name one row (see
+/// [`crate::state::RowRef`]): without it, deleting or locking one source's
+/// detection reached every source's detection of that bird in that second.
+pub(super) fn row_vals(row: &crate::state::RowRef) -> String {
+    escape_html(
+        &serde_json::json!({
+            "date": row.date,
+            "time": row.time,
+            "sci_name": row.sci_name,
+            "file_name": row.file_name.as_deref().unwrap_or(""),
+        })
+        .to_string(),
+    )
+}
+
 /// The lock/unlock toggle button for a clip. Swaps itself out (`outerHTML`)
 /// for the opposite state after the POST, so the row reflects the new state
 /// without a full-list reload.
-pub(super) fn lock_button(date: &str, time: &str, sci: &str, locked: bool) -> String {
-    let date_raw = escape_html(date);
-    let time_raw = escape_html(time);
-    let sci_raw = escape_html(sci);
+pub(super) fn lock_button(row: &crate::state::RowRef, locked: bool) -> String {
+    let row_vals = row_vals(row);
     let (endpoint, glyph, cls, title) = if locked {
         (
             "/pages/recordings-unlock",
@@ -441,7 +455,7 @@ pub(super) fn lock_button(date: &str, time: &str, sci: &str, locked: bool) -> St
         )
     };
     format!(
-        r#"<button type="button" class="{cls}" hx-post="{endpoint}" hx-vals='{{"date":"{date_raw}","time":"{time_raw}","sci_name":"{sci_raw}"}}' hx-swap="outerHTML" title="{title}" aria-label="{title}">{glyph}</button>"#,
+        r#"<button type="button" class="{cls}" hx-post="{endpoint}" hx-vals='{row_vals}' hx-swap="outerHTML" title="{title}" aria-label="{title}">{glyph}</button>"#,
     )
 }
 
@@ -508,7 +522,7 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
         r#"<p class="bnb-lede"><b>Listen along with your station, live.</b> Pick a source and watch the spectrogram scroll as audio arrives — detections appear in the trickle below the moment they're classified. The signal is honest: a flat line when nothing is coming in, never a fake waveform.</p>
 <div class="rc-live">
   <div class="rc-live-head">
-    <span class="bnb-eyebrow">Live spectrogram · 48 kHz · 128 mels</span>
+    <span class="bnb-eyebrow">Live spectrogram</span>
     <span class="bnb-pill" id="rc-live-status"><span class="bnb-dot"></span> idle</span>
   </div>
   <canvas id="rc-spectrogram" height="200" aria-label="Live spectrogram"></canvas>
@@ -550,24 +564,12 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
 
 // ── Mutating endpoints (lock · unlock · delete) ────────────────────────────
 
-/// `date`/`time`/`sci_name` triple identifying a clip for a lock/delete action.
-#[derive(Debug, Deserialize)]
-struct ClipAction {
-    date: String,
-    time: String,
-    sci_name: String,
-}
-
 async fn lock_clip(
     State(state): State<AppState>,
-    Form(f): Form<ClipAction>,
+    Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let button = lock_button(&f.date, &f.time, &f.sci_name, true);
-    let result = tokio::task::spawn_blocking(move || {
-        state
-            .with_db(|conn| birdnet_db::sqlite::lock_detection(conn, &f.date, &f.time, &f.sci_name))
-    })
-    .await;
+    let button = lock_button(&row, true);
+    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, true)).await;
     clip_write(
         super::toast::RowWrite::from_result(result, "lock clip"),
         button,
@@ -577,15 +579,10 @@ async fn lock_clip(
 
 async fn unlock_clip(
     State(state): State<AppState>,
-    Form(f): Form<ClipAction>,
+    Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let button = lock_button(&f.date, &f.time, &f.sci_name, false);
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            birdnet_db::sqlite::unlock_detection(conn, &f.date, &f.time, &f.sci_name)
-        })
-    })
-    .await;
+    let button = lock_button(&row, false);
+    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, false)).await;
     clip_write(
         super::toast::RowWrite::from_result(result, "unlock clip"),
         button,
@@ -617,14 +614,12 @@ fn clip_write(
 
 async fn delete_clip(
     State(state): State<AppState>,
-    Form(form): Form<ClipAction>,
+    Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
     // Paired write: the analytics copy is incremental and cannot notice a
-    // removal on its own. See `AppState::delete_detection`.
-    let result = tokio::task::spawn_blocking(move || {
-        state.delete_detection(&form.date, &form.time, &form.sci_name)
-    })
-    .await;
+    // removal on its own. See `AppState::delete_detection`, which also
+    // removes the clip once no detection names it.
+    let result = tokio::task::spawn_blocking(move || state.delete_detection(&row)).await;
     match super::toast::RowWrite::from_result(result, "delete clip") {
         // Empty body → the row's `hx-swap="outerHTML"` removes it from the
         // list — right whether this request removed it or someone else had.
@@ -708,12 +703,41 @@ mod tests {
         assert!(html.contains("/recordings?view=clips&q=wren"));
     }
 
+    fn test_row() -> crate::state::RowRef {
+        crate::state::RowRef {
+            date: "2026-06-13".into(),
+            time: "06:00:00".into(),
+            sci_name: "Parus major".into(),
+            file_name: Some("Great_Tit-90-2026-06-13-birdnet-cam2-06:00:00.wav".into()),
+        }
+    }
+
+    /// Every write button posts the row's clip with its date, time and
+    /// species. Without the clip the key named every source's row of that
+    /// bird in that second, and one click deleted or locked them all.
+    #[test]
+    fn a_row_button_names_its_clip() {
+        let html = lock_button(&test_row(), false);
+        assert!(
+            html.contains("&quot;file_name&quot;:&quot;Great_Tit-90-2026-06-13-birdnet-cam2-06:00:00.wav&quot;"),
+            "{html}"
+        );
+        // A quote or backslash in a value is JSON-escaped inside the
+        // HTML-escaped attribute, not left to end the string.
+        let odd = crate::state::RowRef {
+            sci_name: "a\"b\\c".into(),
+            ..test_row()
+        };
+        let vals = row_vals(&odd);
+        assert!(vals.contains(r"a\&quot;b\\c"), "{vals}");
+    }
+
     #[test]
     fn lock_button_toggles_endpoint_and_glyph() {
-        let unlocked = lock_button("2026-06-13", "06:00:00", "Parus major", false);
+        let unlocked = lock_button(&test_row(), false);
         assert!(unlocked.contains("/pages/recordings-lock"));
         assert!(unlocked.contains('🔓'));
-        let locked = lock_button("2026-06-13", "06:00:00", "Parus major", true);
+        let locked = lock_button(&test_row(), true);
         assert!(locked.contains("/pages/recordings-unlock"));
         assert!(locked.contains('🔒'));
     }

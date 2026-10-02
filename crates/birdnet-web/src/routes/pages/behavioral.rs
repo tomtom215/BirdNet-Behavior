@@ -47,6 +47,7 @@ pub(super) async fn analytics_sessions_partial(
         return analytics_unavailable_html("Activity sessions");
     }
     let params = birdnet_behavioral::types::SessionizeParams::default();
+    let (gap_minutes, limit) = (params.gap_minutes, params.limit);
     let result = tokio::task::spawn_blocking(move || {
         state
             .with_analytics(|adb| adb.sessionize(&params))
@@ -61,51 +62,11 @@ pub(super) async fn analytics_sessions_partial(
     .await;
 
     match result {
-        Ok(Ok(sessions)) => {
-            // A "burst of singing" made of one detection lasting 0s is not a
-            // burst. Sessionisation groups a species' detections by a 20-minute
-            // gap, so a sparse species yields singletons — structurally correct
-            // and semantically empty, and the panel rendered a table of nothing
-            // but those, which reads as broken to anyone who looks at it.
-            //
-            // Filter to real runs and say plainly when there are none, rather
-            // than showing rows that undermine the reader's trust in the rest
-            // of the page.
-            let bursts: Vec<_> = sessions.iter().filter(|s| s.detection_count > 1).collect();
-            if bursts.is_empty() {
-                let seen = sessions.len();
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "text/html")],
-                    format!(
-                        r#"<p class="bh-muted">No bursts yet. {seen} single detections have been                            grouped so far, but none is part of a run — a burst needs at least two                            detections of one species within about 20 minutes.</p>"#
-                    ),
-                );
-            }
-            let mut html = String::from(
-                r"<table><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>",
-            );
-            for s in bursts.iter().take(20) {
-                let duration = format_duration(s.duration_secs);
-                let _ = write!(
-                    html,
-                    r"<tr><td>{sp}</td><td>{c}</td><td>{st}</td><td>{d}</td></tr>",
-                    sp = escape_html(&s.species),
-                    c = s.detection_count,
-                    st = escape_html(&s.start_time),
-                    d = duration,
-                );
-            }
-            html.push_str("</tbody></table>");
-            if sessions.len() > 20 {
-                let _ = write!(
-                    html,
-                    r#"<p class="bh-note">Showing 20 of {} sessions.</p>"#,
-                    sessions.len()
-                );
-            }
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-        }
+        Ok(Ok(sessions)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_bursts(&sessions, gap_minutes, limit),
+        ),
         Ok(Err(e)) => analytics_error_html("activity sessions", &e),
         // See `error_states::failed_partial` for why this is a 200. `Ok(Err(..))` above is already a 200.
         Err(e) => {
@@ -113,6 +74,63 @@ pub(super) async fn analytics_sessions_partial(
             super::error_states::failed_partial("this station's listening sessions")
         }
     }
+}
+
+/// The bursts table: sessions of two or more detections, newest first.
+///
+/// A "burst of singing" made of one detection lasting 0s is not a burst.
+/// Sessionisation groups a species' detections by a `gap_minutes` gap, so a
+/// sparse species yields singletons — structurally correct and semantically
+/// empty, and a table of nothing but those reads as broken to anyone who looks
+/// at it. Filter to real runs and say plainly when there are none.
+///
+/// Both counts on the card are of what is actually shown. The empty state
+/// named "about 20 minutes" while the query grouped by 30, and the footnote
+/// "Showing 20 of N sessions" counted the filtered-out singletons in N — and N
+/// could never pass `limit`, because only the newest `limit` sessions are
+/// fetched.
+#[cfg(feature = "analytics")]
+fn render_bursts(
+    sessions: &[birdnet_behavioral::types::ActivitySession],
+    gap_minutes: u32,
+    limit: u32,
+) -> String {
+    const SHOWN: usize = 20;
+    let bursts: Vec<_> = sessions.iter().filter(|s| s.detection_count > 1).collect();
+    if bursts.is_empty() {
+        let seen = sessions.len();
+        return format!(
+            r#"<p class="bh-muted">No bursts yet. {seen} single detections have been grouped so far, but none is part of a run — a burst needs at least two detections of one species within {gap_minutes} minutes of each other.</p>"#
+        );
+    }
+    let mut html = String::from(
+        r"<table><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>",
+    );
+    for s in bursts.iter().take(SHOWN) {
+        let duration = format_duration(s.duration_secs);
+        let _ = write!(
+            html,
+            r"<tr><td>{sp}</td><td>{c}</td><td>{st}</td><td>{d}</td></tr>",
+            sp = escape_html(&s.species),
+            c = s.detection_count,
+            st = escape_html(&s.start_time),
+            d = duration,
+        );
+    }
+    html.push_str("</tbody></table>");
+    if bursts.len() > SHOWN {
+        let scope = if u32::try_from(sessions.len()).is_ok_and(|n| n >= limit) {
+            format!(" found among the latest {limit} sessions")
+        } else {
+            String::new()
+        };
+        let _ = write!(
+            html,
+            r#"<p class="bh-note">Showing the {SHOWN} most recent of {n} bursts{scope}.</p>"#,
+            n = bursts.len(),
+        );
+    }
+    html
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -308,9 +326,11 @@ const DAWN_HOUR_START: u32 = 4;
 #[cfg(feature = "analytics")]
 const DAWN_HOUR_END: u32 = 8;
 /// Funnel window (minutes) — a morning's run may span the whole dawn window, so
-/// the `window_funnel` window covers hours 4–8.
+/// the `window_funnel` window covers all of it: hours 4 to 8 *inclusive* are
+/// five hours, 04:00–08:59. It was 240, so a run the headline counted as "in
+/// order" (`sequence_count`, no gap limit) could fall short in the funnel.
 #[cfg(feature = "analytics")]
-const DAWN_FUNNEL_WINDOW_MINUTES: u32 = 240;
+const DAWN_FUNNEL_WINDOW_MINUTES: u32 = (DAWN_HOUR_END - DAWN_HOUR_START + 1) * 60;
 
 /// HTMX partial: the dawn "running order" — how often the morning's leading
 /// voices sing in sequence (`sequence_count`, v0.8.0) plus the step timing of a
@@ -399,28 +419,42 @@ pub(super) async fn analytics_dawn_sequence_partial(
 }
 
 /// Derive the station's dawn "running order" from its own data: the most
-/// prominent dawn-window voices (hours 4–8), ordered by the mean time of day
-/// they sing — earliest first. Returns up to three species; fewer than two
-/// means there isn't enough dawn activity to read an order.
+/// prominent dawn-window voices (hours 4–8), ordered by when each typically
+/// *starts* — the mean, over the mornings it was heard, of its first dawn
+/// detection that morning. Returns up to three species; fewer than two means
+/// there isn't enough dawn activity to read an order.
+///
+/// The card reads "your dawn tends to open …", which is a claim about who
+/// starts first. It was ordered by the mean time of *all* of a species' dawn
+/// song, so a bird up at 04:30 that sang on past eight was placed after one
+/// that sang only from five to twenty past.
 #[cfg(feature = "analytics")]
 fn derive_dawn_sequence(conn: &rusqlite::Connection) -> Vec<String> {
-    // Top five dawn voices by volume, then ordered by mean time-of-day so the
-    // sequence reads as the natural progression of the morning chorus.
-    const SQL: &str = "WITH dawn AS (
-            SELECT Com_Name,
-                   COUNT(*) AS c,
-                   AVG(CAST(substr(Time, 1, 2) AS REAL) * 3600
+    // Top five dawn voices by volume, then ordered by typical first-song time
+    // so the sequence reads as the order the morning chorus opens in.
+    const SQL: &str = "WITH dawn_rows AS (
+            SELECT Date, Com_Name,
+                   CAST(substr(Time, 1, 2) AS REAL) * 3600
                        + CAST(substr(Time, 4, 2) AS REAL) * 60
-                       + CAST(substr(Time, 7, 2) AS REAL)) AS avg_secs
+                       + CAST(substr(Time, 7, 2) AS REAL) AS secs
             FROM detections_analytic
             WHERE length(Time) >= 8
               AND CAST(substr(Time, 1, 2) AS INTEGER) BETWEEN 4 AND 8
+        ),
+        mornings AS (
+            SELECT Com_Name, Date, COUNT(*) AS n, MIN(secs) AS first_secs
+            FROM dawn_rows
+            GROUP BY Com_Name, Date
+        ),
+        dawn AS (
+            SELECT Com_Name, SUM(n) AS c, AVG(first_secs) AS opens_secs
+            FROM mornings
             GROUP BY Com_Name
             HAVING c >= 10
         )
         SELECT Com_Name FROM (
-            SELECT Com_Name, avg_secs FROM dawn ORDER BY c DESC LIMIT 5
-        ) ORDER BY avg_secs ASC LIMIT 3";
+            SELECT Com_Name, opens_secs FROM dawn ORDER BY c DESC LIMIT 5
+        ) ORDER BY opens_secs ASC LIMIT 3";
     let Ok(mut stmt) = conn.prepare(SQL) else {
         return Vec::new();
     };
@@ -710,5 +744,93 @@ mod tests {
     #[test]
     fn zero_total_steps_is_empty() {
         assert_eq!(funnel_step_counts(&[], 0), Vec::<u64>::new());
+    }
+
+    fn session(n: u32) -> birdnet_behavioral::types::ActivitySession {
+        birdnet_behavioral::types::ActivitySession {
+            species: "Great Tit".into(),
+            session_id: 1,
+            detection_count: n,
+            start_time: "2026-05-01 05:00:00".into(),
+            end_time: "2026-05-01 05:10:00".into(),
+            duration_secs: 600,
+        }
+    }
+
+    /// The footnote counts the bursts, not the singletons filtered out of the
+    /// table, and says when the list was cut at the fetch limit.
+    #[test]
+    fn the_bursts_footnote_counts_bursts() {
+        let mut sessions: Vec<_> = (0..25).map(|_| session(3)).collect();
+        sessions.extend((0..75).map(|_| session(1)));
+        let html = super::render_bursts(&sessions, 30, 100);
+        assert!(
+            html.contains(
+                "Showing the 20 most recent of 25 bursts found among the latest 100 sessions."
+            ),
+            "{html}"
+        );
+        // Counterpart: under the limit, no claim about a cut.
+        let html = super::render_bursts(&sessions[..30], 30, 100);
+        assert!(html.contains("of 25 bursts.</p>"), "{html}");
+    }
+
+    /// The empty state names the gap the grouping actually used.
+    #[test]
+    fn the_empty_bursts_message_names_the_real_gap() {
+        let html = super::render_bursts(&[session(1), session(1)], 30, 100);
+        assert!(html.contains("within 30 minutes"), "{html}");
+        assert!(!html.contains("20 minutes"), "{html}");
+    }
+
+    /// The funnel's window spans the whole dawn filter it runs over.
+    ///
+    /// The filter is hours 4 to 8 *inclusive* — 04:00 to 08:59, five hours —
+    /// and the funnel window was 240 minutes, so a morning whose run spanned
+    /// the full dawn counted as "in order" in the headline (`sequence_count`,
+    /// no gap limit) and fell short in the funnel drawn above it.
+    #[test]
+    fn the_funnel_window_covers_the_whole_dawn_filter() {
+        assert_eq!(
+            super::DAWN_FUNNEL_WINDOW_MINUTES,
+            (super::DAWN_HOUR_END - super::DAWN_HOUR_START + 1) * 60
+        );
+    }
+
+    /// The card says the dawn "opens" with the sequence, so it is ordered by
+    /// when each voice *starts* on a typical morning, not by the mean time of
+    /// all its song.
+    ///
+    /// The Robin is first up at 04:30 every morning and keeps singing until
+    /// after eight; the Wren sings only from 05:00 to 05:20. By mean time the
+    /// Wren came first; by who opens the morning, the Robin does.
+    #[test]
+    fn the_dawn_sequence_is_ordered_by_who_starts_first() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE detections_analytic (Date TEXT, Time TEXT, Com_Name TEXT);",
+        )
+        .expect("table");
+        for day in 1..=5 {
+            let date = format!("2026-05-{day:02}");
+            let add = |time: &str, sp: &str| {
+                conn.execute(
+                    "INSERT INTO detections_analytic VALUES (?1, ?2, ?3)",
+                    rusqlite::params![date, time, sp],
+                )
+                .expect("row");
+            };
+            add("04:30:00", "European Robin");
+            for m in ["00", "10", "20", "30"] {
+                add(&format!("08:{m}:00"), "European Robin");
+            }
+            for m in ["00", "05", "10", "20"] {
+                add(&format!("05:{m}:00"), "Eurasian Wren");
+            }
+        }
+        assert_eq!(
+            super::derive_dawn_sequence(&conn),
+            ["European Robin", "Eurasian Wren"]
+        );
     }
 }

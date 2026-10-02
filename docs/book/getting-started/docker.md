@@ -118,8 +118,9 @@ All persistent data lives in one Docker volume at `/data`:
   model/        BirdNET+ ONNX model + labels (auto-downloaded)
   recordings/   Audio segments from the capture pipeline
   cache/        Wikipedia species image cache
-  birds.db      SQLite detections database (see note below)
-  analytics.db  DuckDB behavioral analytics (on by default)
+  analytics.db  DuckDB behavioral analytics (compose sets BIRDNET_ANALYTICS_DB)
+  BirdNet-Behavior/
+    birds.db    SQLite detections database (see note below)
 ```
 
 > The image sets no `DB_PATH`, so the database file is named by the binary's

@@ -129,8 +129,10 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
     let hero_phrase = if firstrun {
         FIRSTRUN_PHRASE
     } else {
-        r#"<h1 class="display td-h1">You're listening.</h1>
-<p class="bnb-meta td-sub">Detections roll in below.</p>"#
+        // A placeholder until the phrase partial answers: it said "You're
+        // listening." on stations with no microphone at all.
+        r#"<h1 class="display td-h1">Today at the station.</h1>
+<p class="bnb-meta td-sub">Counting today's detections…</p>"#
     };
 
     let body = TODAY_PAGE_HTML
@@ -176,6 +178,14 @@ pub(super) const FIRSTRUN_PHRASE: &str = r#"<h1 class="display td-h1">Your stati
 /// `48 kHz` for every station — so an RTSP-only station was labelled "mic",
 /// and a 16 or 44.1 kHz source was reported as 48 kHz directly beneath a live
 /// spectrogram of its own audio.
+/// A sample rate as a person reads it: `48 kHz`, `44.1 kHz`, `22.05 kHz`.
+/// Integer division printed a 44.1 kHz source as "44 kHz".
+fn khz(rate: u32) -> String {
+    let khz = f64::from(rate) / 1000.0;
+    let text = format!("{khz:.2}");
+    format!("{} kHz", text.trim_end_matches('0').trim_end_matches('.'))
+}
+
 fn signal_card(
     source_options: &str,
     first: Option<&&birdnet_db::audio_sources::AudioSource>,
@@ -191,7 +201,7 @@ fn signal_card(
                     "input · {}",
                     crate::routes::admin::audio::kind_label(s.kind)
                 ),
-                format!("{} kHz", s.sample_rate / 1000),
+                khz(s.sample_rate),
             )
         },
     );
@@ -207,7 +217,6 @@ fn signal_card(
       <div class="db-signal-foot">
         <span class="mono bnb-meta">{input_label}</span>
         <span class="mono bnb-meta">{rate}</span>
-        <span class="mono bnb-meta">BirdNET V3.0</span>
       </div>
       <div class="x-sig-row">
         <span class="x-sig-src"><span class="bnb-meta">source</span><select id="td-source" aria-label="Audio source to monitor">{source_options}</select></span>
@@ -247,7 +256,7 @@ fn firstrun_checklist(
     // liveness flag is the stronger predicate — it is true only while the
     // daemon that loaded the model is running.
     let model_row = if model_loaded {
-        r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Model loaded</div><div class="d">BirdNET V3.0 — the detector is running</div></div><span class="v">running</span></div>"#
+        r#"<div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Model loaded</div><div class="d">the detector is running</div></div><span class="v">running</span></div>"#
     } else {
         r#"<div class="x-check-row"><span class="mk down">!</span><div class="c"><div class="t">Detector not running</div><div class="d">no model is loaded — this process runs without the detector, or the model files are missing; see <a href="/admin/doctor">the doctor</a></div></div><span class="v">stopped</span></div>"#
     };
@@ -445,6 +454,18 @@ pub(super) fn disk_used_percent(state: &AppState) -> Option<f64> {
 
 /// "Friday, June 13" from today's date — the hero eyebrow's human form.
 fn human_date() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    human_date_at(secs, super::local_utc_offset_secs())
+}
+
+/// [`human_date`] for a given instant and UTC offset.
+///
+/// The station's **local** date. This divided UTC seconds by a day, so on a
+/// UTC+10 station the hero read yesterday's date until ten in the morning,
+/// above a feed of today's birds.
+fn human_date_at(unix_secs: i64, offset_secs: i64) -> String {
     const MONTHS: [&str; 12] = [
         "January",
         "February",
@@ -468,11 +489,8 @@ fn human_date() -> String {
         "Tuesday",
         "Wednesday",
     ];
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let epoch_days = secs / 86_400;
+    let local_days = (unix_secs + offset_secs).div_euclid(86_400);
+    let epoch_days = u64::try_from(local_days).unwrap_or(0);
     let (_, m, d) = super::days_to_date(epoch_days);
     // 1970-01-01 was a Thursday.
     let weekday = DAYS[(epoch_days % 7) as usize];
@@ -718,28 +736,6 @@ pub struct TodayParams {
     pub bare: Option<String>,
 }
 
-/// Form data for deleting a detection.
-#[derive(Debug, Deserialize)]
-pub struct DeleteForm {
-    /// Detection date in `YYYY-MM-DD` form.
-    pub date: String,
-    /// Detection time in `HH:MM:SS` form.
-    pub time: String,
-    /// Scientific name that uniquely identifies the detection row alongside date/time.
-    pub sci_name: String,
-}
-
-/// Form data for locking/unlocking a detection.
-#[derive(Debug, Deserialize)]
-pub struct LockForm {
-    /// Detection date in `YYYY-MM-DD` form.
-    pub date: String,
-    /// Detection time in `HH:MM:SS` form.
-    pub time: String,
-    /// Scientific name that uniquely identifies the detection row alongside date/time.
-    pub sci_name: String,
-}
-
 /// Form data for re-labeling a detection.
 #[derive(Debug, Deserialize)]
 pub struct RelabelForm {
@@ -753,6 +749,10 @@ pub struct RelabelForm {
     pub new_sci_name: String,
     /// Replacement common name corresponding to `new_sci_name`.
     pub new_com_name: String,
+    /// The row's clip (`""` for none), so the one source's row is relabelled
+    /// and not every source's; absent from older callers.
+    #[serde(default)]
+    pub file_name: Option<String>,
 }
 
 /// HTMX partial: today's detection count. Returns the labelled form by
@@ -830,6 +830,35 @@ async fn today_count_partial(
 /// `?` on its own is not one.
 const COUNT_UNKNOWN: &str = r#"?<span class="sr-only"> — this count could not be loaded</span>"#;
 
+/// What the full-day list says when it has nothing to show.
+///
+/// "No detections found today." whatever was asked, so choosing *Rare* on a
+/// day with three hundred detections told the reader the yard had been silent.
+/// A narrowed list says what it was narrowed by, and how to widen it.
+fn empty_day_message(search: Option<&str>, filter: TodayFilter) -> String {
+    let search = search.map(str::trim).filter(|s| !s.is_empty());
+    let narrowed = match filter {
+        TodayFilter::All => None,
+        TodayFilter::FirstToday => Some("new species"),
+        TodayFilter::Rare => Some("rare birds"),
+        TodayFilter::HighConfidence => Some("very sure detections"),
+    };
+    match (search, narrowed) {
+        (None, None) => r#"<p class="tdl-empty">No detections yet today.</p>"#.to_owned(),
+        (Some(q), None) => format!(
+            r#"<p class="tdl-empty">Nothing heard today matches “{}”. Clear the search to see the whole day.</p>"#,
+            super::escape_html(q)
+        ),
+        (None, Some(what)) => format!(
+            r#"<p class="tdl-empty">No {what} today. Choose <b>All</b> to see the whole day.</p>"#
+        ),
+        (Some(q), Some(what)) => format!(
+            r#"<p class="tdl-empty">No {what} today match “{}”. Clear the search or choose <b>All</b> to see the whole day.</p>"#,
+            super::escape_html(q)
+        ),
+    }
+}
+
 /// HTMX partial: paginated list of today's detections as cards.
 async fn today_partial(
     State(state): State<AppState>,
@@ -874,7 +903,7 @@ async fn today_partial(
             let mut html = String::with_capacity(4096);
 
             if detections.is_empty() && offset == 0 {
-                html.push_str("<p class=\"tdl-empty\">No detections found today.</p>");
+                html.push_str(&empty_day_message(search2.as_deref(), filter));
                 return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
             }
 
@@ -1083,7 +1112,7 @@ fn render_detection_card(
         .filter(|f| !f.is_empty())
         .map(|f| {
             let is_locked = locked.contains(&super::recordings::base_name(f));
-            super::recordings::lock_button(&d.date, &d.time, &d.sci_name, is_locked)
+            super::recordings::lock_button(&crate::state::RowRef::from(d), is_locked)
         })
         .unwrap_or_default();
     let av = avatar(&d.com_name, &d.sci_name, "");
@@ -1093,9 +1122,7 @@ fn render_detection_card(
     let time = escape_html(&d.time);
     let date_enc = simple_url_encode(&d.date);
     let time_enc = simple_url_encode(&d.time);
-    let date_raw = escape_html(&d.date);
-    let time_raw = escape_html(&d.time);
-    let sci_name_raw = escape_html(&d.sci_name);
+    let row_vals = super::recordings::row_vals(&crate::state::RowRef::from(d));
 
     let _ = write!(
         html,
@@ -1113,7 +1140,7 @@ fn render_detection_card(
          <div class=\"tdl-card-actions\">\
          {lock}\
          <button class=\"bnb-btn danger\" hx-post=\"/pages/today-delete\" \
-         hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
+         hx-vals='{row_vals}' \
          hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \
          hx-confirm=\"Delete detection of {com_name} at {time}?\" \
          data-confirm-action=\"hx-post\" \
@@ -1156,17 +1183,12 @@ fn after_write(
 /// Delete a detection and re-render the list.
 async fn delete_detection(
     State(state): State<AppState>,
-    Form(form): Form<DeleteForm>,
+    Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let date = form.date;
-    let time = form.time;
-    let sci_name = form.sci_name;
-
     // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
     // copy is incremental and can never notice a removal on its own, so the
     // deletion has to be mirrored at the same moment.
-    let result =
-        tokio::task::spawn_blocking(move || state.delete_detection(&date, &time, &sci_name)).await;
+    let result = tokio::task::spawn_blocking(move || state.delete_detection(&row)).await;
     after_write(
         super::toast::RowWrite::from_result(result, "delete detection"),
         "Detection deleted.",
@@ -1180,14 +1202,14 @@ async fn relabel_detection(
     Form(form): Form<RelabelForm>,
 ) -> axum::response::Response {
     // Paired write — see `delete_detection` above.
+    let row = crate::state::RowRef {
+        date: form.date,
+        time: form.time,
+        sci_name: form.old_sci_name,
+        file_name: form.file_name,
+    };
     let result = tokio::task::spawn_blocking(move || {
-        state.relabel_detection(
-            &form.date,
-            &form.time,
-            &form.old_sci_name,
-            &form.new_sci_name,
-            &form.new_com_name,
-        )
+        state.relabel_detection(&row, &form.new_sci_name, &form.new_com_name)
     })
     .await;
     after_write(
@@ -1200,14 +1222,9 @@ async fn relabel_detection(
 /// Lock a detection to protect it from disk purge.
 async fn lock_detection(
     State(state): State<AppState>,
-    Form(form): Form<LockForm>,
+    Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            birdnet_db::sqlite::lock_detection(conn, &form.date, &form.time, &form.sci_name)
-        })
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, true)).await;
     after_write(
         super::toast::RowWrite::from_result(result, "lock clip"),
         "Clip locked — it will not be removed to free space.",
@@ -1218,14 +1235,9 @@ async fn lock_detection(
 /// Unlock a detection (allow disk purge again).
 async fn unlock_detection(
     State(state): State<AppState>,
-    Form(form): Form<LockForm>,
+    Form(row): Form<crate::state::RowRef>,
 ) -> axum::response::Response {
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            birdnet_db::sqlite::unlock_detection(conn, &form.date, &form.time, &form.sci_name)
-        })
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || state.set_detection_lock(&row, false)).await;
     after_write(
         super::toast::RowWrite::from_result(result, "unlock clip"),
         "Clip unlocked.",
@@ -1300,6 +1312,34 @@ mod tests {
         assert_eq!(fmt_duration(8_040), "2h 14m");
         assert_eq!(fmt_duration(2_700), "45m");
         assert_eq!(fmt_duration(3_600), "1h 00m");
+    }
+
+    #[test]
+    fn a_narrowed_list_does_not_say_the_day_was_empty() {
+        let plain = empty_day_message(None, TodayFilter::All);
+        assert!(plain.contains("No detections yet today"), "{plain}");
+        let rare = empty_day_message(None, TodayFilter::Rare);
+        assert!(!rare.contains("No detections"), "{rare}");
+        assert!(
+            rare.contains("rare birds") && rare.contains("All"),
+            "{rare}"
+        );
+        let search = empty_day_message(Some("<robin>"), TodayFilter::All);
+        assert!(
+            search.contains("&lt;robin&gt;") && !search.contains("<robin>"),
+            "{search}"
+        );
+        assert!(!empty_day_message(Some("   "), TodayFilter::All).contains("matches"));
+    }
+
+    #[test]
+    fn the_hero_date_is_the_stations_local_date() {
+        // 2026-09-24 22:00 UTC is already Friday the 25th in Sydney (UTC+10)
+        // and still Thursday the 24th in New York (UTC-4).
+        let t = 1_790_287_200;
+        assert_eq!(human_date_at(t, 36_000), "Friday, September 25");
+        assert_eq!(human_date_at(t, -14_400), "Thursday, September 24");
+        assert_eq!(human_date_at(t, 0), "Thursday, September 24");
     }
 
     #[test]
@@ -1465,6 +1505,21 @@ mod tests {
         assert!(html.contains("16 kHz"), "{html}");
         assert!(!html.contains("48 kHz"));
         assert!(!html.contains("input · mic"), "an RTSP source is not a mic");
+    }
+
+    #[test]
+    fn a_sample_rate_is_printed_as_written() {
+        assert_eq!(khz(48_000), "48 kHz");
+        assert_eq!(khz(44_100), "44.1 kHz");
+        assert_eq!(khz(22_050), "22.05 kHz");
+        assert_eq!(khz(16_000), "16 kHz");
+    }
+
+    #[test]
+    fn the_signal_card_does_not_name_a_model_it_was_not_told() {
+        // `MODEL_ID` and `MODEL_ROUTES` choose the classifier; this card never
+        // asked which, and said "BirdNET V3.0" beneath a Perch station too.
+        assert!(!signal_card("", None).contains("V3.0"));
     }
 
     #[test]

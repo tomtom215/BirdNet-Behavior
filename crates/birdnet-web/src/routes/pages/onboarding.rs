@@ -670,8 +670,13 @@ async fn onboarding_save(
         if valid_confidence(conf) {
             items.push(("confidence_threshold", conf, SettingsCategory::Detection));
         }
-        if !items.is_empty() {
-            let _ = settings::set_many(conn, &items);
+        if !items.is_empty()
+            && let Err(e) = settings::set_many(conn, &items)
+        {
+            // Not surfaced beyond the log on purpose: the flag below is still
+            // set so the box is not trapped in the wizard, and every value is
+            // editable on the settings page. Silent it was not meant to be.
+            tracing::error!(error = %e, "the setup wizard could not save its settings");
         }
         // Set the completion flag last so a fresh box stops being redirected here
         // even if a settings write above failed.

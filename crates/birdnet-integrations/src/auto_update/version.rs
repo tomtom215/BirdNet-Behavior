@@ -49,24 +49,23 @@ pub(super) fn is_newer(current: &str, latest: &str) -> Result<bool, UpdateError>
 /// hosts keeps an unexpected or tampered `asset_url` from being downloaded and
 /// installed as the running binary.
 pub(super) fn validate_release_url(url: &str) -> Result<(), UpdateError> {
-    let rest = url
-        .strip_prefix("https://")
-        .ok_or_else(|| UpdateError::Network(format!("refusing non-HTTPS update URL: {url}")))?;
-    // Authority is everything up to the first `/`, `?`, or `#`. Note: we must
-    // NOT split on `:` here — a port lives inside the authority, and splitting
-    // on `:` is exactly what let `https://github.com:x@evil.com/…` read as host
-    // `github.com` (the `:x@evil.com` userinfo+host was discarded) while reqwest
-    // actually connected to `evil.com`.
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    // Drop any `userinfo@` prefix: per the WHATWG URL rules reqwest/`url`
-    // follow, the real host is the part after the LAST `@`. So
-    // `github.com:x@evil.com` → `evil.com`, while a benign `user@github.com`
-    // → `github.com` (still trusted, since that is where the bytes come from).
-    let host_port = authority.rsplit('@').next().unwrap_or(authority);
-    // Strip an optional `:port`, leaving the bare host. (An IPv6 literal would
-    // split at the wrong colon here, but GitHub never serves assets from one, so
-    // it would fail the suffix check below and be rejected anyway — fail-safe.)
-    let host = host_port.split(':').next().unwrap_or(host_port);
+    // Parse with the parser reqwest itself connects with (`reqwest::Url` is
+    // the `url` crate's WHATWG implementation), and trust the host *it*
+    // finds. Every hand-rolled authority split this had disagreed with it
+    // somewhere: splitting on `:` read `https://github.com:x@evil.com/…` as
+    // github.com, and splitting only on `/?#` missed that a special scheme
+    // treats `\` as a path separator, so `https://evil.com\@github.com/x` —
+    // host evil.com to reqwest — was read as github.com and trusted.
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|e| UpdateError::Network(format!("refusing unparseable update URL {url}: {e}")))?;
+    if parsed.scheme() != "https" {
+        return Err(UpdateError::Network(format!(
+            "refusing non-HTTPS update URL: {url}"
+        )));
+    }
+    // A domain only (`None` for an IP literal, which is never where GitHub
+    // serves assets). The parser has already lowercased it.
+    let host = parsed.domain().unwrap_or("");
     let trusted = host == "github.com"
         || host.ends_with(".github.com")
         || host.ends_with(".githubusercontent.com");
@@ -111,6 +110,41 @@ mod tests {
         assert!(validate_release_url("https://github.com@evil.com/payload.tgz").is_err());
         assert!(validate_release_url("https://objects.githubusercontent.com@evil.com/a").is_err());
         assert!(validate_release_url("https://a@github.com:tok@evil.com/a").is_err());
+    }
+
+    /// The WHATWG parser reqwest uses reads `\` as a path separator in a
+    /// special scheme, so in `https://evil.com\@github.com/x` the host is
+    /// `evil.com` and `\@github.com/x` is path. Splitting the authority only
+    /// on `/?#` read the host as `github.com` and trusted it.
+    #[test]
+    fn validate_release_url_rejects_backslash_host_spoof() {
+        for url in [
+            r"https://evil.com\@github.com/payload.tgz",
+            r"https://evil.com\github.com/payload.tgz",
+            r"https://evil.com\x@objects.githubusercontent.com/a",
+        ] {
+            let real = reqwest::Url::parse(url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned));
+            assert_eq!(real.as_deref(), Some("evil.com"), "fixture premise: {url}");
+            assert!(
+                validate_release_url(url).is_err(),
+                "{url} connects to evil.com but was trusted"
+            );
+        }
+    }
+
+    /// Counterpart: the parser does not turn real GitHub URLs away, including
+    /// an upper-case host and a signed query string.
+    #[test]
+    fn validate_release_url_accepts_github_hosts_however_spelled() {
+        assert!(validate_release_url("https://GitHub.com/o/r/releases/download/v1/a.tgz").is_ok());
+        assert!(
+            validate_release_url(
+                "https://release-assets.githubusercontent.com/github-production-release-asset/1?sig=a%2Fb"
+            )
+            .is_ok()
+        );
     }
 
     #[test]

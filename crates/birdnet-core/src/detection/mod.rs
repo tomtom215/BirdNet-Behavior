@@ -53,7 +53,11 @@ impl ChunkFilters {
         chunks: &[types::ChunkPrediction],
     ) -> Vec<Vec<types::Detection>> {
         let after_privacy = self.privacy.filter_timed(starts, chunks);
-        let after_noise = self.noise.filter_predictions(starts, &after_privacy);
+        let loudest: Vec<Option<types::Detection>> =
+            chunks.iter().map(|c| c.loudest_noise.clone()).collect();
+        let after_noise = self
+            .noise
+            .filter_with_evidence(starts, &after_privacy, &loudest);
         corroboration::corroborate(self.confirmation, starts, &after_noise)
     }
 
@@ -79,6 +83,7 @@ mod chunk_filter_tests {
         ChunkPrediction {
             detections,
             human_score: 0.0,
+            loudest_noise: None,
         }
     }
 
@@ -87,6 +92,7 @@ mod chunk_filter_tests {
         ChunkPrediction {
             detections,
             human_score: 0.8,
+            loudest_noise: None,
         }
     }
 
@@ -114,6 +120,32 @@ mod chunk_filter_tests {
             noise: NoiseFilter::with_default_classes(0.5),
             confirmation: ConfirmationLevel::Off,
         }
+    }
+
+    /// A bark scored below the *detection* threshold still reaches a noise
+    /// threshold set below it. The filter read only the detection list,
+    /// which never holds anything under the detection threshold, so
+    /// `NOISE_THRESHOLD=0.3` under `CONFIDENCE=0.7` could never fire.
+    #[test]
+    fn a_bark_below_the_detection_threshold_still_trips_the_noise_filter() {
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::with_default_classes(0.3),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let mut barked = quiet(vec![d("Turdus merula", "Eurasian Blackbird", 0.8)]);
+        barked.loudest_noise = Some(d("Dog", "Dog", 0.5));
+        let out = filters.apply(&[0.0], &[barked]);
+        assert!(
+            out[0].is_empty(),
+            "the bark at 0.5 cleared the 0.3 noise bar"
+        );
+
+        // Counterpart: a quieter bark, under the noise bar, leaves the chunk.
+        let mut faint = quiet(vec![d("Turdus merula", "Eurasian Blackbird", 0.8)]);
+        faint.loudest_noise = Some(d("Dog", "Dog", 0.2));
+        let out = filters.apply(&[0.0], &[faint]);
+        assert_eq!(out[0].len(), 1);
     }
 
     #[test]

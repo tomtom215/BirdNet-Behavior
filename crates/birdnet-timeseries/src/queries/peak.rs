@@ -9,6 +9,11 @@ use super::QueryPlan;
 ///
 /// Generates overlapping `window_minutes`-wide buckets, hopping every
 /// `hop_minutes`, then ranks them by detection count.
+///
+/// The ranked candidates overlap by construction, so one burst of activity
+/// fills several consecutive ranks. [`crate::executor::TimeSeriesDb::peak_windows`]
+/// keeps only the best of each overlapping group; callers of this raw SQL get
+/// every candidate.
 #[derive(Debug, Clone)]
 pub struct PeakWindows {
     /// Width of each candidate window in minutes (default: 15).
@@ -115,7 +120,7 @@ impl SpeciesPeak {
 impl QueryPlan for SpeciesPeak {
     fn sql(&self) -> String {
         let sp = self.species.replace('\'', "''");
-        let days = self.lookback_days;
+        let window = super::last_days(self.lookback_days);
         let limit = self.limit;
         format!(
             "SELECT
@@ -123,10 +128,11 @@ impl QueryPlan for SpeciesPeak {
     COUNT(*)                          AS detection_count,
     COUNT(DISTINCT detection_date)    AS active_days,
     AVG(Confidence)                   AS avg_confidence,
-    COUNT(*) * 1.0 / COUNT(DISTINCT detection_date) AS avg_per_active_day
+    COUNT(*) * 1.0 / COUNT(DISTINCT detection_date) AS avg_per_active_day,
+    MAX(Confidence)                   AS max_confidence
 FROM detections_ts
 WHERE Com_Name = '{sp}'
-  AND detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+  AND {window}
 GROUP BY hour(detection_timestamp)
 ORDER BY detection_count DESC
 LIMIT {limit}"

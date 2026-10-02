@@ -105,6 +105,30 @@ fn a_database_this_binary_creates_is_incremental_from_its_first_table() {
     );
 }
 
+/// The same promise through the door production uses. `open_or_create`
+/// switched the file to WAL before `migrate` ran, and the WAL switch writes
+/// page 1 — after which `auto_vacuum` is silently ignored. The gate above
+/// opened a bare connection and so never saw it.
+#[test]
+fn a_database_open_or_create_makes_is_incremental_from_its_first_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("birds.db");
+    let conn = birdnet_db::sqlite::open_or_create(&path).expect("open_or_create");
+    assert_eq!(auto_vacuum_mode(&conn).unwrap(), AUTO_VACUUM_INCREMENTAL);
+    drop(conn);
+    // Read back from a fresh connection: the mode is the file's, not the
+    // handle's.
+    let reopened = Connection::open(&path).unwrap();
+    assert_eq!(
+        auto_vacuum_mode(&reopened).unwrap(),
+        AUTO_VACUUM_INCREMENTAL
+    );
+    let journal: String = reopened
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(journal, "wal", "and WAL still took");
+}
+
 #[test]
 fn a_database_from_before_is_converted_once_beside_itself_and_then_left_alone() {
     let _t = traced();

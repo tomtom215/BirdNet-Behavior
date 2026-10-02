@@ -93,6 +93,14 @@ pub struct RegisteredModel {
     pub model: BirdNetModel,
     /// Its own threshold, if it was given one.
     pub threshold: Option<f32>,
+    /// The bar its detections are finally judged against: its own threshold
+    /// if it has one, else the station's, as loaded.
+    ///
+    /// Not `model.config().confidence_threshold`, which the daemon lowers to
+    /// the published per-species floor before every file so a lowered species
+    /// can reach the processor at all. The merge needs the unlowered number to
+    /// tell a verdict that counts from one that only got through the floor.
+    pub own_threshold: f32,
     /// What it needs fed to it, after any declared sample rate is applied.
     ///
     /// This and not [`BirdNetModel::input_spec`] is what the pipeline reads:
@@ -256,6 +264,7 @@ impl ClassifierRegistry {
             if let Some(threshold) = spec.threshold {
                 config.confidence_threshold = threshold;
             }
+            let own_threshold = config.confidence_threshold;
             let model = BirdNetModel::load(&spec.model_path, labels, config).map_err(|e| {
                 RegistryError::Load {
                     id: spec.id.clone(),
@@ -270,6 +279,7 @@ impl ClassifierRegistry {
             }
             models.push(RegisteredModel {
                 id: spec.id.clone(),
+                own_threshold,
                 model,
                 threshold: spec.threshold,
                 spec: effective,
@@ -342,6 +352,7 @@ impl ClassifierRegistry {
         Self {
             models: vec![RegisteredModel {
                 spec: model.input_spec(),
+                own_threshold: model.config().confidence_threshold,
                 id: id.into(),
                 model,
                 threshold: None,
@@ -840,6 +851,35 @@ mod tests {
             "got {}",
             declared.primary().spec.window_secs()
         );
+    }
+
+    /// `own_threshold` is the bar the merge judges a verdict against, so it is
+    /// the classifier's own threshold (else the station's) as loaded, and it
+    /// does not follow the per-species floor the daemon lowers the model to.
+    #[test]
+    fn own_threshold_is_the_loaded_bar_not_the_floor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let station = ModelConfig {
+            confidence_threshold: 0.5,
+            ..ModelConfig::default()
+        };
+        let mut reg = ClassifierRegistry::load(
+            &[
+                spec(dir.path(), "strict", TINY_V24, Some(0.7)),
+                spec(dir.path(), "plain", TINY_V24, None),
+            ],
+            &no_routes(),
+            &station,
+        )
+        .expect("loads");
+        assert!((reg.primary().own_threshold - 0.7).abs() < 1e-6);
+        assert!((reg.model(1).unwrap().own_threshold - 0.5).abs() < 1e-6);
+
+        reg.model_mut(0)
+            .unwrap()
+            .model
+            .set_confidence_threshold(0.1);
+        assert!((reg.primary().own_threshold - 0.7).abs() < 1e-6);
     }
 
     // ── route parsing ───────────────────────────────────────────────────

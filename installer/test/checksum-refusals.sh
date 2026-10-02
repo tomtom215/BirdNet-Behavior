@@ -71,6 +71,14 @@ run_install_binary() {
         source <(sed -n '/^install_binary()/,/^}/p' "${BINARY_LIB}")
         # shellcheck disable=SC1090
         source <(sed -n '/^install_binary_atomically()/,/^}/p' "${BINARY_LIB}")
+        # The temp-dir cleanup that has to run however install_binary ends.
+        # shellcheck disable=SC1090
+        source <(sed -n '/^track_tmpdir()/,/^}/p;/^remove_tracked_tmpdirs()/,/^}/p;/^installer_on_exit()/,/^}/p' "${BINARY_LIB}")
+        # 77-manage.sh's half of the EXIT handler; no service here.
+        restore_service_if_we_stopped_it() { return "${1:-0}"; }
+        # Every mktemp lands here, so a leaked workdir is visible afterwards.
+        export TMPDIR="${sandbox}/tmp"
+        mkdir -p "${TMPDIR}"
 
         info()    { echo "[INFO] $*"; }
         success() { echo "[OK] $*"; }
@@ -162,6 +170,16 @@ if grep -q "\[STOP\]" "${OUT}"; then
     fail "the running service was stopped for an update that then refused to install"
 else
     pass "the running service was never stopped"
+fi
+
+# `trap … RETURN` never fires on `exit`, and every refusal above is a `fatal`,
+# which exits: each failed attempt left its workdir (the ~100 MB archive) in
+# /tmp. On a Pi whose /tmp is a small tmpfs, retrying filled it.
+leftover="$(find "${sandbox}/tmp" -mindepth 1 -maxdepth 1 2>/dev/null)"
+if [ -z "${leftover}" ]; then
+    pass "the refused download's workdir was removed on the fatal exit"
+else
+    fail "the refused download's workdir was left behind: ${leftover}"
 fi
 
 echo

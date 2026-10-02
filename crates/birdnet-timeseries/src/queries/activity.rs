@@ -27,7 +27,7 @@ impl Default for HourlyActivity {
 
 impl QueryPlan for HourlyActivity {
     fn sql(&self) -> String {
-        let days = self.lookback_days;
+        let window = super::last_days(self.lookback_days);
         let species_filter = self
             .species
             .as_deref()
@@ -44,7 +44,7 @@ impl QueryPlan for HourlyActivity {
     COUNT(DISTINCT Com_Name)                           AS species_count,
     AVG(Confidence)                                    AS avg_confidence
 FROM detections_ts
-WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+WHERE {window}
   {species_filter}
 GROUP BY ALL
 ORDER BY window_start"
@@ -72,7 +72,7 @@ impl Default for DailyActivity {
 
 impl QueryPlan for DailyActivity {
     fn sql(&self) -> String {
-        let days = self.lookback_days;
+        let window = super::last_days(self.lookback_days);
         let species_filter = self
             .species
             .as_deref()
@@ -90,7 +90,7 @@ impl QueryPlan for DailyActivity {
     AVG(Confidence)               AS avg_confidence,
     MAX(Confidence)               AS max_confidence
 FROM detections_ts
-WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+WHERE {window}
   {species_filter}
 GROUP BY detection_date
 ORDER BY detection_date"
@@ -101,7 +101,9 @@ ORDER BY detection_date"
 /// Weekly activity totals (ISO weeks).
 #[derive(Debug, Clone)]
 pub struct WeeklyActivity {
-    /// Look back this many weeks (default: 52).
+    /// Number of weekly buckets, the running week included (default: 52).
+    /// Each starts on a Monday, so every bucket but the running one is a
+    /// whole week.
     pub lookback_weeks: u32,
 }
 
@@ -113,7 +115,11 @@ impl Default for WeeklyActivity {
 
 impl QueryPlan for WeeklyActivity {
     fn sql(&self) -> String {
-        let weeks = self.lookback_weeks;
+        // `weeks` buckets: the running week and the `weeks - 1` whole weeks
+        // before it. Counting back from *today* started the first bucket part
+        // way through a week, so the oldest bar was a stub of one to six days
+        // drawn at the same scale as the whole weeks beside it.
+        let back = self.lookback_weeks.saturating_sub(1);
         format!(
             "SELECT
     strftime(date_trunc('week', detection_date), '%Y-%m-%d') AS window_start,
@@ -122,7 +128,7 @@ impl QueryPlan for WeeklyActivity {
     COUNT(DISTINCT Com_Name)                              AS species_count,
     AVG(Confidence)                                       AS avg_confidence
 FROM detections_ts
-WHERE detection_date >= CURRENT_DATE - INTERVAL {weeks} WEEKS
+WHERE detection_date >= date_trunc('week', CURRENT_DATE) - INTERVAL {back} WEEKS
 GROUP BY date_trunc('week', detection_date)
 ORDER BY window_start"
         )
@@ -140,32 +146,46 @@ ORDER BY window_start"
 /// ninety days it was not running.
 #[derive(Debug, Clone)]
 pub struct HourlyHeatmap {
-    /// Number of days of history to include (default: 90).
+    /// Number of complete days of history to include (default: 90). Today is
+    /// never one of them: a day a few hours old would count in the
+    /// denominator in full and in the numerator only up to now.
     pub lookback_days: u32,
+    /// Optional species filter. The denominator stays the days the *station*
+    /// heard anything, so a species' figure is its rate per listening day.
+    pub species: Option<String>,
 }
 
 impl Default for HourlyHeatmap {
     fn default() -> Self {
-        Self { lookback_days: 90 }
+        Self {
+            lookback_days: 90,
+            species: None,
+        }
     }
 }
 
 impl QueryPlan for HourlyHeatmap {
     fn sql(&self) -> String {
-        let days = self.lookback_days;
+        let window = super::last_complete_days(self.lookback_days);
+        let species_filter = self
+            .species
+            .as_deref()
+            .map(|s| format!("WHERE Com_Name = '{}'", s.replace('\'', "''")))
+            .unwrap_or_default();
         format!(
             "WITH windowed AS (
     SELECT * FROM detections_ts
-    WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
+    WHERE {window}
 ),
-station_days AS (SELECT COUNT(DISTINCT detection_date) AS n FROM windowed)
+station_days AS (SELECT COUNT(DISTINCT detection_date) AS n FROM windowed),
+selected AS (SELECT * FROM windowed {species_filter})
 SELECT
     hour(detection_timestamp)    AS hour_of_day,
     COUNT(*)                     AS total_detections,
     COUNT(DISTINCT detection_date) AS active_days,
     COUNT(*) * 1.0 / ANY_VALUE(station_days.n) AS avg_detections_per_day,
     COUNT(DISTINCT Com_Name)     AS unique_species
-FROM windowed, station_days
+FROM selected, station_days
 GROUP BY hour(detection_timestamp)
 ORDER BY hour_of_day"
         )
@@ -181,7 +201,7 @@ mod tests {
         let q = HourlyActivity::default();
         let sql = q.sql();
         assert!(sql.contains("time_bucket"));
-        assert!(sql.contains("INTERVAL 7 DAYS"));
+        assert!(sql.contains("detection_date > CURRENT_DATE - INTERVAL 7 DAYS"));
     }
 
     #[test]

@@ -103,11 +103,13 @@ impl Default for PeakParams {
 /// Parameters for session (gap-based grouping) queries.
 #[derive(Debug, Clone)]
 pub struct SessionParams {
-    /// Gap threshold in minutes (default: 30).
+    /// A silence longer than this many minutes of elapsed time starts a new
+    /// session (default: 30).
     pub gap_minutes: u32,
     /// Restrict to a single date (ISO-8601), or `None` for all dates.
     pub date_filter: Option<String>,
-    /// Number of days to look back when no specific date is given (default: 7).
+    /// Number of dates to look back, today included, when no specific date is
+    /// given (default: 7).
     pub lookback_days: u32,
     /// Maximum sessions to return (default: 100).
     pub limit: u32,

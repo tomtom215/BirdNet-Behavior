@@ -536,3 +536,41 @@ fn live_residency_separates_the_four_patterns() {
         "{ret:?}"
     );
 }
+
+/// A vagrant heard six times on one morning is a rarity the table shows.
+///
+/// `min_detections` was applied as `HAVING COUNT(*)` over cohort anchors — one
+/// per distinct *day* — so at the default of five a species needed five days
+/// of presence to be listed at all. A Rarity is by definition every detection
+/// within one week, so almost none could reach it: the class existed and the
+/// default table could not show it.
+#[test]
+fn live_a_one_day_vagrant_heard_often_is_listed_as_a_rarity() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed_residency(&db);
+    db.conn()
+        .execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+             SELECT '2025-06-01', strftime(t, '%H:%M:%S'), 'Jynx torquilla', 'Eurasian Wryneck',
+                    0.9, epoch(t)
+               FROM range(TIMESTAMP '2025-06-01 05:00:00', TIMESTAMP '2025-06-01 05:06:00',
+                          INTERVAL 1 MINUTE) r(t);
+             INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+             VALUES ('2025-06-02','05:00:00','Upupa epops','Eurasian Hoopoe',0.9,
+                     epoch(TIMESTAMP '2025-06-02 05:00:00'));",
+        )
+        .expect("seed vagrants");
+    let ret = db.retention(&types::RetentionParams::default()).unwrap();
+    let wryneck = ret
+        .iter()
+        .find(|r| r.species == "Eurasian Wryneck")
+        .unwrap_or_else(|| panic!("six detections pass a minimum of five: {ret:?}"));
+    assert_eq!(wryneck.classification, types::ResidencyType::Rarity);
+    // Counterpart: one detection is still below the minimum.
+    assert!(
+        ret.iter().all(|r| r.species != "Eurasian Hoopoe"),
+        "{ret:?}"
+    );
+}

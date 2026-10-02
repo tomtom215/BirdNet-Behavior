@@ -17,7 +17,7 @@
 <html lang="en">
 <head>
   <!-- FOUC theme guard, identical to layout.html. -->
-  <script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=localStorage.getItem('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');var m=localStorage.getItem('bnb-motion');if(m==='reduced')document.documentElement.setAttribute('data-motion','reduced');var c=localStorage.getItem('bnb-contrast');if(c==='high')document.documentElement.setAttribute('data-contrast','high');})();</script>
+  <script>(function(){var read=function(k){try{return localStorage.getItem(k)}catch(e){return null}};var t=read('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=read('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');var m=read('bnb-motion');if(m==='reduced')document.documentElement.setAttribute('data-motion','reduced');var c=read('bnb-contrast');if(c==='high')document.documentElement.setAttribute('data-contrast','high');})();</script>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">

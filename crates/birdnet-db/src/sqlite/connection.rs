@@ -95,6 +95,12 @@ pub fn open_connection(path: &Path) -> Result<Connection, DbError> {
 /// Returns `DbError` on connection or schema creation failure.
 pub fn open_or_create(path: &Path) -> Result<Connection, DbError> {
     let conn = Connection::open(path)?;
+    // Before `PRAGMAS`, and it has to be: `journal_mode=WAL` writes the file's
+    // header page, and once a database has a page 1 SQLite silently ignores
+    // `auto_vacuum` — so `migrate`'s own call, reached after it, found no
+    // table yet and set a mode that never took. Every station this created
+    // was left for `resilience` to convert with a full `VACUUM`.
+    crate::migration::set_incremental_vacuum_on_empty(&conn)?;
     conn.execute_batch(PRAGMAS)?;
     // Apply the full migration chain so the resulting database matches the
     // production schema exactly. Previously this function hand-coded a

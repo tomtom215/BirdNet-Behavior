@@ -174,6 +174,10 @@ impl Config {
     /// Returns `ConfigError::Parse` if the content is malformed.
     pub fn parse(content: &str) -> Result<Self, ConfigError> {
         let mut values = HashMap::new();
+        // A UTF-8 byte-order mark (Windows editors write one) is not
+        // whitespace to `trim`, and would otherwise become part of the first
+        // key, which then answers to no name anything reads.
+        let content = content.strip_prefix('\u{feff}').unwrap_or(content);
 
         for (line_num, line) in content.lines().enumerate() {
             let line = line.trim();
@@ -433,6 +437,16 @@ MODEL=BirdNET_GLOBAL_6K_V2.4_Model_FP16
     fn require_missing_key_returns_error() {
         let config = Config::parse("KEY=value").unwrap();
         assert!(config.require("MISSING").is_err());
+    }
+
+    /// A file saved by an editor that writes a UTF-8 byte-order mark (Windows
+    /// Notepad does) must not have it glued to its first key: that key was
+    /// read as `\u{feff}LATITUDE` and nothing asked for it by name found it.
+    #[test]
+    fn a_byte_order_mark_does_not_become_part_of_the_first_key() {
+        let config = Config::parse("\u{feff}LATITUDE=52.5\nLONGITUDE=13.4\n").unwrap();
+        assert_eq!(config.get("LATITUDE"), Some("52.5"));
+        assert_eq!(config.get("LONGITUDE"), Some("13.4"));
     }
 
     #[test]

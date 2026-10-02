@@ -52,6 +52,39 @@ fn geomodel_week(date: &str, path: &Path) -> u32 {
     })
 }
 
+/// Minimum seconds between two logged runtime failures of the metadata model.
+///
+/// The failure repeats on every file (a segment every few seconds) for as long
+/// as it lasts; one line per file would bury everything else in the journal,
+/// and none would hide it.
+const SPECIES_FILTER_FAILURE_LOG_INTERVAL_SECS: u64 = 600;
+
+/// When the last runtime failure was logged, in seconds since the Unix epoch
+/// (`0`: never).
+static SPECIES_FILTER_FAILURE_LOGGED_AT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Log a runtime failure of the metadata model, at most once per
+/// [`SPECIES_FILTER_FAILURE_LOG_INTERVAL_SECS`].
+fn report_species_filter_failure(error: &crate::inference::model::InferenceError) {
+    use std::sync::atomic::Ordering;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let last = SPECIES_FILTER_FAILURE_LOGGED_AT.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < SPECIES_FILTER_FAILURE_LOG_INTERVAL_SECS {
+        return;
+    }
+    SPECIES_FILTER_FAILURE_LOGGED_AT.store(now.max(1), Ordering::Relaxed);
+    tracing::error!(
+        error = %error,
+        repeat_suppressed_secs = SPECIES_FILTER_FAILURE_LOG_INTERVAL_SECS,
+        "metadata model failed at run time; species occurrence filtering is OFF for this \
+         file and every species in the model stays a candidate (the include/exclude lists \
+         still apply). Recording continues"
+    );
+}
+
 /// Process a single audio file and run inference.
 ///
 /// Returns all detections found in the file, or an empty vec if
@@ -77,6 +110,7 @@ fn infer_chunk(
 ) -> Result<ChunkPrediction, DaemonError> {
     let mut verdicts = Vec::with_capacity(route.len());
     let mut human_score = 0.0_f32;
+    let mut loudest_noise = None;
 
     for &idx in route {
         let Some(registered) = registry.model_mut(idx) else {
@@ -85,6 +119,7 @@ fn infer_chunk(
             continue;
         };
         let model_id = registered.id.clone();
+        let own_threshold = registered.own_threshold;
         let prediction = registered.model.predict_chunk(
             &chunk.spectrogram.data,
             &chunk.recording.date,
@@ -94,15 +129,27 @@ fn infer_chunk(
             week,
         )?;
         human_score = human_score.max(prediction.human_score);
+        // Likewise the loudest watched noise class across classifiers.
+        if let Some(noise) = prediction.loudest_noise
+            && loudest_noise
+                .as_ref()
+                .is_none_or(|l: &crate::detection::types::Detection| {
+                    noise.confidence > l.confidence
+                })
+        {
+            loudest_noise = Some(noise);
+        }
         verdicts.push(crate::detection::merge::ModelVerdict {
             model_id,
             detections: prediction.detections,
+            threshold: own_threshold,
         });
     }
 
     Ok(ChunkPrediction {
         detections: crate::detection::merge::merge_verdicts(&verdicts),
         human_score,
+        loudest_noise,
     })
 }
 
@@ -256,7 +303,20 @@ pub fn process_and_infer_filtered(
     // different vocabulary is filtered by its own thresholds and lists, not by
     // a geomodel that has never heard of its labels.
     let primary_labels = registry.primary().model.labels();
-    let allowed_species = species_filter.filter_species(lat.zip(lon), week, primary_labels)?;
+    //
+    // A metadata model that fails *here*, at run time, falls back to the
+    // operator's lists — the same thing a model that fails to load does. This
+    // was a `?`, which failed every file for as long as the fault lasted: a
+    // station that recorded nothing, rather than one that recorded without an
+    // occurrence filter.
+    let (allowed_species, geo_ok) =
+        match species_filter.filter_species(lat.zip(lon), week, primary_labels) {
+            Ok(set) => (set, true),
+            Err(e) => {
+                report_species_filter_failure(&e);
+                (species_filter.allowed_by_lists(primary_labels), false)
+            }
+        };
     // Species only another routed classifier knows: the operator's lists
     // alone. Every detection used to be checked against the primary's set,
     // so a species outside BirdNET's vocabulary was dropped whichever model
@@ -281,7 +341,7 @@ pub fn process_and_infer_filtered(
     };
     if let Some(observer) = filter_observer {
         observer.report(
-            species_filter.has_model(),
+            species_filter.has_model() && geo_ok,
             Some(allowed_species.len() as u64),
         );
     }
@@ -347,5 +407,111 @@ mod tests {
             &config,
         );
         assert!(result.is_err());
+    }
+
+    /// A metadata model that loads but fails every time it is *run* must not
+    /// silence the station.
+    ///
+    /// At load time a metadata model that cannot be used already falls back
+    /// to passthrough (the operator's lists still apply). At run time the
+    /// same failure was a `?`, which failed every file: nothing recorded, one
+    /// error per segment, for as long as the station ran.
+    ///
+    /// The fixture is the tiny V2.4 classifier loaded as a metadata model: its
+    /// declared output width (11) matches the 11-label vocabulary, so it
+    /// loads, and its `[1, 144 000]` input then refuses the `[1, 3]`
+    /// `(lat, lon, week)` tensor on every run.
+    #[test]
+    fn a_metadata_model_that_fails_at_run_time_falls_back_to_the_lists() {
+        use crate::detection::corroboration::ConfirmationLevel;
+        use crate::detection::noise::NoiseFilter;
+        use crate::detection::privacy::PrivacyFilter;
+        use crate::inference::labels::LabelSet;
+        use crate::inference::model::{BirdNetModel, ModelConfig};
+        use crate::inference::species_filter::SpeciesFilterConfig;
+
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let model_path = tmp.path().join("m.onnx");
+        std::fs::write(&model_path, TINY_V24).unwrap();
+        let labels = LabelSet::from_entries(
+            (0..11)
+                .map(|i| (format!("Species{i} bird"), format!("Bird {i}")))
+                .collect(),
+        );
+
+        let config = ModelConfig {
+            confidence_threshold: 0.0,
+            ..ModelConfig::default()
+        };
+        let model = BirdNetModel::load(&model_path, labels.clone(), config).unwrap();
+        let mut registry = ClassifierRegistry::single("birdnet", model);
+
+        let mut species_filter = SpeciesFilter::load_with_vocabulary(
+            &model_path,
+            None,
+            &labels,
+            &std::collections::HashMap::new(),
+            SpeciesFilterConfig {
+                exclude_list: vec!["Species0 bird".to_owned()],
+                ..SpeciesFilterConfig::default()
+            },
+        )
+        .expect("precondition: the fixture loads as a metadata model");
+        assert!(
+            species_filter
+                .filter_species(Some((52.0, 13.0)), 10, &labels)
+                .is_err(),
+            "precondition: the fixture fails when run"
+        );
+
+        // Three seconds of low noise at 48 kHz.
+        let wav = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * 3 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            w.write_sample(((x >> 16) as i16) / 8).unwrap();
+        }
+        w.finalize().unwrap();
+
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::new(0.0, Vec::new()),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let pipeline_config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            ..PipelineConfig::default()
+        };
+        let events = process_and_infer_filtered(
+            &wav,
+            &pipeline_config,
+            &mut registry,
+            &[0],
+            &filters,
+            &mut species_filter,
+            None,
+            Some(52.0),
+            Some(13.0),
+            "",
+        )
+        .expect("a failing metadata model must not fail the file");
+        assert!(!events.is_empty(), "threshold 0 reports every species");
+        assert!(
+            events
+                .iter()
+                .all(|e| e.detection.scientific_name != "Species0 bird"),
+            "the operator's exclude list still applies"
+        );
     }
 }
