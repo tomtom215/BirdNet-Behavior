@@ -7,13 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Measured on x86_64 under real systemd. aarch64 (Raspberry Pi) was not tested.
+Measured on x86_64 under real systemd, and seen in the journal of a
+Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
 
 ### Upgrade notes
 
 - **An x86_64 station on 0.16.0, 0.16.1 or 0.17.0 that will not start:
   update.** The service was killed (SIGSYS) the moment it loaded the
   geomodel, and systemd restarted it into the same kill every few minutes.
+  On a station with coordinates the first thing killed is the preflight's
+  doctor, which loads the geomodel too: the journal shows `Bad system call`
+  and `Control process exited … status=1/FAILURE`.
   The 0.16 installers switch the geomodel on for a fresh install, and 0.17.0's
   for an update too. Measured: a fresh 0.16.1 install, and 0.15.0 updated to
   0.17.0; 0.16.0 was not run. The unit this release's installer writes lets
@@ -22,6 +26,13 @@ Measured on x86_64 under real systemd. aarch64 (Raspberry Pi) was not tested.
   will not start: update again**, or run `sudo bash install.sh repair` with
   this release's installer, which rewrites the unit without downloading
   anything.
+- **Rolling back to a release from before the geomodel takes the geomodel
+  back out.** When an update adds the geomodel to a config that had none, it
+  now prints a second rollback command that also removes those lines. 0.15.0
+  pairs the 12K-output geomodel with the 11K classifier by position: rolled
+  back with it configured and coordinates set, it recorded nothing from a
+  magpie recording. Test: `installer/test/rollback-geomodel.sh`, which fails
+  on the 0.17.0 installer.
 - **After rolling back from 0.17.0 to 0.15.0, the analytics pages stop
   updating.** The previous binary records detections against the newer
   database (tested), but its analytics sync fails on the columns 0.17.0 added
@@ -73,7 +84,9 @@ Measured on x86_64 under real systemd. aarch64 (Raspberry Pi) was not tested.
   four newest earlier releases and does not publish unless all pass;
   `upgrade.yml` runs it against the three newest on pull requests. It also
   checks that the geomodel is configured and loads after the update and after
-  the rollback. A 0.16.x or 0.17.0 station, which cannot start on x86_64 as
+  the rollback, on a station with coordinates — without them the preflight's
+  doctor skips the geomodel, and the first version of this test missed the
+  failure a Pi showed. A 0.16.x or 0.17.0 station, which cannot start on x86_64 as
   shipped, is started for the test with a unit drop-in allowing the syscall,
   removed again before the update; that list is named, so any other release
   that fails to start fails the test. Passed locally from 0.15.0 and 0.16.1.

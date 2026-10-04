@@ -636,6 +636,9 @@ Field-deployment philosophy: **don't auto-update**.
   that has it, so the rolled-back binary starts under it. A unit written by
   0.17.0 did not do that: after rolling back from 0.17.0, run
   `sudo bash install.sh repair` with the current installer to rewrite it.
+  When the update added the geomodel to a config that had none, it prints a
+  second rollback command that also takes those lines back out; use that
+  one, because a release from before the geomodel cannot use it.
 - Rolling back leaves the database at the newer schema. The previous
   binary logs a warning about it at every start and keeps recording; every
   release is tested for this (below). Its analytics pages may stop

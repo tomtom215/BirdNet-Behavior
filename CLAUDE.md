@@ -303,6 +303,11 @@ Corollaries, each learned the same way:
   Runtime's default thread pool) on every start. Two hand-run reproductions
   came up clean before a real systemd showed it in one try. Upgrade questions
   go through `installer/test/upgrade-e2e.sh` on a real systemd host.
+- **A station without coordinates skips half the geomodel.** The doctor in
+  the unit's preflight loads the geomodel only when LATITUDE/LONGITUDE are
+  set, so the first upgrade test, on a station with none, saw the service
+  killed and never the preflight — the exact failure a Pi reported. Fixtures
+  should look like a configured station, not a fresh one.
 - **Booting systemd in this container wipes the shared `/tmp`.** Its
   boot-time `systemd-tmpfiles --remove` deleted the scratchpad and started
   every enabled service (redis). Give it its own namespaces, a private `/tmp`

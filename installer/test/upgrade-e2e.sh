@@ -49,6 +49,9 @@ SERVICE="birdnet-behavior"
 BIN="/usr/local/bin/birdnet-behavior"
 LISTEN="127.0.0.1:8502"
 FIXTURE="${REPO_ROOT}/tests/testdata/Pica_pica_30s.wav"
+# Berlin. The fixture is a magpie, which the geomodel keeps here all year.
+STATION_LAT="52.5200"
+STATION_LON="13.4050"
 
 : "${PREV_VERSION:?set PREV_VERSION, e.g. 0.15.0}"
 : "${CANDIDATE_TARBALL:?set CANDIDATE_TARBALL to the candidate release tarball}"
@@ -218,9 +221,25 @@ SUDO_USER="${SERVICE_USER}" BIRDNET_NONINTERACTIVE=1 BIRDNET_LISTEN="${LISTEN}" 
     bash "${PREV_DIR}/install.sh" install --version "${PREV_VERSION}" --noninteractive \
     > "${WORK}/install-prev.log" 2>&1 \
     || { tail -40 "${WORK}/install-prev.log"; die "v${PREV_VERSION} install.sh exited non-zero"; }
-systemctl is-active --quiet "${SERVICE}" || systemctl start "${SERVICE}"
+# A real station has a location, and the doctor in the unit's preflight loads
+# the geomodel only when it does. Without one, that load — where a Raspberry
+# Pi updated to 0.17.0 was killed ("Bad system call" from the preflight, not
+# the service) — never ran here. Magpies occur year-round at this point.
+printf 'LATITUDE=%s\nLONGITUDE=%s\n' "${STATION_LAT}" "${STATION_LON}" >> /etc/birdnet/birdnet.conf
+STARTED_AT="$(date '+%Y-%m-%d %H:%M:%S')"
+systemctl restart "${SERVICE}" || true
+# Killed by SIGSYS: the service itself (exit status 31), or the preflight's
+# doctor, which /bin/sh reports as "Bad system call".
+# Captured, then matched: `journalctl | grep -q` under pipefail reports
+# failure whenever grep stops reading early (installer/test/pipefail-sigpipe.sh).
+sigsys_since() {
+    local log
+    [ "$(systemctl show -p ExecMainStatus --value "${SERVICE}")" = 31 ] && return 0
+    log="$(journalctl -u "${SERVICE}" --since "$1" --no-pager -o cat 2>/dev/null)"
+    grep -q 'Bad system call' <<<"${log}"
+}
 if ! up_within 90 \
-    && [ "$(systemctl show -p ExecMainStatus --value "${SERVICE}")" = 31 ] \
+    && sigsys_since "${STARTED_AT}" \
     && grep -qwF -- "${PREV_VERSION}" <<<"${KNOWN_GEOMODEL_SIGSYS}" \
     && grep -q '^METADATA_' /etc/birdnet/birdnet.conf; then
     echo "  KNOWN  v${PREV_VERSION} is killed by SIGSYS with the geomodel on; starting it with sched_setaffinity allowed"
@@ -302,8 +321,15 @@ STEP="after rollback"
 wait_up
 [ "$(running_version)" = "${PREV_VERSION}" ] || die "binary after rollback is $(running_version), not ${PREV_VERSION}"
 pass "active on v${PREV_VERSION} again"
-geomodel_loaded || die "the geomodel is configured but did not load on the rolled-back v${PREV_VERSION}"
-pass "the geomodel loaded on v${PREV_VERSION}, under the candidate's unit"
+# A rollback to a release from before the geomodel takes it back out of the
+# config (the update prints that command when it added the geomodel); any
+# other rollback keeps it, and then it has to load.
+if grep -q '^METADATA_MODEL_PATH=' /etc/birdnet/birdnet.conf; then
+    geomodel_loaded || die "the geomodel is configured but did not load on the rolled-back v${PREV_VERSION}"
+    pass "the geomodel loaded on v${PREV_VERSION}, under the candidate's unit"
+else
+    pass "the rollback took the geomodel the update added back out of the config"
+fi
 n4="$(detections)"
 [ "${n4}" = "${n3}" ] || die "detections went from ${n3} to ${n4} across the rollback"
 pass "all ${n4} detection(s) survived the rollback"

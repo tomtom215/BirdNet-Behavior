@@ -1548,6 +1548,19 @@ enable_geomodel_in_kept_config() {
         printf '\n# --- Species occurrence filtering (added by install.sh) ---\n%s\n%s\n' \
             "${model_line}" "${labels_line}" >>"${CONFIG_FILE}"
         success "Species occurrence filtering is ON: added the geomodel to ${CONFIG_FILE}."
+        # A config with no METADATA line was written before the geomodel
+        # shipped, so the binary kept as .prev predates it too. 0.15.0 loads
+        # this 12K-output geomodel but pairs its outputs with the 11K
+        # classifier by position, and with coordinates set it filtered a
+        # magpie recording down to no detections. The plain `mv` rollback
+        # brought back a station that ran and recorded nothing; this one also
+        # takes back the three lines just added (the blank line before the
+        # marker stays). Printed after the binary's own rollback line, so it is
+        # the last one shown.
+        local prev="${INSTALL_DIR}/${BINARY_NAME}.prev"
+        if [ -f "${prev}" ]; then
+            info "The previous binary predates the geomodel, so roll back with: sudo sed -i '/^# --- Species occurrence filtering (added by install\\.sh) ---\$/,+2d' ${CONFIG_FILE} && sudo mv ${prev} ${INSTALL_DIR}/${BINARY_NAME} && sudo systemctl restart ${SERVICE_NAME}"
+        fi
     elif grep -qE '^# METADATA_MODEL_PATH=$' "${CONFIG_FILE}"; then
         sed -i -e "s|^# METADATA_MODEL_PATH=\$|${model_line}|" \
             -e "s|^# METADATA_LABELS_PATH=\$|${labels_line}|" "${CONFIG_FILE}"
