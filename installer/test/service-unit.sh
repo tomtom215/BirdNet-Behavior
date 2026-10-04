@@ -43,7 +43,8 @@ UNIT="${WORK}/birdnet-behavior.service"
 
 # Generate a unit at $1 with the real install_service, from the real module.
 # A unit already at $1 is what install_service regenerates over, as an update.
-generate_unit() {
+# Its stderr is kept, for 4f; generate_unit discards it.
+generate_unit_stderr() {
 (
     set -euo pipefail
     # shellcheck disable=SC1090
@@ -82,8 +83,9 @@ generate_unit() {
     JOURNALD_DROPIN="${WORK}/journald-birdnet-behavior.conf"
 
     install_service
-) >/dev/null 2>&1
+) >/dev/null
 }
+generate_unit() { generate_unit_stderr "$1" 2>/dev/null; }
 generate_unit "${UNIT}"
 
 if [ ! -s "${UNIT}" ]; then
@@ -225,6 +227,99 @@ if grep -qE '^ExecStart=.*--analytics-db /home/birdnet/BirdNet-Behavior/analytic
     pass "a fresh unit uses the default analytics path"
 else
     fail "a fresh unit lost the default analytics path: $(grep -E '^ExecStart=' "${UNIT}")"
+fi
+
+echo
+echo "=== 4d. the preflight lets a rolled-back binary start ==="
+# An update keeps the previous binary as birdnet-behavior.prev and prints
+# "roll back with: sudo mv …prev … && sudo systemctl restart". The unit stays
+# the new one. 0.17.0's preflight called --doctor-gate unconditionally; a 0.15
+# or 0.16 binary rejects that flag with exit 2, so the rolled-back station
+# never started again. Run the unit's own preflight line against stand-ins for
+# both generations, and against the failures it must still block.
+PRE="$(awk '/^ExecStartPre=\/bin\/sh -c .*--doctor/ { sub(/^ExecStartPre=/, ""); print; exit }' "${UNIT}")"
+if [ -z "${PRE}" ]; then
+    fail "no doctor ExecStartPre found in the unit"
+else
+    STUB="${WORK}/stub-bin"
+    # $1 = whether the binary has --doctor-gate, $2 = --doctor-gate exit,
+    # $3 = --doctor exit. An unknown flag exits 2, as clap does, even beside
+    # --help: 0.15.0 answers `--doctor-gate --help` with 2, 0.17.0 with 0.
+    make_stub() {
+        cat > "${STUB}" <<STUB_EOF
+#!/bin/sh
+case "\$1" in
+    --doctor-gate)
+        [ "$1" = yes ] || { echo "error: unexpected argument '--doctor-gate' found" >&2; exit 2; }
+        [ "\$2" = --help ] && exit 0
+        exit $2 ;;
+    --doctor) exit $3 ;;
+esac
+exit 2
+STUB_EOF
+        chmod +x "${STUB}"
+    }
+    preflight() { # → exit status of the unit's preflight against ${STUB}
+        local cmd="${PRE//\/usr\/local\/bin\/birdnet-behavior/${STUB}}"
+        eval "${cmd}" >/dev/null 2>&1
+    }
+    check_pre() { # $1 = want (start|block)  $2 = label
+        if preflight; then got=start; else got=block; fi
+        if [ "${got}" = "$1" ]; then pass "$2"; else fail "$2 — the preflight would ${got} it"; fi
+    }
+    make_stub no  0 1; check_pre start "a binary without --doctor-gate (a .prev rollback) starts on a doctor warning"
+    make_stub no  0 2; check_pre block "a binary without --doctor-gate is still blocked by its doctor's error"
+    make_stub yes 1 2; check_pre start "a binary with --doctor-gate is gated by it, not by the plain doctor"
+    make_stub yes 2 0; check_pre block "a binary with --doctor-gate is blocked by a start-critical failure"
+    printf '#!/bin/sh\nexit 127\n' > "${STUB}"
+    check_pre block "a binary that cannot run at all is blocked"
+fi
+
+echo
+echo "=== 4e. ONNX Runtime may pin its threads ==="
+# ORT calls sched_setaffinity for any session built without a thread count,
+# and @resources denies it, so the kernel killed the service with SIGSYS: every
+# binary up to 0.17.0 with the geomodel configured, the rolled-back .prev
+# included. systemd applies SystemCallFilter= lines in order, and an allow line
+# only re-adds a call when it comes *after* the deny that removed it.
+deny_at="$(awk '/^SystemCallFilter=~.*@resources/ { print NR; exit }' "${UNIT}")"
+allow_at="$(awk '/^SystemCallFilter=([^~].*[[:space:]])?sched_setaffinity([[:space:]]|$)/ { n = NR } END { print n }' "${UNIT}")"
+if [ -n "${deny_at}" ] && [ -n "${allow_at}" ] && [ "${allow_at}" -gt "${deny_at}" ]; then
+    pass "sched_setaffinity is allowed back after the @resources deny"
+else
+    fail "sched_setaffinity is not allowed after the @resources deny (deny line ${deny_at:-none}, allow line ${allow_at:-none}) — ORT's default thread pool gets the service killed with SIGSYS"
+fi
+
+echo
+echo "=== 4f. writing the unit runs nothing ==="
+# The unit is an unquoted heredoc, so a backtick in one of its comments is a
+# command substitution. Two comments quoted `sudo systemctl edit
+# birdnet-behavior` and `systemctl reload birdnet-behavior`: every install and
+# update ran both, reloading the service mid-update ("Failed to reload … Job
+# type reload is not applicable") and leaving the comments with a hole where
+# the command was. Generate a unit with recording stand-ins on PATH.
+SPY="${WORK}/spy"
+mkdir -p "${SPY}"
+for cmd in systemctl sudo; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n' "${cmd}" "${SPY}" > "${SPY}/${cmd}"
+    chmod +x "${SPY}/${cmd}"
+done
+SPIED="${WORK}/spied.service"
+errs="$(PATH="${SPY}:${PATH}" generate_unit_stderr "${SPIED}" 2>&1 >/dev/null)"
+if [ -s "${SPY}/calls" ]; then
+    fail "writing the unit ran: $(tr '\n' ';' < "${SPY}/calls")"
+else
+    pass "writing the unit ran no systemctl or sudo"
+fi
+if [ -n "${errs}" ]; then
+    fail "writing the unit wrote to stderr: ${errs}"
+else
+    pass "writing the unit wrote nothing to stderr"
+fi
+if grep -q 'make it with `sudo systemctl edit birdnet-behavior` instead' "${SPIED}"; then
+    pass "the unit's comments keep the commands they quote"
+else
+    fail "the unit's comment lost the command it quotes"
 fi
 
 echo

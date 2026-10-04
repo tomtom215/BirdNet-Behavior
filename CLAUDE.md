@@ -296,6 +296,35 @@ Corollaries, each learned the same way:
   recording it has processed, so copying the watch dir for a second run copies
   nothing — a rerun "found 0 detections" for that reason alone. Stage the
   inputs fresh for every run.
+- **A stubbed `systemctl` hides everything the unit does.** Running the
+  service binary by hand, or install.sh with `systemctl` stubbed, skips the
+  unit's sandbox — and 0.17.0's geomodel session was killed by the unit's
+  `SystemCallFilter=~@resources` (SIGSYS, `sched_setaffinity` from ONNX
+  Runtime's default thread pool) on every start. Two hand-run reproductions
+  came up clean before a real systemd showed it in one try. Upgrade questions
+  go through `installer/test/upgrade-e2e.sh` on a real systemd host.
+- **A station without coordinates skips half the geomodel.** The doctor in
+  the unit's preflight loads the geomodel only when LATITUDE/LONGITUDE are
+  set, so the first upgrade test, on a station with none, saw the service
+  killed and never the preflight — the exact failure a Pi reported. Fixtures
+  should look like a configured station, not a fresh one.
+- **Three things that made "the station did X" untrue in a test.** The
+  settings table wins over the config file once the first start has seeded
+  it, so moving a station by editing LATITUDE did nothing (check
+  `analysis_runs`, written from what the daemon uses). Metrics live at
+  `/api/v2/metrics`, not `/metrics` — a 404 read as "0 files analysed". And
+  the stream directory keeps processed segments for ten minutes, so a
+  recording's disappearance is not a sign it was analysed; the
+  `birdnet_files_analysed_total` counter is.
+- **Booting systemd in this container wipes the shared `/tmp`.** Its
+  boot-time `systemd-tmpfiles --remove` deleted the scratchpad and started
+  every enabled service (redis). Give it its own namespaces, a private `/tmp`
+  and `/run`, and a target that pulls in only journald, then `nsenter` into
+  it:
+  `unshare --pid --fork --mount --uts --mount-proc sh -c 'mount --make-rprivate /; mount -t tmpfs tmpfs /tmp; mount -t tmpfs tmpfs /run; mkdir -p /run/lock; exec env container=other /lib/systemd/systemd --system --unit=bnbtest.target'`,
+  where `bnbtest.target` is `DefaultDependencies=no` +
+  `Wants=systemd-journald.socket systemd-journald.service`. Keep test files
+  out of `/tmp`.
 - **Every feature set is its own copy of the target dir.** Default,
   `--all-features` and per-crate `--features analytics` each built bundled
   libduckdb (482 MB an rlib) and filled the disk twice in one session. Pick one

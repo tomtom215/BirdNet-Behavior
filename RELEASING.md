@@ -177,7 +177,11 @@ Copy-paste this into the release PR or issue and tick it off:
 [ ] Local gate: cargo test --workspace
 [ ] Local gate: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
 [ ] Version-bump PR merged to main; CI green on the merge commit
-[ ] Dry run (workflow_dispatch on release.yml) is green
+[ ] Dry run (workflow_dispatch on release.yml) is green, including every
+    `Upgrade from vA.B.C` row: each installs a published release under real
+    systemd, records detections, updates in place to this build, and rolls
+    back with the command the update printed. The release does not publish
+    without them.
 [ ] git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
 [ ] `verify-release` green (it downloads and checksum-verifies every published
     asset over the public URL; a red one means the Release is not installable)

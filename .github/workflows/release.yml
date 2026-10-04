@@ -712,10 +712,67 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+# ── Job 4b: Upgrade the last releases to this one, and roll back ─────────────
+  # The exact x86_64 tarball `build` produced, installed over each of the most
+  # recent published releases under real systemd, then rolled back with the
+  # command the update prints (installer/test/upgrade-e2e.sh). 0.17.0 was
+  # published without this and broke stations that updated in place; nothing
+  # publishes now unless every row passes. upgrade.yml runs the same script on
+  # pull requests.
+  upgrade-sources:
+    name: Choose the releases to upgrade from
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      prev: ${{ steps.sources.outputs.prev }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: List them
+        id: sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "prev=$(bash scripts/upgrade-sources.sh "${{ needs.validate.outputs.version }}" 4)" >> "$GITHUB_OUTPUT"
+
+  upgrade:
+    name: Upgrade from v${{ matrix.prev }}
+    needs: [validate, build, upgrade-sources]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        prev: ${{ fromJSON(needs.upgrade-sources.outputs.prev) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Download the x86_64 build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-x86_64-unknown-linux-gnu
+          path: dist/
+
+      - name: Cache the models
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/upgrade-models
+          key: upgrade-models-v3.0-preview3-geo-3.0.2
+
+      - name: Upgrade v${{ matrix.prev }} → v${{ needs.validate.outputs.version }} and roll back
+        run: |
+          sudo env PATH="$PATH" \
+            PREV_VERSION="${{ matrix.prev }}" \
+            CANDIDATE_TARBALL="$PWD/dist/birdnet-behavior-${{ needs.validate.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz" \
+            MODEL_CACHE="$HOME/upgrade-models" \
+            bash installer/test/upgrade-e2e.sh
+          sudo chmod -R a+rX "$HOME/upgrade-models"
+
 # ── Job 5: Create or update the GitHub Release ───────────────────────────────
   github-release:
     name: Publish GitHub Release
-    needs: [validate, package]
+    needs: [validate, package, upgrade]
     # Tag pushes publish; workflow_dispatch runs are dry runs that stop after
     # `package` (build + SBOM + SLSA attestation all still run and are verified).
     if: github.event_name == 'push'

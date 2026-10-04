@@ -120,15 +120,23 @@ ExecStartPre=/bin/mkdir -p ${STREAM_DIR}
 # address, an unwritable database directory, an unusable HTTPS setup); every
 # other failure is reported and the service starts, running without what it
 # names, with the same report at /admin/doctor. Exit 0 and 1 are accepted.
-ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --config ${CONFIG_FILE} || [ \$? -le 1 ]'
+#
+# A binary older than 0.17.0 has no --doctor-gate, and rejects it with exit 2.
+# The update keeps the previous binary as ${BINARY_NAME}.prev and tells the
+# operator to roll back by moving it into place, which leaves this unit in
+# front of a binary that refuses its preflight: the station never started
+# again. So the gate is asked for only when the binary accepts it (--doctor-gate
+# --help exits 0; an older binary rejects the flag with 2), and the plain
+# doctor runs otherwise, as it did before 0.17.0.
+ExecStartPre=/bin/sh -c 'if ${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --help >/dev/null 2>&1; then ${INSTALL_DIR}/${BINARY_NAME} --doctor-gate --config ${CONFIG_FILE}; else ${INSTALL_DIR}/${BINARY_NAME} --doctor --config ${CONFIG_FILE}; fi || [ \$? -le 1 ]'
 # DuckDB behavioral analytics is compiled into every release binary and enabled
 # here by default (the database is created on first run). To run without it
 # (e.g. on a very low-RAM board), change the flag below to --analytics-db "":
 # an update keeps that choice. Removing the flag does not turn analytics off, it
 # falls back to <database>.duckdb. Any other change to this line is replaced by
-# the next update; make it with `sudo systemctl edit birdnet-behavior` instead.
+# the next update; make it with \`sudo systemctl edit birdnet-behavior\` instead.
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${analytics_arg}
-# `systemctl reload birdnet-behavior` re-reads LOG_LEVEL / LOG_MODULES from
+# \`systemctl reload birdnet-behavior\` re-reads LOG_LEVEL / LOG_MODULES from
 # the config and applies them without a restart (the SIGHUP handler in main.rs).
 ExecReload=/bin/kill -HUP \$MAINPID
 
@@ -213,6 +221,16 @@ SystemCallArchitectures=native
 # excludes things like raw_io / module_load / ptrace / mount / reboot.
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module
+# …except sched_setaffinity, from @resources. ONNX Runtime pins its pool
+# threads with it whenever a session is built without a thread count, and the
+# kernel answers a denied call by killing the process (SIGSYS). The geomodel
+# session in every binary up to 0.17.0 was built that way, so with the geomodel
+# configured — 0.17.0's installer configures it — those binaries die at start,
+# including the .prev an update keeps for rolling back. Measured under this
+# filter: 0.15.0 and 0.17.0 both killed by signal 31 without this line, both
+# running with it. It lets the service place only its own threads on CPUs.
+# A later allow line re-adds a call to the set the line above removed it from.
+SystemCallFilter=sched_setaffinity
 
 # Audio access — must keep these capability sets / device mounts.
 #

@@ -200,7 +200,9 @@ The installer's systemd unit (`install.sh`) ships hardened by default:
   `MemoryDenyWriteExecute=yes`, `RestrictRealtime=yes`,
   `RestrictNamespaces=yes`.
 - `SystemCallFilter=@system-service` minus the `@privileged @resources @mount
-  @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module` groups.
+  @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module` groups,
+  with `sched_setaffinity` allowed back: ONNX Runtime pins its threads with
+  it, and a denied call kills the service rather than failing.
 - `MemoryHigh=768M`, `MemoryMax=1G`, `TasksMax=512`, `LimitNOFILE=65536`,
   `LimitNPROC=256` — bounded resource ceilings; runaway processes can't
   take down the host. The FP32 model is loaded into anonymous memory,
@@ -286,7 +288,9 @@ This is the workhorse of unattended operation:
    permanently-broken install retries quietly every five minutes for
    ever and recovers by itself the moment its cause is fixed. An
    unattended box never parks itself in `failed` waiting for a visit.
-5. `ExecStartPre` runs `birdnet-behavior --doctor-gate`: the full
+5. `ExecStartPre` runs `birdnet-behavior --doctor-gate` (or plain
+   `--doctor` for a binary too old to have the gate, such as a rolled-back
+   `.prev`): the full
    doctor report, in the journal on every start. It exits 2, blocking
    startup, only for a failure the station cannot run past (an
    unreadable configuration file, an invalid listen address, an
@@ -627,7 +631,23 @@ Field-deployment philosophy: **don't auto-update**.
   detections.
 - `install.sh` keeps the outgoing binary at
   `/usr/local/bin/birdnet-behavior.prev`, so a one-line `mv` rollback is
-  available if the new build misbehaves.
+  available if the new build misbehaves. The update prints the exact
+  command. The unit it writes asks for `--doctor-gate` only from a binary
+  that has it, so the rolled-back binary starts under it. A unit written by
+  0.17.0 did not do that: after rolling back from 0.17.0, run
+  `sudo bash install.sh repair` with the current installer to rewrite it.
+  When the update added the geomodel to a config that had none, it prints a
+  second rollback command that also takes those lines back out; use that
+  one, because a release from before the geomodel cannot use it.
+- Rolling back leaves the database at the newer schema. The previous
+  binary logs a warning about it at every start and keeps recording; every
+  release is tested for this (below). Its analytics pages may stop
+  updating, because the analytics copy carries columns it does not know;
+  the detections are unaffected.
+- Every release is gated on this path before it is published: the newest
+  previous releases are installed under systemd, given detections, updated
+  in place, and rolled back with the printed command
+  (`installer/test/upgrade-e2e.sh`).
 
 ## 11. Pre-flight checklist
 

@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Measured on x86_64 under real systemd, and seen in the journal of a
+Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
+
+### Upgrade notes
+
+- **An x86_64 station on 0.16.0, 0.16.1 or 0.17.0 that will not start:
+  update.** The service was killed (SIGSYS) the moment it loaded the
+  geomodel, and systemd restarted it into the same kill every few minutes.
+  On a station with coordinates the first thing killed is the preflight's
+  doctor, which loads the geomodel too: the journal shows `Bad system call`
+  and `Control process exited … status=1/FAILURE`.
+  The 0.16 installers switch the geomodel on for a fresh install, and 0.17.0's
+  for an update too. Measured: a fresh 0.16.1 install, and 0.15.0 updated to
+  0.17.0; 0.16.0 was not run. The unit this release's installer writes lets
+  them start — measured with the 0.17.0 binary itself as well as this one.
+- **A station rolled back from 0.17.0 with the command its update printed
+  will not start: update again**, or run `sudo bash install.sh repair` with
+  this release's installer, which rewrites the unit without downloading
+  anything.
+- **Rolling back to a release from before the geomodel takes the geomodel
+  back out.** When an update adds the geomodel to a config that had none, it
+  now prints a second rollback command that also removes those lines. 0.15.0
+  pairs the 12K-output geomodel with the 11K classifier by position: rolled
+  back with it configured and coordinates set, it recorded nothing from a
+  magpie recording. Test: `installer/test/rollback-geomodel.sh`, which fails
+  on the 0.17.0 installer.
+- **After rolling back from 0.17.0 to 0.15.0, the analytics pages stop
+  updating.** The previous binary records detections against the newer
+  database (tested), but its analytics sync fails on the columns 0.17.0 added
+  (`initial DuckDB sync failed … Call to EndRow before all columns have been
+  appended`). The detections themselves are unaffected. Seen with 0.15.0;
+  not checked for 0.16.x.
+
+### Fixed
+
+- **The unit no longer kills the service for pinning its threads.** ONNX
+  Runtime calls `sched_setaffinity` for a session built without a thread
+  count; the unit denied it (`SystemCallFilter=~@resources`) and the kernel
+  killed the process with SIGSYS. The geomodel session in every binary up to
+  0.17.0 is built that way, so with the geomodel configured the service, and
+  the `.prev` an update keeps for rolling back, died at start. The unit now
+  allows that one call back. Measured under the filter alone: 0.15.0 and
+  0.17.0 both killed by signal 31 without the line, both running with it.
+  Test: `installer/test/service-unit.sh` 4e, which fails without the line and
+  with it placed before the deny.
+- **The geomodel session sets its own thread count**, one, as the classifier
+  session always did, so it no longer depends on that call at all. Test:
+  `onnx_sessions_set_their_thread_count`, which fails on the 0.17.0 geomodel
+  session. (The upgrade test below cannot tell this fix apart from the unit
+  line, which also rescues the 0.17.0 binary.)
+- **The rollback an update prints works.** The update keeps the previous
+  binary as `birdnet-behavior.prev` and prints `mv … && systemctl restart`,
+  but the unit's preflight ran `--doctor-gate`, which a 0.15 or 0.16 binary
+  rejects. The preflight now asks for the gate only from a binary that
+  accepts it and runs the plain doctor otherwise. Test:
+  `installer/test/service-unit.sh` 4d, which fails on the 0.17.0 unit line.
+
+- **Writing the unit no longer runs the commands its comments quote.** The
+  unit is an unquoted heredoc, and two comments quoted `sudo systemctl edit
+  birdnet-behavior` and `systemctl reload birdnet-behavior` in backticks, so
+  every install and update ran both — the reload is the "Failed to reload
+  birdnet-behavior.service" line in an update's output — and the written unit
+  had a hole where each command was. Test: `installer/test/service-unit.sh` 4f,
+  which fails on the 0.17.0 template.
+
+### Known issues
+
+- **The doctor can report a location the station is not using.** The first
+  start copies the config's LATITUDE/LONGITUDE into the settings table, and
+  from then on the table wins over the file. The doctor reads the file first
+  and the table only when the file has none, so after a location change on
+  one side only, `--doctor` (and the unit's preflight) names one place while
+  the detector filters for the other. Seen in the upgrade test: the doctor
+  reported 38.5000, -98.0000 while the run record said 52.52, 13.405. Not
+  fixed in this release.
+
+### Added
+
+- **The occurrence filter is tested against the real geomodel.**
+  `the_geomodel_keeps_out_birds_that_do_not_occur_here` asks the v3.0.2
+  geomodel, with the classifier's vocabulary, about the two North American
+  species a European station reported (Dickcissel, Great Horned Owl) and a
+  magpie: Berlin in June keeps the magpie and drops both; Kansas keeps both
+  and drops the magpie. Seen failing with the filter's threshold comparison
+  disabled. CI's inference job now fetches the geomodel to run it. The
+  upgrade test does the same end to end: it moves the upgraded station to
+  Kansas, confirms from its run record that it moved, hands it the magpie
+  recording and checks that no magpie is stored — seen failing with
+  `SF_THRESH=0.0` ("magpie rows 12 → 16").
+- **Every release is upgrade-tested before it is published.**
+  `installer/test/upgrade-e2e.sh` installs a published release with its own
+  installer under real systemd, lets it record detections from a real
+  recording, updates it in place with the candidate installer and tarball
+  while the service runs, checks that it is active with every row and records
+  a new detection, then runs the rollback command the update printed and
+  checks the same of the previous binary. `release.yml` runs it against the
+  four newest earlier releases that publish an installer and an x86_64 tarball
+  (0.16.0 has no assets) and does not publish unless all pass;
+  `upgrade.yml` runs it against the three newest on pull requests. It also
+  checks that the geomodel is configured and loads after the update and after
+  the rollback, on a station with coordinates — without them the preflight's
+  doctor skips the geomodel, and the first version of this test missed the
+  failure a Pi showed. A 0.16.x or 0.17.0 station, which cannot start on x86_64 as
+  shipped, is started for the test with a unit drop-in allowing the syscall,
+  removed again before the update; that list is named, so any other release
+  that fails to start fails the test. Passed locally from 0.15.0 and 0.16.1.
+  Seen failing against 0.17.0 at each defect above: the 0.17.0 installer and
+  binary at the update (SIGSYS); the fixed binary with the 0.17.0 installer,
+  and with only the preflight reverted, at the rollback (preflight); the
+  preflight fix without the syscall line at the rollback (SIGSYS).
+
 ## [0.17.0] - 2026-09-25
 
 Where an entry names a test, that test was seen failing against the code
