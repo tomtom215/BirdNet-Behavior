@@ -302,7 +302,19 @@ impl SpeciesFilter {
             "loading metadata ONNX model for species occurrence filtering"
         );
 
+        // An explicit thread count, never ONNX Runtime's default. Left at 0,
+        // ORT sizes the pool to the machine and pins each thread to a core
+        // with sched_setaffinity — a syscall the unit 0.17.0 wrote denies
+        // (`SystemCallFilter=~@resources`), so the kernel killed the service
+        // with SIGSYS the moment it loaded the geomodel, and again on every
+        // restart. 0.17.0's installer turned the geomodel on, which is how an
+        // in-place update became a station that never came back up. The unit
+        // allows the call again now, for the binaries already shipped; this
+        // keeps the session from needing it. One thread is ample: the model
+        // scores one location per week.
         let session = Session::builder()
+            .map_err(|e| InferenceError::Model(e.to_string()))?
+            .with_intra_threads(1)
             .map_err(|e| InferenceError::Model(e.to_string()))?
             .commit_from_file(path)
             .map_err(|e| InferenceError::Model(e.to_string()))?;

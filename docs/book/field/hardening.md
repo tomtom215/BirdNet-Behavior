@@ -374,6 +374,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module
+SystemCallFilter=sched_setaffinity
 DevicePolicy=closed
 SupplementaryGroups=audio
 ```

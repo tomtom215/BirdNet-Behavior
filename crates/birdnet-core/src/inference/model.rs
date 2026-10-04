@@ -225,6 +225,8 @@ impl BirdNetModel {
     ) -> Result<Self, InferenceError> {
         let session = Session::builder()
             .map_err(|e| InferenceError::Model(e.to_string()))?
+            .with_intra_threads(config.num_threads)
+            .map_err(|e| InferenceError::Model(e.to_string()))?
             .commit_from_memory(bytes)
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
