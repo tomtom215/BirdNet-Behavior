@@ -54,24 +54,30 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
-# `~` pins the bundled DuckDB version: the `10505` component is DuckDB 1.5.5
-# itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST match
-# the DuckDB version the published `behavioral` community extension targets —
-# DuckDB refuses to LOAD an extension built for any other version (verified:
-# even `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
-# The community CDN serves `behavioral` v0.9.1 built for DuckDB 1.5.5 (verified:
-# the v1.5.5 artifact footer reports behavioral_version v0.9.1 + DuckDB v1.5.5
-# for both linux_amd64 and linux_arm64, exposing sessionize / window_funnel /
-# retention / sequence_*), so the bundled engine matches and `LOAD behavioral`
-# succeeds.
+# `~` pins the bundled DuckDB version: the `10506` component is DuckDB 1.5.6
+# itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST be a
+# version both extension registries publish builds under, because every embed
+# and every runtime INSTALL fetches from `<registry>/v<duckdb>/<platform>/`:
+#
+# - `icu` is a C++ extension and loads only into the exact DuckDB version it
+#   was built for (`allow_extensions_metadata_mismatch` does not bypass this).
+# - `behavioral` v0.10.0 is built on DuckDB's stable C API (footer ABI
+#   `C_STRUCT`, C API v1.2.0), so DuckDB 1.5.6 accepts it by its own rule —
+#   same C API major, no newer than the engine's (`src/main/extension.cpp`).
+#   Up to v0.9.1 it was `C_STRUCT_UNSTABLE` and as version-locked as ICU.
+#
+# Verified, not assumed: the community CDN's `v1.5.6` artifacts for
+# linux_amd64 and linux_arm64 carry footers `C_STRUCT / v0.10.0 / v1.2.0`, and
+# `file` reports x86-64 and aarch64 respectively (the upstream changelog notes
+# an earlier GitHub-release arm64 artifact that was x86-64). The `v1.5.6` ICU
+# builds carry `CPP / v1.5.6 / v1.5.6`.
 #
 # When bumping, confirm the new build actually LOADs — an HTTP 200 on the
 # version path is not sufficient, because a freshly published artifact can lag
 # and still embed the previous DuckDB version in its footer until the
 # community-extensions rebuild propagates. (The `v1.5.4` path long served a
-# byte-identical copy of the old v0.8.0/1.5.3 build; DuckDB moved 1.5.3 -> 1.5.5
-# and v0.9.1 was published under v1.5.5.)
-duckdb = { version = "~1.10505", features = ["bundled"] }
+# byte-identical copy of the old v0.8.0/1.5.3 build.)
+duckdb = { version = "~1.10506", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }

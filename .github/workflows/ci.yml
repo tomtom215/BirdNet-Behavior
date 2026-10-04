@@ -167,7 +167,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          url="https://community-extensions.duckdb.org/v1.5.5/linux_amd64/behavioral.duckdb_extension.gz"
+          url="https://community-extensions.duckdb.org/v1.5.6/linux_amd64/behavioral.duckdb_extension.gz"
           tmp="$RUNNER_TEMP/behavioral.duckdb_extension"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o "${tmp}.gz" "$url"; then
             gunzip -f "${tmp}.gz"
@@ -196,7 +196,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          url="https://extensions.duckdb.org/v1.5.5/linux_amd64/icu.duckdb_extension.gz"
+          url="https://extensions.duckdb.org/v1.5.6/linux_amd64/icu.duckdb_extension.gz"
           tmp="$RUNNER_TEMP/icu.duckdb_extension"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o "${tmp}.gz" "$url"; then
             gunzip -f "${tmp}.gz"
@@ -565,7 +565,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          url="https://extensions.duckdb.org/v1.5.5/linux_arm64/icu.duckdb_extension.gz"
+          url="https://extensions.duckdb.org/v1.5.6/linux_arm64/icu.duckdb_extension.gz"
           tmp="$RUNNER_TEMP/icu.duckdb_extension"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o "${tmp}.gz" "$url"; then
             gunzip -f "${tmp}.gz"

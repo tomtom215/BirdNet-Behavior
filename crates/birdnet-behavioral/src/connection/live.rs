@@ -574,3 +574,92 @@ fn live_a_one_day_vagrant_heard_often_is_listed_as_a_rarity() {
         "{ret:?}"
     );
 }
+
+/// A day whose detections carry no instant is omitted, not reported.
+///
+/// `detection_instant` is NULL when `detected_at_utc` is, and DuckDB can still
+/// read a `detection_timestamp` from the same row, so such a day survives the
+/// hour filter and forms its own group. Against `behavioral` v0.10.0 that
+/// group made `sequence_match` / `sequence_count` return NULL (they returned
+/// `false` / `0` up to v0.9.1) and `sessionize` a NULL session id (as in
+/// v0.9.1), and each of those failed its whole query on the typed decode —
+/// `InvalidColumnType(1, "matched", Null)` — taking the patterns and sessions
+/// cards down for every day, not just the unplaceable one. The funnels did not
+/// fail; they reported the day as `0` steps, which is a claim about a morning
+/// nobody could order.
+#[test]
+fn live_a_day_without_instants_is_omitted_not_reported() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed(&db);
+    db.conn()
+        .execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES
+             ('2024-05-04', '05:00:00', 'Erithacus rubecula', 'European Robin', 0.9, NULL),
+             ('2024-05-04', '05:10:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, NULL),
+             ('2024-05-04', '05:20:00', 'Troglodytes troglodytes', 'Eurasian Wren', 0.9, NULL);",
+        )
+        .unwrap();
+    // Precondition: the fixture really produced rows that land in a day group
+    // with a timestamp but no instant, or the assertions below prove nothing.
+    let stranded: i64 = db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM detections_ts \
+             WHERE detection_timestamp IS NOT NULL AND detection_instant IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stranded, 3);
+
+    let p = types::PatternParams::default();
+    let f = types::FunnelParams::default();
+    let dates = |v: Vec<String>| {
+        assert!(!v.is_empty(), "the seeded days must still be reported");
+        assert!(!v.iter().any(|d| d == "2024-05-04"), "{v:?}");
+    };
+    dates(
+        db.sequence_match(&p)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+    dates(
+        db.sequence_count(&p)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+    dates(
+        db.sequence_match_events(&p)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+    dates(db.funnel(&f).unwrap().into_iter().map(|r| r.date).collect());
+    dates(
+        db.funnel_events(&f)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+
+    let sessions = db.sessionize(&types::SessionizeParams::default()).unwrap();
+    assert!(!sessions.is_empty());
+    assert!(
+        !sessions
+            .iter()
+            .any(|s| s.start_time.starts_with("2024-05-04")),
+        "{sessions:?}"
+    );
+    // Counterpart: the seeded mornings' answers are unchanged by the filter.
+    let preds = db.next_species("European Robin", 60, 5).unwrap();
+    assert_eq!(preds[0].predicted_species, "Eurasian Blackbird");
+    assert_eq!(preds[0].frequency, 3);
+}

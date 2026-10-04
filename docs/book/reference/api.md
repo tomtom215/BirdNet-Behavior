@@ -186,11 +186,12 @@ broken. The `store` object is the part that differs:
     "detections": 412903,
     "unplaceable_detections": 3,
     "detections_placeable": 412900,
-    "engine_duckdb_version": "v1.5.5",
+    "engine_duckdb_version": "v1.5.6",
     "engine_platform": "linux_arm64",
     "embedded_extension": {
-      "version": "v0.9.1",
-      "duckdb_version": "v1.5.5",
+      "version": "v0.10.0",
+      "duckdb_version": "v1.2.0",
+      "abi": "C_STRUCT",
       "platform": "linux_arm64",
       "mismatch": null
     }
@@ -205,10 +206,16 @@ broken. The `store` object is the part that differs:
   station with no behavioural analytics. Its `property` says whether the
   `DuckDB version`, the `platform`, or both disagree — compare against
   `engine_duckdb_version` and `engine_platform`. An extension is locked to
-  both, and both fail the same way at `LOAD`. Rebuild against
+  both, and both fail the same way at `LOAD`. How `duckdb_version` is read
+  depends on `abi`: for `CPP` and `C_STRUCT_UNSTABLE` it is a DuckDB version
+  that must equal the engine's; for `C_STRUCT` (behavioral v0.10.0 and later)
+  it is a C API version, and any engine of the same major at or above it
+  accepts the extension — so `v1.2.0` against a `v1.5.6` engine is correct. Rebuild against
   `community-extensions.duckdb.org/<engine_duckdb_version>/<engine_platform>/`.
 - `detections: 0` against a station with history — the SQLite → DuckDB sync has
   not run or did not complete.
+- `detections: null` — the count itself could not be read from the store, which
+  is a store fault rather than a sync that has not run.
 - `unplaceable_detections` above zero — that many rows carry a `Date`/`Time`
   naming no point in time (usually from a BirdNET-Pi import). They count toward
   the station's detection total but cannot appear in any date- or time-based

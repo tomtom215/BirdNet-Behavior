@@ -45,6 +45,7 @@ impl QueryPlan for HourlyActivity {
     AVG(Confidence)                                    AS avg_confidence
 FROM detections_ts
 WHERE {window}
+  AND detection_timestamp IS NOT NULL
   {species_filter}
 GROUP BY ALL
 ORDER BY window_start"
@@ -170,7 +171,7 @@ impl QueryPlan for HourlyHeatmap {
         let species_filter = self
             .species
             .as_deref()
-            .map(|s| format!("WHERE Com_Name = '{}'", s.replace('\'', "''")))
+            .map(|s| format!("AND Com_Name = '{}'", s.replace('\'', "''")))
             .unwrap_or_default();
         format!(
             "WITH windowed AS (
@@ -178,7 +179,9 @@ impl QueryPlan for HourlyHeatmap {
     WHERE {window}
 ),
 station_days AS (SELECT COUNT(DISTINCT detection_date) AS n FROM windowed),
-selected AS (SELECT * FROM windowed {species_filter})
+-- A row whose time does not parse has a day but no hour: it counts toward
+-- the station's days, and has no cell in the grid.
+selected AS (SELECT * FROM windowed WHERE detection_timestamp IS NOT NULL {species_filter})
 SELECT
     hour(detection_timestamp)    AS hour_of_day,
     COUNT(*)                     AS total_detections,

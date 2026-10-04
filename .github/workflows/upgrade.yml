@@ -84,8 +84,8 @@ jobs:
         shell: bash
         run: |
           set -eu
-          for ext in "community-extensions.duckdb.org/v1.5.5/linux_amd64/behavioral BIRDNET_BUNDLED_EXTENSION_FILE" \
-                     "extensions.duckdb.org/v1.5.5/linux_amd64/icu BIRDNET_BUNDLED_ICU_FILE"; do
+          for ext in "community-extensions.duckdb.org/v1.5.6/linux_amd64/behavioral BIRDNET_BUNDLED_EXTENSION_FILE" \
+                     "extensions.duckdb.org/v1.5.6/linux_amd64/icu BIRDNET_BUNDLED_ICU_FILE"; do
             set -- $ext
             tmp="$RUNNER_TEMP/$(basename "$1").duckdb_extension"
             if curl -fsSL --retry 3 --max-time 180 -o "${tmp}.gz" "https://$1.duckdb_extension.gz"; then

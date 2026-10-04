@@ -104,7 +104,9 @@ pub struct AccumulationCurve {
 
 impl QueryPlan for AccumulationCurve {
     fn sql(&self) -> String {
-        let mut where_parts = Vec::new();
+        // A species seen only on rows whose date does not parse has no first
+        // date, and a NULL one cannot be reported as a day.
+        let mut where_parts = vec!["detection_date IS NOT NULL".to_owned()];
         if let Some(from) = &self.from_date {
             let esc = from.replace('\'', "''");
             where_parts.push(format!("detection_date >= '{esc}'"));
@@ -113,11 +115,7 @@ impl QueryPlan for AccumulationCurve {
             let esc = to.replace('\'', "''");
             where_parts.push(format!("detection_date <= '{esc}'"));
         }
-        let where_sql = if where_parts.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", where_parts.join(" AND "))
-        };
+        let where_sql = format!("WHERE {}", where_parts.join(" AND "));
         format!(
             "WITH first_seen AS (
     SELECT

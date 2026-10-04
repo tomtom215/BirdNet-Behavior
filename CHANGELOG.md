@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DuckDB 1.5.5 → 1.5.6** (`duckdb` / `libduckdb-sys` 1.10505.0 →
+  1.10506.0), to pick up **`duckdb-behavioral` v0.10.0** and the embedded ICU
+  for 1.5.6. CI, release, upgrade and Docker fetch from the `v1.5.6` registry
+  paths. Measured before landing: the community CDN's `v1.5.6` `behavioral`
+  artifacts report `v0.10.0` for linux_amd64 and linux_arm64, and `file`
+  confirms each is built for its named architecture.
+- **The embedded-extension check understands stable-C-API extensions.**
+  v0.10.0 is built on DuckDB's stable C API: its footer carries ABI
+  `C_STRUCT` and a *C API* version (`v1.2.0`) where v0.9.1 carried the DuckDB
+  version. The build script and the runtime check compared that field to the
+  engine's version for equality, so a plain bump would have reported a
+  correct, loadable embed as a mismatch on every start, failed
+  `--verify-extension`, and failed `embedded_extension_targets_the_linked_engine`.
+  The check now applies DuckDB's own per-ABI rule
+  (`src/main/extension.cpp`): exact version for `CPP` / `C_STRUCT_UNSTABLE`,
+  same major and no newer than the engine's C API for `C_STRUCT`.
+  `/api/v2/analytics/status` reports the embed's `abi`.
+
+### Fixed
+
+- **One day without timestamps no longer takes the Analytics page's
+  Activity sessions and dawn-chorus cards down**, nor `/analytics/sessions`,
+  `/analytics/patterns` and `/analytics/sequence-count`. A detection whose `detected_at_utc` is NULL while
+  its date and time still parse in DuckDB has no `detection_instant`, and
+  forms a day group of its own. On such a group `behavioral` v0.10.0 returns
+  NULL from `sequence_match` / `sequence_count` (v0.9.1 returned `false` /
+  `0`; measured on both), and `sessionize` returns a NULL session id (both
+  versions). Each failed its whole query on decode; the dawn-chorus card
+  runs `sequence_count` first, so it failed too. The funnels reported that
+  day as "0 steps". Every builder that orders by the instant now leaves
+  such rows out.
+- **The Time series page's sessions card, and the time-series hourly,
+  accumulation and sessions endpoints, no longer fail outright on one
+  unplaceable row.** A row with a date but an unparseable time, or with no
+  parseable date, or with no instant, reached a decoder as NULL and failed the
+  query for every day. `species_peak_hours` (library only) had the same
+  defect.
+- **`/analytics/abundance` and `/analytics/phenology` no longer truncate
+  decimals.** The JSON converter tried an integer first, and duckdb-rs's
+  integer conversion accepts and truncates a DOUBLE: `detections_per_hour`
+  of 0.43 reached the JSON as `0`, a `DECIMAL` 2.5 as `3`, and a numeric
+  string as a number. FLOAT columns also now render at their own precision
+  (`0.4286`, not `0.428600013256073`).
+- **`/api/v2/analytics/status` reports an unreadable count as `null`, not
+  `0`.** A zero there is documented as "the sync has not run", which was the
+  wrong diagnosis for a store whose tables could not be read.
+
 ## [0.17.1] - 2026-10-04
 
 Measured on x86_64 under real systemd, and seen in the journal of a

@@ -776,22 +776,44 @@ async fn run_phenology_query(
 /// Convert one `DuckDB` column to JSON, degrading to null rather than failing.
 ///
 /// Column types vary by query (and `percentile_cont` returns DOUBLE where the
-/// input was INTEGER), so this probes rather than assumes.
+/// input was INTEGER), so this dispatches on the type DuckDB actually returned.
+///
+/// It used to probe instead, trying `Option<i64>` first. duckdb-rs's integer
+/// `FromSql` accepts a DOUBLE, DECIMAL, VARCHAR, DATE or TIMESTAMP and casts it
+/// (`duckdb` 1.10506 `src/types/from_sql.rs`), so the first probe always won:
+/// `detections_per_hour` of 0.43 reached the abundance JSON as `0`, and a
+/// numeric-looking string as a number.
 #[cfg(feature = "analytics")]
 fn duckdb_value_to_json(row: &birdnet_behavioral::duckdb::Row<'_>, i: usize) -> Value {
-    if let Ok(v) = row.get::<_, Option<i64>>(i) {
-        return v.map_or(Value::Null, |n| json!(n));
+    use birdnet_behavioral::duckdb::types::ValueRef;
+    let Ok(v) = row.get_ref(i) else {
+        return Value::Null;
+    };
+    match v {
+        ValueRef::Boolean(b) => json!(b),
+        ValueRef::TinyInt(n) => json!(n),
+        ValueRef::SmallInt(n) => json!(n),
+        ValueRef::Int(n) => json!(n),
+        ValueRef::BigInt(n) => json!(n),
+        ValueRef::UTinyInt(n) => json!(n),
+        ValueRef::USmallInt(n) => json!(n),
+        ValueRef::UInt(n) => json!(n),
+        ValueRef::UBigInt(n) => json!(n),
+        // `SUM` over an integer column is HUGEINT in DuckDB.
+        ValueRef::HugeInt(n) => {
+            i64::try_from(n).map_or_else(|_| json!(n.to_string()), |n| json!(n))
+        }
+        // Through the f32's own shortest decimal form: widening it to f64
+        // prints `ROUND(CAST(3 AS REAL) / 7, 4)` as 0.428600013256073.
+        ValueRef::Float(f) => f
+            .to_string()
+            .parse::<f64>()
+            .map_or(Value::Null, |f| json!(f)),
+        ValueRef::Double(f) => json!(f),
+        ValueRef::Decimal(_) => row.get::<_, f64>(i).map_or(Value::Null, |f| json!(f)),
+        ValueRef::Text(_) => row.get::<_, String>(i).map_or(Value::Null, |s| json!(s)),
+        _ => Value::Null,
     }
-    if let Ok(v) = row.get::<_, Option<f64>>(i) {
-        return v.map_or(Value::Null, |n| json!(n));
-    }
-    if let Ok(v) = row.get::<_, Option<bool>>(i) {
-        return v.map_or(Value::Null, |b| json!(b));
-    }
-    if let Ok(v) = row.get::<_, Option<String>>(i) {
-        return v.map_or(Value::Null, |s| json!(s));
-    }
-    Value::Null
 }
 
 #[cfg(feature = "analytics")]
@@ -803,8 +825,10 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
     // stays healthy, so each is reported separately rather than collapsed into
     // one "ok" flag.
     let store = state.with_analytics(|db| {
-        let detections = db.detection_count().unwrap_or_default();
-        let unplaceable = db.unplaceable_detection_count().unwrap_or_default();
+        // `null` when a count cannot be read: a defaulted 0 here reads as
+        // "the sync has not run", the wrong diagnosis for a failing store.
+        let detections = db.detection_count().ok();
+        let unplaceable = db.unplaceable_detection_count().ok();
         json!({
             // The behavioural functions (sessionize, retention, window_funnel,
             // sequence_*) need this; the extension is optional to *open* the
@@ -815,14 +839,21 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
             // absent from every time-bucketed analytic. A non-zero value here
             // is why a dashboard total can sit below the station's own count.
             "unplaceable_detections": unplaceable,
-            "detections_placeable": detections.saturating_sub(unplaceable),
+            "detections_placeable": detections
+                .zip(unplaceable)
+                .map(|(d, u)| d.saturating_sub(u)),
             // What the engine itself is, so a mismatch below can be read
             // without knowing how this binary was built.
             "engine_duckdb_version": db.duckdb_version(),
             "engine_platform": db.engine_platform(),
             "embedded_extension": {
                 "version": AnalyticsDb::embedded_extension_version(),
+                // The footer's version target, read according to `abi`: a
+                // DuckDB version for `CPP` / `C_STRUCT_UNSTABLE`, a minimum C
+                // API version for `C_STRUCT` (behavioral v0.10.0 and later,
+                // which loads into any engine at or above it).
                 "duckdb_version": AnalyticsDb::embedded_extension_duckdb_version(),
+                "abi": AnalyticsDb::embedded_extension_abi(),
                 "platform": AnalyticsDb::embedded_extension_platform(),
                 // Some(..) means the embedded copy can never load, so an
                 // offline station has no behavioural analytics at all. An
@@ -833,6 +864,7 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
                     json!({
                         "property": m.kind.to_string(),
                         "embedded_for": m.embedded_for,
+                        "embedded_abi": m.embedded_abi,
                         "engine": m.engine,
                         "embedded_platform": m.embedded_platform,
                         "engine_platform": m.engine_platform,
@@ -948,5 +980,73 @@ mod tests {
         let raw = vec!["sp"; 5000].join(",");
         let parsed = parse_species_sequence(Some(raw), vec![]);
         assert_eq!(parsed.len(), MAX_SPECIES_SEQUENCE);
+    }
+}
+
+#[cfg(all(test, feature = "analytics"))]
+mod json_value_tests {
+    use super::{analytics_status, duckdb_value_to_json};
+    use axum::extract::State;
+    use serde_json::{Value, json};
+
+    /// A store whose counts cannot be read says so, rather than reporting a
+    /// zero that the docs tell the operator means "the sync has not run".
+    #[tokio::test]
+    async fn status_reports_an_unreadable_count_as_null_not_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::new_with_analytics(
+            dir.path().join("birds.db"),
+            &dir.path().join("analytics.duckdb"),
+        )
+        .unwrap();
+        let (_, healthy) = analytics_status(State(state.clone())).await;
+        // Counterpart: a readable empty store still reports a real zero.
+        assert_eq!(healthy.0["store"]["detections"], json!(0), "{}", healthy.0);
+        state
+            .with_analytics(|db| {
+                db.conn()
+                    .execute_batch("DROP VIEW detections_ts; DROP TABLE detections;")
+            })
+            .unwrap()
+            .unwrap();
+        let (_, broken) = analytics_status(State(state)).await;
+        assert_eq!(broken.0["store"]["detections"], Value::Null, "{}", broken.0);
+        assert_eq!(
+            broken.0["store"]["detections_placeable"],
+            Value::Null,
+            "{}",
+            broken.0
+        );
+    }
+
+    /// Each column reaches the JSON as the type DuckDB returned, not as
+    /// whatever the first probe could coerce it into.
+    #[test]
+    fn json_keeps_each_duckdb_type() {
+        let conn = birdnet_behavioral::duckdb::Connection::open_in_memory().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT 0.43::DOUBLE, ROUND(CAST(3 AS REAL) / 7, 4), 2.5::DECIMAL(9,2), \
+                 SUM(x)::HUGEINT, COUNT(*), '123', NULL::DOUBLE, TRUE, 1.5::FLOAT \
+                 FROM (VALUES (40), (2)) t(x)",
+            )
+            .unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        let got: Vec<Value> = (0..9).map(|i| duckdb_value_to_json(row, i)).collect();
+        assert_eq!(
+            got,
+            vec![
+                json!(0.43),
+                json!(0.4286),
+                json!(2.5),
+                json!(42),
+                json!(2),
+                json!("123"),
+                Value::Null,
+                json!(true),
+                json!(1.5),
+            ]
+        );
     }
 }

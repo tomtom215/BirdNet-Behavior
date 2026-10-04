@@ -413,7 +413,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          ddb_ver="v1.5.5"
+          ddb_ver="v1.5.6"
           case "${{ matrix.target }}" in
             x86_64-*linux*)  plat="linux_amd64" ;;
             aarch64-*linux*) plat="linux_arm64" ;;
@@ -453,7 +453,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          ddb_ver="v1.5.5"
+          ddb_ver="v1.5.6"
           case "${{ matrix.target }}" in
             x86_64-*linux*)   plat="linux_amd64" ;;
             aarch64-*linux*)  plat="linux_arm64" ;;

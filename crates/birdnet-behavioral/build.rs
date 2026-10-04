@@ -45,10 +45,20 @@
 //!
 //! # Why this script parses the extension footer
 //!
-//! A DuckDB extension is version-locked: the engine refuses to `LOAD` a build
-//! targeting any other DuckDB version, and `allow_extensions_metadata_mismatch`
-//! does not bypass that check. Embedding is therefore only useful if the bytes
-//! target *exactly* the engine `libduckdb-sys` links in.
+//! A DuckDB extension is locked to the engine it was built for, in one of two
+//! ways depending on its ABI type, and `allow_extensions_metadata_mismatch`
+//! bypasses neither (DuckDB 1.5.6 `src/main/extension.cpp`,
+//! `ParsedExtensionMetaData::GetInvalidMetadataError`):
+//!
+//! - **`CPP` and `C_STRUCT_UNSTABLE`** (ICU; `behavioral` up to v0.9.1): the
+//!   footer names a DuckDB version, and the engine loads it only when that
+//!   equals its own.
+//! - **`C_STRUCT`** (`behavioral` from v0.10.0, built on the stable C API): the
+//!   footer names a *C API* version, and the engine loads it when the major
+//!   matches and the version is no newer than the engine's own C API version.
+//!
+//! Embedding is therefore only useful if the bytes satisfy the rule for their
+//! ABI against the engine `libduckdb-sys` links in.
 //!
 //! Nothing used to check that. `Dockerfile` pinned the extension to DuckDB
 //! `v1.5.3` while the workspace bundled `v1.5.5`; the download succeeded, the
@@ -61,25 +71,26 @@
 //!
 //! # Footer layout
 //!
-//! Measured against the published `behavioral` builds for DuckDB v1.5.3 and
-//! v1.5.5 (`community-extensions.duckdb.org`) and the published `icu` build for
-//! v1.5.5 (`extensions.duckdb.org`), not taken from documentation:
+//! Measured against the published `behavioral` builds (v0.9.1 for DuckDB
+//! v1.5.5, v0.10.0 for v1.5.6, `community-extensions.duckdb.org`) and the
+//! published `icu` builds for v1.5.5 and v1.5.6 (`extensions.duckdb.org`), not
+//! taken from documentation:
 //!
 //! ```text
 //! last 512 bytes:
 //!   [  0: 96]  reserved (zero)
-//!   [ 96:128]  ABI type              "C_STRUCT_UNSTABLE"  (icu: "CPP")
-//!   [128:160]  extension version     "v0.9.1"             (icu: "v1.5.5")
-//!   [160:192]  DuckDB version        "v1.5.5"
+//!   [ 96:128]  ABI type              "C_STRUCT"  (v0.9.1: "C_STRUCT_UNSTABLE"; icu: "CPP")
+//!   [128:160]  extension version     "v0.10.0"   (icu: "v1.5.6")
+//!   [160:192]  version target        "v1.2.0"    (C API version for C_STRUCT;
+//!                                                 DuckDB version otherwise, e.g. "v1.5.6")
 //!   [192:224]  platform              "linux_amd64"
 //!   [224:256]  metadata format ver.  "4"
 //!   [256:512]  signature block
 //! ```
 //!
-//! Each field is NUL-padded to 32 bytes. The ABI type differs between a
-//! community C-API extension and a core C++ one and is deliberately not
-//! checked here: `LOAD` enforces it, and the two fields this script acts on —
-//! DuckDB version and platform — are the ones a build can get wrong silently.
+//! Each field is NUL-padded to 32 bytes. The ABI type is recorded because it
+//! decides how the version target is read; an ABI this script does not know is
+//! refused, since the version rule for it would be a guess.
 
 use std::{env, fs, path::PathBuf};
 
@@ -87,9 +98,12 @@ use std::{env, fs, path::PathBuf};
 const FOOTER_LEN: usize = 512;
 /// Width of one NUL-padded metadata field.
 const FIELD_LEN: usize = 32;
-/// Field index of the extension's own version (e.g. `v0.9.1`).
+/// Field index of the ABI type (`CPP`, `C_STRUCT_UNSTABLE` or `C_STRUCT`).
+const IDX_ABI_TYPE: usize = 3;
+/// Field index of the extension's own version (e.g. `v0.10.0`).
 const IDX_EXTENSION_VERSION: usize = 4;
-/// Field index of the DuckDB version the extension was built for.
+/// Field index of the version the engine checks: a DuckDB version for the
+/// `CPP` / `C_STRUCT_UNSTABLE` ABIs, a C API version for `C_STRUCT`.
 const IDX_DUCKDB_VERSION: usize = 5;
 /// Field index of the target platform (e.g. `linux_amd64`).
 const IDX_PLATFORM: usize = 6;
@@ -103,12 +117,18 @@ const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
 /// If DuckDB bumps this, the build fails loudly rather than embedding bytes
 /// whose layout we would be guessing at. Re-measure the layout, then bump.
 const SUPPORTED_METADATA_VERSION: &str = "4";
+/// The ABI types DuckDB 1.5.6 knows (`extension_load.cpp`); anything else is
+/// refused rather than embedded under a version rule we would be guessing.
+const KNOWN_ABI_TYPES: [&str; 3] = ["CPP", "C_STRUCT_UNSTABLE", "C_STRUCT"];
 
 /// What an extension binary declares about itself.
 struct ExtensionMetadata {
-    /// DuckDB version the extension was compiled against, e.g. `v1.5.5`.
+    /// ABI type, e.g. `C_STRUCT`.
+    abi: String,
+    /// The version target the engine checks, e.g. `v1.5.6` (or a C API
+    /// version such as `v1.2.0` when `abi` is `C_STRUCT`).
     duckdb_version: String,
-    /// The extension's own version, e.g. `v0.9.1`.
+    /// The extension's own version, e.g. `v0.10.0`.
     extension_version: String,
     /// Target platform triple, e.g. `linux_amd64`.
     platform: String,
@@ -119,8 +139,8 @@ struct EmbedSpec {
     /// DuckDB's name for it, used in diagnostics and in the download hint.
     name: &'static str,
     /// Prefix of the generated Rust constants, e.g. `EMBEDDED_ICU` yields
-    /// `EMBEDDED_ICU`, `EMBEDDED_ICU_DUCKDB_VERSION`, `EMBEDDED_ICU_VERSION`
-    /// and `EMBEDDED_ICU_PLATFORM`.
+    /// `EMBEDDED_ICU`, `EMBEDDED_ICU_DUCKDB_VERSION`, `EMBEDDED_ICU_VERSION`,
+    /// `EMBEDDED_ICU_PLATFORM` and `EMBEDDED_ICU_ABI`.
     const_prefix: &'static str,
     /// Env var the release pipeline sets to point at an un-gzipped binary.
     env_var: &'static str,
@@ -170,7 +190,7 @@ fn main() {
     fs::write(&generated, body).expect("write embedded_extension.rs");
 }
 
-/// Emit the four constants for one extension, embedding `source` when present.
+/// Emit the five constants for one extension, embedding `source` when present.
 fn generate(
     spec: &EmbedSpec,
     source: Option<&std::path::Path>,
@@ -182,7 +202,8 @@ fn generate(
             "pub(crate) const {prefix}: Option<&[u8]> = None;\n\
              pub(crate) const {prefix}_DUCKDB_VERSION: Option<&str> = None;\n\
              pub(crate) const {prefix}_VERSION: Option<&str> = None;\n\
-             pub(crate) const {prefix}_PLATFORM: Option<&str> = None;\n",
+             pub(crate) const {prefix}_PLATFORM: Option<&str> = None;\n\
+             pub(crate) const {prefix}_ABI: Option<&str> = None;\n",
         );
     };
 
@@ -224,8 +245,8 @@ fn generate(
         );
     }
     println!(
-        "cargo:warning=embedding {} {} for DuckDB {} ({})",
-        spec.name, meta.extension_version, meta.duckdb_version, meta.platform
+        "cargo:warning=embedding {} {} ({} ABI, version target {}, {})",
+        spec.name, meta.extension_version, meta.abi, meta.duckdb_version, meta.platform
     );
 
     // Stage into OUT_DIR so `include_bytes!` has a stable path and the build is
@@ -237,11 +258,13 @@ fn generate(
         "pub(crate) const {prefix}: Option<&[u8]> = Some(include_bytes!(r\"{}\"));\n\
          pub(crate) const {prefix}_DUCKDB_VERSION: Option<&str> = Some(\"{}\");\n\
          pub(crate) const {prefix}_VERSION: Option<&str> = Some(\"{}\");\n\
-         pub(crate) const {prefix}_PLATFORM: Option<&str> = Some(\"{}\");\n",
+         pub(crate) const {prefix}_PLATFORM: Option<&str> = Some(\"{}\");\n\
+         pub(crate) const {prefix}_ABI: Option<&str> = Some(\"{}\");\n",
         staged.display(),
         meta.duckdb_version,
         meta.extension_version,
         meta.platform,
+        meta.abi,
     )
 }
 
@@ -289,6 +312,13 @@ fn parse_metadata(bytes: &[u8]) -> Result<ExtensionMetadata, String> {
         ));
     }
 
+    let abi = footer_field(footer, IDX_ABI_TYPE)?;
+    if !KNOWN_ABI_TYPES.contains(&abi.as_str()) {
+        return Err(format!(
+            "footer declares ABI type {abi:?}, which this build script does not know how to \
+             version-check (known: {KNOWN_ABI_TYPES:?})"
+        ));
+    }
     let duckdb_version = footer_field(footer, IDX_DUCKDB_VERSION)?;
     let extension_version = footer_field(footer, IDX_EXTENSION_VERSION)?;
     let platform = footer_field(footer, IDX_PLATFORM)?;
@@ -301,6 +331,7 @@ fn parse_metadata(bytes: &[u8]) -> Result<ExtensionMetadata, String> {
     }
 
     Ok(ExtensionMetadata {
+        abi,
         duckdb_version,
         extension_version,
         platform,

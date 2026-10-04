@@ -199,6 +199,28 @@ LOAD behavioral;
 pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM duckdb_extensions() \
      WHERE extension_name = 'behavioral' AND loaded";
 
+/// The filter every builder that orders or measures by `detection_instant`
+/// applies: a row with no instant has no place in any sequence.
+///
+/// `detection_instant` is NULL when the row's `detected_at_utc` is — a wall
+/// clock SQLite's `strftime` could not place, which DuckDB's more lenient
+/// `TRY_CAST` may still turn into a `detection_timestamp`, so the row passes
+/// the hour filter and lands in a day group. On such a group the behavioural
+/// functions answer NULL rather than a verdict (measured against the published
+/// extension, DuckDB 1.5.6 + `behavioral` v0.10.0):
+///
+/// - `sequence_match` / `sequence_count` return NULL for a group whose
+///   timestamps are all NULL. Up to v0.9.1 they returned `false` / `0`; the
+///   v0.10.0 changelog lists this as a behaviour change. The typed decoders
+///   read those columns as `bool` / `i64`, so one such day failed the whole
+///   patterns query.
+/// - `sessionize` returns a NULL session id for a NULL timestamp, in v0.9.1 as
+///   well, which failed the whole Activity Sessions query the same way.
+/// - `window_funnel` / `*_events` return `0` / `[]`, which reads as "the
+///   chorus did not happen that morning" for a morning that was never
+///   measured. Omitted rather than fabricated.
+const ORDERABLE: &str = "detection_instant IS NOT NULL";
+
 /// Build SQL for activity sessionization.
 ///
 /// `sessionize()` is a window function that assigns a session id per detection,
@@ -208,7 +230,7 @@ pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM du
 /// aggregates each session.
 pub fn sessionize_sql(params: &SessionizeParams) -> String {
     let species_filter = params.species.as_ref().map_or_else(String::new, |s| {
-        format!("WHERE Com_Name = '{}'", s.replace('\'', "''"))
+        format!("AND Com_Name = '{}'", s.replace('\'', "''"))
     });
 
     format!(
@@ -228,6 +250,7 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
                     OVER (PARTITION BY Sci_Name ORDER BY detection_instant)
                     AS session_id
             FROM detections_ts
+            WHERE {ORDERABLE}
             {species_filter}
         )
         GROUP BY species, session_id
@@ -341,7 +364,8 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
                 {conditions}
             ) AS steps_completed
         FROM detections_ts
-        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        WHERE {ORDERABLE}
+          AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
         GROUP BY CAST(detection_timestamp AS DATE)
         ORDER BY date DESC",
         window = params.window_minutes,
@@ -385,7 +409,8 @@ pub fn funnel_events_sql(params: &FunnelParams) -> String {
                 ) AS ev,
                 {WALL_OFFSET}
             FROM detections_ts
-            WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+            WHERE {ORDERABLE}
+          AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
             GROUP BY CAST(detection_timestamp AS DATE)
         )
         ORDER BY date DESC",
@@ -414,7 +439,8 @@ pub fn sequence_match_sql(params: &PatternParams) -> String {
                 {conditions}
             ) AS matched
         FROM detections_ts
-        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        WHERE {ORDERABLE}
+          AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
         GROUP BY CAST(detection_timestamp AS DATE)
         ORDER BY date DESC",
         start = params.hour_start,
@@ -442,7 +468,8 @@ pub fn sequence_count_sql(params: &PatternParams) -> String {
                 {conditions}
             ) AS match_count
         FROM detections_ts
-        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        WHERE {ORDERABLE}
+          AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
         GROUP BY CAST(detection_timestamp AS DATE)
         ORDER BY date DESC",
         start = params.hour_start,
@@ -476,7 +503,8 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
                 ) AS ev,
                 {WALL_OFFSET}
             FROM detections_ts
-            WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+            WHERE {ORDERABLE}
+          AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
             GROUP BY CAST(detection_timestamp AS DATE)
         )
         ORDER BY date DESC",
@@ -511,6 +539,7 @@ pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) 
                    sessionize(detection_instant, INTERVAL '{window_minutes} MINUTE')
                        OVER (ORDER BY detection_instant) AS sid
             FROM detections_ts
+            WHERE {ORDERABLE}
         ),
         per_session AS (
             SELECT sequence_next_node('forward', 'first_match',
@@ -569,7 +598,7 @@ mod tests {
         // GROUP BY of a window expression.
         assert!(sql.contains("GROUP BY species, session_id"));
         assert!(sql.contains("LIMIT 100"));
-        assert!(!sql.contains("WHERE"));
+        assert!(!sql.contains("Com_Name ="));
     }
 
     #[test]
@@ -580,7 +609,7 @@ mod tests {
             limit: 50,
         };
         let sql = sessionize_sql(&params);
-        assert!(sql.contains("WHERE Com_Name = 'European Robin'"));
+        assert!(sql.contains("AND Com_Name = 'European Robin'"));
         assert!(sql.contains("INTERVAL '15 MINUTE'"));
         assert!(sql.contains("LIMIT 50"));
     }

@@ -3,8 +3,9 @@
 //! A session window groups consecutive events separated by inactivity gaps
 //! no longer than a configurable threshold. When the silence between two
 //! detections is *longer* than the threshold a new session begins — the rule
-//! the behavioral extension's `sessionize` applies (probed against v0.9.1:
-//! 30:00 apart at a 30-minute gap is one session, 30:01 is two), so the
+//! the behavioral extension's `sessionize` applies (probed against v0.9.1 and
+//! again against v0.10.0: 30:00 apart at a 30-minute gap is one session, 30:01
+//! is two), so the
 //! Behaviour and Trends pages cut the same day the same way.
 //!
 //! Implementation follows the `DuckDB` pattern:
@@ -138,6 +139,9 @@ impl WindowSpec for SessionSpec {
 /// Two rules from ANA12: a session's longest gap excludes the row that opens
 /// it, whose gap is the silence *before* the session; and `limit` keeps the
 /// newest sessions, returned oldest-first.
+///
+/// Rows with no `detection_instant` are left out before anything else: a NULL
+/// gap opens a session, and that session's start date is NULL.
 pub(crate) fn session_sql(where_sql: &str, gap_threshold_minutes: u32, limit: u32) -> String {
     let threshold_us = u64::from(gap_threshold_minutes) * 60_000_000;
     format!(
@@ -150,7 +154,9 @@ pub(crate) fn session_sql(where_sql: &str, gap_threshold_minutes: u32, limit: u3
         epoch_us(detection_instant) - epoch_us(LAG(detection_instant) OVER (
             ORDER BY detection_instant
         )) AS gap_us
-    FROM detections_ts
+    -- A row with no instant has no place in any session: its NULL gap would
+    -- open a session of its own, with a NULL start date that fails the decode.
+    FROM (SELECT * FROM detections_ts WHERE detection_instant IS NOT NULL) detections_ts
     {where_sql}
 ),
 with_session_id AS (

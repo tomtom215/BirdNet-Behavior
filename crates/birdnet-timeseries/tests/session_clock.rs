@@ -259,3 +259,30 @@ fn a_truncated_session_list_keeps_the_newest() {
         "the limit dropped the newest session"
     );
 }
+
+/// A detection with no instant has no place in any session.
+///
+/// `detection_instant` is NULL when `detected_at_utc` is, while the row's date
+/// and wall clock can still parse, so the date filter keeps it. Its `gap_us` is
+/// NULL, which opened a session of its own, whose `arg_min(detection_date,
+/// detection_instant)` was NULL too — and decoding that into the row's `date:
+/// String` failed the whole query, taking the day's every session with it.
+#[test]
+fn a_detection_without_an_instant_is_left_out_of_the_sessions() {
+    // 2026-05-10 05:00Z and 05:10Z: one session of two detections.
+    let (_dir, db) = store(&[
+        ("2026-05-10", "07:00:00", 1_778_389_200),
+        ("2026-05-10", "07:10:00", 1_778_389_800),
+    ]);
+    db.conn()
+        .execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+             VALUES ('2026-05-10', '07:20:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, NULL);",
+        )
+        .expect("seed the unplaced row");
+
+    let sessions = sessions_for_date(&db, "2026-05-10");
+    assert_eq!(sessions.len(), 1, "{sessions:?}");
+    assert_eq!(sessions[0].detection_count, 2, "{sessions:?}");
+    assert_eq!(sessions[0].duration_minutes, 10, "{sessions:?}");
+}
