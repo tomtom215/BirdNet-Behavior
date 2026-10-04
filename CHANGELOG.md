@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-04
+
 Measured on x86_64 under real systemd, and seen in the journal of a
 Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
 
@@ -9721,7 +9723,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.15.0...v0.16.0
