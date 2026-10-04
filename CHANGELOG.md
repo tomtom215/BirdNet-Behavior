@@ -72,8 +72,30 @@ Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
   had a hole where each command was. Test: `installer/test/service-unit.sh` 4f,
   which fails on the 0.17.0 template.
 
+### Known issues
+
+- **The doctor can report a location the station is not using.** The first
+  start copies the config's LATITUDE/LONGITUDE into the settings table, and
+  from then on the table wins over the file. The doctor reads the file first
+  and the table only when the file has none, so after a location change on
+  one side only, `--doctor` (and the unit's preflight) names one place while
+  the detector filters for the other. Seen in the upgrade test: the doctor
+  reported 38.5000, -98.0000 while the run record said 52.52, 13.405. Not
+  fixed in this release.
+
 ### Added
 
+- **The occurrence filter is tested against the real geomodel.**
+  `the_geomodel_keeps_out_birds_that_do_not_occur_here` asks the v3.0.2
+  geomodel, with the classifier's vocabulary, about the two North American
+  species a European station reported (Dickcissel, Great Horned Owl) and a
+  magpie: Berlin in June keeps the magpie and drops both; Kansas keeps both
+  and drops the magpie. Seen failing with the filter's threshold comparison
+  disabled. CI's inference job now fetches the geomodel to run it. The
+  upgrade test does the same end to end: it moves the upgraded station to
+  Kansas, confirms from its run record that it moved, hands it the magpie
+  recording and checks that no magpie is stored — seen failing with
+  `SF_THRESH=0.0` ("magpie rows 12 → 16").
 - **Every release is upgrade-tested before it is published.**
   `installer/test/upgrade-e2e.sh` installs a published release with its own
   installer under real systemd, lets it record detections from a real

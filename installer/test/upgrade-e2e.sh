@@ -52,6 +52,9 @@ FIXTURE="${REPO_ROOT}/tests/testdata/Pica_pica_30s.wav"
 # Berlin. The fixture is a magpie, which the geomodel keeps here all year.
 STATION_LAT="52.5200"
 STATION_LON="13.4050"
+# Central Kansas: no magpie lives there, so the geomodel must drop one.
+AWAY_LAT="38.5000"
+AWAY_LON="-98.0000"
 
 : "${PREV_VERSION:?set PREV_VERSION, e.g. 0.15.0}"
 : "${CANDIDATE_TARBALL:?set CANDIDATE_TARBALL to the candidate release tarball}"
@@ -103,6 +106,16 @@ schema_version() {
 import sqlite3, sys
 c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
 print(c.execute("SELECT MAX(version) FROM schema_version").fetchone()[0])
+PY
+}
+
+# Magpie rows in the database. The recording may also yield a bird that does
+# live in Kansas; that is the filter working, so only the magpie is counted.
+magpies() {
+    python3 - "${DB}" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+print(c.execute("SELECT COUNT(*) FROM detections WHERE Sci_Name = 'Pica pica'").fetchone()[0])
 PY
 }
 
@@ -180,6 +193,75 @@ record_one() {
         sleep 1
     done
     die "a 30 s magpie recording produced no detection within 180 s (count stayed ${before})"
+}
+
+# Audio files the running daemon has finished analysing, summed over sources.
+analysed() {
+    local metrics
+    metrics="$(curl -fsS "http://${LISTEN}/api/v2/metrics" 2>/dev/null)" \
+        || die "GET /api/v2/metrics failed, so whether a recording was analysed cannot be told"
+    awk '/^birdnet_files_analysed_total[{ ]/ { n += $NF } END { print n + 0 }' <<<"${metrics}"
+}
+
+# Hand the running daemon the magpie recording where the geomodel says no
+# magpie lives, and check it stores nothing. Without waiting for the daemon's
+# analysed-files counter to move, "no new row" could mean only "not processed
+# yet". (A processed recording is not deleted at once — the stream directory
+# keeps segments for ten minutes — so its disappearance is no signal.)
+record_none() {
+    local before files pid dir name now
+    before="$(magpies)" || die "could not count magpie rows"
+    files="$(analysed)"
+    pid="$(systemctl show -p MainPID --value "${SERVICE}")"
+    [ -n "${pid}" ] && [ "${pid}" != 0 ] || die "no main PID to hand a recording to"
+    dir="/proc/${pid}/root/tmp/birdnet-stream"
+    name="$(date '+%Y-%m-%d-birdnet-%H:%M:%S').wav"
+    cp "${FIXTURE}" "${dir}/${name}.part"
+    chown "${SERVICE_USER}:" "${dir}/${name}.part"
+    mv "${dir}/${name}.part" "${dir}/${name}"
+    for _ in $(seq 1 180); do
+        [ "$(analysed)" -gt "${files}" ] && break
+        sleep 1
+    done
+    [ "$(analysed)" -gt "${files}" ] || die "the daemon did not analyse ${name} within 180 s"
+    sleep 5
+    now="$(magpies)" || die "could not count magpie rows"
+    [ "${now}" = "${before}" ] \
+        || die "a magpie recorded where no magpie occurs was stored (magpie rows ${before} → ${now}): the occurrence filter let it through"
+}
+
+# Move the station. The first start copies the config's location into the
+# settings table, and from then on the table wins over the file, so editing the
+# file alone moved nothing (the run record kept Berlin while the preflight's
+# doctor, which reads the file, reported Kansas). Write both, as the settings
+# page and the file each would, then check where the station says it is.
+set_location() {
+    local lat="$1" lon="$2" got
+    systemctl stop "${SERVICE}"
+    sed -i -e "s/^LATITUDE=.*/LATITUDE=${lat}/" -e "s/^LONGITUDE=.*/LONGITUDE=${lon}/" /etc/birdnet/birdnet.conf
+    python3 - "${DB}" "${lat}" "${lon}" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+for key, value in (("latitude", sys.argv[2]), ("longitude", sys.argv[3])):
+    c.execute("UPDATE settings SET value = ? WHERE key = ?", (value, key))
+c.commit()
+PY
+    chown "${SERVICE_USER}:" "${DB}"
+    systemctl start "${SERVICE}"
+    wait_up
+    # The run record is written by the daemon from the coordinates it uses.
+    for _ in $(seq 1 60); do
+        got="$(python3 - "${DB}" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+row = c.execute("SELECT lat, lon FROM analysis_runs ORDER BY id DESC LIMIT 1").fetchone()
+print(f"{row[0]:.4f} {row[1]:.4f}" if row and row[0] is not None else "")
+PY
+)"
+        [ "${got}" = "$(printf '%.4f %.4f' "${lat}" "${lon}")" ] && return 0
+        sleep 1
+    done
+    die "the station did not move to ${lat}, ${lon}; its newest run record says '${got}'"
 }
 
 running_version() { "${BIN}" --version | awk '{print $2}'; }
@@ -302,6 +384,21 @@ geomodel_loaded || die "the geomodel is configured but did not load on v${CAND_V
 pass "the geomodel is configured and loaded"
 n3="$(record_one "${n2}")" || exit 1
 pass "v${CAND_VERSION} records a new detection (${n2} → ${n3})"
+
+# The occurrence filter, end to end. A Pi in Europe recorded Great Horned Owls
+# and Dickcissels; whatever the cause there, a station has to drop a bird the
+# geomodel places elsewhere. Move this one to Kansas, where no magpie lives,
+# and hand it the magpie it just recorded in Berlin.
+STEP="occurrence filter"
+set_location "${AWAY_LAT}" "${AWAY_LON}"
+geomodel_loaded || die "the geomodel did not load in Kansas, so nothing below tests it"
+record_none
+pass "with the station in Kansas, the magpie recording stores no magpie"
+set_location "${STATION_LAT}" "${STATION_LON}"
+# The rollback is checked against this total, which includes anything the
+# Kansas recording legitimately stored.
+n3="$(detections)"
+STEP="after update"
 
 # ── 5. the rollback the installer printed, verbatim ─────────────────────────
 

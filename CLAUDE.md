@@ -308,6 +308,14 @@ Corollaries, each learned the same way:
   set, so the first upgrade test, on a station with none, saw the service
   killed and never the preflight — the exact failure a Pi reported. Fixtures
   should look like a configured station, not a fresh one.
+- **Three things that made "the station did X" untrue in a test.** The
+  settings table wins over the config file once the first start has seeded
+  it, so moving a station by editing LATITUDE did nothing (check
+  `analysis_runs`, written from what the daemon uses). Metrics live at
+  `/api/v2/metrics`, not `/metrics` — a 404 read as "0 files analysed". And
+  the stream directory keeps processed segments for ten minutes, so a
+  recording's disappearance is not a sign it was analysed; the
+  `birdnet_files_analysed_total` counter is.
 - **Booting systemd in this container wipes the shared `/tmp`.** Its
   boot-time `systemd-tmpfiles --remove` deleted the scratchpad and started
   every enabled service (redis). Give it its own namespaces, a private `/tmp`

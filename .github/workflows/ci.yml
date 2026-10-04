@@ -296,8 +296,29 @@ jobs:
           # A truncated or substituted model must never be allowed to "pass" by
           # silently skipping — a wrong checksum is a hard failure.
           echo "$sha  $model" | sha256sum -c -
+
+          # The geomodel, for the occurrence-filter test. Same release, same
+          # pinned checksums as installer/lib/10-config.sh, and the same rule:
+          # a download failure skips, a wrong checksum fails.
+          geo="$dir/geomodel.onnx"
+          geolabels="$dir/geomodel-labels.txt"
+          gfile="BirdNET%2B_Geomodel_V3.0.2_Global_12K_FP32.onnx"
+          glfile="BirdNET%2B_Geomodel_V3.0.2_Global_12K_Labels.txt"
+          if [ ! -f "$geo" ]; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 300 -o "$geo" "$gh/$gfile" \
+              || { echo "::warning::could not fetch the geomodel; inference tests will skip"; exit 0; }
+          fi
+          if [ ! -f "$geolabels" ]; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 300 -o "$geolabels" "$gh/$glfile" \
+              || { echo "::warning::could not fetch the geomodel labels; inference tests will skip"; exit 0; }
+          fi
+          echo "b151f680a47de5371f39b3df129aea5946ac6baa039582274f833b42eaf992ea  $geo" | sha256sum -c -
+          echo "c15818db07e55978d909a9bcd916cd0615b0183f789227d9516059151787c784  $geolabels" | sha256sum -c -
+
           echo "BIRDNET_TEST_MODEL=$model"  >> "$GITHUB_ENV"
           echo "BIRDNET_TEST_LABELS=$labels" >> "$GITHUB_ENV"
+          echo "BIRDNET_TEST_GEOMODEL=$geo" >> "$GITHUB_ENV"
+          echo "BIRDNET_TEST_GEOMODEL_LABELS=$geolabels" >> "$GITHUB_ENV"
           # Only set once the model is present AND checksum-verified. From here
           # a model-gated test that skips is a hard failure instead of a silent
           # `ok` — see tests/common/mod.rs. Deliberately inside the success
@@ -322,6 +343,8 @@ jobs:
         run: |
           cargo test --test inference_e2e --test pipeline_e2e --test species_filter_e2e \
             --test a_lowered_species_threshold_reaches_the_model \
+            -- --nocapture
+          cargo test -p birdnet-core --test the_geomodel_keeps_out_birds_that_do_not_occur_here \
             -- --nocapture
 
   doc:
