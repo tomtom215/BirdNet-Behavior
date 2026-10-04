@@ -9,7 +9,7 @@
 #
 # Usage: scripts/upgrade-sources.sh CANDIDATE_VERSION [N]
 # Needs gh (authenticated via GH_TOKEN) and GITHUB_REPOSITORY.
-#   scripts/upgrade-sources.sh 0.17.1      → ["0.17.0","0.16.1","0.16.0"]
+#   scripts/upgrade-sources.sh 0.17.1      → ["0.17.0","0.16.1","0.15.0"]
 
 set -euo pipefail
 
@@ -17,8 +17,16 @@ cand="${1:?candidate version, e.g. 0.17.1}"
 n="${2:-3}"
 repo="${GITHUB_REPOSITORY:?set GITHUB_REPOSITORY}"
 
-tags="$(gh api --paginate "repos/${repo}/releases?per_page=100" \
-    --jq '.[] | select(.draft | not) | select(.prerelease | not) | .tag_name')"
+# Only a release an operator can actually install: v0.16.0 was published with
+# no assets at all, and the upgrade test failed on its 404 rather than on
+# anything it was there to test. The test runs on x86_64.
+filter='.[] | select(.draft | not) | select(.prerelease | not)
+    | (.tag_name | ltrimstr("v")) as $v
+    | select([.assets[].name]
+        | (index("install.sh") and index("SHA256SUMS")
+           and index("birdnet-behavior-\($v)-x86_64-unknown-linux-gnu.tar.gz")))
+    | .tag_name'
+tags="$(gh api --paginate "repos/${repo}/releases?per_page=100" --jq "${filter}")"
 
 picked=()
 while read -r v; do

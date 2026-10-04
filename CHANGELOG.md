@@ -103,7 +103,8 @@ Raspberry Pi 4 (aarch64) updated from 0.15.0 to 0.17.0.
   while the service runs, checks that it is active with every row and records
   a new detection, then runs the rollback command the update printed and
   checks the same of the previous binary. `release.yml` runs it against the
-  four newest earlier releases and does not publish unless all pass;
+  four newest earlier releases that publish an installer and an x86_64 tarball
+  (0.16.0 has no assets) and does not publish unless all pass;
   `upgrade.yml` runs it against the three newest on pull requests. It also
   checks that the geomodel is configured and loads after the update and after
   the rollback, on a station with coordinates — without them the preflight's
