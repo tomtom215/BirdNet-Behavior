@@ -181,7 +181,7 @@ ring = "0.17"
 # Bumping password-hash alone (dependabot #148 proposed 0.6.1) fails to
 # compile — two distinct PasswordHasher traits. Take both together once
 # argon2 0.6 is released.
-argon2 = "0.5"
+argon2 = "0.6"
 password-hash = { version = "0.5", features = ["getrandom"] }
 
 # File watching
