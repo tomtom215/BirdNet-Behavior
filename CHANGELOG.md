@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The analytics engine leaves the classifier its cores.** DuckDB used every
+  core whatever the process's CPU affinity; it now uses the CPUs available
+  less the classifier's two inference threads, at least one — 2 on a Pi 4.
+  `BIRDNET_DUCKDB_THREADS` overrides. Measured on a 4-core x86 host with two
+  busy loops standing in for inference: two threads halved the slowest
+  dashboard query against one without slowing the competing load more than
+  one thread did; four were ~22 % faster again but cut the competing load to
+  62–75 % and were slower on three of four write shapes.
+  `enable_optimistic_write` (DuckDB's default, on) was measured too and is
+  kept: off, a full resync spilled 86–103 MB and wrote 3.4x the bytes.
 - **DuckDB 1.5.5 → 1.5.6** (`duckdb` / `libduckdb-sys` 1.10505.0 →
   1.10506.0), to pick up **`duckdb-behavioral` v0.10.0** and the embedded ICU
   for 1.5.6. CI, release, upgrade and Docker fetch from the `v1.5.6` registry

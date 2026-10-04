@@ -83,6 +83,37 @@ impl From<DuckDbError> for AnalyticsError {
 /// can raise it via the `BIRDNET_DUCKDB_MEMORY_LIMIT` environment variable.
 const DEFAULT_DUCKDB_MEMORY_LIMIT: &str = "256MB";
 
+/// Intra-op threads the station's own inference uses: `birdnet_core`'s
+/// `ModelConfig::default().num_threads`, which the daemon does not override.
+const INFERENCE_THREADS: usize = 2;
+
+/// How many threads `DuckDB` may use: `BIRDNET_DUCKDB_THREADS` when it is a
+/// positive integer, otherwise the CPUs this process may run on less the
+/// [`INFERENCE_THREADS`] the classifier keeps busy, and never fewer than one.
+///
+/// Left unset, `DuckDB` takes `std::thread::hardware_concurrency()` — four on
+/// a Pi 4 — and ignores CPU affinity (measured: under `taskset -c 0-1` it
+/// still reported 4). Measured on a 4-vCPU x86 host with two busy loops
+/// standing in for inference, 1.5 M synthetic detections, `memory_limit`
+/// 256MB, five runs each:
+///
+/// - two threads ran the retention query in 4.75 s against 9.37 s for one,
+///   and left the competing load at 84–104 % of its idle rate (one thread:
+///   85–100 %);
+/// - four threads ran it in 3.72 s but cut the competing load to 62–75 %,
+///   raised process RSS on a full resync from 246 to 374 MiB, and were
+///   13–18 % *slower* on three of the four write shapes.
+///
+/// On a station that is classifying, the inference is the product; the
+/// analytics are not worth a quarter of its throughput. Absolute timings do
+/// not transfer to a Pi; the ratios are what this rests on.
+fn decide_threads(configured: Option<&str>, available: usize) -> usize {
+    configured
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| available.saturating_sub(INFERENCE_THREADS).max(1))
+}
+
 /// Directory `DuckDB` is pointed at for extension installs, relative to the
 /// analytics database file.
 const EXTENSION_DIR_NAME: &str = "duckdb-extensions";
@@ -581,6 +612,17 @@ impl AnalyticsDb {
             .limit()
             .unwrap_or_else(|| DEFAULT_DUCKDB_MEMORY_LIMIT.to_owned());
         conn.execute_batch(&format!("SET memory_limit='{memory_limit}';"))?;
+
+        // `available_parallelism` honours CPU affinity and cgroup quotas, which
+        // `DuckDB`'s own default does not. `enable_optimistic_write` is left at
+        // its default (on): measured, turning it off made a full resync spill
+        // 86–103 MB to disk and write 3.4x the bytes, for 0.5 s on a fast disk
+        // — the wrong trade on an SD card.
+        let threads = decide_threads(
+            std::env::var("BIRDNET_DUCKDB_THREADS").ok().as_deref(),
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+        );
+        conn.execute_batch(&format!("SET threads={threads};"))?;
 
         // Before anything can install or load: keep extension writes inside the
         // data directory rather than `$HOME`, which the unit mounts read-only.
@@ -1499,6 +1541,36 @@ mod tests {
         assert_eq!(resolve_memory_limit(Some("2GB")), "2GB");
         assert_eq!(resolve_memory_limit(Some(" 80% ")), "80%");
         assert_eq!(resolve_memory_limit(Some("1073741824")), "1073741824");
+    }
+
+    #[test]
+    fn threads_leave_room_for_inference() {
+        // Pi 4 and larger hosts: the classifier's two threads are left free.
+        assert_eq!(decide_threads(None, 4), 2);
+        assert_eq!(decide_threads(None, 8), 6);
+        // Small boards never go to zero.
+        assert_eq!(decide_threads(None, 2), 1);
+        assert_eq!(decide_threads(None, 1), 1);
+        // The variable wins when it is a positive integer, and only then.
+        assert_eq!(decide_threads(Some("4"), 4), 4);
+        assert_eq!(decide_threads(Some(" 3 "), 8), 3);
+        for bad in ["0", "-1", "four", "", "2;DROP TABLE detections"] {
+            assert_eq!(decide_threads(Some(bad), 4), 2, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn open_sets_the_decided_thread_count() {
+        let (db, _tmp) = make_db();
+        let set: i64 = db
+            .conn()
+            .query_row("SELECT current_setting('threads')", [], |r| r.get(0))
+            .unwrap();
+        let expected = decide_threads(
+            std::env::var("BIRDNET_DUCKDB_THREADS").ok().as_deref(),
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+        );
+        assert_eq!(usize::try_from(set).unwrap(), expected);
     }
 
     #[test]

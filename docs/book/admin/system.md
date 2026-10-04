@@ -81,6 +81,16 @@ Where the two numbers come from, since neither is a preference:
   32 MiB and succeeded from 48 MiB up on DuckDB 1.5. 64 MiB is the next step
   above the smallest observed working value.
 
+**Threads.** Unset, `BIRDNET_DUCKDB_THREADS` becomes the CPUs this process may
+run on less the two the bird classifier uses, and at least one — 2 on a
+Raspberry Pi 4. DuckDB's own default is every core, whatever the process's CPU
+affinity. Measured on a 4-core x86 host with two busy loops standing in for the
+classifier, two threads halved the slowest dashboard query against one and slowed
+the competing load no more than one thread did (84–104 % of its idle rate,
+against 85–100 %); four threads were about a fifth faster
+again but cut the competing load to 62–75 % and used more memory. Set the
+variable to override, for example on a station that only serves dashboards.
+
 What is *not* measured is the rest of the process's footprint on a Raspberry Pi,
 which would need a Pi. So this sizes a proportion, not a budget: it makes the
 analytics engine's share scale with the machine, and does not claim to know the

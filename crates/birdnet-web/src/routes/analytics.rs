@@ -1093,7 +1093,9 @@ mod json_value_tests {
             &dir.path().join("analytics.duckdb"),
         )
         .unwrap();
-        let loaded = state.with_analytics(|db| db.extension_loaded()).unwrap();
+        let loaded = state
+            .with_analytics(birdnet_behavioral::connection::AnalyticsDb::extension_loaded)
+            .unwrap();
         if !loaded {
             birdnet_behavioral::gating::skip_or_fail(
                 "the behavioral extension",
@@ -1169,7 +1171,7 @@ mod json_value_tests {
         };
         held_rx.recv().unwrap();
         let ticked = Arc::new(AtomicBool::new(false));
-        let ticker = {
+        let other_task = {
             let ticked = Arc::clone(&ticked);
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -1181,7 +1183,7 @@ mod json_value_tests {
             ticked.load(Ordering::SeqCst),
             "the runtime's only thread was blocked while the request waited for the handle"
         );
-        ticker.await.unwrap();
+        other_task.await.unwrap();
         holder.join().unwrap();
     }
 

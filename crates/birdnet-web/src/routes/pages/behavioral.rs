@@ -806,7 +806,7 @@ mod tests {
         };
         held_rx.recv().unwrap();
         let ticked = Arc::new(AtomicBool::new(false));
-        let ticker = {
+        let other_task = {
             let ticked = Arc::clone(&ticked);
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -820,7 +820,7 @@ mod tests {
             ticked.load(Ordering::SeqCst),
             "the runtime's only thread was blocked while the card waited for the handle"
         );
-        ticker.await.unwrap();
+        other_task.await.unwrap();
         holder.join().unwrap();
     }
 
@@ -839,7 +839,10 @@ mod tests {
             &dir.path().join("analytics.duckdb"),
         )
         .unwrap();
-        if !state.with_analytics(|db| db.extension_loaded()).unwrap() {
+        if !state
+            .with_analytics(birdnet_behavioral::connection::AnalyticsDb::extension_loaded)
+            .unwrap()
+        {
             birdnet_behavioral::gating::skip_or_fail(
                 "the behavioral extension",
                 "it did not load into the test store",
