@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
             get(sequence_match_events),
         )
         .route("/analytics/next-species", get(next_species))
+        .route("/analytics/previous-species", get(previous_species))
         .route("/analytics/abundance", get(abundance))
         .route("/analytics/phenology", get(phenology))
         .route("/analytics/status", get(analytics_status))
@@ -88,6 +89,14 @@ struct NextSpeciesQuery {
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
+struct PreviousSpeciesQuery {
+    before: Option<String>,
+    window: Option<u32>,
+    limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
 struct PatternsQuery {
     species: Option<String>,
     max_gap: Option<u32>,
@@ -106,7 +115,8 @@ struct PatternsQuery {
 #[cfg(feature = "analytics")]
 const MAX_SESSIONS_LIMIT: u32 = 10_000;
 
-/// Upper bound on `?limit=` for `/analytics/next-species`.
+/// Upper bound on `?limit=` for `/analytics/next-species` and
+/// `/analytics/previous-species`.
 #[cfg(feature = "analytics")]
 const MAX_NEXT_SPECIES_LIMIT: u32 = 1_000;
 
@@ -657,6 +667,69 @@ async fn next_species(
     unavailable("sequence_next_node")
 }
 
+/// `GET /analytics/previous-species?before=…` — what is heard immediately
+/// before the first detection of a species in an activity session
+/// (`sequence_next_node` run `backward`). The mirror of `next-species`.
+#[cfg(feature = "analytics")]
+async fn previous_species(
+    State(state): State<AppState>,
+    Query(query): Query<PreviousSpeciesQuery>,
+) -> (StatusCode, Json<Value>) {
+    if !state.has_analytics() {
+        return unavailable("sequence_next_node");
+    }
+    let Some(trigger) = query.before else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "missing required query parameter: before",
+                "usage": "/analytics/previous-species?before=European+Robin&window=60&limit=10",
+            })),
+        );
+    };
+    let window = query.window.unwrap_or(60);
+    let limit = query.limit.unwrap_or(10).min(MAX_NEXT_SPECIES_LIMIT);
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.previous_species(&trigger, window, limit))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(predictions)) => {
+            let total = predictions.len();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "predictions": predictions,
+                    "total": total,
+                })),
+            )
+        }
+        Ok(Err(e)) => extension_error("sequence_next_node", &e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn previous_species(
+    State(_state): State<AppState>,
+    Query(_query): Query<PreviousSpeciesQuery>,
+) -> (StatusCode, Json<Value>) {
+    unavailable("sequence_next_node")
+}
+
 /// Analytics status endpoint -- reports what capabilities are available.
 ///
 /// Reports the *store*, not just the build flags. `analytics_compiled` and
@@ -824,54 +897,74 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
     // Each of these is a way the dashboards go empty while the rest of the app
     // stays healthy, so each is reported separately rather than collapsed into
     // one "ok" flag.
-    let store = state.with_analytics(|db| {
-        // `null` when a count cannot be read: a defaulted 0 here reads as
-        // "the sync has not run", the wrong diagnosis for a failing store.
-        let detections = db.detection_count().ok();
-        let unplaceable = db.unplaceable_detection_count().ok();
-        json!({
-            // The behavioural functions (sessionize, retention, window_funnel,
-            // sequence_*) need this; the extension is optional to *open* the
-            // database, so a false here is invisible until a query runs.
-            "extension_loaded": db.extension_loaded(),
-            "detections": detections,
-            // Rows whose Date/Time name no point in time: present in the total,
-            // absent from every time-bucketed analytic. A non-zero value here
-            // is why a dashboard total can sit below the station's own count.
-            "unplaceable_detections": unplaceable,
-            "detections_placeable": detections
-                .zip(unplaceable)
-                .map(|(d, u)| d.saturating_sub(u)),
-            // What the engine itself is, so a mismatch below can be read
-            // without knowing how this binary was built.
-            "engine_duckdb_version": db.duckdb_version(),
-            "engine_platform": db.engine_platform(),
-            "embedded_extension": {
-                "version": AnalyticsDb::embedded_extension_version(),
-                // The footer's version target, read according to `abi`: a
-                // DuckDB version for `CPP` / `C_STRUCT_UNSTABLE`, a minimum C
-                // API version for `C_STRUCT` (behavioral v0.10.0 and later,
-                // which loads into any engine at or above it).
-                "duckdb_version": AnalyticsDb::embedded_extension_duckdb_version(),
-                "abi": AnalyticsDb::embedded_extension_abi(),
-                "platform": AnalyticsDb::embedded_extension_platform(),
-                // Some(..) means the embedded copy can never load, so an
-                // offline station has no behavioural analytics at all. An
-                // extension is locked to a platform as well as a version and
-                // the two fail identically at LOAD, so `property` names which
-                // one is wrong rather than leaving it to be inferred.
-                "mismatch": db.embedded_extension_mismatch().map(|m| {
-                    json!({
-                        "property": m.kind.to_string(),
-                        "embedded_for": m.embedded_for,
-                        "embedded_abi": m.embedded_abi,
-                        "engine": m.engine,
-                        "embedded_platform": m.embedded_platform,
-                        "engine_platform": m.engine_platform,
-                    })
+    //
+    // On the blocking pool: the analytics handle sits behind one mutex shared
+    // with every analytics query, so waiting for it here held a runtime worker
+    // for the length of whatever query was running.
+    let store = tokio::task::spawn_blocking(move || {
+        state.with_analytics(|db| {
+            // `null` when a count cannot be read: a defaulted 0 here reads as
+            // "the sync has not run", the wrong diagnosis for a failing store.
+            let detections = db.detection_count().ok();
+            let unplaceable = db.unplaceable_detection_count().ok();
+            json!({
+                // The behavioural functions (sessionize, retention, window_funnel,
+                // sequence_*) need this; the extension is optional to *open* the
+                // database, so a false here is invisible until a query runs.
+                "extension_loaded": db.extension_loaded(),
+                // Loaded is not the same as answering correctly: every function is
+                // run on fixed events and compared with the extension version this
+                // build was written for. `null` when the extension is not loaded,
+                // otherwise `ok` or the first disagreement.
+                "self_test": db.extension_loaded().then(|| {
+                    db.verify_behavioral_functions()
+                        .map_or_else(|e| e.to_string(), |()| "ok".to_owned())
                 }),
-            },
+                "detections": detections,
+                // Rows whose Date/Time name no point in time: present in the total,
+                // absent from every time-bucketed analytic. A non-zero value here
+                // is why a dashboard total can sit below the station's own count.
+                "unplaceable_detections": unplaceable,
+                "detections_placeable": detections
+                    .zip(unplaceable)
+                    .map(|(d, u)| d.saturating_sub(u)),
+                // What the engine itself is, so a mismatch below can be read
+                // without knowing how this binary was built.
+                "engine_duckdb_version": db.duckdb_version(),
+                "engine_platform": db.engine_platform(),
+                "embedded_extension": {
+                    "version": AnalyticsDb::embedded_extension_version(),
+                    // The footer's version target, read according to `abi`: a
+                    // DuckDB version for `CPP` / `C_STRUCT_UNSTABLE`, a minimum C
+                    // API version for `C_STRUCT` (behavioral v0.10.0 and later,
+                    // which loads into any engine at or above it).
+                    "duckdb_version": AnalyticsDb::embedded_extension_duckdb_version(),
+                    "abi": AnalyticsDb::embedded_extension_abi(),
+                    "platform": AnalyticsDb::embedded_extension_platform(),
+                    // Some(..) means the embedded copy can never load, so an
+                    // offline station has no behavioural analytics at all. An
+                    // extension is locked to a platform as well as a version and
+                    // the two fail identically at LOAD, so `property` names which
+                    // one is wrong rather than leaving it to be inferred.
+                    "mismatch": db.embedded_extension_mismatch().map(|m| {
+                        json!({
+                            "property": m.kind.to_string(),
+                            "embedded_for": m.embedded_for,
+                            "embedded_abi": m.embedded_abi,
+                            "engine": m.engine,
+                            "embedded_platform": m.embedded_platform,
+                            "engine_platform": m.engine_platform,
+                        })
+                    }),
+                },
+            })
         })
+    })
+    .await
+    .unwrap_or_else(|e| {
+        // Not `None`: a null `store` means "built without analytics".
+        tracing::warn!(error = %e, "analytics status: task failed");
+        Some(json!({ "error": "the status check itself failed; see the log" }))
     });
 
     (
@@ -885,6 +978,7 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
                 "retention": "/analytics/retention?min_detections=5",
                 "funnel": "/analytics/funnel?species=Robin,Blackbird&window=120&hour_start=4&hour_end=8",
                 "next_species": "/analytics/next-species?after=European+Robin&window=60&limit=10",
+                "previous_species": "/analytics/previous-species?before=European+Robin&window=60&limit=10",
                 "patterns": "/analytics/patterns?species=Robin,Blackbird,Wren&max_gap=60&hour_start=4&hour_end=8",
             },
         })),
@@ -912,6 +1006,7 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
                 "retention": "/analytics/retention?min_detections=5",
                 "funnel": "/analytics/funnel?species=Robin,Blackbird&window=120&hour_start=4&hour_end=8",
                 "next_species": "/analytics/next-species?after=European+Robin&window=60&limit=10",
+                "previous_species": "/analytics/previous-species?before=European+Robin&window=60&limit=10",
                 "patterns": "/analytics/patterns?species=Robin,Blackbird,Wren&max_gap=60&hour_start=4&hour_end=8",
             },
         })),
@@ -985,9 +1080,110 @@ mod tests {
 
 #[cfg(all(test, feature = "analytics"))]
 mod json_value_tests {
-    use super::{analytics_status, duckdb_value_to_json};
-    use axum::extract::State;
+    use super::{PreviousSpeciesQuery, analytics_status, duckdb_value_to_json, previous_species};
+    use axum::extract::{Query, State};
+
+    /// `/analytics/previous-species` answers from the store, names the
+    /// direction in its JSON, and rejects a request without a trigger.
+    #[tokio::test]
+    async fn previous_species_reports_what_came_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::new_with_analytics(
+            dir.path().join("birds.db"),
+            &dir.path().join("analytics.duckdb"),
+        )
+        .unwrap();
+        let loaded = state.with_analytics(|db| db.extension_loaded()).unwrap();
+        if !loaded {
+            birdnet_behavioral::gating::skip_or_fail(
+                "the behavioral extension",
+                "it did not load into the test store",
+            );
+            return;
+        }
+        state
+            .with_analytics(|db| {
+                db.conn().execute_batch(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) \
+                     VALUES ('2024-05-01', '05:00:00', 'x', 'Eurasian Wren', 0.9, 1714539600), \
+                            ('2024-05-01', '05:01:00', 'x', 'European Robin', 0.9, 1714539660);",
+                )
+            })
+            .unwrap()
+            .unwrap();
+
+        let (status, body) = previous_species(
+            State(state.clone()),
+            Query(PreviousSpeciesQuery {
+                before: Some("European Robin".into()),
+                window: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{}", body.0);
+        assert_eq!(body.0["total"], json!(1), "{}", body.0);
+        let p = &body.0["predictions"][0];
+        assert_eq!(p["before_species"], json!("European Robin"), "{}", body.0);
+        assert_eq!(p["predicted_species"], json!("Eurasian Wren"), "{}", body.0);
+
+        let (status, _) = previous_species(
+            State(state),
+            Query(PreviousSpeciesQuery {
+                before: None,
+                window: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    }
     use serde_json::{Value, json};
+
+    /// Waiting for the analytics handle does not stall the async runtime.
+    ///
+    /// On a one-thread runtime, another thread holds the handle for 500 ms
+    /// while a status request waits for it, and a second task's 50 ms timer
+    /// expires meanwhile. That task runs only if the request yielded the
+    /// thread; done on the runtime, the request blocked it for the full
+    /// 500 ms and the task was still waiting when it returned.
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_waits_for_the_handle_off_the_runtime() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::new_with_analytics(
+            dir.path().join("birds.db"),
+            &dir.path().join("analytics.duckdb"),
+        )
+        .unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let holder = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                state.with_analytics(|_| {
+                    held_tx.send(()).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                });
+            })
+        };
+        held_rx.recv().unwrap();
+        let ticked = Arc::new(AtomicBool::new(false));
+        let ticker = {
+            let ticked = Arc::clone(&ticked);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                ticked.store(true, Ordering::SeqCst);
+            })
+        };
+        let _ = analytics_status(State(state)).await;
+        assert!(
+            ticked.load(Ordering::SeqCst),
+            "the runtime's only thread was blocked while the request waited for the handle"
+        );
+        ticker.await.unwrap();
+        holder.join().unwrap();
+    }
 
     /// A store whose counts cannot be read says so, rather than reporting a
     /// zero that the docs tell the operator means "the sync has not run".
@@ -1002,6 +1198,16 @@ mod json_value_tests {
         let (_, healthy) = analytics_status(State(state.clone())).await;
         // Counterpart: a readable empty store still reports a real zero.
         assert_eq!(healthy.0["store"]["detections"], json!(0), "{}", healthy.0);
+        let expected_self_test = if healthy.0["store"]["extension_loaded"] == json!(true) {
+            json!("ok")
+        } else {
+            Value::Null
+        };
+        assert_eq!(
+            healthy.0["store"]["self_test"], expected_self_test,
+            "{}",
+            healthy.0
+        );
         state
             .with_analytics(|db| {
                 db.conn()

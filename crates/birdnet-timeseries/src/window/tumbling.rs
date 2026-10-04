@@ -79,12 +79,17 @@ impl WindowSpec for TumblingSpec {
         };
 
         let mut where_clauses = Vec::new();
+        // Quoted, as the fields' docs promise ISO-8601 dates. They were
+        // spliced in raw, so `2026-01-01` reached DuckDB as the integer
+        // `2026 - 1 - 1` and the query failed to bind ("Cannot compare values
+        // of type DATE and type INTEGER") — and any other text ran as SQL.
         if let Some(from) = &self.from_date {
-            // Raw SQL expression (e.g. "CURRENT_DATE - INTERVAL 7 DAYS") or literal date
-            where_clauses.push(format!("detection_date >= {from}"));
+            let escaped = from.replace('\'', "''");
+            where_clauses.push(format!("detection_date >= '{escaped}'"));
         }
         if let Some(to) = &self.to_date {
-            where_clauses.push(format!("detection_date <= {to}"));
+            let escaped = to.replace('\'', "''");
+            where_clauses.push(format!("detection_date <= '{escaped}'"));
         }
         if let Some(sp) = &self.species {
             let escaped = sp.replace('\'', "''");

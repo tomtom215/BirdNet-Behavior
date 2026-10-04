@@ -445,11 +445,16 @@ pub fn run_verify_extension(
     adb.load_extension()
         .map_err(|e| format!("behavioral extension did not load: {e}"))?;
 
+    // Loading proves a library is present, not that it answers the way this
+    // build's queries assume. Run every function on fixed events and compare.
+    adb.verify_behavioral_functions()
+        .map_err(|e| format!("behavioral extension loaded but failed its self-test: {e}"))?;
+
     tracing::info!(
         duckdb = %engine,
         extension = adb.extension_version().as_deref().unwrap_or("unknown"),
         path = %path.display(),
-        "behavioral extension loaded"
+        "behavioral extension loaded and passed its functional self-test"
     );
 
     // ICU is the other half of an offline-capable station, and the half that

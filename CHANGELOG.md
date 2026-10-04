@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **What is heard just before a species.** The Analytics page's follow-on
+  card now shows the species heard immediately *before* the most recent
+  bird's first detection in a session as well as after it
+  (`sequence_next_node` run backward), and
+  `GET /api/v2/analytics/previous-species?before=…` returns the same.
+- **The behavioural functions are checked, not just loaded.**
+  `--verify-extension` and `/api/v2/analytics/status` (`self_test`) run every
+  function the station uses on fixed events and compare each answer with
+  v0.10.0's, so an extension that loads but answers differently is reported
+  rather than turned into plausible wrong numbers.
+
 ### Changed
 
 - **DuckDB 1.5.5 → 1.5.6** (`duckdb` / `libduckdb-sys` 1.10505.0 →
@@ -29,6 +42,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Birds heard together are no longer reported as heard in order.**
+  BirdNET stamps every species in one audio chunk with the same instant.
+  Measured against v0.10.0, the funnels and sequence patterns counted such a
+  pair as ordered in *both* directions, so the dawn running order and
+  `/analytics/funnel` / `patterns` / `sequence-count` credited orders nobody
+  observed. Funnels now use `'strict_increase'` and patterns require each step
+  strictly after the last (`(?t>0)`); detections 3 s apart still count. The
+  neighbour card likewise no longer reports a species heard in the same chunk
+  as the trigger as its "next" or "previous" one (which it did by alphabetical
+  order).
+- **Step times on a clock-change day.** Funnel and pattern step times were
+  converted to wall clock with one offset per day; with an hour range spanning
+  the change, one side came out an hour off (a step heard at 03:30 on
+  Europe/Berlin's spring-forward day read `02:30`). Each step now takes its own
+  detection's recorded wall clock.
+- **The follow-on card never showed a prediction.** It found the latest
+  detection with `ORDER BY rowid` on a view, which the bundled SQLite 3.53
+  rejects; the error was swallowed into "No detections yet." on every
+  station.
+- **Effort-corrected abundance divided by effort as of the last restart.**
+  Recording effort reached the analytics store only at startup, so each week
+  since then had too few listening hours, or none. The last two days are now
+  re-copied after every effort sample; the copy is one transaction (a failed
+  copy used to leave the table empty), and a row that cannot be read fails the
+  copy instead of being skipped.
+- **Analytics status and the engine card no longer hold an async worker**
+  while waiting for the analytics database, which is shared with every
+  analytics query.
+- **`AbsenceStreak` did not parse and `TumblingSpec` rejected the ISO dates
+  it documents** (both public time-series query builders with no caller).
+  Both now run, and every public query builder is executed by a test.
 - **One day without timestamps no longer takes the Analytics page's
   Activity sessions and dawn-chorus cards down**, nor `/analytics/sessions`,
   `/analytics/patterns` and `/analytics/sequence-count`. A detection whose `detected_at_utc` is NULL while

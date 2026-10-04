@@ -351,6 +351,9 @@ pub fn retention_sql(params: &RetentionParams) -> String {
 /// species sequence occurred within the time window. The step conditions are
 /// passed as variadic boolean arguments — the real signature — not as an array.
 ///
+/// Mode [`FUNNEL_MODE`]: a step counts only when it is strictly later than the
+/// one before it.
+///
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn funnel_sql(params: &FunnelParams) -> String {
     let conditions = species_conditions(&params.species_sequence);
@@ -360,6 +363,7 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
             CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
             window_funnel(
                 INTERVAL '{window} MINUTE',
+                {FUNNEL_MODE},
                 detection_instant,
                 {conditions}
             ) AS steps_completed
@@ -374,50 +378,89 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
     )
 }
 
-/// The select-list item that carries a morning's wall-clock offset.
+/// The `window_funnel` mode every funnel builder passes.
+///
+/// BirdNET stamps every species found in one audio chunk with the same
+/// instant, so two birds heard together share a timestamp. In the default mode
+/// such a pair advances the funnel in *either* order — measured against
+/// `behavioral` v0.10.0, a Robin and a Blackbird at the same instant give
+/// `window_funnel(…, Robin, Blackbird) = 2` and so does the reverse — which
+/// reports an order nobody observed. `strict_increase` counts a step only when
+/// it is strictly later than the step before; 3 s apart still counts.
+const FUNNEL_MODE: &str = "'strict_increase'";
+
+/// Wrap a per-day query that yields `date` and an `ev TIMESTAMP[]` of step
+/// instants, returning `date` and `step_times VARCHAR[]` in wall clock.
 ///
 /// The event functions time their steps on `detection_instant`, which is UTC,
-/// but the step times are shown to a person as "first heard at 05:42", which
-/// is the station's wall clock. Adding the morning's own
-/// `detection_timestamp - detection_instant` converts one to the other without
-/// asking `DuckDB` what time zone it thinks it is in — the question that made
-/// `detection_instant` itself wrong on every station outside UTC. `MIN` picks
-/// one offset for the day; the dawn window never contains a clock change.
-const WALL_OFFSET: &str = "MIN(detection_timestamp - detection_instant) AS wall_offset";
+/// but the step times are shown to a person as "first heard at 05:42", which is
+/// the station's wall clock. Each step is mapped back to the `detection_timestamp`
+/// recorded on its own detection row — the wall clock the station wrote down
+/// for that instant — without asking `DuckDB` what time zone it is in, the
+/// question that made `detection_instant` itself wrong on every station outside
+/// UTC.
+///
+/// This replaced one offset per day, `MIN(detection_timestamp -
+/// detection_instant)`, which was exact on every day but the two a year when
+/// the clock changes: with an hour range spanning the change, the steps on one
+/// side came out an hour off — on Europe/Berlin's spring-forward day a step
+/// heard at 03:30 read `02:30`, a time that never happened there.
+///
+/// A day whose list is empty keeps its row with an empty list.
+fn wall_clock_steps(per_day: &str) -> String {
+    format!(
+        "WITH per_day AS (
+            {per_day}
+        ),
+        steps AS (
+            SELECT date, generate_subscripts(ev, 1) AS i, ev FROM per_day
+        ),
+        walls AS (
+            SELECT s.date, s.i, MIN(d.detection_timestamp) AS wall
+            FROM steps s
+            JOIN detections_ts d ON d.detection_instant = s.ev[s.i]
+            GROUP BY s.date, s.i
+        )
+        SELECT p.date,
+               COALESCE(
+                   list(CAST(w.wall AS VARCHAR) ORDER BY w.i) FILTER (WHERE w.i IS NOT NULL),
+                   []
+               ) AS step_times
+        FROM per_day p
+        LEFT JOIN walls w ON w.date = p.date
+        GROUP BY p.date
+        ORDER BY p.date DESC"
+    )
+}
 
 /// Build SQL for dawn-chorus funnel *step timings* (`window_funnel_events`,
 /// v0.8.0).
 ///
 /// Same shape as [`funnel_sql`], but `window_funnel_events()` returns the
-/// `TIMESTAMP[]` of when each completed step fired rather than a step count.
-/// Each element is cast to `VARCHAR` via `list_transform` so the result is a
-/// plain string list the typed layer can read without timestamp-array decoding.
+/// `TIMESTAMP[]` of when each completed step fired rather than a step count,
+/// returned as wall-clock strings by [`wall_clock_steps`].
 ///
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn funnel_events_sql(params: &FunnelParams) -> String {
     let conditions = species_conditions(&params.species_sequence);
 
-    format!(
-        "SELECT date, list_transform(ev, x -> CAST(x + wall_offset AS VARCHAR)) AS step_times
-        FROM (
-            SELECT
+    wall_clock_steps(&format!(
+        "SELECT
                 CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
                 window_funnel_events(
                     INTERVAL '{window} MINUTE',
+                    {FUNNEL_MODE},
                     detection_instant,
                     {conditions}
-                ) AS ev,
-                {WALL_OFFSET}
+                ) AS ev
             FROM detections_ts
             WHERE {ORDERABLE}
-          AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-            GROUP BY CAST(detection_timestamp AS DATE)
-        )
-        ORDER BY date DESC",
+              AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+            GROUP BY CAST(detection_timestamp AS DATE)",
         window = params.window_minutes,
         start = params.hour_start,
         end = params.hour_end,
-    )
+    ))
 }
 
 /// Build SQL for ordered sequence pattern matching.
@@ -484,68 +527,114 @@ pub fn sequence_count_sql(params: &PatternParams) -> String {
 /// `sequence_match_events()` returns the `TIMESTAMP[]` of the events that
 /// satisfied the pattern — the longest in-order prefix reached that day (the
 /// full set when the sequence completes, a partial otherwise), like
-/// `window_funnel_events`. Each element is cast to `VARCHAR` via
-/// `list_transform`, mirroring [`funnel_events_sql`], so the result reads back
-/// as a plain string list.
+/// `window_funnel_events`. Returned as wall-clock strings by
+/// [`wall_clock_steps`], like [`funnel_events_sql`].
 ///
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn sequence_match_events_sql(params: &PatternParams) -> String {
     let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
     let conditions = species_conditions(&params.species_sequence);
 
-    format!(
-        "SELECT date, list_transform(ev, x -> CAST(x + wall_offset AS VARCHAR)) AS step_times
-        FROM (
-            SELECT
+    wall_clock_steps(&format!(
+        "SELECT
                 CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
                 sequence_match_events('{pattern}', detection_instant,
                     {conditions}
-                ) AS ev,
-                {WALL_OFFSET}
+                ) AS ev
             FROM detections_ts
             WHERE {ORDERABLE}
-          AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
-            GROUP BY CAST(detection_timestamp AS DATE)
-        )
-        ORDER BY date DESC",
+              AND EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+            GROUP BY CAST(detection_timestamp AS DATE)",
         start = params.hour_start,
         end = params.hour_end,
-    )
+    ))
 }
 
-/// Build SQL for next-species prediction.
+/// Build SQL for next-species prediction: what is heard immediately after the
+/// first detection of `trigger_species` in each activity session.
 ///
 /// The timeline is split into activity sessions separated by gaps larger than
-/// `window_minutes`; within each session `sequence_next_node()` finds the
-/// species detected immediately after the first occurrence of the trigger.
-/// Counting those across sessions yields a frequency distribution of what
-/// typically follows the trigger species.
+/// `window_minutes`; counting the follower across sessions yields a frequency
+/// distribution of what typically follows the trigger. The trigger itself can
+/// be its own follower — the same bird calling again — which the page labels
+/// rather than drops. See [`adjacent_species_sql`] for the shared shape.
+pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
+    adjacent_species_sql(Adjacent::Next, trigger_species, window_minutes, limit)
+}
+
+/// Build SQL for previous-species prediction: what is heard immediately
+/// *before* the first detection of `trigger_species` in each activity session
+/// (`sequence_next_node` with direction `backward`).
 ///
-/// `sessions` is the number of sessions with any follower, taken by a window
+/// Anchored on the trigger's first detection in the session, so the trigger
+/// can never be its own predecessor; a session the trigger opens has none and
+/// is not counted. See [`adjacent_species_sql`].
+pub fn previous_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
+    adjacent_species_sql(Adjacent::Previous, trigger_species, window_minutes, limit)
+}
+
+/// Which neighbour of the trigger [`adjacent_species_sql`] reports.
+#[derive(Clone, Copy)]
+enum Adjacent {
+    Next,
+    Previous,
+}
+
+/// The query behind [`next_species_sql`] and [`previous_species_sql`].
+///
+/// Per session, `first_trigger` is the instant of the trigger's first
+/// detection. Only one row at that instant is kept — the trigger's own — plus
+/// the rows strictly after it (`Next`) or strictly before it (`Previous`):
+///
+/// - A species heard in the same audio chunk as the trigger shares its
+///   instant. Kept, it became the "next" species when its name sorted after
+///   the trigger's and the "previous" one when it sorted before: an order
+///   decided by the alphabet.
+/// - Exact duplicate rows (same session, instant and species) are collapsed,
+///   so a duplicated trigger row cannot report the trigger as its own
+///   follower.
+///
+/// `sequence_next_node(direction, 'first_match', ts, value, base, TRUE)` then
+/// anchors on the trigger (`base`) and returns the neighbouring row's species.
+/// When several species share the neighbouring instant the extension picks
+/// one by its sort key; each of them was genuinely adjacent.
+///
+/// `sessions` is the number of sessions with any neighbour, taken by a window
 /// over the grouped rows *before* `LIMIT` — the denominator of each
 /// probability. Summing the returned frequencies instead normalised over the
 /// top `limit` only (ANA8).
-///
-/// `sequence_next_node(direction, mode, ts, value, base_cond, event_cond)`
-/// requires at least two boolean conditions; `forward`/`first_match` anchors on
-/// the first event matching `base_cond` (the trigger) and the `TRUE` event
-/// condition accepts whatever node comes next, so it returns that node's
-/// species (verified against the live extension in `connection::live`).
-pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
+fn adjacent_species_sql(
+    direction: Adjacent,
+    trigger_species: &str,
+    window_minutes: u32,
+    limit: u32,
+) -> String {
     let escaped = trigger_species.replace('\'', "''");
+    let (dir, side) = match direction {
+        Adjacent::Next => ("forward", ">"),
+        Adjacent::Previous => ("backward", "<"),
+    };
     format!(
         "WITH sessioned AS (
-            SELECT detection_instant, Com_Name,
+            SELECT DISTINCT detection_instant, Com_Name,
                    sessionize(detection_instant, INTERVAL '{window_minutes} MINUTE')
                        OVER (ORDER BY detection_instant) AS sid
             FROM detections_ts
             WHERE {ORDERABLE}
         ),
+        anchored AS (
+            SELECT *,
+                   MIN(detection_instant) FILTER (WHERE Com_Name = '{escaped}')
+                       OVER (PARTITION BY sid) AS first_trigger
+            FROM sessioned
+        ),
         per_session AS (
-            SELECT sequence_next_node('forward', 'first_match',
+            SELECT sequence_next_node('{dir}', 'first_match',
                        detection_instant, Com_Name,
                        Com_Name = '{escaped}', TRUE) AS predicted
-            FROM sessioned
+            FROM anchored
+            WHERE detection_instant {side} first_trigger
+               OR (detection_instant = first_trigger AND Com_Name = '{escaped}')
             GROUP BY sid
         )
         SELECT predicted AS predicted_species, COUNT(*) AS frequency,
@@ -570,13 +659,22 @@ fn species_conditions(species: &[String]) -> String {
 
 /// Build the NFA pattern string for an ordered sequence of `steps` conditions.
 ///
-/// `(?1).*(?2).*…(?N)` matches the conditions in order with any events between.
-/// When `max_gap_minutes` is set, a `(?t<=secs)` constraint precedes each step
-/// after the first so consecutive steps must occur within that gap.
+/// `(?1).*(?t>0)(?2).*(?t>0)…(?N)` matches the conditions in order with any
+/// events between. When `max_gap_minutes` is set, a `(?t<=secs)` constraint
+/// also precedes each step after the first, so consecutive steps must occur
+/// within that gap.
+///
+/// `(?t>0)` — strictly later than the previous step — is there for the reason
+/// [`FUNNEL_MODE`] gives: species heard in one audio chunk share an instant,
+/// and without it a Robin and a Blackbird heard together matched `(?1).*(?2)`
+/// in both orders (measured against `behavioral` v0.10.0). In this extension a
+/// time constraint measures from the event consumed by the previous step, and
+/// stacked constraints must all hold (both measured, as was `.*` still skipping
+/// past a tied event to a later one that satisfies them).
 fn ordered_pattern(steps: usize, max_gap_minutes: Option<u32>) -> String {
     let mut pattern = String::from("(?1)");
     for i in 2..=steps {
-        pattern.push_str(".*");
+        pattern.push_str(".*(?t>0)");
         if let Some(gap) = max_gap_minutes {
             let _ = write!(pattern, "(?t<={})", u64::from(gap) * 60);
         }
@@ -634,6 +732,7 @@ mod tests {
     fn funnel_sql_default() {
         let sql = funnel_sql(&FunnelParams::default());
         assert!(sql.contains("window_funnel("));
+        assert!(sql.contains("'strict_increase',"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         assert!(sql.contains("BETWEEN 4 AND 8"));
         // Conditions are variadic, not wrapped in an array literal.
@@ -643,7 +742,7 @@ mod tests {
     #[test]
     fn sequence_match_sql_default() {
         let sql = sequence_match_sql(&PatternParams::default());
-        assert!(sql.contains("sequence_match('(?1).*(?2).*(?3)', detection_instant"));
+        assert!(sql.contains("sequence_match('(?1).*(?t>0)(?2).*(?t>0)(?3)', detection_instant"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         assert!(sql.contains("AS matched"));
     }
@@ -656,13 +755,13 @@ mod tests {
             ..PatternParams::default()
         };
         let sql = sequence_match_sql(&params);
-        assert!(sql.contains("sequence_match('(?1).*(?t<=1800)(?2)'"));
+        assert!(sql.contains("sequence_match('(?1).*(?t>0)(?t<=1800)(?2)'"));
     }
 
     #[test]
     fn sequence_count_sql_default() {
         let sql = sequence_count_sql(&PatternParams::default());
-        assert!(sql.contains("sequence_count('(?1).*(?2).*(?3)', detection_instant"));
+        assert!(sql.contains("sequence_count('(?1).*(?t>0)(?2).*(?t>0)(?3)', detection_instant"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         assert!(sql.contains("AS match_count"));
     }
@@ -670,12 +769,13 @@ mod tests {
     #[test]
     fn sequence_match_events_sql_default() {
         let sql = sequence_match_events_sql(&PatternParams::default());
-        assert!(sql.contains("sequence_match_events('(?1).*(?2).*(?3)', detection_instant"));
-        // The TIMESTAMP[] is moved onto the wall clock and cast element-wise
-        // to VARCHAR for a plain list (tests/two_clocks.rs holds the values).
-        assert!(sql.contains("list_transform("));
-        assert!(sql.contains("x -> CAST(x + wall_offset AS VARCHAR)"));
-        assert!(sql.contains(WALL_OFFSET));
+        assert!(
+            sql.contains("sequence_match_events('(?1).*(?t>0)(?2).*(?t>0)(?3)', detection_instant")
+        );
+        // Each step is mapped back to its own row's wall clock
+        // (tests/two_clocks.rs and the DST live test hold the values).
+        assert!(sql.contains("JOIN detections_ts d ON d.detection_instant = s.ev[s.i]"));
+        assert!(!sql.contains("wall_offset"));
         assert!(sql.contains("AS step_times"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         // Conditions are variadic, not wrapped in an array literal.
@@ -690,18 +790,18 @@ mod tests {
             ..PatternParams::default()
         };
         let sql = sequence_match_events_sql(&params);
-        assert!(sql.contains("sequence_match_events('(?1).*(?t<=1800)(?2)'"));
+        assert!(sql.contains("sequence_match_events('(?1).*(?t>0)(?t<=1800)(?2)'"));
     }
 
     #[test]
     fn funnel_events_sql_default() {
         let sql = funnel_events_sql(&FunnelParams::default());
         assert!(sql.contains("window_funnel_events("));
-        // The TIMESTAMP[] is moved onto the wall clock and cast element-wise
-        // to VARCHAR for a plain list (tests/two_clocks.rs holds the values).
-        assert!(sql.contains("list_transform("));
-        assert!(sql.contains("x -> CAST(x + wall_offset AS VARCHAR)"));
-        assert!(sql.contains(WALL_OFFSET));
+        assert!(sql.contains("'strict_increase',"));
+        // Each step is mapped back to its own row's wall clock
+        // (tests/two_clocks.rs and the DST live test hold the values).
+        assert!(sql.contains("JOIN detections_ts d ON d.detection_instant = s.ev[s.i]"));
+        assert!(!sql.contains("wall_offset"));
         assert!(sql.contains("AS step_times"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         // Conditions are variadic, not wrapped in an array literal.
@@ -715,12 +815,22 @@ mod tests {
         assert!(sql.contains("Com_Name = 'O''Brien''s Warbler', TRUE)"));
         assert!(sql.contains("INTERVAL '60 MINUTE'"));
         assert!(sql.contains("LIMIT 10"));
+        assert!(sql.contains("detection_instant > first_trigger"));
+    }
+
+    #[test]
+    fn previous_species_sql_runs_backward_from_the_first_trigger() {
+        let sql = previous_species_sql("O'Brien's Warbler", 60, 10);
+        assert!(sql.contains("sequence_next_node('backward', 'first_match'"));
+        assert!(sql.contains("Com_Name = 'O''Brien''s Warbler', TRUE)"));
+        assert!(sql.contains("detection_instant < first_trigger"));
+        assert!(!sql.contains("detection_instant > first_trigger"));
     }
 
     #[test]
     fn ordered_pattern_shapes() {
-        assert_eq!(ordered_pattern(3, None), "(?1).*(?2).*(?3)");
-        assert_eq!(ordered_pattern(2, Some(60)), "(?1).*(?t<=3600)(?2)");
+        assert_eq!(ordered_pattern(3, None), "(?1).*(?t>0)(?2).*(?t>0)(?3)");
+        assert_eq!(ordered_pattern(2, Some(60)), "(?1).*(?t>0)(?t<=3600)(?2)");
         assert_eq!(ordered_pattern(1, None), "(?1)");
     }
 
@@ -780,6 +890,7 @@ mod tests {
                 sequence_match_events_sql(&pattern_params),
             ),
             ("next_species", next_species_sql("Robin", 30, 5)),
+            ("previous_species", previous_species_sql("Robin", 30, 5)),
         ];
         for (name, sql) in &all {
             for marker in ELAPSED {

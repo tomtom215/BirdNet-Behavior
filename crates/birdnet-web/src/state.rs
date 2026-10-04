@@ -970,6 +970,27 @@ impl AppState {
         })
     }
 
+    /// Mirror the last two local days of recording effort into the analytics
+    /// store, after the effort recorder has credited a sample.
+    ///
+    /// Returns `None` when analytics is not enabled. Lock order as in
+    /// [`Self::resync_analytics_full`].
+    #[cfg(feature = "analytics")]
+    pub fn mirror_recent_recording_effort(
+        &self,
+    ) -> Option<Result<u64, birdnet_behavioral::connection::AnalyticsError>> {
+        let analytics = self.inner.analytics_db.as_ref()?;
+        let conn = self
+            .inner
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let adb = analytics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(adb.sync_recent_recording_effort(&conn))
+    }
+
     /// Rebuild the `DuckDB` analytics copy from the full `SQLite` detections
     /// table.
     ///

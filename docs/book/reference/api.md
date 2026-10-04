@@ -166,7 +166,7 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/timeseries/accumulation` | Life-list accumulation curve |
 | `GET /api/v2/timeseries/heatmap` · `sessions` | Hour×day heatmap, activity sessions |
 | `GET /api/v2/timeseries/status` | Whether the time-series engine is available |
-| `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `patterns` | DuckDB behavioral analytics |
+| `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `previous-species` · `patterns` | DuckDB behavioral analytics |
 | `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
 
 ### Diagnosing empty analytics dashboards
@@ -183,6 +183,7 @@ broken. The `store` object is the part that differs:
   "analytics_configured": true,
   "store": {
     "extension_loaded": true,
+    "self_test": "ok",
     "detections": 412903,
     "unplaceable_detections": 3,
     "detections_placeable": 412900,
@@ -212,6 +213,12 @@ broken. The `store` object is the part that differs:
   it is a C API version, and any engine of the same major at or above it
   accepts the extension — so `v1.2.0` against a `v1.5.6` engine is correct. Rebuild against
   `community-extensions.duckdb.org/<engine_duckdb_version>/<engine_platform>/`.
+- `self_test` other than `"ok"` while `extension_loaded` is `true` — the
+  extension loaded but one of its functions answered a fixed check differently
+  from the version this build's queries were written for; the message names
+  the function. The behavioural cards may show wrong numbers rather than
+  errors, so treat it as broken. `birdnet-behavior --verify-extension` runs
+  the same checks.
 - `detections: 0` against a station with history — the SQLite → DuckDB sync has
   not run or did not complete.
 - `detections: null` — the count itself could not be read from the store, which

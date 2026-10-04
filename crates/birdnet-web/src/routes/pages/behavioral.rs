@@ -9,6 +9,8 @@ use std::fmt::Write as _;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::{Router, routing::get};
+#[cfg(feature = "analytics")]
+use rusqlite::OptionalExtension as _;
 
 use super::{ANALYTICS_PAGE_HTML, escape_html};
 use crate::state::AppState;
@@ -212,7 +214,8 @@ pub(super) async fn analytics_retention_partial(
     analytics_unavailable_html("Species retention")
 }
 
-/// HTMX partial: next-species predictions.
+/// HTMX partial: the species heard just before and just after the most
+/// recently detected one.
 #[cfg(feature = "analytics")]
 pub(super) async fn analytics_next_partial(
     State(state): State<AppState>,
@@ -224,29 +227,50 @@ pub(super) async fn analytics_next_partial(
         let s = state.clone();
         move || {
             s.with_db(|conn| {
+                // The most recent detection. Not `ORDER BY rowid`: this is a
+                // view, and the bundled SQLite (3.53) has no rowid on a view —
+                // "no such column: rowid". The error was swallowed by `.ok()`
+                // into "No detections yet", so the card never showed a
+                // prediction on any station.
                 conn.query_row(
-                    "SELECT Com_Name FROM detections_analytic ORDER BY rowid DESC LIMIT 1",
+                    "SELECT Com_Name FROM detections_analytic \
+                     ORDER BY detected_at_utc DESC NULLS LAST LIMIT 1",
                     [],
                     |row| row.get::<_, String>(0),
                 )
-                .ok()
+                .optional()
             })
         }
     })
     .await;
 
-    let Ok(Some(trigger)) = trigger_result else {
-        return (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            r#"<p class="bh-muted">No detections yet.</p>"#.to_string(),
-        );
+    let trigger = match trigger_result {
+        Ok(Ok(Some(trigger))) => trigger,
+        Ok(Ok(None)) => {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                r#"<p class="bh-muted">No detections yet.</p>"#.to_string(),
+            );
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "analytics next: could not read the latest detection");
+            return super::error_states::failed_partial("what the station expects to hear next");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "analytics next: task failed");
+            return super::error_states::failed_partial("what the station expects to hear next");
+        }
     };
 
     let display = trigger.clone();
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics(|adb| adb.next_species(&trigger, 60, 5))
+            .with_analytics(|adb| {
+                let before = adb.previous_species(&trigger, 60, 5)?;
+                let after = adb.next_species(&trigger, 60, 5)?;
+                Ok((before, after))
+            })
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -258,8 +282,8 @@ pub(super) async fn analytics_next_partial(
     .await;
 
     match result {
-        Ok(Ok(predictions)) => {
-            if predictions.is_empty() {
+        Ok(Ok((before, after))) => {
+            if before.is_empty() && after.is_empty() {
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
@@ -269,39 +293,17 @@ pub(super) async fn analytics_next_partial(
                     ),
                 );
             }
-            let mut html = format!(
-                r#"<p class="bh-after">After <strong>{}</strong>:</p><table><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>"#,
-                escape_html(&display),
-            );
-            for p in &predictions {
-                // The trigger species appears among its own follow-ons — the
-                // same bird calling again — which under a heading that reads
-                // "which tends to turn up **next**" is confusing rather than
-                // informative. Label it instead of dropping it: that it sings
-                // again is a real fact about the species, just not a
-                // *succession* fact.
-                let self_follow = p.predicted_species == display;
-                let pct = p.probability * 100.0;
-                let cls = if pct >= 50.0 {
-                    "high"
-                } else if pct >= 20.0 {
-                    "mid"
-                } else {
-                    "low"
-                };
-                let _ = write!(
-                    html,
-                    r#"<tr><td>{sp}{note}</td><td><span class="conf {cls}">{pct:.0}%</span></td><td>{f}</td></tr>"#,
-                    sp = escape_html(&p.predicted_species),
-                    note = if self_follow {
-                        r#" <span class="bnb-meta">(calls again)</span>"#
-                    } else {
-                        ""
-                    },
-                    f = p.frequency
-                );
-            }
-            html.push_str("</tbody></table>");
+            let before: Vec<_> = before
+                .iter()
+                .map(|p| (p.predicted_species.as_str(), p.probability, p.frequency))
+                .collect();
+            let after: Vec<_> = after
+                .iter()
+                .map(|p| (p.predicted_species.as_str(), p.probability, p.frequency))
+                .collect();
+            let mut html = String::new();
+            render_neighbours(&mut html, "Before", &display, &before);
+            render_neighbours(&mut html, "After", &display, &after);
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         Ok(Err(e)) => analytics_error_html("what sings next", &e),
@@ -311,6 +313,52 @@ pub(super) async fn analytics_next_partial(
             super::error_states::failed_partial("what the station expects to hear next")
         }
     }
+}
+
+/// One "Before"/"After" table of the follow-on card: `(species, probability,
+/// sessions)` rows for the species heard adjacent to `trigger`.
+#[cfg(feature = "analytics")]
+fn render_neighbours(html: &mut String, side: &str, trigger: &str, rows: &[(&str, f64, u64)]) {
+    let _ = write!(
+        html,
+        r#"<p class="bh-after">{side} <strong>{}</strong>:</p>"#,
+        escape_html(trigger),
+    );
+    if rows.is_empty() {
+        html.push_str(r#"<p class="bh-muted">Nothing yet.</p>"#);
+        return;
+    }
+    html.push_str(
+        "<table><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>",
+    );
+    for &(species, probability, frequency) in rows {
+        // The trigger appears among its own follow-ons — the same bird calling
+        // again — which under a heading that reads "which tends to turn up
+        // **next**" is confusing rather than informative. Label it instead of
+        // dropping it: that it sings again is a real fact about the species,
+        // just not a *succession* fact. It cannot precede its own first
+        // detection, so the label only ever appears under "After".
+        let self_follow = species == trigger;
+        let pct = probability * 100.0;
+        let cls = if pct >= 50.0 {
+            "high"
+        } else if pct >= 20.0 {
+            "mid"
+        } else {
+            "low"
+        };
+        let _ = write!(
+            html,
+            r#"<tr><td>{sp}{note}</td><td><span class="conf {cls}">{pct:.0}%</span></td><td>{frequency}</td></tr>"#,
+            sp = escape_html(species),
+            note = if self_follow {
+                r#" <span class="bnb-meta">(calls again)</span>"#
+            } else {
+                ""
+            },
+        );
+    }
+    html.push_str("</tbody></table>");
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -596,13 +644,26 @@ async fn analytics_config_partial(
     // three flags — compiled / active / extension-loaded — measure independent
     // truths, so they're shown as three distinct rows instead of one ambiguous
     // "Connected" pill.
+    // On the blocking pool, for the reason `analytics_status` gives: the
+    // handle's mutex is shared with every analytics query. A failed task reads
+    // as "no store", which the table renders as nothing rather than a guess.
     #[cfg(feature = "analytics")]
-    let ext_status: Option<(bool, Option<String>, Option<String>)> = state.with_analytics(|db| {
-        (
-            db.extension_loaded(),
-            db.duckdb_version(),
-            db.extension_version(),
-        )
+    let ext_status: Option<(bool, Option<String>, Option<String>)> = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            state.with_analytics(|db| {
+                (
+                    db.extension_loaded(),
+                    db.duckdb_version(),
+                    db.extension_version(),
+                )
+            })
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "analytics config: task failed");
+        None
     });
     #[cfg(not(feature = "analytics"))]
     let ext_status: Option<(bool, Option<String>, Option<String>)> = None;
@@ -718,6 +779,126 @@ fn find_rate(rates: &[birdnet_behavioral::types::RetentionRate], days: u32) -> S
 mod tests {
     use super::funnel_step_counts;
     use birdnet_behavioral::types::ChorusFunnel;
+
+    /// The engine-configuration card waits for the analytics handle off the
+    /// async runtime (see `status_waits_for_the_handle_off_the_runtime` in
+    /// `routes::analytics` for the shape of the check).
+    #[tokio::test(flavor = "current_thread")]
+    async fn config_card_waits_for_the_handle_off_the_runtime() {
+        use axum::response::IntoResponse as _;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::new_with_analytics(
+            dir.path().join("birds.db"),
+            &dir.path().join("analytics.duckdb"),
+        )
+        .unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let holder = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                state.with_analytics(|_| {
+                    held_tx.send(()).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                });
+            })
+        };
+        held_rx.recv().unwrap();
+        let ticked = Arc::new(AtomicBool::new(false));
+        let ticker = {
+            let ticked = Arc::clone(&ticked);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                ticked.store(true, Ordering::SeqCst);
+            })
+        };
+        let _ = super::analytics_config_partial(axum::extract::State(state))
+            .await
+            .into_response();
+        assert!(
+            ticked.load(Ordering::SeqCst),
+            "the runtime's only thread was blocked while the card waited for the handle"
+        );
+        ticker.await.unwrap();
+        holder.join().unwrap();
+    }
+
+    /// The card names the most recent species and shows who came before and
+    /// after it.
+    ///
+    /// Its trigger lookup ordered a view by `rowid`, which the bundled SQLite
+    /// rejects; the error was swallowed and every station's card read "No
+    /// detections yet." over any amount of history.
+    #[tokio::test]
+    async fn the_neighbour_card_renders_from_real_history() {
+        use axum::response::IntoResponse as _;
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::new_with_analytics(
+            dir.path().join("birds.db"),
+            &dir.path().join("analytics.duckdb"),
+        )
+        .unwrap();
+        if !state.with_analytics(|db| db.extension_loaded()).unwrap() {
+            birdnet_behavioral::gating::skip_or_fail(
+                "the behavioral extension",
+                "it did not load into the test store",
+            );
+            return;
+        }
+        // Three mornings of Wren -> Robin -> Blackbird; the latest detection
+        // is a Robin, which is what the card asks about.
+        state.with_db(|conn| {
+            for day in 1..=3 {
+                for (time, com, utc) in [
+                    ("05:00:00", "Eurasian Wren", 0),
+                    ("05:01:00", "European Robin", 60),
+                    ("05:02:00", "Eurasian Blackbird", 120),
+                ] {
+                    conn.execute(
+                        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) \
+                         VALUES (?1, ?2, 'x', ?3, 0.9, ?4)",
+                        rusqlite::params![
+                            format!("2024-05-0{day}"),
+                            time,
+                            com,
+                            1_714_539_600 + (day - 1) * 86_400 + utc
+                        ],
+                    )
+                    .unwrap();
+                }
+            }
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) \
+                 VALUES ('2024-05-04', '05:01:00', 'x', 'European Robin', 0.9, 1714799000)",
+                [],
+            )
+            .unwrap();
+        });
+        state.resync_analytics_full().unwrap().unwrap();
+
+        let response = super::analytics_next_partial(axum::extract::State(state))
+            .await
+            .into_response();
+        let html = String::from_utf8(
+            axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(!html.contains("No detections yet"), "{html}");
+        assert!(
+            html.contains("Before <strong>European Robin</strong>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("After <strong>European Robin</strong>"),
+            "{html}"
+        );
+        assert!(html.contains("<td>Eurasian Wren</td>"), "{html}");
+        assert!(html.contains("<td>Eurasian Blackbird</td>"), "{html}");
+    }
 
     fn cf(steps_completed: u32) -> ChorusFunnel {
         ChorusFunnel {

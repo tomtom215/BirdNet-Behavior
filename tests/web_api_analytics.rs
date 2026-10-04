@@ -139,6 +139,23 @@ async fn analytics_endpoints_report_unavailable_without_duckdb() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "unavailable");
+    // previous-species is routed the same way.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/analytics/previous-species?before=Robin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "unavailable");
 }
 
 #[tokio::test]

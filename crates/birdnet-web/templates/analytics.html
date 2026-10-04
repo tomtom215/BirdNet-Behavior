@@ -39,12 +39,13 @@
         </div>
     </div>
 
-    <!-- Next species -->
+    <!-- Previous / next species -->
     <div class="bnb-card pad">
-        <div class="bnb-eyebrow">What comes next</div>
-        <h2 class="an-card-h3">Follow-on species</h2>
+        <div class="bnb-eyebrow">Before and after</div>
+        <h2 class="an-card-h3">Neighbouring species</h2>
         <p class="bnb-meta an-card-lede">
-            After hearing one species, which tends to turn up <b>next</b> in the same session.
+            Which species tends to be heard just <b>before</b> a bird first turns up in a
+            session, and which just <b>after</b>. Birds heard at the same moment are not counted.
         </p>
         <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
             <p class="an-loading">Loading predictions...</p>

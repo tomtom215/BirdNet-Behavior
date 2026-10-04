@@ -3026,6 +3026,8 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .bh-muted-sm     { color: var(--text-muted); font-size: 0.8rem; }
 .bh-cell-note    { color: var(--text-muted); padding-top: 0.5rem; }
 .bh-after        { font-size: 0.85rem; margin-bottom: 0.75rem; }
+/* The neighbour card stacks a "Before" and an "After" table. */
+.bh-after:not(:first-child) { margin-top: 1.5rem; }
 .bh-config-table { font-size: 0.85rem; }
 .bh-key          { font-weight: 600; }
 

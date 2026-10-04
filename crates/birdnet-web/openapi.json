@@ -2127,14 +2127,62 @@
           "analytics"
         ],
         "summary": "Predict the next species",
-        "description": "Given a trigger species, the species most likely to be heard next within a time window.",
+        "description": "Given a trigger species, the species most often heard immediately after its first detection in an activity session (sessions split at gaps longer than `window` minutes). A species heard in the same audio chunk as the trigger is simultaneous, not next, and is not counted. The trigger can be its own follower (the same bird calling again).",
         "operationId": "analyticsNextSpecies",
         "parameters": [
           {
             "name": "after",
             "in": "query",
             "required": true,
-            "description": "Trigger species (common or scientific name).",
+            "description": "Trigger species, by common name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/analytics/previous-species": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Predict the previous species",
+        "description": "Given a trigger species, the species most often heard immediately before its first detection in an activity session (sessions split at gaps longer than `window` minutes). A session the trigger opens has no predecessor and is not counted; a species heard in the same audio chunk as the trigger is simultaneous, not previous.",
+        "operationId": "analyticsPreviousSpecies",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": true,
+            "description": "Trigger species, by common name.",
             "schema": {
               "type": "string"
             }

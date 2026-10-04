@@ -934,6 +934,48 @@ impl AnalyticsDb {
         &self,
         sqlite_conn: &rusqlite::Connection,
     ) -> Result<u64, AnalyticsError> {
+        self.replace_recording_effort(sqlite_conn, None)
+    }
+
+    /// Re-copy only the last two local days of recording effort.
+    ///
+    /// The startup copy is the only one [`Self::sync_recording_effort`] makes,
+    /// and today's row grows every five minutes, so without this the store
+    /// held effort as of boot: every week since the last restart divided its
+    /// detections by too few listening hours, or by none. Called after each
+    /// effort sample. Yesterday is included because the last sample before
+    /// midnight is credited to it, and the next sample to today.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::sync_recording_effort`].
+    pub fn sync_recent_recording_effort(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+    ) -> Result<u64, AnalyticsError> {
+        let since: String = sqlite_conn
+            .query_row("SELECT date('now', 'localtime', '-1 day')", [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| AnalyticsError::InvalidData(format!("SQLite read error: {e}")))?;
+        self.replace_recording_effort(sqlite_conn, Some(&since))
+    }
+
+    /// Replace the store's effort rows with `SQLite`'s — all of them, or those
+    /// dated `since` or later (`YYYY-MM-DD` compares as text).
+    ///
+    /// One transaction: the delete and the re-insert land together or not at
+    /// all. They used to be two steps, and an append that failed after the
+    /// delete left the table empty, so every effort-corrected rate read NULL
+    /// until the next restart. A row that cannot be read fails the sync
+    /// rather than being skipped — skipping it undercounted that day's
+    /// listening and so overstated its detections per hour — and the previous
+    /// copy stays in place.
+    fn replace_recording_effort(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+        since: Option<&str>,
+    ) -> Result<u64, AnalyticsError> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS recording_effort (
                 date VARCHAR NOT NULL,
@@ -945,20 +987,35 @@ impl AnalyticsDb {
         let read_err =
             |e: rusqlite::Error| AnalyticsError::InvalidData(format!("SQLite read error: {e}"));
         let mut stmt = sqlite_conn
-            .prepare("SELECT date, source, seconds FROM recording_effort")
+            .prepare("SELECT date, source, seconds FROM recording_effort WHERE date >= ?1")
             .map_err(read_err)?;
         let rows: Vec<(String, String, f64)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map([since.unwrap_or("")], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .map_err(read_err)?
-            .filter_map(Result::ok)
-            .collect();
+            .collect::<Result<_, _>>()
+            .map_err(read_err)?;
 
-        self.conn.execute_batch("DELETE FROM recording_effort;")?;
-        let mut appender = self.conn.appender("recording_effort")?;
-        for (date, source, seconds) in &rows {
-            appender.append_row(params![date, source, seconds])?;
+        self.conn.execute_batch("BEGIN TRANSACTION;")?;
+        let replaced = (|| -> Result<(), duckdb::Error> {
+            self.conn.execute(
+                "DELETE FROM recording_effort WHERE date >= ?",
+                params![since.unwrap_or("")],
+            )?;
+            let mut appender = self.conn.appender("recording_effort")?;
+            for (date, source, seconds) in &rows {
+                appender.append_row(params![date, source, seconds])?;
+            }
+            appender.flush()
+        })();
+        match replaced {
+            Ok(()) => self.conn.execute_batch("COMMIT;")?,
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                return Err(AnalyticsError::from(e));
+            }
         }
-        appender.flush()?;
         Ok(rows.len() as u64)
     }
 
@@ -1086,6 +1143,112 @@ impl AnalyticsDb {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A `SQLite` store with the station's `recording_effort` schema.
+    fn effort_sqlite(rows: &[(&str, &str, f64)]) -> rusqlite::Connection {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE recording_effort (
+                date TEXT NOT NULL, source TEXT NOT NULL,
+                seconds REAL NOT NULL DEFAULT 0, PRIMARY KEY (date, source));",
+        )
+        .unwrap();
+        for (d, src, secs) in rows {
+            c.execute(
+                "INSERT INTO recording_effort VALUES (?1, ?2, ?3)",
+                rusqlite::params![d, src, secs],
+            )
+            .unwrap();
+        }
+        c
+    }
+
+    fn effort_rows(db: &AnalyticsDb) -> Vec<(String, f64)> {
+        let mut stmt = db
+            .conn
+            .prepare("SELECT date, seconds FROM recording_effort ORDER BY date")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// A failed copy leaves the previous effort in place.
+    ///
+    /// The delete and the re-insert were separate steps, so an append that
+    /// failed after the delete left the table empty and every
+    /// effort-corrected rate NULL until the next restart. The failure is
+    /// forced here with a store whose table has a column the copy does not
+    /// fill.
+    #[test]
+    fn a_failed_effort_copy_keeps_the_previous_copy() {
+        let (db, _tmp) = make_db();
+        db.conn
+            .execute_batch(
+                "CREATE TABLE recording_effort (date VARCHAR NOT NULL, source VARCHAR NOT NULL, \
+                 seconds DOUBLE NOT NULL, extra INTEGER NOT NULL); \
+                 INSERT INTO recording_effort VALUES ('2024-05-01', 'mic', 3600, 1);",
+            )
+            .unwrap();
+        let sqlite = effort_sqlite(&[("2024-05-01", "mic", 7200.0)]);
+        assert!(db.sync_recording_effort(&sqlite).is_err());
+        assert_eq!(effort_rows(&db), [("2024-05-01".to_owned(), 3600.0)]);
+    }
+
+    /// A row that cannot be read fails the copy; it is not skipped.
+    ///
+    /// Skipping it undercounted that day's listening and so overstated the
+    /// day's detections per hour, silently.
+    #[test]
+    fn an_unreadable_effort_row_fails_the_copy() {
+        let (db, _tmp) = make_db();
+        let good = effort_sqlite(&[("2024-05-01", "mic", 3600.0)]);
+        db.sync_recording_effort(&good).unwrap();
+        // REAL affinity keeps text that does not look numeric as text.
+        let bad = effort_sqlite(&[("2024-05-01", "mic", 7200.0)]);
+        bad.execute(
+            "INSERT INTO recording_effort VALUES ('2024-05-02', 'mic', 'garbled')",
+            [],
+        )
+        .unwrap();
+        assert!(db.sync_recording_effort(&bad).is_err());
+        assert_eq!(effort_rows(&db), [("2024-05-01".to_owned(), 3600.0)]);
+    }
+
+    /// The recurring copy replaces the last two local days and nothing older.
+    #[test]
+    fn the_recent_effort_copy_touches_only_the_last_two_days() {
+        let (db, _tmp) = make_db();
+        let sqlite = effort_sqlite(&[]);
+        let (today, yesterday, older): (String, String, String) = sqlite
+            .query_row(
+                "SELECT date('now','localtime'), date('now','localtime','-1 day'), \
+                        date('now','localtime','-5 day')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        for (d, secs) in [(&older, 100.0), (&yesterday, 200.0), (&today, 300.0)] {
+            sqlite
+                .execute(
+                    "INSERT INTO recording_effort VALUES (?1, 'mic', ?2)",
+                    rusqlite::params![d, secs],
+                )
+                .unwrap();
+        }
+        db.sync_recording_effort(&sqlite).unwrap();
+        // The day goes on; SQLite's rows grow, and an old row is changed
+        // behind the copy's back to show the recurring copy leaves it alone.
+        sqlite
+            .execute_batch("UPDATE recording_effort SET seconds = seconds + 1000;")
+            .unwrap();
+        assert_eq!(db.sync_recent_recording_effort(&sqlite).unwrap(), 2);
+        assert_eq!(
+            effort_rows(&db),
+            [(older, 100.0), (yesterday, 1200.0), (today, 1300.0)]
+        );
+    }
 
     fn make_db() -> (AnalyticsDb, TempDir) {
         let dir = TempDir::new().unwrap();

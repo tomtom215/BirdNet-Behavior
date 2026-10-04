@@ -473,3 +473,99 @@ fn a_silent_day_is_an_anomaly() {
     assert_eq!(flag(3).as_deref(), Some("normal"), "{rows:?}");
     assert_eq!(flag(8).as_deref(), Some("low"), "{rows:?}");
 }
+
+/// `AbsenceStreak` runs and counts the days since the species was last heard.
+///
+/// It is public and had no caller, and its streak used a window function as a
+/// frame bound, which DuckDB does not even parse; the sweep above never ran
+/// it, because it only drives the executor's methods.
+#[test]
+fn an_absence_streak_counts_the_days_since_last_heard() {
+    use birdnet_timeseries::queries::QueryPlan as _;
+    use birdnet_timeseries::queries::gap::AbsenceStreak;
+    let dir = TempDir::new().expect("temp dir");
+    let db = AnalyticsDb::open(&dir.path().join("a.duckdb")).expect("open");
+    for back in [5, 2] {
+        let d = day_before(&db, back);
+        db.conn()
+            .execute_batch(&format!(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+                 VALUES ('{d}', '06:00:00', 'Erithacus rubecula', 'European Robin', 0.9,
+                         epoch(TIMESTAMP '{d} 06:00:00'));"
+            ))
+            .expect("seed");
+    }
+    let sql = AbsenceStreak {
+        species: "European Robin".into(),
+        lookback_days: 6,
+    }
+    .sql();
+    let mut stmt = db.conn().prepare(&sql).expect("AbsenceStreak binds");
+    let streaks: Vec<(bool, i64, i64)> = stmt
+        .query_map([], |r| Ok((r.get(1)?, r.get(2)?, r.get(3)?)))
+        .expect("AbsenceStreak executes")
+        .map(Result::unwrap)
+        .collect();
+    // Days -6..=0; heard on -5 and -2.
+    assert_eq!(
+        streaks,
+        [
+            (false, 0, 1),
+            (true, 1, 0),
+            (false, 1, 1),
+            (false, 1, 2),
+            (true, 2, 0),
+            (false, 2, 1),
+            (false, 2, 2),
+        ]
+    );
+}
+
+/// `TumblingSpec` takes the ISO dates its fields document, and filters on them.
+///
+/// They were spliced in unquoted, so `2026-01-01` reached DuckDB as integer
+/// arithmetic and the query failed to bind.
+#[test]
+fn a_tumbling_window_takes_iso_dates() {
+    use birdnet_timeseries::WindowSpec as _;
+    use birdnet_timeseries::window::{Granularity, TumblingSpec};
+    let (store, _tmp) = seeded_db();
+    let sql = TumblingSpec {
+        granularity: Granularity::Day,
+        from_date: Some(day_before(&store, 3)),
+        to_date: Some(day_before(&store, 0)),
+        species: None,
+        limit: 100,
+    }
+    .build_sql();
+    let mut stmt = store.conn().prepare(&sql).expect("TumblingSpec binds");
+    let counts: Vec<i64> = stmt
+        .query_map([], |r| r.get(2))
+        .expect("TumblingSpec executes")
+        .map(Result::unwrap)
+        .collect();
+    // Four days, each 4 hours x 3 species.
+    assert_eq!(counts, [12, 12, 12, 12]);
+}
+
+/// `HoppingSpec` — the last public window spec nothing executed — binds and
+/// finds the seeded detections through both of its constructors.
+#[test]
+fn a_hopping_window_binds_and_counts() {
+    use birdnet_timeseries::WindowSpec as _;
+    use birdnet_timeseries::window::HoppingSpec;
+    let (store, _tmp) = seeded_db();
+    for spec in [HoppingSpec::default(), HoppingSpec::last_n_days(3, 60, 30)] {
+        let sql = spec.build_sql();
+        let mut stmt = store
+            .conn()
+            .prepare(&sql)
+            .unwrap_or_else(|e| panic!("HoppingSpec binds: {e}\n{sql}"));
+        let n = stmt
+            .query_map([], |r| r.get::<_, i64>(2))
+            .expect("HoppingSpec executes")
+            .map(Result::unwrap)
+            .count();
+        assert!(n > 0, "no windows over a seeded store:\n{sql}");
+    }
+}

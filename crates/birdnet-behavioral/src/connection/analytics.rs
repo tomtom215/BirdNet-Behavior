@@ -10,6 +10,85 @@ use duckdb::types::Value;
 use super::{AnalyticsDb, AnalyticsError};
 use crate::{queries, types};
 
+/// The events [`AnalyticsDb::verify_behavioral_functions`] runs on: a Wren,
+/// a Robin 3 s later, a Blackbird and a Song Thrush together 3 s after that,
+/// and a Robin an hour later.
+const SELF_TEST_EVENTS: &str = "(VALUES \
+    (TIMESTAMP '2024-05-01 05:00:00', 'W'), \
+    (TIMESTAMP '2024-05-01 05:00:03', 'R'), \
+    (TIMESTAMP '2024-05-01 05:00:06', 'B'), \
+    (TIMESTAMP '2024-05-01 05:00:06', 'T'), \
+    (TIMESTAMP '2024-05-01 06:00:00', 'R')) ev(ts, s)";
+
+/// `(check, query over {EVENTS} yielding one VARCHAR, v0.10.0's answer)`.
+const SELF_TEST: [(&str, &str, &str); 11] = [
+    (
+        "sessionize",
+        "SELECT CAST(list(sid ORDER BY ts, s) AS VARCHAR) FROM (SELECT ts, s, \
+         sessionize(ts, INTERVAL '30 MINUTE') OVER (ORDER BY ts) AS sid FROM {EVENTS})",
+        "[1, 1, 1, 1, 2]",
+    ),
+    (
+        "retention",
+        "SELECT CAST(retention(s = 'W', s = 'R', s = 'X') AS VARCHAR) FROM {EVENTS}",
+        "[true, true, false]",
+    ),
+    (
+        "window_funnel",
+        "SELECT CAST(window_funnel(INTERVAL '60 MINUTE', 'strict_increase', ts, \
+         s = 'W', s = 'R', s = 'B') AS VARCHAR) FROM {EVENTS}",
+        "3",
+    ),
+    (
+        "window_funnel, same instant",
+        "SELECT CAST(window_funnel(INTERVAL '60 MINUTE', 'strict_increase', ts, \
+         s = 'R', s = 'B', s = 'T') AS VARCHAR) FROM {EVENTS}",
+        "2",
+    ),
+    (
+        "window_funnel_events",
+        "SELECT CAST(window_funnel_events(INTERVAL '60 MINUTE', 'strict_increase', ts, \
+         s = 'W', s = 'R', s = 'B') AS VARCHAR) FROM {EVENTS}",
+        "['2024-05-01 05:00:00', '2024-05-01 05:00:03', '2024-05-01 05:00:06']",
+    ),
+    (
+        "sequence_match",
+        "SELECT CAST(sequence_match('(?1).*(?t>0)(?2)', ts, s = 'W', s = 'B') AS VARCHAR) \
+         FROM {EVENTS}",
+        "true",
+    ),
+    (
+        "sequence_match, same instant",
+        "SELECT CAST(sequence_match('(?1).*(?t>0)(?2)', ts, s = 'B', s = 'T') AS VARCHAR) \
+         FROM {EVENTS}",
+        "false",
+    ),
+    (
+        "sequence_count",
+        "SELECT CAST(sequence_count('(?1).*(?t>0)(?t<=3600)(?2)', ts, s = 'W', s = 'R') \
+         AS VARCHAR) FROM {EVENTS}",
+        "1",
+    ),
+    (
+        "sequence_match_events",
+        "SELECT CAST(sequence_match_events('(?1).*(?t>0)(?2)', ts, s = 'W', s = 'B') \
+         AS VARCHAR) FROM {EVENTS}",
+        "['2024-05-01 05:00:00', '2024-05-01 05:00:06']",
+    ),
+    (
+        "sequence_next_node forward",
+        "SELECT sequence_next_node('forward', 'first_match', ts, s, s = 'W', TRUE) \
+         FROM {EVENTS}",
+        "R",
+    ),
+    (
+        "sequence_next_node backward",
+        "SELECT sequence_next_node('backward', 'first_match', ts, s, s = 'B', TRUE) \
+         FROM {EVENTS}",
+        "R",
+    ),
+];
+
 impl AnalyticsDb {
     /// Execute a sessionize query.
     ///
@@ -336,8 +415,9 @@ impl AnalyticsDb {
 
     /// Execute a next-species prediction query.
     ///
-    /// Finds which species are most likely to be detected after `trigger`
-    /// within `window_minutes` minutes, based on historical co-occurrence.
+    /// Finds which species are most likely to be detected immediately after
+    /// the first detection of `trigger` in an activity session (sessions split
+    /// at gaps longer than `window_minutes`).
     ///
     /// # Errors
     ///
@@ -350,10 +430,55 @@ impl AnalyticsDb {
     ) -> Result<Vec<types::NextSpeciesPrediction>, AnalyticsError> {
         self.require_extension()?;
         let sql = queries::next_species_sql(trigger, window_minutes, limit);
-        let mut stmt = self.conn.prepare(&sql)?;
+        Ok(self
+            .adjacent_species(&sql)?
+            .into_iter()
+            .map(
+                |(predicted_species, frequency, probability)| types::NextSpeciesPrediction {
+                    after_species: trigger.to_string(),
+                    predicted_species,
+                    frequency,
+                    probability,
+                },
+            )
+            .collect())
+    }
+
+    /// Execute a previous-species query: which species are most often heard
+    /// immediately before the first detection of `trigger` in an activity
+    /// session.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AnalyticsError::ExtensionLoad` if the extension is not loaded.
+    pub fn previous_species(
+        &self,
+        trigger: &str,
+        window_minutes: u32,
+        limit: u32,
+    ) -> Result<Vec<types::PreviousSpeciesPrediction>, AnalyticsError> {
+        self.require_extension()?;
+        let sql = queries::previous_species_sql(trigger, window_minutes, limit);
+        Ok(self
+            .adjacent_species(&sql)?
+            .into_iter()
+            .map(
+                |(predicted_species, frequency, probability)| types::PreviousSpeciesPrediction {
+                    before_species: trigger.to_string(),
+                    predicted_species,
+                    frequency,
+                    probability,
+                },
+            )
+            .collect())
+    }
+
+    /// Run a next/previous-species query: `(species, frequency, probability)`.
+    fn adjacent_species(&self, sql: &str) -> Result<Vec<(String, u64, f64)>, AnalyticsError> {
+        let mut stmt = self.conn.prepare(sql)?;
         let rows = stmt.query_map([], |row| {
             let frequency: i64 = row.get(1)?;
-            // Over every session with a follower, not the rows `LIMIT` kept.
+            // Over every session with a neighbour, not the rows `LIMIT` kept.
             let sessions: f64 = row.get(2)?;
             #[allow(clippy::cast_precision_loss)]
             let probability = if sessions > 0.0 {
@@ -361,17 +486,55 @@ impl AnalyticsDb {
             } else {
                 0.0
             };
-            Ok(types::NextSpeciesPrediction {
-                after_species: trigger.to_string(),
-                predicted_species: row.get(0)?,
-                frequency: u64::try_from(frequency).unwrap_or(0),
+            Ok((
+                row.get(0)?,
+                u64::try_from(frequency).unwrap_or(0),
                 probability,
-            })
+            ))
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
     }
 
-    /// Guard: return an error if the extension is not loaded.
+    /// Run every behavioural function the station uses on fixed literal
+    /// events, in the shapes the query builders use, and compare each answer
+    /// with the one `behavioral` v0.10.0 gives.
+    ///
+    /// `extension_loaded` and `behavioral_version()` only say a library is
+    /// present. A build that loads cleanly and answers differently — v0.10.0
+    /// itself replaced `window_funnel`'s algorithm and changed what
+    /// `sequence_match` returns on a group without timestamps — would leave
+    /// every dashboard rendering plausible, wrong numbers. This is the check
+    /// that notices. It reads no station data.
+    ///
+    /// The expected values were measured against the published v0.10.0 build
+    /// (DuckDB 1.5.6), not derived. The two "same instant" checks pin the
+    /// ordering contract the builders rely on (`'strict_increase'`, `(?t>0)`):
+    /// two species heard in one chunk are not an order.
+    ///
+    /// # Errors
+    ///
+    /// [`AnalyticsError::ExtensionLoad`] when the extension is not loaded;
+    /// [`AnalyticsError::InvalidData`] naming the first check whose answer
+    /// differs, or that failed to run.
+    pub fn verify_behavioral_functions(&self) -> Result<(), AnalyticsError> {
+        self.require_extension()?;
+        for (name, sql, expected) in SELF_TEST {
+            let sql = sql.replace("{EVENTS}", SELF_TEST_EVENTS);
+            let got: Option<String> = self
+                .conn
+                .query_row(&sql, [], |r| r.get(0))
+                .map_err(|e| AnalyticsError::InvalidData(format!("{name}: {e}")))?;
+            if got.as_deref() != Some(expected) {
+                return Err(AnalyticsError::InvalidData(format!(
+                    "{name} answered {got:?} where behavioral v0.10.0 answers {expected:?}: \
+                     the loaded extension's semantics differ from the ones this build's \
+                     queries were written for"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     fn require_extension(&self) -> Result<(), AnalyticsError> {
         if self.extension_loaded {
             Ok(())
