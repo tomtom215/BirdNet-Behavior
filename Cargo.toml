@@ -71,7 +71,7 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 # community-extensions rebuild propagates. (The `v1.5.4` path long served a
 # byte-identical copy of the old v0.8.0/1.5.3 build; DuckDB moved 1.5.3 -> 1.5.5
 # and v0.9.1 was published under v1.5.5.)
-duckdb = { version = "~1.10505", features = ["bundled"] }
+duckdb = { version = "~1.10506", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
