@@ -413,13 +413,17 @@ pub(super) async fn restore_backup(
 
     // Before the upload is even read: a restore replaces the detection history
     // wholesale, and the row has to exist whether or not the restore finishes.
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "data.database.restore",
-        None,
-        None,
-    );
+    state
+        .run_blocking(move |state| {
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "data.database.restore",
+                None,
+                None,
+            );
+        })
+        .await;
 
     if RESTORE_IN_PROGRESS
         .compare_exchange(

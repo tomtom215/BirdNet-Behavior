@@ -28,10 +28,18 @@ pub async fn settings_page(
     State(state): State<AppState>,
     user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
 ) -> Result<Html<String>, StatusCode> {
-    Ok(Html(match load_settings_for(&state, user.as_deref()) {
-        Ok(settings_map) => render_settings_page(&settings_map),
-        Err(e) => crate::routes::admin::admin_shell("Settings", "settings", &unreadable_notice(&e)),
-    }))
+    state
+        .run_blocking(move |state| {
+            Ok(Html(match load_settings_for(state, user.as_deref()) {
+                Ok(settings_map) => render_settings_page(&settings_map),
+                Err(e) => crate::routes::admin::admin_shell(
+                    "Settings",
+                    "settings",
+                    &unreadable_notice(&e),
+                ),
+            }))
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -47,10 +55,14 @@ pub async fn settings_partial(
     State(state): State<AppState>,
     user: Option<axum::Extension<crate::auth_middleware::RequestUser>>,
 ) -> Result<Html<String>, StatusCode> {
-    Ok(Html(match load_settings_for(&state, user.as_deref()) {
-        Ok(settings_map) => render_settings_form(&settings_map),
-        Err(e) => unreadable_notice(&e),
-    }))
+    state
+        .run_blocking(move |state| {
+            Ok(Html(match load_settings_for(state, user.as_deref()) {
+                Ok(settings_map) => render_settings_form(&settings_map),
+                Err(e) => unreadable_notice(&e),
+            }))
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +187,7 @@ pub async fn save_settings(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SettingsForm>,
 ) -> Result<Html<String>, StatusCode> {
+    state.run_blocking(move |state| {
     // Compare submitted values against the current DB state so we only
     // persist the rows the operator actually changed. Without this the
     // page's render-time defaults (e.g. `night_inhibit=false` when no row
@@ -183,7 +196,7 @@ pub async fn save_settings(
     // Refuse outright when the current values cannot be read: the diff below
     // would count every submitted field as changed and write all of them,
     // render-time defaults included, over the operator's real configuration.
-    let existing = match load_all_settings(&state) {
+    let existing = match load_all_settings(state) {
         Ok(existing) => existing,
         Err(e) => {
             let body = Html(format!(
@@ -248,7 +261,7 @@ pub async fn save_settings(
             // moved the recording schedule.
             if let Some(keys) = changed {
                 crate::audit::audit(
-                    &state,
+                    state,
                     Some(&request_user),
                     "settings.update",
                     None,
@@ -303,6 +316,8 @@ pub async fn save_settings(
             ))
         }
     }
+})
+.await
 }
 
 // ---------------------------------------------------------------------------

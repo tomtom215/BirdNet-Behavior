@@ -326,6 +326,33 @@ fn record_notification(
     }
 }
 
+/// [`record_notification`] from async code: the write runs on the blocking
+/// pool, so a send task does not hold a runtime worker while the detection
+/// processor holds the database.
+async fn log_notification_outcome(
+    state: &birdnet_web::state::AppState,
+    channel: &'static str,
+    subject: &NotificationSubject,
+    status: NotifStatus,
+    message: Option<&str>,
+    error: Option<&str>,
+) {
+    let subject = subject.clone();
+    let (message, error) = (message.map(str::to_owned), error.map(str::to_owned));
+    state
+        .run_blocking(move |state| {
+            record_notification(
+                state,
+                channel,
+                &subject,
+                status,
+                message.as_deref(),
+                error.as_deref(),
+            );
+        })
+        .await;
+}
+
 /// What the station and this run were when a row was written — the columns
 /// BirdNET-Pi has always filled and this daemon left NULL (R-2 / UP-1).
 ///
@@ -1182,14 +1209,17 @@ pub(super) fn event_processor(
                         )
                         .await;
                     match result {
-                        Ok(()) => record_notification(
-                            &log_state,
-                            "apprise",
-                            &log_subject,
-                            NotifStatus::Sent,
-                            Some(&title),
-                            None,
-                        ),
+                        Ok(()) => {
+                            log_notification_outcome(
+                                &log_state,
+                                "apprise",
+                                &log_subject,
+                                NotifStatus::Sent,
+                                Some(&title),
+                                None,
+                            )
+                            .await;
+                        }
                         Err(e) => {
                             // Not delivered: the next detection of this bird
                             // may try again rather than wait out a cooldown
@@ -1208,14 +1238,15 @@ pub(super) fn event_processor(
                             // `skipped` row below.
                             if !e.nothing_was_attempted() {
                                 tracing::warn!(error = %e, "Apprise notification failed");
-                                record_notification(
+                                log_notification_outcome(
                                     &log_state,
                                     "apprise",
                                     &log_subject,
                                     NotifStatus::Failed,
                                     Some(&title),
                                     Some(&e.to_string()),
-                                );
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1269,14 +1300,15 @@ pub(super) fn event_processor(
                         post_soundscape_for_row(&client, &row_state, inserted_rowid, upload).await;
                 }
                 let Err(e) = client.post_detection(&post).await else {
-                    record_notification(
+                    log_notification_outcome(
                         &log_state,
                         "birdweather",
                         &log_subject,
                         NotifStatus::Sent,
                         None,
                         None,
-                    );
+                    )
+                    .await;
                     return;
                 };
                 // Refused for its content: parking it would only replay the
@@ -1287,14 +1319,15 @@ pub(super) fn event_processor(
                         species = %post.common_name,
                         "BirdWeather rejected the upload; not queued for replay"
                     );
-                    record_notification(
+                    log_notification_outcome(
                         &log_state,
                         "birdweather",
                         &log_subject,
                         NotifStatus::Failed,
                         None,
                         Some(&e.to_string()),
-                    );
+                    )
+                    .await;
                     return;
                 }
                 // Recorded as `queued`, not `failed`: the payload is parked for
@@ -1302,14 +1335,15 @@ pub(super) fn event_processor(
                 // BirdWeather yet" is a different fact from "this was lost", and
                 // the Notification Center is where an operator on a flaky uplink
                 // needs to be able to tell them apart.
-                record_notification(
+                log_notification_outcome(
                     &log_state,
                     "birdweather",
                     &log_subject,
                     NotifStatus::Queued,
                     None,
                     Some(&e.to_string()),
-                );
+                )
+                .await;
                 // Park the payload for the store-and-forward drainer instead
                 // of dropping it: BirdWeather is an append-only record that
                 // accepts late posts, so an upload lost to a Wi-Fi/LTE outage
@@ -1366,27 +1400,27 @@ pub(super) fn event_processor(
                 match notifier.notify(&alert).await {
                     Ok(true) => {
                         tracing::debug!(species = %alert.common_name, "email alert sent");
-                        record_notification(
+                        log_notification_outcome(
                             &log_state,
                             "email",
                             &log_subject,
                             NotifStatus::Sent,
                             None,
                             None,
-                        );
+                        ).await;
                     }
                     // The notifier's own filter declined; not an attempt.
                     Ok(false) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, species = %alert.common_name, "email alert failed");
-                        record_notification(
+                        log_notification_outcome(
                             &log_state,
                             "email",
                             &log_subject,
                             NotifStatus::Failed,
                             None,
                             Some(&e.to_string()),
-                        );
+                        ).await;
                     }
                 }
             });

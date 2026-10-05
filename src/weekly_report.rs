@@ -82,7 +82,7 @@ async fn weekly_report_loop(
             continue; // Already sent today.
         }
         let now_secs = unix_now();
-        match already_sent(&state, now_secs) {
+        match state.run_blocking(move |s| already_sent(s, now_secs)).await {
             Ok(true) => continue,
             Ok(false) => {}
             Err(e) => {
@@ -95,7 +95,7 @@ async fn weekly_report_loop(
 
         tracing::info!(date = %today_str, "sending weekly detection report");
 
-        match build_weekly_report(&state) {
+        match state.run_blocking(build_weekly_report).await {
             Ok((title, body)) => {
                 let mut client = apprise.lock().await;
                 // Operational, not routine: a report sent once a week must not
@@ -109,7 +109,7 @@ async fn weekly_report_loop(
                     tracing::warn!(error = %e, "weekly report notification failed");
                 } else {
                     tracing::info!("weekly report sent");
-                    if let Err(e) = record_sent(&state, now_secs) {
+                    if let Err(e) = state.run_blocking(move |s| record_sent(s, now_secs)).await {
                         tracing::warn!(error = %e, "weekly report sent but not recorded; a restart today would send it again");
                     }
                     last_sent_date = Some(today_str);

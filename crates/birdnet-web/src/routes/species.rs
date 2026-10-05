@@ -42,45 +42,52 @@ async fn species_tracking(
     State(state): State<AppState>,
     Query(q): Query<TrackingQuery>,
 ) -> Json<Value> {
-    let date = q
-        .date
-        .filter(|d| is_iso_date(d))
-        .unwrap_or_else(crate::routes::pages::today_date_string);
-    let notable_only = q.notable_only.unwrap_or(false);
+    state
+        .run_blocking(move |state| {
+            let date = q
+                .date
+                .filter(|d| is_iso_date(d))
+                .unwrap_or_else(crate::routes::pages::today_date_string);
+            let notable_only = q.notable_only.unwrap_or(false);
 
-    let (windows, rows) = state.with_read_db(|conn| {
-        let windows = crate::tracking::resolve_windows(conn, &date);
-        let rows =
-            birdnet_db::species_tracking::statuses_for_date(conn, &date, windows.as_windows())
+            let (windows, rows) = state.with_read_db(|conn| {
+                let windows = crate::tracking::resolve_windows(conn, &date);
+                let rows = birdnet_db::species_tracking::statuses_for_date(
+                    conn,
+                    &date,
+                    windows.as_windows(),
+                )
                 .unwrap_or_default();
-        (windows, rows)
-    });
+                (windows, rows)
+            });
 
-    let species: Vec<Value> = rows
-        .iter()
-        .filter(|r| !notable_only || r.status.is_notable())
-        .map(|r| {
-            json!({
-                "sci_name": r.sci_name,
-                "com_name": r.com_name,
-                "headline": r.status.headline(),
-                "new_ever": r.status.new_ever,
-                "new_this_year": r.status.new_this_year,
-                "new_this_season": r.status.new_this_season,
-                "returning_after_absence": r.status.returning_after_absence,
-                "days_since_previous": r.status.days_since_previous,
-            })
+            let species: Vec<Value> = rows
+                .iter()
+                .filter(|r| !notable_only || r.status.is_notable())
+                .map(|r| {
+                    json!({
+                        "sci_name": r.sci_name,
+                        "com_name": r.com_name,
+                        "headline": r.status.headline(),
+                        "new_ever": r.status.new_ever,
+                        "new_this_year": r.status.new_this_year,
+                        "new_this_season": r.status.new_this_season,
+                        "returning_after_absence": r.status.returning_after_absence,
+                        "days_since_previous": r.status.days_since_previous,
+                    })
+                })
+                .collect();
+
+            Json(json!({
+                "date": date,
+                "year_start": windows.year_start,
+                "season": windows.season,
+                "season_start": windows.season_start,
+                "absence_days": windows.absence_days,
+                "species": species,
+            }))
         })
-        .collect();
-
-    Json(json!({
-        "date": date,
-        "year_start": windows.year_start,
-        "season": windows.season,
-        "season_start": windows.season_start,
-        "absence_days": windows.absence_days,
-        "species": species,
-    }))
+        .await
 }
 
 /// Whether `s` is a plausible `YYYY-MM-DD`.

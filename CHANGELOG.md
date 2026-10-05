@@ -77,9 +77,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-copied after every effort sample; the copy is one transaction (a failed
   copy used to leave the table empty), and a row that cannot be read fails the
   copy instead of being skipped.
-- **Analytics status and the engine card no longer hold an async worker**
-  while waiting for the analytics database, which is shared with every
-  analytics query.
+- **A request waiting on the database no longer stalls the others.** 170
+  places in the web server and the daemon's background tasks read or wrote a
+  database directly on an async worker thread — most of them through a helper
+  such as the audit-log write, which 43 admin actions call — so while the
+  detection writer held the database, every page, script and live socket
+  scheduled on that thread waited too. A Pi 4 has four. All of them now run on
+  the blocking pool (`AppState::run_blocking`); startup's ten one-off reads,
+  before the server listens, are named and left as they are. Measured with
+  one worker and the database lock held: a static script was not served
+  within 5 s before, and is served at once now. An admin change and its
+  audit-log row are now written together, so a client that disconnects
+  between them can no longer leave a change unrecorded.
 - **`AbsenceStreak` did not parse and `TumblingSpec` rejected the ISO dates
   it documents** (both public time-series query builders with no caller).
   Both now run, and every public query builder is executed by a test.

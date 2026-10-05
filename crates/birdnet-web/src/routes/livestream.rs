@@ -254,23 +254,28 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     // Resolve the audio source. Two paths:
     //   1. `?source_id=` → DB lookup by id; honour the row's kind explicitly.
     //   2. (no param) → the first enabled `audio_sources` row, else 503.
-    let resolved = match params.source_id.as_deref() {
-        Some(id) if !id.is_empty() => match resolve_by_source_id(&state, id) {
-            Some(resolved) => resolved,
-            None => {
-                return (StatusCode::NOT_FOUND, "no such audio source").into_response();
-            }
-        },
-        _ => match resolve_default_source(&state) {
-            Some(resolved) => resolved,
-            None => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "no audio source configured",
-                )
-                    .into_response();
-            }
-        },
+    let by_id = params.source_id.clone().filter(|id| !id.is_empty());
+    let asked_for_id = by_id.is_some();
+    let looked_up = state
+        .run_blocking(move |state| {
+            by_id.as_deref().map_or_else(
+                || resolve_default_source(state),
+                |id| resolve_by_source_id(state, id),
+            )
+        })
+        .await;
+    let resolved = match looked_up {
+        Some(resolved) => resolved,
+        None if asked_for_id => {
+            return (StatusCode::NOT_FOUND, "no such audio source").into_response();
+        }
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no audio source configured",
+            )
+                .into_response();
+        }
     };
     let ResolvedSource {
         id: source_id,

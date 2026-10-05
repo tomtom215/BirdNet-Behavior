@@ -314,67 +314,73 @@ async fn create_user(
     request_user: RequestUser,
     Form(form): Form<CreateUserForm>,
 ) -> Response {
-    if form.password.len() < 10 {
-        return toast::oob_only(Toast::error("Password must be at least 10 characters."))
-            .into_response();
-    }
+    state
+        .run_blocking(move |state| {
+            if form.password.len() < 10 {
+                return toast::oob_only(Toast::error("Password must be at least 10 characters."))
+                    .into_response();
+            }
 
-    let pwd_argon2 = match accounts::hash_password(&form.password) {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::error!(error = %e, "hash_password failed in create_user");
-            return toast::oob_only(Toast::error(
-                "Could not hash the password. See server logs.",
-            ))
-            .into_response();
-        }
-    };
+            let pwd_argon2 = match accounts::hash_password(&form.password) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!(error = %e, "hash_password failed in create_user");
+                    return toast::oob_only(Toast::error(
+                        "Could not hash the password. See server logs.",
+                    ))
+                    .into_response();
+                }
+            };
 
-    let result = state.with_db(|conn| {
-        conn.create_user(
-            form.username.trim(),
-            &pwd_argon2,
-            Role::Viewer,
-            form.label.as_deref(),
-        )
-    });
+            let result = state.with_db(|conn| {
+                conn.create_user(
+                    form.username.trim(),
+                    &pwd_argon2,
+                    Role::Viewer,
+                    form.label.as_deref(),
+                )
+            });
 
-    match result {
-        Ok(_) => {
-            // On success only: a rejected create is not an account change, and
-            // a log that records attempts alongside outcomes cannot answer
-            // "who has an account?" without the reader knowing which is which.
-            crate::audit::audit(
-                &state,
-                Some(&request_user),
-                "account.user.create",
-                Some(form.username.trim()),
-                None,
-            );
-            // Re-render the full user list so the new row appears.
-            let users = state.with_db(UserStore::list_users).unwrap_or_default();
-            let body = Html(render_user_rows(&users));
-            toast::with(
-                body,
-                Toast::success(format!(
-                    "Invited {}. They can sign in now with that password.",
+            match result {
+                Ok(_) => {
+                    // On success only: a rejected create is not an account change, and
+                    // a log that records attempts alongside outcomes cannot answer
+                    // "who has an account?" without the reader knowing which is which.
+                    crate::audit::audit(
+                        state,
+                        Some(&request_user),
+                        "account.user.create",
+                        Some(form.username.trim()),
+                        None,
+                    );
+                    // Re-render the full user list so the new row appears.
+                    let users = state.with_db(UserStore::list_users).unwrap_or_default();
+                    let body = Html(render_user_rows(&users));
+                    toast::with(
+                        body,
+                        Toast::success(format!(
+                            "Invited {}. They can sign in now with that password.",
+                            form.username
+                        )),
+                    )
+                    .into_response()
+                }
+                Err(AccountsError::Conflict(_)) => toast::oob_only(Toast::error(format!(
+                    "Username \"{}\" is already taken.",
                     form.username
-                )),
-            )
-            .into_response()
-        }
-        Err(AccountsError::Conflict(_)) => toast::oob_only(Toast::error(format!(
-            "Username \"{}\" is already taken.",
-            form.username
-        )))
-        .into_response(),
-        Err(AccountsError::Invalid(msg)) => toast::oob_only(Toast::error(msg)).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "create_user failed");
-            toast::oob_only(Toast::error("Could not create the user. See server logs."))
-                .into_response()
-        }
-    }
+                )))
+                .into_response(),
+                Err(AccountsError::Invalid(msg)) => {
+                    toast::oob_only(Toast::error(msg)).into_response()
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "create_user failed");
+                    toast::oob_only(Toast::error("Could not create the user. See server logs."))
+                        .into_response()
+                }
+            }
+        })
+        .await
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -386,29 +392,35 @@ async fn remove_user(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Response {
-    let result = state.with_db(|conn| conn.delete_user(id));
-    match result {
-        Ok(()) => {
-            crate::audit::audit(
-                &state,
-                Some(&request_user),
-                "account.user.delete",
-                Some(&format!("user:{id}")),
-                None,
-            );
-            let users = state.with_db(UserStore::list_users).unwrap_or_default();
-            let body = Html(render_user_rows(&users));
-            toast::with(body, Toast::success("User removed.")).into_response()
-        }
-        Err(AccountsError::Invalid(msg)) => toast::oob_only(Toast::warn(msg)).into_response(),
-        Err(AccountsError::NotFound(_)) => {
-            toast::oob_only(Toast::warn("User no longer exists.")).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "remove_user failed");
-            toast::oob_only(Toast::error("Could not remove the user.")).into_response()
-        }
-    }
+    state
+        .run_blocking(move |state| {
+            let result = state.with_db(|conn| conn.delete_user(id));
+            match result {
+                Ok(()) => {
+                    crate::audit::audit(
+                        state,
+                        Some(&request_user),
+                        "account.user.delete",
+                        Some(&format!("user:{id}")),
+                        None,
+                    );
+                    let users = state.with_db(UserStore::list_users).unwrap_or_default();
+                    let body = Html(render_user_rows(&users));
+                    toast::with(body, Toast::success("User removed.")).into_response()
+                }
+                Err(AccountsError::Invalid(msg)) => {
+                    toast::oob_only(Toast::warn(msg)).into_response()
+                }
+                Err(AccountsError::NotFound(_)) => {
+                    toast::oob_only(Toast::warn("User no longer exists.")).into_response()
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "remove_user failed");
+                    toast::oob_only(Toast::error("Could not remove the user.")).into_response()
+                }
+            }
+        })
+        .await
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -428,6 +440,7 @@ async fn set_password(
     Path(id): Path<i64>,
     Form(form): Form<PasswordForm>,
 ) -> Response {
+    state.run_blocking(move |state| {
     if form.password.len() < 10 {
         return toast::oob_only(Toast::error("Password must be at least 10 characters."))
             .into_response();
@@ -464,7 +477,7 @@ async fn set_password(
             // always the actor: an admin resetting someone else's password is
             // the event this row exists to make visible.
             crate::audit::audit(
-                &state,
+                state,
                 Some(&request_user),
                 "account.password.set",
                 Some(&format!("user:{id}")),
@@ -478,7 +491,7 @@ async fn set_password(
                 ))
                 .into_response();
                 if let Some(cookie) = crate::routes::auth_pages::mint_session_cookie(
-                    &state,
+                    state,
                     id,
                     client.as_deref(),
                     &headers,
@@ -523,6 +536,8 @@ async fn set_password(
             toast::oob_only(Toast::error("Could not rotate the password.")).into_response()
         }
     }
+})
+.await
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -534,26 +549,31 @@ async fn revoke_session_handler(
     request_user: RequestUser,
     Path(id): Path<String>,
 ) -> Response {
-    let result = state.with_db(|conn| conn.revoke_session(&id));
-    if let Err(e) = result {
-        tracing::error!(error = %e, "revoke_session failed");
-        return toast::oob_only(Toast::error("Could not revoke that session.")).into_response();
-    }
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "account.session.revoke",
-        Some(&id),
-        None,
-    );
-    let current_session_id = request_user.session_id.clone();
-    let body = state
-        .with_db(|conn| -> Result<String, AccountsError> {
-            let sessions = conn.list_sessions(request_user.user.id)?;
-            Ok(render_session_rows(&sessions, &current_session_id))
+    state
+        .run_blocking(move |state| {
+            let result = state.with_db(|conn| conn.revoke_session(&id));
+            if let Err(e) = result {
+                tracing::error!(error = %e, "revoke_session failed");
+                return toast::oob_only(Toast::error("Could not revoke that session."))
+                    .into_response();
+            }
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "account.session.revoke",
+                Some(&id),
+                None,
+            );
+            let current_session_id = request_user.session_id.clone();
+            let body = state
+                .with_db(|conn| -> Result<String, AccountsError> {
+                    let sessions = conn.list_sessions(request_user.user.id)?;
+                    Ok(render_session_rows(&sessions, &current_session_id))
+                })
+                .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
+            toast::with(Html(body), Toast::success("Session signed out.")).into_response()
         })
-        .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
-    toast::with(Html(body), Toast::success("Session signed out.")).into_response()
+        .await
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -564,40 +584,44 @@ async fn revoke_others_handler(
     State(state): State<AppState>,
     request_user: RequestUser,
 ) -> Response {
-    let current_session_id = request_user.session_id.clone();
-    let user_id = request_user.user.id;
-    let result = state.with_db(|conn| -> Result<usize, AccountsError> {
-        conn.revoke_others(user_id, &current_session_id)
-    });
-    let n = match result {
-        Ok(n) => n,
-        Err(e) => {
-            tracing::error!(error = %e, "revoke_others failed");
-            return toast::oob_only(Toast::error("Could not sign out the other devices."))
-                .into_response();
-        }
-    };
-    // The count is the whole content of this event: "signed out 4 other
-    // devices" is what an operator checks against how many they expected.
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "account.session.revoke_others",
-        Some(&format!("user:{user_id}")),
-        Some(&format!("revoked={n}")),
-    );
-    let body = state
-        .with_db(|conn| -> Result<String, AccountsError> {
-            let sessions = conn.list_sessions(user_id)?;
-            Ok(render_session_rows(&sessions, &current_session_id))
+    state
+        .run_blocking(move |state| {
+            let current_session_id = request_user.session_id.clone();
+            let user_id = request_user.user.id;
+            let result = state.with_db(|conn| -> Result<usize, AccountsError> {
+                conn.revoke_others(user_id, &current_session_id)
+            });
+            let n = match result {
+                Ok(n) => n,
+                Err(e) => {
+                    tracing::error!(error = %e, "revoke_others failed");
+                    return toast::oob_only(Toast::error("Could not sign out the other devices."))
+                        .into_response();
+                }
+            };
+            // The count is the whole content of this event: "signed out 4 other
+            // devices" is what an operator checks against how many they expected.
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "account.session.revoke_others",
+                Some(&format!("user:{user_id}")),
+                Some(&format!("revoked={n}")),
+            );
+            let body = state
+                .with_db(|conn| -> Result<String, AccountsError> {
+                    let sessions = conn.list_sessions(user_id)?;
+                    Ok(render_session_rows(&sessions, &current_session_id))
+                })
+                .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
+            let label = if n == 1 {
+                "Signed out 1 other device.".to_string()
+            } else {
+                format!("Signed out {n} other devices.")
+            };
+            toast::with(Html(body), Toast::success(label)).into_response()
         })
-        .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
-    let label = if n == 1 {
-        "Signed out 1 other device.".to_string()
-    } else {
-        format!("Signed out {n} other devices.")
-    };
-    toast::with(Html(body), Toast::success(label)).into_response()
+        .await
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -630,34 +654,38 @@ async fn audit_full_page(
     State(state): State<AppState>,
     Query(params): Query<AuditParams>,
 ) -> Html<String> {
-    let (from, to) = resolve_audit_range(&params);
-    let action_filter = params.action.as_deref().unwrap_or("").trim().to_string();
-    let action_like = if action_filter.is_empty() {
-        String::new()
-    } else {
-        format!("%{action_filter}%")
-    };
+    state
+        .run_blocking(move |state| {
+            let (from, to) = resolve_audit_range(&params);
+            let action_filter = params.action.as_deref().unwrap_or("").trim().to_string();
+            let action_like = if action_filter.is_empty() {
+                String::new()
+            } else {
+                format!("%{action_filter}%")
+            };
 
-    let body = state.with_db(|conn| -> Result<String, AccountsError> {
-        let entries = conn.query(&from, &to, &action_like, AUDIT_PAGE_LIMIT)?;
-        let users = conn.list_users()?;
-        Ok(render_audit_page(
-            &from,
-            &to,
-            &action_filter,
-            &entries,
-            &users,
-        ))
-    });
+            let body = state.with_db(|conn| -> Result<String, AccountsError> {
+                let entries = conn.query(&from, &to, &action_like, AUDIT_PAGE_LIMIT)?;
+                let users = conn.list_users()?;
+                Ok(render_audit_page(
+                    &from,
+                    &to,
+                    &action_filter,
+                    &entries,
+                    &users,
+                ))
+            });
 
-    let body = match body {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!(error = %e, "audit page render failed");
-            render_error("Audit log could not be loaded.")
-        }
-    };
-    Html(admin_shell("Audit log", "accounts", &body))
+            let body = match body {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::error!(error = %e, "audit page render failed");
+                    render_error("Audit log could not be loaded.")
+                }
+            };
+            Html(admin_shell("Audit log", "accounts", &body))
+        })
+        .await
 }
 
 /// Resolve the inclusive `(from, to)` date strings for the query. When

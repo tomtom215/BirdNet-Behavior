@@ -144,55 +144,59 @@ impl Prefill {
 const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
 
 async fn onboarding_page(State(state): State<AppState>, req: Request) -> Response {
-    // A signed-in *viewer* used to be walked through all six steps and then
-    // refused at the finish line. `cookie_auth_middleware` allows safe methods
-    // to any authenticated user and gates unsafe ones behind `require_admin`,
-    // so `GET /onboarding` rendered the whole wizard and `POST
-    // /onboarding/save` answered a bare "Forbidden — admin role required for
-    // this action." with every answer gone. That is the same shape as the ON-6
-    // bug this module's own doc records as fixed, for a different actor: the
-    // integration test covers the unauthenticated and open-station cases and
-    // never a viewer.
-    if let Some(user) = req
-        .extensions()
-        .get::<crate::auth_middleware::RequestUser>()
-        && !user.is_admin()
-    {
-        return not_admin_page();
-    }
-    // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
-    let (sources, prefill) = state
-        .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
-        .unwrap_or_else(|err| {
-            tracing::error!(error = %err, "onboarding: audio_sources list failed");
-            (Vec::new(), Prefill::default())
-        });
-    let needs_password = !crate::auth_middleware::admin_password_configured(&state);
-    let password_error = req
-        .uri()
-        .query()
-        .is_some_and(|q| q.split('&').any(|p| p == "error=password"));
+    state
+        .run_blocking(move |state| {
+            // A signed-in *viewer* used to be walked through all six steps and then
+            // refused at the finish line. `cookie_auth_middleware` allows safe methods
+            // to any authenticated user and gates unsafe ones behind `require_admin`,
+            // so `GET /onboarding` rendered the whole wizard and `POST
+            // /onboarding/save` answered a bare "Forbidden — admin role required for
+            // this action." with every answer gone. That is the same shape as the ON-6
+            // bug this module's own doc records as fixed, for a different actor: the
+            // integration test covers the unauthenticated and open-station cases and
+            // never a viewer.
+            if let Some(user) = req
+                .extensions()
+                .get::<crate::auth_middleware::RequestUser>()
+                && !user.is_admin()
+            {
+                return not_admin_page();
+            }
+            // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
+            let (sources, prefill) = state
+                .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
+                .unwrap_or_else(|err| {
+                    tracing::error!(error = %err, "onboarding: audio_sources list failed");
+                    (Vec::new(), Prefill::default())
+                });
+            let needs_password = !crate::auth_middleware::admin_password_configured(state);
+            let password_error = req
+                .uri()
+                .query()
+                .is_some_and(|q| q.split('&').any(|p| p == "error=password"));
 
-    let body = render_page(
-        &render_mic_body(&sources, capture_verdict(&state).as_deref()),
-        &escape_html(&mic_summary(&sources)),
-        &prefill,
-        PasswordStep {
-            needed: needs_password,
-            error: password_error,
-        },
-    );
-    // `no-store` because the Welcome step can carry a password form: without
-    // it the back-forward cache restores the typed fields on Back. `/login`
-    // already does this.
-    (
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        Html(body),
-    )
-        .into_response()
+            let body = render_page(
+                &render_mic_body(&sources, capture_verdict(state).as_deref()),
+                &escape_html(&mic_summary(&sources)),
+                &prefill,
+                PasswordStep {
+                    needed: needs_password,
+                    error: password_error,
+                },
+            );
+            // `no-store` because the Welcome step can carry a password form: without
+            // it the back-forward cache restores the typed fields on Back. `/login`
+            // already does this.
+            (
+                [
+                    (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                Html(body),
+            )
+                .into_response()
+        })
+        .await
 }
 
 /// What a signed-in non-admin sees instead of a wizard they cannot submit.
@@ -582,20 +586,21 @@ async fn onboarding_save(
     headers: axum::http::HeaderMap,
     Form(form): Form<OnboardingForm>,
 ) -> Response {
+    state.run_blocking(move |state| {
     // The password first (DD-14), and only on a station that has none: with
     // one set, the operator signed in to reach this page and the fields are
     // not rendered. A refused password saves nothing else either — the
     // operator is sent back to the step that failed rather than left with a
     // configured, still-open station and no idea why.
     let mut set_cookie = None;
-    if !crate::auth_middleware::admin_password_configured(&state) && !form.password.is_empty() {
+    if !crate::auth_middleware::admin_password_configured(state) && !form.password.is_empty() {
         if form.password.len() < MIN_PASSWORD_LEN || form.password != form.password_confirm {
             return Redirect::to("/onboarding?error=password").into_response();
         }
-        match set_first_admin_password(&state, &form.password) {
+        match set_first_admin_password(state, &form.password) {
             Ok(admin_id) => {
                 set_cookie = super::super::auth_pages::mint_session_cookie(
-                    &state,
+                    state,
                     admin_id,
                     client.as_deref(),
                     &headers,
@@ -695,6 +700,8 @@ async fn onboarding_save(
             .append(axum::http::header::SET_COOKIE, value);
     }
     resp
+})
+.await
 }
 
 /// Hash `password` onto the seed admin row and record it. Returns the

@@ -29,13 +29,21 @@ pub fn router() -> Router<AppState> {
 // ---------------------------------------------------------------------------
 
 async fn overview_page(State(state): State<AppState>) -> Html<String> {
-    let stats_html = blocking_stats(&state);
-    Html(render_overview_page(&stats_html))
+    state
+        .run_blocking(move |state| {
+            let stats_html = blocking_stats(state);
+            Html(render_overview_page(&stats_html))
+        })
+        .await
 }
 
 async fn stats_partial(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
-    let html = blocking_stats(&state);
-    Ok(Html(html))
+    state
+        .run_blocking(move |state| {
+            let html = blocking_stats(state);
+            Ok(Html(html))
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------

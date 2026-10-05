@@ -76,7 +76,10 @@ cross build --release --target aarch64-unknown-linux-gnu
 - **No `anyhow`/`thiserror` in library crates** - hand-rolled error types
 - **No async in the compute/storage library crates** (e.g. `birdnet-core`, `birdnet-db`) - they are synchronous. `birdnet-integrations` is the deliberate exception: an async *client* library for network I/O that constructs no runtime of its own
 - **The tokio runtime is owned by application code** (`birdnet-web`, main binary) - library crates never start their own runtime
-- **Blocking ops via `tokio::task::spawn_blocking`** for DB, file I/O, inference
+- **Blocking ops via `tokio::task::spawn_blocking`** for DB, file I/O, inference.
+  For database work from a handler, `state.run_blocking(|s| ..).await`; a
+  test in the root crate fails on any async function that reaches `with_db`
+  and its siblings, directly or through a helper, without one.
 - **`unsafe` is forbidden** workspace-wide (`unsafe_code = "forbid"`)
 - **`missing_docs` enforced** workspace-wide
 - **Clippy pedantic + nursery** enabled
@@ -329,6 +332,22 @@ Corollaries, each learned the same way:
   `--all-features` and per-crate `--features analytics` each built bundled
   libduckdb (482 MB an rlib) and filled the disk twice in one session. Pick one
   (`--all-features`) and set `CARGO_INCREMENTAL=0`, as CI does.
+- **An old checkout built into this target dir poisons it.** A `git worktree`
+  of an earlier commit, built with `CARGO_TARGET_DIR` pointed at this tree's
+  `target/` to save disk, left this tree's next build linking the old
+  `birdnet-behavioral`: "no method named `previous_species`" for a method
+  that is right there in the source. `cargo clean -p` for every workspace
+  package fixed it. Give an old checkout its own target dir, or clean the
+  workspace packages afterwards — and suspect this before the code.
+- **A test cannot time out on the runtime it is proving stuck.** With one
+  worker blocked, nothing drives tokio's timer, so `tokio::time::timeout` in
+  a test of "this request is not starved" hangs against the old code instead
+  of failing. Wait on an OS thread (`mpsc::Receiver::recv_timeout`), and
+  release whatever blocks the worker before asserting, or the runtime cannot
+  shut down to report. Nor is a grep the sweep: one for `with_db` and its
+  siblings finds 45 of the 170 blocking calls, because the rest went through
+  a sync helper. `tests/database_work_stays_off_the_async_runtime.rs` follows
+  calls.
 
 ### Key Dependencies
 

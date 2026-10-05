@@ -394,16 +394,18 @@ async fn trigger_backup(
     State(state): State<AppState>,
     request_user: crate::auth_middleware::RequestUser,
 ) -> Result<Html<String>, StatusCode> {
-    crate::audit::audit(&state, Some(&request_user), "data.backup.run", None, None);
     let db_path = state.db_path().to_path_buf();
     let backup_dir = db_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("backups");
 
-    let result = tokio::task::spawn_blocking(move || backup_database(&db_path, &backup_dir))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::audit::audit(&state, Some(&request_user), "data.backup.run", None, None);
+        backup_database(&db_path, &backup_dir)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match result {
         Ok(path) => {

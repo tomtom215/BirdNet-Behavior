@@ -191,7 +191,10 @@ pub(super) async fn flush<K: Ord + Clone + std::fmt::Debug>(
                         "an alert that had not been delivered has now gone out"
                     );
                 }
-                record(state, NotifStatus::Sent, alert.title(), None);
+                let title = alert.title().to_owned();
+                state
+                    .run_blocking(move |s| record(s, NotifStatus::Sent, &title, None))
+                    .await;
                 outbox.settle(&key, true);
             }
             Err(e) => {
@@ -210,12 +213,12 @@ pub(super) async fn flush<K: Ord + Clone + std::fmt::Debug>(
                     // Once, on the first failure. The retry runs every poll,
                     // so a notifier down for a day would otherwise write ~288
                     // rows for one alert and bury the log it exists to be.
-                    record(
-                        state,
-                        NotifStatus::Queued,
-                        alert.title(),
-                        Some(&e.to_string()),
-                    );
+                    let (title, error) = (alert.title().to_owned(), e.to_string());
+                    state
+                        .run_blocking(move |s| {
+                            record(s, NotifStatus::Queued, &title, Some(&error));
+                        })
+                        .await;
                 } else {
                     tracing::debug!(
                         episode = ?key,

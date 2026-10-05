@@ -234,10 +234,15 @@ async fn serve_spectrogram(
     // BirdNET-Pi's `RAW_SPECTROGRAM` with one honest difference: their setting
     // also removes *axes*, and we have never drawn any. The image is a bare mel
     // surface either way; the only thing to suppress is the text.
-    let raw = state.with_db(|conn| {
-        birdnet_db::settings::get_or(conn, "raw_spectrogram", "false")
-            .unwrap_or_else(|_| "false".to_owned())
-    }) == "true";
+    let raw = state
+        .run_blocking(|state| {
+            state.with_db(|conn| {
+                birdnet_db::settings::get_or(conn, "raw_spectrogram", "false")
+                    .unwrap_or_else(|_| "false".to_owned())
+            })
+        })
+        .await
+        == "true";
 
     // Build the optional overlay label, plus a matching cache-key fragment.
     let label = if thumb || raw {

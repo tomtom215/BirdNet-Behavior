@@ -169,18 +169,30 @@ async fn private_gate_middleware(request: Request<Body>, next: Next, state: &App
     if crate::private_mode::is_open(path, state.public_access()) {
         return next.run(request).await;
     }
-    // Fail closed. The admin gate's open-bypass exists so a fresh Pi is
-    // usable before anyone sets a password; a station the operator declared
-    // private and then left without one must not quietly become the open
-    // station they asked it not to be.
-    if !admin_password_configured(state) {
-        return private_without_password();
-    }
     let original_path = request
         .uri()
         .path_and_query()
         .map_or_else(|| path.to_string(), ToString::to_string);
-    let Some(user) = session_user(&request, state) else {
+    let cookie = session_cookie(&request);
+    // Both reads in one trip to the blocking pool: this runs on every request
+    // a private station serves.
+    let (configured, user) = state
+        .run_blocking(move |state| {
+            if admin_password_configured(state) {
+                (true, session_user(cookie, state))
+            } else {
+                (false, None)
+            }
+        })
+        .await;
+    // Fail closed. The admin gate's open-bypass exists so a fresh Pi is
+    // usable before anyone sets a password; a station the operator declared
+    // private and then left without one must not quietly become the open
+    // station they asked it not to be.
+    if !configured {
+        return private_without_password();
+    }
+    let Some(user) = user else {
         return refuse_private(&request, &original_path);
     };
     let mut req = request;
@@ -242,20 +254,37 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
         return next.run(request).await;
     }
 
+    // Every database read this gate makes, in one trip to the blocking pool,
+    // in the order the checks below consume them.
+    let private = state.private_mode();
+    let cookie = session_cookie(&request);
+    let (configured, synth, user) = state
+        .run_blocking(move |state| {
+            if admin_password_configured(state) {
+                return (true, None, session_user(cookie, state));
+            }
+            if private {
+                return (false, None, None);
+            }
+            synthesise_seed_admin(state).map_or_else(
+                || (false, None, session_user(cookie, state)),
+                |synth| (false, Some(synth), None),
+            )
+        })
+        .await;
+
     // A private station with no password fails closed here as it does on the
     // public router. This router is not behind that gate, and the open bypass
     // below would otherwise hand a station its operator declared private —
     // whole-database download included — to anyone who reached its address.
-    if state.private_mode() && !admin_password_configured(state) {
+    if private && !configured {
         return private_without_password();
     }
 
     // No admin password configured → open access. Synthesise a
     // RequestUser pointing at the seed admin so downstream handlers
     // still see an identity.
-    if !admin_password_configured(state)
-        && let Some(synth) = synthesise_seed_admin(state)
-    {
+    if let Some(synth) = synth {
         // Only for a name no outside website can point here — otherwise DNS
         // rebinding turns "open on the LAN" into "open to every page anyone
         // in the house visits". See `open_admin_host`.
@@ -276,7 +305,7 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
     // configured, or no admin row yet) fall through to the
     // cookie-validation path.
 
-    let Some(user) = session_user(&request, state) else {
+    let Some(user) = user else {
         return redirect_to_login(&request, &original_path);
     };
 
@@ -342,19 +371,30 @@ fn viewer_may_read(path: &str) -> bool {
     true
 }
 
-/// The signed-in user behind a request's `bnb-session` cookie, if the cookie
-/// validates and its session row is live and its user not disabled. `None`
-/// covers every way of not being signed in; the reason is logged at debug.
-///
-/// Shared by the admin gate and the private-mode gate so the two cannot
-/// accept different cookies.
-fn session_user(request: &Request<Body>, state: &AppState) -> Option<RequestUser> {
-    let token = request
+/// The request's `bnb-session` cookie, if it is present and its signature
+/// and expiry check out. No database: the half of [`session_user`] that needs
+/// the request, so the other half can run on the blocking pool without it.
+fn session_cookie(request: &Request<Body>) -> Option<session::ValidatedToken> {
+    request
         .headers()
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
-        .and_then(session::extract_token);
-    let validated = token.and_then(session::validate_token)?;
+        .and_then(session::extract_token)
+        .and_then(session::validate_token)
+}
+
+/// The signed-in user behind a validated `bnb-session` cookie, if its session
+/// row is live and its user not disabled. `None` covers every way of not
+/// being signed in; the reason is logged at debug.
+///
+/// Shared by the admin gate and the private-mode gate so the two cannot
+/// accept different cookies. Blocks on the database: call it from
+/// [`AppState::run_blocking`].
+fn session_user(
+    validated: Option<session::ValidatedToken>,
+    state: &AppState,
+) -> Option<RequestUser> {
+    let validated = validated?;
 
     let lookup = state.with_db(|conn| -> Result<RequestUser, accounts::AccountsError> {
         let session = conn.find_active_session(&validated.session_id)?;

@@ -394,111 +394,112 @@ async fn create(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<CreateForm>,
 ) -> Response {
-    let _ = form.scope;
-    let device_id = form.device_id.trim().to_string();
-    if device_id.is_empty() {
-        return validation_response("Device id is required.");
-    }
-    let kind: SourceKind = match form.kind.parse() {
-        Ok(k) => k,
-        Err(_) => return validation_response("Unknown source kind."),
-    };
+    state
+        .run_blocking(move |state| {
+            let _ = form.scope;
+            let device_id = form.device_id.trim().to_string();
+            if device_id.is_empty() {
+                return validation_response("Device id is required.");
+            }
+            let kind: SourceKind = match form.kind.parse() {
+                Ok(k) => k,
+                Err(_) => return validation_response("Unknown source kind."),
+            };
 
-    // Fool-proofing: refuse to add the same physical source twice. The DB only
-    // enforces uniqueness on the synthetic `id` (freshly generated here), so
-    // without this an operator who can't tell the save registered just clicks
-    // "Save" again and silently ends up with the same mic/stream listed twice.
-    let already_configured = state
-        .with_db(AudioSourceStore::list)
-        .unwrap_or_default()
-        .iter()
-        .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device_id);
-    if already_configured {
-        return validation_response(&format!(
-            "“{device_id}” is already configured — see the list below."
-        ));
-    }
+            // Fool-proofing: refuse to add the same physical source twice. The DB only
+            // enforces uniqueness on the synthetic `id` (freshly generated here), so
+            // without this an operator who can't tell the save registered just clicks
+            // "Save" again and silently ends up with the same mic/stream listed twice.
+            let already_configured = state
+                .with_db(AudioSourceStore::list)
+                .unwrap_or_default()
+                .iter()
+                .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device_id);
+            if already_configured {
+                return validation_response(&format!(
+                    "“{device_id}” is already configured — see the list below."
+                ));
+            }
 
-    let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
-    new.label = form.label.and_then(|s| {
-        let trimmed = s.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    });
-    if let Some(rate) = form.sample_rate {
-        // Constrained by the SQL CHECK; the form select limits it to safe values.
-        new.sample_rate = rate;
-    }
-    if let Some(transport) = form.rtsp_transport.as_deref() {
-        match transport.parse::<RtspTransport>() {
-            Ok(t) => new.rtsp_transport = t,
-            Err(_) => return validation_response("Unknown RTSP transport."),
-        }
-    }
-    if let Some(toggles) = ToggleSet::from_form(
-        form.pipeline_present.as_deref(),
-        form.high_pass.as_deref(),
-        form.dc_removal.as_deref(),
-        form.agc.as_deref(),
-        form.rtsp_keepalive.as_deref(),
-    ) {
-        new.pipeline = toggles.into_flags();
-    }
-    match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
-        Ok(QuietChoice::Set(a, b)) => new.schedule_quiet = Some((a, b)),
-        Ok(QuietChoice::Absent | QuietChoice::Clear) => {}
-        Err(msg) => return validation_response(msg),
-    }
-    // After `sample_rate`, which the check depends on.
-    match parse_eq_field(form.eq_chain.as_deref(), new.sample_rate) {
-        Ok(Some(spec)) => new.eq_chain = spec,
-        Ok(None) => {}
-        Err(msg) => return validation_response(&msg),
-    }
+            let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
+            new.label = form.label.and_then(|s| {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            });
+            if let Some(rate) = form.sample_rate {
+                // Constrained by the SQL CHECK; the form select limits it to safe values.
+                new.sample_rate = rate;
+            }
+            if let Some(transport) = form.rtsp_transport.as_deref() {
+                match transport.parse::<RtspTransport>() {
+                    Ok(t) => new.rtsp_transport = t,
+                    Err(_) => return validation_response("Unknown RTSP transport."),
+                }
+            }
+            if let Some(toggles) = ToggleSet::from_form(
+                form.pipeline_present.as_deref(),
+                form.high_pass.as_deref(),
+                form.dc_removal.as_deref(),
+                form.agc.as_deref(),
+                form.rtsp_keepalive.as_deref(),
+            ) {
+                new.pipeline = toggles.into_flags();
+            }
+            match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
+                Ok(QuietChoice::Set(a, b)) => new.schedule_quiet = Some((a, b)),
+                Ok(QuietChoice::Absent | QuietChoice::Clear) => {}
+                Err(msg) => return validation_response(msg),
+            }
+            // After `sample_rate`, which the check depends on.
+            match parse_eq_field(form.eq_chain.as_deref(), new.sample_rate) {
+                Ok(Some(spec)) => new.eq_chain = spec,
+                Ok(None) => {}
+                Err(msg) => return validation_response(&msg),
+            }
 
-    let result = state.with_db(|conn| conn.insert(&new));
-    match result {
-        Ok(row) => {
-            // The device id, not the label: a label is cosmetic and a device
-            // id is what an operator matches against the hardware in front of
-            // them when asking why a channel appeared.
-            crate::audit::audit(
-                &state,
-                Some(&request_user),
-                "audio.source.create",
-                Some(&row.device_id),
-                Some(&format!("kind={}", row.kind)),
-            );
-            let mut body = render_row(
-                &row,
-                daemon_status(&row, &state),
-                &listen_default_id(&state),
-            );
-            // Refresh the section totals so adding the first (or Nth) source
-            // visibly updates the "N mics / N streams" header, not just the list.
-            body.push_str(&count_oobs(&state));
-            body.push_str(
-                &Toast::success(format!(
-                    "Added {}.",
-                    row.label.as_deref().unwrap_or(&row.device_id)
-                ))
-                .with_action("/admin/system/restart", "Restart to apply")
-                .render_oob(),
-            );
-            Html(body).into_response()
-        }
-        Err(AudioSourceError::Conflict(_)) => validation_response(
-            "A source with that id already exists. Retry — a new id will be generated.",
-        ),
-        Err(AudioSourceError::Invalid(msg)) => validation_response(&msg),
-        Err(e) => {
-            tracing::error!(error = %e, "audio source insert failed");
-            internal_response("Could not add the source.")
-        }
-    }
+            let result = state.with_db(|conn| conn.insert(&new));
+            match result {
+                Ok(row) => {
+                    // The device id, not the label: a label is cosmetic and a device
+                    // id is what an operator matches against the hardware in front of
+                    // them when asking why a channel appeared.
+                    crate::audit::audit(
+                        state,
+                        Some(&request_user),
+                        "audio.source.create",
+                        Some(&row.device_id),
+                        Some(&format!("kind={}", row.kind)),
+                    );
+                    let mut body =
+                        render_row(&row, daemon_status(&row, state), &listen_default_id(state));
+                    // Refresh the section totals so adding the first (or Nth) source
+                    // visibly updates the "N mics / N streams" header, not just the list.
+                    body.push_str(&count_oobs(state));
+                    body.push_str(
+                        &Toast::success(format!(
+                            "Added {}.",
+                            row.label.as_deref().unwrap_or(&row.device_id)
+                        ))
+                        .with_action("/admin/system/restart", "Restart to apply")
+                        .render_oob(),
+                    );
+                    Html(body).into_response()
+                }
+                Err(AudioSourceError::Conflict(_)) => validation_response(
+                    "A source with that id already exists. Retry — a new id will be generated.",
+                ),
+                Err(AudioSourceError::Invalid(msg)) => validation_response(&msg),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source insert failed");
+                    internal_response("Could not add the source.")
+                }
+            }
+        })
+        .await
 }
 
 async fn remove(
@@ -506,36 +507,40 @@ async fn remove(
     request_user: crate::auth_middleware::RequestUser,
     Path(id): Path<String>,
 ) -> Response {
-    let result = state.with_db(|conn| conn.soft_delete(&id));
-    match result {
-        Ok(()) => {
-            // A removed source is a channel that stops producing detections.
-            // Without this row the gap in the record has no explanation.
-            crate::audit::audit(
-                &state,
-                Some(&request_user),
-                "audio.source.delete",
-                Some(&id),
-                None,
-            );
-            // The row's hx-swap removes it from the list; refresh both count
-            // chips via OOB so the header totals drop in step.
-            let mut body = count_oobs(&state);
-            body.push_str(
-                &Toast::success("Source removed.")
-                    .with_action("/admin/system/restart", "Restart to apply")
-                    .render_oob(),
-            );
-            Html(body).into_response()
-        }
-        Err(AudioSourceError::NotFound(_)) => {
-            toast::oob_only(Toast::warn("Source already removed.")).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "audio source soft-delete failed");
-            internal_response("Could not remove the source.")
-        }
-    }
+    state
+        .run_blocking(move |state| {
+            let result = state.with_db(|conn| conn.soft_delete(&id));
+            match result {
+                Ok(()) => {
+                    // A removed source is a channel that stops producing detections.
+                    // Without this row the gap in the record has no explanation.
+                    crate::audit::audit(
+                        state,
+                        Some(&request_user),
+                        "audio.source.delete",
+                        Some(&id),
+                        None,
+                    );
+                    // The row's hx-swap removes it from the list; refresh both count
+                    // chips via OOB so the header totals drop in step.
+                    let mut body = count_oobs(state);
+                    body.push_str(
+                        &Toast::success("Source removed.")
+                            .with_action("/admin/system/restart", "Restart to apply")
+                            .render_oob(),
+                    );
+                    Html(body).into_response()
+                }
+                Err(AudioSourceError::NotFound(_)) => {
+                    toast::oob_only(Toast::warn("Source already removed.")).into_response()
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source soft-delete failed");
+                    internal_response("Could not remove the source.")
+                }
+            }
+        })
+        .await
 }
 
 /// Restart one capture source, leaving every other source recording.
@@ -560,45 +565,45 @@ async fn restart(
     request_user: crate::auth_middleware::RequestUser,
     Path(id): Path<String>,
 ) -> Response {
-    use birdnet_core::audio::capture::request_source_restart;
+    state
+        .run_blocking(move |state| {
+            use birdnet_core::audio::capture::request_source_restart;
 
-    // Confirm the source exists before claiming anything happened: an id from a
-    // stale page must not answer "restarting" for a source that was removed.
-    let row = match state.with_db(|conn| conn.get(&id)) {
-        Ok(Some(row)) => row,
-        Ok(None) => return not_found_row(&id),
-        Err(e) => {
-            tracing::error!(error = %e, "audio source get failed");
-            return internal_response("Could not load that source.");
-        }
-    };
+            // Confirm the source exists before claiming anything happened: an id from a
+            // stale page must not answer "restarting" for a source that was removed.
+            let row = match state.with_db(|conn| conn.get(&id)) {
+                Ok(Some(row)) => row,
+                Ok(None) => return not_found_row(&id),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source get failed");
+                    return internal_response("Could not load that source.");
+                }
+            };
 
-    let Some(control) = state.capture_control() else {
-        // Web-only mode, or the daemon is not supervising capture in this
-        // process. Saying so beats a success toast for a restart that no
-        // thread exists to perform.
-        return toast::oob_only(Toast::warn(
+            let Some(control) = state.capture_control() else {
+                // Web-only mode, or the daemon is not supervising capture in this
+                // process. Saying so beats a success toast for a restart that no
+                // thread exists to perform.
+                return toast::oob_only(Toast::warn(
             "Capture is not being supervised by this process, so there is nothing to restart.",
         ))
         .into_response();
-    };
+            };
 
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "audio.source.restart",
-        Some(&id),
-        None,
-    );
-    request_source_restart(&control, &id);
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "audio.source.restart",
+                Some(&id),
+                None,
+            );
+            request_source_restart(&control, &id);
 
-    let mut body = render_row(
-        &row,
-        daemon_status(&row, &state),
-        &listen_default_id(&state),
-    );
-    body.push_str(&Toast::success("Restarting this source…").render_oob());
-    Html(body).into_response()
+            let mut body = render_row(&row, daemon_status(&row, state), &listen_default_id(state));
+            body.push_str(&Toast::success("Restarting this source…").render_oob());
+            Html(body).into_response()
+        })
+        .await
 }
 
 /// Make one source the station's default for `/stream` (N-3).
@@ -618,6 +623,7 @@ async fn listen_default(
     request_user: crate::auth_middleware::RequestUser,
     Path(id): Path<String>,
 ) -> Response {
+    state.run_blocking(move |state| {
     let row = match state.with_db(|conn| conn.get(&id)) {
         Ok(Some(row)) => row,
         Ok(None) => return not_found_row(&id),
@@ -646,7 +652,7 @@ async fn listen_default(
         return internal_response("Could not save the listen default.");
     }
     crate::audit::audit(
-        &state,
+        state,
         Some(&request_user),
         "audio.source.listen_default",
         Some(&row.id),
@@ -658,26 +664,32 @@ async fn listen_default(
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
     let (rows_local, rows_rtsp) =
-        render_lists(&local, &rtsp, &|row| daemon_status(row, &state), &row.id);
+        render_lists(&local, &rtsp, &|row| daemon_status(row, state), &row.id);
     let mut body = format!(
         r#"<ul id="local-list" role="list" class="audio-sources" hx-swap-oob="true">{rows_local}</ul>
 <ul id="rtsp-list" role="list" class="audio-sources" hx-swap-oob="true">{rows_rtsp}</ul>"#
     );
     body.push_str(&Toast::success("Listen now plays this source by default.").render_oob());
     Html(body).into_response()
+})
+.await
 }
 
 async fn edit_form(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let result = state.with_db(|conn| conn.get(&id));
-    let row = match result {
-        Ok(Some(row)) => row,
-        Ok(None) => return not_found_row(&id),
-        Err(e) => {
-            tracing::error!(error = %e, "audio source get failed");
-            return internal_response("Could not load that source.");
-        }
-    };
-    Html(render_edit_form(&row)).into_response()
+    state
+        .run_blocking(move |state| {
+            let result = state.with_db(|conn| conn.get(&id));
+            let row = match result {
+                Ok(Some(row)) => row,
+                Ok(None) => return not_found_row(&id),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source get failed");
+                    return internal_response("Could not load that source.");
+                }
+            };
+            Html(render_edit_form(&row)).into_response()
+        })
+        .await
 }
 
 async fn update(
@@ -686,97 +698,98 @@ async fn update(
     Path(id): Path<String>,
     Form(form): Form<CreateForm>,
 ) -> Response {
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "audio.source.update",
-        Some(&id),
-        None,
-    );
-    let mut patch = AudioSourcePatch::default();
-    let device_id = form.device_id.trim().to_string();
-    if !device_id.is_empty() {
-        patch.device_id = Some(device_id);
-    }
-    let label = form.label.map(|s| {
-        let trimmed = s.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    });
-    if let Some(l) = label {
-        patch.label = Some(l);
-    }
-    if let Some(rate) = form.sample_rate {
-        patch.sample_rate = Some(rate);
-    }
-    if let Some(transport) = form.rtsp_transport.as_deref() {
-        match transport.parse::<RtspTransport>() {
-            Ok(t) => patch.rtsp_transport = Some(t),
-            Err(_) => return validation_response("Unknown RTSP transport."),
-        }
-    }
-    if let Some(toggles) = ToggleSet::from_form(
-        form.pipeline_present.as_deref(),
-        form.high_pass.as_deref(),
-        form.dc_removal.as_deref(),
-        form.agc.as_deref(),
-        form.rtsp_keepalive.as_deref(),
-    ) {
-        patch.pipeline = Some(toggles.into_flags());
-    }
-    match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
-        Ok(QuietChoice::Set(a, b)) => patch.schedule_quiet = Some(Some((a, b))),
-        Ok(QuietChoice::Clear) => patch.schedule_quiet = Some(None),
-        Ok(QuietChoice::Absent) => {}
-        Err(msg) => return validation_response(msg),
-    }
-    // Against the rate the row will *have* after this PATCH, not the rate it
-    // has now: a submission that lowers the sample rate and keeps a chain the
-    // new rate cannot carry has to be caught here, not at the next restart.
-    if form.eq_chain.is_some() {
-        let effective_rate = match patch.sample_rate {
-            Some(rate) => rate,
-            None => match state.with_db(|conn| conn.get(&id)) {
-                Ok(Some(row)) => row.sample_rate,
-                Ok(None) => return not_found_row(&id),
-                Err(e) => {
-                    tracing::error!(error = %e, "audio source get failed");
-                    return internal_response("Could not update the source.");
+    state
+        .run_blocking(move |state| {
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "audio.source.update",
+                Some(&id),
+                None,
+            );
+            let mut patch = AudioSourcePatch::default();
+            let device_id = form.device_id.trim().to_string();
+            if !device_id.is_empty() {
+                patch.device_id = Some(device_id);
+            }
+            let label = form.label.map(|s| {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
                 }
-            },
-        };
-        match parse_eq_field(form.eq_chain.as_deref(), effective_rate) {
-            Ok(Some(spec)) => patch.eq_chain = Some(spec),
-            Ok(None) => {}
-            Err(msg) => return validation_response(&msg),
-        }
-    }
+            });
+            if let Some(l) = label {
+                patch.label = Some(l);
+            }
+            if let Some(rate) = form.sample_rate {
+                patch.sample_rate = Some(rate);
+            }
+            if let Some(transport) = form.rtsp_transport.as_deref() {
+                match transport.parse::<RtspTransport>() {
+                    Ok(t) => patch.rtsp_transport = Some(t),
+                    Err(_) => return validation_response("Unknown RTSP transport."),
+                }
+            }
+            if let Some(toggles) = ToggleSet::from_form(
+                form.pipeline_present.as_deref(),
+                form.high_pass.as_deref(),
+                form.dc_removal.as_deref(),
+                form.agc.as_deref(),
+                form.rtsp_keepalive.as_deref(),
+            ) {
+                patch.pipeline = Some(toggles.into_flags());
+            }
+            match parse_quiet_choice(form.quiet_start.as_deref(), form.quiet_end.as_deref()) {
+                Ok(QuietChoice::Set(a, b)) => patch.schedule_quiet = Some(Some((a, b))),
+                Ok(QuietChoice::Clear) => patch.schedule_quiet = Some(None),
+                Ok(QuietChoice::Absent) => {}
+                Err(msg) => return validation_response(msg),
+            }
+            // Against the rate the row will *have* after this PATCH, not the rate it
+            // has now: a submission that lowers the sample rate and keeps a chain the
+            // new rate cannot carry has to be caught here, not at the next restart.
+            if form.eq_chain.is_some() {
+                let effective_rate = match patch.sample_rate {
+                    Some(rate) => rate,
+                    None => match state.with_db(|conn| conn.get(&id)) {
+                        Ok(Some(row)) => row.sample_rate,
+                        Ok(None) => return not_found_row(&id),
+                        Err(e) => {
+                            tracing::error!(error = %e, "audio source get failed");
+                            return internal_response("Could not update the source.");
+                        }
+                    },
+                };
+                match parse_eq_field(form.eq_chain.as_deref(), effective_rate) {
+                    Ok(Some(spec)) => patch.eq_chain = Some(spec),
+                    Ok(None) => {}
+                    Err(msg) => return validation_response(&msg),
+                }
+            }
 
-    let result = state.with_db(|conn| conn.update(&id, &patch));
-    match result {
-        Ok(row) => {
-            let mut body = render_row(
-                &row,
-                daemon_status(&row, &state),
-                &listen_default_id(&state),
-            );
-            body.push_str(
-                &Toast::success("Source updated.")
-                    .with_action("/admin/system/restart", "Restart to apply")
-                    .render_oob(),
-            );
-            Html(body).into_response()
-        }
-        Err(AudioSourceError::NotFound(_)) => not_found_row(&id),
-        Err(AudioSourceError::Invalid(msg)) => validation_response(&msg),
-        Err(e) => {
-            tracing::error!(error = %e, "audio source update failed");
-            internal_response("Could not update the source.")
-        }
-    }
+            let result = state.with_db(|conn| conn.update(&id, &patch));
+            match result {
+                Ok(row) => {
+                    let mut body =
+                        render_row(&row, daemon_status(&row, state), &listen_default_id(state));
+                    body.push_str(
+                        &Toast::success("Source updated.")
+                            .with_action("/admin/system/restart", "Restart to apply")
+                            .render_oob(),
+                    );
+                    Html(body).into_response()
+                }
+                Err(AudioSourceError::NotFound(_)) => not_found_row(&id),
+                Err(AudioSourceError::Invalid(msg)) => validation_response(&msg),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source update failed");
+                    internal_response("Could not update the source.")
+                }
+            }
+        })
+        .await
 }
 
 /// Query for the live response-curve preview.
@@ -804,32 +817,36 @@ async fn eq_preview(
     Path(id): Path<String>,
     axum::extract::Query(q): axum::extract::Query<EqPreviewQuery>,
 ) -> Response {
-    let sample_rate = match state.with_db(|conn| conn.get(&id)) {
-        Ok(Some(row)) => row.sample_rate,
-        Ok(None) => return not_found_row(&id),
-        Err(e) => {
-            tracing::error!(error = %e, "audio source get failed");
-            return internal_response("Could not load that source.");
-        }
-    };
-    let body = match EqChain::parse(&q.eq_chain) {
-        Ok(chain) => match chain.build(sample_rate) {
-            Ok(_) => format!(
-                r#"<div id="eq-preview-{id}" class="eq-preview">{}</div>"#,
-                eq_curve::render(&chain, sample_rate),
-                id = escape_html(&id)
-            ),
-            Err(e) => eq_preview_problem(
-                &id,
-                &format!(
-                    "Not usable at {sample_rate} Hz: {e}. This source tops out at {} Hz.",
-                    sample_rate / 2
-                ),
-            ),
-        },
-        Err(e) => eq_preview_problem(&id, &format!("“{}”: {}", e.stage, e.reason)),
-    };
-    Html(body).into_response()
+    state
+        .run_blocking(move |state| {
+            let sample_rate = match state.with_db(|conn| conn.get(&id)) {
+                Ok(Some(row)) => row.sample_rate,
+                Ok(None) => return not_found_row(&id),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source get failed");
+                    return internal_response("Could not load that source.");
+                }
+            };
+            let body = match EqChain::parse(&q.eq_chain) {
+                Ok(chain) => match chain.build(sample_rate) {
+                    Ok(_) => format!(
+                        r#"<div id="eq-preview-{id}" class="eq-preview">{}</div>"#,
+                        eq_curve::render(&chain, sample_rate),
+                        id = escape_html(&id)
+                    ),
+                    Err(e) => eq_preview_problem(
+                        &id,
+                        &format!(
+                            "Not usable at {sample_rate} Hz: {e}. This source tops out at {} Hz.",
+                            sample_rate / 2
+                        ),
+                    ),
+                },
+                Err(e) => eq_preview_problem(&id, &format!("“{}”: {}", e.stage, e.reason)),
+            };
+            Html(body).into_response()
+        })
+        .await
 }
 
 /// The preview panel in its "cannot draw this yet" state.
@@ -844,16 +861,20 @@ fn eq_preview_problem(id: &str, message: &str) -> String {
 }
 
 async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let row = match state.with_db(|conn| conn.get(&id)) {
-        Ok(Some(row)) => row,
-        Ok(None) => return not_found_row(&id),
-        Err(e) => {
-            tracing::error!(error = %e, "audio source probe failed");
-            return internal_response("Could not probe that source.");
-        }
-    };
-    let status = daemon_status(&row, &state);
-    Html(render_status_pill(&row.id, status)).into_response()
+    state
+        .run_blocking(move |state| {
+            let row = match state.with_db(|conn| conn.get(&id)) {
+                Ok(Some(row)) => row,
+                Ok(None) => return not_found_row(&id),
+                Err(e) => {
+                    tracing::error!(error = %e, "audio source probe failed");
+                    return internal_response("Could not probe that source.");
+                }
+            };
+            let status = daemon_status(&row, state);
+            Html(render_status_pill(&row.id, status)).into_response()
+        })
+        .await
 }
 
 /// Return the read-only row for one source. Used by the edit form's **Cancel**
@@ -861,19 +882,21 @@ async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Respons
 /// `hx-swap="none"`, which fetched the status pill but swapped nothing, leaving
 /// the edit form stuck open — Cancel appeared to do nothing.)
 async fn row(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.with_db(|conn| conn.get(&id)) {
-        Ok(Some(src)) => Html(render_row(
-            &src,
-            daemon_status(&src, &state),
-            &listen_default_id(&state),
-        ))
-        .into_response(),
-        Ok(None) => not_found_row(&id),
-        Err(e) => {
-            tracing::error!(error = %e, "audio source get failed");
-            internal_response("Could not load that source.")
-        }
-    }
+    state
+        .run_blocking(move |state| match state.with_db(|conn| conn.get(&id)) {
+            Ok(Some(src)) => Html(render_row(
+                &src,
+                daemon_status(&src, state),
+                &listen_default_id(state),
+            ))
+            .into_response(),
+            Ok(None) => not_found_row(&id),
+            Err(e) => {
+                tracing::error!(error = %e, "audio source get failed");
+                internal_response("Could not load that source.")
+            }
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------

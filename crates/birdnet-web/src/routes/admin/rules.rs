@@ -249,9 +249,8 @@ async fn import_rules(
         }
     };
 
-    let audit_state = state.clone();
     let (inserted, metric_inserted) = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        let (inserted, metric_inserted) = state.with_db(|conn| {
             let mut n = 0;
             for i in &ready {
                 if insert_rule(conn, &i.rule).is_ok() {
@@ -265,25 +264,26 @@ async fn import_rules(
                 }
             }
             (n, m)
-        })
+        });
+        // The count, because an import is a bulk change: one row saying "12
+        // rules arrived" beats twelve rows and is what an operator compares
+        // against the file they pasted. In this closure, with the write, so a
+        // client that hangs up cannot leave the rules in and the row out.
+        if inserted > 0 || metric_inserted > 0 {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.import",
+                None,
+                Some(&format!(
+                    "inserted={inserted} metric_inserted={metric_inserted}"
+                )),
+            );
+        }
+        (inserted, metric_inserted)
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // The count, because an import is a bulk change: one row saying "12 rules
-    // arrived" beats twelve rows and is what an operator compares against the
-    // file they pasted.
-    if inserted > 0 || metric_inserted > 0 {
-        crate::audit::audit(
-            &audit_state,
-            Some(&request_user),
-            "rule.import",
-            None,
-            Some(&format!(
-                "inserted={inserted} metric_inserted={metric_inserted}"
-            )),
-        );
-    }
 
     Ok(Html(render_import_outcome(
         inserted,
@@ -607,25 +607,30 @@ async fn create_rule(
         action,
     };
 
-    let audit_state = state.clone();
-    let inserted =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| insert_rule(conn, &new_rule)))
-            .await;
+    let audited_name = rule_name.clone();
+    let inserted = tokio::task::spawn_blocking(move || {
+        let inserted = state.with_db(|conn| insert_rule(conn, &new_rule));
+        // A rule can suppress detections or POST to a webhook, so "who added
+        // the one that has been swallowing owls since March?" is an audit
+        // question. Written with the rule, so neither outlives the other.
+        if inserted.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.create",
+                Some(&audited_name),
+                None,
+            );
+        }
+        inserted
+    })
+    .await;
     if !matches!(inserted, Ok(Ok(_))) {
         tracing::warn!(rule = %rule_name, "alert rule not created");
         return crate::routes::pages::toast::not_applied(&Toast::error(format!(
             "The rule '{rule_name}' was not created: the database refused the write."
         )));
     }
-    // A rule can suppress detections or POST to a webhook, so "who added the
-    // one that has been swallowing owls since March?" is an audit question.
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.create",
-        Some(&rule_name),
-        None,
-    );
 
     // Return a success message and a loader that re-fetches the rule list.
     let body = Html(format!(
@@ -650,24 +655,28 @@ async fn delete_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
-    let audit_state = state.clone();
-    let deleted = tokio::task::spawn_blocking(move || state.with_db(|conn| delete_rule(conn, id)))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r.map_err(|e| e.to_string()));
+    let deleted = tokio::task::spawn_blocking(move || {
+        let deleted = state.with_db(|conn| delete_rule(conn, id));
+        if deleted.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.delete",
+                Some(&format!("rule:{id}")),
+                None,
+            );
+        }
+        deleted
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()));
     if let Err(e) = deleted {
         tracing::error!(error = %e, rule = id, "delete_rule failed");
         return Ok(toast::oob_only(Toast::error(
             "That rule could not be deleted — nothing was changed.",
         )));
     }
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.delete",
-        Some(&format!("rule:{id}")),
-        None,
-    );
 
     // O-18: HTMX removes the row via outerHTML swap (response body is empty
     // after OOB extraction); the OOB toast confirms the action separately.
@@ -679,12 +688,26 @@ async fn toggle_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
-    let audit_state = state.clone();
     // Same reasoning as `delete_rule_handler`: a 5xx here is invisible.
-    let toggled = tokio::task::spawn_blocking(move || state.with_db(|conn| toggle_rule(conn, id)))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r.map_err(|e| e.to_string()));
+    let toggled = tokio::task::spawn_blocking(move || {
+        let toggled = state.with_db(|conn| toggle_rule(conn, id));
+        if let Ok(new_state) = &toggled {
+            // The new state is the content: a rule silently disabled in
+            // October explains an empty November.
+            let enabled = new_state.unwrap_or(false);
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.toggle",
+                Some(&format!("rule:{id}")),
+                Some(if enabled { "enabled" } else { "disabled" }),
+            );
+        }
+        toggled
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()));
     let new_state = match toggled {
         Ok(v) => v,
         Err(e) => {
@@ -696,15 +719,6 @@ async fn toggle_rule_handler(
     };
 
     let enabled = new_state.unwrap_or(false);
-    // The new state is the content: a rule silently disabled in October
-    // explains an empty November.
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.toggle",
-        Some(&format!("rule:{id}")),
-        Some(if enabled { "enabled" } else { "disabled" }),
-    );
     let label = if enabled { "Enabled" } else { "Disabled" };
     let cls = if enabled { "on" } else { "off" };
     let body = Html(format!(
@@ -778,9 +792,21 @@ async fn create_metric_rule(
     }
 
     let name = rule.name.clone();
-    let audit_state = state.clone();
     let stored = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::metric_rules::insert(conn, &rule))
+        let stored = state.with_db(|conn| birdnet_db::metric_rules::insert(conn, &rule));
+        // A rule that alerts on the station's own health is one an operator
+        // will later ask "who set this, and when" about — the same question
+        // the detection rules are audited for.
+        if stored.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.create",
+                Some(&rule.name),
+                Some("kind=metric"),
+            );
+        }
+        stored
     })
     .await;
     match stored {
@@ -788,17 +814,6 @@ async fn create_metric_rule(
         Ok(Err(e)) => return metric_form_problem(&e.to_string()),
         Err(_) => return metric_form_problem("could not store the rule"),
     }
-
-    // A rule that alerts on the station's own health is one an operator will
-    // later ask "who set this, and when" about — the same question the
-    // detection rules are audited for.
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.create",
-        Some(&name),
-        Some("kind=metric"),
-    );
 
     let body = Html(String::from(
         "<div class=\"rule-success\">Rule created.</div>\
@@ -821,20 +836,20 @@ async fn delete_metric_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Html<String> {
-    let audit_state = state.clone();
-    let removed = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::metric_rules::delete(conn, id))
+    let _removed = tokio::task::spawn_blocking(move || {
+        let removed = state.with_db(|conn| birdnet_db::metric_rules::delete(conn, id));
+        if matches!(removed, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.delete",
+                Some(&id.to_string()),
+                Some("kind=metric"),
+            );
+        }
+        removed
     })
     .await;
-    if matches!(removed, Ok(Ok(true))) {
-        crate::audit::audit(
-            &audit_state,
-            Some(&request_user),
-            "rule.delete",
-            Some(&id.to_string()),
-            Some("kind=metric"),
-        );
-    }
     let body = Html(String::from(
         "<div hx-get=\"/admin/metric-rules/list\" hx-trigger=\"load\" \
           hx-target=\"#metric-rules-table-container\" hx-swap=\"innerHTML\"></div>",
@@ -847,25 +862,25 @@ async fn toggle_metric_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Html<String> {
-    let audit_state = state.clone();
     let now = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::metric_rules::toggle(conn, id))
+        let now = state.with_db(|conn| birdnet_db::metric_rules::toggle(conn, id));
+        if let Ok(Some(enabled)) = now {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.toggle",
+                Some(&id.to_string()),
+                Some(if enabled {
+                    "kind=metric enabled"
+                } else {
+                    "kind=metric disabled"
+                }),
+            );
+        }
+        now
     })
     .await;
     let enabled = matches!(now, Ok(Ok(Some(true))));
-    if matches!(now, Ok(Ok(Some(_)))) {
-        crate::audit::audit(
-            &audit_state,
-            Some(&request_user),
-            "rule.toggle",
-            Some(&id.to_string()),
-            Some(if enabled {
-                "kind=metric enabled"
-            } else {
-                "kind=metric disabled"
-            }),
-        );
-    }
     let body = Html(String::from(
         "<div hx-get=\"/admin/metric-rules/list\" hx-trigger=\"load\" \
           hx-target=\"#metric-rules-table-container\" hx-swap=\"innerHTML\"></div>",

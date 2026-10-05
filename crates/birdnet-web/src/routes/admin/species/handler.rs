@@ -27,22 +27,30 @@ pub async fn species_page() -> axum::response::Redirect {
 
 /// Return the HTMX partial fragment containing the current species lists.
 pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
-    let (exclude, include) = load_lists(&state);
-    Html(render_species_partial(&exclude, &include))
+    state
+        .run_blocking(move |state| {
+            let (exclude, include) = load_lists(state);
+            Html(render_species_partial(&exclude, &include))
+        })
+        .await
 }
 
 /// Render the species filter-test page, which shows every known species and
 /// whether the current exclude/include lists would suppress or pass each one.
 pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
-    let (exclude, include) = load_lists(&state);
-    let species =
-        state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default());
-    #[allow(clippy::cast_sign_loss)]
-    let rows: Vec<(String, String, u64)> = species
-        .into_iter()
-        .map(|s| (s.sci_name, s.com_name, s.count.max(0) as u64))
-        .collect();
-    Html(render_filter_test_page(&exclude, &include, &rows))
+    state
+        .run_blocking(move |state| {
+            let (exclude, include) = load_lists(state);
+            let species = state
+                .with_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default());
+            #[allow(clippy::cast_sign_loss)]
+            let rows: Vec<(String, String, u64)> = species
+                .into_iter()
+                .map(|s| (s.sci_name, s.com_name, s.count.max(0) as u64))
+                .collect();
+            Html(render_filter_test_page(&exclude, &include, &rows))
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -66,19 +74,23 @@ pub async fn add_exclude(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_exclude", &form.name, &ListAction::Add);
-    // A filter list decides what the station is allowed to record. A season
-    // missing a species is otherwise indistinguishable from a season in which
-    // it was not heard.
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "species.exclude.add",
-        Some(&form.name),
-        None,
-    );
-    let (exclude, include) = load_lists(&state);
-    Ok(Html(render_species_partial(&exclude, &include)))
+    state
+        .run_blocking(move |state| {
+            modify_list(state, "species_exclude", &form.name, &ListAction::Add);
+            // A filter list decides what the station is allowed to record. A season
+            // missing a species is otherwise indistinguishable from a season in which
+            // it was not heard.
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.exclude.add",
+                Some(&form.name),
+                None,
+            );
+            let (exclude, include) = load_lists(state);
+            Ok(Html(render_species_partial(&exclude, &include)))
+        })
+        .await
 }
 
 /// Remove a species from the exclusion list and return the updated partial.
@@ -91,19 +103,23 @@ pub async fn remove_exclude(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_exclude", &form.name, &ListAction::Remove);
-    // A filter list decides what the station is allowed to record. A season
-    // missing a species is otherwise indistinguishable from a season in which
-    // it was not heard.
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "species.exclude.remove",
-        Some(&form.name),
-        None,
-    );
-    let (exclude, include) = load_lists(&state);
-    Ok(Html(render_species_partial(&exclude, &include)))
+    state
+        .run_blocking(move |state| {
+            modify_list(state, "species_exclude", &form.name, &ListAction::Remove);
+            // A filter list decides what the station is allowed to record. A season
+            // missing a species is otherwise indistinguishable from a season in which
+            // it was not heard.
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.exclude.remove",
+                Some(&form.name),
+                None,
+            );
+            let (exclude, include) = load_lists(state);
+            Ok(Html(render_species_partial(&exclude, &include)))
+        })
+        .await
 }
 
 /// Add a species to the allow-list and return the updated partial.
@@ -116,19 +132,23 @@ pub async fn add_include(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_include", &form.name, &ListAction::Add);
-    // A filter list decides what the station is allowed to record. A season
-    // missing a species is otherwise indistinguishable from a season in which
-    // it was not heard.
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "species.include.add",
-        Some(&form.name),
-        None,
-    );
-    let (exclude, include) = load_lists(&state);
-    Ok(Html(render_species_partial(&exclude, &include)))
+    state
+        .run_blocking(move |state| {
+            modify_list(state, "species_include", &form.name, &ListAction::Add);
+            // A filter list decides what the station is allowed to record. A season
+            // missing a species is otherwise indistinguishable from a season in which
+            // it was not heard.
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.include.add",
+                Some(&form.name),
+                None,
+            );
+            let (exclude, include) = load_lists(state);
+            Ok(Html(render_species_partial(&exclude, &include)))
+        })
+        .await
 }
 
 /// Remove a species from the allow-list and return the updated partial.
@@ -141,19 +161,23 @@ pub async fn remove_include(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_include", &form.name, &ListAction::Remove);
-    // A filter list decides what the station is allowed to record. A season
-    // missing a species is otherwise indistinguishable from a season in which
-    // it was not heard.
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "species.include.remove",
-        Some(&form.name),
-        None,
-    );
-    let (exclude, include) = load_lists(&state);
-    Ok(Html(render_species_partial(&exclude, &include)))
+    state
+        .run_blocking(move |state| {
+            modify_list(state, "species_include", &form.name, &ListAction::Remove);
+            // A filter list decides what the station is allowed to record. A season
+            // missing a species is otherwise indistinguishable from a season in which
+            // it was not heard.
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "species.include.remove",
+                Some(&form.name),
+                None,
+            );
+            let (exclude, include) = load_lists(state);
+            Ok(Html(render_species_partial(&exclude, &include)))
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -197,8 +221,12 @@ fn load_thresholds_and_suggestions(
 
 /// Return the HTMX partial fragment listing all current per-species confidence thresholds.
 pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
-    let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
-    Html(render_thresholds_partial(&thresholds, &suggestions))
+    state
+        .run_blocking(move |state| {
+            let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
+            Html(render_thresholds_partial(&thresholds, &suggestions))
+        })
+        .await
 }
 
 /// Per-species threshold submission.
@@ -230,6 +258,7 @@ pub async fn set_threshold(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ThresholdForm>,
 ) -> axum::response::Response {
+    state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
     use axum::response::IntoResponse as _;
     let sci_name = form.sci_name.trim().to_string();
@@ -262,14 +291,16 @@ pub async fn set_threshold(
     // number that changes which detections are kept, and reconstructing "what
     // was it set to in April?" from anything else is impossible.
     crate::audit::audit(
-        &state,
+        state,
         Some(&request_user),
         "species.threshold.set",
         Some(&sci_name),
         Some(&format!("threshold={threshold}")),
     );
-    let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
+    let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
     Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+})
+.await
 }
 
 /// Form carrying the species whose per-species threshold should be removed.
@@ -288,6 +319,7 @@ pub async fn delete_threshold(
     request_user: crate::auth_middleware::RequestUser,
     Form(form): Form<ThresholdDeleteForm>,
 ) -> axum::response::Response {
+    state.run_blocking(move |state| {
     use crate::routes::pages::toast::{Toast, not_applied};
     use axum::response::IntoResponse as _;
     if let Err(e) =
@@ -300,14 +332,16 @@ pub async fn delete_threshold(
         )));
     }
     crate::audit::audit(
-        &state,
+        state,
         Some(&request_user),
         "species.threshold.delete",
         Some(&form.sci_name),
         None,
     );
-    let (thresholds, suggestions) = load_thresholds_and_suggestions(&state);
+    let (thresholds, suggestions) = load_thresholds_and_suggestions(state);
     Html(render_thresholds_partial(&thresholds, &suggestions)).into_response()
+})
+.await
 }
 
 // ---------------------------------------------------------------------------

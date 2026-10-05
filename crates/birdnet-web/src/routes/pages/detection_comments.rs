@@ -94,55 +94,56 @@ async fn add_comment(
     user: RequestUser,
     Form(form): Form<AddForm>,
 ) -> impl IntoResponse {
-    // The author is the signed-in identity, never anything the form carried. A
-    // name a browser could choose is not attribution.
-    let (user_id, author) = (Some(user.user.id), user.user.username.clone());
+    // The write, its audit row and the re-read run as one piece on the
+    // blocking pool: none of them may hold a runtime worker, and a client that
+    // hangs up part way must not leave a comment with no audit row.
+    let rendered = state
+        .run_blocking(move |state| {
+            // The author is the signed-in identity, never anything the form
+            // carried. A name a browser could choose is not attribution.
+            let (user_id, author) = (Some(user.user.id), user.user.username.clone());
+            let written = state.with_db(|conn| {
+                detection_comments::insert(
+                    conn,
+                    &NewComment {
+                        date: &form.date,
+                        time: &form.time,
+                        sci_name: &form.sci_name,
+                        user_id,
+                        author: &author,
+                        body: &form.body,
+                    },
+                )
+            });
 
-    let st = state.clone();
-    let (date, time, sci) = (form.date.clone(), form.time.clone(), form.sci_name.clone());
-    let body = form.body.clone();
-    let written = tokio::task::spawn_blocking(move || {
-        st.with_db(|conn| {
-            detection_comments::insert(
-                conn,
-                &NewComment {
-                    date: &date,
-                    time: &time,
-                    sci_name: &sci,
-                    user_id,
-                    author: &author,
-                    body: &body,
-                },
+            let problem = match written {
+                Ok(comment) => {
+                    crate::audit::audit(
+                        state,
+                        Some(&user),
+                        "detection.comment.add",
+                        Some(&target_of(&form.date, &form.time, &form.sci_name)),
+                        Some(&format!("id={}", comment.id)),
+                    );
+                    None
+                }
+                // The database's own words: it is the one that knows the body
+                // was empty, or 40 characters too long, and an operator who has
+                // just typed a paragraph deserves better than "something went
+                // wrong".
+                Err(e) => Some(e.to_string()),
+            };
+
+            render_thread(
+                state,
+                &form.date,
+                &form.time,
+                &form.sci_name,
+                problem.as_deref(),
             )
         })
-    })
-    .await;
-
-    let problem = match written {
-        Ok(Ok(comment)) => {
-            crate::audit::audit(
-                &state,
-                Some(&user),
-                "detection.comment.add",
-                Some(&target_of(&form.date, &form.time, &form.sci_name)),
-                Some(&format!("id={}", comment.id)),
-            );
-            None
-        }
-        // The database's own words: it is the one that knows the body was
-        // empty, or 40 characters too long, and an operator who has just typed
-        // a paragraph deserves better than "something went wrong".
-        Ok(Err(e)) => Some(e.to_string()),
-        Err(_) => Some("the comment could not be saved".to_owned()),
-    };
-
-    html(render_thread(
-        &state,
-        &form.date,
-        &form.time,
-        &form.sci_name,
-        problem.as_deref(),
-    ))
+        .await;
+    html(rendered)
 }
 
 async fn delete_comment(
@@ -150,40 +151,41 @@ async fn delete_comment(
     user: RequestUser,
     Form(form): Form<DeleteForm>,
 ) -> impl IntoResponse {
-    let st = state.clone();
-    let id = form.id;
-    let removed = tokio::task::spawn_blocking(move || {
-        st.with_db(|conn| detection_comments::delete(conn, id))
-    })
-    .await;
+    // As in `add_comment`: delete, audit and re-read together, off the runtime.
+    let rendered = state
+        .run_blocking(move |state| {
+            let id = form.id;
+            let problem = match state.with_db(|conn| detection_comments::delete(conn, id)) {
+                Ok(Some(comment)) => {
+                    crate::audit::audit(
+                        state,
+                        Some(&user),
+                        "detection.comment.delete",
+                        Some(&target_of(&form.date, &form.time, &form.sci_name)),
+                        // The id and the author, never the body: a comment
+                        // deleted because it named somebody must not survive in
+                        // the log that recorded its removal.
+                        Some(&format!("id={id} author={}", comment.author)),
+                    );
+                    None
+                }
+                // Already gone. Two people with the page open both pressing
+                // Remove is not an error; the second one gets the list without
+                // it.
+                Ok(None) => None,
+                Err(_) => Some("the comment could not be removed".to_owned()),
+            };
 
-    let problem = match removed {
-        Ok(Ok(Some(comment))) => {
-            crate::audit::audit(
-                &state,
-                Some(&user),
-                "detection.comment.delete",
-                Some(&target_of(&form.date, &form.time, &form.sci_name)),
-                // The id and the author, never the body: a comment deleted
-                // because it named somebody must not survive in the log that
-                // recorded its removal.
-                Some(&format!("id={id} author={}", comment.author)),
-            );
-            None
-        }
-        // Already gone. Two people with the page open both pressing Remove is
-        // not an error; the second one gets the list without it.
-        Ok(Ok(None)) => None,
-        _ => Some("the comment could not be removed".to_owned()),
-    };
-
-    html(render_thread(
-        &state,
-        &form.date,
-        &form.time,
-        &form.sci_name,
-        problem.as_deref(),
-    ))
+            render_thread(
+                state,
+                &form.date,
+                &form.time,
+                &form.sci_name,
+                problem.as_deref(),
+            )
+        })
+        .await;
+    html(rendered)
 }
 
 /// The audit target for a detection: the tuple, in the schema's order.

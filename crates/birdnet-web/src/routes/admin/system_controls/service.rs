@@ -114,17 +114,20 @@ binary.</span></p>"
 /// The decision is [`request_restart`]'s; this renders it as the HTML fragment
 /// HTMX swaps in, and records *who* asked. `POST /api/v2/control/restart` is
 /// the same decision rendered as JSON.
-#[allow(clippy::unused_async)] // async required by axum's Handler trait
 pub(super) async fn service_restart(
     axum::extract::State(state): axum::extract::State<crate::state::AppState>,
     request_user: crate::auth_middleware::RequestUser,
 ) -> Html<String> {
-    // Before the SIGTERM, and before the systemd check, so the record survives
-    // the restart and exists even on a station where the restart is refused —
-    // "who kept pressing this?" is a question either outcome raises.
-    crate::audit::audit(&state, Some(&request_user), "system.restart", None, None);
+    state
+        .run_blocking(move |state| {
+            // Before the SIGTERM, and before the systemd check, so the record survives
+            // the restart and exists even on a station where the restart is refused —
+            // "who kept pressing this?" is a question either outcome raises.
+            crate::audit::audit(state, Some(&request_user), "system.restart", None, None);
 
-    restart_fragment(request_restart(state.supervised_by_systemd()))
+            restart_fragment(request_restart(state.supervised_by_systemd()))
+        })
+        .await
 }
 
 /// Return HTML with current process status (PID, uptime, memory, version).

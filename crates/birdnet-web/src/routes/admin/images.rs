@@ -49,6 +49,7 @@ pub struct BlacklistForm {
 
 /// Render the image blacklist admin page.
 async fn images_page(State(state): State<AppState>) -> Html<String> {
+    state.run_blocking(move |state| {
     let entries =
         state.with_db(|conn| birdnet_db::sqlite::list_image_blacklist(conn).unwrap_or_default());
 
@@ -124,6 +125,8 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
         "Images",
         &body,
     ))
+})
+.await
 }
 
 /// Add a URL to the image blacklist.

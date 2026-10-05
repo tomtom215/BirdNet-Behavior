@@ -41,51 +41,55 @@ async fn sound_level(
     State(state): State<AppState>,
     Query(q): Query<SoundLevelQuery>,
 ) -> Json<Value> {
-    let broadband = state
-        .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24))
-        .unwrap_or_default();
+    state
+        .run_blocking(move |state| {
+            let broadband = state
+                .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24))
+                .unwrap_or_default();
 
-    // Default to whichever source reported most recently, so a single-
-    // microphone station needs no query string and a multi-source one gets a
-    // sensible landing view.
-    let source = q
-        .source
-        .or_else(|| broadband.first().map(|b| b.source.clone()));
-    let Some(source) = source else {
-        return Json(json!({
-            "source": Value::Null,
-            "unit": "dBFS",
-            "bands": [],
-            "note": "no sound level observations yet",
-        }));
-    };
+            // Default to whichever source reported most recently, so a single-
+            // microphone station needs no query string and a multi-source one gets a
+            // sensible landing view.
+            let source = q
+                .source
+                .or_else(|| broadband.first().map(|b| b.source.clone()));
+            let Some(source) = source else {
+                return Json(json!({
+                    "source": Value::Null,
+                    "unit": "dBFS",
+                    "bands": [],
+                    "note": "no sound level observations yet",
+                }));
+            };
 
-    let bands = state
-        .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source))
-        .unwrap_or_default();
-    let latest = broadband.iter().find(|b| b.source == source);
-    let calibration_db = latest.map_or(0.0, |b| b.calibration_db);
+            let bands = state
+                .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source))
+                .unwrap_or_default();
+            let latest = broadband.iter().find(|b| b.source == source);
+            let calibration_db = latest.map_or(0.0, |b| b.calibration_db);
 
-    Json(json!({
-        "source": source,
-        "date": bands.first().map(|b| b.date.clone()),
-        "hour": bands.first().map(|b| b.hour),
-        "samples": bands.first().map_or(0, |b| b.samples),
-        "unit": if calibration_db == 0.0 { "dBFS" } else { "dB SPL" },
-        "calibration_db": calibration_db,
-        "a_weighted_db": latest.map(|b| b.a_weighted_db),
-        "z_weighted_db": latest.map(|b| b.z_weighted_db),
-        "bands": bands
-            .iter()
-            .map(|b| json!({
-                "band_hz": b.band_hz,
-                "label": birdnet_core::audio::soundlevel::label_for(b.band_hz),
-                "mean_db": b.mean_db,
-                "min_db": b.min_db,
-                "max_db": b.max_db,
+            Json(json!({
+                "source": source,
+                "date": bands.first().map(|b| b.date.clone()),
+                "hour": bands.first().map(|b| b.hour),
+                "samples": bands.first().map_or(0, |b| b.samples),
+                "unit": if calibration_db == 0.0 { "dBFS" } else { "dB SPL" },
+                "calibration_db": calibration_db,
+                "a_weighted_db": latest.map(|b| b.a_weighted_db),
+                "z_weighted_db": latest.map(|b| b.z_weighted_db),
+                "bands": bands
+                    .iter()
+                    .map(|b| json!({
+                        "band_hz": b.band_hz,
+                        "label": birdnet_core::audio::soundlevel::label_for(b.band_hz),
+                        "mean_db": b.mean_db,
+                        "min_db": b.min_db,
+                        "max_db": b.max_db,
+                    }))
+                    .collect::<Vec<_>>(),
             }))
-            .collect::<Vec<_>>(),
-    }))
+        })
+        .await
 }
 
 async fn root() -> Json<Value> {

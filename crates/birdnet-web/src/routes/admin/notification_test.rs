@@ -132,7 +132,9 @@ impl From<&Notifier> for PushChannel {
 // ---------------------------------------------------------------------------
 
 async fn test_page(State(state): State<AppState>) -> Html<String> {
-    Html(render_test_page_for(&state))
+    state
+        .run_blocking(move |state| Html(render_test_page_for(state)))
+        .await
 }
 
 fn render_test_page_for(state: &AppState) -> String {
@@ -349,13 +351,18 @@ async fn test_push(State(state): State<AppState>) -> (StatusCode, Html<String>) 
     }
 }
 
-async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<String>) {
-    let token = state.with_db(|conn| {
+/// The stored BirdWeather token, if one is set. Blocks on the database.
+fn birdweather_token(state: &AppState) -> Option<String> {
+    state.with_db(|conn| {
         ensure_settings_table(conn).ok();
         get_setting(conn, "birdweather_token")
             .ok()
             .filter(|v| !v.is_empty())
-    });
+    })
+}
+
+async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<String>) {
+    let token = state.run_blocking(birdweather_token).await;
 
     // O-18: toast the test outcome on every branch.
     match token {
@@ -400,12 +407,7 @@ async fn test_all(State(state): State<AppState>) -> (StatusCode, Html<String>) {
         lines.push("&#x26a0;&#xfe0f; Push: no destination resolved (skipped)".to_owned());
     }
 
-    let bw_token = state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
-        get_setting(conn, "birdweather_token")
-            .ok()
-            .filter(|v| !v.is_empty())
-    });
+    let bw_token = state.run_blocking(birdweather_token).await;
     if let Some(tok) = bw_token {
         match ping_birdweather(&tok).await {
             Ok(msg) => lines.push(format!("&#x2705; BirdWeather: {}", escape_html(&msg))),

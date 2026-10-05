@@ -83,126 +83,138 @@ async fn login_submit(
     headers: axum::http::HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let next = sanitize_next(form.next.as_deref()).to_string();
-    let device = DeviceFingerprint::from_request(client.as_deref(), &headers);
-    // The throttle (O-6), before any hash is computed. A request with no
-    // resolved address is a direct call in a test; it shares one bucket, as
-    // it shares one bucket in the global limiter.
-    let ip = client
-        .as_ref()
-        .map_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), |c| c.0.0);
-    // The hop that named this address has a budget of its own, so a hop that
-    // names a new address per attempt cannot buy unlimited guesses. Not when
-    // nothing but the connection vouched (that *is* the client), and not for
-    // loopback — see `login_throttle::VOUCHER_MAX_FAILURES`.
-    let voucher = vouched_by
-        .map(|v| v.0.0)
-        .filter(|v| *v != ip && !v.is_loopback());
-    let attempt = match state.login_throttle().begin(ip, voucher) {
-        Ok(attempt) => attempt,
-        Err(retry_after) => {
+    state
+        .run_blocking(move |state| {
+            let next = sanitize_next(form.next.as_deref()).to_string();
+            let device = DeviceFingerprint::from_request(client.as_deref(), &headers);
+            // The throttle (O-6), before any hash is computed. A request with no
+            // resolved address is a direct call in a test; it shares one bucket, as
+            // it shares one bucket in the global limiter.
+            let ip = client
+                .as_ref()
+                .map_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), |c| c.0.0);
+            // The hop that named this address has a budget of its own, so a hop that
+            // names a new address per attempt cannot buy unlimited guesses. Not when
+            // nothing but the connection vouched (that *is* the client), and not for
+            // loopback — see `login_throttle::VOUCHER_MAX_FAILURES`.
+            let voucher = vouched_by
+                .map(|v| v.0.0)
+                .filter(|v| *v != ip && !v.is_loopback());
+            let attempt = match state.login_throttle().begin(ip, voucher) {
+                Ok(attempt) => attempt,
+                Err(retry_after) => {
+                    crate::audit::audit_user_id(
+                        state,
+                        None,
+                        "auth.login.throttled",
+                        Some(&form.username),
+                        None,
+                    );
+                    tracing::warn!(
+                        ip = %ip,
+                        username = %form.username,
+                        retry_after_secs = retry_after.as_secs(),
+                        "sign-in refused: too many failed attempts from this address"
+                    );
+                    return throttled_response(retry_after, &next);
+                }
+            };
+            let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
+                (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
+                _ => None,
+            };
+
+            // Authenticate. The order matters: DB first, env-fallback second,
+            // so an operator who has rotated their password in the UI doesn't
+            // hit the env-fallback path with stale credentials.
+            let Some(auth_user_id) = authenticate(
+                state,
+                &form.username,
+                &form.password,
+                configured_env.as_ref(),
+            ) else {
+                // Wrong credentials, or no admin password configured at all.
+                // Bypass the gate when basic-auth would also have let the
+                // request through (no CADDY_USER + no DB admin password).
+                // The same fail-closed test as the middleware's bypass: a password
+                // whose bootstrap write failed, or a database that did not answer,
+                // is not "no password".
+                if configured_env.is_none()
+                    && !crate::auth_middleware::admin_password_configured(state)
+                {
+                    // The same name check as the middleware's bypass: a session minted
+                    // here under a rebound name would carry the attacker straight past
+                    // it on the next request.
+                    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+                    if !crate::open_admin_host::may_open_bypass(host) {
+                        return crate::open_admin_host::refused(host.unwrap_or(""));
+                    }
+                    return open_bypass_redirect(state, &next, &device);
+                }
+                // The target carries the *submitted* username, not a verified one:
+                // "someone tried to sign in as admin sixty times last night" is the
+                // whole point, and a name that does not exist is as interesting as one
+                // that does. There is no actor id because there is no actor — that is
+                // why `audit_log.user_id` is nullable.
+                crate::audit::audit_user_id(
+                    state,
+                    None,
+                    "auth.login.fail",
+                    Some(&form.username),
+                    None,
+                );
+                // Already counted by `begin`; dropping the attempt keeps it.
+                drop(attempt);
+                let query = format!("?error=1&next={}", urlencode_path(&next));
+                return Redirect::to(&format!("/login{query}")).into_response();
+            };
+            state.login_throttle().succeeded(attempt);
+
+            let ttl_ms = if form.remember.as_deref() == Some("1") {
+                session::REMEMBER_ME_TTL_MS
+            } else {
+                session::default_ttl_ms()
+            };
+
+            // Mint a fresh session id, persist a row, and emit the bound v2 cookie.
+            let session_id = session::generate_session_id();
+            let expires_at = expires_at_for_ttl(ttl_ms);
+            let create_result = state.with_db(|conn| {
+                conn.create_session(
+                    &session_id,
+                    auth_user_id,
+                    &expires_at,
+                    device.user_agent.as_deref(),
+                    device.ip_hash.as_deref(),
+                )
+            });
+            if let Err(e) = create_result {
+                // Not `error=1`. The password that got this far was *correct*; the
+                // station could not write the session row (a full disk, a locked
+                // database). Reporting that as "Incorrect username or password" sends
+                // someone to retype a password that was never wrong, and enough
+                // retries trip the throttle — so the station tells them they are
+                // locked out of their own garden over a fault that is not theirs.
+                tracing::error!(error = %e, "create_session failed during login");
+                let query = format!("?error=session&next={}", urlencode_path(&next));
+                return Redirect::to(&format!("/login{query}")).into_response();
+            }
+
+            // After the session row exists, so a success recorded here is one the
+            // operator actually got. Credentials that verified but whose session
+            // could not be persisted are a failed login from the outside.
             crate::audit::audit_user_id(
-                &state,
-                None,
-                "auth.login.throttled",
+                state,
+                Some(auth_user_id),
+                "auth.login.ok",
                 Some(&form.username),
                 None,
             );
-            tracing::warn!(
-                ip = %ip,
-                username = %form.username,
-                retry_after_secs = retry_after.as_secs(),
-                "sign-in refused: too many failed attempts from this address"
-            );
-            return throttled_response(retry_after, &next);
-        }
-    };
-    let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
-        (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
-        _ => None,
-    };
 
-    // Authenticate. The order matters: DB first, env-fallback second,
-    // so an operator who has rotated their password in the UI doesn't
-    // hit the env-fallback path with stale credentials.
-    let Some(auth_user_id) = authenticate(
-        &state,
-        &form.username,
-        &form.password,
-        configured_env.as_ref(),
-    ) else {
-        // Wrong credentials, or no admin password configured at all.
-        // Bypass the gate when basic-auth would also have let the
-        // request through (no CADDY_USER + no DB admin password).
-        // The same fail-closed test as the middleware's bypass: a password
-        // whose bootstrap write failed, or a database that did not answer,
-        // is not "no password".
-        if configured_env.is_none() && !crate::auth_middleware::admin_password_configured(&state) {
-            // The same name check as the middleware's bypass: a session minted
-            // here under a rebound name would carry the attacker straight past
-            // it on the next request.
-            let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
-            if !crate::open_admin_host::may_open_bypass(host) {
-                return crate::open_admin_host::refused(host.unwrap_or(""));
-            }
-            return open_bypass_redirect(&state, &next, &device);
-        }
-        // The target carries the *submitted* username, not a verified one:
-        // "someone tried to sign in as admin sixty times last night" is the
-        // whole point, and a name that does not exist is as interesting as one
-        // that does. There is no actor id because there is no actor — that is
-        // why `audit_log.user_id` is nullable.
-        crate::audit::audit_user_id(&state, None, "auth.login.fail", Some(&form.username), None);
-        // Already counted by `begin`; dropping the attempt keeps it.
-        drop(attempt);
-        let query = format!("?error=1&next={}", urlencode_path(&next));
-        return Redirect::to(&format!("/login{query}")).into_response();
-    };
-    state.login_throttle().succeeded(attempt);
-
-    let ttl_ms = if form.remember.as_deref() == Some("1") {
-        session::REMEMBER_ME_TTL_MS
-    } else {
-        session::default_ttl_ms()
-    };
-
-    // Mint a fresh session id, persist a row, and emit the bound v2 cookie.
-    let session_id = session::generate_session_id();
-    let expires_at = expires_at_for_ttl(ttl_ms);
-    let create_result = state.with_db(|conn| {
-        conn.create_session(
-            &session_id,
-            auth_user_id,
-            &expires_at,
-            device.user_agent.as_deref(),
-            device.ip_hash.as_deref(),
-        )
-    });
-    if let Err(e) = create_result {
-        // Not `error=1`. The password that got this far was *correct*; the
-        // station could not write the session row (a full disk, a locked
-        // database). Reporting that as "Incorrect username or password" sends
-        // someone to retype a password that was never wrong, and enough
-        // retries trip the throttle — so the station tells them they are
-        // locked out of their own garden over a fault that is not theirs.
-        tracing::error!(error = %e, "create_session failed during login");
-        let query = format!("?error=session&next={}", urlencode_path(&next));
-        return Redirect::to(&format!("/login{query}")).into_response();
-    }
-
-    // After the session row exists, so a success recorded here is one the
-    // operator actually got. Credentials that verified but whose session
-    // could not be persisted are a failed login from the outside.
-    crate::audit::audit_user_id(
-        &state,
-        Some(auth_user_id),
-        "auth.login.ok",
-        Some(&form.username),
-        None,
-    );
-
-    let token = session::issue_token(&session_id, ttl_ms);
-    redirect_with_cookie(&token, ttl_ms, &next)
+            let token = session::issue_token(&session_id, ttl_ms);
+            redirect_with_cookie(&token, ttl_ms, &next)
+        })
+        .await
 }
 
 /// Verify credentials against (DB row, hash) first, falling back to
@@ -376,35 +388,42 @@ fn format_sqlite_datetime(secs: i64) -> String {
 /// `POST /logout` — revoke the bound session row (if any) and clear
 /// the cookie.
 async fn logout_submit(State(state): State<AppState>, req: Request) -> Response {
-    // Pull the cookie from the request and revoke the bound session
-    // before clearing the browser-side cookie. Failures are logged but
-    // never block the redirect — the cookie still gets cleared.
-    if let Some(token) = req
-        .headers()
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(session::extract_token)
-        && let Some(validated) = session::validate_token(token)
-    {
-        // The user id comes from the session row rather than from a
-        // `RequestUser`: `/logout` is deliberately reachable without the auth
-        // middleware, so a stale cookie can still be cleared.
-        let user_id = state
-            .with_db(|conn| <_ as SessionStore>::find_active_session(conn, &validated.session_id))
-            .ok()
-            .map(|s| s.user_id);
-        let _ =
-            state.with_db(|conn| <_ as SessionStore>::revoke_session(conn, &validated.session_id));
-        crate::audit::audit_user_id(&state, user_id, "auth.logout", None, None);
-    }
+    state
+        .run_blocking(move |state| {
+            // Pull the cookie from the request and revoke the bound session
+            // before clearing the browser-side cookie. Failures are logged but
+            // never block the redirect — the cookie still gets cleared.
+            if let Some(token) = req
+                .headers()
+                .get(header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(session::extract_token)
+                && let Some(validated) = session::validate_token(token)
+            {
+                // The user id comes from the session row rather than from a
+                // `RequestUser`: `/logout` is deliberately reachable without the auth
+                // middleware, so a stale cookie can still be cleared.
+                let user_id = state
+                    .with_db(|conn| {
+                        <_ as SessionStore>::find_active_session(conn, &validated.session_id)
+                    })
+                    .ok()
+                    .map(|s| s.user_id);
+                let _ = state.with_db(|conn| {
+                    <_ as SessionStore>::revoke_session(conn, &validated.session_id)
+                });
+                crate::audit::audit_user_id(state, user_id, "auth.logout", None, None);
+            }
 
-    let mut resp = Redirect::to("/").into_response();
-    let public_url = std::env::var("BNB_PUBLIC_URL").ok();
-    let clear = session::build_clear_cookie(public_url.as_deref());
-    if let Ok(val) = HeaderValue::from_str(&clear) {
-        resp.headers_mut().append(header::SET_COOKIE, val);
-    }
-    resp
+            let mut resp = Redirect::to("/").into_response();
+            let public_url = std::env::var("BNB_PUBLIC_URL").ok();
+            let clear = session::build_clear_cookie(public_url.as_deref());
+            if let Ok(val) = HeaderValue::from_str(&clear) {
+                resp.headers_mut().append(header::SET_COOKIE, val);
+            }
+            resp
+        })
+        .await
 }
 
 fn redirect_with_cookie(token: &str, ttl_ms: u64, next: &str) -> Response {

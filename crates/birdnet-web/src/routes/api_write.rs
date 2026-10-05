@@ -150,88 +150,100 @@ async fn list_comments(
     State(state): State<AppState>,
     Query(key): Query<Key>,
 ) -> (StatusCode, Json<Value>) {
-    if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
-        return e;
-    }
-    let comments = state.with_db(|conn| {
-        birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
-    });
-    match comments {
-        Ok(comments) => (
-            StatusCode::OK,
-            Json(json!({
-                "detection": target_of(&key.date, &key.time, &key.sci_name),
-                "comments": comments.iter().map(comment_json).collect::<Vec<_>>(),
-            })),
-        ),
-        Err(e) => comment_error(&e),
-    }
+    state
+        .run_blocking(move |state| {
+            if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
+                return e;
+            }
+            let comments = state.with_db(|conn| {
+                birdnet_db::detection_comments::list(conn, &key.date, &key.time, &key.sci_name)
+            });
+            match comments {
+                Ok(comments) => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "detection": target_of(&key.date, &key.time, &key.sci_name),
+                        "comments": comments.iter().map(comment_json).collect::<Vec<_>>(),
+                    })),
+                ),
+                Err(e) => comment_error(&e),
+            }
+        })
+        .await
 }
 
 async fn add_comment(
     State(state): State<AppState>,
     Json(body): Json<CommentBody>,
 ) -> (StatusCode, Json<Value>) {
-    if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
-        return e;
-    }
-    let written = state.with_db(|conn| {
-        birdnet_db::detection_comments::insert(
-            conn,
-            &birdnet_db::detection_comments::NewComment {
-                date: &body.date,
-                time: &body.time,
-                sci_name: &body.sci_name,
-                user_id: None,
-                author: API_AUTHOR,
-                body: &body.body,
-            },
-        )
-    });
-    match written {
-        Ok(comment) => {
-            crate::audit::audit(
-                &state,
-                None,
-                "detection.comment.add",
-                Some(&target_of(&body.date, &body.time, &body.sci_name)),
-                Some(&format!("{VIA_API} id={}", comment.id)),
-            );
-            (StatusCode::CREATED, Json(comment_json(&comment)))
-        }
-        Err(e) => comment_error(&e),
-    }
+    state
+        .run_blocking(move |state| {
+            if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
+                return e;
+            }
+            let written = state.with_db(|conn| {
+                birdnet_db::detection_comments::insert(
+                    conn,
+                    &birdnet_db::detection_comments::NewComment {
+                        date: &body.date,
+                        time: &body.time,
+                        sci_name: &body.sci_name,
+                        user_id: None,
+                        author: API_AUTHOR,
+                        body: &body.body,
+                    },
+                )
+            });
+            match written {
+                Ok(comment) => {
+                    crate::audit::audit(
+                        state,
+                        None,
+                        "detection.comment.add",
+                        Some(&target_of(&body.date, &body.time, &body.sci_name)),
+                        Some(&format!("{VIA_API} id={}", comment.id)),
+                    );
+                    (StatusCode::CREATED, Json(comment_json(&comment)))
+                }
+                Err(e) => comment_error(&e),
+            }
+        })
+        .await
 }
 
 async fn delete_comment(
     State(state): State<AppState>,
     Json(key): Json<CommentId>,
 ) -> (StatusCode, Json<Value>) {
-    match state.with_db(|conn| birdnet_db::detection_comments::delete(conn, key.id)) {
-        Ok(Some(comment)) => {
-            crate::audit::audit(
-                &state,
-                None,
-                "detection.comment.delete",
-                Some(&target_of(&comment.date, &comment.time, &comment.sci_name)),
-                // Never the body: a comment removed because it named somebody
-                // must not survive in the log that recorded its removal.
-                Some(&format!(
-                    "{VIA_API} id={} author={}",
-                    comment.id, comment.author
-                )),
-            );
-            (
-                StatusCode::OK,
-                Json(json!({ "deleted": comment.id, "author": comment.author })),
-            )
-        }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "no comment has that id" })),
-        ),
-        Err(e) => comment_error(&e),
-    }
+    state
+        .run_blocking(move |state| {
+            match state.with_db(|conn| birdnet_db::detection_comments::delete(conn, key.id)) {
+                Ok(Some(comment)) => {
+                    crate::audit::audit(
+                        state,
+                        None,
+                        "detection.comment.delete",
+                        Some(&target_of(&comment.date, &comment.time, &comment.sci_name)),
+                        // Never the body: a comment removed because it named somebody
+                        // must not survive in the log that recorded its removal.
+                        Some(&format!(
+                            "{VIA_API} id={} author={}",
+                            comment.id, comment.author
+                        )),
+                    );
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "deleted": comment.id, "author": comment.author })),
+                    )
+                }
+                Ok(None) => (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "no comment has that id" })),
+                ),
+                Err(e) => comment_error(&e),
+            }
+        })
+        .await
 }
 
 fn comment_json(c: &birdnet_db::detection_comments::DetectionComment) -> Value {
@@ -391,52 +403,62 @@ async fn review(
     State(state): State<AppState>,
     Json(body): Json<ReviewBody>,
 ) -> (StatusCode, Json<Value>) {
-    if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
-        return e;
-    }
-    let target = target_of(&body.date, &body.time, &body.sci_name);
+    state
+        .run_blocking(move |state| {
+            if let Err(e) = validate(&body.date, &body.time, &body.sci_name) {
+                return e;
+            }
+            let target = target_of(&body.date, &body.time, &body.sci_name);
 
-    let outcome = match body.status.as_deref() {
-        None => state.clear_detection_review(&body.date, &body.time, &body.sci_name),
-        Some(s) => {
-            let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(s) else {
-                return bad_request("status must be \"confirmed\", \"rejected\", or omitted");
+            let outcome = match body.status.as_deref() {
+                None => state.clear_detection_review(&body.date, &body.time, &body.sci_name),
+                Some(s) => {
+                    let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(s) else {
+                        return bad_request(
+                            "status must be \"confirmed\", \"rejected\", or omitted",
+                        );
+                    };
+                    state.set_detection_review(
+                        &body.date,
+                        &body.time,
+                        &body.sci_name,
+                        body.com_name.as_deref().unwrap_or(&body.sci_name),
+                        status,
+                        body.notes.as_deref(),
+                    )
+                }
             };
-            state.set_detection_review(
-                &body.date,
-                &body.time,
-                &body.sci_name,
-                body.com_name.as_deref().unwrap_or(&body.sci_name),
-                status,
-                body.notes.as_deref(),
-            )
-        }
-    };
 
-    match outcome {
-        Ok(()) => {
-            crate::audit::audit(
-                &state,
-                None,
-                "detection.review",
-                Some(&target),
-                Some(VIA_API),
-            );
-            (
-                StatusCode::OK,
-                Json(json!({ "status": body.status, "detection": target })),
-            )
-        }
-        Err(e) => server_error(&e),
-    }
+            match outcome {
+                Ok(()) => {
+                    crate::audit::audit(
+                        state,
+                        None,
+                        "detection.review",
+                        Some(&target),
+                        Some(VIA_API),
+                    );
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "status": body.status, "detection": target })),
+                    )
+                }
+                Err(e) => server_error(&e),
+            }
+        })
+        .await
 }
 
 async fn lock(State(state): State<AppState>, Json(key): Json<Key>) -> (StatusCode, Json<Value>) {
-    set_lock(&state, &key, true)
+    state
+        .run_blocking(move |state| set_lock(state, &key, true))
+        .await
 }
 
 async fn unlock(State(state): State<AppState>, Json(key): Json<Key>) -> (StatusCode, Json<Value>) {
-    set_lock(&state, &key, false)
+    state
+        .run_blocking(move |state| set_lock(state, &key, false))
+        .await
 }
 
 fn set_lock(state: &AppState, key: &Key, locked: bool) -> (StatusCode, Json<Value>) {
@@ -469,27 +491,31 @@ fn set_lock(state: &AppState, key: &Key, locked: bool) -> (StatusCode, Json<Valu
 }
 
 async fn delete(State(state): State<AppState>, Json(key): Json<Key>) -> (StatusCode, Json<Value>) {
-    if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
-        return e;
-    }
-    let target = target_of(&key.date, &key.time, &key.sci_name);
-    match state.delete_detection(&key.row()) {
-        Ok(true) => {
-            crate::audit::audit(
-                &state,
-                None,
-                "detection.delete",
-                Some(&target),
-                Some(VIA_API),
-            );
-            (
-                StatusCode::OK,
-                Json(json!({ "deleted": true, "detection": target })),
-            )
-        }
-        Ok(false) => not_found(),
-        Err(e) => server_error(&e),
-    }
+    state
+        .run_blocking(move |state| {
+            if let Err(e) = validate(&key.date, &key.time, &key.sci_name) {
+                return e;
+            }
+            let target = target_of(&key.date, &key.time, &key.sci_name);
+            match state.delete_detection(&key.row()) {
+                Ok(true) => {
+                    crate::audit::audit(
+                        state,
+                        None,
+                        "detection.delete",
+                        Some(&target),
+                        Some(VIA_API),
+                    );
+                    (
+                        StatusCode::OK,
+                        Json(json!({ "deleted": true, "detection": target })),
+                    )
+                }
+                Ok(false) => not_found(),
+                Err(e) => server_error(&e),
+            }
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -621,144 +647,150 @@ async fn batch(
     State(state): State<AppState>,
     Json(body): Json<BatchBody>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(op) = BatchOp::parse(&body.op) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "unknown op",
-                "op": body.op,
-                "accepted": BatchOp::NAMES,
-            })),
-        );
-    };
-
-    // Refused rather than ignored, for the reason a misspelled settings key is:
-    // a caller who sent `{"op":"delete","status":"confirmed"}` believes one of
-    // those two words did something, and only one of them did.
-    if op != BatchOp::Review && (body.status.is_some() || body.notes.is_some()) {
-        return bad_request("status and notes apply to op \"review\" only");
-    }
-
-    // Parsed once, before anything is written: a batch that would fail on every
-    // item because the verdict is misspelled should say so instead of reporting
-    // 500 identical failures.
-    let verdict = match body.status.as_deref() {
-        None => None,
-        Some(s) => {
-            let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(s) else {
-                return bad_request("status must be \"confirmed\", \"rejected\", or omitted");
-            };
-            Some(status)
-        }
-    };
-
-    if body.detections.len() > BATCH_MAX {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "too many detections in one batch",
-                "requested": body.detections.len(),
-                "max": BATCH_MAX,
-            })),
-        );
-    }
-
-    let mut results = Vec::with_capacity(body.detections.len());
-    let mut applied = 0_usize;
-    let mut failed = 0_usize;
-
-    for key in &body.detections {
-        let target = target_of(&key.date, &key.time, &key.sci_name);
-
-        // Per item, not per request: one malformed key must not sink the rest,
-        // and the caller is told which one it was.
-        if let Err((_, Json(e))) = validate(&key.date, &key.time, &key.sci_name) {
-            failed += 1;
-            results.push(json!({
-                "detection": target,
-                "applied": false,
-                "error": e.get("error").and_then(Value::as_str).unwrap_or("invalid key"),
-            }));
-            continue;
-        }
-
-        let outcome: Result<bool, birdnet_db::sqlite::DbError> = match op {
-            BatchOp::Review => match verdict {
-                Some(status) => state
-                    .set_detection_review(
-                        &key.date,
-                        &key.time,
-                        &key.sci_name,
-                        key.com_name.as_deref().unwrap_or(&key.sci_name),
-                        status,
-                        body.notes.as_deref(),
-                    )
-                    .map(|()| true),
-                None => state
-                    .clear_detection_review(&key.date, &key.time, &key.sci_name)
-                    .map(|()| true),
-            },
-            BatchOp::Lock => state.set_detection_lock(&batch_row(key), true),
-            BatchOp::Unlock => state.set_detection_lock(&batch_row(key), false),
-            BatchOp::Delete => state.delete_detection(&batch_row(key)),
-        };
-
-        match outcome {
-            Ok(true) => {
-                applied += 1;
-                // The action names are matched inline rather than returned by
-                // a helper so `tests/the_audit_log_records_what_happened.rs`
-                // can see them: that gate reads string literals in the lines
-                // following a `crate::audit::audit` call, and a helper taking
-                // the action as a parameter is invisible to it. rustfmt
-                // expands this match to one arm per line, which put the fourth
-                // literal outside the gate's window — the window is ten rather
-                // than seven because of this call site, and that is recorded
-                // where the window is set.
-                crate::audit::audit(
-                    &state,
-                    None,
-                    match op {
-                        BatchOp::Review => "detection.review",
-                        BatchOp::Lock => "detection.lock",
-                        BatchOp::Unlock => "detection.unlock",
-                        BatchOp::Delete => "detection.delete",
-                    },
-                    Some(&target),
-                    Some(VIA_API),
+    state
+        .run_blocking(move |state| {
+            let Some(op) = BatchOp::parse(&body.op) else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "unknown op",
+                        "op": body.op,
+                        "accepted": BatchOp::NAMES,
+                    })),
                 );
-                results.push(json!({ "detection": target, "applied": true }));
-            }
-            Ok(false) => {
-                failed += 1;
-                results.push(json!({
-                    "detection": target,
-                    "applied": false,
-                    "error": "no detection matches that date, time and scientific name",
-                }));
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, detection = %target, "batch item failed");
-                failed += 1;
-                results.push(json!({
-                    "detection": target,
-                    "applied": false,
-                    "error": "the database refused the change",
-                }));
-            }
-        }
-    }
+            };
 
-    (
-        StatusCode::OK,
-        Json(json!({
-            "op": body.op,
-            "requested": body.detections.len(),
-            "applied": applied,
-            "failed": failed,
-            "results": results,
-        })),
-    )
+            // Refused rather than ignored, for the reason a misspelled settings key is:
+            // a caller who sent `{"op":"delete","status":"confirmed"}` believes one of
+            // those two words did something, and only one of them did.
+            if op != BatchOp::Review && (body.status.is_some() || body.notes.is_some()) {
+                return bad_request("status and notes apply to op \"review\" only");
+            }
+
+            // Parsed once, before anything is written: a batch that would fail on every
+            // item because the verdict is misspelled should say so instead of reporting
+            // 500 identical failures.
+            let verdict = match body.status.as_deref() {
+                None => None,
+                Some(s) => {
+                    let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(s) else {
+                        return bad_request(
+                            "status must be \"confirmed\", \"rejected\", or omitted",
+                        );
+                    };
+                    Some(status)
+                }
+            };
+
+            if body.detections.len() > BATCH_MAX {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "too many detections in one batch",
+                        "requested": body.detections.len(),
+                        "max": BATCH_MAX,
+                    })),
+                );
+            }
+
+            let mut results = Vec::with_capacity(body.detections.len());
+            let mut applied = 0_usize;
+            let mut failed = 0_usize;
+
+            for key in &body.detections {
+                let target = target_of(&key.date, &key.time, &key.sci_name);
+
+                // Per item, not per request: one malformed key must not sink the rest,
+                // and the caller is told which one it was.
+                if let Err((_, Json(e))) = validate(&key.date, &key.time, &key.sci_name) {
+                    failed += 1;
+                    results.push(json!({
+                        "detection": target,
+                        "applied": false,
+                        "error": e.get("error").and_then(Value::as_str).unwrap_or("invalid key"),
+                    }));
+                    continue;
+                }
+
+                let outcome: Result<bool, birdnet_db::sqlite::DbError> = match op {
+                    BatchOp::Review => match verdict {
+                        Some(status) => state
+                            .set_detection_review(
+                                &key.date,
+                                &key.time,
+                                &key.sci_name,
+                                key.com_name.as_deref().unwrap_or(&key.sci_name),
+                                status,
+                                body.notes.as_deref(),
+                            )
+                            .map(|()| true),
+                        None => state
+                            .clear_detection_review(&key.date, &key.time, &key.sci_name)
+                            .map(|()| true),
+                    },
+                    BatchOp::Lock => state.set_detection_lock(&batch_row(key), true),
+                    BatchOp::Unlock => state.set_detection_lock(&batch_row(key), false),
+                    BatchOp::Delete => state.delete_detection(&batch_row(key)),
+                };
+
+                match outcome {
+                    Ok(true) => {
+                        applied += 1;
+                        // The action names are matched inline rather than returned by
+                        // a helper so `tests/the_audit_log_records_what_happened.rs`
+                        // can see them: that gate reads string literals in the lines
+                        // following a `crate::audit::audit` call, and a helper taking
+                        // the action as a parameter is invisible to it. rustfmt
+                        // expands this match to one arm per line, which put the fourth
+                        // literal outside the gate's window — the window is ten rather
+                        // than seven because of this call site, and that is recorded
+                        // where the window is set.
+                        crate::audit::audit(
+                            state,
+                            None,
+                            match op {
+                                BatchOp::Review => "detection.review",
+                                BatchOp::Lock => "detection.lock",
+                                BatchOp::Unlock => "detection.unlock",
+                                BatchOp::Delete => "detection.delete",
+                            },
+                            Some(&target),
+                            Some(VIA_API),
+                        );
+                        results.push(json!({ "detection": target, "applied": true }));
+                    }
+                    Ok(false) => {
+                        failed += 1;
+                        results.push(json!({
+                            "detection": target,
+                            "applied": false,
+                            "error": "no detection matches that date, time and scientific name",
+                        }));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, detection = %target, "batch item failed");
+                        failed += 1;
+                        results.push(json!({
+                            "detection": target,
+                            "applied": false,
+                            "error": "the database refused the change",
+                        }));
+                    }
+                }
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "op": body.op,
+                    "requested": body.detections.len(),
+                    "applied": applied,
+                    "failed": failed,
+                    "results": results,
+                })),
+            )
+        })
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -794,31 +826,35 @@ fn redacted_settings(raw: &std::collections::HashMap<String, String>) -> BTreeMa
 }
 
 async fn read_settings(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    let raw = match crate::routes::admin::settings::handler::load_all_settings(&state) {
-        Ok(raw) => raw,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": format!("the settings could not be read: {e}") })),
-            );
-        }
-    };
-    let redacted = redacted_settings(&raw);
-    let masked: Vec<&String> = redacted
-        .iter()
-        .filter(|(_, v)| v.as_str() == REDACTED)
-        .map(|(k, _)| k)
-        .collect();
-    (
-        StatusCode::OK,
-        Json(json!({
-            "settings": redacted,
-            // Named so a caller can tell "this station has no SMTP password"
-            // from "you are not allowed to read it".
-            "redacted": masked,
-            "writable_keys": SETTINGS_FORM_KEYS,
-        })),
-    )
+    state
+        .run_blocking(move |state| {
+            let raw = match crate::routes::admin::settings::handler::load_all_settings(state) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(json!({ "error": format!("the settings could not be read: {e}") })),
+                    );
+                }
+            };
+            let redacted = redacted_settings(&raw);
+            let masked: Vec<&String> = redacted
+                .iter()
+                .filter(|(_, v)| v.as_str() == REDACTED)
+                .map(|(k, _)| k)
+                .collect();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "settings": redacted,
+                    // Named so a caller can tell "this station has no SMTP password"
+                    // from "you are not allowed to read it".
+                    "redacted": masked,
+                    "writable_keys": SETTINGS_FORM_KEYS,
+                })),
+            )
+        })
+        .await
 }
 
 /// Coerce one JSON scalar to the string the settings table stores.
@@ -842,6 +878,7 @@ async fn write_settings(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
+    state.run_blocking(move |state| {
     let Some(object) = body.as_object() else {
         return bad_request("the body must be a JSON object of setting keys to values");
     };
@@ -921,7 +958,7 @@ async fn write_settings(
 
     // Refused when the current values cannot be read: diffed against nothing,
     // every submitted field would count as changed and be written.
-    let Ok(existing) = crate::routes::admin::settings::handler::load_all_settings(&state) else {
+    let Ok(existing) = crate::routes::admin::settings::handler::load_all_settings(state) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "the current settings could not be read; nothing was written" })),
@@ -954,7 +991,7 @@ async fn write_settings(
             // `birdweather_token=…` would put a credential in a table
             // `/admin/audit` renders.
             crate::audit::audit(
-                &state,
+                state,
                 None,
                 "settings.update",
                 None,
@@ -970,6 +1007,8 @@ async fn write_settings(
             )
         }
     }
+})
+.await
 }
 
 // ---------------------------------------------------------------------------
@@ -984,30 +1023,33 @@ async fn write_settings(
 /// no systemd to bring the process back: a caller that got a cheerful 200 and
 /// then found the station gone would have been told the opposite of what
 /// happened.
-#[allow(clippy::unused_async)] // async required by axum's Handler trait
 async fn restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    use crate::routes::admin::system_controls::service::{RestartOutcome, request_restart};
+    state
+        .run_blocking(move |state| {
+            use crate::routes::admin::system_controls::service::{RestartOutcome, request_restart};
 
-    // Before the decision, so the record exists even where the restart is
-    // refused — and before the SIGTERM, so it survives the restart.
-    crate::audit::audit(&state, None, "system.restart", None, Some(VIA_API));
+            // Before the decision, so the record exists even where the restart is
+            // refused — and before the SIGTERM, so it survives the restart.
+            crate::audit::audit(state, None, "system.restart", None, Some(VIA_API));
 
-    match request_restart(state.supervised_by_systemd()) {
-        RestartOutcome::Signalled => (
-            StatusCode::OK,
-            Json(json!({
-                "restarting": true,
-                "note": "SIGTERM sent; systemd Restart=always brings a fresh instance up"
-            })),
-        ),
-        RestartOutcome::NotUnderSystemd => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "restarting": false,
-                "error": "not running under systemd, so nothing would restart this process"
-            })),
-        ),
-    }
+            match request_restart(state.supervised_by_systemd()) {
+                RestartOutcome::Signalled => (
+                    StatusCode::OK,
+                    Json(json!({
+                        "restarting": true,
+                        "note": "SIGTERM sent; systemd Restart=always brings a fresh instance up"
+                    })),
+                ),
+                RestartOutcome::NotUnderSystemd => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({
+                        "restarting": false,
+                        "error": "not running under systemd, so nothing would restart this process"
+                    })),
+                ),
+            }
+        })
+        .await
 }
 
 /// Per-source capture health: what the Station Health page draws, as JSON.
@@ -1211,6 +1253,7 @@ async fn restart_source(
     State(state): State<AppState>,
     Json(body): Json<SourceRef>,
 ) -> (StatusCode, Json<Value>) {
+    state.run_blocking(move |state| {
     use birdnet_core::audio::capture::{read_capture_status, request_source_restart};
 
     let Some(control) = state.capture_control() else {
@@ -1248,7 +1291,7 @@ async fn restart_source(
     let state_now = source.state;
 
     crate::audit::audit(
-        &state,
+        state,
         None,
         "audio.source.restart",
         Some(&body.source_id),
@@ -1273,6 +1316,8 @@ async fn restart_source(
             },
         })),
     )
+})
+.await
 }
 
 #[cfg(test)]
