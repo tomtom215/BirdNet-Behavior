@@ -425,6 +425,17 @@ impl AnalyticsDb {
     ///
     /// Returns the number of rows loaded.
     ///
+    /// # Disk
+    ///
+    /// The staging table, the new copy and the old one coexist until the swap
+    /// commits, so the file grows to about 2.7 times the live data and stays
+    /// there: `DuckDB` frees the blocks at the next checkpoint but only
+    /// truncates free space at the file's tail. It does not keep growing —
+    /// each rebuild writes into the blocks the last one freed. Measured on
+    /// 300 000 synthetic rows: 6.3 MB after the incremental sync; 17.05 to
+    /// 18.10 MB closed, after each of twelve rebuild-and-reopen cycles; 26
+    /// blocks used and 41 free of 67 after a reopen.
+    ///
     /// # Errors
     ///
     /// Returns an error if reading from `SQLite` or writing to `DuckDB` fails.
