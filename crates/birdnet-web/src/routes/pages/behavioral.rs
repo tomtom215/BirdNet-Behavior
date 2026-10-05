@@ -329,7 +329,7 @@ fn render_neighbours(html: &mut String, side: &str, trigger: &str, rows: &[(&str
         return;
     }
     html.push_str(
-        "<table><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>",
+        "<table class=\"bh-neighbours\" data-fits-phone><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>",
     );
     for &(species, probability, frequency) in rows {
         // The trigger appears among its own follow-ons — the same bird calling

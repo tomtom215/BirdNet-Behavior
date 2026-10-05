@@ -4036,6 +4036,13 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
 .pt-next-row > span:not(.arr):not(.p) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-next-row .arr { color: var(--fg-4); }
 .pt-next-row .p { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); text-align: right; white-space: nowrap; }
+/* The follow-on card's Before/After tables. Below 980px every table becomes a
+   no-wrap sideways scroller; with one-line species names these three short
+   columns came to 342px in a 304px box at 390px, and Observed sat entirely
+   behind the scroll. Letting the name wrap is enough for them to fit. On the
+   cell itself, so the inherited no-wrap loses wherever this rule sits.
+   `data-fits-phone` on the table holds it to that in tools/visual-qa/qa.mjs. */
+table.bh-neighbours td:first-child { white-space: normal; }
 table.pt-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
 table.pt-tbl th { text-align: left; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; padding: 6px 8px; border-bottom: 0.5px solid var(--border); }
 table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); font-variant-numeric: tabular-nums; }
