@@ -260,6 +260,21 @@ impl BirdNetModel {
         model_output_count != label_count && !already_warned
     }
 
+    /// How many non-finite scores to warn about, if this chunk should warn.
+    ///
+    /// Factored out of `predict_chunk` for the same reason as
+    /// [`Self::should_warn_label_count_mismatch`]: `None` once the latch is
+    /// set, and `None` for a chunk whose scores are all finite — a station
+    /// whose model is healthy must not latch the warning away on its first
+    /// clean chunk, or log it.
+    fn non_finite_to_warn(logits: &[f32], already_warned: bool) -> Option<usize> {
+        if already_warned {
+            return None;
+        }
+        let non_finite = logits.iter().filter(|v| !v.is_finite()).count();
+        (non_finite > 0).then_some(non_finite)
+    }
+
     /// Run inference on raw audio samples.
     ///
     /// The `audio` slice should be mono f32 samples at the model's expected
@@ -419,19 +434,16 @@ impl BirdNetModel {
             );
         }
 
-        if !self.warned_non_finite {
-            let non_finite = flat_logits.iter().filter(|v| !v.is_finite()).count();
-            if non_finite > 0 {
-                self.warned_non_finite = true;
-                tracing::warn!(
-                    non_finite,
-                    outputs = flat_logits.len(),
-                    "the model produced non-finite scores (NaN or infinity); they are never \
-                     reported as detections, and a human-class score that is not finite \
-                     masks the clip. A model that does this is damaged or mis-quantised; \
-                     replace the model file with a fresh download"
-                );
-            }
+        if let Some(non_finite) = Self::non_finite_to_warn(flat_logits, self.warned_non_finite) {
+            self.warned_non_finite = true;
+            tracing::warn!(
+                non_finite,
+                outputs = flat_logits.len(),
+                "the model produced non-finite scores (NaN or infinity); they are never \
+                 reported as detections, and a human-class score that is not finite \
+                 masks the clip. A model that does this is damaged or mis-quantised; \
+                 replace the model file with a fresh download"
+            );
         }
 
         // Sort by confidence descending
@@ -1618,6 +1630,18 @@ mod tests {
         assert!(!BirdNetModel::should_warn_label_count_mismatch(
             6522, 6522, true
         ));
+    }
+
+    /// Observed failing with `> 0` mutated to `>= 0` (an all-finite chunk
+    /// warned and latched) and to `< 0` (a NaN chunk never warned) — the two
+    /// mutants CI's cargo-mutants run found surviving in the inline branch.
+    #[test]
+    fn warns_once_only_on_a_non_finite_score() {
+        let clean = [0.1_f32, -2.0, 7.5];
+        let damaged = [0.1_f32, f32::NAN, f32::INFINITY];
+        assert_eq!(BirdNetModel::non_finite_to_warn(&clean, false), None);
+        assert_eq!(BirdNetModel::non_finite_to_warn(&damaged, false), Some(2));
+        assert_eq!(BirdNetModel::non_finite_to_warn(&damaged, true), None);
     }
 
     /// Each chunk is stamped with the moment it was heard, not the moment its

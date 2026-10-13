@@ -67,9 +67,10 @@ impl ExplicitArgs {
 }
 
 /// BirdNet-Behavior bird detection and analytics system.
-///
-/// Not `Debug`: it carries the notification URLs, camera URLs, the
-/// BirdWeather token and the MQTT password as typed on the command line.
+// Not `Debug`: it carries the notification URLs, camera URLs, the BirdWeather
+// token and the MQTT password as typed on the command line. A plain comment,
+// not a doc paragraph: clap turns a second doc paragraph into `long_about`,
+// which `--help` then prints in place of the package description.
 #[derive(Parser, Clone)]
 #[command(name = "birdnet-behavior", version, about)]
 #[allow(clippy::struct_excessive_bools)]
