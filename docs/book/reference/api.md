@@ -309,12 +309,13 @@ They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-Seven *reads* live behind the same token, because what they return is not public:
+Eight *reads* live behind the same token, because what they return is not public:
 `GET /api/v2/settings` (the configuration, credentials taken out),
 `GET /api/v2/system/capture` and `GET /api/v2/system/jobs` (operational detail
 about the station and its sources), `GET /api/v2/system/network` and
 `GET /api/v2/system/processes` (the network it sits on, and what it is running),
-`GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
+`GET /api/v2/system/database/overview` (where its database is and what is in
+it), `GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
 
 ### Turning them on
 
@@ -371,6 +372,7 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `GET` | `/api/v2/system/capture` | Per-source capture health, as Station Health draws it |
 | `GET` | `/api/v2/system/jobs` | Every scheduled maintenance job and its state |
 | `GET` | `/api/v2/system/network` | Network interfaces: addresses with prefix, hardware address, bytes in and out; loopback last |
+| `GET` | `/api/v2/system/database/overview` | The database: engine settings, each table's rows and size, the last recorded integrity check and VACUUM, mean detection-write latency, and detections in each of the last 24 UTC hours |
 | `GET` | `/api/v2/system/processes` | The station's process and everything it started (capture `ffmpeg`, `arecord`, conversions), CPU sampled over 250 ms as a percentage of one core |
 | `GET` | `/api/v2/models/catalog` | The classifiers this build can install |
 
@@ -630,6 +632,31 @@ Restarts an operator asked for are deliberately **not** counted in
 `restarts_last_hour`, and so never raise `flapping`. That number exists to spot
 a source that cannot stay up on its own; clicking Restart three times while
 debugging a camera is not that.
+
+### The database overview
+
+`GET /api/v2/system/database/overview` answers with birdnet-go's fields for
+its SQLite engine: `engine`, `status`, `location`, `size_bytes` (the main
+file; the WAL is `sqlite.wal_size_bytes`), `total_detections`,
+`total_tables`, `sqlite` (version, journal mode, page size, free pages, cache
+size, `integrity_check`, `last_vacuum_at`), `tables` (each with `row_count`,
+`size_bytes` counting its indexes, and `usage_pct`), `performance` and
+`detection_rate_24h` (detections in each of the last 24 UTC hours that had
+any). It differs from upstream where upstream would report a number this
+station did not measure:
+
+- `integrity_check` is the last recorded check — `ok`, `failed` or
+  `unchecked` — where upstream always says `ok`.
+- `wal_checkpoints`, `busy_timeouts` and every `performance` figure except
+  `write_latency_avg_ms` are `null`. Nothing here counts them, and upstream's
+  checkpoint count comes from running a checkpoint, which a `GET` here does
+  not. `write_latency_avg_ms` is the mean detection write since the service
+  started.
+- Table sizes come from reading every page of the file, so they are measured
+  at most every 15 minutes; `tables_measured_at` (Unix seconds) says when.
+
+A database that cannot be read answers `200` with `status: "disconnected"` and
+empty lists, as upstream does.
 
 ### Scheduled maintenance jobs
 

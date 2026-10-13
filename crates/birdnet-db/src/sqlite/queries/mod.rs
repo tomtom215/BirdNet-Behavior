@@ -12,6 +12,7 @@ pub mod images;
 pub mod imports;
 pub mod insights;
 pub mod maintenance;
+pub mod overview;
 pub mod quarantine;
 pub mod species;
 
@@ -73,6 +74,7 @@ pub use maintenance::{
     JobStatus, due_state, job_statuses, last_run_result, last_run_unix, record_run,
     record_run_result,
 };
+pub use overview::{EngineDetails, TableSize, detection_rate_24h, engine_details, table_sizes};
 pub use quarantine::{
     ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
     QuarantineStats, approve_quarantine, count_quarantine, delete_quarantine, get_quarantine,

@@ -84,6 +84,7 @@ pub const READ_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v2/system/jobs"),
     ("GET", "/api/v2/system/network"),
     ("GET", "/api/v2/system/processes"),
+    ("GET", "/api/v2/system/database/overview"),
     ("GET", "/api/v2/models/catalog"),
     ("GET", "/api/v2/detections/comments"),
 ];
@@ -116,6 +117,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/system/capture", get(capture_status))
         .route("/api/v2/system/jobs", get(system_jobs))
         .route("/api/v2/system/network", get(system_network))
+        .route("/api/v2/system/database/overview", get(database_overview))
         .route("/api/v2/system/processes", get(system_processes))
         .route("/api/v2/models/catalog", get(models_catalog))
         .route(
@@ -1171,6 +1173,147 @@ async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>)
     (
         StatusCode::OK,
         Json(json!({ "now_unix": now, "jobs": jobs })),
+    )
+}
+
+/// How long the database overview's table sizes are reused.
+///
+/// Measuring them reads every page of the file — tens of seconds for a
+/// season's history on an SD card — so a dashboard refreshing the overview
+/// must not do it on every poll.
+pub const TABLE_SIZES_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+/// `GET /api/v2/system/database/overview` — the database's engine, tables,
+/// write latency and the last day's arrivals: birdnet-go's database overview.
+///
+/// Upstream's fields, for its SQLite engine, with three kinds of difference,
+/// each because the alternative would be a number nobody measured:
+///
+/// * `integrity_check` is the last recorded integrity check (`ok`, `failed`,
+///   or `unchecked`), where upstream always answers `"ok"`; and
+///   `last_vacuum_at` is when the backup-and-VACUUM job last ran.
+/// * `wal_checkpoints`, `busy_timeouts` and the read latency, queries per
+///   second, queries in the last hour and slow-query figures are `null`:
+///   nothing here counts them. Upstream runs a passive WAL checkpoint to get
+///   its figure; a GET does not write here. `write_latency_avg_ms` is the
+///   mean detection write since the process started.
+/// * Table sizes are measured at most every fifteen minutes
+///   ([`TABLE_SIZES_TTL`]), and `tables_measured_at` says when.
+///
+/// A database that cannot be read answers `200` with `status:
+/// "disconnected"` and empty lists, as upstream answers.
+///
+/// Bearer-gated with the rest of `/system`, as upstream gates it: the file's
+/// location and contents describe someone's station.
+async fn database_overview(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let now = now_unix_secs();
+    let write = state.metrics().snapshot().db_write;
+    let result = state
+        .run_blocking(move |s| {
+            let read = s.with_read_db(|conn| {
+                Ok::<_, birdnet_db::sqlite::connection::DbError>((
+                    birdnet_db::sqlite::engine_details(conn)?,
+                    birdnet_db::sqlite::detection_count(conn)?,
+                    birdnet_db::sqlite::detection_rate_24h(conn, now)?,
+                    birdnet_db::sqlite::last_run_result(
+                        conn,
+                        birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
+                    )?,
+                    birdnet_db::sqlite::last_run_unix(conn, birdnet_db::sqlite::JOB_BACKUP_VACUUM)?,
+                ))
+            })?;
+            let tables = s.table_sizes(TABLE_SIZES_TTL, u64::try_from(now).unwrap_or(0), || {
+                s.with_read_db(birdnet_db::sqlite::table_sizes)
+            })?;
+            Ok::<_, birdnet_db::sqlite::connection::DbError>((
+                read,
+                tables,
+                s.db_path().to_path_buf(),
+            ))
+        })
+        .await;
+    let ((engine, total, rate, integrity, vacuum), (measured_at, tables), path) = match result {
+        Ok(read) => read,
+        Err(e) => {
+            tracing::warn!(error = %e, "database overview could not be read");
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "engine": "sqlite",
+                    "status": "disconnected",
+                    "tables": [],
+                    "detection_rate_24h": [],
+                })),
+            );
+        }
+    };
+    let file_size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
+    let wal = {
+        let mut p = path.clone().into_os_string();
+        p.push("-wal");
+        file_size(std::path::Path::new(&p))
+    };
+    let table_total: i64 = tables.iter().map(|t| t.size_bytes).sum();
+    #[allow(clippy::cast_precision_loss)]
+    let write_avg_ms = (write.count > 0).then(|| write.sum_secs * 1000.0 / write.count as f64);
+    #[allow(clippy::cast_precision_loss)]
+    let tables: Vec<Value> = tables
+        .iter()
+        .map(|t| {
+            json!({
+                "name": t.name,
+                "row_count": t.row_count,
+                "size_bytes": t.size_bytes,
+                "usage_pct": if table_total > 0 {
+                    t.size_bytes as f64 / table_total as f64 * 100.0
+                } else {
+                    0.0
+                },
+                "engine": "",
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "engine": "sqlite",
+            "status": "connected",
+            "location": path.display().to_string(),
+            "size_bytes": file_size(&path),
+            "total_detections": total,
+            "total_tables": tables.len(),
+            "sqlite": {
+                "engine_version": engine.version,
+                "journal_mode": engine.journal_mode,
+                "page_size": engine.page_size,
+                "integrity_check": match integrity {
+                    Some((_, Some(true))) => "ok",
+                    Some((_, Some(false))) => "failed",
+                    _ => "unchecked",
+                },
+                "last_vacuum_at": vacuum.map(birdnet_core::civil::rfc3339_utc),
+                "wal_size_bytes": wal,
+                "wal_checkpoints": Value::Null,
+                "freelist_pages": engine.freelist_pages,
+                "cache_size_bytes": engine.cache_size_bytes,
+                "busy_timeouts": Value::Null,
+            },
+            "tables": tables,
+            "tables_measured_at": measured_at,
+            "performance": {
+                "read_latency_avg_ms": Value::Null,
+                "read_latency_max_ms": Value::Null,
+                "write_latency_avg_ms": write_avg_ms,
+                "write_latency_max_ms": Value::Null,
+                "queries_per_sec": Value::Null,
+                "queries_last_hour": Value::Null,
+                "slow_query_count": Value::Null,
+            },
+            "detection_rate_24h": rate
+                .iter()
+                .map(|(hour, count)| json!({"hour": hour, "count": count}))
+                .collect::<Vec<_>>(),
+        })),
     )
 }
 

@@ -708,7 +708,7 @@ takes a date range.
 | `/analytics/sources` | Sources with counts over a range | **SHIPPED** — `GET /api/v2/analytics/sources`, upstream's path, parameters and fields. One deliberate difference: names are not anonymised for visitors who are not signed in, because the public Station Health tab already shows them; private mode hides both. |
 | `/time/heatmap` | Date × time-of-day density, 15–60 minute slots, CSV | **SHIPPED** — `GET /api/v2/analytics/time/heatmap`, upstream's slot widths, sparse columnar payload and CSV columns. Slots are read from the local `Time` column, so a day of the clocks changing has its detections where the station's clock put them. The hour × weekday heatmap stays. |
 | `/time/dawn-onset` | Each day's chorus onset against civil dawn | **SHIPPED** — `GET /api/v2/analytics/time/dawn-onset`, upstream's rank (third detection), minimum (five) and fields; civil dawn from `birdnet-scheduler`, placed on each day's local date and offset. |
-| `/system/database/overview` | Table stats, latencies, slow queries | PARTIAL — size and write latency only. |
+| `/system/database/overview` | Table stats, latencies, slow queries | **SHIPPED** — `GET /api/v2/system/database/overview`, bearer-gated as upstream gates it, upstream's fields. Read latency, query rates, slow queries, busy timeouts and checkpoints are `null`: not measured here, and upstream's checkpoint figure comes from running one on a GET. Upstream's `integrity_check` is a constant `ok`; ours is the recorded verdict. |
 | `/range/heatmap` | Geomodel occurrence over a lat/lon grid | GAP — the largest: grid inference in the web process and a map without a tile host. |
 
 Found on the way, both the silent-zero shape `CLAUDE.md` describes: the

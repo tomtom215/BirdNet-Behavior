@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/system/database/overview`** (bearer token). The database's
+  engine settings, each table's rows and size, the last recorded integrity
+  check and VACUUM, mean write latency and the last 24 hours' arrivals —
+  birdnet-go's fields, with `null` where it would report a figure this
+  station does not measure.
+
 - **`GET /api/v2/analytics/species/daily`.** Any day's species, most
   detected first, with hourly counts, first and last heard, and how new
   each is — first heard here, this year or this season within the last

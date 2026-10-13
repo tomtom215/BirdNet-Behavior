@@ -438,6 +438,237 @@
         }
       }
     },
+    "/system/database/overview": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The database: engine, tables, write latency and the last day's arrivals",
+        "description": "birdnet-go's database overview for its SQLite engine, with three differences, each to avoid a number nobody measured. `integrity_check` is the last recorded integrity check (`ok`, `failed` or `unchecked`), where upstream always answers `ok`. `wal_checkpoints`, `busy_timeouts` and every performance figure but `write_latency_avg_ms` are null: nothing on this station counts them, and upstream's checkpoint count comes from running a checkpoint, which a GET here does not. Table sizes read every page of the file, so they are measured at most every 15 minutes; `tables_measured_at` says when. A database that cannot be read answers 200 with `status: disconnected` and empty lists.",
+        "operationId": "systemDatabaseOverview",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The overview.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "engine",
+                    "status",
+                    "tables",
+                    "detection_rate_24h"
+                  ],
+                  "properties": {
+                    "engine": {
+                      "type": "string",
+                      "enum": [
+                        "sqlite"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "connected",
+                        "disconnected"
+                      ]
+                    },
+                    "location": {
+                      "type": "string",
+                      "description": "The database file's path."
+                    },
+                    "size_bytes": {
+                      "type": "integer",
+                      "description": "The main file's size; the WAL is `sqlite.wal_size_bytes`."
+                    },
+                    "total_detections": {
+                      "type": "integer"
+                    },
+                    "total_tables": {
+                      "type": "integer"
+                    },
+                    "sqlite": {
+                      "type": "object",
+                      "properties": {
+                        "engine_version": {
+                          "type": "string"
+                        },
+                        "journal_mode": {
+                          "type": "string"
+                        },
+                        "page_size": {
+                          "type": "integer"
+                        },
+                        "integrity_check": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "failed",
+                            "unchecked"
+                          ]
+                        },
+                        "last_vacuum_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "When the backup-and-VACUUM job last ran (RFC 3339, UTC), or null if it never has."
+                        },
+                        "wal_size_bytes": {
+                          "type": "integer"
+                        },
+                        "wal_checkpoints": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not counted here: always null."
+                        },
+                        "freelist_pages": {
+                          "type": "integer"
+                        },
+                        "cache_size_bytes": {
+                          "type": "integer"
+                        },
+                        "busy_timeouts": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not counted here: always null."
+                        }
+                      }
+                    },
+                    "tables": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "row_count",
+                          "size_bytes",
+                          "usage_pct",
+                          "engine"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "row_count": {
+                            "type": "integer"
+                          },
+                          "size_bytes": {
+                            "type": "integer",
+                            "description": "Bytes of the table's pages and its indexes'."
+                          },
+                          "usage_pct": {
+                            "type": "number",
+                            "description": "Share of all tables' bytes."
+                          },
+                          "engine": {
+                            "type": "string",
+                            "description": "Always empty for SQLite."
+                          }
+                        }
+                      }
+                    },
+                    "tables_measured_at": {
+                      "type": "integer",
+                      "description": "Unix seconds when the table sizes were measured."
+                    },
+                    "performance": {
+                      "type": "object",
+                      "properties": {
+                        "read_latency_avg_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "read_latency_max_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "write_latency_avg_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Mean detection write since the process started; null before the first."
+                        },
+                        "write_latency_max_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "queries_per_sec": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "queries_last_hour": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "slow_query_count": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        }
+                      }
+                    },
+                    "detection_rate_24h": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "hour",
+                          "count"
+                        ],
+                        "properties": {
+                          "hour": {
+                            "type": "string",
+                            "examples": [
+                              "2026-10-13T07:00:00Z"
+                            ],
+                            "description": "The UTC hour."
+                          },
+                          "count": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "description": "Detections stored in each UTC hour of the last 24, hours with none left out."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the wrong one."
+          }
+        }
+      }
+    },
     "/system/network": {
       "get": {
         "tags": [

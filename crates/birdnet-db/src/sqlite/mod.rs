@@ -88,6 +88,7 @@ pub use queries::{
     first_heard_between, gone_quiet, new_arrivals, phantom_species, source_counts,
     species_range_summary,
 };
+pub use queries::{EngineDetails, TableSize, detection_rate_24h, engine_details, table_sizes};
 pub use types::{
     ConcurrentDetection, DailyCount, DayCount, DetectionRecord, DetectionRow, HourlyCount,
     SourceActivity, SpeciesCount, SpeciesSummary,
