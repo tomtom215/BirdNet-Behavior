@@ -105,6 +105,10 @@ pub struct NewArrival {
 /// Species whose first-ever detection falls in the `recent_days` days up to
 /// and including `today`, newest first.
 ///
+/// A row with an empty `Date` (an import whose source had none) is not a
+/// first detection: it would sort before every real date and hide the
+/// species' arrival for good.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
@@ -114,7 +118,7 @@ pub fn new_arrivals(
     recent_days: u32,
 ) -> Result<Vec<NewArrival>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT Sci_Name, MAX(Com_Name), MIN(Date) AS first, COUNT(*)
+        "SELECT Sci_Name, MAX(Com_Name), MIN(NULLIF(Date, '')) AS first, COUNT(*)
          FROM detections_analytic
          WHERE Date <= ?1
          GROUP BY Sci_Name
@@ -471,6 +475,57 @@ pub fn species_range_summary(
     Ok(rows)
 }
 
+/// A species whose first detection here falls in a date range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstHeard {
+    /// Scientific name.
+    pub sci_name: String,
+    /// Common name.
+    pub com_name: String,
+    /// Date of its first-ever detection here (`YYYY-MM-DD`).
+    pub first_date: String,
+    /// Its detections within the range.
+    pub count_in_period: i64,
+}
+
+/// Species whose first-ever detection falls in `start..=end`, newest first,
+/// a page of `limit` from `offset`: birdnet-go's new-species list.
+///
+/// Rows with an empty `Date` are not first detections, as in
+/// [`new_arrivals`].
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn first_heard_between(
+    conn: &Connection,
+    start: &str,
+    end: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<FirstHeard>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Sci_Name, MAX(Com_Name), MIN(NULLIF(Date, '')) AS first,
+                SUM(Date BETWEEN ?1 AND ?2)
+         FROM detections_analytic
+         GROUP BY Sci_Name
+         HAVING first BETWEEN ?1 AND ?2
+         ORDER BY first DESC, Sci_Name
+         LIMIT ?3 OFFSET ?4",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![start, end, limit, offset], |row| {
+            Ok(FirstHeard {
+                sci_name: row.get(0)?,
+                com_name: row.get(1)?,
+                first_date: row.get(2)?,
+                count_in_period: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,5 +864,60 @@ mod tests {
             .find(|r| r.sci_name == "Bubo bubo")
             .expect("listed");
         assert_eq!((bubo.count, &bubo.first, &bubo.last), (1, &None, &None));
+    }
+    /// An import with no date is not a first detection: counted as one, it
+    /// would sort before every real date and hide the species' arrival.
+    #[test]
+    fn an_undated_row_does_not_hide_an_arrival() {
+        let conn = station(&[
+            ("2026-10-10", "07:00:00", "Fringilla montifringilla"),
+            ("", "", "Fringilla montifringilla"),
+        ]);
+        let arrivals = new_arrivals(&conn, "2026-10-12", 14).expect("query");
+        assert_eq!(arrivals.len(), 1, "{arrivals:?}");
+        assert_eq!(arrivals[0].first_detected, "2026-10-10");
+        let firsts = first_heard_between(&conn, "2026-10-01", "2026-10-12", 100, 0).expect("query");
+        assert_eq!(firsts.len(), 1, "{firsts:?}");
+    }
+
+    /// Upstream's new-species list: first-ever detection inside the range,
+    /// the count within the range only, newest first, paged.
+    #[test]
+    fn first_heard_lists_species_new_in_the_range() {
+        let conn = station(&[
+            // First heard on the 5th; also on the 20th, after the range.
+            ("2026-10-05", "07:00:00", "Turdus iliacus"),
+            ("2026-10-06", "07:00:00", "Turdus iliacus"),
+            ("2026-10-20", "07:00:00", "Turdus iliacus"),
+            // First heard on the 10th, the range's last day.
+            ("2026-10-10", "07:00:00", "Turdus pilaris"),
+            // First heard on the 1st, the range's first day.
+            ("2026-10-01", "07:00:00", "Bombycilla garrulus"),
+            // Heard in the range, but first heard before it.
+            ("2026-09-30", "07:00:00", "Turdus merula"),
+            ("2026-10-07", "07:00:00", "Turdus merula"),
+            // First heard after the range.
+            ("2026-10-11", "07:00:00", "Regulus regulus"),
+        ]);
+        let f = first_heard_between(&conn, "2026-10-01", "2026-10-10", 100, 0).expect("query");
+        let names: Vec<&str> = f.iter().map(|r| r.sci_name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Turdus pilaris", "Turdus iliacus", "Bombycilla garrulus"]
+        );
+        assert_eq!(f[1].first_date, "2026-10-05");
+        assert_eq!(f[1].count_in_period, 2, "the 20th is outside the range");
+
+        let page = first_heard_between(&conn, "2026-10-01", "2026-10-10", 1, 1).expect("query");
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].sci_name, "Turdus iliacus");
+
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Sci_Name = 'Turdus pilaris'",
+            [],
+        )
+        .expect("reject");
+        let f = first_heard_between(&conn, "2026-10-01", "2026-10-10", 100, 0).expect("query");
+        assert_eq!(f.len(), 2, "a rejected detection is no first: {f:?}");
     }
 }

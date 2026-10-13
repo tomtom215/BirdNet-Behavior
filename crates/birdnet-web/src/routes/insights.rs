@@ -31,6 +31,8 @@ const EXPECTED_MAX_YEARS: u32 = 10;
 const PHANTOM_PERIOD_DAYS: u32 = 30;
 const PHANTOM_MIN_DETECTIONS: u32 = 3;
 const PHANTOM_MAX_AVG_CONFIDENCE: f64 = 0.6;
+const NEW_SPECIES_DEFAULT_DAYS: i64 = 30;
+const NEW_SPECIES_DEFAULT_LIMIT: u32 = 100;
 
 /// The insight routes.
 pub fn router() -> Router<AppState> {
@@ -45,6 +47,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/dashboard/kpis", get(dashboard_kpis))
         .route("/analytics/species/summary", get(species_summary))
+        .route("/analytics/species/detections/new", get(new_species))
 }
 
 /// Query parameters for the dawn chorus. Strings, so that a value that is not
@@ -303,6 +306,91 @@ async fn species_summary(State(state): State<AppState>, Query(q): Query<SummaryQ
     Json(body).into_response()
 }
 
+/// Query parameters for the new-species list.
+#[derive(Debug, Deserialize)]
+struct NewSpeciesQuery {
+    start_date: Option<String>,
+    end_date: Option<String>,
+    limit: Option<String>,
+    offset: Option<String>,
+}
+
+/// A non-negative integer query value, `default` when absent or empty.
+fn non_negative(raw: Option<&str>, default: u32) -> Result<u32, ()> {
+    match raw {
+        None | Some("") => Ok(default),
+        Some(s) => s.parse::<u32>().map_err(|_| ()),
+    }
+}
+
+/// Today's local date and the date `days` before it, from one reading of the
+/// clock (so the pair cannot straddle midnight).
+fn today_and_days_before(days: i64) -> (String, String) {
+    use crate::routes::pages::{local_utc_offset_secs, unix_secs};
+    use birdnet_core::civil::date_string_from_days;
+    let today = (unix_secs() + local_utc_offset_secs()).max(0) / 86_400;
+    (
+        date_string_from_days(today),
+        date_string_from_days(today - days),
+    )
+}
+
+/// `GET /api/v2/analytics/species/detections/new?start_date=&end_date=&limit=&offset=`
+/// — species first heard here within the range, newest first.
+///
+/// Upstream's defaults and shape: the range is the 30 days before today
+/// through today, `limit` is 100 (and 0 means 100), the answer a bare array.
+/// A limit or offset that is not a non-negative integer is a 400, as is a
+/// date that is not a calendar day or a reversed range.
+async fn new_species(State(state): State<AppState>, Query(q): Query<NewSpeciesQuery>) -> Response {
+    let Ok(start) = range_bound(q.start_date.as_deref()) else {
+        return bad_request("start_date must be a YYYY-MM-DD date");
+    };
+    let Ok(end) = range_bound(q.end_date.as_deref()) else {
+        return bad_request("end_date must be a YYYY-MM-DD date");
+    };
+    let (today, month_ago) = today_and_days_before(NEW_SPECIES_DEFAULT_DAYS);
+    let (start, end) = (start.unwrap_or(month_ago), end.unwrap_or(today));
+    if start > end {
+        return bad_request("start_date is after end_date");
+    }
+    let Ok(limit) = non_negative(q.limit.as_deref(), NEW_SPECIES_DEFAULT_LIMIT) else {
+        return bad_request("limit must be a non-negative integer");
+    };
+    let Ok(offset) = non_negative(q.offset.as_deref(), 0) else {
+        return bad_request("offset must be a non-negative integer");
+    };
+    let limit = if limit == 0 {
+        NEW_SPECIES_DEFAULT_LIMIT
+    } else {
+        limit
+    };
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                birdnet_db::sqlite::first_heard_between(conn, &start, &end, limit, offset)
+            })
+        })
+        .await;
+    match result {
+        Ok(rows) => Json(
+            rows.iter()
+                .map(|r| {
+                    json!({
+                        "scientific_name": r.sci_name,
+                        "common_name": r.com_name,
+                        "first_heard_date": r.first_date,
+                        "count_in_period": r.count_in_period,
+                        "thumbnail_url": thumbnail_url(&r.sci_name),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => read_failed("new species", &e),
+    }
+}
+
 /// A binomial written the usual way, genus capitalised: the eBird snapshot
 /// stores names lowercased, for matching.
 fn binomial_case(name: &str) -> String {
@@ -430,7 +518,7 @@ async fn dashboard_kpis(State(state): State<AppState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_days, calendar_date, day_of_year, range_bound};
+    use super::{bounded_days, calendar_date, day_of_year, non_negative, range_bound};
 
     #[test]
     fn day_of_year_counts_from_the_first_of_january() {
@@ -463,6 +551,19 @@ mod tests {
             Ok(Some("2026-10-13".to_owned()))
         );
         assert_eq!(range_bound(Some("2026-02-30")), Err(()));
+    }
+
+    /// Upstream's pagination rule: absent is the default, anything but a
+    /// non-negative integer is refused.
+    #[test]
+    fn a_page_bound_is_a_non_negative_integer() {
+        assert_eq!(non_negative(None, 100), Ok(100));
+        assert_eq!(non_negative(Some(""), 100), Ok(100));
+        assert_eq!(non_negative(Some("0"), 100), Ok(0));
+        assert_eq!(non_negative(Some("25"), 100), Ok(25));
+        for bad in ["-1", "ten", "2.5"] {
+            assert_eq!(non_negative(Some(bad), 100), Err(()), "{bad}");
+        }
     }
 
     /// Upstream's rule: absent takes the default, anything but a positive

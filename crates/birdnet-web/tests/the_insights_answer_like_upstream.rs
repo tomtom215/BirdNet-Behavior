@@ -275,6 +275,75 @@ async fn the_species_summary_answers_with_upstreams_shape() {
     }
 }
 
+/// Upstream's new-species list: first heard in the range (by default the
+/// last 30 days), newest first, as a bare array; bad paging is a 400.
+#[tokio::test]
+async fn new_species_are_those_first_heard_in_the_range() {
+    let app = station(&[
+        (3, "07:00:00", "Fringilla montifringilla"),
+        (1, "07:00:00", "Fringilla montifringilla"),
+        (10, "07:00:00", "Turdus iliacus"),
+        // First heard 31 days ago: before the default range.
+        (31, "07:00:00", "Turdus merula"),
+        (2, "07:00:00", "Turdus merula"),
+        // 30 days ago: the default range's first day.
+        (30, "07:00:00", "Bombycilla garrulus"),
+    ]);
+    let (status, body) = get(&app, "/api/v2/analytics/species/detections/new").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<&str> = body
+        .as_array()
+        .expect("a bare array")
+        .iter()
+        .filter_map(|r| r["scientific_name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Fringilla montifringilla",
+            "Turdus iliacus",
+            "Bombycilla garrulus"
+        ],
+        "{body}"
+    );
+    assert_eq!(body[0]["count_in_period"], 2);
+    let first = body[0]["first_heard_date"].as_str().expect("date");
+
+    // A range ending before the brambling's first day: it is not new there.
+    let (_, body) = get(
+        &app,
+        &format!("/api/v2/analytics/species/detections/new?start_date=2000-01-01&end_date={first}&limit=1&offset=0"),
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(body[0]["scientific_name"], "Fringilla montifringilla");
+    assert_eq!(body[0]["count_in_period"], 1, "{body}");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/species/detections/new?limit=0&offset=2",
+    )
+    .await;
+    assert_eq!(
+        body.as_array().map(Vec::len),
+        Some(1),
+        "limit=0 is the default: {body}"
+    );
+
+    for bad in [
+        "limit=-1",
+        "offset=x",
+        "start_date=2026-02-30",
+        "start_date=2026-10-13&end_date=2026-10-01",
+    ] {
+        let (status, _) = get(
+            &app,
+            &format!("/api/v2/analytics/species/detections/new?{bad}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
 /// Upstream's KPI shape, a streak counted back from today, and its empty
 /// values on a station with nothing yet.
 #[tokio::test]
@@ -339,6 +408,7 @@ async fn an_unreadable_station_is_an_error_not_an_empty_list() {
         "/api/v2/insights/expected-today/regional",
         "/api/v2/dashboard/kpis",
         "/api/v2/analytics/species/summary",
+        "/api/v2/analytics/species/detections/new",
     ] {
         let (status, body) = get(&app, uri).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {body}");

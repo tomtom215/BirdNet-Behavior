@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/v2/analytics/species/detections/new`.** Species first heard
+  here within a date range (by default the last 30 days), newest first,
+  with their detections in the range, paged — birdnet-go's path,
+  defaults and fields.
+
 - **`GET /api/v2/analytics/species/summary`.** Each species' count, mean
   and highest confidence, and first and last detection over an optional
   date range — birdnet-go's path, parameters and fields. First and last

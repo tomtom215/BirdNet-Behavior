@@ -2898,6 +2898,95 @@
         }
       }
     },
+    "/analytics/species/detections/new": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species first heard in a date range",
+        "description": "Species whose first-ever detection here (rejected and undated detections aside) falls in start_date..=end_date, newest first, with their detections in the range. Same path, parameters, defaults and fields as birdnet-go's endpoint.",
+        "operationId": "analyticsNewSpecies",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "First day of the range, inclusive (YYYY-MM-DD). Default: 30 days before today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive (YYYY-MM-DD). Default: today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, a non-negative integer. Default 100; 0 also means 100.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Species to skip, a non-negative integer. Default 0.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "scientific_name": {
+                        "type": "string"
+                      },
+                      "common_name": {
+                        "type": "string"
+                      },
+                      "first_heard_date": {
+                        "type": "string",
+                        "format": "date"
+                      },
+                      "count_in_period": {
+                        "type": "integer"
+                      },
+                      "thumbnail_url": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A date that is not a calendar day, a reversed range, or a limit or offset that is not a non-negative integer."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [
