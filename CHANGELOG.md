@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/analytics/time/year-over-year`.** Detections this year
+  to date against the same span of last year, cumulatively, one point a day
+  aligned by calendar date — birdnet-go's parameter, fields and handling of
+  29 February in either year.
+
 - **`GET /api/v2/analytics/confidence/distribution`.** Each species'
   confidence distribution over a date range — the fraction of its
   detections in each of 5 to 50 equal bins — for the most detected species

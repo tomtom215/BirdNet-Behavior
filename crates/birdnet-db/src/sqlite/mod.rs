@@ -80,6 +80,7 @@ pub use queries::{
 };
 pub use queries::{
     CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, confidence_histograms,
+    day_counts_between,
 };
 pub use queries::{
     DashboardKpis, DawnFirstSong, ExpectedSpecies, FirstHeard, GoneQuiet, NewArrival,

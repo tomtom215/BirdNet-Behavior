@@ -594,3 +594,72 @@ async fn the_confidence_distribution_answers_with_upstreams_shape() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
 }
+
+/// Upstream's year-over-year tracker: `{currentYear, previousYear, points}`,
+/// one cumulative point per day from 1 January to `date`, each year's
+/// detections counted through the same calendar day.
+#[tokio::test]
+async fn year_over_year_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (date, time) in [
+            ("2026-01-01", "06:00:00"),
+            ("2026-01-03", "06:00:00"),
+            ("2026-01-03", "07:00:00"),
+            ("2025-01-02", "06:00:00"),
+            ("2025-01-04", "06:00:00"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, 'Turdus merula', 'Blackbird', 0.9)",
+                rusqlite::params![date, time],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/time/year-over-year?date=2026-01-03",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "currentYear": 2026,
+            "previousYear": 2025,
+            "points": [
+                {"date": "2026-01-01", "monthDay": "01-01", "thisYear": 1, "lastYear": 0, "delta": 1},
+                {"date": "2026-01-02", "monthDay": "01-02", "thisYear": 1, "lastYear": 1, "delta": 0},
+                {"date": "2026-01-03", "monthDay": "01-03", "thisYear": 3, "lastYear": 1, "delta": 2},
+            ],
+        })
+    );
+    // No date is today, which is in the current year.
+    let (status, body) = get(&app, "/api/v2/analytics/time/year-over-year").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let points = body["points"].as_array().expect("points");
+    assert_eq!(
+        points.last().and_then(|p| p["date"].as_str()),
+        Some(local_today().as_str()),
+        "{body}"
+    );
+    for bad in ["date=2026-02-30", "date=today", "date=2026-1-3"] {
+        let (status, _) = get(
+            &app,
+            &format!("/api/v2/analytics/time/year-over-year?{bad}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// Today's local date, as SQLite's `localtime` names it — the same clock the
+/// station's `Date` column is written in.
+fn local_today() -> String {
+    rusqlite::Connection::open_in_memory()
+        .unwrap()
+        .query_row("SELECT date('now', 'localtime')", [], |r| r.get(0))
+        .unwrap()
+}

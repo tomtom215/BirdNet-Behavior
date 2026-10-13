@@ -30,10 +30,12 @@ const CONFIDENCE_MAX_SPECIES: u32 = 10;
 
 /// The chart routes.
 pub fn router() -> Router<AppState> {
-    Router::new().route(
-        "/analytics/confidence/distribution",
-        get(confidence_distribution),
-    )
+    Router::new()
+        .route(
+            "/analytics/confidence/distribution",
+            get(confidence_distribution),
+        )
+        .route("/analytics/time/year-over-year", get(year_over_year))
 }
 
 /// The `YYYY-MM-DD` `days` after a calendar date.
@@ -146,5 +148,208 @@ async fn confidence_distribution(
         )
         .into_response(),
         Err(e) => read_failed("confidence distribution", &e),
+    }
+}
+
+/// One day of the year-over-year comparison.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct YearOverYearPoint {
+    /// The day in the current year (`YYYY-MM-DD`).
+    date: String,
+    /// Detections from 1 January of the current year through it.
+    this_year: i64,
+    /// Detections from 1 January of the previous year through the same
+    /// calendar day of that year.
+    last_year: i64,
+}
+
+/// The two windows the comparison reads, as day numbers: 1 January through
+/// `(year, month, day)`, and 1 January of the year before through the same
+/// month and day — the 28th when that is 29 February.
+///
+/// Upstream also asks whether the previous year is a leap year. It never is
+/// when the current date is 29 February — no two consecutive years are — so
+/// the question is left out rather than carried as a branch nothing reaches.
+const fn year_over_year_windows(year: u32, month: u32, day: u32) -> ((i64, i64), (i64, i64)) {
+    use birdnet_core::civil::days_from_civil;
+    let prev = year - 1;
+    let prev_day = if month == 2 && day == 29 { 28 } else { day };
+    (
+        (
+            days_from_civil(year, 1, 1),
+            days_from_civil(year, month, day),
+        ),
+        (
+            days_from_civil(prev, 1, 1),
+            days_from_civil(prev, month, prev_day),
+        ),
+    )
+}
+
+/// Cumulative counts for each day of `current`, aligned by month and day
+/// with the cumulative counts over `previous`: birdnet-go's
+/// `buildYearOverYear`.
+///
+/// Aligned by calendar date, not day of the year, so the seasons line up
+/// across a leap year. A current 29 February with no counterpart carries the
+/// previous year's total from the 28th; a previous 29 February with none in
+/// the current year is folded into the previous total from 1 March on.
+/// Nothing is lost or counted twice, and both series only rise.
+fn year_over_year_points(
+    current: (i64, i64),
+    previous: (i64, i64),
+    per_day: &std::collections::HashMap<String, i64>,
+) -> Vec<YearOverYearPoint> {
+    use birdnet_core::civil::date_string_from_days;
+    let month_day = |d: &str| d.get(5..).unwrap_or_default().to_owned();
+    let mut prior_by_month_day = std::collections::HashMap::new();
+    let mut running = 0;
+    for day in previous.0..=previous.1 {
+        let d = date_string_from_days(day);
+        running += per_day.get(&d).copied().unwrap_or(0);
+        prior_by_month_day.insert(month_day(&d), running);
+    }
+    let (mut this_year, mut last_year) = (0, 0);
+    (current.0..=current.1)
+        .map(|day| {
+            let date = date_string_from_days(day);
+            this_year += per_day.get(&date).copied().unwrap_or(0);
+            if let Some(&p) = prior_by_month_day.get(&month_day(&date)) {
+                last_year = p;
+            }
+            YearOverYearPoint {
+                date,
+                this_year,
+                last_year,
+            }
+        })
+        .collect()
+}
+
+/// Query parameters for the year-over-year tracker.
+#[derive(Debug, Deserialize)]
+struct YearOverYearQuery {
+    date: Option<String>,
+}
+
+/// `GET /api/v2/analytics/time/year-over-year?date=` — cumulative detections
+/// this year to `date` (default today) against the same span of last year,
+/// one point per day.
+///
+/// Upstream's shape: `{currentYear, previousYear, points: [{date, monthDay,
+/// thisYear, lastYear, delta}]}`. A `date` that is not a calendar day is a
+/// 400.
+async fn year_over_year(
+    State(state): State<AppState>,
+    Query(q): Query<YearOverYearQuery>,
+) -> Response {
+    use birdnet_core::civil::{date_string_from_days, parse_civil};
+    let Ok(date) = range_bound(q.date.as_deref()) else {
+        return bad_request("date must be a YYYY-MM-DD date");
+    };
+    let date = date.unwrap_or_else(crate::routes::pages::today_date_string);
+    let Some(at) = parse_civil(&date, "00:00:00").filter(|c| c.year >= 2) else {
+        return bad_request("date must be a YYYY-MM-DD date");
+    };
+    let (current, previous) = year_over_year_windows(at.year, at.month, at.day);
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                let mut per_day = std::collections::HashMap::new();
+                for (start, end) in [previous, current] {
+                    per_day.extend(birdnet_db::sqlite::day_counts_between(
+                        conn,
+                        &date_string_from_days(start),
+                        &date_string_from_days(end),
+                    )?);
+                }
+                Ok::<_, birdnet_db::sqlite::connection::DbError>(per_day)
+            })
+        })
+        .await;
+    let per_day = match result {
+        Ok(per_day) => per_day,
+        Err(e) => return read_failed("year-over-year counts", &e),
+    };
+    Json(json!({
+        "currentYear": at.year,
+        "previousYear": at.year - 1,
+        "points": year_over_year_points(current, previous, &per_day)
+            .iter()
+            .map(|p| json!({
+                "date": p.date,
+                "monthDay": p.date.get(5..).unwrap_or_default(),
+                "thisYear": p.this_year,
+                "lastYear": p.last_year,
+                "delta": p.this_year - p.last_year,
+            }))
+            .collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counts(days: &[(&str, i64)]) -> std::collections::HashMap<String, i64> {
+        days.iter().map(|(d, n)| ((*d).to_owned(), *n)).collect()
+    }
+
+    fn last(points: &[YearOverYearPoint], date: &str) -> (i64, i64) {
+        let p = points.iter().find(|p| p.date == date).expect(date);
+        (p.this_year, p.last_year)
+    }
+
+    /// Both years run from 1 January to the same calendar day, cumulatively.
+    #[test]
+    fn the_two_years_are_cumulative_and_aligned_by_calendar_day() {
+        let (cur, prev) = year_over_year_windows(2026, 1, 10);
+        let per_day = counts(&[
+            ("2026-01-01", 2),
+            ("2026-01-05", 3),
+            ("2026-01-11", 100),
+            ("2025-01-01", 1),
+            ("2025-01-10", 4),
+            ("2025-01-11", 100),
+            ("2024-12-31", 100),
+        ]);
+        let points = year_over_year_points(cur, prev, &per_day);
+        assert_eq!(points.len(), 10);
+        assert_eq!(points[0].date, "2026-01-01");
+        assert_eq!(last(&points, "2026-01-01"), (2, 1));
+        assert_eq!(last(&points, "2026-01-04"), (2, 1));
+        assert_eq!(last(&points, "2026-01-05"), (5, 1));
+        assert_eq!(last(&points, "2026-01-10"), (5, 5));
+    }
+
+    /// A leap current year against a common one: 29 February has no
+    /// counterpart, so last year's total from the 28th is carried over it, and
+    /// the window last year ends on the 28th.
+    #[test]
+    fn a_current_29_february_carries_last_years_28th() {
+        let (cur, prev) = year_over_year_windows(2028, 2, 29);
+        assert_eq!(
+            prev.1,
+            birdnet_core::civil::days_from_civil(2027, 2, 28),
+            "the window last year ends on the 28th"
+        );
+        let per_day = counts(&[("2027-02-28", 7), ("2027-03-01", 100), ("2028-02-29", 3)]);
+        let points = year_over_year_points(cur, prev, &per_day);
+        assert_eq!(points.len(), 60);
+        assert_eq!(last(&points, "2028-02-28"), (0, 7));
+        assert_eq!(last(&points, "2028-02-29"), (3, 7));
+    }
+
+    /// A leap previous year against a common one: last year's 29 February is
+    /// folded into its total from 1 March, so nothing is lost.
+    #[test]
+    fn a_previous_29_february_is_folded_into_1_march() {
+        let (cur, prev) = year_over_year_windows(2025, 3, 1);
+        let per_day = counts(&[("2024-02-28", 1), ("2024-02-29", 5), ("2024-03-01", 2)]);
+        let points = year_over_year_points(cur, prev, &per_day);
+        assert_eq!(last(&points, "2025-02-28"), (0, 1));
+        assert_eq!(last(&points, "2025-03-01"), (0, 8));
+        assert_eq!(points.len(), 60);
     }
 }

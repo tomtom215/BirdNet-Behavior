@@ -130,6 +130,29 @@ pub fn confidence_histograms(
         .collect())
 }
 
+/// Detections on each day of `start..=end` that had any, oldest first.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn day_counts_between(
+    conn: &Connection,
+    start: &str,
+    end: &str,
+) -> Result<Vec<(String, i64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, COUNT(*) FROM detections_analytic
+         WHERE Date >= ?1 AND Date <= ?2
+         GROUP BY Date ORDER BY Date",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![start, end], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +293,27 @@ mod tests {
                 .expect("query")
                 .is_empty(),
             "no bins, no histogram"
+        );
+    }
+
+    /// Each day's detections, both ends inclusive, rejected ones left out.
+    #[test]
+    fn days_are_counted_over_the_range() {
+        let conn = station(&[
+            ("2026-01-01", "06:00:00", "Turdus merula", 0.9),
+            ("2026-01-01", "07:00:00", "Turdus merula", 0.9),
+            ("2026-01-03", "06:00:00", "Turdus merula", 0.9),
+            ("2026-01-05", "06:00:00", "Turdus merula", 0.9),
+            ("2025-12-31", "06:00:00", "Turdus merula", 0.9),
+        ]);
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Date = '2026-01-03'",
+            [],
+        )
+        .expect("reject");
+        assert_eq!(
+            day_counts_between(&conn, "2026-01-01", "2026-01-05").expect("query"),
+            [("2026-01-01".to_owned(), 2), ("2026-01-05".to_owned(), 1)]
         );
     }
 }
