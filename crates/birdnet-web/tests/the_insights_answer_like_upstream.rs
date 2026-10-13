@@ -663,3 +663,118 @@ fn local_today() -> String {
         .query_row("SELECT date('now', 'localtime')", [], |r| r.get(0))
         .unwrap()
 }
+
+/// Upstream's dawn onset: every day of the range, its detection count, and
+/// its third detection's minute against civil dawn — null on a sparse day
+/// and at a station with no location.
+#[tokio::test]
+async fn dawn_onset_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        // Two days whose third detection is at 04:30, the second with its
+        // first two an hour earlier: strays before dawn that must not move
+        // the onset.
+        for (date, times) in [
+            (
+                "2026-06-01",
+                ["04:10:00", "04:20:00", "04:30:00", "06:00:00", "07:00:00"],
+            ),
+            (
+                "2026-06-04",
+                ["03:10:00", "03:20:00", "04:30:00", "06:00:00", "07:00:00"],
+            ),
+        ] {
+            for time in times {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES (?1, ?2, 'Turdus merula', 'Blackbird', 0.9)",
+                    [date, time],
+                )
+                .expect("insert");
+            }
+        }
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES ('2026-06-03', '05:00:00', 'Turdus merula', 'Blackbird', 0.9)",
+            [],
+        )
+        .expect("insert");
+    });
+    let app = build_router(state.clone());
+    let uri = "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01&end_date=2026-06-03";
+    let (status, body) = get(&app, uri).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!([
+            {"date": "2026-06-01", "onsetRelMinutes": null, "detectionCount": 5},
+            {"date": "2026-06-02", "onsetRelMinutes": null, "detectionCount": 0},
+            {"date": "2026-06-03", "onsetRelMinutes": null, "detectionCount": 1},
+        ]),
+        "no location, so no dawn to measure against"
+    );
+
+    // With a location the five-detection day has an onset. Its value depends
+    // on the zone the test runs in (civil dawn is placed in local time), so
+    // only its presence is asserted here; the arithmetic is unit-tested in
+    // routes/charts.rs.
+    state.with_db(|conn| {
+        birdnet_db::settings::set(
+            conn,
+            "latitude",
+            "51.5",
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .expect("lat");
+        birdnet_db::settings::set(
+            conn,
+            "longitude",
+            "-0.13",
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .expect("lon");
+    });
+    let (_, body) = get(&app, uri).await;
+    let rel = body[0]["onsetRelMinutes"].as_i64();
+    assert!(rel.is_some(), "{body}");
+    assert_eq!(
+        body[2]["onsetRelMinutes"],
+        serde_json::Value::Null,
+        "sparse"
+    );
+    // The third detection, not the first: civil dawn moves about a minute a
+    // day in June, so the two days' onsets agree to within a few minutes;
+    // reading the first detection would put them an hour apart.
+    let (_, both) = get(
+        &app,
+        "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01&end_date=2026-06-04",
+    )
+    .await;
+    let (a, b) = (
+        both[0]["onsetRelMinutes"].as_i64().expect("day 1"),
+        both[3]["onsetRelMinutes"].as_i64().expect("day 4"),
+    );
+    assert!((a - b).abs() <= 5, "{a} {b}: {both}");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01&end_date=2026-06-01&species=Parus%20major",
+    )
+    .await;
+    assert_eq!(
+        body,
+        serde_json::json!([{"date": "2026-06-01", "onsetRelMinutes": null, "detectionCount": 0}]),
+        "another species heard nothing"
+    );
+    let (status, _) = get(&app, "/api/v2/analytics/time/dawn-onset").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "start_date is required");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01",
+    )
+    .await;
+    assert_eq!(
+        body.as_array().map(Vec::len),
+        Some(31),
+        "thirty days after, inclusive"
+    );
+}

@@ -153,6 +153,60 @@ pub fn day_counts_between(
     Ok(rows)
 }
 
+/// The detection that opens one day's chorus, and how many the day had.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayOnset {
+    /// The day (`YYYY-MM-DD`).
+    pub date: String,
+    /// Its detections.
+    pub count: i64,
+    /// The `Time` of its `rank`-th earliest detection; `None` when it had
+    /// fewer than `rank`.
+    pub onset_time: Option<String>,
+}
+
+/// Each day of `start..=end` with detections — of `species` alone when given
+/// — with its count and the time of its `rank`-th earliest detection, oldest
+/// day first.
+///
+/// The rank and not the first: birdnet-go reads a day's chorus onset from
+/// its third detection, so that one or two stray detections before dawn do
+/// not move it, and nothing later in the day can.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn day_onsets(
+    conn: &Connection,
+    start: &str,
+    end: &str,
+    species: Option<&str>,
+    rank: u32,
+) -> Result<Vec<DayOnset>, DbError> {
+    let mut stmt = conn.prepare(
+        "WITH d AS (
+             SELECT Date, Time,
+                    ROW_NUMBER() OVER (PARTITION BY Date ORDER BY Time) AS nth,
+                    COUNT(*) OVER (PARTITION BY Date) AS n
+             FROM detections_analytic
+             WHERE Date >= ?1 AND Date <= ?2
+               AND (?3 IS NULL OR lower(Sci_Name) = lower(?3) OR lower(Com_Name) = lower(?3))
+         )
+         SELECT Date, MAX(n), MAX(CASE WHEN nth = ?4 THEN Time END)
+         FROM d GROUP BY Date ORDER BY Date",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![start, end, species, rank], |row| {
+            Ok(DayOnset {
+                date: row.get(0)?,
+                count: row.get(1)?,
+                onset_time: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +369,44 @@ mod tests {
             day_counts_between(&conn, "2026-01-01", "2026-01-05").expect("query"),
             [("2026-01-01".to_owned(), 2), ("2026-01-05".to_owned(), 1)]
         );
+    }
+
+    /// Each day's count and its third-earliest detection's time, of one
+    /// species when asked; a day with fewer than three has no onset.
+    #[test]
+    fn each_day_is_opened_by_its_rank_th_detection() {
+        let conn = station(&[
+            ("2026-05-01", "05:10:00", "Turdus merula", 0.9),
+            ("2026-05-01", "04:02:00", "Erithacus rubecula", 0.9),
+            ("2026-05-01", "04:30:00", "Turdus merula", 0.9),
+            ("2026-05-01", "18:00:00", "Turdus merula", 0.9),
+            ("2026-05-01", "03:15:00", "Turdus merula", 0.9),
+            ("2026-05-02", "06:00:00", "Turdus merula", 0.9),
+            ("2026-05-02", "05:00:00", "Turdus merula", 0.9),
+            ("2026-05-03", "05:00:00", "Turdus merula", 0.9),
+        ]);
+        let all = day_onsets(&conn, "2026-05-01", "2026-05-02", None, 3).expect("query");
+        assert_eq!(
+            all,
+            [
+                DayOnset {
+                    date: "2026-05-01".to_owned(),
+                    count: 5,
+                    onset_time: Some("04:30:00".to_owned()),
+                },
+                DayOnset {
+                    date: "2026-05-02".to_owned(),
+                    count: 2,
+                    onset_time: None,
+                },
+            ]
+        );
+        let unknown =
+            day_onsets(&conn, "2026-05-01", "2026-05-01", Some("blackbird"), 3).expect("query");
+        assert_eq!(unknown, [], "no species is called that");
+        let blackbird =
+            day_onsets(&conn, "2026-05-01", "2026-05-01", Some("TURDUS MERULA"), 3).expect("query");
+        assert_eq!(blackbird[0].count, 4);
+        assert_eq!(blackbird[0].onset_time.as_deref(), Some("05:10:00"));
     }
 }

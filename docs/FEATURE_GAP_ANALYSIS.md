@@ -707,7 +707,7 @@ takes a date range.
 | `/time/year-over-year` | Cumulative year-to-date against last year | **SHIPPED** — `GET /api/v2/analytics/time/year-over-year`, upstream's parameter, fields and leap-day alignment. `/api/v2/timeseries/year-over-year` (weekly totals) answers a different question and stays. |
 | `/analytics/sources` | Sources with counts over a range | **SHIPPED** — `GET /api/v2/analytics/sources`, upstream's path, parameters and fields. One deliberate difference: names are not anonymised for visitors who are not signed in, because the public Station Health tab already shows them; private mode hides both. |
 | `/time/heatmap` | Date × time-of-day density, 15–60 minute slots, CSV | PARTIAL — hour × weekday only. |
-| `/time/dawn-onset` | Each day's chorus onset against civil dawn | GAP — civil dawn is already computed (`birdnet-scheduler`). |
+| `/time/dawn-onset` | Each day's chorus onset against civil dawn | **SHIPPED** — `GET /api/v2/analytics/time/dawn-onset`, upstream's rank (third detection), minimum (five) and fields; civil dawn from `birdnet-scheduler`, placed on each day's local date and offset. |
 | `/system/database/overview` | Table stats, latencies, slow queries | PARTIAL — size and write latency only. |
 | `/range/heatmap` | Geomodel occurrence over a lat/lon grid | GAP — the largest: grid inference in the web process and a map without a tile host. |
 

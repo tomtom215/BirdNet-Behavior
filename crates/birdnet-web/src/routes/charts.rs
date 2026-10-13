@@ -24,6 +24,11 @@ const DEFAULT_RANGE_DAYS: i64 = 30;
 const CONFIDENCE_DEFAULT_BINS: usize = 20;
 const CONFIDENCE_MIN_BINS: i64 = 5;
 const CONFIDENCE_MAX_BINS: i64 = 50;
+/// A day's chorus onset is its `ONSET_RANK`-th earliest detection, read only
+/// on a day with at least `ONSET_MIN_DETECTIONS`: upstream's
+/// `onsetDetectionRank` and `minOnsetDetections`.
+const ONSET_RANK: u32 = 3;
+const ONSET_MIN_DETECTIONS: i64 = 5;
 /// Species in a confidence distribution: upstream's default and maximum.
 const CONFIDENCE_DEFAULT_SPECIES: u32 = 5;
 const CONFIDENCE_MAX_SPECIES: u32 = 10;
@@ -36,6 +41,7 @@ pub fn router() -> Router<AppState> {
             get(confidence_distribution),
         )
         .route("/analytics/time/year-over-year", get(year_over_year))
+        .route("/analytics/time/dawn-onset", get(dawn_onset))
 }
 
 /// The `YYYY-MM-DD` `days` after a calendar date.
@@ -288,6 +294,147 @@ async fn year_over_year(
     .into_response()
 }
 
+/// Civil dawn on `date` at `location`, as minutes after local midnight:
+/// `None` when the sun does not reach 6° below the horizon that day (polar
+/// day and night) or the clock cannot place it.
+///
+/// Local time is SQLite's `localtime`: the same zone, rules and daylight
+/// saving the `Date` and `Time` columns were written in, for that day rather
+/// than today.
+fn civil_dawn_minute(
+    conn: &rusqlite::Connection,
+    location: birdnet_scheduler::Location,
+    date: &str,
+) -> Option<i64> {
+    use birdnet_core::civil::parse_civil;
+    let c = parse_civil(date, "00:00:00")?;
+    let dawn = birdnet_scheduler::SolarDay::for_date(location, c.year, c.month, c.day)
+        .ok()?
+        .civil_dawn_utc_min?;
+    place_on_local_day(date, dawn, |instant| {
+        conn.query_row(
+            "SELECT date(?1, 'unixepoch', 'localtime'),
+                    CAST(strftime('%H', ?1, 'unixepoch', 'localtime') AS INTEGER) * 60
+                    + CAST(strftime('%M', ?1, 'unixepoch', 'localtime') AS INTEGER)",
+            [instant],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()
+    })
+}
+
+/// The local minute of the day of an event the solver placed at
+/// `utc_minute` of a UTC day, on local `date`.
+///
+/// For a station far from Greenwich, the local date of a dawn is the UTC day
+/// before or after it — Sydney's is the previous UTC evening. Of the three
+/// instants it could be, this takes the one `to_local` (Unix seconds to
+/// local date and minute) puts on `date`.
+fn place_on_local_day(
+    date: &str,
+    utc_minute: u32,
+    to_local: impl Fn(i64) -> Option<(String, i64)>,
+) -> Option<i64> {
+    use birdnet_core::civil::{days_from_civil, parse_civil};
+    let c = parse_civil(date, "00:00:00")?;
+    let day = days_from_civil(c.year, c.month, c.day);
+    [day, day - 1, day + 1].into_iter().find_map(|utc_day| {
+        let (local_date, minute) = to_local(utc_day * 86_400 + i64::from(utc_minute) * 60)?;
+        (local_date == date).then_some(minute)
+    })
+}
+
+/// Minutes after midnight of an `HH:MM:SS`.
+fn minute_of_day(time: &str) -> Option<i64> {
+    let hours: i64 = time.get(0..2)?.parse().ok()?;
+    let minutes: i64 = time.get(3..5)?.parse().ok()?;
+    Some(hours * 60 + minutes)
+}
+
+/// Query parameters shared by the per-day charts.
+#[derive(Debug, Deserialize)]
+struct DayChartQuery {
+    start_date: Option<String>,
+    end_date: Option<String>,
+    species: Option<String>,
+}
+
+/// `GET /api/v2/analytics/time/dawn-onset?start_date=&end_date=&species=` —
+/// for each day of the range, when the dawn chorus began, relative to civil
+/// dawn.
+///
+/// Upstream's rule and shape: a day's onset is its third-earliest
+/// detection, read only on a day with at least five; `onsetRelMinutes` is
+/// that minute of the day less civil dawn's (negative is before dawn), and
+/// `null` on a sparse day, a day with no civil dawn, or at a station with no
+/// location. Every day of the range is listed, quiet ones with a count of 0,
+/// so a chart's line breaks rather than joins across them.
+async fn dawn_onset(State(state): State<AppState>, Query(q): Query<DayChartQuery>) -> Response {
+    let (start, end) = match chart_range(q.start_date.as_deref(), q.end_date.as_deref()) {
+        Ok(range) => range,
+        Err(message) => return bad_request(message),
+    };
+    let species = species_filter(q.species.as_deref());
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                let days = birdnet_db::sqlite::day_onsets(
+                    conn,
+                    &start,
+                    &end,
+                    species.as_deref(),
+                    ONSET_RANK,
+                )?;
+                let location = crate::routes::pages::station_location(conn);
+                Ok::<_, birdnet_db::sqlite::connection::DbError>(dawn_onset_rows(
+                    &start,
+                    &end,
+                    &days,
+                    |date| location.and_then(|l| civil_dawn_minute(conn, l, date)),
+                ))
+            })
+        })
+        .await;
+    match result {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => read_failed("dawn onset", &e),
+    }
+}
+
+/// One row per day of `start..=end`: its date, detection count, and onset
+/// relative to `dawn(date)` where both are known.
+fn dawn_onset_rows(
+    start: &str,
+    end: &str,
+    days: &[birdnet_db::sqlite::DayOnset],
+    dawn: impl Fn(&str) -> Option<i64>,
+) -> Vec<serde_json::Value> {
+    use birdnet_core::civil::{date_string_from_days, days_from_civil, parse_civil};
+    let day_number =
+        |d: &str| parse_civil(d, "00:00:00").map(|c| days_from_civil(c.year, c.month, c.day));
+    let (Some(first), Some(last)) = (day_number(start), day_number(end)) else {
+        return Vec::new();
+    };
+    let by_date: std::collections::HashMap<&str, &birdnet_db::sqlite::DayOnset> =
+        days.iter().map(|d| (d.date.as_str(), d)).collect();
+    (first..=last)
+        .map(|n| {
+            let date = date_string_from_days(n);
+            let day = by_date.get(date.as_str());
+            let onset = day
+                .filter(|d| d.count >= ONSET_MIN_DETECTIONS)
+                .and_then(|d| d.onset_time.as_deref())
+                .and_then(minute_of_day)
+                .and_then(|onset| dawn(&date).map(|dawn| onset - dawn));
+            json!({
+                "date": date,
+                "onsetRelMinutes": onset,
+                "detectionCount": day.map_or(0, |d| d.count),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,5 +498,124 @@ mod tests {
         assert_eq!(last(&points, "2025-02-28"), (0, 1));
         assert_eq!(last(&points, "2025-03-01"), (0, 8));
         assert_eq!(points.len(), 60);
+    }
+
+    fn onset(date: &str, count: i64, time: Option<&str>) -> birdnet_db::sqlite::DayOnset {
+        birdnet_db::sqlite::DayOnset {
+            date: date.to_owned(),
+            count,
+            onset_time: time.map(str::to_owned),
+        }
+    }
+
+    /// Every day of the range is listed; the onset is relative to that day's
+    /// civil dawn, and null on a sparse day or one with no dawn.
+    #[test]
+    fn each_day_gets_its_onset_against_its_own_dawn() {
+        let days = [
+            onset("2026-05-01", 5, Some("04:30:00")),
+            onset("2026-05-02", 4, Some("04:00:00")),
+            onset("2026-05-04", 9, Some("05:00:00")),
+        ];
+        let dawn = |d: &str| match d {
+            "2026-05-01" => Some(4 * 60 + 45),
+            "2026-05-04" => None,
+            _ => Some(5 * 60),
+        };
+        let rows = dawn_onset_rows("2026-05-01", "2026-05-04", &days, dawn);
+        assert_eq!(
+            serde_json::Value::Array(rows),
+            json!([
+                {"date": "2026-05-01", "onsetRelMinutes": -15, "detectionCount": 5},
+                {"date": "2026-05-02", "onsetRelMinutes": null, "detectionCount": 4},
+                {"date": "2026-05-03", "onsetRelMinutes": null, "detectionCount": 0},
+                {"date": "2026-05-04", "onsetRelMinutes": null, "detectionCount": 9},
+            ])
+        );
+    }
+
+    fn sqlite() -> rusqlite::Connection {
+        rusqlite::Connection::open_in_memory().unwrap()
+    }
+
+    /// Civil dawn lands on the requested local day and before sunrise, at a
+    /// mid-latitude station; and there is none in an Arctic midsummer.
+    #[test]
+    fn civil_dawn_is_found_on_the_local_day_and_not_in_polar_day() {
+        let conn = sqlite();
+        // Process zone: compare against the solver's own UTC answer shifted
+        // by the zone's offset on that date, so the test holds in any TZ.
+        let london = birdnet_scheduler::Location::new(51.5, -0.13).unwrap();
+        let minute = civil_dawn_minute(&conn, london, "2026-06-21").expect("a dawn in June");
+        let solar = birdnet_scheduler::SolarDay::for_date(london, 2026, 6, 21).unwrap();
+        let offset_min: i64 = conn
+            .query_row(
+                "SELECT CAST(ROUND((julianday('2026-06-21 03:00:00', 'localtime')
+                                   - julianday('2026-06-21 03:00:00')) * 1440) AS INTEGER)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let expected = (i64::from(solar.civil_dawn_utc_min.unwrap()) + offset_min).rem_euclid(1440);
+        assert_eq!(minute, expected);
+        assert!(
+            i64::from(solar.civil_dawn_utc_min.unwrap())
+                < i64::from(solar.sunrise_utc_min.unwrap()),
+            "precondition: civil dawn precedes sunrise"
+        );
+        let svalbard = birdnet_scheduler::Location::new(78.2, 15.6).unwrap();
+        assert_eq!(civil_dawn_minute(&conn, svalbard, "2026-06-21"), None);
+        assert_eq!(civil_dawn_minute(&conn, london, "2026-02-30"), None);
+    }
+
+    /// A zone `offset_hours` east of UTC, as `place_on_local_day` reads one.
+    fn zone(offset_hours: i64) -> impl Fn(i64) -> Option<(String, i64)> {
+        move |instant| {
+            let local = instant + offset_hours * 3600;
+            Some((
+                birdnet_core::civil::date_string_from_days(local.div_euclid(86_400)),
+                local.rem_euclid(86_400) / 60,
+            ))
+        }
+    }
+
+    /// The instant on the local day is the one taken: Sydney's dawn (UTC+10)
+    /// is the previous UTC evening, Honolulu's evening (UTC-10) the next UTC
+    /// morning, and at UTC the same day.
+    #[test]
+    fn an_event_is_placed_on_its_local_day() {
+        // 19:30 UTC is 05:30 the next day in Sydney.
+        assert_eq!(
+            place_on_local_day("2026-06-21", 19 * 60 + 30, zone(10)),
+            Some(5 * 60 + 30)
+        );
+        // 04:00 UTC is 18:00 the previous day in Honolulu.
+        assert_eq!(
+            place_on_local_day("2026-06-21", 4 * 60, zone(-10)),
+            Some(18 * 60)
+        );
+        assert_eq!(
+            place_on_local_day("2026-06-21", 4 * 60, zone(0)),
+            Some(4 * 60)
+        );
+        assert_eq!(place_on_local_day("2026-06-21", 4 * 60, |_| None), None);
+    }
+
+    /// The date check is what matters across a change of offset. Sydney
+    /// leaves daylight saving at 03:00 on 5 April 2026 (16:00 UTC on the
+    /// 4th). Its dawn on the 4th, 06:00 AEDT, is 19:00 UTC on the 3rd; the
+    /// same UTC minute a day later is already 05:00 AEST on the 5th. Taking
+    /// the first candidate without checking its date would report 05:00.
+    #[test]
+    fn across_a_change_of_offset_the_instant_on_the_local_day_is_taken() {
+        let change = birdnet_core::civil::days_from_civil(2026, 4, 4) * 86_400 + 16 * 3600;
+        let sydney = |instant: i64| {
+            let offset = if instant < change { 11 } else { 10 };
+            zone(offset)(instant)
+        };
+        assert_eq!(
+            place_on_local_day("2026-04-04", 19 * 60, sydney),
+            Some(6 * 60)
+        );
     }
 }

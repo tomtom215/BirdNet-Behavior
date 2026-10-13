@@ -28,8 +28,8 @@ pub use analytics::{
     weekly_detection_count, weekly_new_species, weekly_top_species,
 };
 pub use charts::{
-    CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, confidence_histograms,
-    day_counts_between,
+    CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, confidence_histograms,
+    day_counts_between, day_onsets,
 };
 pub use correlation::{companion_species, top_cooccurrence_pairs};
 pub use detection_reviews::{

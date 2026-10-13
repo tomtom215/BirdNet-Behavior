@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/analytics/time/dawn-onset`.** For each day of a range,
+  when the dawn chorus began against that day's civil dawn: the third
+  detection of the day, so a stray or two before dawn does not move it, on
+  days with at least five. birdnet-go's rule and fields; civil dawn comes
+  from the station's location, in the local time — daylight saving
+  included — of each day rather than today.
+
 - **`GET /api/v2/analytics/time/year-over-year`.** Detections this year
   to date against the same span of last year, cumulatively, one point a day
   aligned by calendar date — birdnet-go's parameter, fields and handling of
