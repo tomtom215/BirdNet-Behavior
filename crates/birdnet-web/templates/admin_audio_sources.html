@@ -100,13 +100,13 @@
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════
-       Network streams (RTSP)
+       Network streams (RTSP, HTTP/Icecast, HLS, RTMP, UDP, SRT)
        ═══════════════════════════════════════════════════════════ -->
   <section class="bnb-card pad aas-section-mt">
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Network streams</div>
-        <h2 class="sh-h">RTSP cameras</h2>
+        <h2 class="sh-h">Cameras and streams</h2>
       </div>
       <div class="aas-count">
         <span class="bnb-meta mono" id="aas-count-rtsp">{{count_rtsp}}</span>
@@ -124,8 +124,8 @@
     <details class="bnb-add-form" id="add-rtsp">
       <summary>
         <span class="bnb-add-form__plus" aria-hidden="true">+</span>
-        <span>Add an RTSP stream</span>
-        <span class="bnb-add-form__hint mono">network camera</span>
+        <span>Add a camera or stream</span>
+        <span class="bnb-add-form__hint mono">RTSP · HTTP · HLS · RTMP · UDP · SRT</span>
       </summary>
       <div class="bnb-add-form__body">
         <form hx-post="/admin/audio/sources"
@@ -138,11 +138,15 @@
           <h4>Connection</h4>
           <div class="bnb-field-grid">
             <div class="bnb-field wide">
-              <label class="bnb-eyebrow" for="rt-url">RTSP URL</label>
+              <label class="bnb-eyebrow" for="rt-url">Stream URL</label>
               <input id="rt-url" class="mono" name="device_id" type="url"
                      placeholder="rtsp://host:554/stream" required>
               <span class="bnb-meta">
-                RTSP: <code class="mono">rtsp://host:554/stream</code> — credentials go in
+                A camera: <code class="mono">rtsp://host:554/stream</code>. Also
+                <code class="mono">http(s)://</code> (Icecast, MP3, an HLS
+                <code class="mono">.m3u8</code>), <code class="mono">rtmp://</code>,
+                <code class="mono">udp://0.0.0.0:5004</code> (MPEG-TS) and
+                <code class="mono">srt://</code>. Credentials go in
                 <code class="mono">user:pass@host</code>.
               </span>
             </div>
@@ -151,7 +155,7 @@
               <input id="rt-label" name="label" type="text" placeholder="Side path camera">
             </div>
             <div class="bnb-field">
-              <label class="bnb-eyebrow" for="rt-transport">Transport</label>
+              <label class="bnb-eyebrow" for="rt-transport">Transport (RTSP)</label>
               <select id="rt-transport" name="rtsp_transport">
                 <option value="auto" selected>auto (TCP)</option>
                 <option value="tcp">TCP only</option>
@@ -159,7 +163,7 @@
               </select>
             </div>
             <div class="bnb-field">
-              <label class="bnb-eyebrow" for="rt-media">Tracks requested</label>
+              <label class="bnb-eyebrow" for="rt-media">Tracks requested (RTSP)</label>
               <select id="rt-media" name="media_mode">
                 <option value="full" selected>audio and video (video discarded)</option>
                 <option value="audio">audio track only</option>

@@ -118,10 +118,10 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
         }
     }
     if let Some(url) = rtsp_single.as_deref() {
-        out.push(probe_rtsp_url(url));
+        out.push(probe_stream_url(url));
     }
     for url in rtsp_multi.unwrap_or_default() {
-        out.push(probe_rtsp_url(&url));
+        out.push(probe_stream_url(&url));
     }
     if let Some(dev) = pulse.as_deref() {
         out.push(probe_pulse_source(dev));
@@ -379,52 +379,65 @@ fn probe_pulse_source(source: &str) -> Check {
     }
 }
 
-fn probe_rtsp_url(url: &str) -> Check {
+fn probe_stream_url(url: &str) -> Check {
+    use birdnet_core::audio::capture::StreamProtocol;
+    const NAME: &str = "Stream URL probe";
     // Lightweight TCP-port probe: parse host[:port] and try a short connect.
-    // Avoids a full RTSP handshake (would need ffmpeg) but catches the most
+    // Avoids a full protocol handshake (would need ffmpeg) but catches the most
     // common failure modes (typo, wrong port, host unreachable).
-    let Some(stripped) = url
-        .strip_prefix("rtsp://")
-        .or_else(|| url.strip_prefix("rtsps://"))
-    else {
+    let Some(protocol) = StreamProtocol::of(url) else {
         return Check::fail(
-            "RTSP URL probe",
+            NAME,
             format!(
-                "{:?} does not start with rtsp:// or rtsps://",
-                crate::support::redact_credentials_in_text(url)
+                "{:?} does not start with {}://",
+                crate::support::redact_credentials_in_text(url),
+                StreamProtocol::SCHEMES
             ),
-            "RTSP URLs must look like rtsp://camera.local:554/stream",
+            "a stream URL looks like rtsp://camera.local:554/stream or \
+             http://radio.local:8000/garden.mp3",
         );
     };
+    let (scheme, stripped) = url.trim().split_once("://").unwrap_or_default();
+    let scheme = scheme.to_ascii_lowercase();
+    if matches!(protocol, StreamProtocol::Udp | StreamProtocol::Srt) {
+        return Check::skip(
+            NAME,
+            format!("{scheme}:// runs over UDP, which has no connection to test"),
+        );
+    }
+    let default_port = match scheme.as_str() {
+        "rtsps" => 322,
+        "http" => 80,
+        "https" | "rtmps" => 443,
+        "rtmp" => 1935,
+        _ => 554,
+    };
 
-    // Drop credentials and path.
-    let after_auth = stripped.rsplit_once('@').map_or(stripped, |(_, h)| h);
-    let hostport = after_auth.split('/').next().unwrap_or(after_auth);
-    let (host, port) = parse_host_port(hostport, 554);
+    // Drop credentials, path and query.
+    let authority = stripped.split(['/', '?', '#']).next().unwrap_or(stripped);
+    let hostport = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let (host, port) = parse_host_port(hostport, default_port);
 
     match std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)) {
         Err(e) => Check::warn(
-            "RTSP URL probe",
+            NAME,
             format!("could not resolve {host}: {e}"),
             "check the hostname/IP and your DNS resolver",
         ),
         Ok(mut addrs) => {
             let Some(addr) = addrs.next() else {
                 return Check::warn(
-                    "RTSP URL probe",
+                    NAME,
                     format!("{host} resolved to no addresses"),
                     "check the hostname",
                 );
             };
             match std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(3)) {
-                Ok(_) => Check::pass(
-                    "RTSP URL probe",
-                    format!("TCP connect to {host}:{port} succeeded"),
-                ),
+                Ok(_) => Check::pass(NAME, format!("TCP connect to {host}:{port} succeeded")),
                 Err(e) => Check::warn(
-                    "RTSP URL probe",
+                    NAME,
                     format!("TCP connect to {host}:{port} failed: {e}"),
-                    "verify the camera is powered on, on the same network, and the port is correct",
+                    "verify the camera or server is powered on, reachable, and the port is correct",
                 ),
             }
         }
@@ -454,7 +467,7 @@ fn parse_host_port(hp: &str, default: u16) -> (String, u16) {
 mod tests {
     use super::{
         CardRef, check_audio_source, effective_alsa_devices, first_card, grade_listing,
-        listing_has_card, parse_card_ref, parse_host_port, probe_rtsp_url, stable_form_hint,
+        listing_has_card, parse_card_ref, parse_host_port, probe_stream_url, stable_form_hint,
     };
     use crate::cli::Cli;
     use crate::doctor::Status;
@@ -479,7 +492,7 @@ mod tests {
         // the host's resolvability), only that the summary is a pass.
         assert_eq!(checks[0].name, "Audio source");
         assert_eq!(checks[0].status, Status::Pass);
-        assert!(checks.iter().any(|c| c.name == "RTSP URL probe"));
+        assert!(checks.iter().any(|c| c.name == "Stream URL probe"));
     }
 
     #[test]
@@ -516,15 +529,54 @@ mod tests {
     }
 
     #[test]
-    fn probe_rtsp_url_rejects_non_rtsp_scheme() {
-        assert_eq!(probe_rtsp_url("http://example.com/s").status, Status::Fail);
+    fn probe_stream_url_rejects_a_scheme_capture_cannot_read() {
+        for url in [
+            "rtp://10.0.0.9:5006",
+            "ftp://example.com/s",
+            "camera.local/s",
+        ] {
+            assert_eq!(probe_stream_url(url).status, Status::Fail, "{url}");
+        }
+    }
+
+    /// G-7: the doctor runs as the unit's `ExecStartPre`, and a `Fail` stops
+    /// the station starting. It failed every URL that was not `rtsp://`, so a
+    /// station set up to record an Icecast or HLS stream would not have
+    /// started. Observed failing with the old `rtsp://`-only prefix check
+    /// restored. A UDP-based stream has no connection to probe and is
+    /// skipped; the others are probed on their protocol's default port.
+    #[test]
+    fn probe_stream_url_accepts_every_protocol_capture_reads() {
+        for url in [
+            "http://nonexistent.invalid/garden.mp3",
+            "https://nonexistent.invalid/live/index.m3u8",
+            "rtmp://nonexistent.invalid/live/garden",
+            "rtsps://nonexistent.invalid/s",
+        ] {
+            assert_eq!(probe_stream_url(url).status, Status::Warn, "{url}");
+        }
+        for url in ["udp://0.0.0.0:5004", "srt://cam.local:8890?streamid=read:g"] {
+            assert_eq!(probe_stream_url(url).status, Status::Skip, "{url}");
+        }
+    }
+
+    /// The host and port end where a query starts, not only at a path: a
+    /// signed URL with no path, `rtmp://host:port?token=…`, read the port as
+    /// `port?token=…`, failed to parse it and probed the default instead.
+    /// Observed failing with the authority split at `/` alone.
+    #[test]
+    fn probe_stream_url_reads_the_port_up_to_a_query() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let c = probe_stream_url(&format!("rtmp://127.0.0.1:{port}?token=x"));
+        assert_eq!(c.status, Status::Pass, "{}", c.message);
     }
 
     #[test]
-    fn probe_rtsp_url_warns_on_unresolvable_host() {
+    fn probe_stream_url_warns_on_unresolvable_host() {
         // `.invalid` is reserved and never resolves (RFC 6761), so the probe
         // takes the resolution-failure branch deterministically.
-        let c = probe_rtsp_url("rtsp://nonexistent.invalid:554/stream");
+        let c = probe_stream_url("rtsp://nonexistent.invalid:554/stream");
         assert_eq!(c.status, Status::Warn);
     }
 

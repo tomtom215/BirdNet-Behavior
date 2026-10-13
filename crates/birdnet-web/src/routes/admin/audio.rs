@@ -132,10 +132,12 @@ pub(crate) const fn kind_label(kind: SourceKind) -> &'static str {
         // its transport ("USB · ALSA", "RTSP") tells a birdwatcher nothing
         // about which of their microphones the row is. PipeWire keeps its name
         // — the add-form makes you choose between it and ALSA, so the word has
-        // to stay recognisable here too.
+        // to stay recognisable here too. A network source is a stream rather
+        // than a camera: since G-7 it can be an Icecast feed or an HLS
+        // playlist as well.
         SourceKind::UsbAlsa => "USB microphone",
         SourceKind::PipeWire => "PipeWire microphone",
-        SourceKind::Rtsp => "Network camera",
+        SourceKind::Rtsp => "Network stream",
     }
 }
 
@@ -408,6 +410,9 @@ async fn create(
                 Ok(k) => k,
                 Err(_) => return validation_response("Unknown source kind."),
             };
+            if let Err(msg) = check_stream_url(kind, &device_id) {
+                return validation_response(&msg);
+            }
 
             // Fool-proofing: refuse to add the same physical source twice. The DB only
             // enforces uniqueness on the synthetic `id` (freshly generated here), so
@@ -719,6 +724,19 @@ async fn update(
             let mut patch = AudioSourcePatch::default();
             let device_id = form.device_id.trim().to_string();
             if !device_id.is_empty() {
+                // A changed stream URL is held to the same rule as a new one.
+                match state.with_db(|conn| conn.get(&id)) {
+                    Ok(Some(row)) => {
+                        if let Err(msg) = check_stream_url(row.kind, &device_id) {
+                            return validation_response(&msg);
+                        }
+                    }
+                    Ok(None) => return not_found_row(&id),
+                    Err(err) => {
+                        tracing::error!(error = %err, id, "audio source read failed");
+                        return internal_response("Could not read that source; nothing was saved.");
+                    }
+                }
                 patch.device_id = Some(device_id);
             }
             let label = form.label.map(|s| {
@@ -1113,7 +1131,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         .schedule_quiet
         .as_ref()
         .map_or(("", ""), |(a, b)| (a.as_str(), b.as_str()));
-    let rtsp_fields = if matches!(row.kind, SourceKind::Rtsp) {
+    let rtsp_fields = if speaks_rtsp(row) {
         render_rtsp_fields(row)
     } else {
         String::new()
@@ -1181,9 +1199,10 @@ fn render_edit_form(row: &AudioSource) -> String {
       <label><input type="checkbox" name="agc" value="1"{agc_checked}>
         Automatic gain control</label>
       <label><input type="checkbox" name="rtsp_keepalive" value="1"{rtsp_keepalive_checked}>
-        Drop a stalled RTSP stream after 10&nbsp;s so it restarts</label>
+        Restart a network stream that stops sending (10&nbsp;s read timeout)</label>
       <p class="hint">Applied to this source before analysis. The first three also
-        shape what you hear on the live stream; the last one affects RTSP only.</p>
+        shape what you hear on the live stream; the last one affects network
+        streams only.</p>
     </div>
     <div class="aud-edit-eq">
       <span class="bnb-eyebrow">Equaliser</span>
@@ -1299,11 +1318,21 @@ pub(crate) fn detail_for(s: &AudioSource) -> String {
         let sign = if s.gain_db >= 0.0 { "+" } else { "" };
         let _ = write!(out, " · gain {sign}{:.0} dB", s.gain_db);
     }
-    if matches!(s.kind, SourceKind::Rtsp) {
+    if speaks_rtsp(s) {
         let _ = write!(out, " · {} transport", s.rtsp_transport.as_str());
         if s.media_mode == RtspMediaMode::Audio {
             out.push_str(" · audio track only");
         }
+    } else if s.kind == SourceKind::Rtsp {
+        use birdnet_core::audio::capture::StreamProtocol;
+        let protocol = match StreamProtocol::of(&s.device_id) {
+            Some(StreamProtocol::Http) => "HTTP stream",
+            Some(StreamProtocol::Rtmp) => "RTMP stream",
+            Some(StreamProtocol::Udp) => "UDP stream",
+            Some(StreamProtocol::Srt) => "SRT stream",
+            Some(StreamProtocol::Rtsp) | None => "unsupported address",
+        };
+        let _ = write!(out, " · {protocol}");
     }
     // A quiet window is the one setting here that makes a source *stop*, so it
     // has to be legible without opening the edit form — a source that looks
@@ -1352,6 +1381,27 @@ fn synth_id(kind: SourceKind) -> String {
 // discards the body of an error response. Answered with `422`, adding the
 // same microphone twice showed nothing at all — the form just stayed open —
 // and so did "Device id is required." and every other refusal here.
+
+/// Whether a row is an RTSP stream, the one protocol that has a transport and
+/// a media mode to choose.
+fn speaks_rtsp(row: &AudioSource) -> bool {
+    use birdnet_core::audio::capture::StreamProtocol;
+    row.kind == SourceKind::Rtsp && StreamProtocol::of(&row.device_id) == Some(StreamProtocol::Rtsp)
+}
+
+/// A stream row's URL has to name a protocol capture can read. Refused here,
+/// with the list, rather than saved and left to fail at every restart with
+/// an ffmpeg error the operator never sees.
+fn check_stream_url(kind: SourceKind, url: &str) -> Result<(), String> {
+    use birdnet_core::audio::capture::StreamProtocol;
+    if kind == SourceKind::Rtsp && StreamProtocol::of(url).is_none() {
+        return Err(format!(
+            "A stream URL starts with {}:// — for example rtsp://camera.local:554/stream.",
+            StreamProtocol::SCHEMES
+        ));
+    }
+    Ok(())
+}
 
 fn validation_response(message: &str) -> Response {
     toast::not_applied(&Toast::warn(message))
@@ -1426,7 +1476,7 @@ mod tests {
         // operator can add either a mic or a stream (the old layout hid the RTSP
         // section until one existed, stranding anyone who had only a mic).
         assert!(html.contains("Add a microphone"));
-        assert!(html.contains("Add an RTSP stream"));
+        assert!(html.contains("Add a camera or stream"));
         // Zeroed counts, and no separate (contradictory) empty-state card.
         assert!(html.contains("0 mics"));
         assert!(html.contains("0 streams"));
@@ -1555,6 +1605,113 @@ mod tests {
             StatusCode::OK
         );
         assert_eq!(stored_chain(&state, "plughw:3,0"), "");
+    }
+
+    /// Transport and media mode are RTSP's; an HLS row's edit form offers
+    /// neither, and its summary names its protocol instead of a transport it
+    /// does not have. Observed failing with `speaks_rtsp` reading the kind
+    /// alone, as the form did before.
+    #[test]
+    fn only_an_rtsp_row_offers_transport_and_media_mode() {
+        use birdnet_db::audio_sources as db;
+        let sample_rtsp_row = |url: &str| AudioSource {
+            id: "src_stream".to_string(),
+            kind: SourceKind::Rtsp,
+            device_id: url.to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: db::Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: db::RtspTransport::Auto,
+            media_mode: db::RtspMediaMode::Full,
+            schedule_quiet: None,
+            pipeline: db::PipelineFlags::default(),
+            eq_chain: String::new(),
+            disabled_at: None,
+            created_at: "x".to_string(),
+            updated_at: "x".to_string(),
+        };
+        let rtsp = sample_rtsp_row("rtsp://cam.local/s");
+        assert!(render_edit_form(&rtsp).contains(r#"name="media_mode""#));
+        assert!(detail_for(&rtsp).contains("auto transport"));
+
+        let hls = sample_rtsp_row("https://cam.local/live/index.m3u8");
+        let form = render_edit_form(&hls);
+        assert!(!form.contains(r#"name="media_mode""#), "{form}");
+        assert!(!form.contains(r#"name="rtsp_transport""#), "{form}");
+        let detail = detail_for(&hls);
+        assert!(detail.contains("HTTP stream"), "{detail}");
+        assert!(!detail.contains("transport"), "{detail}");
+    }
+
+    /// G-7: every protocol capture reads is accepted as a stream source, and
+    /// a URL it cannot read — refused by ffmpeg at every restart, in a log
+    /// the operator never sees — is refused on the form, on add and on edit.
+    /// Observed failing with `check_stream_url` returning `Ok(())`: the
+    /// `rtp://` row was saved.
+    #[tokio::test]
+    async fn a_stream_url_is_held_to_the_protocols_capture_can_read() {
+        use birdnet_db::audio_sources::AudioSourceStore;
+        let (_d, state) = fixture();
+        let urls = |state: &crate::state::AppState| {
+            state
+                .with_db(AudioSourceStore::list)
+                .expect("list")
+                .into_iter()
+                .map(|s| s.device_id)
+                .collect::<Vec<_>>()
+        };
+        for url in [
+            "http://radio.local:8000/garden.mp3",
+            "https://cam.local/live/index.m3u8",
+            "rtmp://obs.local/live/garden",
+            "udp://0.0.0.0:5004",
+            "srt://cam.local:8890?streamid=read:garden",
+        ] {
+            assert_eq!(
+                create(
+                    State(state.clone()),
+                    actor(&state),
+                    Form(eq_form("rtsp", url))
+                )
+                .await
+                .status(),
+                StatusCode::OK,
+                "{url}"
+            );
+        }
+        assert_eq!(urls(&state).len(), 5);
+
+        for url in ["rtp://10.0.0.9:5006", "cam.local/stream"] {
+            let refused = create(
+                State(state.clone()),
+                actor(&state),
+                Form(eq_form("rtsp", url)),
+            )
+            .await;
+            assert_refused(&refused);
+        }
+        assert_eq!(urls(&state).len(), 5, "a refused URL was saved");
+
+        let row = state
+            .with_db(AudioSourceStore::list)
+            .expect("list")
+            .into_iter()
+            .next()
+            .expect("a row");
+        let refused = update(
+            State(state.clone()),
+            actor(&state),
+            Path(row.id.clone()),
+            Form(eq_form("rtsp", "rtp://10.0.0.9:5006")),
+        )
+        .await;
+        assert_refused(&refused);
+        assert!(
+            !urls(&state).iter().any(|u| u.starts_with("rtp://")),
+            "a refused URL was saved by an edit"
+        );
     }
 
     /// The media mode chosen on the add form reaches the row, the edit form
@@ -1957,7 +2114,7 @@ mod tests {
         assert!(html.contains("rtsp://x"));
         assert!(html.contains("Down"));
         assert!(html.contains("untitled"));
-        assert!(html.contains("Network camera"));
+        assert!(html.contains("Network stream"));
     }
 
     #[test]

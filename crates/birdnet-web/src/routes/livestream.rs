@@ -302,6 +302,19 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
         },
     );
 
+    // The reason names the schemes that work, never the URL, which can carry
+    // a camera's password.
+    let rtsp_input = match rtsp_input {
+        Ok(args) => args,
+        Err(reason) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("this source's stream cannot be opened: {reason}"),
+            )
+                .into_response();
+        }
+    };
+
     // Bound concurrent streams before spawning ffmpeg (after source resolution,
     // so a 404/503 never consumes a slot). The owned permit is moved into the
     // forwarding task below and released when the client disconnects.
@@ -688,12 +701,14 @@ struct ResolvedSource {
     /// (operator typed `default`) still picks the PulseAudio ffmpeg backend
     /// rather than ALSA.
     kind: Option<birdnet_db::audio_sources::SourceKind>,
-    /// ffmpeg input options for an RTSP row: its transport and media mode.
-    /// RTSP is not teed, so listening live opens a second session to the
-    /// camera, and it has to be the same kind of session capture opens — this
-    /// used to be a fixed `-rtsp_transport tcp`, so a UDP-only camera could not
-    /// be listened to, and an audio-only one gave up a video session anyway.
-    rtsp_input: Vec<String>,
+    /// ffmpeg input options for a network stream row, from its URL: for RTSP
+    /// its transport and media mode. A stream is not teed, so listening live
+    /// opens a second session to it, and it has to be the same kind of session
+    /// capture opens — this used to be a fixed `-rtsp_transport tcp`, so a
+    /// UDP-only camera could not be listened to, an audio-only one gave up a
+    /// video session anyway, and any stream that was not RTSP could not be
+    /// opened at all. `Err` names why the row's URL cannot be streamed.
+    rtsp_input: Result<Vec<String>, String>,
 }
 
 /// Resolve a `?source_id=` query value by looking up the configured
@@ -802,35 +817,42 @@ fn resolved(source: &birdnet_db::audio_sources::AudioSource) -> ResolvedSource {
         id: source.id.clone(),
         device: source.device_id.clone(),
         kind: Some(source.kind),
-        rtsp_input: rtsp_input_args(source.rtsp_transport, source.media_mode),
+        rtsp_input: if source.kind == birdnet_db::audio_sources::SourceKind::Rtsp {
+            stream_input_options(source)
+        } else {
+            Ok(Vec::new())
+        },
     }
 }
 
-/// The RTSP input options capture uses for the same row
-/// (`birdnet_core::audio::capture::RtspTransport::ffmpeg_arg` and
-/// `RtspMediaMode::ffmpeg_args`, which this crate reaches through the same
-/// mapping the capture resolver applies).
-fn rtsp_input_args(
-    transport: birdnet_db::audio_sources::RtspTransport,
-    media_mode: birdnet_db::audio_sources::RtspMediaMode,
-) -> Vec<String> {
-    use birdnet_core::audio::capture::{RtspMediaMode, RtspTransport};
+/// The input options capture uses for the same stream row
+/// (`birdnet_core::audio::capture::network_input_options`, reached through the
+/// same mapping the capture resolver applies). Without the stall timeout:
+/// listening ends when the listener leaves. `Err` for a UDP stream, which
+/// capture is already reading.
+fn stream_input_options(
+    source: &birdnet_db::audio_sources::AudioSource,
+) -> Result<Vec<String>, String> {
+    use birdnet_core::audio::capture::{
+        RtspMediaMode, RtspTransport, StreamProtocol, network_input_options,
+    };
     use birdnet_db::audio_sources::{RtspMediaMode as DbMode, RtspTransport as DbTransport};
-    let transport = match transport {
+    // A unicast UDP stream reaches one socket, and capture holds it: a second
+    // reader failed to bind ("Address already in use") and the listener got
+    // an empty 200. Said plainly instead.
+    if StreamProtocol::of(&source.device_id) == Some(StreamProtocol::Udp) {
+        return Err("a UDP stream has one reader, and the station's capture is it".to_owned());
+    }
+    let transport = match source.rtsp_transport {
         DbTransport::Auto => RtspTransport::Auto,
         DbTransport::Tcp => RtspTransport::Tcp,
         DbTransport::Udp => RtspTransport::Udp,
     };
-    let mode = match media_mode {
+    let mode = match source.media_mode {
         DbMode::Full => RtspMediaMode::Full,
         DbMode::Audio => RtspMediaMode::AudioOnly,
     };
-    let mut args = vec![
-        "-rtsp_transport".to_string(),
-        transport.ffmpeg_arg().to_string(),
-    ];
-    args.extend(mode.ffmpeg_args().iter().map(|a| (*a).to_string()));
-    args
+    network_input_options(&source.device_id, transport, mode, false).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1130,7 +1152,13 @@ mod tests {
         };
         let r = resolved(&row);
         assert_eq!(
-            stream_input_args(None, true, false, &r.device, &r.rtsp_input),
+            stream_input_args(
+                None,
+                true,
+                false,
+                &r.device,
+                r.rtsp_input.as_ref().expect("an RTSP URL")
+            ),
             vec![
                 "-rtsp_transport",
                 "udp",
@@ -1154,10 +1182,8 @@ mod tests {
                 true,
                 false,
                 "rtsp://cam/feed",
-                &rtsp_input_args(
-                    birdnet_db::audio_sources::RtspTransport::Auto,
-                    birdnet_db::audio_sources::RtspMediaMode::Full
-                )
+                &stream_input_options(&sample("cam", SourceKind::Rtsp, "rtsp://cam/feed", false))
+                    .expect("an RTSP URL")
             ),
             vec!["-rtsp_transport", "tcp", "-i", "rtsp://cam/feed", "-vn"]
         );
@@ -1169,6 +1195,65 @@ mod tests {
             stream_input_args(None, false, true, "default", &[]),
             vec!["-f", "pulse", "-i", "default"]
         );
+    }
+
+    /// G-7: listening live to a stream that is not RTSP opens it with the
+    /// options its protocol accepts — none of RTSP's, which ffmpeg refuses
+    /// for an HLS playlist. Observed failing against the `rtsp_input_args`
+    /// this replaced, which gave every stream row `-rtsp_transport tcp`.
+    #[test]
+    fn a_live_session_to_a_stream_that_is_not_rtsp_carries_no_rtsp_options() {
+        let row = birdnet_db::audio_sources::AudioSource {
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Audio,
+            ..sample(
+                "hls",
+                SourceKind::Rtsp,
+                "http://cam.local:8888/garden/index.m3u8",
+                false,
+            )
+        };
+        let r = resolved(&row);
+        assert_eq!(
+            stream_input_args(
+                None,
+                true,
+                false,
+                &r.device,
+                r.rtsp_input.as_ref().expect("a supported URL")
+            ),
+            vec!["-i", "http://cam.local:8888/garden/index.m3u8", "-vn"]
+        );
+    }
+
+    /// Listening live to a UDP stream opened a second socket on the port
+    /// capture holds: "bind failed: Address already in use", answered as a
+    /// 200 with no audio. It is refused with the reason. Observed failing
+    /// without the UDP check: the row resolved to `Ok([])`.
+    #[test]
+    fn a_live_session_to_a_udp_stream_is_refused_with_the_reason() {
+        let r = resolved(&sample(
+            "udp",
+            SourceKind::Rtsp,
+            "udp://0.0.0.0:5004",
+            false,
+        ));
+        let reason = r.rtsp_input.expect_err("capture holds the port");
+        assert!(reason.contains("one reader"), "{reason}");
+    }
+
+    /// A stream row whose URL ffmpeg cannot be asked to read is refused with
+    /// the reason, which names the schemes and not the URL.
+    #[test]
+    fn a_live_session_to_an_unsupported_scheme_is_refused_by_name() {
+        let r = resolved(&sample(
+            "rtp",
+            SourceKind::Rtsp,
+            "rtp://user:S3CRET@10.0.0.9:5006",
+            false,
+        ));
+        let reason = r.rtsp_input.expect_err("rtp:// is not supported");
+        assert!(reason.contains("rtsp, rtsps, http"), "{reason}");
+        assert!(!reason.contains("S3CRET"), "{reason}");
     }
 
     // ---- live tap plumbing --------------------------------------------------

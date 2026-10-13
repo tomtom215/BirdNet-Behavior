@@ -22,7 +22,10 @@ use std::process::{Child, Command, Stdio};
 use super::live::PcmSpec;
 use super::segment::{SegmentClock, SegmentWriter};
 use super::tee::{self, Shaping, Tee};
-use super::types::{AudioFormat, CaptureError, CaptureSource, RecordingConfig, recording_filename};
+use super::types::{
+    AudioFormat, CaptureError, CaptureSource, RecordingConfig, RtspMediaMode, RtspTransport,
+    StreamProtocol, recording_filename,
+};
 #[cfg(test)]
 use crate::audio::eq::EqChain;
 
@@ -254,12 +257,64 @@ fn drain_capture_stderr(child: &mut Child, source: &str) {
     }
 }
 
-/// How long an RTSP read may stall before ffmpeg gives up, in microseconds.
+/// How long a network stream's read may stall before ffmpeg gives up, in
+/// microseconds.
 ///
 /// Ten seconds: long enough to ride out a congested link or a camera's own
 /// keyframe interval, short enough that the supervisor restarts a dead stream
 /// within one detection window rather than at the next service restart.
 const RTSP_SOCKET_TIMEOUT_US: u64 = 10_000_000;
+
+/// The ffmpeg options that go before `-i` for a network stream at `url`.
+///
+/// Each protocol takes different ones, and an option one protocol does not
+/// know is not ignored: ffmpeg 6.1 refused to open an HLS playlist given
+/// `-rtsp_transport` ("Option not found", exit 8), and refused an RTSP stream
+/// given `-rw_timeout` the same way. Worse, RTMP *does* know
+/// `-timeout` — as the time to wait for an incoming connection, which turns a
+/// reader into a listener ("Address already in use"). So:
+///
+/// - RTSP takes its transport, its media mode and, when `stall_timeout` is
+///   set, `-timeout` (the socket I/O timeout; see `RTSP_SOCKET_TIMEOUT_US`).
+/// - Everything else takes `-rw_timeout`, ffmpeg's protocol-generic I/O
+///   timeout, when `stall_timeout` is set; `transport` and `media_mode` are
+///   RTSP's and are not used. Measured against `MediaMTX` 1.21.2 frozen with
+///   `SIGSTOP` mid-read, at ten seconds: RTMP ended at 20 s, SRT at 5 s (its
+///   own idle timeout), and HLS at 52 s, after its playlist reloader had
+///   failed four times. Without the timeout the same stalled HLS read was
+///   still blocked seven minutes later, and ignored `SIGTERM`.
+///
+/// # Errors
+///
+/// [`CaptureError::Config`] when `url`'s scheme is not one of
+/// [`StreamProtocol::SCHEMES`].
+pub fn network_input_options(
+    url: &str,
+    transport: RtspTransport,
+    media_mode: RtspMediaMode,
+    stall_timeout: bool,
+) -> Result<Vec<String>, CaptureError> {
+    let protocol = StreamProtocol::of(url).ok_or_else(|| {
+        CaptureError::Config(format!(
+            "a stream URL must start with {} followed by ://",
+            StreamProtocol::SCHEMES
+        ))
+    })?;
+    let mut args = Vec::new();
+    if protocol == StreamProtocol::Rtsp {
+        args.extend([
+            "-rtsp_transport".to_owned(),
+            transport.ffmpeg_arg().to_owned(),
+        ]);
+        if stall_timeout {
+            args.extend(["-timeout".to_owned(), RTSP_SOCKET_TIMEOUT_US.to_string()]);
+        }
+        args.extend(media_mode.ffmpeg_args().iter().map(|a| (*a).to_owned()));
+    } else if stall_timeout {
+        args.extend(["-rw_timeout".to_owned(), RTSP_SOCKET_TIMEOUT_US.to_string()]);
+    }
+    Ok(args)
+}
 
 /// The smallest absolute gain (in dB) we bother applying. Below this the gain
 /// is treated as "off": the capture tee forwards samples untouched — which is
@@ -705,34 +760,31 @@ fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), Captu
     let output_path = config.output_dir.join(&filename_pattern);
 
     let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-rtsp_transport")
-        .arg(transport.ffmpeg_arg())
-        // Bound socket I/O so a camera that stops sending is *noticed*.
-        //
-        // ffmpeg has no "send RTSP keepalives" switch — it issues them on its
-        // own, from the session timeout the server advertises — so the stored
-        // `rtsp_keepalive` toggle had nothing to map to and did nothing. What
-        // an operator actually wants from it is the outcome: a stream that has
-        // silently stopped should end rather than block forever. `-timeout`
-        // (microseconds) is that knob. Without it ffmpeg's default is 0, "wait
-        // indefinitely", and a half-open TCP connection to a rebooted camera
-        // keeps the process alive and the supervisor content while no audio
-        // arrives at all.
-        .args(if config.pipeline.rtsp_stall_timeout {
-            vec!["-timeout".to_owned(), RTSP_SOCKET_TIMEOUT_US.to_string()]
-        } else {
-            Vec::new()
-        })
-        .args(media_mode.ffmpeg_args())
-        .arg("-i")
-        .arg(url)
-        .arg("-vn")
-        .arg("-acodec")
-        .arg("pcm_s16le")
-        .arg("-ar")
-        .arg("48000")
-        .arg("-ac")
-        .arg("1");
+    // Bound socket I/O so a camera that stops sending is *noticed*.
+    //
+    // ffmpeg has no "send RTSP keepalives" switch — it issues them on its own,
+    // from the session timeout the server advertises — so the stored
+    // `rtsp_keepalive` toggle had nothing to map to and did nothing. What an
+    // operator actually wants from it is the outcome: a stream that has
+    // silently stopped should end rather than block forever. Without a
+    // timeout ffmpeg's default is "wait indefinitely", and a half-open TCP
+    // connection to a rebooted camera keeps the process alive and the
+    // supervisor content while no audio arrives at all.
+    cmd.args(network_input_options(
+        url,
+        transport,
+        media_mode,
+        config.pipeline.rtsp_stall_timeout,
+    )?)
+    .arg("-i")
+    .arg(url)
+    .arg("-vn")
+    .arg("-acodec")
+    .arg("pcm_s16le")
+    .arg("-ar")
+    .arg("48000")
+    .arg("-ac")
+    .arg("1");
     apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
     cmd.arg("-f")
         .arg("segment")
@@ -943,6 +995,96 @@ mod tests {
                 .any(|a| a == "-allowed_media_types"),
             "the full stream is what earlier releases requested"
         );
+    }
+
+    /// The capture command for a stream at `url`, with the stall timeout on.
+    fn stream_args(url: &str) -> Vec<String> {
+        let config = RecordingConfig {
+            source: CaptureSource::Rtsp {
+                url: url.into(),
+                stream_id: "RTSP_1".into(),
+                transport: RtspTransport::Udp,
+                media_mode: RtspMediaMode::AudioOnly,
+            },
+            output_dir: std::env::temp_dir(),
+            segment_duration_secs: 15,
+            format: AudioFormat::Wav,
+            gain_db: 0.0,
+            pipeline: crate::audio::capture::types::AudioPipeline {
+                rtsp_stall_timeout: true,
+                ..crate::audio::capture::types::AudioPipeline::none()
+            },
+            eq_chain: crate::audio::eq::EqChain::default(),
+            local_offset: LocalOffset::utc(),
+            live_audio: None,
+        };
+        let (cmd, _, _) = rtsp_command(&config).expect("command");
+        cmd.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// The options before `-i`.
+    fn before_input(args: &[String]) -> &[String] {
+        let input = args.iter().position(|a| a == "-i").expect("an input");
+        &args[..input]
+    }
+
+    /// G-7: an HLS playlist, an Icecast stream, an RTMP server, an MPEG-TS
+    /// UDP feed and an SRT stream get the protocol-generic I/O timeout and
+    /// nothing of RTSP's. Observed failing against the RTSP-only command this
+    /// replaced, which gave every URL `-rtsp_transport` — the option ffmpeg
+    /// 6.1 refused to open an HLS playlist with.
+    #[test]
+    fn a_stream_that_is_not_rtsp_gets_only_options_its_protocol_accepts() {
+        for url in [
+            "http://cam.local:8888/garden/index.m3u8",
+            "https://radio.example/birds.mp3",
+            "RTMP://obs.local/live/garden",
+            "udp://@:5004",
+            "srt://cam.local:8890?streamid=read:garden",
+        ] {
+            let args = stream_args(url);
+            assert_eq!(
+                before_input(&args),
+                ["-rw_timeout", "10000000"],
+                "{url}: {args:?}"
+            );
+        }
+    }
+
+    /// The counterpart: an RTSP camera keeps everything it had.
+    #[test]
+    fn an_rtsp_camera_keeps_its_transport_timeout_and_media_mode() {
+        for url in ["rtsp://cam.local/s", "rtsps://cam.local/s"] {
+            let args = stream_args(url);
+            assert_eq!(
+                before_input(&args),
+                [
+                    "-rtsp_transport",
+                    "udp",
+                    "-timeout",
+                    "10000000",
+                    "-allowed_media_types",
+                    "audio"
+                ],
+                "{url}: {args:?}"
+            );
+        }
+    }
+
+    /// A scheme ffmpeg cannot be asked to read sensibly is refused with the
+    /// list of the ones it can, rather than started and left to fail.
+    #[test]
+    fn a_stream_url_with_another_scheme_is_refused_by_name() {
+        for url in ["rtp://127.0.0.1:5006", "ftp://x/y", "cam.local/stream", ""] {
+            let err = network_input_options(url, RtspTransport::Auto, RtspMediaMode::Full, true)
+                .expect_err(url);
+            assert!(
+                err.to_string().contains("rtsp, rtsps, http"),
+                "{url}: {err}"
+            );
+        }
     }
 
     #[test]

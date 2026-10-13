@@ -256,6 +256,53 @@ impl RtspMediaMode {
     }
 }
 
+/// The protocol a network stream's URL names, read from its scheme.
+///
+/// Every network source is stored as one kind (`rtsp`, for history): the URL
+/// already says which protocol it speaks, so a second field could only ever
+/// disagree with it. What differs between them is the ffmpeg options each
+/// accepts before `-i` — see [`super::process::network_input_options`].
+///
+/// `rtp://` is not here. A bare RTP stream does not describe its payload:
+/// ffmpeg 6.1 read one carrying G.711 (a static payload type) and refused one
+/// carrying AAC (a dynamic type) with "Invalid data found", since that needs
+/// an SDP file it has no way to be given. `udp://` — MPEG-TS over UDP, which
+/// describes itself — is what a sender should use instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamProtocol {
+    /// `rtsp://`, `rtsps://` — an IP camera.
+    Rtsp,
+    /// `http://`, `https://` — a direct or Icecast stream, or an HLS
+    /// (`.m3u8`) playlist; ffmpeg tells those apart from the response.
+    Http,
+    /// `rtmp://`, `rtmps://` — read from an RTMP server.
+    Rtmp,
+    /// `udp://` — MPEG-TS over UDP.
+    Udp,
+    /// `srt://`.
+    Srt,
+}
+
+impl StreamProtocol {
+    /// The schemes a network source may use, for a message refusing one.
+    pub const SCHEMES: &'static str = "rtsp, rtsps, http, https, rtmp, rtmps, udp or srt";
+
+    /// The protocol `url` names, or `None` when its scheme is not one of
+    /// [`Self::SCHEMES`]. Schemes are case-insensitive (RFC 3986 §3.1).
+    #[must_use]
+    pub fn of(url: &str) -> Option<Self> {
+        let (scheme, _) = url.trim().split_once("://")?;
+        match scheme.to_ascii_lowercase().as_str() {
+            "rtsp" | "rtsps" => Some(Self::Rtsp),
+            "http" | "https" => Some(Self::Http),
+            "rtmp" | "rtmps" => Some(Self::Rtmp),
+            "udp" => Some(Self::Udp),
+            "srt" => Some(Self::Srt),
+            _ => None,
+        }
+    }
+}
+
 /// Configuration for a recording session.
 #[derive(Debug, Clone)]
 pub struct RecordingConfig {

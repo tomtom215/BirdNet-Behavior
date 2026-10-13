@@ -558,13 +558,14 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_PIPEWIRE_DEVICE")]
     pub pipewire_device: Option<String>,
 
-    /// RTSP URL for audio capture (e.g., `rtsp://camera.local:554/stream`).
+    /// Network stream URL for audio capture (e.g., `rtsp://camera.local:554/stream`).
     ///
-    /// For a single stream. Use `--rtsp-urls` for multiple streams.
+    /// Also `http(s)://` (Icecast, HLS), `rtmp://`, `udp://` (MPEG-TS) and
+    /// `srt://`. For a single stream. Use `--rtsp-urls` for multiple streams.
     #[arg(long, env = "BIRDNET_RTSP_URL")]
     pub rtsp_url: Option<String>,
 
-    /// Comma-separated RTSP URLs for multi-stream capture.
+    /// Comma-separated network stream URLs for multi-stream capture.
     ///
     /// Each URL gets its own independent capture pipeline with filenames
     /// prefixed `RTSP_1-`, `RTSP_2-`, etc. Overrides `--rtsp-url` if set.

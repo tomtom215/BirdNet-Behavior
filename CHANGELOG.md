@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Streams other than RTSP.** A network source can now be an HTTP or
+  Icecast stream, an HLS playlist (`.m3u8`), an RTMP server, MPEG-TS over
+  UDP, or SRT — the URL decides which. Each gets the ffmpeg options its
+  protocol accepts: the RTSP options every stream used to get stop ffmpeg
+  opening an HLS playlist at all, and make an RTMP reader listen instead of
+  connect. Checked end to end against MediaMTX 1.21.2 and ffmpeg 6.1,
+  recording and listening live, and through a stalled server. A URL with
+  another scheme is refused on the form; `rtp://` is not supported (a bare
+  RTP stream does not describe its payload). A UDP stream is listed in the
+  Live view as spectrogram only: capture is its one reader.
+
 - **Audio-only cameras.** An RTSP source can ask the camera for its audio
   track alone (Settings → Capture, a source's edit form: *Tracks requested*).
   By default the station sets up every track and discards the video, which
@@ -65,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A network source is labelled **Network stream** rather than "Network
+  camera", and the Capture tab's section is **Cameras and streams**.
+
 - **ONNX Runtime 1.31** (`ort` 2.0.0-rc.14, was rc.13 with ONNX Runtime
   1.28). Every session is now created under one process-wide environment,
   built on first use and kept for the life of the process — `ort` allows one
@@ -116,6 +130,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but not listened to. It now uses the source's transport (and media mode).
   The add form also described `auto` as "TCP w/ UDP fallback"; it is TCP,
   and nothing falls back. Transport can now be changed on the edit form.
+
+- **A secret in a stream URL's query reached the log.** The log redactors
+  removed `user:pass@` and passed the query through, where an SRT
+  `passphrase=`, a signed URL's `token=` and MediaMTX's
+  `streamid=read:path:user:pass` keep theirs. Parameters named like a secret,
+  and a stream id's user and password, are masked now.
+
+- **`--doctor` failed every stream URL that was not `rtsp://`**, and a
+  failed doctor stops the service starting. It now probes each protocol's
+  port, and skips UDP and SRT, which have no connection to test.
+
+- **The audio docs described an "Add-RTSP wizard"** — a locked `rtsp://`
+  prefix, a reachability pill, a preview row — that does not exist. They now
+  describe the add form.
 
 - **Station tabs restyled the whole page.** Five of the pages folded into
   the Station tabs (settings, alert rules, notifications, species settings,

@@ -190,14 +190,17 @@ within each group by how much they change what a station can do.
 | **Why it matters** | An owl calling for six minutes, a nightjar churring, a woodpecker drumming session — these produce dozens of near-identical short clips today, which is both worse listening and more disk. |
 | **Plan** | A session-merging stage in the extraction path keyed on species + source + gap: while the same species keeps being detected within the gap, extend the open clip rather than opening a new one. Bounded by `max_duration_secs` and by the segment-spanning machinery from G‑3, which this depends on. |
 
-#### G‑7 · Stream protocols beyond RTSP — GAP
+#### G‑7 · Stream protocols beyond RTSP — SHIPPED (RTSP, HTTP/Icecast, HLS, RTMP, UDP, SRT; `rtp://` declined, with the reason)
 
 | | |
 |---|---|
 | **Upstream** | `conf.StreamType` — `rtsp`, `http` (direct/Icecast), `hls` (`.m3u8`), `rtmp` (OBS push), `udp` (RTP), each with transport selection. |
-| **Ours** | ALSA (the `Microphone` variant), PipeWire and RTSP (`crates/birdnet-core/src/audio/capture/types.rs:14` `CaptureSource`). |
-| **Why it matters** | The cheapest way to add a second listening post is often an existing stream that is not RTSP — a neighbour's Icecast feed, an HLS wildlife cam, an OBS push from a laptop. |
-| **Plan** | `CaptureSource` gains a `Stream { url, kind, transport }` variant; the ffmpeg command builder in `capture/process.rs` already takes a URL, so most of this is URL classification, per-protocol ffmpeg flags, and the reconnect policy each protocol needs. Probing (`capture/probe.rs`) must learn to answer for them. |
+| **Ours** | One network source kind (stored as `rtsp`, for history) whose URL scheme decides the protocol: `birdnet_core::audio::capture::StreamProtocol`, read by `network_input_options` (`capture/process.rs`), which builds the ffmpeg input options for capture **and** for listening live (`routes/livestream.rs`). No second field, so the kind and the URL cannot disagree, and no table rebuild — `audio_sources.kind` has a `CHECK` that SQLite cannot alter in place. |
+| **Why the options had to be per protocol** | ffmpeg 6.1 refused to open an HLS playlist given `-rtsp_transport` ("Option not found"), which every stream got; RTSP refuses `-rw_timeout` the same way; and RTMP reads `-timeout` as the time to wait for an *incoming* connection, turning the reader into a listener ("Address already in use"). RTSP keeps transport, `-timeout` and media mode; the rest get `-rw_timeout`. |
+| **Verified** | The station binary against MediaMTX 1.21.2 (HLS, RTMP, SRT), an MPEG-TS UDP sender and a multi-client HTTP MP3 server, all ffmpeg 6.1: every source recorded 15 s, 48 kHz segments carrying its own fixture's tone (1500 / 2500 / 3500 Hz, by FFT of the segment). Listening live worked for HLS, RTMP, SRT and HTTP alongside capture. With MediaMTX frozen by `SIGSTOP`, RTMP and SRT capture exited and were restarted within seconds, HLS exited after 52 s (its playlist reloader retries first), and all three resumed on their own once the server did. The add form accepted all five and refused `rtp://` with the list of schemes. |
+| **Not adopted** | `rtp://`: ffmpeg read a bare RTP stream carrying G.711 (a static payload type) and refused one carrying AAC ("Invalid data found"), which needs an SDP file. MPEG-TS over `udp://` describes itself and covers the case. RTMP is read *from* a server; the station does not accept a push. |
+| **Limits** | A UDP stream has no live audio: a unicast datagram reaches one socket, and capture holds it (a second reader failed with "Address already in use", answered as an empty `200`). `/stream` now answers `503` with the reason, and the Live view lists the source as *spectrogram only*. |
+| **Found on the way** | `--doctor` failed every stream URL that was not `rtsp://`, and its `Fail` stops the unit's `ExecStartPre` — a station configured with an Icecast URL would not have started. It now probes each protocol's default port and skips the UDP-based two. The log redactors passed a URL's query through, where SRT keeps its `passphrase=` and MediaMTX its `streamid=…:user:pass`; both are masked now. And the docs described an "Add-RTSP wizard" with a locked prefix and a reachability pill that the web crate does not contain; the section now describes the form. The plan's "probing must learn to answer for them" did not apply: `capture/probe.rs` probes ALSA rates only, and a stream is resampled to 48 kHz by ffmpeg. |
 
 #### G‑8 · RTSP media mode — SHIPPED (`full` and `audio`; `auto` not adopted, with the reason)
 
@@ -597,7 +600,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 29 | HLS live streaming | G‑21 | Shares the encode seam with #10 |
 | 30 | ~~Dashboard layout customisation~~ — **shipped** (order and visibility). See G‑22. | G‑22 | The HTMX partials are already the component vocabulary |
 | 31 | Extended capture | G‑6 | Depends on #6 |
-| 32 | Additional stream protocols | G‑7 | HTTP/Icecast first; RTMP and UDP after |
+| 32 | ~~Additional stream protocols~~ — **shipped** (HTTP/Icecast, HLS, RTMP, UDP, SRT; `rtp://` declined). See G‑7. | G‑7 | One kind, the URL decides the protocol |
 | 33 | Silero VAD privacy gate | G‑13 | Depends on #26 Stage 1 for a second ONNX session |
 | 34 | ~~RTSP media mode~~ — **shipped** (`full` / `audio`). See G‑8. | G‑8 | It mattered for RTSP on its own — the camera's video sessions — not only alongside #32 |
 | 35 | Profiling endpoints | G‑24 | Behind a Cargo feature |
