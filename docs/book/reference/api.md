@@ -138,7 +138,7 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 
 | Endpoint | Common query params |
 |---|---|
-| `GET /api/v2/detections` | `date`, `species`, `limit`, `offset` — paginated list |
+| `GET /api/v2/detections` | `date`, `species` (common or scientific name), `source`, `limit`, `offset` — paginated, newest first; the filters combine, and `total_count` counts every page of the filtered set |
 | `GET /api/v2/detections/recent` | `limit` — most recent first |
 | `GET /api/v2/detections/daily` | `days` — per-day counts over the last N days |
 

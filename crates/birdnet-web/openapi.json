@@ -532,7 +532,7 @@
           "detections"
         ],
         "summary": "List detections",
-        "description": "Paginated detection log, newest first. When `limit`/`offset` are supplied the response also carries `total_count`.",
+        "description": "Detection log, newest first, one page at a time. `date`, `species` and `source` combine: each one given narrows the list. `total_count` is the size of the filtered set.",
         "operationId": "listDetections",
         "parameters": [
           {
@@ -540,6 +540,9 @@
           },
           {
             "$ref": "#/components/parameters/Species"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           },
           {
             "$ref": "#/components/parameters/Limit"
@@ -3204,6 +3207,15 @@
           "type": "string"
         }
       },
+      "Source": {
+        "name": "source",
+        "in": "query",
+        "required": false,
+        "description": "Filter to one audio source, by the label detections carry (the `source` field). Combines with every other filter.",
+        "schema": {
+          "type": "string"
+        }
+      },
       "SpeciesList": {
         "name": "species",
         "in": "query",
@@ -3722,7 +3734,7 @@
           },
           "total_count": {
             "type": "integer",
-            "description": "Total matching rows (present on paginated responses)."
+            "description": "Rows matching the filters, all pages together (`GET /detections`)."
           },
           "limit": {
             "type": "integer"
