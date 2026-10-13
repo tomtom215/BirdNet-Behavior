@@ -697,12 +697,12 @@ takes a date range.
 | `/insights/migration` | Recent first-ever arrivals; species gone quiet | **SHIPPED** — `GET /api/v2/insights/migration`. Gone-quiet had no counterpart; arrivals existed only as the life list's six newest. |
 | `/insights/expected-today/regional` | eBird species seen nearby, not heard here | **SHIPPED** — `GET /api/v2/insights/expected-today/regional`, from the snapshot already in memory. One deliberate difference: a failed read of the station's own history is a `500`, not the unfiltered eBird list upstream falls back to. |
 | `/insights/expected-today` | Species heard within ±3 days of today in past years | **SHIPPED** — `GET /api/v2/insights/expected-today`: ten earlier years, one window each, so a window across New Year counts once. (The Migration tab's 42-day "still expected" count answers a different question and stays.) |
-| `/dashboard/kpis` | Lifetime species, today, best day, detection streak | PARTIAL — no streak, and no single endpoint. |
+| `/dashboard/kpis` | Lifetime species, today, best day, detection streak | **SHIPPED** — `GET /api/v2/dashboard/kpis`, upstream's fields and empty values. The streak is counted in SQL over every detection date, where upstream reads the 90 most recent and so stops at 90. |
 | `/species/detections/new` | Species first seen in a date range, with counts | PARTIAL — the six most recent firsts; no range or paging. |
 | `/species/summary` | Per-species count, first, last, mean and max confidence over a range | PARTIAL — all-time count and mean only. |
 | `/species/daily` | One date's species with hourly counts and first/last heard | PARTIAL — today only (heatmap); other dates give counts only. |
 | `/time/distribution/species`, `/time/succession` | Top-N species' hour-of-day profile, normalised or stacked | PARTIAL — the dawn-chorus ribbons, fixed at 60 days and 8 species. |
-| `/insights/phantom-species` | Last 30 days, ≥ 3 detections, mean confidence < 0.6 | PARTIAL, deliberately — `/admin/quality/phantoms` uses four shape signals over all history; no recency window. |
+| `/insights/phantom-species` | Last 30 days, ≥ 3 detections, mean confidence < 0.6 | **SHIPPED** — `GET /api/v2/insights/phantom-species`, upstream's rule and fields. `/admin/quality/phantoms` answers a different question (four shape signals over all history) and stays. |
 | `/confidence/distribution` | Per-species confidence histogram | PARTIAL — station-wide, six fixed buckets. |
 | `/time/year-over-year` | Cumulative year-to-date against last year | PARTIAL — weekly comparison in JSON, on no page. |
 | `/analytics/sources` | Sources with counts over a range | PARTIAL — today only. |

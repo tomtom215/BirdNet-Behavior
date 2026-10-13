@@ -1,5 +1,8 @@
-//! `GET /api/v2/insights/*` — the dawn chorus's running order, recent
-//! arrivals, and species gone quiet.
+//! `GET /api/v2/insights/*` and `GET /api/v2/dashboard/kpis`.
+//!
+//! The dawn chorus's running order, recent arrivals, species gone quiet,
+//! likely misdetections, what is expected today, and the dashboard's headline
+//! numbers.
 //!
 //! The counterparts of birdnet-go's endpoints of the same names, with the same
 //! parameters, defaults and field names, so a client written against either
@@ -24,17 +27,22 @@ const MIGRATION_RECENT_DAYS: u32 = 14;
 const MIGRATION_MIN_TOTAL: u32 = 5;
 const EXPECTED_WINDOW_DAYS: u32 = 3;
 const EXPECTED_MAX_YEARS: u32 = 10;
+const PHANTOM_PERIOD_DAYS: u32 = 30;
+const PHANTOM_MIN_DETECTIONS: u32 = 3;
+const PHANTOM_MAX_AVG_CONFIDENCE: f64 = 0.6;
 
 /// The insight routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/insights/dawn-chorus", get(dawn_chorus))
         .route("/insights/migration", get(migration))
+        .route("/insights/phantom-species", get(phantom_species))
         .route("/insights/expected-today", get(expected_today))
         .route(
             "/insights/expected-today/regional",
             get(expected_today_regional),
         )
+        .route("/dashboard/kpis", get(dashboard_kpis))
 }
 
 /// Query parameters for the dawn chorus. Strings, so that a value that is not
@@ -166,6 +174,46 @@ async fn migration(State(state): State<AppState>) -> Response {
     }
 }
 
+/// `GET /api/v2/insights/phantom-species` — species detected at least three
+/// times in the last 30 days with a mean confidence under 0.6, the least
+/// confident first.
+///
+/// Upstream's rule. `/admin/quality/phantoms` asks a different question —
+/// four shape signals over all history — and stays.
+async fn phantom_species(State(state): State<AppState>) -> Response {
+    let today = crate::routes::pages::today_date_string();
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                birdnet_db::sqlite::phantom_species(
+                    conn,
+                    &today,
+                    PHANTOM_PERIOD_DAYS,
+                    PHANTOM_MIN_DETECTIONS,
+                    PHANTOM_MAX_AVG_CONFIDENCE,
+                )
+            })
+        })
+        .await;
+    match result {
+        Ok(species) => Json(json!({
+            "species": species.iter().map(|p| json!({
+                "scientific_name": p.sci_name,
+                "common_name": p.com_name,
+                "detection_count": p.detection_count,
+                "avg_confidence": p.avg_confidence,
+                "max_confidence": p.max_confidence,
+                "thumbnail_url": thumbnail_url(&p.sci_name),
+            })).collect::<Vec<_>>(),
+            "period_days": PHANTOM_PERIOD_DAYS,
+            "confidence_threshold": PHANTOM_MAX_AVG_CONFIDENCE,
+            "min_detections": PHANTOM_MIN_DETECTIONS,
+        }))
+        .into_response(),
+        Err(e) => read_failed("phantom species", &e),
+    }
+}
+
 /// A binomial written the usual way, genus capitalised: the eBird snapshot
 /// stores names lowercased, for matching.
 fn binomial_case(name: &str) -> String {
@@ -259,6 +307,36 @@ async fn expected_today_regional(State(state): State<AppState>) -> Response {
         })
         .collect();
     Json(json!({ "species": species, "available": true })).into_response()
+}
+
+/// `GET /api/v2/dashboard/kpis` — species ever heard, detections today, the
+/// busiest day since this date last year, and the run of consecutive days
+/// with a detection ending today.
+///
+/// Upstream's shape, including its empty values: a station with no busiest
+/// day answers `{"date": "", "count": 0}`, and no streak `start_date: ""`.
+/// Unlike upstream, the streak is not capped at the 90 most recent dates.
+async fn dashboard_kpis(State(state): State<AppState>) -> Response {
+    let today = crate::routes::pages::today_date_string();
+    let result = state
+        .run_blocking(move |s| s.with_db(|conn| birdnet_db::sqlite::dashboard_kpis(conn, &today)))
+        .await;
+    match result {
+        Ok(k) => {
+            let (best_date, best_count) = k.best_day.unwrap_or_default();
+            Json(json!({
+                "lifetime_species": k.lifetime_species,
+                "today_detections": k.today_detections,
+                "best_day": { "date": best_date, "count": best_count },
+                "detection_streak": {
+                    "days": k.streak_days,
+                    "start_date": k.streak_start.unwrap_or_default(),
+                },
+            }))
+            .into_response()
+        }
+        Err(e) => read_failed("dashboard figures", &e),
+    }
 }
 
 #[cfg(test)]

@@ -170,10 +170,12 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
 | `GET /api/v2/insights/dawn-chorus?period_days=&min_days=` | Each species' typical first song of the morning (mean and earliest first detection between 04:00 and 10:00), over species heard on at least `min_days` (default 3) of the last `period_days` (default 30, at most 365) days, earliest first. A value that is not a positive integer is a `400`; one over the limit is clamped, and both values applied are echoed. |
 | `GET /api/v2/insights/migration` | Species first heard in the last 14 days, and species with at least 5 detections and none in the last 14 days, with when and how often. |
+| `GET /api/v2/insights/phantom-species` | Species detected at least 3 times in the last 30 days with a mean confidence under 0.6, least confident first — often a noise source the model keeps mistaking for a bird. Rejected detections do not count. |
 | `GET /api/v2/insights/expected-today` | Species heard within 3 days either side of today's date in any of the last 10 years, most regular first, with `years_of_data`. |
 | `GET /api/v2/insights/expected-today/regional` | What eBird observers reported nearby that this station does not usually hear now: the eBird snapshot less the list above. `available` is `false` without a snapshot ([eBird](integrations.md)). |
+| `GET /api/v2/dashboard/kpis` | Species ever heard, detections today, the busiest day since this date last year (`best_day`), and the run of consecutive days with a detection ending today (`detection_streak`; 0 when today has none). With none, `best_day` is `{"date": "", "count": 0}`. |
 
-The `insights` endpoints read SQLite directly, so they answer with the analytics engine off. Their parameters, defaults and field names are birdnet-go's, so a client written for either station reads both. A station whose detections cannot be read answers `500` rather than an empty list.
+The `insights` and `dashboard` endpoints read SQLite directly, so they answer with the analytics engine off. Their parameters, defaults and field names are birdnet-go's, so a client written for either station reads both. A station whose detections cannot be read answers `500` rather than an empty list.
 
 ### Diagnosing empty analytics dashboards
 

@@ -1,5 +1,5 @@
-//! `/api/v2/insights/{dawn-chorus,migration}` answer with birdnet-go's field
-//! names, defaults and limits, and a station whose detections cannot be read
+//! `/api/v2/insights/*` and `/api/v2/dashboard/kpis` answer with birdnet-go's
+//! field names, defaults and limits, and a station whose detections cannot be read
 //! is told so rather than given an empty list.
 
 use axum::body::Body;
@@ -185,7 +185,79 @@ async fn the_regional_list_is_ebird_less_the_stations_regulars() {
     assert_eq!(body["species"][0]["location_name"], "Marsh hide");
 }
 
-/// The counterpart to both: an empty list would read as "nothing arrived",
+/// Upstream's phantom-species fields and thresholds, echoed.
+#[tokio::test]
+async fn phantom_species_answer_with_upstreams_fields() {
+    let state = station_state(&[]);
+    state
+        .with_db(|conn| {
+            for (days_ago, conf) in [(0, 0.3), (1, 0.4), (2, 0.5)] {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES (date('now', 'localtime', ?1), '03:00:00', 'Strix aluco',
+                             'Tawny Owl', ?2)",
+                    rusqlite::params![format!("-{days_ago} days"), conf],
+                )?;
+            }
+            Ok::<_, rusqlite::Error>(())
+        })
+        .expect("insert");
+    let app = build_router(state);
+    let (status, body) = get(&app, "/api/v2/insights/phantom-species").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["period_days"], 30);
+    assert_eq!(body["min_detections"], 3);
+    assert_eq!(body["confidence_threshold"], 0.6);
+    let owl = &body["species"][0];
+    assert_eq!(owl["scientific_name"], "Strix aluco", "{body}");
+    assert_eq!(owl["common_name"], "Tawny Owl");
+    assert_eq!(owl["detection_count"], 3);
+    assert_eq!(owl["max_confidence"], 0.5);
+    assert!(
+        owl["avg_confidence"]
+            .as_f64()
+            .is_some_and(|m| (m - 0.4).abs() < 1e-9),
+        "{body}"
+    );
+}
+
+/// Upstream's KPI shape, a streak counted back from today, and its empty
+/// values on a station with nothing yet.
+#[tokio::test]
+async fn the_dashboard_kpis_answer_with_upstreams_shape() {
+    let app = station(&[
+        (0, "07:00:00", "Turdus merula"),
+        (0, "08:00:00", "Turdus merula"),
+        (1, "07:00:00", "Erithacus rubecula"),
+        (3, "07:00:00", "Parus major"),
+    ]);
+    let (status, body) = get(&app, "/api/v2/dashboard/kpis").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["lifetime_species"], 3, "{body}");
+    assert_eq!(body["today_detections"], 2);
+    assert_eq!(body["best_day"]["count"], 2);
+    assert_eq!(body["detection_streak"]["days"], 2, "{body}");
+    // The busiest day is today, and the streak began the day before it.
+    let best = body["best_day"]["date"].as_str().expect("date");
+    let start = body["detection_streak"]["start_date"]
+        .as_str()
+        .expect("date");
+    assert_eq!((best.len(), start.len()), (10, 10), "{body}");
+    assert!(start < best, "{body}");
+
+    let (status, body) = get(&station(&[]), "/api/v2/dashboard/kpis").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["best_day"],
+        serde_json::json!({ "date": "", "count": 0 })
+    );
+    assert_eq!(
+        body["detection_streak"],
+        serde_json::json!({ "days": 0, "start_date": "" })
+    );
+}
+
+/// The counterpart to all of them: an empty list would read as "nothing arrived",
 /// "nobody sang" — a claim about the station's records made on a read that
 /// failed.
 #[tokio::test]
@@ -208,8 +280,10 @@ async fn an_unreadable_station_is_an_error_not_an_empty_list() {
     for uri in [
         "/api/v2/insights/dawn-chorus",
         "/api/v2/insights/migration",
+        "/api/v2/insights/phantom-species",
         "/api/v2/insights/expected-today",
         "/api/v2/insights/expected-today/regional",
+        "/api/v2/dashboard/kpis",
     ] {
         let (status, body) = get(&app, uri).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {body}");

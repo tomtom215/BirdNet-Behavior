@@ -2579,6 +2579,68 @@
         }
       }
     },
+    "/insights/phantom-species": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Frequent, low-confidence species",
+        "description": "Species with at least min_detections detections in the last period_days days (today included) whose mean confidence is below confidence_threshold, the least confident first: a cue to look for a noise source the model keeps mistaking for a bird. Rejected detections are not counted. Same fields and thresholds as birdnet-go's endpoint of the same name.",
+        "operationId": "insightsPhantomSpecies",
+        "responses": {
+          "200": {
+            "description": "The species, and the thresholds applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "detection_count": {
+                            "type": "integer"
+                          },
+                          "avg_confidence": {
+                            "type": "number"
+                          },
+                          "max_confidence": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "period_days": {
+                      "type": "integer"
+                    },
+                    "confidence_threshold": {
+                      "type": "number"
+                    },
+                    "min_detections": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/insights/expected-today": {
       "get": {
         "tags": [
@@ -2683,6 +2745,63 @@
           },
           "500": {
             "description": "The station's own detections could not be read."
+          }
+        }
+      }
+    },
+    "/dashboard/kpis": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "The dashboard's headline numbers",
+        "description": "Distinct species ever detected; detections today; the busiest day from this date last year to today, ties to the more recent day; and the run of consecutive days with a detection ending today (0 when today has none). Same fields and empty values as birdnet-go's endpoint of the same name.",
+        "operationId": "dashboardKpis",
+        "responses": {
+          "200": {
+            "description": "The four figures.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lifetime_species": {
+                      "type": "integer"
+                    },
+                    "today_detections": {
+                      "type": "integer"
+                    },
+                    "best_day": {
+                      "type": "object",
+                      "properties": {
+                        "date": {
+                          "type": "string",
+                          "description": "YYYY-MM-DD, or empty when there is none."
+                        },
+                        "count": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "detection_streak": {
+                      "type": "object",
+                      "properties": {
+                        "days": {
+                          "type": "integer"
+                        },
+                        "start_date": {
+                          "type": "string",
+                          "description": "YYYY-MM-DD, or empty when there is none."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
           }
         }
       }

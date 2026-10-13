@@ -256,6 +256,132 @@ pub fn expected_today(
     Ok((species, years_of_data))
 }
 
+/// The dashboard's headline numbers, as birdnet-go's `/dashboard/kpis`
+/// computes them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DashboardKpis {
+    /// Distinct species ever detected.
+    pub lifetime_species: i64,
+    /// Detections dated `today`.
+    pub today_detections: i64,
+    /// The busiest day from the same date a year ago up to and including
+    /// `today`, and its count; `None` with no detections in that span. Ties
+    /// go to the more recent day.
+    pub best_day: Option<(String, i64)>,
+    /// Consecutive days with a detection, ending `today`; 0 when `today` has
+    /// none.
+    pub streak_days: i64,
+    /// The first day of that streak, when there is one.
+    pub streak_start: Option<String>,
+}
+
+/// The dashboard's headline numbers as of `today`.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn dashboard_kpis(conn: &Connection, today: &str) -> Result<DashboardKpis, DbError> {
+    let (lifetime_species, today_detections): (i64, i64) = conn.query_row(
+        "SELECT COUNT(DISTINCT Sci_Name),
+                COALESCE(SUM(CASE WHEN Date = ?1 THEN 1 ELSE 0 END), 0)
+         FROM detections_analytic
+         WHERE Date <= ?1",
+        [today],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let best_day = conn
+        .query_row(
+            "SELECT Date, COUNT(*) AS n FROM detections_analytic
+             WHERE Date >= date(?1, '-1 year') AND Date <= ?1
+             GROUP BY Date ORDER BY n DESC, Date DESC LIMIT 1",
+            [today],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })?;
+    // Distinct detection dates, newest first: a date belongs to the streak
+    // ending today exactly when its distance back from today equals its row
+    // number, which holds until the first gap and never after it.
+    let (streak_days, streak_start): (i64, Option<String>) = conn.query_row(
+        "SELECT COUNT(*), MIN(Date) FROM (
+             SELECT Date,
+                    CAST(julianday(?1) - julianday(Date) AS INTEGER) AS back,
+                    ROW_NUMBER() OVER (ORDER BY Date DESC) - 1 AS rn
+             FROM (SELECT DISTINCT Date FROM detections_analytic WHERE Date <= ?1)
+         ) WHERE back = rn",
+        [today],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(DashboardKpis {
+        lifetime_species,
+        today_detections,
+        best_day,
+        streak_days,
+        streak_start,
+    })
+}
+
+/// A species heard often lately, but never with much confidence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhantomSpecies {
+    /// Scientific name.
+    pub sci_name: String,
+    /// Common name.
+    pub com_name: String,
+    /// Detections of it in the period.
+    pub detection_count: i64,
+    /// Their mean confidence.
+    pub avg_confidence: f64,
+    /// Their highest confidence.
+    pub max_confidence: f64,
+}
+
+/// Species with at least `min_detections` detections in the `period_days`
+/// days up to and including `today` whose mean confidence is below
+/// `max_avg_confidence`, the least confident first.
+///
+/// birdnet-go's phantom-species insight: a cue to look for a noise source the
+/// model keeps mistaking for a bird.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn phantom_species(
+    conn: &Connection,
+    today: &str,
+    period_days: u32,
+    min_detections: u32,
+    max_avg_confidence: f64,
+) -> Result<Vec<PhantomSpecies>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Sci_Name, MAX(Com_Name), COUNT(*) AS n,
+                AVG(Confidence) AS mean, MAX(Confidence)
+         FROM detections_analytic
+         WHERE Date > date(?1, '-' || ?2 || ' days') AND Date <= ?1
+         GROUP BY Sci_Name
+         HAVING n >= ?3 AND mean < ?4
+         ORDER BY mean, Sci_Name",
+    )?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![today, period_days, min_detections, max_avg_confidence],
+            |row| {
+                Ok(PhantomSpecies {
+                    sci_name: row.get(0)?,
+                    com_name: row.get(1)?,
+                    detection_count: row.get(2)?,
+                    avg_confidence: row.get(3)?,
+                    max_confidence: row.get(4)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +522,116 @@ mod tests {
         assert_eq!(species.len(), 1, "{species:?}");
         assert_eq!(species[0].years_seen, 1);
         assert_eq!(years, 1);
+    }
+
+    /// A streak counts back from today and stops at the first gap; a day
+    /// without detections today is no streak at all, however long the run
+    /// before it. The best day is the busiest since this date last year.
+    #[test]
+    fn kpis_count_the_streak_back_from_today() {
+        let mut rows = vec![
+            ("2026-10-12", "07:00:00", "Turdus merula"),
+            ("2026-10-11", "07:00:00", "Turdus merula"),
+            ("2026-10-10", "07:00:00", "Erithacus rubecula"),
+            // A gap on the 9th: the 8th is not in the streak.
+            ("2026-10-08", "07:00:00", "Turdus merula"),
+            // The busiest day of the year, three detections.
+            ("2026-03-01", "07:00:00", "Turdus merula"),
+            ("2026-03-01", "08:00:00", "Turdus merula"),
+            ("2026-03-01", "09:00:00", "Parus major"),
+        ];
+        // Busier, but more than a year ago.
+        for t in ["01", "02", "03", "04", "05"] {
+            rows.push(("2025-10-01", t, "Sitta europaea"));
+        }
+        let conn = station(&rows);
+        let k = dashboard_kpis(&conn, "2026-10-12").expect("query");
+        assert_eq!(k.best_day, Some(("2026-03-01".to_owned(), 3)));
+        // As busy as 1 March, and exactly a year back: inside the span, as
+        // upstream counts it, but the less recent of the two.
+        for t in ["01", "02", "03"] {
+            rows.push(("2025-10-12", t, "Sitta europaea"));
+        }
+        let k = dashboard_kpis(&station(&rows), "2026-10-12").expect("query");
+        assert_eq!(k.best_day, Some(("2026-03-01".to_owned(), 3)));
+        // One more and it is the best day: the boundary is inclusive.
+        rows.push(("2025-10-12", "04", "Sitta europaea"));
+        let conn = station(&rows);
+        let k = dashboard_kpis(&conn, "2026-10-12").expect("query");
+        assert_eq!(k.streak_days, 3);
+        assert_eq!(k.streak_start.as_deref(), Some("2026-10-10"));
+        assert_eq!(k.today_detections, 1);
+        assert_eq!(k.lifetime_species, 4);
+        assert_eq!(k.best_day, Some(("2025-10-12".to_owned(), 4)));
+
+        // As of the 11th, the 12th is ahead of today and does not shift the
+        // count back.
+        let k = dashboard_kpis(&conn, "2026-10-11").expect("query");
+        assert_eq!(k.streak_days, 2);
+        assert_eq!(k.streak_start.as_deref(), Some("2026-10-10"));
+
+        // Nothing yet today: no streak, though yesterday ended a run.
+        let k = dashboard_kpis(&conn, "2026-10-13").expect("query");
+        assert_eq!(k.streak_days, 0);
+        assert_eq!(k.streak_start, None);
+        assert_eq!(k.today_detections, 0);
+
+        // An empty station: zeros and no best day, not an error.
+        let k = dashboard_kpis(&station(&[]), "2026-10-12").expect("query");
+        assert_eq!(
+            (k.lifetime_species, k.streak_days, k.best_day),
+            (0, 0, None)
+        );
+    }
+    /// Upstream's phantom-species rule: enough detections in the period, a
+    /// mean confidence under the threshold, the least confident first. A
+    /// species confident on average, too rare, heard only outside the period,
+    /// or rejected by a reviewer is not one.
+    #[test]
+    fn phantoms_are_frequent_and_unconfident_in_the_period() {
+        let conn = station(&[]);
+        let rows: &[(&str, &str, f64)] = &[
+            // Three low-confidence detections inside the 30 days.
+            ("2026-10-12", "Strix aluco", 0.40),
+            ("2026-10-01", "Strix aluco", 0.50),
+            ("2026-09-13", "Strix aluco", 0.30),
+            // Less unconfident, so listed second.
+            ("2026-10-12", "Bubo bubo", 0.50),
+            ("2026-10-11", "Bubo bubo", 0.55),
+            ("2026-10-10", "Bubo bubo", 0.59),
+            // A mean of exactly the threshold is not under it.
+            ("2026-10-12", "Asio otus", 0.60),
+            ("2026-10-11", "Asio otus", 0.60),
+            ("2026-10-10", "Asio otus", 0.60),
+            // Two in the period and one the day before it: too few.
+            ("2026-10-12", "Tyto alba", 0.20),
+            ("2026-10-11", "Tyto alba", 0.20),
+            ("2026-09-12", "Tyto alba", 0.20),
+            // Tomorrow is not in the period either.
+            ("2026-10-13", "Tyto alba", 0.20),
+            // Rejected by a reviewer below: already dealt with.
+            ("2026-10-12", "Otus scops", 0.20),
+            ("2026-10-11", "Otus scops", 0.20),
+            ("2026-10-10", "Otus scops", 0.20),
+        ];
+        for (date, sci, conf) in rows {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, '03:00:00', ?2, ?2 || ' common', ?3)",
+                rusqlite::params![date, sci, conf],
+            )
+            .expect("insert");
+        }
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Sci_Name = 'Otus scops'",
+            [],
+        )
+        .expect("reject");
+        let p = phantom_species(&conn, "2026-10-12", 30, 3, 0.6).expect("query");
+        let names: Vec<&str> = p.iter().map(|s| s.sci_name.as_str()).collect();
+        assert_eq!(names, ["Strix aluco", "Bubo bubo"]);
+        assert_eq!(p[0].detection_count, 3);
+        assert!((p[0].avg_confidence - 0.4).abs() < 1e-9, "{p:?}");
+        assert!((p[0].max_confidence - 0.5).abs() < 1e-9, "{p:?}");
     }
 }

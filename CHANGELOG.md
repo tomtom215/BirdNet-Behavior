@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/v2/insights/phantom-species`.** Species detected at least
+  three times in the last 30 days with a mean confidence under 0.6, the
+  least confident first — birdnet-go's rule and fields. The quality page's
+  phantom report, which looks at the shape of all history, is unchanged.
+
+- **`GET /api/v2/dashboard/kpis`.** Species ever heard, detections today,
+  the busiest day since this date last year, and the run of consecutive
+  days with a detection ending today — birdnet-go's fields and empty
+  values, with the streak uncapped where upstream stops at 90 days.
+
 - **`GET /api/v2/insights/expected-today` and `…/expected-today/regional`.**
   The first lists species heard within three days of today's date in any
   of the last ten years, most regular first; the second, what eBird
