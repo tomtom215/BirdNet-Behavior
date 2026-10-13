@@ -219,6 +219,9 @@ pub struct MetricsRegistry {
     /// Segments waiting for analysis after the last sweep (PR-2);
     /// `u64::MAX` = the daemon has not reported yet.
     analysis_queue_depth: AtomicU64,
+    /// Each classifier's health as the daemon last reported it, primary
+    /// first (`e853776`). Empty until the daemon has analysed a file.
+    model_health: RwLock<Vec<(String, birdnet_core::inference::health::ModelHealth)>>,
     /// Notifications that never left the station, by why.
     ///
     /// Both guards on the outbound path — the per-destination circuit breaker
@@ -294,6 +297,7 @@ impl MetricsRegistry {
             segments_dropped: RwLock::new(HashMap::new()),
             segments_shed: RwLock::new(HashMap::new()),
             analysis_queue_depth: AtomicU64::new(u64::MAX),
+            model_health: RwLock::new(Vec::new()),
             notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
@@ -394,6 +398,26 @@ impl MetricsRegistry {
             u64::try_from(depth).unwrap_or(u64::MAX - 1),
             Ordering::Relaxed,
         );
+    }
+
+    /// Publish each classifier's health (`e853776`).
+    pub fn set_model_health(
+        &self,
+        health: &[(String, birdnet_core::inference::health::ModelHealth)],
+    ) {
+        if let Ok(mut current) = self.model_health.write() {
+            current.clear();
+            current.extend_from_slice(health);
+        }
+    }
+
+    /// Each classifier's health as last reported, primary first; empty before
+    /// the daemon has analysed a file.
+    #[must_use]
+    pub fn model_health(&self) -> Vec<(String, birdnet_core::inference::health::ModelHealth)> {
+        self.model_health
+            .read()
+            .map_or_else(|_| Vec::new(), |m| m.clone())
     }
 
     /// Segments waiting for analysis after the last sweep; `None` before the
@@ -768,6 +792,7 @@ impl MetricsRegistry {
             segments_dropped: Self::read_map(&self.segments_dropped),
             segments_shed: Self::read_map(&self.segments_shed),
             analysis_queue_depth: self.analysis_queue_depth(),
+            model_health: self.model_health(),
             notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
@@ -848,6 +873,8 @@ pub struct MetricsSnapshot {
     pub segments_shed: Vec<(String, u64)>,
     /// Segments waiting for analysis, when the daemon has reported.
     pub analysis_queue_depth: Option<u64>,
+    /// Each classifier's health, primary first.
+    pub model_health: Vec<(String, birdnet_core::inference::health::ModelHealth)>,
     /// Notifications that never left the station, by reason.
     pub notifications_dropped: Vec<(String, u64)>,
     /// Capture restarts per source.
@@ -873,6 +900,63 @@ pub struct MetricsSnapshot {
 
 /// Render the runtime metrics as Prometheus text 0.0.4.
 ///
+/// Each classifier's health (`e853776`): whether it is failing, its run of
+/// failed windows, the windows it has run, and when it last answered.
+///
+/// The last-success timestamp is omitted for a classifier that has never
+/// answered, rather than exported as 0 — a timestamp of the epoch would read
+/// as measured.
+fn push_model_health_series(
+    out: &mut String,
+    health: &[(String, birdnet_core::inference::health::ModelHealth)],
+) {
+    use std::fmt::Write as _;
+    if health.is_empty() {
+        return;
+    }
+    out.push_str("# HELP birdnet_model_failing Whether a classifier is failing (1): it has failed at least 10 analysis windows in a row and answered none since. 0 while it answers.\n");
+    out.push_str("# TYPE birdnet_model_failing gauge\n");
+    for (model, h) in health {
+        let _ = writeln!(
+            out,
+            "birdnet_model_failing{{model=\"{}\"}} {}",
+            escape_label(model),
+            u8::from(h.is_failing())
+        );
+    }
+    out.push_str("# HELP birdnet_model_consecutive_failed_windows Analysis windows a classifier has failed since it last answered one.\n");
+    out.push_str("# TYPE birdnet_model_consecutive_failed_windows gauge\n");
+    for (model, h) in health {
+        let _ = writeln!(
+            out,
+            "birdnet_model_consecutive_failed_windows{{model=\"{}\"}} {}",
+            escape_label(model),
+            h.consecutive_failures
+        );
+    }
+    out.push_str("# HELP birdnet_model_windows_total Analysis windows a classifier has run since it was loaded, answered or failed.\n");
+    out.push_str("# TYPE birdnet_model_windows_total counter\n");
+    for (model, h) in health {
+        let _ = writeln!(
+            out,
+            "birdnet_model_windows_total{{model=\"{}\"}} {}",
+            escape_label(model),
+            h.windows
+        );
+    }
+    out.push_str("# HELP birdnet_model_last_success_timestamp_seconds When a classifier last answered a window cleanly, in seconds since the Unix epoch. Absent for one that has not.\n");
+    out.push_str("# TYPE birdnet_model_last_success_timestamp_seconds gauge\n");
+    for (model, h) in health {
+        if let Some(at) = h.last_success_at {
+            let _ = writeln!(
+                out,
+                "birdnet_model_last_success_timestamp_seconds{{model=\"{}\"}} {at}",
+                escape_label(model)
+            );
+        }
+    }
+}
+
 /// The pipeline's own throughput series: files analysed, segments dropped
 /// before analysis, segments shed, and the queue's depth.
 fn push_pipeline_series(out: &mut String, snap: &MetricsSnapshot) {
@@ -1010,6 +1094,7 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     }
 
     push_pipeline_series(&mut out, snap);
+    push_model_health_series(&mut out, &snap.model_health);
 
     out.push_str("# HELP birdnet_occurrence_filter_active Whether species occurrence filtering is running (1) or every species the classifier knows is admitted (0).\n");
     out.push_str("# TYPE birdnet_occurrence_filter_active gauge\n");
@@ -1304,6 +1389,45 @@ mod tests {
             text.contains("birdnet_detection_write_failures_total 2"),
             "counter did not reach the exposition: {text}"
         );
+    }
+
+    /// `e853776`: each classifier's health reaches the exposition, and a
+    /// classifier that has never answered has no last-success timestamp
+    /// rather than the epoch.
+    #[test]
+    fn classifier_health_is_exported_per_model() {
+        use birdnet_core::inference::health::{ErrorClass, FAILING_AFTER, ModelHealth};
+        let m = MetricsRegistry::new();
+        assert!(
+            !render_runtime_metrics(&m.snapshot()).contains("birdnet_model_"),
+            "nothing to say before the daemon reports"
+        );
+        let mut good = ModelHealth::default();
+        good.succeeded(1_700_000_000);
+        let mut bad = ModelHealth::default();
+        for i in 0..FAILING_AFTER {
+            bad.failed(ErrorClass::Inference, u64::from(i));
+        }
+        m.set_model_health(&[("birdnet".to_owned(), good), ("bats".to_owned(), bad)]);
+        let text = render_runtime_metrics(&m.snapshot());
+        for line in [
+            "birdnet_model_failing{model=\"birdnet\"} 0",
+            "birdnet_model_failing{model=\"bats\"} 1",
+            "birdnet_model_consecutive_failed_windows{model=\"birdnet\"} 0",
+            "birdnet_model_consecutive_failed_windows{model=\"bats\"} 10",
+            "birdnet_model_windows_total{model=\"birdnet\"} 1",
+            "birdnet_model_windows_total{model=\"bats\"} 10",
+            "birdnet_model_last_success_timestamp_seconds{model=\"birdnet\"} 1700000000",
+        ] {
+            assert!(text.lines().any(|l| l == line), "missing {line}: {text}");
+        }
+        assert!(
+            !text.contains("birdnet_model_last_success_timestamp_seconds{model=\"bats\"}"),
+            "a model that never answered has no last success: {text}"
+        );
+        // A later report replaces the earlier one rather than adding to it.
+        m.set_model_health(&[("birdnet".to_owned(), good)]);
+        assert_eq!(m.model_health().len(), 1);
     }
 
     #[test]

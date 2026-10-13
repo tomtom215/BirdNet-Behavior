@@ -5,6 +5,7 @@
 //! compatible architectures.
 
 pub mod classifier;
+pub mod health;
 pub mod identity;
 pub mod labels;
 pub mod model;

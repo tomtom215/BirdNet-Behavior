@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A classifier that fails every window is reported.** After ten failed
+  analysis windows in a row — an error, or scores that are not numbers — a
+  classifier is *failing* until it answers one: a station-health alert
+  names it (`classifier:<id>`), `/api/v2/health` lists every classifier's
+  state and makes a failing one a `?strict=1` fault, and Prometheus gets
+  `birdnet_model_failing`, `birdnet_model_consecutive_failed_windows`,
+  `birdnet_model_windows_total` and
+  `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
+  and error classes. Before, it was one journal line per segment.
+
 - **`GET /api/v2/analytics/species/detections/new`.** Species first heard
   here within a date range (by default the last 30 days), newest first,
   with their detections in the range, paged — birdnet-go's path,
@@ -166,6 +176,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/v2/analytics/status` reports the embed's `abi`.
 
 ### Fixed
+
+- **One failing classifier silenced the rest.** On a station running more
+  than one classifier, an error from any of them failed the whole file, so
+  a broken second model stopped the primary from recording anything. A
+  window now fails only when none of its classifiers answers.
 
 - **Listening live to a camera ignored its transport.** The live stream
   always asked for TCP, so a camera that only speaks UDP could be recorded

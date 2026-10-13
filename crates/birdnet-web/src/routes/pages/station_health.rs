@@ -87,6 +87,8 @@ struct Snapshot {
     acoustic: Vec<birdnet_db::audio_levels::SourceDrift>,
     /// What the species occurrence filter is doing (ON-12).
     occurrence: OccurrenceFilterState,
+    /// Classifiers failing every window (`e853776`), by id.
+    failing_classifiers: Vec<String>,
 }
 
 /// Render the operator Health surface for the public Station Health tab.
@@ -200,6 +202,13 @@ async fn gather(state: &AppState) -> Snapshot {
                 birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
             }),
             occurrence: state.metrics().occurrence_filter(),
+            failing_classifiers: state
+                .metrics()
+                .model_health()
+                .into_iter()
+                .filter(|(_, h)| h.is_failing())
+                .map(|(id, _)| id)
+                .collect(),
         }
     })
     .await
@@ -231,6 +240,7 @@ async fn gather(state: &AppState) -> Snapshot {
             active: false,
             candidates: None,
         },
+        failing_classifiers: Vec::new(),
     })
 }
 
@@ -422,6 +432,12 @@ fn status_banner(s: &Snapshot) -> String {
     }
     if s.occurrence.admits_nothing() {
         issues.push("the species filter admits no species, so nothing can be recorded".to_owned());
+    }
+    for id in &s.failing_classifiers {
+        issues.push(format!(
+            "the classifier \u{201c}{id}\u{201d} is failing every window, so nothing it would \
+             detect is recorded"
+        ));
     }
 
     let last = s
@@ -890,7 +906,23 @@ mod tests {
                 active: false,
                 candidates: None,
             },
+            failing_classifiers: Vec::new(),
         }
+    }
+
+    /// `e853776`: a classifier failing every window is named in the banner;
+    /// a healthy station's banner stays green.
+    #[test]
+    fn a_failing_classifier_is_named_in_the_banner() {
+        let mut s = snap(false, true, 2, 0);
+        assert!(status_banner(&s).contains("All systems healthy"));
+        s.failing_classifiers = vec!["bats".to_owned()];
+        let banner = status_banner(&s);
+        assert!(banner.contains("Needs attention"), "{banner}");
+        assert!(
+            banner.contains("classifier \u{201c}bats\u{201d} is failing every window"),
+            "{banner}"
+        );
     }
 
     /// The gate for ON-12: the occurrence filter's state is on the station

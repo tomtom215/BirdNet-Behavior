@@ -27,6 +27,18 @@ curl http://localhost:8502/api/v2/health
   "detection_silence_secs": 142,
   "analysis_queue_depth": 2,
   "detection_deadman": "ok",
+  "classifiers": [
+    {
+      "model": "birdnet",
+      "state": "ok",
+      "consecutive_failures": 0,
+      "failure_threshold": 10,
+      "windows": 48210,
+      "last_window_at": 1788973195,
+      "last_success_at": 1788973195,
+      "error_class": null
+    }
+  ],
   "data_volume": {
     "writable": true,
     "mount": "intact",
@@ -67,6 +79,18 @@ never, once the station has listened that long), `ok` otherwise, `off` when
 its threshold is 0. `tripped` is degraded under `?strict=1`, so a monitor
 polling the strict endpoint goes red at the moment the notifier fires rather
 than reading `detection_silence_secs` against a threshold of its own.
+
+`classifiers` is each loaded classifier, primary first (empty until the
+daemon has analysed a file). `state` is `failing` once a classifier has failed
+`failure_threshold` analysis windows in a row and answered none since, and
+`ok` otherwise; `error_class` says why the latest failed window failed —
+`inference_error` (the model returned an error) or `non_finite_output` (it
+answered with NaN or infinite scores, which are never recorded). Times are
+seconds since the Unix epoch, `null` for never. A failing classifier is
+degraded under `?strict=1` and raises the `classifier:<id>` station-health
+condition. On a station with several classifiers the others keep recording
+while one fails, which is why the detection deadman cannot be relied on to
+notice.
 
 `boot_anomalies` is what the boot journal found this start changed since the
 last one: `db_lost` (the database held detections at the last start and holds

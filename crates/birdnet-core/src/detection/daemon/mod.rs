@@ -142,7 +142,14 @@ pub struct ThroughputObserver {
     queue_depth: Option<std::sync::Arc<dyn Fn(usize) + Send + Sync>>,
     /// A segment the shed policy chose not to analyse, and why (PR-2).
     shed: Option<ShedCallback>,
+    /// Each classifier's health after every file the pipeline ran inference
+    /// on, primary first (`e853776`).
+    model_health: Option<ModelHealthCallback>,
 }
+
+/// A shared callback taking each classifier's id and health.
+type ModelHealthCallback =
+    std::sync::Arc<dyn Fn(&[(String, crate::inference::health::ModelHealth)]) + Send + Sync>;
 
 /// A shared callback taking a file path.
 type PathCallback = std::sync::Arc<dyn Fn(&std::path::Path) + Send + Sync>;
@@ -337,6 +344,24 @@ impl ThroughputObserver {
             dropped: None,
             queue_depth: None,
             shed: None,
+            model_health: None,
+        }
+    }
+
+    /// Also report each classifier's health after every file it ran on.
+    #[must_use]
+    pub fn with_model_health<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&[(String, crate::inference::health::ModelHealth)]) + Send + Sync + 'static,
+    {
+        self.model_health = Some(std::sync::Arc::new(f));
+        self
+    }
+
+    /// Report each classifier's health.
+    pub fn model_health(&self, health: &[(String, crate::inference::health::ModelHealth)]) {
+        if let Some(f) = &self.model_health {
+            f(health);
         }
     }
 

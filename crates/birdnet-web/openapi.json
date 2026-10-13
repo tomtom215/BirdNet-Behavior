@@ -4172,6 +4172,78 @@
             ],
             "description": "The detection deadman's verdict: `tripped` while it has an open quiet episode (no detections for longer than its threshold, or never), a strict fault; `off` when its threshold is 0."
           },
+          "classifiers": {
+            "type": "array",
+            "description": "Each loaded classifier, primary first; empty until the daemon has analysed a file. A failing classifier is degraded under `?strict=1` and raises the `classifier:<id>` condition.",
+            "items": {
+              "type": "object",
+              "required": [
+                "model",
+                "state",
+                "consecutive_failures",
+                "failure_threshold",
+                "windows",
+                "last_window_at",
+                "last_success_at",
+                "error_class"
+              ],
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "description": "The classifier's id."
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "ok",
+                    "failing"
+                  ],
+                  "description": "`failing` once `failure_threshold` windows in a row have failed and none answered since."
+                },
+                "consecutive_failures": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "failure_threshold": {
+                  "type": "integer",
+                  "examples": [
+                    10
+                  ]
+                },
+                "windows": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Analysis windows run since the classifier was loaded."
+                },
+                "last_window_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Unix seconds of the latest window, or null before the first."
+                },
+                "last_success_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Unix seconds of the latest window answered cleanly, or null for never."
+                },
+                "error_class": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "inference_error",
+                    "non_finite_output",
+                    null
+                  ],
+                  "description": "Why the latest failed window failed; null after a clean one."
+                }
+              }
+            }
+          },
           "strict": {
             "type": "boolean",
             "description": "Which mode this response answered in."

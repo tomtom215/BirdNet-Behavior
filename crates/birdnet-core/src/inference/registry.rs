@@ -107,6 +107,8 @@ pub struct RegisteredModel {
     /// the model can only derive its rate from the shape, and for anything
     /// but the two BirdNET shapes that derivation is a guess.
     pub spec: InputSpec,
+    /// Whether it is still answering: kept by the daemon, window by window.
+    pub health: super::health::ModelHealth,
 }
 
 impl fmt::Debug for RegisteredModel {
@@ -115,6 +117,7 @@ impl fmt::Debug for RegisteredModel {
             .field("id", &self.id)
             .field("threshold", &self.threshold)
             .field("input_spec", &self.model.input_spec())
+            .field("health", &self.health)
             .finish_non_exhaustive()
     }
 }
@@ -283,6 +286,7 @@ impl ClassifierRegistry {
                 model,
                 threshold: spec.threshold,
                 spec: effective,
+                health: super::health::ModelHealth::default(),
             });
         }
 
@@ -356,6 +360,7 @@ impl ClassifierRegistry {
                 id: id.into(),
                 model,
                 threshold: None,
+                health: super::health::ModelHealth::default(),
             }],
             routes: HashMap::new(),
         }
@@ -378,6 +383,15 @@ impl ClassifierRegistry {
     #[must_use]
     pub fn model(&self, idx: usize) -> Option<&RegisteredModel> {
         self.models.get(idx)
+    }
+
+    /// Each classifier's id and health, primary first.
+    #[must_use]
+    pub fn health(&self) -> Vec<(String, super::health::ModelHealth)> {
+        self.models
+            .iter()
+            .map(|m| (m.id.clone(), m.health))
+            .collect()
     }
 
     /// How many classifiers are loaded. Always at least one.

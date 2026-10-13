@@ -133,6 +133,12 @@ fn throughput_observer(
                 let metrics = state.metrics();
                 move |_path, reason| metrics.inc_segment_shed(reason.as_str())
             })
+            // Each classifier's run of failed windows (`e853776`), for the
+            // `classifiers` condition, the health endpoint and the exposition.
+            .with_model_health({
+                let metrics = state.metrics();
+                move |health| metrics.set_model_health(health)
+            })
 }
 
 /// Whether the board is at the limit the shed policy backs off at: the CPU

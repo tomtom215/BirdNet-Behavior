@@ -6,6 +6,10 @@
 //! monitor polls. The deadman now publishes its verdict, and `tripped` is a
 //! strict fault — and only a strict one, since a silent station is exactly
 //! the station a container supervisor must not restart in a loop.
+//!
+//! A classifier failing every window (birdnet-go `e853776`) is the same kind
+//! of silence, and one the deadman can miss altogether while another
+//! classifier still answers: it is a strict fault on the same terms.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -67,4 +71,56 @@ async fn a_tripped_deadman_is_a_strict_fault_and_nothing_else() {
         body["detection_deadman"], "tripped",
         "the verdict is still on the body"
     );
+}
+
+#[tokio::test]
+async fn a_failing_classifier_is_a_strict_fault_and_nothing_else() {
+    use birdnet_core::inference::health::{ErrorClass, FAILING_AFTER, ModelHealth};
+    let state = station();
+    let (status, body) = health(&state, "/api/v2/health?strict=1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["classifiers"],
+        serde_json::json!([]),
+        "nothing reported yet"
+    );
+
+    let mut primary = ModelHealth::default();
+    primary.succeeded(1_700_000_000);
+    let mut second = ModelHealth::default();
+    for i in 0..FAILING_AFTER - 1 {
+        second.failed(ErrorClass::NonFiniteOutput, 1_700_000_001 + u64::from(i));
+    }
+    // One short of the threshold: not yet failing, and not yet a fault.
+    state.metrics().set_model_health(&[
+        ("birdnet".to_owned(), primary),
+        ("perch".to_owned(), second),
+    ]);
+    let (status, body) = health(&state, "/api/v2/health?strict=1").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["classifiers"][1]["state"], "ok");
+    assert_eq!(
+        body["classifiers"][1]["consecutive_failures"],
+        FAILING_AFTER - 1
+    );
+
+    second.failed(ErrorClass::NonFiniteOutput, 1_700_000_100);
+    state.metrics().set_model_health(&[
+        ("birdnet".to_owned(), primary),
+        ("perch".to_owned(), second),
+    ]);
+    let (status, body) = health(&state, "/api/v2/health?strict=1").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["status"], "degraded");
+    let perch = &body["classifiers"][1];
+    assert_eq!(perch["model"], "perch");
+    assert_eq!(perch["state"], "failing");
+    assert_eq!(perch["failure_threshold"], FAILING_AFTER);
+    assert_eq!(perch["error_class"], "non_finite_output");
+    assert_eq!(perch["last_success_at"], serde_json::Value::Null);
+    assert_eq!(body["classifiers"][0]["state"], "ok");
+    assert_eq!(body["classifiers"][0]["last_success_at"], 1_700_000_000_u64);
+
+    let (status, body) = health(&state, "/api/v2/health").await;
+    assert_eq!(status, StatusCode::OK, "not strict: {body}");
 }
