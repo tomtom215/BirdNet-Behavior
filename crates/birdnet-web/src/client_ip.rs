@@ -36,6 +36,12 @@
 //!    `cloudflare` — then `X-Forwarded-For` walked **right to left**, stopping
 //!    at the first hop that is not itself a trusted proxy, then `X-Real-IP`.
 //!
+//!    If the walk and `X-Real-IP` both name a client (an untrusted address)
+//!    and the two differ, the peer is the client. One of the two was written
+//!    by the visitor — nginx set up with `X-Real-IP` alone passes the
+//!    client's `X-Forwarded-For` through, Caddy passes a client's `X-Real-IP`
+//!    through — and nothing in the request says which.
+//!
 //!    Cloudflare overwrites `CF-Connecting-IP`; nothing else does. Caddy and
 //!    nginx pass it through as the client sent it, so believing it from any
 //!    trusted peer meant that a station behind the reverse proxy
@@ -419,14 +425,30 @@ impl TrustedProxies {
             return from_peer(ip);
         }
 
+        let real_ip = header_ip(headers, "x-real-ip").map(unmap);
         if let Some(resolved) = self.walk_forwarded_for(headers, peer) {
+            // The walk and `X-Real-IP` can each be written by the visitor:
+            // nginx with only `proxy_set_header X-Real-IP` passes the client's
+            // own `X-Forwarded-For` through, and Caddy passes a client's
+            // `X-Real-IP` through. When both name a client — not a proxy we
+            // trust — and the names differ, one of them is forged and nothing
+            // here says which, so the request is attributed to the proxy that
+            // sent it. That fails closed: a forger lands in one shared bucket
+            // instead of minting a fresh identity per request.
+            if let Some(real) = real_ip
+                && real != resolved.client
+                && !self.is_trusted(real)
+            {
+                warn_headers_disagree();
+                return from_peer(peer);
+            }
             return resolved;
         }
 
         // nginx's `X-Real-IP` is a single value describing nginx's own client.
         // Last because in a chain it names the previous proxy rather than the
         // origin, which the `X-Forwarded-For` walk gets right.
-        if let Some(ip) = header_ip(headers, "x-real-ip") {
+        if let Some(ip) = real_ip {
             return from_peer(ip);
         }
 
@@ -471,6 +493,24 @@ impl TrustedProxies {
             vouched_by: hops[at + 1],
         })
     }
+}
+
+/// Log, once per process, that a trusted proxy's forwarded headers disagree.
+///
+/// Once, because the requests that trigger it may be a visitor's forgeries,
+/// and a log line per request would let them fill the disk. The operator needs
+/// to hear it once to fix the proxy; every later request is handled the same
+/// safe way whether or not it is logged.
+fn warn_headers_disagree() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!(
+            "a trusted proxy sent X-Forwarded-For and X-Real-IP naming different clients; \
+             attributing such requests to the proxy itself. Configure the proxy to write \
+             X-Forwarded-For (nginx: `proxy_set_header X-Forwarded-For \
+             $proxy_add_x_forwarded_for;`) and to set or clear X-Real-IP"
+        );
+    });
 }
 
 /// Parse the reserved-name tables, which are compile-time constants known to
@@ -764,9 +804,61 @@ mod tests {
                 &headers(&[("x-real-ip", "9.9.9.9"), ("x-forwarded-for", "8.8.8.8")]),
                 ip("127.0.0.1")
             ),
-            ip("8.8.8.8"),
-            "the forwarded-for walk is better evidence than X-Real-IP and must win"
+            ip("127.0.0.1"),
+            "two client addresses that disagree are neither believed — see \
+             headers_that_disagree_are_neither_believed"
         );
+    }
+
+    /// nginx configured with only `proxy_set_header X-Real-IP $remote_addr;`
+    /// passes the client's own `X-Forwarded-For` through untouched. The walk
+    /// then reads an address the visitor typed, so any visitor could name a
+    /// fresh one per request and walk past the rate limiter and the sign-in
+    /// throttle. When the two headers name different client addresses we
+    /// cannot tell which the proxy wrote, so the request is the proxy's.
+    #[test]
+    fn headers_that_disagree_are_neither_believed() {
+        let t = TrustedProxies::default();
+        let forged_xff = headers(&[("x-real-ip", "203.0.113.7"), ("x-forwarded-for", "9.9.9.9")]);
+        assert_eq!(
+            t.client_ip(&forged_xff, ip("127.0.0.1")),
+            ip("127.0.0.1"),
+            "a client-written X-Forwarded-For must not name the client"
+        );
+        // The mirror image: Caddy appends to X-Forwarded-For and never sets
+        // X-Real-IP, so an X-Real-IP that arrives was written by the visitor.
+        let forged_real = headers(&[("x-real-ip", "9.9.9.9"), ("x-forwarded-for", "203.0.113.7")]);
+        assert_eq!(
+            t.client_ip(&forged_real, ip("127.0.0.1")),
+            ip("127.0.0.1"),
+            "a client-written X-Real-IP must not name the client either"
+        );
+    }
+
+    /// The counterpart: a correctly configured proxy writes the same client
+    /// into both headers, and that client is believed — a blanket refusal of
+    /// X-Real-IP would pass the test above and break every nginx station.
+    #[test]
+    fn headers_that_agree_are_believed() {
+        let t = TrustedProxies::default();
+        let h = headers(&[
+            ("x-real-ip", "203.0.113.7"),
+            ("x-forwarded-for", "9.9.9.9, 203.0.113.7"),
+        ]);
+        assert_eq!(t.client_ip(&h, ip("127.0.0.1")), ip("203.0.113.7"));
+    }
+
+    /// Two trusted proxies: the inner one sets `X-Real-IP` to the outer one,
+    /// which is a proxy, not a competing claim about the client. The walk
+    /// passes the outer proxy and reaches the visitor.
+    #[test]
+    fn x_real_ip_naming_a_trusted_proxy_is_not_a_disagreement() {
+        let t = TrustedProxies::default();
+        let h = headers(&[
+            ("x-real-ip", "192.168.1.5"),
+            ("x-forwarded-for", "203.0.113.7, 192.168.1.5"),
+        ]);
+        assert_eq!(t.client_ip(&h, ip("127.0.0.1")), ip("203.0.113.7"));
     }
 
     /// A trusted peer with no forwarded headers at all is the client itself —

@@ -59,6 +59,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A visitor behind some reverse-proxy setups could choose their own
+  address.** With a trusted proxy that sets only `X-Real-IP` (nginx with
+  `proxy_set_header X-Real-IP $remote_addr;` and no `X-Forwarded-For` line),
+  the visitor's own `X-Forwarded-For` reached the station and won, so each
+  request could claim a fresh address and walk past the rate limiter and the
+  sign-in throttle, and write a false identity into the audit log. It did not
+  bypass authentication. When the two headers name different visitors the
+  request is now attributed to the proxy, and the log says so once. The
+  documented nginx and Caddy configurations did not have the defect. The
+  cost, stated rather than hidden: a visitor who forges `X-Real-IP` is now
+  counted as the proxy, an identity shared with anyone browsing on the
+  station's own machine, so they can spend that identity's sign-in
+  throttle. Having a proxy overwrite or clear `X-Real-IP` closes that too.
+
 - **"Suggest an edit" was a 404 on every page of the published manual.**
   mdBook 0.5 expands `{path}` relative to the book root, so the 0.4-era
   template sent every link to `docs/book/docs/book/…`.
