@@ -1,8 +1,9 @@
-//! Year in Review — an editorial annual recap of the station's listening year.
+//! Year in Review — an editorial recap of the calendar year so far.
 //!
-//! A read-only celebration page: big-number tiles, a 52-week activity tape,
-//! the species leaderboard, a few milestone facts and a closing statement.
-//! Everything is computed from the existing SQLite aggregates.
+//! A read-only celebration page: big-number tiles, a tape with one cell per
+//! week of the year, the species leaderboard, a few milestone facts and a
+//! closing statement. Every figure covers 1 January to today and nothing
+//! earlier.
 
 use std::fmt::Write as _;
 
@@ -36,21 +37,27 @@ pub(super) async fn content(state: AppState) -> String {
     // day —", for a station with three years of records. There is nothing on
     // this page that is not a claim about the reader's own birds, so a query
     // that fails has to say so rather than round down to nothing.
+    //
+    // Every figure is the calendar year so far, 1 January to today, because
+    // that is what the masthead's "· 2026" says. The page used to mix three
+    // scopes under that label: all-time totals, leaderboard and first day; a
+    // trailing 366 days for the busiest day; and the calendar year for "new
+    // to your list" — so a station with three years of records showed all
+    // three years' detections as "your year".
+    let today = today_date_string();
+    let start = year_start(&today);
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let total = birdnet_db::sqlite::detection_count(conn)?;
-            let species = birdnet_db::sqlite::species_count(conn)?;
-            let dates = birdnet_db::sqlite::distinct_detection_dates(conn)?;
-            // limit 1000 covers every species → doubles as a sci→common lookup
-            let all = birdnet_db::sqlite::top_species(conn, 1000)?;
-            let first_seen = birdnet_db::sqlite::species_first_seen(conn)?;
-            let daily = birdnet_db::sqlite::daily_counts(conn, 366)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((total, species, dates, all, first_seen, daily))
+            let daily = birdnet_db::sqlite::range_daily_counts(conn, &start, &today)?;
+            // 1000 is more species than any station has heard.
+            let top = birdnet_db::sqlite::weekly_top_species(conn, &start, &today, 1000)?;
+            let new = birdnet_db::sqlite::weekly_new_species(conn, &start, &today)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new))
         })
     })
     .await;
 
-    let (total, species, dates, all, first_seen, daily) = match result {
+    let (today, daily, top, new) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "year in review: query failed");
@@ -62,7 +69,12 @@ pub(super) async fn content(state: AppState) -> String {
         }
     };
 
-    render_content(total, species, &dates, &all, &first_seen, &daily)
+    render_content(&today, &daily, &top, &new)
+}
+
+/// `YYYY-01-01` for the year `today` falls in.
+fn year_start(today: &str) -> String {
+    format!("{}-01-01", today.get(0..4).unwrap_or("1970"))
 }
 
 const MONTHS: [&str; 12] = [
@@ -76,22 +88,28 @@ const MONTHS: [&str; 12] = [
     clippy::too_many_lines
 )]
 fn render_content(
-    total: i64,
-    species: i64,
-    dates: &[String],
-    all: &[birdnet_db::sqlite::SpeciesCount],
-    first_seen: &std::collections::HashMap<String, String>,
+    today: &str,
     daily: &[birdnet_db::sqlite::DailyCount],
+    top: &[(String, String, i64)],
+    new: &[(String, String, String)],
 ) -> String {
-    let today = today_date_string();
     let year = today.get(0..4).unwrap_or("----");
-    let active_days = dates.len();
+    let total: i64 = daily.iter().map(|d| d.count).sum();
+    let species = top.len();
+    let active_days = daily.len();
 
-    // Busiest day.
-    let busiest = daily.iter().max_by_key(|d| d.count);
+    // Busiest day: the first of any tie, so the answer does not depend on
+    // which of two equal days the iterator met last.
+    let busiest = daily.iter().fold(
+        None::<&birdnet_db::sqlite::DailyCount>,
+        |best, d| match best {
+            Some(b) if b.count >= d.count => Some(b),
+            _ => Some(d),
+        },
+    );
 
-    // 52(+1)-week activity tape over the trailing year.
-    let base = date_to_epoch_days(&today).saturating_sub(364);
+    // One cell per week of the calendar year, from 1 January.
+    let base = date_to_epoch_days(&year_start(today));
     let mut weeks = [0i64; 53];
     for dc in daily {
         let e = date_to_epoch_days(&dc.date);
@@ -108,7 +126,7 @@ fn render_content(
     // O-20 — help link in the year-in-review masthead.
     let help_link = super::help::help_link(super::help::Topic::Reports);
     let busiest_count = busiest.map_or(0, |d| d.count);
-    let new_this_year = first_seen.values().filter(|d| d.starts_with(year)).count();
+    let new_this_year = new.len();
     let per_day = if active_days > 0 {
         total / i64::try_from(active_days).unwrap_or(1).max(1)
     } else {
@@ -139,7 +157,7 @@ fn render_content(
         html,
         r#"<div class="rp-stats">
   <div class="rp-stat"><div class="v moss">{det}</div><div class="l">detections</div><div class="d">≈ {per_day} a day</div></div>
-  <div class="rp-stat"><div class="v">{species}</div><div class="l">species heard</div><div class="d">on the life list</div></div>
+  <div class="rp-stat"><div class="v">{species}</div><div class="l">species heard</div><div class="d">this year</div></div>
   <div class="rp-stat"><div class="v rare">{new_this_year}</div><div class="l">new to your list</div></div>
   <div class="rp-stat"><div class="v">{busy}</div><div class="l">busiest day</div><div class="d">{busy_date}</div></div>
 </div>"#,
@@ -196,54 +214,51 @@ fn render_content(
     html.push_str(
         r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most heard</div><h2 class="sh-h">The year's leaderboard</h2></div><a class="action" href="/species">Full list →</a></div>"#,
     );
-    if all.is_empty() {
-        html.push_str(r#"<p class="bnb-meta">No detections yet.</p>"#);
+    if top.is_empty() {
+        let _ = write!(
+            html,
+            r#"<p class="bnb-meta">Nothing heard yet in {year}.</p>"#
+        );
     } else {
-        for (i, sp) in all.iter().take(10).enumerate() {
+        for (i, (sci, com, count)) in top.iter().take(10).enumerate() {
             let _ = write!(
                 html,
                 r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
-                av = avatar(&sp.com_name, &sp.sci_name, ""),
-                enc = simple_url_encode(&sp.com_name),
-                name = escape_html(&sp.com_name),
-                count = group_thousands(sp.count),
+                av = avatar(com, sci, ""),
+                enc = simple_url_encode(com),
+                name = escape_html(com),
+                count = group_thousands(*count),
             );
         }
     }
     html.push_str("</div>");
 
     // Milestones.
-    let sci_to_com: std::collections::HashMap<&str, &str> = all
-        .iter()
-        .map(|s| (s.sci_name.as_str(), s.com_name.as_str()))
-        .collect();
-    let first_voice = dates.iter().min().cloned().unwrap_or_default();
-    let newest = first_seen
-        .iter()
-        .max_by(|a, b| a.1.cmp(b.1))
-        .map(|(sci, date)| {
-            let com = sci_to_com
-                .get(sci.as_str())
-                .copied()
-                .unwrap_or(sci.as_str());
-            (com.to_string(), date.clone())
-        });
-    let busiest_label = busiest.map_or_else(
-        || "—".to_string(),
-        |d| format!("{} · {}", d.date, group_thousands(d.count)),
-    );
-    let leader = all.first().map(|s| (s.com_name.clone(), s.count));
+    // `daily` is in date order and `new` in first-heard order.
+    let first_voice = daily.first().map(|d| d.date.as_str());
+    let newest = new
+        .last()
+        .map(|(_, com, date)| (com.as_str(), date.as_str()));
+    let leader = top.first().map(|(_, com, count)| (com.as_str(), *count));
 
     html.push_str(
         r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Milestones</div><h2 class="sh-h">Moments that mattered</h2></div></div>"#,
     );
-    milestone(
-        &mut html,
-        "✦",
-        "First voice of the year",
-        &format!("{first_voice} · the earliest day on record"),
-    );
+    match first_voice {
+        Some(date) => milestone(
+            &mut html,
+            "✦",
+            "First voice of the year",
+            &format!("{} · the first day heard in {year}", escape_html(date)),
+        ),
+        None => milestone(
+            &mut html,
+            "✦",
+            "First voice of the year",
+            &format!("Not yet — nothing heard in {year} so far"),
+        ),
+    }
     if let Some((com, count)) = leader {
         milestone(
             &mut html,
@@ -251,23 +266,29 @@ fn render_content(
             "Most-heard species",
             &format!(
                 "{} · {} detections",
-                escape_html(&com),
+                escape_html(com),
                 group_thousands(count)
             ),
         );
     }
-    milestone(
-        &mut html,
-        "☼",
-        "Busiest day",
-        &format!("{busiest_label} · the loudest the yard ever got"),
-    );
+    if let Some(d) = busiest {
+        milestone(
+            &mut html,
+            "☼",
+            "Busiest day",
+            &format!(
+                "{} · {} · the loudest the yard got this year",
+                escape_html(&d.date),
+                group_thousands(d.count)
+            ),
+        );
+    }
     if let Some((com, date)) = newest {
         milestone(
             &mut html,
             "✸",
             "Newest arrival",
-            &format!("{} · first heard {date}", escape_html(&com)),
+            &format!("{} · first heard {}", escape_html(com), escape_html(date)),
         );
     }
     html.push_str("</div></div>");
@@ -277,7 +298,7 @@ fn render_content(
         html,
         r#"<div class="bnb-card pad yir-close">
   <div class="bnb-eyebrow">The tally</div>
-  <p class="display yir-close-line">{species} species and <span class="accent">{total}</span> detections across {days} days of listening.</p>
+  <p class="display yir-close-line">{species} species and <span class="accent">{total}</span> detections across {days} days of listening in {year}.</p>
   <p class="bnb-meta">Here's to next year's first dawn chorus.</p>
 </div>"#,
         species = species,
@@ -311,25 +332,36 @@ mod tests {
 
     #[test]
     fn render_content_smoke() {
-        let all = vec![birdnet_db::sqlite::SpeciesCount {
-            com_name: "Northern Cardinal".into(),
-            sci_name: "Cardinalis cardinalis".into(),
-            count: 100,
-            avg_confidence: 0.9,
-        }];
         let daily = vec![birdnet_db::sqlite::DailyCount {
             date: "2026-05-20".into(),
             count: 30,
         }];
-        let mut fs = std::collections::HashMap::new();
-        fs.insert(
+        let top = vec![(
             "Cardinalis cardinalis".to_string(),
-            "2026-05-01".to_string(),
-        );
-        let html = render_content(100, 1, &["2026-05-20".to_string()], &all, &fs, &daily);
+            "Northern Cardinal".to_string(),
+            30,
+        )];
+        let html = render_content("2026-05-22", &daily, &top, &[]);
         assert!(html.contains("Your year in"));
         assert!(html.contains("rp-stats"));
         assert!(html.contains("Northern Cardinal"));
-        assert!(html.contains("Leaderboard") || html.contains("leaderboard"));
+        assert!(html.contains("leaderboard"));
+    }
+
+    /// Two equal days: the busiest is the first, whatever order a fold meets
+    /// them in — `max_by_key` returns the last.
+    #[test]
+    fn the_busiest_day_of_a_tie_is_the_first() {
+        let day = |date: &str| birdnet_db::sqlite::DailyCount {
+            date: date.into(),
+            count: 5,
+        };
+        let html = render_content(
+            "2026-05-22",
+            &[day("2026-03-01"), day("2026-04-01")],
+            &[],
+            &[],
+        );
+        assert!(html.contains("2026-03-01 · 5 · the loudest"), "{html}");
     }
 }

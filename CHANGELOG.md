@@ -96,6 +96,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the job state** — which reads as "nothing is due" on exactly the station
   that has a problem. It now answers `500`.
 
+- **Year in Review mixed three periods under one year.** Its masthead says
+  "Year in review · 2026", but the totals, species count, leaderboard, first
+  day and days of listening were all-time; the busiest day was the trailing
+  366 days ("the loudest the yard ever got"); and only "new to your list" was
+  the calendar year. A station with three years of records was shown all three
+  as "your year". Every figure is now 1 January to today, and a year with
+  nothing heard yet says so. Species tied on count in the leaderboard and the
+  weekly report are ordered by name rather than by however the scan returned
+  them.
+
 - **Share links reached the request log.** At `debug`, every request was
   logged with its full URI, so `/r/{token}` — where the token is the access —
   went to the journal and into support bundles. Requests are now logged by

@@ -117,7 +117,11 @@ pub fn confidence_distribution(conn: &Connection) -> Result<[i64; 6], DbError> {
 
 /// Top species by detection count within a date range `[week_start, week_end]`.
 ///
-/// Returns `(sci_name, com_name, count)` tuples, most-detected first.
+/// Returns `(sci_name, com_name, count)` tuples, most-detected first, ties
+/// by common name — as [`super::species::top_species`] breaks them, and for
+/// the same reason: without it, two species heard equally often came back in
+/// whatever order the scan produced, and a report could reorder between two
+/// loads of the same numbers.
 ///
 /// # Errors
 ///
@@ -133,7 +137,7 @@ pub fn weekly_top_species(
          FROM detections_analytic
          WHERE Date >= ?1 AND Date <= ?2
          GROUP BY Sci_Name, Com_Name
-         ORDER BY cnt DESC
+         ORDER BY cnt DESC, Com_Name ASC
          LIMIT ?3",
     )?;
     let rows = stmt
@@ -733,6 +737,26 @@ mod tests {
     use super::*;
     use crate::sqlite::connection::open_or_create;
     use rusqlite::params;
+
+    /// Equal counts are ordered by common name. The two species are chosen so
+    /// that scientific-name order — the order `GROUP BY` produces — is the
+    /// reverse of common-name order.
+    #[test]
+    fn weekly_top_species_breaks_ties_by_common_name() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        for (sci, com) in [("Aaa aaa", "Zebra Finch"), ("Zzz zzz", "Apple Warbler")] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES ('2026-03-01', '06:00:00', ?1, ?2, 0.9)",
+                params![sci, com],
+            )
+            .unwrap();
+        }
+        let top = weekly_top_species(&conn, "2026-01-01", "2026-12-31", 10).unwrap();
+        let names: Vec<&str> = top.iter().map(|(_, com, _)| com.as_str()).collect();
+        assert_eq!(names, ["Apple Warbler", "Zebra Finch"]);
+    }
 
     /// Return the ISO-8601 date `n` days before `now`, computed by `SQLite`
     /// so callers and the fixture agree regardless of the host clock.
