@@ -1110,6 +1110,29 @@ fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
     }
 }
 
+/// The ONNX Runtime environment every session in this process is created
+/// under: the classifiers and the geomodel alike.
+///
+/// Built once, on first use, and held for the life of the process. `ort`
+/// allows one environment per process and refuses a second even after the
+/// first is dropped (`EnvironmentBuilder::build` checks a global that is never
+/// reset), so an environment built per model load would fail the second load —
+/// the geomodel after the classifier, or a classifier hot-swap. No global
+/// thread pool: each session keeps the explicit intra-op thread count its
+/// builder sets, for the reason [`super::species_filter`]'s loader gives.
+pub(crate) fn ort_environment() -> Result<&'static ort::environment::Environment, InferenceError> {
+    static ENV: std::sync::OnceLock<Result<ort::environment::Environment, String>> =
+        std::sync::OnceLock::new();
+    ENV.get_or_init(|| {
+        ort::init()
+            .with_name("birdnet")
+            .build()
+            .map_err(|e| e.to_string())
+    })
+    .as_ref()
+    .map_err(|e| InferenceError::Model(format!("ONNX Runtime environment: {e}")))
+}
+
 /// The session settings every classifier is loaded with.
 ///
 /// Intra-op spin-waiting is off. With it on, ONNX Runtime's worker threads
@@ -1125,7 +1148,7 @@ fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
 fn classifier_session_builder(
     num_threads: usize,
 ) -> Result<ort::session::builder::SessionBuilder, InferenceError> {
-    Session::builder()
+    Session::builder(ort_environment()?)
         .map_err(|e| InferenceError::Model(e.to_string()))?
         .with_intra_threads(num_threads)
         .map_err(|e| InferenceError::Model(e.to_string()))?

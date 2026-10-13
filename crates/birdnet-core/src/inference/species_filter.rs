@@ -312,7 +312,7 @@ impl SpeciesFilter {
         // allows the call again now, for the binaries already shipped; this
         // keeps the session from needing it. One thread is ample: the model
         // scores one location per week.
-        let session = Session::builder()
+        let session = Session::builder(super::model::ort_environment()?)
             .map_err(|e| InferenceError::Model(e.to_string()))?
             .with_intra_threads(1)
             .map_err(|e| InferenceError::Model(e.to_string()))?

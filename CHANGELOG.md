@@ -57,6 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **ONNX Runtime 1.31** (`ort` 2.0.0-rc.14, was rc.13 with ONNX Runtime
+  1.28). Every session is now created under one process-wide environment,
+  built on first use and kept for the life of the process — `ort` allows one
+  per process and refuses a second even after the first is dropped. Scores
+  are unchanged: the top 25 species of every 3-second chunk of the test
+  recording match the previous runtime to nine decimal places, byte for byte
+  (x86_64, the BirdNET+ V3.0 model; not measured on a Raspberry Pi).
+  `scripts/setup-onnxruntime.sh` now seeds the runtime for the `ort-sys`
+  version in `Cargo.lock`; it took the first one unpacked, which after an
+  upgrade was the old one.
+
 - **The classifier no longer spin-waits between chunks.** ONNX Runtime's
   worker threads busy-waited after every inference. Off, measured on a 4-vCPU
   x86_64 host with the BirdNET v2.4 INT8 model: 52–54 ms of CPU per
