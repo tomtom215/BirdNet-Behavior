@@ -8,7 +8,10 @@
 >   from. Compared at `88985a3` (2026‑02‑28).
 > * [`tphakala/birdnet-go`](https://github.com/tphakala/birdnet-go) — an
 >   independent Go rewrite of the same idea, an order of magnitude larger than
->   either. Compared at `1e74c82` (2026‑09‑02).
+>   either. Compared at `1e74c82` (2026‑09‑02), then re-checked at `780ce51`
+>   (2026‑10‑11): the 239 commits between are triaged in **Part 5**.
+>   `Nachtzuster/BirdNET-Pi` was re-checked the same day and is still at
+>   `88985a3`.
 
 ## How this was measured
 
@@ -276,7 +279,7 @@ within each group by how much they change what a station can do.
 | | |
 |---|---|
 | **Upstream** | `conf.VADSettings` — an embedded Silero VAD ONNX model detecting speech *presence* (not content, not speaker), opt-in, augmenting the label-based privacy filter. |
-| **Ours** | `crates/birdnet-core/src/detection/privacy.rs` — rank-based on BirdNET's own `Human` labels, with adjacent-chunk masking. Our own `noise.rs` doc comment records that at the shipped `top_n` of 10 the privacy filter's cutoff `max(10, …)` never actually excludes anything, so it is a blunt instrument. |
+| **Ours** | `crates/birdnet-core/src/detection/privacy.rs` gates on the chunk's *human score* — the highest confidence BirdNET gave any human class, read before the detection threshold and top-N cut — with adjacent-chunk masking. (This row used to say the filter was rank-based and never excluded anything at the shipped `top_n`; that described the BirdNET-Pi rule this port inherited, which `privacy.rs` replaced. `noise.rs`'s doc comment repeated it and was corrected at the same time.) It is still BirdNET's own label set, not a speech detector. |
 | **Why it matters** | A garden microphone records the neighbours. BirdNET's human classes are a by-product of its training set, not a speech detector, and they miss quiet conversation at exactly the distance where it is still intelligible. For anyone deploying where consent matters, a real VAD is the difference between a defensible privacy claim and a hopeful one. |
 | **Plan** | Optional second small ONNX session (~2 MB) run only on chunks that pass the cheap gates, gating clip *retention* rather than detection: a chunk with speech is analysed and its detection recorded, but no audio is written. Off by default, and the model shipped alongside rather than embedded so the binary size story does not change for stations that do not want it. |
 
@@ -399,7 +402,7 @@ within each group by how much they change what a station can do.
 
 ### 2.4 Integrations
 
-#### G‑26 · Weather providers — SHIPPED (three of four; OpenWeather declined)
+#### G‑26 · Weather providers — SHIPPED (Open-Meteo, MET Norway/yr.no, Wunderground; OpenWeather declined; Pirate Weather added upstream since — see Part 5)
 
 | | |
 |---|---|
@@ -479,7 +482,7 @@ within each group by how much they change what a station can do.
 | | |
 |---|---|
 | **Upstream** | `/api/v2/system/{info,resources,disks,processes,network-interfaces,jobs,temperature/cpu,external-media,inference}` plus `/api/v2/control/{restart,reload,rebuild-filter,restart-source/:id}`. |
-| **Ours** | `/api/v2/health`, `/api/v2/metrics`, `/station/*`, `/system/disk`, `/admin/system/*` and `POST /admin/system/service/restart`. **Per-source restart has landed** — see the resolution below. Still missing: per-process view, network interfaces, external media detection, a job list, and filter rebuild. |
+| **Ours** | `/api/v2/health`, `/api/v2/metrics`, `/station/*`, `/system/disk`, `/admin/system/*` and `POST /admin/system/service/restart`. **Per-source restart has landed** — see the resolution below. Still missing: per-process view, network interfaces, external media detection, and filter rebuild. Our `GET /api/v2/system/jobs` is a maintenance-job catalogue; upstream's `/system/jobs` (`GetJobQueueStats`) is detection-action queue statistics — the same path for a different thing. |
 | **Why it matters** | Per-source restart is the one that matters daily — restarting the whole service to recover one wedged RTSP camera drops every other source and loses in-flight audio. |
 | **Resolution (per-source restart)** | The supervisor owns its source list privately on its own thread, so this needed a seam in the direction that did not exist: `crates/birdnet-core/src/audio/capture/control.rs` holds the set of pending restart requests the web layer writes and `run_supervisor` drains once per tick (`src/capture/runloop.rs`), the mirror of `status.rs`. A drained request stops the source and clears its fault state, so `reconcile` starts it again on that same tick rather than waiting out a backoff. It goes through the supervisor's *own* start path, so the schedule and quiet window still hold and a request for a paused source is spent rather than overriding them. Three surfaces: a **Restart** button per row on `/admin/audio`, `POST /api/v2/control/restart-source`, and `GET /api/v2/system/capture` to read the labels it takes. Audited as `audio.source.restart`. |
 | **Two things this deliberately does not do** | It does **not** reload the source's settings — `CaptureManager` is built once at supervisor start and `start()` respawns from that stored config, so an edit still needs a service restart. And an operator-requested restart is **not** counted in `restarts_last_hour`, so it never raises `flapping`: that verdict exists to spot a source that cannot stay up on its own. Both are gated, the second with its counterpart. |
@@ -605,3 +608,67 @@ against the code it was written for, per `CLAUDE.md`.
 G‑25 (Sentry), G‑31 (MySQL), the script notification provider in G‑28, FTP and
 Google Drive in G‑30, and the BirdNET-Pi Adminer / file manager / web terminal.
 Each has a stated reason above and a substitute where one is warranted.
+
+---
+
+## Part 5 — birdnet-go `1e74c82` → `780ce51` (2026‑09‑02 → 2026‑10‑11)
+
+Every `feat` commit in the range was read from its diff, and the `fix`/`perf`
+commits were triaged for user-visible capability; about forty Svelte-only,
+wizard-only and Go-specific fixes were grouped rather than checked one by one.
+Our side was read at `4e8fe34`. Statuses are kept current as work lands, as in
+Part 4.
+
+### Gaps and partials
+
+| Upstream | What it does | Status | Ours (evidence) |
+|---|---|---|---|
+| `221262b`, `ef76b6f` reject non-finite scores | NaN / ±inf scores never become detections | **SHIPPED** | `compute_confidence` sent `+inf` to 1.0 on both output paths; non-finite now maps to 0.0, a non-finite human score masks the clip, and the geomodel's `prob < sf_thresh` test — which NaN never satisfies — now reports a non-finite output as a run-time failure instead of passing the species (`inference/model.rs`, `inference/species_filter.rs`). |
+| `631cdf1` forwarded client-IP headers must agree | subnet bypass decided on a strictly resolved address | **SHIPPED** (the defect it exposed here) | We have no subnet bypass, but `client_ip.rs` let a client-written `X-Forwarded-For` win behind a proxy that set only `X-Real-IP`. When the two name different clients the request is now the proxy's. |
+| `780ce51` FLAC detection tags | Vorbis comments in saved FLAC clips | GAP | `audio/extraction/convert.rs` passes no `-metadata` to ffmpeg. |
+| `50547d0` ONNX Runtime spin-wait off | idle intra-op threads stop burning CPU | GAP | `inference/model.rs`, `inference/species_filter.rs` set only the intra-op thread count. |
+| `6dfdc10` MQTT first/last detection time | `speciesFirstDetectedAt` / `speciesLastDetectedAt` in the payload | GAP | `birdnet-integrations/src/mqtt/types.rs` `DetectionPayload` has neither; the data is in `birdnet-db/src/species_tracking.rs`. |
+| `63e7c64` Pirate Weather | a fourth weather provider (Dark Sky-compatible) | GAP | `birdnet-integrations/src/weather.rs` `Provider`: Open-Meteo, MET Norway, Wunderground. |
+| `0b51812` BirdWeather token check | refuses to save sharing-on with an empty or malformed token | PARTIAL | A Test button exists (`routes/admin/notification_test.rs`); the save path stores the token as typed (`routes/admin/settings/handler.rs`). |
+| `7def0cf` detections filtered by source | `source` on the detections list API | PARTIAL | The search page filters by source (`sqlite/queries/detections/filter.rs`); `/api/v2/detections` does not (`routes/detections.rs`). |
+| `a73db53` dawn-chorus window | `period_days` / `min_days` on the API | PARTIAL | Hard-wired to 60 days (`routes/pages/dawn_chorus.rs`). |
+| `e853776` a model failing every window | persistent notice, per-model health, a health check | PARTIAL | A failing file logs; the dead-man fires after 24 h (`src/integrations/deadman.rs`); no per-classifier condition in `station_health.rs`. |
+| `712d4c2` stream metrics | per-source errors and data rates | PARTIAL | `birdnet_audio_source_up`, restarts and stalls are exported; no data rate. |
+| `dee43f5` effective overlap from measured latency | caps overlap to what the device sustains, shows configured vs effective | PARTIAL | The static "needs overlap N s" per level is shown; nothing measures. Its effect cannot be judged off a Pi. |
+| `cd488cc` browser location | `navigator.geolocation` button | PARTIAL | IP-based lookup in onboarding only. Needs a secure context, which a LAN station on plain HTTP is not. |
+| `54b5545` place search | Photon geocoder in settings | GAP | Plain latitude/longitude inputs. Would add an outbound host to the egress inventory. |
+| `6d2335c`, `64aa9e2` SSRF guard on outbound probes | | GAP | Already open as O‑11 in `UNATTENDED_DEPLOYMENT_AUDIT.md`. The probe routes are admin-only. |
+| `0e7290d` location change without restart | | PARTIAL | Latitude/longitude are `Wiring::Bridged`: next restart. |
+| `92067fa` spectrograms after audio retention | | GAP | Spectrograms are rendered on demand from the clip. |
+| `aa86b38` per-source Home Assistant state topics | | GAP (minor) | Discovery publishes station-wide sensors only. |
+| `111fb34`, `121f005` host-network Compose, Portainer/Unraid templates, mDNS in the container | | PARTIAL / GAP | Bridge-network Compose only; no nss-mdns in the image. Not verifiable without a Docker daemon. |
+| `0f46189` Africa regional tiles | three more regional model variants | GAP, inside G‑10 | No regional variants in `model_catalog.rs`. |
+
+### Parity, not applicable, or declined
+
+`af617ba` settings deep links — PARITY (`#set-…` anchors; there are no tabs).
+`1b7e56c` ffmpeg stderr tail — PARITY in shape (we drain and promote stderr);
+whether ffmpeg echoes RTSP credentials into the lines we log is **unverified**.
+`812237a`, `e445493`, `ad25bd2`, `c39534a`, `9a1fb24`, `7dcae61`, `db87734` —
+PARITY. `2210354`/`c404137`/`ffd6d52` native RTSP ingest and `b4e39ca` native
+MP3 encoder — not applicable (ffmpeg is our ingest and encoder). `8f0d3ec`,
+`c04d0cd` model-catalog dependencies and optimisation offers — not applicable
+to a compiled-in two-entry catalogue. `0ee57b1`, `32e1f50` ultrasonic export and
+audible bats — wait on G‑14. `83ed7b9` running with zero acoustic models —
+declined: `inference/registry.rs` refuses an empty registry on purpose.
+`98b1c62` `lang` follows the UI language — not applicable (the UI is English).
+
+### Corrections to Part 2 this re-check found
+
+* **G‑13**'s "Ours" cell described a rank-based filter that had been replaced.
+  Corrected above. Upstream now embeds Silero in every build (`3e03da1`); our
+  plan to ship it alongside stands.
+* **G‑20** upstream now always sends PKCE (S256) (`90ebedf`).
+* **G‑22** upstream's colour schemes are five plus custom, not six.
+* **G‑26** upstream's set is now yr.no, OpenWeather, Wunderground and Pirate
+  Weather.
+* **G‑32**'s "Ours" cell listed "a job list" as missing while the same row said
+  the jobs API shipped. Corrected, with the note that upstream's
+  `/system/jobs` is `GetJobQueueStats` — detection-action queue statistics,
+  not a maintenance-job catalogue — so the two share a path, not a meaning.
+

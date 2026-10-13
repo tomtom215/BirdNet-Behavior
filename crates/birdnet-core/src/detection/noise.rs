@@ -24,14 +24,14 @@
 //!
 //! # Two deliberate differences from the privacy filter
 //!
-//! **It gates on confidence, not rank.** The privacy filter asks whether a
-//! human label appears within the top *N* predictions. That reads as a
-//! sensitivity control and, at the shipped `top_n` of 10, is not one: the
-//! cutoff is `max(10, …)` and the list handed to it is already truncated to
-//! `top_n`, so it never excludes anything. (It starts to bite only if an
-//! operator raises `top_n` above 10 — verified by probe.) A confidence
-//! threshold means what it says at any `top_n`, and is the same unit the
-//! operator already sets everywhere else in the detection settings.
+//! **It gates on confidence, as the privacy filter now does too.** Both read
+//! their score from the model's output *before* the detection threshold and
+//! the top-N cut ([`ChunkPrediction`](crate::detection::types::ChunkPrediction)),
+//! so each threshold means what it says at any `top_n`. The privacy filter
+//! once used BirdNET-Pi's rank rule — a human label within the top
+//! `max(10, …)` of a list already cut to `top_n`, which at the shipped
+//! `top_n` of 10 excluded nothing — and this filter was written as the
+//! correction; `privacy.rs` has since been moved onto the same footing.
 //!
 //! **It does not suppress neighbouring chunks.** The privacy filter masks the
 //! chunks either side, which is right for speech: a conversation runs for
