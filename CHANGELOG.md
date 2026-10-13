@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model output of infinity was a 100 % detection, and a NaN from the
+  occurrence model let a species through.** Both classifier output mappings
+  turned `+inf` into exactly 1.0, a confident detection of whichever label sat
+  at that index; a non-finite score is now never a detection, a non-finite
+  human-class score masks the clip, and the first one is logged. The
+  occurrence filter skipped a species only when `score < threshold`, which a
+  NaN never is, so an all-NaN geomodel output admitted every species in
+  silence; it is now a reported run-time failure, handled like any other.
+
 - **A visitor behind some reverse-proxy setups could choose their own
   address.** With a trusted proxy that sets only `X-Real-IP` (nginx with
   `proxy_set_header X-Real-IP $remote_addr;` and no `X-Forwarded-For` line),

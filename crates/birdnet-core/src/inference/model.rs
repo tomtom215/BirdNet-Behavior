@@ -94,6 +94,10 @@ pub struct BirdNetModel {
     /// on every 3-second inference. `&mut self` in `predict`, so a plain bool
     /// suffices (no atomics).
     warned_label_count_mismatch: bool,
+    /// Latches once a non-finite output has been logged. Such outputs are
+    /// never detections ([`compute_confidence`]); this makes a model that
+    /// produces them visible instead of merely quiet.
+    warned_non_finite: bool,
     /// Output indices whose label names a human class, found once at load so
     /// the per-chunk human score is a lookup rather than a scan of every label.
     human_indices: Vec<usize>,
@@ -208,6 +212,7 @@ impl BirdNetModel {
             input_shape,
             is_probability_output,
             warned_label_count_mismatch: false,
+            warned_non_finite: false,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -241,6 +246,7 @@ impl BirdNetModel {
             input_shape,
             is_probability_output,
             warned_label_count_mismatch: false,
+            warned_non_finite: false,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -419,6 +425,21 @@ impl BirdNetModel {
             );
         }
 
+        if !self.warned_non_finite {
+            let non_finite = flat_logits.iter().filter(|v| !v.is_finite()).count();
+            if non_finite > 0 {
+                self.warned_non_finite = true;
+                tracing::warn!(
+                    non_finite,
+                    outputs = flat_logits.len(),
+                    "the model produced non-finite scores (NaN or infinity); they are never \
+                     reported as detections, and a human-class score that is not finite \
+                     masks the clip. A model that does this is damaged or mis-quantised; \
+                     replace the model file with a fresh download"
+                );
+            }
+        }
+
         // Sort by confidence descending
         detections.sort_by(|a, b| {
             b.confidence
@@ -436,9 +457,7 @@ impl BirdNetModel {
             .human_indices
             .iter()
             .filter_map(|&i| flat_logits.get(i))
-            .map(|&raw| {
-                compute_confidence(raw, self.config.sensitivity, self.is_probability_output)
-            })
+            .map(|&raw| human_confidence(raw, self.config.sensitivity, self.is_probability_output))
             .fold(0.0_f32, f32::max);
 
         // The watched noise classes, likewise before either cut: the noise
@@ -1069,12 +1088,31 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 ///   `flat_sigmoid` treats sensitivity as a bias shift instead. A
 ///   `SENSITIVITY` carried over from BirdNET-Pi is read as written, and
 ///   therefore does not reproduce that station's behaviour.
+///
+/// A non-finite `raw` is **0.0**, never a detection. A model that overflows
+/// emits `inf`, and both mappings send `+inf` to exactly 1.0 — a confident
+/// detection of whichever label sits at that index. The privacy gate reads
+/// the same output the opposite way; see [`human_confidence`].
 #[must_use]
 pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
+    if !raw.is_finite() {
+        return 0.0;
+    }
     if is_probability {
         raw.clamp(0.0, 1.0)
     } else {
         sigmoid(sensitivity * raw)
+    }
+}
+
+/// [`compute_confidence`] for a human class, failing towards privacy: a
+/// score the model could not produce is treated as speech present (1.0), so
+/// the clip is masked rather than kept on the strength of a broken output.
+fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
+    if raw.is_finite() {
+        compute_confidence(raw, sensitivity, is_probability)
+    } else {
+        1.0
     }
 }
 
@@ -1902,9 +1940,52 @@ mod tests {
     #[test]
     fn compute_confidence_v30_clamps_out_of_range() {
         // Numerically noisy probabilities can spike outside [0, 1]; we clamp
-        // rather than panic. (NaN is *not* clamped by clamp — separate test.)
+        // rather than panic. Non-finite values are not clamped — see
+        // `compute_confidence_non_finite_is_never_a_detection`.
         assert!((compute_confidence(-0.05, 1.0, true) - 0.0).abs() < 1e-6);
         assert!((compute_confidence(1.05, 1.0, true) - 1.0).abs() < 1e-6);
+    }
+
+    /// A model that overflows emits `inf`. `clamp(+inf)` is 1.0 and
+    /// `sigmoid(+inf)` is 1.0, so before this an overflowing output was a
+    /// detection at 100 % — of whichever label sat at that index — on both
+    /// output paths. NaN was dropped only because `NaN >= t` is false.
+    #[test]
+    fn compute_confidence_non_finite_is_never_a_detection() {
+        for raw in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            for is_probability in [true, false] {
+                let c = compute_confidence(raw, 1.0, is_probability);
+                assert!(
+                    c.to_bits() == 0.0_f32.to_bits(),
+                    "raw {raw} (probability={is_probability}) gave {c}, not 0.0"
+                );
+            }
+        }
+    }
+
+    /// The counterpart: finite extremes still saturate as before, so the
+    /// guard is on finiteness and not a cap on high scores.
+    #[test]
+    fn compute_confidence_finite_extremes_still_saturate() {
+        assert!((compute_confidence(f32::MAX, 1.0, true) - 1.0).abs() < 1e-6);
+        assert!((compute_confidence(40.0, 1.0, false) - 1.0).abs() < 1e-6);
+    }
+
+    /// The privacy gate fails the other way: a human score the model could
+    /// not produce is treated as speech present, so the clip is masked.
+    #[test]
+    fn human_confidence_non_finite_is_speech_present() {
+        for raw in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            assert!(
+                (human_confidence(raw, 1.0, false) - 1.0).abs() < 1e-6,
+                "raw {raw}"
+            );
+            assert!(
+                (human_confidence(raw, 1.0, true) - 1.0).abs() < 1e-6,
+                "raw {raw}"
+            );
+        }
+        assert!((human_confidence(0.0, 1.0, false) - 0.5).abs() < 1e-6);
     }
 
     #[test]
