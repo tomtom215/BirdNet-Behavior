@@ -236,6 +236,10 @@ impl Client {
     ///
     /// Returns `BirdWeatherError::NoToken` if the token is empty.
     pub fn new(station_token: &str, lat: f64, lon: f64) -> Result<Self, BirdWeatherError> {
+        // Trimmed: a token copied from the BirdWeather page tends to bring a
+        // newline with it, and the token is a path segment, where the stray
+        // character turns into a different station that does not exist.
+        let station_token = station_token.trim();
         if station_token.is_empty() {
             return Err(BirdWeatherError::NoToken);
         }
@@ -289,10 +293,7 @@ impl Client {
         &self,
         detection: &DetectionPost,
     ) -> Result<ApiResponse, BirdWeatherError> {
-        let url = format!(
-            "{}/stations/{}/detections",
-            self.base_url, self.station_token
-        );
+        let url = self.station_url("detections");
 
         let body = detection_body(detection);
 
@@ -316,9 +317,8 @@ impl Client {
         soundscape: SoundscapePost,
     ) -> Result<u64, BirdWeatherError> {
         let url = format!(
-            "{}/stations/{}/soundscapes?timestamp={}&type={}",
-            self.base_url,
-            self.station_token,
+            "{}?timestamp={}&type={}",
+            self.station_url("soundscapes"),
             urlencode(&soundscape.timestamp),
             urlencode(&soundscape.extension),
         );
@@ -347,6 +347,16 @@ impl Client {
                 })))
             }
         }
+    }
+
+    /// `{base}/stations/{token}/{tail}`, with the token encoded as the one
+    /// path segment it is — a `/` or `?` in it cannot reach another path.
+    fn station_url(&self, tail: &str) -> String {
+        format!(
+            "{}/stations/{}/{tail}",
+            self.base_url,
+            urlencode(&self.station_token)
+        )
     }
 
     /// Get the station token.
@@ -499,6 +509,38 @@ mod tests {
             "2026-07-01T12%3A00%3A00%2B01%3A00"
         );
         assert_eq!(urlencode("wav"), "wav");
+    }
+
+    #[test]
+    fn a_pasted_token_loses_its_surrounding_whitespace() {
+        // Copied from the BirdWeather page with the newline after it, the
+        // token used to go into the request path as-is, and every upload
+        // was refused for good.
+        let client = Client::new("  abc123XYZ\n", 0.0, 0.0).unwrap();
+        assert_eq!(client.token(), "abc123XYZ");
+        assert_eq!(
+            client.station_url("detections"),
+            "https://app.birdweather.com/api/v1/stations/abc123XYZ/detections"
+        );
+    }
+
+    #[test]
+    fn a_blank_token_is_no_token() {
+        assert!(matches!(
+            Client::new(" \t\n", 0.0, 0.0),
+            Err(BirdWeatherError::NoToken)
+        ));
+    }
+
+    /// The token is one path segment. A `/` or `?` in it must not become
+    /// another path or a query on the same host.
+    #[test]
+    fn the_token_cannot_change_the_path() {
+        let client = Client::new("a/../b?c=d", 0.0, 0.0).unwrap();
+        assert_eq!(
+            client.station_url("detections"),
+            "https://app.birdweather.com/api/v1/stations/a%2F..%2Fb%3Fc%3Dd/detections"
+        );
     }
 
     #[test]

@@ -177,6 +177,31 @@ pub(crate) fn range_problems(form: &SettingsForm) -> Vec<String> {
     problems
 }
 
+/// Fields saved with surrounding whitespace removed.
+///
+/// Opaque identifiers only, which a copy from a web page tends to bring a
+/// newline or a space with. Not passwords: a space can be part of one.
+const TRIMMED_FIELDS: &[&str] = &["birdweather_token"];
+
+/// A BirdWeather token holding anything but letters and digits, explained.
+///
+/// The token is placed in the upload address, so a stray character — an
+/// invisible one from a copy, a `/` from the address bar — makes every upload
+/// fail for good while the setting looks right. Only the characters are
+/// checked: the length is BirdWeather's to define, and refusing a valid token
+/// would turn sharing off for nothing.
+fn birdweather_token_problem(form: &SettingsForm) -> Option<String> {
+    let token = form.birdweather_token.as_deref()?.trim();
+    if token.is_empty() || token.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(
+        "The BirdWeather token can only contain letters and digits — it goes into the \
+         upload address. Copy it again from your station's page on BirdWeather."
+            .to_owned(),
+    )
+}
+
 /// Save submitted settings and return an HTMX feedback partial.
 ///
 /// # Errors
@@ -215,7 +240,8 @@ pub async fn save_settings(
 
     // Reject before writing, and reject the whole submission: a partial save
     // would leave the form showing one thing and the station running another.
-    let problems = range_problems(&form);
+    let mut problems = range_problems(&form);
+    problems.extend(birdweather_token_problem(&form));
     if !problems.is_empty() {
         let list = problems.iter().fold(String::new(), |mut acc, p| {
             use std::fmt::Write as _;
@@ -584,6 +610,8 @@ pub(crate) fn build_settings_items(
             if let Some(ref raw) = $field {
                 let value = if is_numeric_field($key) {
                     birdnet_core::config::locale::normalize_decimal(raw)
+                } else if TRIMMED_FIELDS.contains(&$key) {
+                    raw.trim().to_owned()
                 } else {
                     raw.clone()
                 };
@@ -1066,6 +1094,41 @@ mod tests {
         let items = build_settings_items(&form, &existing, Unset::AsEmpty);
         let lat = items.iter().find(|(k, _, _)| *k == "latitude").unwrap();
         assert_eq!(lat.1, "51.5074");
+    }
+
+    /// A token copied from the BirdWeather page often brings a newline or a
+    /// space with it, and went into the upload URL as typed.
+    #[test]
+    fn a_birdweather_token_is_saved_trimmed() {
+        let form = SettingsForm {
+            birdweather_token: Some("  abc123XYZ\n".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &HashMap::new(), Unset::AsEmpty);
+        let token = items
+            .iter()
+            .find(|(k, _, _)| *k == "birdweather_token")
+            .expect("a changed token is persisted");
+        assert_eq!(token.1, "abc123XYZ");
+    }
+
+    /// The token is placed in the upload address, so a character that does
+    /// not belong in one is refused before anything is written — and a
+    /// token of letters and digits, or none, is not.
+    #[test]
+    fn a_birdweather_token_with_a_stray_character_is_refused() {
+        let with = |t: &str| SettingsForm {
+            birdweather_token: Some(t.to_string()),
+            ..empty_form()
+        };
+        let problem = birdweather_token_problem(&with("abc/123"));
+        assert!(problem.is_some_and(|p| p.contains("BirdWeather")));
+        assert_eq!(birdweather_token_problem(&with(" abc123XYZ \n")), None);
+        assert_eq!(
+            birdweather_token_problem(&with("")),
+            None,
+            "clearing the token turns sharing off"
+        );
     }
 
     #[test]
