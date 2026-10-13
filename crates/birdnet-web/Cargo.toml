@@ -79,6 +79,8 @@ password-hash.workspace = true
 # now — `tls.rs`'s accept loop calls `Service::call` on the router directly —
 # but kept declared here too so the dev-only `ServiceExt` usage is explicit.
 tower.workspace = true
+# Captures the request span in `a_share_link_never_reaches_the_request_log`.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
