@@ -205,6 +205,21 @@ impl Extractor {
         // returned say so (DD-36).
         let mut written_path = output_path.clone();
         let mut written_format = self.config.target_format;
+        let meta = DetectionMeta {
+            common_name: detection.common_name.clone(),
+            scientific_name: detection.scientific_name.clone(),
+            confidence: detection.confidence,
+            date: detection.date.clone(),
+            time: detection.time.clone(),
+            loudness: measured_lufs.and_then(|measured_lufs| {
+                self.config
+                    .target_lufs
+                    .map(|target_lufs| super::metadata::ClipLoudness {
+                        measured_lufs,
+                        target_lufs,
+                    })
+            }),
+        };
         if self.config.freq_shift_hz != 0 || self.config.target_format.needs_conversion() {
             // Write to a temporary WAV first, then apply shift and/or convert.
             let wav_path = output_path.with_extension("wav");
@@ -225,6 +240,9 @@ impl Extractor {
                 if shift_ok {
                     let _ = std::fs::remove_file(&wav_path);
                     if self.config.target_format.needs_conversion() {
+                        // ffmpeg copies the INFO chunk into the output as the format's own
+                        // tags: Vorbis comments in FLAC and Ogg, ID3 in MP3.
+                        tag_wav(&shifted_path, &meta);
                         written_path = convert_audio_format(
                             &shifted_path,
                             &output_path,
@@ -241,6 +259,7 @@ impl Extractor {
                     );
                     let _ = std::fs::remove_file(&shifted_path);
                     if self.config.target_format.needs_conversion() {
+                        tag_wav(&wav_path, &meta);
                         written_path = convert_audio_format(
                             &wav_path,
                             &output_path,
@@ -251,6 +270,7 @@ impl Extractor {
                     }
                 }
             } else {
+                tag_wav(&wav_path, &meta);
                 written_path =
                     convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
             }
@@ -262,30 +282,11 @@ impl Extractor {
         }
         let output_path = written_path;
 
-        // Embed RIFF INFO metadata into WAV files (best-effort, non-fatal).
+        // A WAV on disk carries the INFO chunk itself. When a failed
+        // conversion kept the WAV, it was tagged before the attempt, and the
+        // embed leaves an already-tagged file alone.
         if written_format == super::format::AudioFormat::Wav {
-            let meta = DetectionMeta {
-                common_name: detection.common_name.clone(),
-                scientific_name: detection.scientific_name.clone(),
-                confidence: detection.confidence,
-                date: detection.date.clone(),
-                time: detection.time.clone(),
-                loudness: measured_lufs.and_then(|measured_lufs| {
-                    self.config
-                        .target_lufs
-                        .map(|target_lufs| super::metadata::ClipLoudness {
-                            measured_lufs,
-                            target_lufs,
-                        })
-                }),
-            };
-            if let Err(e) = embed_wav_metadata(&output_path, &meta) {
-                tracing::debug!(
-                    error = %e,
-                    path = %output_path.display(),
-                    "WAV metadata embedding failed (non-fatal)"
-                );
-            }
+            tag_wav(&output_path, &meta);
         }
 
         tracing::info!(
@@ -334,6 +335,18 @@ impl ExtractedClip {
     pub fn detection_span(&self) -> (f32, f32) {
         let start = self.pre_detection_secs.max(0.0);
         (start, start + self.detection_secs)
+    }
+}
+
+/// Append the detection's RIFF INFO chunk to `path`. Best-effort: a clip
+/// without tags is still a clip.
+fn tag_wav(path: &Path, meta: &DetectionMeta) {
+    if let Err(e) = embed_wav_metadata(path, meta) {
+        tracing::debug!(
+            error = %e,
+            path = %path.display(),
+            "WAV metadata embedding failed (non-fatal)"
+        );
     }
 }
 
@@ -1335,11 +1348,25 @@ mod tests {
         }
     }
 
+    fn on_path(tool: &str) -> bool {
+        std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join(tool).is_file()))
+    }
+
+    /// Whether the conversion tests can run. With `BNB_REQUIRE_FFMPEG` set
+    /// (CI sets it) a missing ffmpeg is a failure rather than a skip — see
+    /// `convert::tests::ffmpeg_available`.
+    fn has_ffmpeg() -> bool {
+        let found = on_path("ffmpeg");
+        assert!(
+            found || std::env::var_os("BNB_REQUIRE_FFMPEG").is_none(),
+            "BNB_REQUIRE_FFMPEG is set and ffmpeg is not on PATH"
+        );
+        found
+    }
+
     fn has_ffmpeg_or_sox() -> bool {
-        let Ok(path) = std::env::var("PATH") else {
-            return false;
-        };
-        std::env::split_paths(&path).any(|d| d.join("ffmpeg").is_file() || d.join("sox").is_file())
+        has_ffmpeg() || on_path("sox")
     }
 
     #[test]
@@ -1465,6 +1492,65 @@ mod tests {
             base_bytes, shift_bytes,
             "freq shift produced byte-identical output — shift branch likely skipped"
         );
+    }
+
+    /// A FLAC, MP3 or Ogg clip carries the same tags a WAV clip does.
+    ///
+    /// The INFO chunk used to be written only when the output stayed WAV, so
+    /// every compressed clip — the formats a station short of disk is told to
+    /// use — left the station with no species, confidence or date inside it.
+    /// ffmpeg is required: the sox fallback does not carry the tags over.
+    #[test]
+    fn compressed_clips_carry_the_detection_tags() {
+        if !has_ffmpeg() {
+            eprintln!("SKIP: ffmpeg not available");
+            return;
+        }
+        for format in [AudioFormat::Flac, AudioFormat::Mp3, AudioFormat::Ogg] {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+            write_silent_wav(&src, 30.0, 48_000);
+            let cfg = ExtractionConfig {
+                output_dir: tmp.path().join("out"),
+                audio_format: "wav".into(),
+                recording_length: 30.0,
+                extraction_length: 6.0,
+                target_format: format,
+                freq_shift_hz: 0,
+                pre_capture_secs: 0.0,
+                ..ExtractionConfig::default()
+            };
+            let out = Extractor::new(cfg)
+                .extract_detection(
+                    &src,
+                    &Detection {
+                        date: "2026-05-19".into(),
+                        time: "09:00:00".into(),
+                        scientific_name: "Erithacus rubecula".into(),
+                        common_name: "European Robin".into(),
+                        confidence: 0.87,
+                        start: 10.0,
+                        stop: 13.0,
+                        week: 20,
+                        file_name_extr: None,
+                        model_id: None,
+                        agreeing_models: None,
+                    },
+                )
+                .expect("extraction succeeds");
+            assert_eq!(
+                out.extension().and_then(|e| e.to_str()),
+                Some(format.extension()),
+                "precondition: the clip was converted, not kept as WAV"
+            );
+            let bytes = std::fs::read(&out).unwrap();
+            for needle in ["Erithacus rubecula", "European Robin", "Confidence: 87%"] {
+                assert!(
+                    bytes.windows(needle.len()).any(|w| w == needle.as_bytes()),
+                    "{format} clip has no {needle:?} tag"
+                );
+            }
+        }
     }
 
     #[test]

@@ -324,9 +324,19 @@ mod tests {
     /// mutation-testing job) install ffmpeg, so those branches are exercised
     /// there. Tests that don't need a real tool (the arithmetic helpers, the
     /// codec-arg mapping, the rename fallback) run unconditionally.
+    ///
+    /// With `BNB_REQUIRE_FFMPEG` set (CI sets it), a missing ffmpeg fails the
+    /// test instead: a skip prints only into captured output, so without this
+    /// a runner without ffmpeg would report these tests green having run none
+    /// of them.
     fn ffmpeg_available() -> bool {
-        std::env::var_os("PATH")
-            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join("ffmpeg").is_file()))
+        let found = std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|d| d.join("ffmpeg").is_file()));
+        assert!(
+            found || std::env::var_os("BNB_REQUIRE_FFMPEG").is_none(),
+            "BNB_REQUIRE_FFMPEG is set and ffmpeg is not on PATH"
+        );
+        found
     }
 
     fn write_silent_wav(path: &Path, secs: f32, sample_rate: u32) {

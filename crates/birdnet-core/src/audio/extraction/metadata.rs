@@ -182,6 +182,33 @@ fn build_info_chunk(tags: &[(&[u8; 4], &str)]) -> Vec<u8> {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Whether the chunks after `WAVE` include a `LIST` of type `INFO`.
+///
+/// Walks the chunk headers from offset 12 up to the end of the RIFF body
+/// (`riff_size + 8`) or of the file, whichever is first; a truncated header
+/// ends the walk rather than failing it.
+fn has_info_list(file: &mut std::fs::File, riff_size: u32) -> std::io::Result<bool> {
+    let file_len = file.seek(SeekFrom::End(0))?;
+    let end = file_len.min(u64::from(riff_size) + 8);
+    let mut pos = 12_u64;
+    while pos + 8 <= end {
+        file.seek(SeekFrom::Start(pos))?;
+        let mut head = [0u8; 8];
+        file.read_exact(&mut head)?;
+        let size = u64::from(u32::from_le_bytes([head[4], head[5], head[6], head[7]]));
+        if &head[..4] == b"LIST" && pos + 12 <= end {
+            let mut kind = [0u8; 4];
+            file.read_exact(&mut kind)?;
+            if &kind == b"INFO" {
+                return Ok(true);
+            }
+        }
+        // Chunks are word-aligned: an odd size is followed by a pad byte.
+        pos += 8 + size + (size & 1);
+    }
+    Ok(false)
+}
+
 /// Embed `BirdNet` detection metadata into an existing WAV file in-place.
 ///
 /// Appends a RIFF `LIST INFO` chunk to the file and updates the RIFF chunk
@@ -252,6 +279,14 @@ pub fn embed_wav_metadata(path: &Path, meta: &DetectionMeta) -> Result<(), MetaE
             "expected WAVE, got {:?}",
             std::str::from_utf8(&wave).unwrap_or("???")
         )));
+    }
+
+    // Once only. A WAV that already has an INFO list is left as it is: the
+    // clip writer tags the intermediate WAV before a conversion, and when the
+    // conversion fails that same WAV is what is kept — a second list would
+    // give every reader two titles to choose between.
+    if has_info_list(&mut file, riff_size)? {
+        return Ok(());
     }
 
     // Seek to end of file and append INFO chunk
@@ -352,6 +387,43 @@ mod tests {
         );
         assert!(content.contains("Tyto alba"), "sci name not found in WAV");
         assert!(content.contains("BirdNet-Behavior"), "software tag missing");
+    }
+
+    fn info_lists(path: &Path) -> usize {
+        let bytes = std::fs::read(path).unwrap();
+        bytes.windows(4).filter(|w| *w == b"INFO").count()
+    }
+
+    /// The clip writer tags the WAV it hands to the converter, and keeps that
+    /// same WAV when the conversion fails, then tags what it kept. The second
+    /// call must not append a second list.
+    #[test]
+    fn embedding_twice_leaves_one_info_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("twice.wav");
+        make_minimal_wav(&path, 48_000);
+        embed_wav_metadata(&path, &sample_meta()).unwrap();
+        let once = std::fs::read(&path).unwrap();
+        embed_wav_metadata(&path, &sample_meta()).unwrap();
+        assert_eq!(info_lists(&path), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), once, "the file is unchanged");
+    }
+
+    /// The counterpart: a WAV whose only `LIST` chunk is not `INFO` (an
+    /// `adtl` cue list, say) is still tagged, so the check is on the list's
+    /// type and not on the presence of any list.
+    #[test]
+    fn a_non_info_list_does_not_count_as_tagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("adtl.wav");
+        make_minimal_wav(&path, 48_000);
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.extend_from_slice(b"LIST\x04\x00\x00\x00adtl");
+        let riff = u32::try_from(bytes.len() - 8).unwrap();
+        bytes[4..8].copy_from_slice(&riff.to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        embed_wav_metadata(&path, &sample_meta()).unwrap();
+        assert_eq!(info_lists(&path), 1);
     }
 
     #[test]

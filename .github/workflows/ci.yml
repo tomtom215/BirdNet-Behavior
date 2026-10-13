@@ -108,6 +108,13 @@ jobs:
       # Set here rather than by the fetch step on success: a flag the fetch
       # controls could not catch the fetch failing, which is the whole defect.
       BIRDNET_REQUIRE_LIVE_EXTENSION: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '' }}
+      # The clip-conversion tests (FLAC/MP3/Ogg output, the tags carried into
+      # it, the frequency shift) need ffmpeg and used to skip without it. A
+      # skip prints only into captured output, so a runner image that dropped
+      # ffmpeg would have reported them green having run none. ffmpeg is
+      # installed below and its absence is now a failure, on every event: unlike
+      # the extensions above it comes from the distribution, not a CDN.
+      BNB_REQUIRE_FFMPEG: "1"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -124,7 +131,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake g++
+          sudo apt-get install -y --no-install-recommends cmake g++ ffmpeg
       - name: Cache Cargo
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
