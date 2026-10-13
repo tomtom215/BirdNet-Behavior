@@ -456,7 +456,7 @@ fn sanitize_next(raw: Option<&str>) -> &str {
     .unwrap_or("/admin/overview")
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct LoginForm {
     username: String,
     password: String,

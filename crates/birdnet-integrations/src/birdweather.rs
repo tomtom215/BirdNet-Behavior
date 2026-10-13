@@ -80,7 +80,7 @@ impl fmt::Display for BirdWeatherError {
 impl std::error::Error for BirdWeatherError {}
 
 /// `BirdWeather` API client.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Client {
     /// Station token (from `BirdWeather` settings).
     station_token: String,
@@ -94,6 +94,18 @@ pub struct Client {
     lat: f64,
     /// Station longitude.
     lon: f64,
+}
+
+impl std::fmt::Debug for Client {
+    /// Hand-written so the station token cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("station_token", &"<redacted>")
+            .field("base_url", &self.base_url)
+            .field("lat", &self.lat)
+            .field("lon", &self.lon)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A detection to post to `BirdWeather`.

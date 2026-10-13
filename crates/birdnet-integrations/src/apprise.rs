@@ -310,7 +310,6 @@ fn passes_filters(config: &NotifyConfig, species: &str, sci_name: &str, confiden
 /// to prevent notification flooding during active bird sessions.
 ///
 /// BirdNET-Pi equivalent: `birdnet_analysis.sh` invokes `apprise -c <file>`.
-#[derive(Debug)]
 pub struct Client {
     /// Apprise API server base URL (e.g., `http://localhost:8000`).
     base_url: String,
@@ -343,6 +342,26 @@ pub struct Client {
     /// is set without the caller having said otherwise, so a config file whose
     /// contents were never read is still delivered rather than dropped.
     cli_needed: bool,
+}
+
+impl std::fmt::Debug for Client {
+    /// Hand-written so the Apprise endpoint's key cannot reach a log through
+    /// `{:?}`: the URL is printed as `redact_value` prints it. The native
+    /// routes print through `Target`'s own redacting `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field(
+                "base_url",
+                &birdnet_core::config::redact::redact_value(&self.base_url),
+            )
+            .field("config", &self.config)
+            .field("config_file", &self.config_file)
+            .field("native", &self.native)
+            .field("skipped_circuit_open", &self.skipped_circuit_open)
+            .field("skipped_rate_limited", &self.skipped_rate_limited)
+            .field("cli_needed", &self.cli_needed)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Client {

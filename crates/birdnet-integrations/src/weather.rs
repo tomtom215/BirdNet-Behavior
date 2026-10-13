@@ -63,7 +63,7 @@ pub const PIRATE_WEATHER_BASE_URL: &str = "https://api.pirateweather.net";
 /// Where the station's weather comes from.
 ///
 /// See the module docs for why this is an enum and not a trait.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Provider {
     /// Open-Meteo's gridded forecast. The default, and self-hostable.
     OpenMeteo,
@@ -82,6 +82,25 @@ pub enum Provider {
         /// The operator's Pirate Weather API key.
         api_key: String,
     },
+}
+
+impl std::fmt::Debug for Provider {
+    /// Hand-written so a provider's API key cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OpenMeteo => f.write_str("OpenMeteo"),
+            Self::MetNorway => f.write_str("MetNorway"),
+            Self::Wunderground { station_id, .. } => f
+                .debug_struct("Wunderground")
+                .field("station_id", station_id)
+                .field("api_key", &"<redacted>")
+                .finish(),
+            Self::PirateWeather { .. } => f
+                .debug_struct("PirateWeather")
+                .field("api_key", &"<redacted>")
+                .finish(),
+        }
+    }
 }
 
 impl Provider {

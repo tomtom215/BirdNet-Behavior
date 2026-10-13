@@ -365,7 +365,7 @@ fn render_import_outcome(
 /// operators) via `birdnet_core::config::locale::parse_decimal`.
 /// Receiving them as `f64` here would let serde's default parser
 /// reject any comma value with a 422.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RuleForm {
     name: String,
     species_pattern: Option<String>,
@@ -447,7 +447,7 @@ const TEST_CONFIDENCE: f64 = 0.99;
 
 /// What testing a rule did, separated from the handler so the non-network
 /// branches are assertable without a request.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 enum TestPlan {
     /// A webhook to fire, with its rendered body.
     Fire {
@@ -460,6 +460,22 @@ enum TestPlan {
     },
     /// Nothing to send: the action has no outbound side.
     NothingToSend(&'static str),
+}
+
+impl std::fmt::Debug for TestPlan {
+    /// Hand-written because the URL is the rule's webhook, which commonly
+    /// carries its token in the path.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fire { url, method, body } => f
+                .debug_struct("Fire")
+                .field("url", &birdnet_core::config::redact::redact_value(url))
+                .field("method", method)
+                .field("body", body)
+                .finish(),
+            Self::NothingToSend(why) => f.debug_tuple("NothingToSend").field(why).finish(),
+        }
+    }
 }
 
 /// Work out what testing `action` would send.

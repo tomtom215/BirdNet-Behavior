@@ -66,7 +66,7 @@ pub const EXPORT_VERSION: u32 = 2;
 /// Deliberately flat rather than mirroring [`AlertAction`]'s enum: an exported
 /// file is something an operator reads, hand-edits and pastes into a chat with
 /// someone else, and a tagged union renders badly for all three.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RuleExport {
     /// Human-readable rule name.
     pub name: String,
@@ -114,6 +114,37 @@ pub struct RuleExport {
 }
 
 /// serde default for [`RuleExport::enabled`].
+impl fmt::Debug for RuleExport {
+    /// Hand-written so a webhook's token and credential cannot reach a log
+    /// through `{:?}`: the URL keeps only its scheme and host, as a redacted
+    /// export writes it, and the credential prints as whether one is set.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuleExport")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("species_pattern", &self.species_pattern)
+            .field("confidence_min", &self.confidence_min)
+            .field("confidence_max", &self.confidence_max)
+            .field("hour_start", &self.hour_start)
+            .field("hour_end", &self.hour_end)
+            .field("days_of_week", &self.days_of_week)
+            .field("action", &self.action)
+            .field(
+                "webhook_url",
+                &self.webhook_url.as_deref().map(redacted_webhook_url),
+            )
+            .field("webhook_method", &self.webhook_method)
+            .field("webhook_body", &self.webhook_body)
+            .field("webhook_auth_kind", &self.webhook_auth_kind)
+            .field(
+                "webhook_auth_value",
+                &self.webhook_auth_value.as_ref().map(|_| "<redacted>"),
+            )
+            .field("webhook_header_name", &self.webhook_header_name)
+            .finish()
+    }
+}
+
 const fn default_true() -> bool {
     true
 }
@@ -463,7 +494,7 @@ impl WebhookAuth {
 }
 
 /// The action executed when a rule's conditions are met.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AlertAction {
     /// Send an HTTP request to a webhook URL.
     Webhook {
@@ -482,6 +513,29 @@ pub enum AlertAction {
     Log,
     /// Suppress all other notifications (Apprise, email, MQTT) for this event.
     Suppress,
+}
+
+impl fmt::Debug for AlertAction {
+    /// Hand-written for the same reason as [`RuleExport`]'s: a webhook URL
+    /// commonly carries its token in the path.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Webhook {
+                url,
+                method,
+                body_template,
+                auth,
+            } => f
+                .debug_struct("Webhook")
+                .field("url", &redacted_webhook_url(url))
+                .field("method", method)
+                .field("body_template", body_template)
+                .field("auth", auth)
+                .finish(),
+            Self::Log => f.write_str("Log"),
+            Self::Suppress => f.write_str("Suppress"),
+        }
+    }
 }
 
 impl AlertAction {
@@ -885,6 +939,39 @@ fn current_weekday() -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_never_prints_a_webhook_token_or_credential() {
+        let url = "https://discord.com/api/webhooks/123/s3cr3t-token";
+        let action = AlertAction::Webhook {
+            url: url.into(),
+            method: "POST".into(),
+            body_template: None,
+            auth: Some(WebhookAuth::Bearer("bearer-xyz".into())),
+        };
+        let export = RuleExport {
+            name: "r".into(),
+            enabled: true,
+            species_pattern: None,
+            confidence_min: 0.0,
+            confidence_max: 1.0,
+            hour_start: None,
+            hour_end: None,
+            days_of_week: None,
+            action: "webhook".into(),
+            webhook_url: Some(url.into()),
+            webhook_method: None,
+            webhook_body: None,
+            webhook_auth_kind: Some("bearer".into()),
+            webhook_auth_value: Some("bearer-xyz".into()),
+            webhook_header_name: None,
+        };
+        for shown in [format!("{action:?}"), format!("{export:?}")] {
+            assert!(!shown.contains("s3cr3t"), "{shown}");
+            assert!(!shown.contains("bearer-xyz"), "{shown}");
+            assert!(shown.contains("discord.com"), "{shown}");
+        }
+    }
     use rusqlite::Connection;
 
     fn memory_db() -> Connection {

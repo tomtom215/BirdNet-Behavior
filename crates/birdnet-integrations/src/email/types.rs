@@ -3,7 +3,7 @@
 use std::fmt;
 
 /// Configuration for the SMTP email integration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EmailConfig {
     /// SMTP server hostname (e.g. `"smtp.gmail.com"`).
     pub smtp_host: String,
@@ -25,6 +25,24 @@ pub struct EmailConfig {
     pub min_confidence: f64,
     /// Minimum seconds between emails for the same species.
     pub cooldown_secs: u64,
+}
+
+impl std::fmt::Debug for EmailConfig {
+    /// Hand-written so the SMTP password cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .field("from_address", &self.from_address)
+            .field("to_address", &self.to_address)
+            .field("from_name", &self.from_name)
+            .field("use_starttls", &self.use_starttls)
+            .field("min_confidence", &self.min_confidence)
+            .field("cooldown_secs", &self.cooldown_secs)
+            .finish()
+    }
 }
 
 impl EmailConfig {

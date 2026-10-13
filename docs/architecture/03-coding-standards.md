@@ -259,6 +259,13 @@ emulation.
 - Prefer returning `Result` over panicking
 - Use `tracing::{debug, info, warn, error}` instead of `println!` / `eprintln!`
 - Structured logging: `tracing::info!(species = %name, confidence = conf, "detection");`
+- A type that holds a credential — a password, token, API key, or a URL that
+  can carry one — writes `Debug` by hand and prints the secret as
+  `<redacted>` (see `FlickrClient`). `tests/no_secret_in_derived_debug_guard.rs`
+  refuses a derived `Debug` on one; a field that only *looks* like a
+  credential is listed there with the reason it is not.
+- Log a request by its route, never its URI: a path can be a capability
+  (`/r/{token}`). `server::request_span` does this for every request.
 
 ---
 

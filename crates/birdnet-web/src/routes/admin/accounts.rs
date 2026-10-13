@@ -301,7 +301,7 @@ fn render_error(message: &str) -> String {
 // POST /admin/accounts/users — invite a viewer
 // ───────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct CreateUserForm {
     username: String,
     password: String,
@@ -427,7 +427,7 @@ async fn remove_user(
 // POST /admin/accounts/users/{id}  (rotate password)
 // ───────────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct PasswordForm {
     password: String,
 }

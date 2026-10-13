@@ -17,7 +17,7 @@ use std::fmt;
 /// flap between `online` and `offline` for ever.
 ///
 /// [`client_id`]: Self::client_id
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MqttConfig {
     /// Broker hostname or IP address.
     pub host: String,
@@ -46,6 +46,24 @@ pub struct MqttConfig {
     pub timeout_ms: u64,
     /// TLS settings, or `None` for a plaintext connection.
     pub tls: Option<TlsConfig>,
+}
+
+impl std::fmt::Debug for MqttConfig {
+    /// Hand-written so the broker password cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MqttConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("client_id", &self.client_id)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("topic_prefix", &self.topic_prefix)
+            .field("qos", &self.qos)
+            .field("retain", &self.retain)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("tls", &self.tls)
+            .finish()
+    }
 }
 
 /// How to establish TLS to the broker.

@@ -96,6 +96,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the job state** — which reads as "nothing is due" on exactly the station
   that has a problem. It now answers `500`.
 
+- **Share links reached the request log.** At `debug`, every request was
+  logged with its full URI, so `/r/{token}` — where the token is the access —
+  went to the journal and into support bundles. Requests are now logged by
+  the route they matched (`/r/{token}`, literally), and a request that
+  matched no route by its path; the query string is no longer logged.
+
+- **Credentials printed by `{:?}`.** 26 types that hold a password, token,
+  API key or a URL with one in it derived `Debug`, which prints every field
+  in full: the SMTP, MQTT and ntfy passwords, the Discord, Telegram, Slack,
+  Gotify and Pushover tokens, the BirdWeather, eBird, Weather Underground and
+  Pirate Weather keys, RTSP and webhook URLs, the S3 request signature, the
+  login, onboarding and account forms, and the command line. Each now writes
+  `Debug` by hand and prints `<redacted>`, or the URL without its credential.
+  So does the notification request body, which carried Pushover's token as a
+  form value. A source scan keeps a credential-holding type from deriving
+  `Debug` again.
+
 - **An RTSP camera's password reached the journal.** Starting an RTSP
   source logged its URL at info, on every start. ffmpeg also names its input
   in its errors (`Error opening input file rtsp://admin:…@cam/stream.`), which

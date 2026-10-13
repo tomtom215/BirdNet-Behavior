@@ -93,7 +93,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
 /// struct's own field names and pin them against [`SETTINGS_FORM_KEYS`], and
 /// gating it keeps a payload carrying `email_smtp_pass` from being serialisable
 /// anywhere in production.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[cfg_attr(test, derive(serde::Serialize, Default))]
 pub struct SettingsForm {
     // Audio
@@ -263,6 +263,16 @@ pub struct SettingsForm {
     pub email_min_confidence: Option<String>,
     /// Per-species email cooldown in seconds. Suppresses repeat emails within this window.
     pub email_cooldown_secs: Option<String>,
+}
+
+impl std::fmt::Debug for SettingsForm {
+    /// Prints no values. The form carries the camera URLs, notification URLs
+    /// and the BirdWeather token among sixty-odd fields, and a field list
+    /// kept here by hand would drift from the struct the first time one was
+    /// added.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsForm").finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]

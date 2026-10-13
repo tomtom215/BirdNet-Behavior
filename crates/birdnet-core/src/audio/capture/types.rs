@@ -10,7 +10,7 @@ use super::live::LiveAudioHubHandle;
 use crate::civil::CivilTime;
 
 /// Audio capture source configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum CaptureSource {
     /// Local microphone via `arecord` (ALSA).
     Microphone {
@@ -55,6 +55,52 @@ pub enum CaptureSource {
         /// Transport ffmpeg should negotiate with the camera.
         transport: RtspTransport,
     },
+}
+
+impl std::fmt::Debug for CaptureSource {
+    /// Hand-written so a camera's password cannot reach a log through `{:?}`:
+    /// the RTSP URL is printed with its `user:pass@` removed, the host and
+    /// path kept, as the capture start log prints it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Microphone {
+                device,
+                sample_rate,
+                channels,
+                channel_pick,
+                stream_id,
+            } => f
+                .debug_struct("Microphone")
+                .field("device", device)
+                .field("sample_rate", sample_rate)
+                .field("channels", channels)
+                .field("channel_pick", channel_pick)
+                .field("stream_id", stream_id)
+                .finish(),
+            Self::PipeWire {
+                device,
+                sample_rate,
+                channels,
+                stream_id,
+            } => f
+                .debug_struct("PipeWire")
+                .field("device", device)
+                .field("sample_rate", sample_rate)
+                .field("channels", channels)
+                .field("stream_id", stream_id)
+                .finish(),
+            Self::Rtsp {
+                url,
+                stream_id,
+                transport,
+            } => f
+                .debug_struct("Rtsp")
+                .field("url", &crate::config::redact::redact_url_credentials(url))
+                .field("stream_id", stream_id)
+                .field("transport", transport)
+                .finish(),
+        }
+    }
 }
 
 impl CaptureSource {
@@ -359,6 +405,19 @@ pub(crate) fn filename_matches_stream(name: &str, stream_id: Option<&str>, ext: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_keeps_the_camera_and_drops_its_password() {
+        let src = CaptureSource::Rtsp {
+            url: "rtsp://admin:hunter2@cam.local:554/stream1".into(),
+            stream_id: "RTSP_1".into(),
+            transport: RtspTransport::Auto,
+        };
+        let shown = format!("{src:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(shown.contains("cam.local:554/stream1"), "{shown}");
+        assert!(shown.contains("RTSP_1"), "{shown}");
+    }
 
     #[test]
     fn recording_filename_local_mic() {

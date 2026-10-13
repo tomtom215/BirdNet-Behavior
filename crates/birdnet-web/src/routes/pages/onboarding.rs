@@ -473,7 +473,7 @@ fn mic_summary(sources: &[AudioSource]) -> String {
 /// Fields the first-run wizard submits. All optional: clicking straight through
 /// still marks onboarding complete (so the first-boot redirect stops firing)
 /// without writing empty settings.
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
 struct OnboardingForm {
     #[serde(default)]
     latitude: String,
