@@ -8,6 +8,7 @@ pub mod analysis_runs;
 pub mod analytics;
 pub mod api_write;
 pub mod auth_pages;
+pub mod charts;
 pub mod detections;
 pub mod export;
 pub mod feeds;
@@ -80,6 +81,7 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", websocket::router())
         .nest("/api/v2", images::router())
         .nest("/api/v2", insights::router())
+        .nest("/api/v2", charts::router())
         .nest("/api/v2", recordings::router())
         .nest("/api/v2", spectrogram::router())
         .nest("/api/v2", spectrogram_ws::router())

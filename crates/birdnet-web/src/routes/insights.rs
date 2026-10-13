@@ -70,11 +70,11 @@ fn bounded_days(raw: Option<&str>, default: u32, max: u32) -> Result<u32, ()> {
     Ok(n.min(max))
 }
 
-fn bad_request(message: &str) -> Response {
+pub(super) fn bad_request(message: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
 }
 
-fn read_failed(what: &str, e: &birdnet_db::sqlite::connection::DbError) -> Response {
+pub(super) fn read_failed(what: &str, e: &birdnet_db::sqlite::connection::DbError) -> Response {
     tracing::warn!(error = %e, "insight could not be read: {what}");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -229,7 +229,7 @@ struct SummaryQuery {
 }
 
 /// A `YYYY-MM-DD` that names a real calendar day.
-fn calendar_date(s: &str) -> bool {
+pub(super) fn calendar_date(s: &str) -> bool {
     use birdnet_core::civil::{date_string_from_days, days_from_civil, parse_civil};
     parse_civil(s, "00:00:00")
         .is_some_and(|c| date_string_from_days(days_from_civil(c.year, c.month, c.day)) == s)
@@ -237,7 +237,7 @@ fn calendar_date(s: &str) -> bool {
 
 /// A date-range bound: absent or empty is open, anything but a calendar date
 /// is refused.
-fn range_bound(raw: Option<&str>) -> Result<Option<String>, ()> {
+pub(super) fn range_bound(raw: Option<&str>) -> Result<Option<String>, ()> {
     match raw {
         None | Some("") => Ok(None),
         Some(s) if calendar_date(s) => Ok(Some(s.to_owned())),

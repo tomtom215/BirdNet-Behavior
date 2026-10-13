@@ -79,6 +79,9 @@ pub use queries::{
     weekly_new_species, weekly_top_species,
 };
 pub use queries::{
+    CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, confidence_histograms,
+};
+pub use queries::{
     DashboardKpis, DawnFirstSong, ExpectedSpecies, FirstHeard, GoneQuiet, NewArrival,
     PhantomSpecies, SpeciesRangeSummary, dashboard_kpis, dawn_first_songs, expected_today,
     first_heard_between, gone_quiet, new_arrivals, phantom_species, source_counts,

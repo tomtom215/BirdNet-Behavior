@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/analytics/confidence/distribution`.** Each species'
+  confidence distribution over a date range — the fraction of its
+  detections in each of 5 to 50 equal bins — for the most detected species
+  or for one named species, with birdnet-go's parameters, defaults and
+  fields. The quality page's station-wide six-bucket histogram is unchanged.
+
 - **`GET /api/v2/analytics/sources`.** The audio sources with detections
   over an optional date range, busiest first, with the name each was given
   on the Capture screen — birdnet-go's path, parameters and fields. Until

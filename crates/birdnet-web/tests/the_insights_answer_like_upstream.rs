@@ -1,6 +1,7 @@
-//! `/api/v2/insights/*` and `/api/v2/dashboard/kpis` answer with birdnet-go's
-//! field names, defaults and limits, and a station whose detections cannot be read
-//! is told so rather than given an empty list.
+//! `/api/v2/insights/*`, `/api/v2/dashboard/kpis` and the `/api/v2/analytics/*`
+//! routes shared with birdnet-go answer with its field names, defaults and
+//! limits, and a station whose detections cannot be read is told so rather than
+//! given an empty list.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -463,6 +464,133 @@ async fn sources_are_listed_with_their_counts_and_names() {
         "start_date=2026-10-13&end_date=2026-10-12",
     ] {
         let (status, _) = get(&app, &format!("/api/v2/analytics/sources?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// Upstream's confidence distribution: camelCase, `start_date` required,
+/// `bins` and `limit` defaulted and bounded as upstream bounds them.
+#[tokio::test]
+async fn the_confidence_distribution_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for i in 0..25 {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES ('2026-10-02', printf('06:%02d:00', ?1), 'Turdus merula', 'Blackbird', ?2)",
+                rusqlite::params![i, if i < 5 { 0.97 } else { 0.51 }],
+            )
+            .expect("insert");
+        }
+        // Five more species, each less detected, for the limit: six qualify,
+        // so the default of five is told apart from the maximum of ten.
+        for (k, sci) in [
+            "Erithacus rubecula",
+            "Parus major",
+            "Sitta europaea",
+            "Pica pica",
+            "Corvus corone",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for i in 0..(24 - k) {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES ('2026-10-03', printf('06:%02d:00', ?1), ?2, ?2, 0.8)",
+                    rusqlite::params![i64::try_from(i).unwrap(), sci],
+                )
+                .expect("insert");
+            }
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-10-01",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = &body[0];
+    assert_eq!(row["scientificName"], "Turdus merula", "{body}");
+    assert_eq!(row["commonName"], "Blackbird");
+    assert_eq!(row["total"], 25);
+    let bins = row["bins"].as_array().expect("bins");
+    assert_eq!(bins.len(), 20, "the default");
+    assert_eq!(bins[19], 0.2);
+    assert_eq!(bins[10], 0.8);
+
+    for (query, expected) in [
+        ("bins=3", 5),
+        ("bins=500", 50),
+        ("bins=many", 20),
+        ("bins=7", 7),
+    ] {
+        let (_, body) = get(
+            &app,
+            &format!("/api/v2/analytics/confidence/distribution?start_date=2026-10-01&{query}"),
+        )
+        .await;
+        assert_eq!(
+            body[0]["bins"].as_array().map(Vec::len),
+            Some(expected),
+            "{query}"
+        );
+    }
+    // end_date defaults to thirty days after start_date: the 2nd is inside a
+    // range starting on 2 September, and outside one ending on 1 October.
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-09-02",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-09-01",
+    )
+    .await;
+    assert_eq!(body, serde_json::json!([]), "never null");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-10-01&species=blackbird",
+    )
+    .await;
+    assert_eq!(body[0]["total"], 25, "by common name, in any case: {body}");
+    // `limit`: upstream's ParsePaginationLimit, so 0, a non-number and
+    // anything above 10 all mean the default of 5 — not the maximum.
+    for (query, expected) in [
+        ("limit=1", 1),
+        ("limit=6", 6),
+        ("limit=10", 6),
+        ("limit=0", 5),
+        ("limit=11", 5),
+        ("limit=x", 5),
+        ("limit=", 5),
+    ] {
+        let (_, body) = get(
+            &app,
+            &format!("/api/v2/analytics/confidence/distribution?start_date=2026-10-01&{query}"),
+        )
+        .await;
+        assert_eq!(
+            body.as_array().map(Vec::len),
+            Some(expected),
+            "{query}: {body}"
+        );
+    }
+
+    for bad in [
+        "",
+        "start_date=2026-02-30",
+        "start_date=2026-10-01&end_date=soon",
+        "start_date=2026-10-13&end_date=2026-10-12",
+    ] {
+        let (status, _) = get(
+            &app,
+            &format!("/api/v2/analytics/confidence/distribution?{bad}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
 }

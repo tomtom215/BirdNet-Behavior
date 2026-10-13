@@ -703,7 +703,7 @@ takes a date range.
 | `/species/daily` | One date's species with hourly counts and first/last heard | PARTIAL — today only (heatmap); other dates give counts only. |
 | `/time/distribution/species`, `/time/succession` | Top-N species' hour-of-day profile, normalised or stacked | PARTIAL — the dawn-chorus ribbons, fixed at 60 days and 8 species. |
 | `/insights/phantom-species` | Last 30 days, ≥ 3 detections, mean confidence < 0.6 | **SHIPPED** — `GET /api/v2/insights/phantom-species`, upstream's rule and fields. `/admin/quality/phantoms` answers a different question (four shape signals over all history) and stays. |
-| `/confidence/distribution` | Per-species confidence histogram | PARTIAL — station-wide, six fixed buckets. |
+| `/confidence/distribution` | Per-species confidence histogram | **SHIPPED** — `GET /api/v2/analytics/confidence/distribution`, upstream's parameters, bounds, minimum of 20 detections and camelCase fields. Ties in volume are broken by scientific name, where upstream breaks them by its internal label id. The station-wide six-bucket histogram stays for the quality page. |
 | `/time/year-over-year` | Cumulative year-to-date against last year | PARTIAL — weekly comparison in JSON, on no page. |
 | `/analytics/sources` | Sources with counts over a range | **SHIPPED** — `GET /api/v2/analytics/sources`, upstream's path, parameters and fields. One deliberate difference: names are not anonymised for visitors who are not signed in, because the public Station Health tab already shows them; private mode hides both. |
 | `/time/heatmap` | Date × time-of-day density, 15–60 minute slots, CSV | PARTIAL — hour × weekday only. |

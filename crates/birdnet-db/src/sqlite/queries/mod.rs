@@ -2,6 +2,7 @@
 
 pub mod analysis_runs;
 pub mod analytics;
+pub mod charts;
 pub mod correlation;
 pub mod detection_reviews;
 pub mod detections;
@@ -26,6 +27,7 @@ pub use analytics::{
     reviewed_detections_by_species, species_shapes, today_species_hour_heatmap,
     weekly_detection_count, weekly_new_species, weekly_top_species,
 };
+pub use charts::{CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, confidence_histograms};
 pub use correlation::{companion_species, top_cooccurrence_pairs};
 pub use detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
