@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`birdnet_audio_analysed_seconds_total{source}`**, the data rate: seconds of
+  audio analysed per source. Its rate is about 1 for a source that delivers
+  continuously, and falls below that when audio goes missing inside segments
+  — which a count of files cannot show.
+
 - **Streams other than RTSP.** A network source can now be an HTTP or
   Icecast stream, an HLS playlist (`.m3u8`), an RTMP server, MPEG-TS over
   UDP, or SRT — the URL decides which. Each gets the ffmpeg options its

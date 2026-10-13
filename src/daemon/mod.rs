@@ -105,8 +105,13 @@ fn throughput_observer(
     birdnet_core::detection::daemon::ThroughputObserver::new({
                 let metrics = state.metrics();
                 move |path| {
-                    metrics
-                        .inc_file_analysed(&crate::daemon::disposition::derive_source_label(path));
+                    let source = crate::daemon::disposition::derive_source_label(path);
+                    metrics.inc_file_analysed(&source);
+                    // From the header, not by decoding again: the file is
+                    // still claimed here, and this is the data rate.
+                    if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
+                        metrics.add_audio_analysed(&source, secs);
+                    }
                 }
             })
             // A segment gone before the pipeline read it (PR-1 / S-3): the
