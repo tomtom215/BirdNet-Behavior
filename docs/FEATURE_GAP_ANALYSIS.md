@@ -636,7 +636,7 @@ Part 4.
 | `63e7c64` Pirate Weather | a fourth weather provider (Dark Sky-compatible) | **SHIPPED** | `Provider::PirateWeather`, reading the `hourly` block (upstream reads `currently`). Built against Pirate Weather's field definitions, not a live response; `windBearing` is taken as the direction the wind comes from, an assumption the definition does not settle. |
 | `0b51812` BirdWeather token check | refuses to save sharing-on with an empty or malformed token | **SHIPPED** (characters, not length) | Saved and used trimmed; a token with anything but letters and digits is refused on save; the client encodes it as one path segment. Upstream also requires exactly 24 characters — not adopted, because BirdWeather's own documentation was not available to confirm it, and refusing a valid token turns sharing off. |
 | `7def0cf` detections filtered by source | `source` on the detections list API | **SHIPPED** | `/api/v2/detections` now runs on the search page's `DetectionFilter`, which also fixed `?species=…&date=…` silently dropping the date. |
-| `a73db53` dawn-chorus window | `period_days` / `min_days` on the API | PARTIAL | Hard-wired to 60 days (`routes/pages/dawn_chorus.rs`). |
+| `a73db53` dawn-chorus window | `period_days` / `min_days` on the API | **SHIPPED** (the whole insight, not only its window) | This row first cited `routes/pages/dawn_chorus.rs`, which draws hourly activity ribbons — a different computation. Upstream's insight is each species' average and earliest *first* detection in 04:00–10:00, which nothing here served as an answer. `GET /api/v2/insights/dawn-chorus` now does, with upstream's parameters, limits and fields (`routes/insights.rs`, query `birdnet_db::sqlite::queries::insights::dawn_first_songs`). See Part 6. |
 | `e853776` a model failing every window | persistent notice, per-model health, a health check | PARTIAL | A failing file logs; the dead-man fires after 24 h (`src/integrations/deadman.rs`); no per-classifier condition in `station_health.rs`. |
 | `712d4c2` stream metrics | per-source errors and data rates | **SHIPPED** (data rate; wire rate and engine not applicable) | Errors, health and stalls per source were already exported (`birdnet_capture_restarts_total`, `birdnet_audio_source_up`, `birdnet_capture_stalls_total`). The data rate is `birdnet_audio_analysed_seconds_total{source}`, read from each analysed file's header: checked on a running station against a UDP and an HTTP source. Upstream's wire rate is the compressed bytes off the network, which ffmpeg does not report to this process; its engine gauge chooses between two ingest engines, and there is one here. |
 | `dee43f5` effective overlap from measured latency | caps overlap to what the device sustains, shows configured vs effective | PARTIAL | The static "needs overlap N s" per level is shown; nothing measures. Its effect cannot be judged off a Pi. |
@@ -677,4 +677,42 @@ declined: `inference/registry.rs` refuses an empty registry on purpose.
   the jobs API shipped. Corrected, with the note that upstream's
   `/system/jobs` is `GetJobQueueStats` — detection-action queue statistics,
   not a maintenance-job catalogue — so the two share a path, not a meaning.
+
+## Part 6 — the analytics and insights surface (birdnet-go `780ce51`)
+
+Parts 2 and 5 compared capabilities; neither went endpoint by endpoint
+through upstream's analytics API, and the one row that touched it (dawn chorus,
+above) cited a chart that computes something else. This part does: each of the
+29 routes `internal/api/v2/analytics/handler.go` registers was read, and our
+counterpart found by grepping for the concept and opening the code on both
+sides. Five are client conveniences (batch variants, a thumbnail URL builder,
+a sun-times helper for chart shading) and not features; five are at parity in
+substance — diversity, accumulation, phenology, hourly and daily activity,
+hour-of-day distribution — though ours take a look-back window where upstream
+takes a date range.
+
+| Upstream | What it answers | Status here |
+|---|---|---|
+| `/insights/dawn-chorus` | Each species' typical first song of the morning | **SHIPPED** — `GET /api/v2/insights/dawn-chorus` |
+| `/insights/migration` | Recent first-ever arrivals; species gone quiet | **SHIPPED** — `GET /api/v2/insights/migration`. Gone-quiet had no counterpart; arrivals existed only as the life list's six newest. |
+| `/insights/expected-today/regional` | eBird species seen nearby, not heard here | GAP — the eBird snapshot is already in memory (`state.nearby()`); only the view is missing. |
+| `/insights/expected-today` | Species heard within ±3 days of today in past years | PARTIAL — the Migration tab counts species due in the next 42 days from one prior year; there is no list. |
+| `/dashboard/kpis` | Lifetime species, today, best day, detection streak | PARTIAL — no streak, and no single endpoint. |
+| `/species/detections/new` | Species first seen in a date range, with counts | PARTIAL — the six most recent firsts; no range or paging. |
+| `/species/summary` | Per-species count, first, last, mean and max confidence over a range | PARTIAL — all-time count and mean only. |
+| `/species/daily` | One date's species with hourly counts and first/last heard | PARTIAL — today only (heatmap); other dates give counts only. |
+| `/time/distribution/species`, `/time/succession` | Top-N species' hour-of-day profile, normalised or stacked | PARTIAL — the dawn-chorus ribbons, fixed at 60 days and 8 species. |
+| `/insights/phantom-species` | Last 30 days, ≥ 3 detections, mean confidence < 0.6 | PARTIAL, deliberately — `/admin/quality/phantoms` uses four shape signals over all history; no recency window. |
+| `/confidence/distribution` | Per-species confidence histogram | PARTIAL — station-wide, six fixed buckets. |
+| `/time/year-over-year` | Cumulative year-to-date against last year | PARTIAL — weekly comparison in JSON, on no page. |
+| `/analytics/sources` | Sources with counts over a range | PARTIAL — today only. |
+| `/time/heatmap` | Date × time-of-day density, 15–60 minute slots, CSV | PARTIAL — hour × weekday only. |
+| `/time/dawn-onset` | Each day's chorus onset against civil dawn | GAP — civil dawn is already computed (`birdnet-scheduler`). |
+| `/system/database/overview` | Table stats, latencies, slow queries | PARTIAL — size and write latency only. |
+| `/range/heatmap` | Geomodel occurrence over a lat/lon grid | GAP — the largest: grid inference in the web process and a map without a tile host. |
+
+Found on the way, both the silent-zero shape `CLAUDE.md` describes: the
+suspect-species report read a failed query as "Nothing looks suspicious", and
+the dawn-sequence card read one as "Not enough dawn activity yet". Both now say
+the data could not be read.
 

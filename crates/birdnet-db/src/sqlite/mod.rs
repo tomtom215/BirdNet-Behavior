@@ -78,6 +78,9 @@ pub use queries::{
     unlock_detection_at, unstamped_detection_count, weekly_detection_count, weekly_heatmap,
     weekly_new_species, weekly_top_species,
 };
+pub use queries::{
+    DawnFirstSong, GoneQuiet, NewArrival, dawn_first_songs, gone_quiet, new_arrivals,
+};
 pub use types::{
     ConcurrentDetection, DailyCount, DayCount, DetectionRecord, DetectionRow, HourlyCount,
     SourceActivity, SpeciesCount, SpeciesSummary,

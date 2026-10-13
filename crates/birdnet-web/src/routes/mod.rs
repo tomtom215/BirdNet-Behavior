@@ -13,6 +13,7 @@ pub mod export;
 pub mod feeds;
 pub mod health;
 pub mod images;
+pub mod insights;
 pub mod livestream;
 pub mod openapi;
 pub mod pages;
@@ -78,6 +79,7 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", export::router())
         .nest("/api/v2", websocket::router())
         .nest("/api/v2", images::router())
+        .nest("/api/v2", insights::router())
         .nest("/api/v2", recordings::router())
         .nest("/api/v2", spectrogram::router())
         .nest("/api/v2", spectrogram_ws::router())

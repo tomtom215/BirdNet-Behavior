@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/v2/insights/dawn-chorus` and `GET /api/v2/insights/migration`.**
+  The first answers who opens the dawn chorus: each species' typical and
+  earliest first song of the morning (04:00–10:00), over species heard on at
+  least `min_days` of the last `period_days` days. The second lists species
+  first heard in the last 14 days, and species heard at least five times
+  that have gone quiet for 14. Both match birdnet-go's endpoints of the same
+  names — parameters, defaults, limits and field names — and read SQLite, so
+  they answer with the analytics engine off.
+
 - **`birdnet_audio_analysed_seconds_total{source}`**, the data rate: seconds of
   audio analysed per source. Its rate is about 1 for a source that delivers
   continuously, and falls below that when audio goes missing inside segments

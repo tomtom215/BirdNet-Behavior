@@ -168,6 +168,10 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/timeseries/status` | Whether the time-series engine is available |
 | `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `previous-species` · `patterns` | DuckDB behavioral analytics |
 | `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
+| `GET /api/v2/insights/dawn-chorus?period_days=&min_days=` | Each species' typical first song of the morning (mean and earliest first detection between 04:00 and 10:00), over species heard on at least `min_days` (default 3) of the last `period_days` (default 30, at most 365) days, earliest first. A value that is not a positive integer is a `400`; one over the limit is clamped, and both values applied are echoed. |
+| `GET /api/v2/insights/migration` | Species first heard in the last 14 days, and species with at least 5 detections and none in the last 14 days, with when and how often. |
+
+The two `insights` endpoints read SQLite directly, so they answer with the analytics engine off. Their parameters, defaults and field names are birdnet-go's, so a client written for either station reads both. A station whose detections cannot be read answers `500` rather than an empty list.
 
 ### Diagnosing empty analytics dashboards
 

@@ -2401,6 +2401,184 @@
         }
       }
     },
+    "/insights/dawn-chorus": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Dawn chorus running order",
+        "description": "Each species' typical first song of the morning: the mean and earliest of its first detection between start_hour and end_hour local time, over species heard there on at least min_days of the last period_days days, earliest riser first. Same parameters, defaults and fields as birdnet-go's endpoint of the same name. Rejected detections, and imports the operator excluded, are left out.",
+        "operationId": "insightsDawnChorus",
+        "parameters": [
+          {
+            "name": "period_days",
+            "in": "query",
+            "required": false,
+            "description": "Days to look back, 1 to 365 (larger is clamped). Default 30.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30
+            }
+          },
+          {
+            "name": "min_days",
+            "in": "query",
+            "required": false,
+            "description": "Mornings a species must be heard on, 1 to period_days (larger is clamped). Default 3.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The running order, and the parameters applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "avg_first_detection": {
+                            "type": "string",
+                            "description": "HH:MM"
+                          },
+                          "earliest_detection": {
+                            "type": "string",
+                            "description": "HH:MM"
+                          },
+                          "days_observed": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "period_days": {
+                      "type": "integer"
+                    },
+                    "min_days": {
+                      "type": "integer"
+                    },
+                    "start_hour": {
+                      "type": "integer"
+                    },
+                    "end_hour": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/insights/migration": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "New arrivals and species gone quiet",
+        "description": "Species first heard in the last recent_days days, newest first; and species with at least min_total_detections detections and none in the last recent_days days, most recently heard first. Same fields as birdnet-go's endpoint of the same name.",
+        "operationId": "insightsMigration",
+        "responses": {
+          "200": {
+            "description": "Both lists, and the thresholds applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "new_arrivals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "first_detected": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "detection_count": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "gone_quiet": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "last_detected": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "days_since": {
+                            "type": "integer"
+                          },
+                          "total_detections": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "recent_days": {
+                      "type": "integer"
+                    },
+                    "min_total_detections": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [

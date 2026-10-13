@@ -9,6 +9,7 @@ pub mod effort;
 pub mod heatmap;
 pub mod images;
 pub mod imports;
+pub mod insights;
 pub mod maintenance;
 pub mod quarantine;
 pub mod species;
@@ -55,6 +56,9 @@ pub use images::{
     list_image_blacklist, remove_image_blacklist,
 };
 pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches};
+pub use insights::{
+    DawnFirstSong, GoneQuiet, NewArrival, dawn_first_songs, gone_quiet, new_arrivals,
+};
 pub use maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM,
     JOB_INTEGRITY_CHECK, JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOBS, JobSpec,
