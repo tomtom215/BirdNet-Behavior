@@ -27,8 +27,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a banner on any page that is not the latest release.
   `scripts/build-versioned-docs.sh` builds it; a release tag push deploys it.
 
+- **MQTT says when a species was last heard.** Each detection payload carries
+  `species_first_detected_at` and `species_last_detected_at`: the species'
+  earliest and latest detections before this one. Both are `null` for a
+  first-ever detection, and both are left out when the history could not be
+  read, so a "new species" automation cannot fire on a database error.
+- **`/api/v2/detections?source=`** filters by audio source, and combines with
+  `date` and `species`.
+
+- **Pirate Weather** as a fourth weather provider: `WEATHER_PROVIDER=pirate-weather`
+  with `WEATHER_API_KEY`. Hourly rows from its Dark Sky-compatible API.
+  Written against its published field definitions; not checked against a
+  live response, because that needs a key.
+
 ### Changed
 
+- **The classifier no longer spin-waits between chunks.** ONNX Runtime's
+  worker threads busy-waited after every inference. Off, measured on a 4-vCPU
+  x86_64 host with the BirdNET v2.4 INT8 model: 52–54 ms of CPU per
+  inference instead of 93–98 ms, for 3–4 ms more wall time. Not yet measured
+  on a Raspberry Pi.
 - **The analytics engine leaves the classifier its cores.** DuckDB used every
   core whatever the process's CPU affinity; it now uses the CPUs available
   less the classifier's two inference threads, at least one — 2 on a Pi 4.
@@ -58,6 +76,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/v2/analytics/status` reports the embed's `abi`.
 
 ### Fixed
+
+- **FLAC, MP3 and Ogg clips carried no tags.** The species, confidence and
+  date were written into a clip only when it stayed a WAV, so every
+  compressed clip — the formats a station short of disk is told to use —
+  left with nothing inside it. The WAV is now tagged before conversion and
+  ffmpeg carries the tags into the format's own (Vorbis comments, ID3). A
+  WAV is never tagged twice. The sox fallback does not carry them.
+
+- **`/api/v2/detections` ignored `date` whenever `species` was given**, so
+  `?species=X&date=Y` answered with every detection of X on every day. Every
+  filter now applies together, through the same filter the search page uses.
+  `species` now also matches a scientific name and ignores case, as its
+  documentation always said; it matched the exact common name only. An empty
+  `species=` means no filter, where it used to return nothing. `total_count`
+  is now always present and counts the filtered set.
+- **A BirdWeather token pasted with a trailing newline or space failed every
+  upload.** It is saved trimmed and trimmed again when the client is built,
+  and a token holding anything but letters and digits is refused on save with
+  a message saying why. The token is now encoded as the single path segment
+  it is, so a `/` or `?` in it cannot reach a different address.
+- **Alert-rule webhooks could be pointed at a cloud metadata address**
+  (O-11). Webhook requests, the Test button included, refuse link-local
+  addresses (`169.254.169.254` among them), the unspecified address and two
+  more metadata addresses, in every IPv4-in-IPv6 encoding, on the first
+  request, on every redirect, and for every address a host name resolves to.
+  Loopback, LAN and public addresses are unaffected. Webhook requests no
+  longer go through `HTTP(S)_PROXY`: through a proxy the guard cannot see the
+  address. The policy is birdnet-go's (`internal/httpclient/ssrf.go`).
 
 - **A model output of infinity was a 100 % detection, and a NaN from the
   occurrence model let a species through.** Both classifier output mappings

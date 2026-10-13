@@ -402,7 +402,7 @@ within each group by how much they change what a station can do.
 
 ### 2.4 Integrations
 
-#### G‑26 · Weather providers — SHIPPED (Open-Meteo, MET Norway/yr.no, Wunderground; OpenWeather declined; Pirate Weather added upstream since — see Part 5)
+#### G‑26 · Weather providers — SHIPPED (Open-Meteo, MET Norway/yr.no, Wunderground, Pirate Weather; OpenWeather declined)
 
 | | |
 |---|---|
@@ -625,19 +625,19 @@ Part 4.
 |---|---|---|---|
 | `221262b`, `ef76b6f` reject non-finite scores | NaN / ±inf scores never become detections | **SHIPPED** | `compute_confidence` sent `+inf` to 1.0 on both output paths; non-finite now maps to 0.0, a non-finite human score masks the clip, and the geomodel's `prob < sf_thresh` test — which NaN never satisfies — now reports a non-finite output as a run-time failure instead of passing the species (`inference/model.rs`, `inference/species_filter.rs`). |
 | `631cdf1` forwarded client-IP headers must agree | subnet bypass decided on a strictly resolved address | **SHIPPED** (the defect it exposed here) | We have no subnet bypass, but `client_ip.rs` let a client-written `X-Forwarded-For` win behind a proxy that set only `X-Real-IP`. When the two name different clients the request is now the proxy's. |
-| `780ce51` FLAC detection tags | Vorbis comments in saved FLAC clips | GAP | `audio/extraction/convert.rs` passes no `-metadata` to ffmpeg. |
-| `50547d0` ONNX Runtime spin-wait off | idle intra-op threads stop burning CPU | GAP | `inference/model.rs`, `inference/species_filter.rs` set only the intra-op thread count. |
-| `6dfdc10` MQTT first/last detection time | `speciesFirstDetectedAt` / `speciesLastDetectedAt` in the payload | GAP | `birdnet-integrations/src/mqtt/types.rs` `DetectionPayload` has neither; the data is in `birdnet-db/src/species_tracking.rs`. |
-| `63e7c64` Pirate Weather | a fourth weather provider (Dark Sky-compatible) | GAP | `birdnet-integrations/src/weather.rs` `Provider`: Open-Meteo, MET Norway, Wunderground. |
-| `0b51812` BirdWeather token check | refuses to save sharing-on with an empty or malformed token | PARTIAL | A Test button exists (`routes/admin/notification_test.rs`); the save path stores the token as typed (`routes/admin/settings/handler.rs`). |
-| `7def0cf` detections filtered by source | `source` on the detections list API | PARTIAL | The search page filters by source (`sqlite/queries/detections/filter.rs`); `/api/v2/detections` does not (`routes/detections.rs`). |
+| `780ce51` FLAC detection tags | Vorbis comments in saved FLAC clips | **SHIPPED** (FLAC, MP3 and Ogg) | The intermediate WAV gets its RIFF INFO chunk before conversion and ffmpeg maps it to each format's tags — checked against this container's ffmpeg (libavformat 60.16) for all three. Upstream also writes the model and app version; ours carries the species, confidence, date and loudness note the WAV already had. |
+| `50547d0` ONNX Runtime spin-wait off | idle intra-op threads stop burning CPU | **SHIPPED** | `classifier_session_builder` in `inference/model.rs`. Measured here: CPU per inference 93–98 ms → 52–54 ms, wall time +3–4 ms (4-vCPU x86_64, BirdNET v2.4 INT8). The geomodel runs one intra-op thread and has no pool to spin. Not measured on a Pi. |
+| `6dfdc10` MQTT first/last detection time | `speciesFirstDetectedAt` / `speciesLastDetectedAt` in the payload | **SHIPPED** | `species_first_detected_at` / `species_last_detected_at` (`mqtt/types.rs` `SpeciesHistory`, read by `species_tracking::prior_detections`). One deliberate difference: upstream sends `null` both for a first detection and for a failed read; ours omits the keys on a failed read, so a "new species" automation cannot fire on a database error. |
+| `63e7c64` Pirate Weather | a fourth weather provider (Dark Sky-compatible) | **SHIPPED** | `Provider::PirateWeather`, reading the `hourly` block (upstream reads `currently`). Built against Pirate Weather's field definitions, not a live response; `windBearing` is taken as the direction the wind comes from, an assumption the definition does not settle. |
+| `0b51812` BirdWeather token check | refuses to save sharing-on with an empty or malformed token | **SHIPPED** (characters, not length) | Saved and used trimmed; a token with anything but letters and digits is refused on save; the client encodes it as one path segment. Upstream also requires exactly 24 characters — not adopted, because BirdWeather's own documentation was not available to confirm it, and refusing a valid token turns sharing off. |
+| `7def0cf` detections filtered by source | `source` on the detections list API | **SHIPPED** | `/api/v2/detections` now runs on the search page's `DetectionFilter`, which also fixed `?species=…&date=…` silently dropping the date. |
 | `a73db53` dawn-chorus window | `period_days` / `min_days` on the API | PARTIAL | Hard-wired to 60 days (`routes/pages/dawn_chorus.rs`). |
 | `e853776` a model failing every window | persistent notice, per-model health, a health check | PARTIAL | A failing file logs; the dead-man fires after 24 h (`src/integrations/deadman.rs`); no per-classifier condition in `station_health.rs`. |
 | `712d4c2` stream metrics | per-source errors and data rates | PARTIAL | `birdnet_audio_source_up`, restarts and stalls are exported; no data rate. |
 | `dee43f5` effective overlap from measured latency | caps overlap to what the device sustains, shows configured vs effective | PARTIAL | The static "needs overlap N s" per level is shown; nothing measures. Its effect cannot be judged off a Pi. |
 | `cd488cc` browser location | `navigator.geolocation` button | PARTIAL | IP-based lookup in onboarding only. Needs a secure context, which a LAN station on plain HTTP is not. |
 | `54b5545` place search | Photon geocoder in settings | GAP | Plain latitude/longitude inputs. Would add an outbound host to the egress inventory. |
-| `6d2335c`, `64aa9e2` SSRF guard on outbound probes | | GAP | Already open as O‑11 in `UNATTENDED_DEPLOYMENT_AUDIT.md`. The probe routes are admin-only. |
+| `6d2335c`, `64aa9e2` SSRF guard on outbound probes | | **SHIPPED** for webhooks (O‑11) | `birdnet_integrations::egress_guard`, upstream's policy. Not applied to the native notification senders, which some stations reach only through a proxy. |
 | `0e7290d` location change without restart | | PARTIAL | Latitude/longitude are `Wiring::Bridged`: next restart. |
 | `92067fa` spectrograms after audio retention | | GAP | Spectrograms are rendered on demand from the clip. |
 | `aa86b38` per-source Home Assistant state topics | | GAP (minor) | Discovery publishes station-wide sensors only. |
@@ -666,6 +666,7 @@ declined: `inference/registry.rs` refuses an empty registry on purpose.
 * **G‑20** upstream now always sends PKCE (S256) (`90ebedf`).
 * **G‑22** upstream's colour schemes are five plus custom, not six.
 * **G‑26** upstream's set is now yr.no, OpenWeather, Wunderground and Pirate
+  Weather; ours is Open-Meteo, MET Norway (yr.no), Wunderground and Pirate
   Weather.
 * **G‑32**'s "Ours" cell listed "a job list" as missing while the same row said
   the jobs API shipped. Corrected, with the note that upstream's

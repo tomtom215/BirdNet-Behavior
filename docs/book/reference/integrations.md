@@ -9,13 +9,14 @@ Off by default — a fresh install contacts no weather service until
 stores hourly rows, and paints them as a signal-context band behind the
 day-strip and dawn-chorus charts.
 
-Three upstreams, chosen with the `WEATHER_PROVIDER` key in `birdnet.conf`:
+Four upstreams, chosen with the `WEATHER_PROVIDER` key in `birdnet.conf`:
 
 | `WEATHER_PROVIDER` | What it is | Needs |
 |---|---|---|
 | `open-meteo` *(default)* | Free gridded forecast, no key, and self-hostable — point `BNB_WEATHER_BASE_URL` at your own instance | nothing |
 | `met-no` | The Norwegian Meteorological Institute's Locationforecast. Keyless, and a better model over Europe | nothing |
 | `wunderground` | **Your own personal weather station's** current observations | `WEATHER_STATION_ID` and `WEATHER_API_KEY` |
+| `pirate-weather` | [Pirate Weather](https://pirateweather.net/)'s hourly forecast, a Dark Sky-compatible API blending several models | `WEATHER_API_KEY` (free tier available) |
 
 ```dotenv
 # birdnet.conf — read the anemometer in the garden, not a forecast for the county
@@ -170,9 +171,28 @@ those, which is where the ~45 s comes from.
   "confidence": 0.83,
   "confidence_pct": 83,
   "file_name": "Song_Sparrow-...wav",
-  "rtsp_id": null
+  "species_first_detected_at": "2026-03-14T06:02:11",
+  "species_last_detected_at": "2026-05-21T19:47:03"
 }
 ```
+
+`file_name` is left out when no clip was saved, and `rtsp_id` (the stream a
+detection came from) appears only for an RTSP source.
+
+`species_first_detected_at` and `species_last_detected_at` are the species'
+earliest and latest detections **before** this one, in the same local
+wall-clock form as `timestamp`; rejected detections are not counted, nor are
+imported ones when imports are excluded from analytics. The two keys say
+three different things:
+
+| The keys are | Meaning |
+|---|---|
+| timestamps | the station had heard this species before |
+| both `null` | it had not — this is the first detection ever |
+| absent | the history could not be read, so nothing is claimed |
+
+An automation for "a species never heard here before" should test for
+`null`, not for a missing key: a missing key is a read failure, not a first.
 
 ## Home Assistant
 
