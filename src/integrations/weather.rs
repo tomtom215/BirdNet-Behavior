@@ -263,6 +263,16 @@ mod tests {
                 api_key: "abc123".to_owned(),
             }
         );
+        assert_eq!(
+            resolve_provider(Some(&config_with(&[
+                ("WEATHER_PROVIDER", "pirate-weather"),
+                ("WEATHER_API_KEY", "pw-key"),
+            ])))
+            .expect("pirate-weather resolves with a key"),
+            Provider::PirateWeather {
+                api_key: "pw-key".to_owned(),
+            }
+        );
     }
 
     /// The counterpart: a misconfigured provider does not silently become the
@@ -283,6 +293,7 @@ mod tests {
                 ("WEATHER_PROVIDER", "wunderground"),
                 ("WEATHER_STATION_ID", "KMAHANOV10"),
             ],
+            vec![("WEATHER_PROVIDER", "pirate-weather")],
         ] {
             let cfg = config_with(&entries);
             assert!(

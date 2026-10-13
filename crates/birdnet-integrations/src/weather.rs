@@ -1,4 +1,4 @@
-//! Weather client for the O-23 signal-context overlay, over one of three
+//! Weather client for the O-23 signal-context overlay, over one of four
 //! upstreams (`G-26`).
 //!
 //! Off by default. The poll loop only starts when both:
@@ -7,7 +7,7 @@
 //! 2. The caller supplies station coordinates (otherwise there's
 //!    nothing to fetch for).
 //!
-//! # Which upstream, and why there are three
+//! # Which upstream, and why there are four
 //!
 //! [`Provider::OpenMeteo`] stays the default: free, no API key, terms that
 //! allow non-commercial use, and self-hostable — an operator uneasy about the
@@ -25,7 +25,13 @@
 //! better covariate for bird activity than any gridded model. It needs the
 //! station's own id and an API key.
 //!
-//! An enum rather than a trait. The set is closed — these three and whatever
+//! [`Provider::PirateWeather`] is a Dark Sky-compatible gridded forecast that
+//! needs a free API key — for an operator who already has one, or who wants
+//! a forecast blended from several models. It is the fourth provider
+//! tphakala/birdnet-go added (63e7c64); theirs reads the `currently` block,
+//! this reads `hourly`, because the overlay stores hours.
+//!
+//! An enum rather than a trait. The set is closed — these four and whatever
 //! is added deliberately — and `birdnet-integrations` constructs no runtime and
 //! carries no `async-trait`, so a trait here would either be
 //! dyn-incompatible (`async fn` in traits) or need a boxed-future dance for no
@@ -51,6 +57,9 @@ pub const MET_NORWAY_BASE_URL: &str = "https://api.met.no";
 /// The Weather Company's personal-weather-station host.
 pub const WUNDERGROUND_BASE_URL: &str = "https://api.weather.com";
 
+/// Pirate Weather's API host.
+pub const PIRATE_WEATHER_BASE_URL: &str = "https://api.pirateweather.net";
+
 /// Where the station's weather comes from.
 ///
 /// See the module docs for why this is an enum and not a trait.
@@ -68,11 +77,17 @@ pub enum Provider {
         /// The API key the station's owner holds.
         api_key: String,
     },
+    /// Pirate Weather's hourly forecast.
+    PirateWeather {
+        /// The operator's Pirate Weather API key.
+        api_key: String,
+    },
 }
 
 impl Provider {
     /// Every provider's configuration name, in the order the docs list them.
-    pub const NAMES: &'static [&'static str] = &["open-meteo", "met-no", "wunderground"];
+    pub const NAMES: &'static [&'static str] =
+        &["open-meteo", "met-no", "wunderground", "pirate-weather"];
 
     /// The name an operator writes in the config.
     #[must_use]
@@ -81,6 +96,7 @@ impl Provider {
             Self::OpenMeteo => "open-meteo",
             Self::MetNorway => "met-no",
             Self::Wunderground { .. } => "wunderground",
+            Self::PirateWeather { .. } => "pirate-weather",
         }
     }
 
@@ -91,6 +107,7 @@ impl Provider {
             Self::OpenMeteo => "Open-Meteo",
             Self::MetNorway => "MET Norway",
             Self::Wunderground { .. } => "Weather Underground (personal station)",
+            Self::PirateWeather { .. } => "Pirate Weather",
         }
     }
 
@@ -101,6 +118,7 @@ impl Provider {
             Self::OpenMeteo => DEFAULT_BASE_URL,
             Self::MetNorway => MET_NORWAY_BASE_URL,
             Self::Wunderground { .. } => WUNDERGROUND_BASE_URL,
+            Self::PirateWeather { .. } => PIRATE_WEATHER_BASE_URL,
         }
     }
 
@@ -142,6 +160,19 @@ impl Provider {
                     )),
                 }
             }
+            "pirate-weather" | "pirateweather" | "pirate" => api_key
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|api_key| Self::PirateWeather {
+                    api_key: api_key.to_owned(),
+                })
+                .ok_or_else(|| {
+                    WeatherError::Config(
+                        "the pirate-weather provider needs WEATHER_API_KEY (the key may be \
+                         mounted as a file with BIRDNET_WEATHER_API_KEY_FILE)"
+                            .into(),
+                    )
+                }),
             other => Err(WeatherError::Config(format!(
                 "unknown weather provider {other:?}; expected one of {}",
                 Self::NAMES.join(", ")
@@ -298,6 +329,9 @@ impl Client {
                 station_id,
                 api_key,
             } => self.fetch_wunderground(station_id, api_key).await,
+            Provider::PirateWeather { api_key } => {
+                self.fetch_pirate_weather(api_key, lat, lon).await
+            }
         }
     }
 
@@ -337,6 +371,26 @@ impl Client {
             base = self.base_url
         );
         let body: WundergroundResponse = self.get_json(&url, "wunderground").await?;
+        Ok(body.into_rows())
+    }
+
+    async fn fetch_pirate_weather(
+        &self,
+        api_key: &str,
+        lat: f64,
+        lon: f64,
+    ) -> Result<Vec<WeatherRow>, WeatherError> {
+        // The key is a path segment here, not a query parameter
+        // (`/forecast/[apikey]/[latitude],[longitude]`, Pirate Weather's API
+        // page). `units=si`: °C, m/s, hPa, mm/h. Everything but `hourly` is
+        // excluded — it is the only block the overlay stores.
+        let url = format!(
+            "{base}/forecast/{key}/{lat:.4},{lon:.4}\
+             ?units=si&exclude=currently,minutely,daily,alerts",
+            base = self.base_url,
+            key = path_segment(api_key),
+        );
+        let body: PirateWeatherResponse = self.get_json(&url, "pirate weather").await?;
         Ok(body.into_rows())
     }
 
@@ -615,6 +669,88 @@ impl WundergroundResponse {
             })
             .collect()
     }
+}
+
+/// Pirate Weather's response under `units=si`, `hourly` block only.
+///
+/// **Written against Pirate Weather's published field definitions, not a live
+/// call** — the API needs a key this repository does not have. From its
+/// "Data Blocks" page: `time` is "the time in which the data point begins
+/// represented in UNIX time", aligned to the top of the hour; `cloudCover` is
+/// "between 0 and 1 inclusive"; `pressure` is "the sea-level pressure";
+/// `precipIntensity` is liquid-water equivalent; and `units=si` makes these
+/// °C, mm per hour, m/s and hPa.
+///
+/// `windBearing` is defined there as "the direction in which the wind is
+/// blowing". This stores it as the column's direction-the-wind-comes-*from*,
+/// which is what the Dark Sky field this API reproduces meant and what
+/// birdnet-go does with it too — but that is an assumption, not something the
+/// definition settles.
+#[derive(Debug, Deserialize)]
+struct PirateWeatherResponse {
+    #[serde(default)]
+    hourly: Option<PirateWeatherBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PirateWeatherBlock {
+    #[serde(default)]
+    data: Vec<PirateWeatherHour>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PirateWeatherHour {
+    time: i64,
+    #[serde(default)]
+    temperature: Option<f32>,
+    /// mm per hour; for an hourly data point, the hour's amount.
+    #[serde(default)]
+    precip_intensity: Option<f32>,
+    #[serde(default)]
+    wind_speed: Option<f32>,
+    #[serde(default)]
+    wind_bearing: Option<f32>,
+    #[serde(default)]
+    pressure: Option<f32>,
+    #[serde(default)]
+    cloud_cover: Option<f32>,
+}
+
+impl PirateWeatherResponse {
+    fn into_rows(self) -> Vec<WeatherRow> {
+        self.hourly
+            .map(|block| block.data)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|hour| WeatherRow {
+                at: birdnet_core::civil::rfc3339_utc(hour.time),
+                temp_c: hour.temperature,
+                precip_mm: hour.precip_intensity.map(|v| v.max(0.0)),
+                wind_kt: hour.wind_speed.map(|v| v * MS_TO_KT),
+                wind_dir_deg: hour.wind_bearing.map(round_to_degrees),
+                pressure_hpa: hour.pressure,
+                cloud_pct: hour.cloud_cover.map(|f| round_to_degrees(f * 100.0)),
+                // An `icon` name, not a WMO code — left empty for the reason
+                // the MET Norway decoder gives.
+                code: None,
+            })
+            .collect()
+    }
+}
+
+/// Percent-encode a URL path segment: everything but unreserved characters.
+fn path_segment(value: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
 }
 
 /// 1 m/s in knots.
@@ -898,9 +1034,63 @@ mod provider_tests {
     /// Every provider has a distinct name, label and default host, and the
     /// `NAMES` list is the set `resolve` accepts. A name in the docs that
     /// `resolve` rejects is the drift this catches.
+    /// The documented shape, converted: unix start-of-hour to the column's
+    /// RFC 3339, m/s to knots, a 0–1 fraction to a percentage, and a negative
+    /// intensity (which the API should never send) clamped rather than stored.
+    #[test]
+    fn a_pirate_weather_hour_converts_to_one_row() {
+        let body: PirateWeatherResponse = serde_json::from_str(
+            r#"{"latitude":52.52,"longitude":13.405,"hourly":{"summary":"Clear","data":[
+                {"time":1780304400,"temperature":14.5,"precipIntensity":0.3,
+                 "windSpeed":5.0,"windBearing":271.6,"pressure":1013.2,
+                 "cloudCover":0.42,"icon":"partly-cloudy-day"},
+                {"time":1780308000,"precipIntensity":-0.01}
+            ]}}"#,
+        )
+        .expect("decodes");
+        let rows = body.into_rows();
+        assert_eq!(rows.len(), 2);
+        let r = &rows[0];
+        assert_eq!(r.at, "2026-06-01T09:00:00Z");
+        assert_eq!(r.temp_c, Some(14.5));
+        assert_eq!(r.precip_mm, Some(0.3));
+        assert!(
+            (r.wind_kt.unwrap() - 9.719_222).abs() < 1e-3,
+            "{:?}",
+            r.wind_kt
+        );
+        assert_eq!(r.wind_dir_deg, Some(272));
+        assert_eq!(r.pressure_hpa, Some(1013.2));
+        assert_eq!(r.cloud_pct, Some(42));
+        assert_eq!(r.code, None, "an icon name is not a WMO code");
+        assert_eq!(rows[1].precip_mm, Some(0.0));
+        assert_eq!(rows[1].temp_c, None, "a field that is absent stays absent");
+    }
+
+    #[test]
+    fn a_pirate_weather_response_without_an_hourly_block_yields_no_rows() {
+        let body: PirateWeatherResponse =
+            serde_json::from_str(r#"{"latitude":1.0,"longitude":2.0}"#).expect("decodes");
+        assert!(body.into_rows().is_empty());
+    }
+
+    #[test]
+    fn pirate_weather_needs_a_key() {
+        assert!(matches!(
+            Provider::resolve("pirate-weather", None, Some("  ")),
+            Err(WeatherError::Config(_))
+        ));
+        assert_eq!(
+            Provider::resolve("PirateWeather", None, Some(" k ")).expect("resolves"),
+            Provider::PirateWeather {
+                api_key: "k".to_owned()
+            }
+        );
+    }
+
     #[test]
     fn every_listed_name_resolves_and_round_trips() {
-        assert_eq!(Provider::NAMES.len(), 3);
+        assert_eq!(Provider::NAMES.len(), 4);
         for name in Provider::NAMES {
             let provider = Provider::resolve(name, Some("id"), Some("key"))
                 .unwrap_or_else(|e| panic!("NAMES lists {name}, which does not resolve: {e}"));
@@ -915,7 +1105,7 @@ mod provider_tests {
                 "{name} has no default host"
             );
         }
-        // And the three are actually different upstreams, not one aliased.
+        // And the four are actually different upstreams, not one aliased.
         let hosts: std::collections::BTreeSet<&str> = Provider::NAMES
             .iter()
             .map(|n| {
@@ -924,7 +1114,7 @@ mod provider_tests {
                     .default_base_url()
             })
             .collect();
-        assert_eq!(hosts.len(), 3, "each provider has its own host: {hosts:?}");
+        assert_eq!(hosts.len(), 4, "each provider has its own host: {hosts:?}");
     }
 
     /// The provider decides **which endpoint is actually requested**.
@@ -952,6 +1142,14 @@ mod provider_tests {
                 },
                 "/v2/pws/observations/current",
                 vec!["stationId=KMAHANOV10", "units=m"],
+            ),
+            (
+                // A `/` in the key stays inside its one path segment.
+                Provider::PirateWeather {
+                    api_key: "pw/key".to_owned(),
+                },
+                "/forecast/pw%2Fkey/52.5200,13.4050",
+                vec!["units=si", "exclude=currently,minutely,daily,alerts"],
             ),
         ] {
             let (addr, request) = spawn_one_shot_server().await;

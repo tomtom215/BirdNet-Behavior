@@ -35,9 +35,9 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_METADATA_MODEL` | `--metadata-model` | `METADATA_MODEL_PATH` | set by the installer / entrypoint |
 | `BIRDNET_METADATA_LABELS` | `--metadata-labels` | `METADATA_LABELS_PATH` | set by the installer / entrypoint |
 | `BIRDNET_SPECIES_ALIASES` | `--species-aliases` | `SPECIES_ALIASES_PATH` | — (a tab-separated `legacy<TAB>canonical` scientific-name map, for species the geomodel and the classifier name differently and the automatic rules cannot connect &mdash; see [tuning](../guides/tuning.md#when-the-two-files-disagree-about-a-name)) |
-| — | — | `WEATHER_PROVIDER` | `open-meteo`; also `met-no` (MET Norway, keyless) and `wunderground` (your own personal weather station). An unimplemented name does not start the poll — see [the weather overlay](../guide/analytics.md) |
+| — | — | `WEATHER_PROVIDER` | `open-meteo`; also `met-no` (MET Norway, keyless), `pirate-weather` (needs `WEATHER_API_KEY`) and `wunderground` (your own personal weather station). An unimplemented name does not start the poll — see [the weather overlay](../guide/analytics.md) |
 | — | — | `WEATHER_STATION_ID` | — (`wunderground` only: the station's Weather Underground id) |
-| `BIRDNET_WEATHER_API_KEY_FILE` | — | `WEATHER_API_KEY` | — (`wunderground` only; mountable from a file like the other credentials) |
+| `BIRDNET_WEATHER_API_KEY_FILE` | — | `WEATHER_API_KEY` | — (`wunderground` and `pirate-weather`; mountable from a file like the other credentials) |
 | `BIRDNET_EBIRD_API_KEY_FILE` | — | `EBIRD_API_KEY` | — (absent ⇒ eBird corroboration is off entirely; mountable from a file like the other credentials — see [eBird](../reference/integrations.md#ebird)) |
 | — | — | `EBIRD_REGION` | — (empty ⇒ the station's own `LATITUDE`/`LONGITUDE` are used, which is usually better) |
 | — | — | `EBIRD_DIST_KM` | `25` (0–50; the radius asked about when using coordinates) |
@@ -127,7 +127,9 @@ normally never fires.
 
 Everything else is off until you configure it, and configuring it is the
 consent: Apprise, BirdWeather, MQTT, SMTP e-mail, the heartbeat ping, and the
-weather poll (`api.open-meteo.com`, itself opt-in via `BNB_WEATHER_ENABLED=1`).
+weather poll (`api.open-meteo.com` by default; `api.met.no`, `api.weather.com`
+or `api.pirateweather.net` for the other `WEATHER_PROVIDER`s — itself opt-in via
+`BNB_WEATHER_ENABLED=1`).
 The location button on the settings page calls `ip-api.com`, and only when you
 press it.
 
