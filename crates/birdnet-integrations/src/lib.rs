@@ -12,6 +12,7 @@ pub mod auto_update;
 pub mod birdweather;
 pub mod dispatch;
 pub mod ebird;
+pub mod egress_guard;
 pub mod email;
 pub mod heartbeat;
 pub mod model_catalog;
