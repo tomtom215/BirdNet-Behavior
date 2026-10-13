@@ -7,7 +7,7 @@
 //! ## Typical use
 //!
 //! ```rust,no_run
-//! use birdnet_integrations::mqtt::{MqttClient, MqttConfig, DetectionPayload};
+//! use birdnet_integrations::mqtt::{DetectionPayload, MqttClient, MqttConfig, SpeciesHistory};
 //!
 //! let config = MqttConfig {
 //!     host: "mqtt.local".to_string(),
@@ -24,6 +24,7 @@
 //!     confidence_pct: 87,
 //!     file_name: None,
 //!     rtsp_id: None,
+//!     species_history: SpeciesHistory::Never,
 //! };
 //! client.publish_detection(&payload).unwrap();
 //! ```
@@ -48,7 +49,10 @@ pub use discovery::{HaDiscovery, HaDiscoveryConfig};
 pub use publisher::{
     KEEPALIVE_SECS, PRESENCE_OFFLINE, PRESENCE_ONLINE, PresenceSession, publish, publish_with,
 };
-pub use types::{ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel, TlsConfig, Will};
+pub use types::{
+    ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel, SpeciesHistory, TlsConfig,
+    Will,
+};
 
 /// High-level MQTT client for publishing bird detection events.
 ///
@@ -148,6 +152,7 @@ mod tests {
             confidence_pct: 87,
             file_name: None,
             rtsp_id: None,
+            species_history: SpeciesHistory::Unknown,
         };
         // Verify topic uses underscores (not spaces)
         let species_safe = payload.common_name.replace(' ', "_");
@@ -173,6 +178,7 @@ mod tests {
             confidence_pct: 87,
             file_name: None,
             rtsp_id: None,
+            species_history: SpeciesHistory::Unknown,
         };
         let result = client.publish_detection(&payload);
         assert!(matches!(result, Err(MqttError::Connection(_))));

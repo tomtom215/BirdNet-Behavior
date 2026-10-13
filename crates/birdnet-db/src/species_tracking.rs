@@ -253,6 +253,62 @@ fn days_from_ymd(date: &str) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
+/// A species' earliest and most recent detections *before* a given moment.
+///
+/// Both are `YYYY-MM-DDTHH:MM:SS`, local wall-clock — the shape every other
+/// timestamp this station publishes takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriorDetections {
+    /// The earliest detection before the moment.
+    pub first: String,
+    /// The latest detection before the moment.
+    pub last: String,
+}
+
+/// `sci_name`'s earliest and most recent detections strictly before
+/// `date`/`time`, or `None` when it has none.
+///
+/// "Before" rather than "other than this row": the caller asks while
+/// announcing a detection that is already stored, and a backlog analysed out
+/// of order should still describe what came *earlier* in time. A detection
+/// of the same species at the same second from another source is therefore
+/// not "previous" either, which is the honest answer.
+///
+/// Read through `detections_analytic`, so a rejected detection — and an
+/// imported one when the operator has excluded imports — is not history.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on query failure.
+pub fn prior_detections(
+    conn: &Connection,
+    sci_name: &str,
+    date: &str,
+    time: &str,
+) -> Result<Option<PriorDetections>, DbError> {
+    // Two ordered single-row reads in the column order of
+    // `idx_detections_sci_first_cover` (`Sci_Name, Date, Time, …`), with
+    // `Date` and `Time` compared separately rather than as one concatenated
+    // string, so the comparison is on the indexed columns themselves.
+    let edge = |order: &str| -> Result<Option<String>, DbError> {
+        let sql = format!(
+            "SELECT Date || 'T' || Time FROM detections_analytic
+              WHERE Sci_Name = ?1 AND (Date < ?2 OR (Date = ?2 AND Time < ?3))
+              ORDER BY Date {order}, Time {order} LIMIT 1"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![sci_name, date, time])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(row.get(0)?),
+            None => None,
+        })
+    };
+    let (Some(first), Some(last)) = (edge("ASC")?, edge("DESC")?) else {
+        return Ok(None);
+    };
+    Ok(Some(PriorDetections { first, last }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +339,59 @@ mod tests {
             params![date, sci, sci, time],
         )
         .expect("insert");
+    }
+
+    fn prior(conn: &Connection, sci: &str, date: &str, time: &str) -> Option<(String, String)> {
+        prior_detections(conn, sci, date, time)
+            .expect("query")
+            .map(|p| (p.first, p.last))
+    }
+
+    /// The span is earliest-to-latest of what came strictly before, and
+    /// nothing at or after the moment counts — including the row being
+    /// announced, which is already stored when the question is asked.
+    #[test]
+    fn prior_detections_are_strictly_earlier() {
+        let conn = db();
+        seen_at(&conn, "Turdus merula", "2026-03-01", "05:10:00");
+        seen_at(&conn, "Turdus merula", "2026-05-22", "06:00:00");
+        seen_at(&conn, "Turdus merula", "2026-05-22", "21:10:31"); // the one announced
+        seen_at(&conn, "Turdus merula", "2026-05-23", "04:00:00"); // later, from a backlog
+        seen_at(&conn, "Parus major", "2026-01-01", "00:00:01"); // another species
+        assert_eq!(
+            prior(&conn, "Turdus merula", "2026-05-22", "21:10:31"),
+            Some(("2026-03-01T05:10:00".into(), "2026-05-22T06:00:00".into()))
+        );
+    }
+
+    /// The counterpart that makes the one above mean something: a species
+    /// whose only detection is the one announced has no history at all.
+    #[test]
+    fn a_first_ever_detection_has_no_prior() {
+        let conn = db();
+        seen_at(&conn, "Turdus merula", "2026-05-22", "21:10:31");
+        assert_eq!(
+            prior(&conn, "Turdus merula", "2026-05-22", "21:10:31"),
+            None
+        );
+    }
+
+    /// A rejected detection is not history — the same rule every other
+    /// first-seen figure on the station follows.
+    #[test]
+    fn a_rejected_detection_is_not_prior() {
+        let conn = db();
+        seen_at(&conn, "Turdus merula", "2026-04-01", "06:00:00");
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Date = '2026-04-01'",
+            [],
+        )
+        .expect("reject");
+        seen_at(&conn, "Turdus merula", "2026-05-22", "21:10:31");
+        assert_eq!(
+            prior(&conn, "Turdus merula", "2026-05-22", "21:10:31"),
+            None
+        );
     }
 
     fn windows<'a>(year: &'a str, season: &'a str, absence: u32) -> TrackingWindows<'a> {

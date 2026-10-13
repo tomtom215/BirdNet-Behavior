@@ -59,6 +59,33 @@ pub const fn is_first_detection_today(count_after_insert: i64) -> bool {
     count_after_insert <= 1
 }
 
+/// What an MQTT detection payload says about a species' earlier detections.
+///
+/// A failed read is [`SpeciesHistory::Unknown`] — the keys are left out —
+/// and never [`SpeciesHistory::Never`]: `null` there states a first-ever
+/// detection, and an automation keyed on "new species" would fire on a
+/// database error. The same mistake `is_first_detection_today` exists to
+/// avoid for the dashboard's "new today".
+pub fn species_history(
+    read: Result<
+        Option<birdnet_db::species_tracking::PriorDetections>,
+        birdnet_db::sqlite::DbError,
+    >,
+) -> birdnet_integrations::mqtt::SpeciesHistory {
+    use birdnet_integrations::mqtt::SpeciesHistory;
+    match read {
+        Ok(Some(prior)) => SpeciesHistory::Seen {
+            first: prior.first,
+            last: prior.last,
+        },
+        Ok(None) => SpeciesHistory::Never,
+        Err(e) => {
+            tracing::debug!(error = %e, "species history unavailable for the MQTT payload");
+            SpeciesHistory::Unknown
+        }
+    }
+}
+
 /// Combine the "Suppress alert-rule fired?" gate with the trigger-mode
 /// filter into a single notification-eligibility verdict.
 ///
@@ -635,6 +662,32 @@ mod tests {
         // pin a non-round case here to double-cover.
         let v = latency_ms_to_seconds(2_750);
         assert!((v - 2.75).abs() < 1e-9, "got {v}");
+    }
+
+    // ── species_history ─────────────────────────────────────────────────
+
+    /// The discrimination that matters: a read error and an empty history
+    /// must not map to the same payload.
+    #[test]
+    fn species_history_keeps_an_error_apart_from_never() {
+        use birdnet_integrations::mqtt::SpeciesHistory;
+        assert_eq!(species_history(Ok(None)), SpeciesHistory::Never);
+        assert_eq!(
+            species_history(Err(birdnet_db::sqlite::DbError::Schema(
+                "no such table: detections".into()
+            ))),
+            SpeciesHistory::Unknown
+        );
+        assert_eq!(
+            species_history(Ok(Some(birdnet_db::species_tracking::PriorDetections {
+                first: "2026-03-01T05:10:00".into(),
+                last: "2026-05-22T06:00:00".into(),
+            }))),
+            SpeciesHistory::Seen {
+                first: "2026-03-01T05:10:00".into(),
+                last: "2026-05-22T06:00:00".into(),
+            }
+        );
     }
 
     // ── is_first_detection_today ────────────────────────────────────────

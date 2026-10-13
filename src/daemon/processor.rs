@@ -14,7 +14,7 @@ use birdnet_integrations::notification::{
 use super::disposition::{
     DispositionDecision, confidence_pct_round, confidence_pct_trunc, decide_disposition,
     derive_source_label, is_first_detection_today, latency_ms_to_seconds, passes_filter,
-    should_dispatch_notification,
+    should_dispatch_notification, species_history,
 };
 use birdnet_db::notifications::NotifStatus;
 use birdnet_integrations::webhook::dispatch_webhook;
@@ -1436,6 +1436,16 @@ pub(super) fn event_processor(
         // behind a dead network path and back the channel up. Spawning it
         // detaches that latency from the detection pipeline entirely.
         if let Some(ref mqtt_client) = mqtt {
+            // Read on this thread, which already owns the database round trips
+            // for this detection; the publish below is what is detached.
+            let species_history = species_history(state.with_db(|conn| {
+                birdnet_db::species_tracking::prior_detections(
+                    conn,
+                    &detection.scientific_name,
+                    &detection.date,
+                    &detection.time,
+                )
+            }));
             let payload = birdnet_integrations::mqtt::DetectionPayload {
                 timestamp: format!("{}T{}", detection.date, detection.time),
                 scientific_name: detection.scientific_name.clone(),
@@ -1451,6 +1461,7 @@ pub(super) fn event_processor(
                         birdnet_core::detection::types::RecordingFile::parse(n)
                             .and_then(|rf| rf.rtsp_id)
                     }),
+                species_history,
             };
             let client = Arc::clone(mqtt_client);
             let species = detection.common_name.clone();
