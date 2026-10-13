@@ -17,7 +17,18 @@ External links are deliberately not followed. They rot and rate-limit, and a
 docs build that fails because someone else's server is down blocks releases for
 no reason.
 
-Usage:  scripts/check-book-links.py <rendered-html-dir> [more dirs...]
+One external link *is* checked, offline: each page's "Suggest an edit" link
+(`rel="edit"`) must name a file that exists in this repository. mdBook 0.5
+expands `{path}` in `edit-url-template` relative to the book root (the
+repository root here), not to `src`, so a template written for 0.4 sent every
+edit link to `docs/book/docs/book/…` — a 404 on every page of the published
+site, invisible to a check that skips `https:` links.
+
+Usage:  scripts/check-book-links.py [--base /served/prefix/] <rendered-html-dir> [more dirs...]
+
+`--base` is the URL path the tree is served under (mdBook's `site-url`). A
+root-absolute link under that prefix resolves inside the tree; one outside it
+cannot be checked offline and is reported. Without `--base`, `/` is the tree.
 """
 
 from __future__ import annotations
@@ -38,6 +49,12 @@ CODE = re.compile(r"<pre\b.*?</pre>|<code\b.*?</code>", re.I | re.S)
 # `id="…"` / `name="…"`, for fragment targets.
 ANCHOR = re.compile(r"""\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 
+# The repository-relative path in a GitHub "edit" URL: `…/edit/<ref>/<path>`.
+EDIT_URL = re.compile(r"^https://github\.com/[^/]+/[^/]+/edit/[^/]+/(.+)$")
+EDIT_LINK = re.compile(r"""<a\b[^>]*\brel\s*=\s*["']edit["'][^>]*>""", re.I)
+EDIT_HREF = re.compile(r"""\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 SKIP_SCHEMES = {"http", "https", "mailto", "tel", "data", "javascript", "ftp"}
 
 
@@ -50,7 +67,7 @@ def anchors_in(path: str) -> set[str]:
     return {html.unescape(a or b) for a, b in ANCHOR.findall(body)}
 
 
-def check(root: str) -> list[str]:
+def check(root: str, base: str = "/") -> list[str]:
     problems: list[str] = []
     anchor_cache: dict[str, set[str]] = {}
     pages = [
@@ -66,6 +83,15 @@ def check(root: str) -> list[str]:
         with open(page, encoding="utf-8", errors="replace") as fh:
             body = CODE.sub("", fh.read())
         here = os.path.dirname(page)
+        for tag in EDIT_LINK.findall(body):
+            href = EDIT_HREF.search(tag)
+            raw = html.unescape((href.group(1) or href.group(2)) if href else "")
+            m = EDIT_URL.match(raw)
+            if not m or not os.path.isfile(os.path.join(REPO_ROOT, unquote(m.group(1)))):
+                problems.append(
+                    f"{os.path.relpath(page, root)}: edit link {raw!r} — "
+                    "names no file in this repository"
+                )
         for a, b in ATTR.findall(body):
             raw = html.unescape(a or b).strip()
             if not raw:
@@ -84,11 +110,13 @@ def check(root: str) -> list[str]:
                         problems.append(f"{rel}: #{frag} — no such anchor on this page")
                 continue
 
-            dest = (
-                os.path.join(root, unquote(target).lstrip("/"))
-                if target.startswith("/")
-                else os.path.join(here, unquote(target))
-            )
+            if target.startswith("/"):
+                if not target.startswith(base) and target + "/" != base:
+                    problems.append(f"{rel}: {raw} — outside the served prefix {base}")
+                    continue
+                dest = os.path.join(root, unquote(target[len(base):]).lstrip("/"))
+            else:
+                dest = os.path.join(here, unquote(target))
             dest = os.path.normpath(dest)
             if os.path.isdir(dest):
                 dest = os.path.join(dest, "index.html")
@@ -106,6 +134,10 @@ def check(root: str) -> list[str]:
 
 def main(argv: list[str]) -> int:
     roots = argv[1:]
+    base = "/"
+    if roots[:1] == ["--base"] and len(roots) >= 2:
+        base = roots[1] if roots[1].endswith("/") else roots[1] + "/"
+        roots = roots[2:]
     if not roots:
         print(__doc__)
         return 2
@@ -115,7 +147,7 @@ def main(argv: list[str]) -> int:
         # lines printed under it. Counting occurrences instead read as a silent
         # truncation ("10 broken links" over a list of 8) when the only
         # difference was the same dead target linked twice from one page.
-        problems = sorted(set(check(root)))
+        problems = sorted(set(check(root, base)))
         if problems:
             failed = True
             print(f"check-book-links: {len(problems)} broken link(s) under {root}:")

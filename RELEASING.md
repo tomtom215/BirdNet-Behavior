@@ -44,7 +44,7 @@ That single tag push drives everything else.
 
 ## What each workflow emits
 
-Pushing a `vX.Y.Z` tag triggers **two** workflows in parallel:
+Pushing a `vX.Y.Z` tag triggers **three** workflows in parallel:
 
 ### `release.yml` — binaries, SBOM, attestation, GitHub Release
 
@@ -91,6 +91,14 @@ digest, then merges to one multi-arch manifest tagged
 `X.Y.Z` / `X.Y` / `X` / `latest` (and `edge` on `main`, `sha-<rev>` always).
 The manifest is **signed with keyless cosign** (GitHub OIDC → Fulcio +
 Rekor), with buildx `provenance` and `sbom` attestations attached.
+
+### `docs.yml` — the versioned manual on GitHub Pages
+
+Rebuilds the whole site from tags with `scripts/build-versioned-docs.sh`: the
+root becomes this release's manual, which is also kept at `/vX.Y.Z/`; earlier
+versioned releases and `/dev/` (`main`) are rebuilt beside it. Every tree is
+link-checked, including each page's "Suggest an edit" link. Nothing to do by
+hand — see "What is NOT automated" for what this means for a docs fix.
 
 ## The shared model release (`models-v3.0-preview3`)
 
@@ -222,16 +230,15 @@ isn't half-done:
   the tag, but you make the edits (see the checklist). There is no auto-bump.
 - **Tag creation/push.** The pipeline is tag-triggered; creating and
   pushing the tag is the manual "go" action.
-- **Docs versioning + tag-time rebuild.** The mdBook documentation site is
-  **"latest tracks `main`"** — it is not snapshotted per release. `docs.yml`
-  rebuilds and deploys it on pushes to `main` that touch `docs/book/**`,
-  `docs/book-theme/**` or `book.toml` (not the audit notes in `docs/*.md`). There is
-  no tag-triggered docs build, and it is not needed: a release is cut from
-  `main`, so the live docs already reflect the released commit (the docs
-  change deployed when its PR merged). Old versions are not archived.
-  (Rationale: a single small appliance project; one accurate "current"
-  manual beats N drifting snapshots. Revisit if the config/schema surface
-  starts changing incompatibly between releases.)
+- **Nothing for the docs.** The manual is versioned and needs no release step
+  of its own: pushing the tag triggers `docs.yml`, which rebuilds the whole
+  site with `scripts/build-versioned-docs.sh` — the root becomes the new
+  release's manual, it is also kept at `/vX.Y.Z/`, earlier releases (from
+  `v0.17.1`, the first versioned one) stay at theirs, and `main` is at `/dev/`.
+  Each version is rendered from its own tag and link-checked. A docs fix merged
+  after a release reaches `/dev/` at once and the root at the next release; to
+  correct a released manual, cut a patch release. The in-app `/help/*` tree is
+  always the manual for the binary serving it, so it needs no versioning.
 - **Crates.io publishing.** Not published to crates.io (this is an
   application, not a library).
 - **The shared model release.** `publish-model.yml` is a manual, one-shot
@@ -254,6 +261,7 @@ isn't half-done:
 - **The release already exists and needs regenerating.** Delete the
   GitHub Release (keep the tag), then re-run the workflow from the
   Actions tab. `github-release` is idempotent and re-creates it.
-- **Docs didn't update after merging a docs change.** Check the
-  `docs.yml` run on `main`; Pages must be enabled (Settings → Pages →
-  Source: GitHub Actions) once for the repo.
+- **Docs didn't update after merging a docs change.** A merged change
+  appears under `/dev/`, not at the root — the root is the latest release. If
+  `/dev/` is stale too, check the `docs.yml` run on `main`; Pages must be
+  enabled (Settings → Pages → Source: GitHub Actions) once for the repo.

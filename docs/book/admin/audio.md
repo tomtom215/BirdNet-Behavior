@@ -130,7 +130,7 @@ microphone gets a one-pole filter (6 dB/octave); an RTSP camera gets ffmpeg's
 two-pole one (12 dB/octave). From the same tick-box, a microphone therefore
 keeps considerably more low-frequency energy:
 
-| | 20 Hz | 30 Hz | 50 Hz | 60 Hz | 80 Hz | 120 Hz |
+| Source | 20 Hz | 30 Hz | 50 Hz | 60 Hz | 80 Hz | 120 Hz |
 |---|---|---|---|---|---|---|
 | Microphone | −15.7 dB | −12.3 dB | −8.3 dB | −7.0 dB | −5.1 dB | −3.0 dB |
 | RTSP camera | −31.1 dB | −24.1 dB | −15.3 dB | −12.3 dB | −7.8 dB | −3.0 dB |

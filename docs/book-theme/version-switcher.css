@@ -1,0 +1,30 @@
+/* Version switcher and banner — see version-switcher.js. Colours come from
+   mdBook's own theme variables so all five themes are covered. */
+
+.bnb-version-select {
+  margin: 0 0.5em;
+  padding: 0.2em 0.3em;
+  font: inherit;
+  font-size: 1.4rem;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--searchbar-border-color, var(--sidebar-spacer));
+  border-radius: 4px;
+  max-width: 11em;
+  vertical-align: middle;
+}
+
+.bnb-version-banner {
+  margin: 0 0 1.5em;
+  padding: 0.8em 1em;
+  border-inline-start: 4px solid var(--bnb-dawn, #b07d3a);
+  background: var(--quote-bg);
+  color: var(--fg);
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+.bnb-version-banner a {
+  color: var(--links);
+  text-decoration: underline;
+}

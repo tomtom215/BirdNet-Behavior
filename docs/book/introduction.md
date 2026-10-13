@@ -21,7 +21,7 @@ BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in 
 
 BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi). It keeps everything BirdNET-Pi does and adds behavioral analytics, a redesigned UI, MQTT/Home Assistant integration, and a much lighter runtime.
 
-| | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
+| Aspect | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
 |---|---|---|
 | Runtime | CPython interpreter + virtualenv | One native binary — no interpreter |
 | Install | `pip` into a venv + system packages | one file, or one `curl` installer |

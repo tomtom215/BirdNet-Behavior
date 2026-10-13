@@ -19,20 +19,37 @@ name: Docs
 # along — it is a 0.4-era plugin, last released in 2022 — so internal links are
 # checked by `scripts/check-book-links.py` against the rendered HTML instead,
 # which is renderer-agnostic and therefore covers both trees.
+#
+# ## Versioned
+#
+# `scripts/build-versioned-docs.sh` builds the whole site every time: the
+# site root is the latest release's manual (so existing links keep working
+# and mean "the release you can install"), every release from v0.17.1 on is
+# kept at `/vX.Y.Z/` from its own tag, and `/dev/` is `main`. Pages replaces
+# the site wholesale on each deploy, so rebuilding every version from its tag
+# is what keeps old versions published — and keeps them reproducible. A
+# release tag push triggers a deploy, so the root moves to a release the
+# moment it is tagged.
 
 on:
   push:
     branches: [main]
+    # A release tag moves the site root to that release.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
     paths:
       - "docs/book/**"
       - "docs/book-theme/**"
       - "book.toml"
+      - "scripts/build-versioned-docs.sh"
+      - "scripts/check-book-links.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/book/**"
       - "docs/book-theme/**"
       - "book.toml"
+      - "scripts/build-versioned-docs.sh"
+      - "scripts/check-book-links.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -40,35 +57,40 @@ on:
 permissions:
   contents: read
 
-# Supersede an in-flight run for the same PR; never cancel a Pages deployment
-# (the deploy job carries its own `pages` group for that).
-concurrency:
-  group: docs-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # observed 18s
+    # Every non-PR build shares one group, whatever its ref: each builds the
+    # *whole* site, so a `main` push that started before a release tag was
+    # pushed must not deploy after the tag's run and move the root back to the
+    # previous release. A newer build cancels an older one; this is on the job,
+    # not the workflow, so a run already deploying is never cancelled (the
+    # deploy job's `pages` group queues the next one behind it).
+    concurrency:
+      group: docs-build-${{ github.event_name == 'pull_request' && github.ref || 'site' }}
+      cancel-in-progress: true
+    timeout-minutes: 20  # observed 18s for one version; re-measure as versions accrue
     env:
       # Pinned to the `mdbook-driver` version in Cargo.lock, so the published site
       # and the in-app `/help/*` tree are byte-for-byte the same render.
       MDBOOK_VERSION: "0.5.4"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Every release tag is rebuilt from its own sources.
+          fetch-depth: 0
+          fetch-tags: true
       - name: Install mdBook
         uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
         with:
           tool: mdbook@${{ env.MDBOOK_VERSION }}
-      - name: Build the book
-        # One backend, so mdBook writes straight into `build-dir`
-        # (`docs/.book-build`) rather than a `html/` subdirectory of it.
-        run: mdbook build
-      - name: Check every internal link resolves
-        # Against the rendered HTML, not as an mdBook backend — see the header.
-        # This found five broken anchors in shipped documentation the first time
-        # it ran, which the 0.4 backend had been passing.
-        run: ./scripts/check-book-links.py docs/.book-build
+      - name: Build every version, link-checking each
+        # Each tree is checked against the rendered HTML, not as an mdBook
+        # backend — see the header. That check found five broken anchors in
+        # shipped documentation the first time it ran, which the 0.4 backend
+        # had been passing, and later a "Suggest an edit" link on every page
+        # that pointed at a path doubled by mdBook 0.5's `{path}`.
+        run: ./scripts/build-versioned-docs.sh docs/.book-build
       # Pages packaging is deploy-only: a pull request has no Pages token and
       # nothing to publish, so these steps would fail or waste a run.
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0

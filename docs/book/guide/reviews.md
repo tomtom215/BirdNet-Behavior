@@ -11,7 +11,7 @@ human-checked record over time.
 
 These are two different quality-control surfaces; it helps to keep them straight:
 
-| | [Quarantine](../admin/settings.md) | Detection reviews |
+| Aspect | [Quarantine](../admin/settings.md) | Detection reviews |
 |---|---|---|
 | **What it holds** | Detections that *failed* a stricter per-species threshold | Detections already admitted to the log |
 | **Effect** | Gates rows *out* of `detections` until you approve them | A non-destructive annotation; nothing is moved or deleted |

@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   v0.10.0's, so an extension that loads but answers differently is reported
   rather than turned into plausible wrong numbers.
 
+- **The published manual is versioned.** The site root is now the latest
+  release's manual, so existing links keep working and describe what you can
+  install; each release from v0.17.1 on stays at `/vX.Y.Z/`, rebuilt from its
+  own tag, and `main` is at `/dev/`. A version menu sits in the toolbar, with
+  a banner on any page that is not the latest release.
+  `scripts/build-versioned-docs.sh` builds it; a release tag push deploys it.
+
 ### Changed
 
 - **The analytics engine leaves the classifier its cores.** DuckDB used every
@@ -51,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/v2/analytics/status` reports the embed's `abi`.
 
 ### Fixed
+
+- **"Suggest an edit" was a 404 on every page of the published manual.**
+  mdBook 0.5 expands `{path}` relative to the book root, so the 0.4-era
+  template sent every link to `docs/book/docs/book/…`.
+  `scripts/check-book-links.py` now fails on an edit link that names no file
+  in the repository (46 findings — every content page — against the old
+  template, 0 after).
+- **Manual accessibility.** Links inside running text were told apart by
+  colour alone (WCAG 1.4.1) and are underlined; four tables had an empty
+  first header cell; tables and code samples that scroll sideways on a phone
+  could not be reached from the keyboard and are now focusable when they
+  overflow. axe found all three classes; the fixed pages report none.
 
 - **Birds heard together are no longer reported as heard in order.**
   BirdNET stamps every species in one audio chunk with the same instant.
