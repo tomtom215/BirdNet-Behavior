@@ -96,6 +96,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the job state** — which reads as "nothing is due" on exactly the station
   that has a problem. It now answers `500`.
 
+- **A species page told the truth only about birds with recent detections.**
+  Its "Detections, last 14 days" chart drew the 14 most recent days *with* a
+  detection, so a bird heard once a week filled it with three months and no
+  gaps; it now draws the last 14 calendar days, today last, and says "Not
+  heard in the last 14 days" when there are none. Its "7-day moving average
+  overlaid" note described a line that was never drawn, and is gone. A bird
+  this station has not heard got "Species not found." — false for a real
+  species — in a bare paragraph that collapsed the stats row to a hairline
+  across the page; it now gets the four tiles, honestly empty, and its
+  hour-of-day chart no longer says "No detections today yet" about an
+  all-dates chart. When every clip of a species has been reclaimed by
+  retention, the Best detection panel says so instead of "No recording
+  captured for this species yet". The page's sections had no space between
+  them.
+
+- **The count over the tallest bar was never drawn.** Both bar charts (the
+  daily trend on the dashboard and species page, and the hour-of-day chart)
+  placed it 3 units above the top of the chart, outside what the SVG shows —
+  so the busiest day or hour was the one bar without a number.
+
+- **Station tabs had up to four `<h1>`s.** Capture, Alerts, Data and Access
+  embed the bodies of the admin pages they replaced, and each kept its own
+  page heading: Capture showed "Audio sources" twice (with an eyebrow reading
+  "primary support surface", a phrase from a design document) and a second
+  title "Species List Management". Embedded titles are now `<h2>`, or gone
+  where the tab already names the section; the standalone Test Notifications
+  page keeps its own title.
+
 - **Year in Review mixed three periods under one year.** Its masthead says
   "Year in review · 2026", but the totals, species count, leaderboard, first
   day and days of listening were all-time; the busiest day was the trailing

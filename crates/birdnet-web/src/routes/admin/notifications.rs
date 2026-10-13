@@ -159,7 +159,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
     .btn-danger {{ background:var(--rare-soft); color:var(--rare); }}
     .btn-danger:hover {{ background:var(--rare-soft); }}
     .empty {{ color:var(--fg-4); text-align:center; padding:2rem; }}
-    h1 {{ font-size:1.5rem; font-weight:700; color:var(--fg); }}
+    .nh-title {{ font-size:1.5rem; font-weight:700; color:var(--fg); }}
     .page-head {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }}
     .stat-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem; }}
     .value.moss {{ color:var(--moss); }}
@@ -178,7 +178,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
   </style>
 
   <div class="page-head">
-    <h1>Notification History</h1>
+    <h2 class="nh-title">Notification History</h2>
     {prune_btn}
   </div>
   <div id="prune-result"></div>

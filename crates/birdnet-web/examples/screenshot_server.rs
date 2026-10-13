@@ -736,6 +736,32 @@ async fn main() {
             .filter_map(Result::ok)
             .collect()
     };
+    // Every other row names a clip this fixture never writes. A real station
+    // has those files until retention reclaims them, and then marks the row
+    // `Clip_Pruned_At` — which every play surface reads through
+    // `CLIP_AVAILABLE`. Without the mark, a species page picked a clip with no
+    // file as its best detection and the sweep graded a broken player that no
+    // real station shows.
+    {
+        // Numbered explicitly: a bare `?` takes the next index after the
+        // highest one written before it, so `?21` ahead of a list of `?`
+        // numbered that list 22 to 41.
+        let keep = (2..=demo_clips.len() + 1)
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "UPDATE detections SET Clip_Pruned_At = ?1 \
+             WHERE File_Name IS NOT NULL AND File_Name NOT IN ({keep})"
+        );
+        let reclaimed_at = now as i64;
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&reclaimed_at];
+        params.extend(demo_clips.iter().map(|c| c as &dyn rusqlite::ToSql));
+        let pruned = conn
+            .execute(&sql, params.as_slice())
+            .expect("mark unwritten clips as reclaimed");
+        eprintln!("marked {pruned} clips the fixture does not write as reclaimed");
+    }
 
     // Run exactly like the shipped binary: analytics on *and active*, not
     // merely compiled in. Reopen the seeded SQLite through the analytics-aware

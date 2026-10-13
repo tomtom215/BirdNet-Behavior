@@ -287,9 +287,9 @@ fn render_quality_page(data: &QualityData) -> String {
         r#"<header class="page-head q-head" data-screen-label="Data quality" data-om-validate>
   <div>
     <div class="bnb-eyebrow">Admin · data quality</div>
-    <h1 class="display q-h1">
+    <h2 class="display q-h1">
       Data quality
-    </h1>
+    </h2>
     <p class="bnb-meta q-lede">
       Detection database health — confidence distributions, trend analysis,
       and potential false positives.

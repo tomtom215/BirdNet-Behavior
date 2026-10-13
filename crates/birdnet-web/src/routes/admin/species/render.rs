@@ -22,7 +22,6 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
 pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> String {
     format!(
         r#"<style>
-      h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
       .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
       .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
       label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
@@ -49,7 +48,6 @@ pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> Stri
       .del-btn {{ padding:0.2rem 0.6rem; font-size:0.75rem; }}
     </style>
 
-  <h1>Species List Management</h1>
   <div id="species-lists">
     {inner}
   </div>"#,
@@ -410,7 +408,8 @@ mod tests {
         // tab active; the filter-test sub-page also carries the breadcrumb.
         let lists = render_species_page(&[], &[]);
         assert!(lists.contains(r#"href="/admin/species" class="am-nav-active""#));
-        assert!(lists.contains("Species List Management"));
+        assert!(lists.contains(r#"id="species-lists""#));
+        assert!(lists.contains("Exclusion List"));
         let test = render_filter_test_page(&[], &[], &[]);
         assert!(test.contains(r#"href="/admin/species" class="am-nav-active""#));
         assert!(test.contains("bnb-crumbs"));

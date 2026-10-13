@@ -286,7 +286,7 @@ fn render_error(message: &str) -> String {
   <header class="page-head">
     <div>
       <div class="bnb-eyebrow">Admin · access</div>
-      <h1 class="display acct-h1">Accounts &amp; sessions</h1>
+      <h2 class="display acct-h1">Accounts &amp; sessions</h2>
     </div>
   </header>
   <section class="bnb-card pad acct-error">

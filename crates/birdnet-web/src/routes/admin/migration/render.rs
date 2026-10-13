@@ -16,7 +16,6 @@ use crate::routes::pages::escape_html;
 pub fn migration_body(dest_db_path: &str) -> String {
     format!(
         r##"<style>
-    h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; color:var(--fg); }}
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
     label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
@@ -90,7 +89,6 @@ pub fn migration_body(dest_db_path: &str) -> String {
     .bar-note {{ color:var(--fg-4); font-size:0.8rem; margin-top:0.25rem; }}
   </style>
 
-  <h1>BirdNET-Pi Migration</h1>
   <p class="lede">
     Safely import your existing BirdNET-Pi detection history.
     Your source file is <strong class="fg">never modified</strong>

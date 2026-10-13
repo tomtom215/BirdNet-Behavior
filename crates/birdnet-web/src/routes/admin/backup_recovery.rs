@@ -530,7 +530,7 @@ fn render_body(f: &DataFacts) -> String {
     format!(
         r#"<div>
   <div class="bnb-eyebrow">Operations</div>
-  <h1 class="display bkr-h1">Backups &amp; recovery</h1>
+  <h2 class="display bkr-h1">Backups &amp; recovery</h2>
   <p class="bnb-meta bkr-lede">Snapshots, exports, storage and the controls you hope you never need.</p>
   {stats}
   <div class="bkr-main">

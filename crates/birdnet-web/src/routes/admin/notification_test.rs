@@ -162,11 +162,17 @@ pub(crate) fn channels_test_body(state: &AppState) -> String {
 }
 
 fn render_test_page(push: &PushChannel, bw_ok: bool) -> String {
+    // The page's own title lives here, not in the body: the body is also the
+    // Station Alerts tab's "Channels" section, under that tab's heading, and
+    // a second `<h1>` there put the tab's outline out of order.
     crate::routes::admin::admin_subpage_shell(
         "Test notifications",
         "notifications",
         "Test",
-        &test_notifications_body(push, bw_ok),
+        &format!(
+            r#"<h1 class="nt-title">Test Notification Channels</h1>{}"#,
+            test_notifications_body(push, bw_ok)
+        ),
     )
 }
 
@@ -241,14 +247,13 @@ fn test_notifications_body(push: &PushChannel, bw_ok: bool) -> String {
       .btn-primary { background:var(--moss); color:var(--on-moss); }
       .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
       .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
-      h1 { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
       .hint a { color:var(--moss-ink); }
       .result-banner { border:1px solid; border-radius:0.375rem; padding:0.75rem; margin-top:0.75rem; }
       .result-banner.ok { background:var(--moss-soft); border-color:var(--moss-soft); color:var(--moss-ink); }
       .result-banner.err { background:var(--rare-soft); border-color:var(--rare-soft); color:var(--rare); }
+      .nt-title { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
     </style>
 
-  <h1>Test Notification Channels</h1>
 ");
 
     // Push card

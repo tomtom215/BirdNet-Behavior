@@ -30,6 +30,8 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
 
     let max_count = counts.iter().copied().max().unwrap_or(1).max(1);
     let chart_w = 700;
+    // Room above the tallest bar for its count, as in `render_daily_chart`.
+    let top = 12;
     let chart_h = 120;
     let bar_w = 25;
     let gap = 4;
@@ -38,13 +40,13 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
     let mut svg = format!(
         r#"<svg viewBox="0 0 {svg_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
         svg_w = chart_w,
-        svg_h = chart_h + 20,
+        svg_h = top + chart_h + 20,
     );
 
     for (i, &count) in counts.iter().enumerate() {
         let x = left_pad + i as i32 * (bar_w + gap);
         let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
-        let y = chart_h - bar_h;
+        let y = top + chart_h - bar_h;
         let color = if count > 0 {
             "var(--moss)"
         } else {
@@ -70,7 +72,7 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
                 svg,
                 r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="9" font-family="sans-serif">{i:02}</text>"#,
                 tx = x + bar_w / 2,
-                ty = chart_h + 14,
+                ty = top + chart_h + 14,
             );
         }
     }
@@ -92,6 +94,10 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
     }
 
     let max_count = days.iter().map(|d| d.count).max().unwrap_or(1).max(1);
+    // Room above the tallest bar for its count. Without it the label sat at
+    // y = -3, outside the viewBox, so the busiest day — the one a reader
+    // looks for — was the one whose number never showed.
+    let top = 12;
     let chart_h = 100;
     let bar_w = 32;
     let gap = 6;
@@ -106,13 +112,13 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
     let mut svg = format!(
         r#"<svg viewBox="0 0 {svg_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
         svg_w = chart_w,
-        svg_h = chart_h + 22,
+        svg_h = top + chart_h + 22,
     );
 
     for (i, day) in days.iter().enumerate() {
         let x = left_pad + i as i32 * (bar_w + gap);
         let bar_h = (day.count as f64 / max_count as f64 * chart_h as f64) as i32;
-        let y = chart_h - bar_h;
+        let y = top + chart_h - bar_h;
 
         let _ = write!(
             svg,
@@ -134,7 +140,7 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
             svg,
             r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="8" font-family="sans-serif">{label}</text>"#,
             tx = x + bar_w / 2,
-            ty = chart_h + 14,
+            ty = top + chart_h + 14,
             label = super::escape_html(date_label),
         );
     }
@@ -315,6 +321,55 @@ mod tests {
                 assert!(*x >= 0, "n = {n}: bar {i} starts at a negative x ({x})");
             }
         }
+    }
+
+    /// The same for the hour-of-day chart. Observed failing before the top
+    /// margin: y = -3.
+    #[test]
+    fn the_busiest_hours_count_is_drawn_inside_the_chart() {
+        let hours: Vec<_> = [("06", 2_i64), ("07", 7)]
+            .into_iter()
+            .map(|(hour, count)| birdnet_db::sqlite::HourlyCount {
+                hour: hour.into(),
+                count,
+            })
+            .collect();
+        let svg = render_hourly_chart(&hours);
+        let label = svg
+            .split("<text ")
+            .find(|t| t.contains(">7</text>"))
+            .expect("the busiest hour is labelled");
+        let y: i32 = label
+            .split("y=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .and_then(|v| v.parse().ok())
+            .expect("label has a y");
+        assert!(y >= 9, "the label's baseline is at y = {y}");
+    }
+
+    /// The count over the tallest bar is inside the viewBox, with room for
+    /// its 9-unit glyphs. Observed failing before the top margin: y = -3.
+    #[test]
+    fn the_tallest_bars_count_is_drawn_inside_the_chart() {
+        let days: Vec<_> = (1..=3)
+            .map(|i| birdnet_db::sqlite::DailyCount {
+                date: format!("2026-01-{i:02}"),
+                count: i,
+            })
+            .collect();
+        let svg = render_daily_chart(&days);
+        let label = svg
+            .split("<text ")
+            .find(|t| t.contains(">3</text>"))
+            .expect("the tallest bar is labelled");
+        let y: i32 = label
+            .split("y=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .and_then(|v| v.parse().ok())
+            .expect("label has a y");
+        assert!(y >= 9, "the label's baseline is at y = {y}");
     }
 
     /// The counterpart to the gate above: proving bars *fit* is worthless if

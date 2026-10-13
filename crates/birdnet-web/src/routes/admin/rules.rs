@@ -999,7 +999,7 @@ fn render_metric_rules_table(rules: &[birdnet_db::metric_rules::MetricRule]) -> 
 /// `const`. (A `<style>` block carries no CSP nonce burden; the inline-style
 /// guard forbids `style="` attributes, not stylesheets.)
 const RULES_CSS: &str = r"<style>
-      h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
+      .ar-title { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }
       .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
       .card h2 { font-size:1.1rem; color:var(--moss-ink); margin:0 0 1rem; }
@@ -1047,7 +1047,7 @@ const RULES_CSS: &str = r"<style>
 pub(crate) fn rules_body() -> String {
     [RULES_CSS, r##"
 
-  <h1>Alert Rules</h1>
+  <h2 class="ar-title">Alert Rules</h2>
   <p class="subtitle">
     Define conditional actions triggered by detections — webhooks, structured
     logs, or notification suppression.

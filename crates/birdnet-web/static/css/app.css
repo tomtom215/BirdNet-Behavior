@@ -3426,7 +3426,6 @@ a.login-about    { color: var(--fg-3); }
 
 /* ── Audio sources (/admin/audio) ───────────────────────────────────────── */
 .aas-head       { align-items: flex-start; }
-.aas-h1         { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
 .aas-lede       { margin-top: 6px; max-width: 580px; }
 .aas-pills      { margin: 0; }
 .aas-count      { display: inline-flex; align-items: center; gap: 12px; }
