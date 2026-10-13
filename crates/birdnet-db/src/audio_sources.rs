@@ -204,6 +204,54 @@ impl fmt::Display for RtspTransport {
     }
 }
 
+/// Which of an RTSP stream's tracks the station asks the camera for.
+/// 'full' / 'audio'.
+///
+/// A camera serves a bounded number of concurrent video sessions, and a
+/// station that sets up the video track only to throw it away holds one of
+/// them — enough, on some cameras, to lock the owner out of their own live
+/// view. `Audio` sets up the audio track alone. `Full` is the default because
+/// it is what every earlier release did, and because a camera with no audio
+/// track then fails visibly instead of silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RtspMediaMode {
+    /// Request every track (video included) and discard the video.
+    #[default]
+    Full,
+    /// Request the audio track only.
+    Audio,
+}
+
+impl RtspMediaMode {
+    /// Returns the canonical SQL-on-disk string for this variant.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Audio => "audio",
+        }
+    }
+}
+
+impl std::str::FromStr for RtspMediaMode {
+    type Err = AudioSourceError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "full" => Ok(Self::Full),
+            "audio" => Ok(Self::Audio),
+            other => Err(AudioSourceError::Invalid(format!(
+                "unknown rtsp media mode: {other}"
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for RtspMediaMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Audio-pipeline toggles, as stored.
 ///
 /// Four independent per-source flags. Each is intrinsically boolean (a filter
@@ -268,6 +316,8 @@ pub struct AudioSource {
     pub gain_db: f32,
     /// Preferred RTSP transport; ignored for non-RTSP sources.
     pub rtsp_transport: RtspTransport,
+    /// Which tracks to request from an RTSP camera; ignored for other sources.
+    pub media_mode: RtspMediaMode,
     /// `(start, end)` quiet schedule in HH:MM form, when set.
     pub schedule_quiet: Option<(String, String)>,
     /// Audio pipeline feature flags for this source.
@@ -310,6 +360,8 @@ pub struct NewAudioSource {
     pub gain_db: f32,
     /// Preferred RTSP transport; ignored for non-RTSP sources.
     pub rtsp_transport: RtspTransport,
+    /// Which tracks to request from an RTSP camera; ignored for other sources.
+    pub media_mode: RtspMediaMode,
     /// Optional `(start, end)` quiet-hours window in `HH:MM` form.
     pub schedule_quiet: Option<(String, String)>,
     /// Audio pipeline feature flags.
@@ -334,6 +386,7 @@ impl NewAudioSource {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -359,6 +412,8 @@ pub struct AudioSourcePatch {
     pub gain_db: Option<f32>,
     /// Replacement RTSP transport preference.
     pub rtsp_transport: Option<RtspTransport>,
+    /// Replacement RTSP media mode.
+    pub media_mode: Option<RtspMediaMode>,
     /// Replacement quiet schedule; `Some(None)` clears the existing schedule.
     pub schedule_quiet: Option<Option<(String, String)>>,
     /// Replacement filter chain; `Some(String::new())` clears it back to the
@@ -498,7 +553,7 @@ impl AudioSourceStore for Connection {
                     gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
                     pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
                     pipeline_rtsp_keepalive, disabled_at, created_at, updated_at,
-                    eq_chain
+                    eq_chain, media_mode
              FROM audio_sources
              WHERE disabled_at IS NULL
              ORDER BY created_at ASC",
@@ -515,7 +570,7 @@ impl AudioSourceStore for Connection {
                     gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
                     pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
                     pipeline_rtsp_keepalive, disabled_at, created_at, updated_at,
-                    eq_chain
+                    eq_chain, media_mode
              FROM audio_sources WHERE id = ?1",
             params![id],
             row_to_source,
@@ -539,8 +594,8 @@ impl AudioSourceStore for Connection {
                 id, kind, device_id, label, sample_rate, channels, bit_depth,
                 gain_db, rtsp_transport, schedule_quiet_start, schedule_quiet_end,
                 pipeline_high_pass, pipeline_dc_removal, pipeline_agc,
-                pipeline_rtsp_keepalive, eq_chain
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                pipeline_rtsp_keepalive, eq_chain, media_mode
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 new.id,
                 new.kind.as_str(),
@@ -558,6 +613,7 @@ impl AudioSourceStore for Connection {
                 i32::from(new.pipeline.agc),
                 i32::from(new.pipeline.rtsp_keepalive),
                 new.eq_chain,
+                new.media_mode.as_str(),
             ],
         )?;
         self.get(&new.id)?
@@ -617,6 +673,12 @@ impl AudioSourceStore for Connection {
             push!(
                 "rtsp_transport",
                 rusqlite::types::Value::Text(transport.as_str().to_string())
+            );
+        }
+        if let Some(mode) = patch.media_mode {
+            push!(
+                "media_mode",
+                rusqlite::types::Value::Text(mode.as_str().to_string())
             );
         }
         if let Some(sched) = patch.schedule_quiet.as_ref() {
@@ -698,6 +760,10 @@ fn row_to_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<AudioSource> {
     let rtsp_transport = transport_str.parse::<RtspTransport>().map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
     })?;
+    let mode_str: String = row.get(19)?;
+    let media_mode = mode_str.parse::<RtspMediaMode>().map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(19, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     let q_start: Option<String> = row.get(9)?;
     let q_end: Option<String> = row.get(10)?;
     // Clippy 1.96 prefers `Option::zip` over the manual and_then(|s| map(|e| (s, e))) form.
@@ -714,6 +780,7 @@ fn row_to_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<AudioSource> {
         #[allow(clippy::cast_possible_truncation)]
         gain_db: gain as f32,
         rtsp_transport,
+        media_mode,
         schedule_quiet,
         pipeline: PipelineFlags {
             high_pass: row.get::<_, i64>(11)? != 0,
@@ -894,6 +961,50 @@ mod tests {
     fn rtsp_transport_round_trip() {
         for t in [RtspTransport::Auto, RtspTransport::Tcp, RtspTransport::Udp] {
             assert_eq!(t.as_str().parse::<RtspTransport>().unwrap(), t);
+        }
+    }
+
+    /// The media mode is stored, read back by both queries, patched, and
+    /// defaults to the full stream — which is what a row written before the
+    /// column existed must keep doing. The CHECK refuses anything else.
+    #[test]
+    fn the_media_mode_survives_storage_and_defaults_to_full() {
+        let conn = open_db();
+        let plain = conn
+            .insert(&sample_new("cam_plain", SourceKind::Rtsp, "rtsp://cam1/a"))
+            .unwrap();
+        assert_eq!(plain.media_mode, RtspMediaMode::Full);
+
+        let mut new = sample_new("cam_audio", SourceKind::Rtsp, "rtsp://cam2/a");
+        new.media_mode = RtspMediaMode::Audio;
+        conn.insert(&new).unwrap();
+        assert_eq!(
+            conn.get("cam_audio").unwrap().expect("row").media_mode,
+            RtspMediaMode::Audio
+        );
+        let listed: Vec<_> = conn.list().unwrap().iter().map(|s| s.media_mode).collect();
+        assert_eq!(listed, [RtspMediaMode::Full, RtspMediaMode::Audio]);
+
+        conn.update(
+            "cam_audio",
+            &AudioSourcePatch {
+                media_mode: Some(RtspMediaMode::Full),
+                ..AudioSourcePatch::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            conn.get("cam_audio").unwrap().expect("row").media_mode,
+            RtspMediaMode::Full
+        );
+
+        let refused = conn.execute(
+            "UPDATE audio_sources SET media_mode = 'video' WHERE id = 'cam_plain'",
+            [],
+        );
+        assert!(refused.is_err(), "the CHECK accepted an unknown mode");
+        for m in [RtspMediaMode::Full, RtspMediaMode::Audio] {
+            assert_eq!(m.as_str().parse::<RtspMediaMode>().unwrap(), m);
         }
     }
 

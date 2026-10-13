@@ -3649,6 +3649,19 @@ input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; b
   margin-top: 4px;
 }
 .aud-edit-quiet .hint { flex-basis: 100%; margin: 2px 0 0; }
+/* An RTSP row's transport and media mode, on a row of their own like the
+   quiet window. */
+.aud-edit-rtsp {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.aud-edit-rtsp .hint { flex-basis: 100%; margin: 2px 0 0; }
+.aud-edit-pair { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: 100%; }
+.aud-edit-pair select { max-width: 100%; min-width: 0; }
 input.aud-edit-time {
   font-size: 12.5px;
   padding: 6px 8px;

@@ -2264,6 +2264,25 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_source_datetime
                      ON detections(Source, Date, Time) WHERE Source IS NOT NULL;",
     },
+    Migration {
+        version: 53,
+        description: "Per-source RTSP media mode: request the audio track alone",
+        // A camera serves a bounded number of concurrent video sessions, and
+        // ffmpeg's RTSP client sets up every track it is offered unless told
+        // otherwise — so a station listening to a camera held one of its
+        // video sessions for the whole time it ran. 'audio' maps to ffmpeg's
+        // `-allowed_media_types audio`. Checked against MediaMTX 1.21.2: the
+        // reader set up "2 tracks (H264, MPEG-4 Audio)" by default and
+        // "1 track (MPEG-4 Audio)" with the option.
+        //
+        // 'full' is the default and what every row gets: it is what the
+        // station did before, and a camera with no audio track then fails in
+        // the same visible way it always did. tphakala/birdnet-go defaults
+        // to the full stream for the same reason.
+        up_sql: "ALTER TABLE audio_sources
+                     ADD COLUMN media_mode TEXT NOT NULL DEFAULT 'full'
+                     CHECK (media_mode IN ('full','audio'));",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -3624,10 +3643,7 @@ mod tests {
         // say, a chain that reproduces the two switches — the latter would
         // look equivalent and would not be, because the boolean columns are
         // still editable and would then be silently overridden.
-        let conn = memory_db();
-        for m in MIGRATIONS.iter().filter(|m| m.version < 39) {
-            conn.execute_batch(m.up_sql).unwrap();
-        }
+        let conn = memory_db_at_version(38);
         conn.execute_batch(
             "INSERT INTO audio_sources (id, kind, device_id, pipeline_high_pass)
              VALUES ('legacy_mic', 'usb-alsa', 'plughw:1,0', 1);",
@@ -3639,6 +3655,11 @@ mod tests {
             .find(|m| m.version == 39)
             .expect("migration 39 exists");
         conn.execute_batch(m39.up_sql).unwrap();
+        conn.execute(
+            "INSERT INTO schema_version (version, description) VALUES (?1, ?2)",
+            rusqlite::params![m39.version, m39.description],
+        )
+        .unwrap();
 
         let chain: String = conn
             .query_row(
@@ -3649,7 +3670,10 @@ mod tests {
             .unwrap();
         assert_eq!(chain, "", "a pre-existing source must carry no chain");
 
-        // And the row still loads through the store, with its switches intact.
+        // And the row still loads through today's store, with its switches
+        // intact — after every later migration, since the store reads the
+        // columns they add.
+        migrate(&conn).unwrap();
         let source = crate::audio_sources::AudioSourceStore::get(&conn, "legacy_mic")
             .unwrap()
             .expect("the source survived the migration");

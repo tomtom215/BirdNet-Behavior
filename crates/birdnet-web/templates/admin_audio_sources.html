@@ -153,10 +153,19 @@
             <div class="bnb-field">
               <label class="bnb-eyebrow" for="rt-transport">Transport</label>
               <select id="rt-transport" name="rtsp_transport">
-                <option value="auto" selected>auto (TCP w/ UDP fallback)</option>
+                <option value="auto" selected>auto (TCP)</option>
                 <option value="tcp">TCP only</option>
                 <option value="udp">UDP only</option>
               </select>
+            </div>
+            <div class="bnb-field">
+              <label class="bnb-eyebrow" for="rt-media">Tracks requested</label>
+              <select id="rt-media" name="media_mode">
+                <option value="full" selected>audio and video (video discarded)</option>
+                <option value="audio">audio track only</option>
+              </select>
+              <span class="hint">Audio only leaves the camera's few video slots free.
+                A camera that sends no audio then fails to connect.</span>
             </div>
           </div>
 

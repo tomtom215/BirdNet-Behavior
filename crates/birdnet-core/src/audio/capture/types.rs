@@ -54,6 +54,8 @@ pub enum CaptureSource {
         stream_id: String,
         /// Transport ffmpeg should negotiate with the camera.
         transport: RtspTransport,
+        /// Which of the camera's tracks to set up.
+        media_mode: RtspMediaMode,
     },
 }
 
@@ -93,11 +95,13 @@ impl std::fmt::Debug for CaptureSource {
                 url,
                 stream_id,
                 transport,
+                media_mode,
             } => f
                 .debug_struct("Rtsp")
                 .field("url", &crate::config::redact::redact_url_credentials(url))
                 .field("stream_id", stream_id)
                 .field("transport", transport)
+                .field("media_mode", media_mode)
                 .finish(),
         }
     }
@@ -218,6 +222,36 @@ impl RtspTransport {
         match self {
             Self::Auto | Self::Tcp => "tcp",
             Self::Udp => "udp",
+        }
+    }
+}
+
+/// Which of an RTSP camera's tracks ffmpeg sets up.
+///
+/// Mirrors the `media_mode` column of `audio_sources`. A camera serves a
+/// bounded number of concurrent video sessions; with `Full`, ffmpeg sets up
+/// the video track too and discards it, holding one of them for as long as
+/// the station listens. `AudioOnly` passes `-allowed_media_types audio`, so
+/// only the audio track is set up — checked against `MediaMTX` 1.21.2, whose
+/// reader log went from "2 tracks (H264, MPEG-4 Audio)" to "1 track
+/// (MPEG-4 Audio)". A stream with no audio track then fails at PLAY (`MediaMTX`
+/// answers 501), which the supervisor reports as a down source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RtspMediaMode {
+    /// Every track; the video is discarded. What earlier releases did.
+    #[default]
+    Full,
+    /// The audio track alone.
+    AudioOnly,
+}
+
+impl RtspMediaMode {
+    /// The ffmpeg input options this mode adds before `-i`.
+    #[must_use]
+    pub const fn ffmpeg_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Full => &[],
+            Self::AudioOnly => &["-allowed_media_types", "audio"],
         }
     }
 }
@@ -412,6 +446,7 @@ mod tests {
             url: "rtsp://admin:hunter2@cam.local:554/stream1".into(),
             stream_id: "RTSP_1".into(),
             transport: RtspTransport::Auto,
+            media_mode: RtspMediaMode::AudioOnly,
         };
         let shown = format!("{src:?}");
         assert!(!shown.contains("hunter2"), "{shown}");
@@ -627,6 +662,7 @@ mod tests {
             url: "rtsp://cam/feed".into(),
             stream_id: "RTSP_1".into(),
             transport: RtspTransport::Auto,
+            media_mode: RtspMediaMode::Full,
         };
         assert_eq!(rtsp.label(), "RTSP_1");
     }

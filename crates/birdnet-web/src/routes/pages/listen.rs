@@ -98,6 +98,7 @@ mod tests {
             bit_depth: 16,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),

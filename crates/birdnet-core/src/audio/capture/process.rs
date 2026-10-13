@@ -671,10 +671,31 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
 ///
 /// Returns `CaptureError` if `ffmpeg` cannot be started.
 pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
+    let (mut cmd, stream_id, url) = rtsp_command(config)?;
+    let mut child = cmd.stdout(Stdio::null()).stderr(Stdio::piped()).spawn()?;
+    drain_capture_stderr(&mut child, stream_id);
+
+    tracing::info!(
+        stream_id = stream_id,
+        url = %crate::config::redact::redact_url_credentials(url),
+        gain_db = config.gain_db,
+        "started RTSP capture via ffmpeg"
+    );
+    Ok(CaptureProcess {
+        child,
+        source: config.source.clone(),
+        tee: None,
+    })
+}
+
+/// The ffmpeg command an RTSP source is captured with, with its stream id and
+/// URL — built apart from the spawn so the argument list can be checked.
+fn rtsp_command(config: &RecordingConfig) -> Result<(Command, &str, &str), CaptureError> {
     let CaptureSource::Rtsp {
         ref url,
         ref stream_id,
         transport,
+        media_mode,
     } = config.source
     else {
         return Err(CaptureError::Config("expected RTSP source".into()));
@@ -702,6 +723,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
         } else {
             Vec::new()
         })
+        .args(media_mode.ffmpeg_args())
         .arg("-i")
         .arg(url)
         .arg("-vn")
@@ -712,30 +734,14 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
         .arg("-ac")
         .arg("1");
     apply_audio_filters(&mut cmd, config.gain_db, config.pipeline, &config.eq_chain);
-    let mut child = cmd
-        .arg("-f")
+    cmd.arg("-f")
         .arg("segment")
         .arg("-segment_time")
         .arg(config.segment_duration_secs.to_string())
         .arg("-strftime")
         .arg("1")
-        .arg(output_path.to_string_lossy().as_ref())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    drain_capture_stderr(&mut child, stream_id);
-
-    tracing::info!(
-        stream_id = stream_id,
-        url = %crate::config::redact::redact_url_credentials(url),
-        gain_db = config.gain_db,
-        "started RTSP capture via ffmpeg"
-    );
-    Ok(CaptureProcess {
-        child,
-        source: config.source.clone(),
-        tee: None,
-    })
+        .arg(output_path.to_string_lossy().as_ref());
+    Ok((cmd, stream_id.as_str(), url.as_str()))
 }
 
 /// Spawn the appropriate capture process based on the source type.
@@ -849,7 +855,7 @@ mod capture_failure_classification {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::{AudioFormat, LocalOffset, RtspTransport};
+    use super::super::types::{AudioFormat, LocalOffset, RtspMediaMode, RtspTransport};
     use super::*;
     use crate::audio::capture::types::AudioPipeline;
     use std::path::PathBuf;
@@ -892,12 +898,60 @@ mod tests {
         assert_eq!(required_tool(&src), expected);
     }
 
+    /// Audio-only puts `-allowed_media_types audio` among ffmpeg's *input*
+    /// options — before `-i`, where an input option has to be — and the full
+    /// stream puts nothing there. Observed failing with the `.args(…)` call
+    /// removed from `rtsp_command`.
+    #[test]
+    fn an_audio_only_source_asks_the_camera_for_the_audio_track_alone() {
+        let args = |mode| {
+            let config = RecordingConfig {
+                source: CaptureSource::Rtsp {
+                    url: "rtsp://cam.local/s".into(),
+                    stream_id: "RTSP_1".into(),
+                    transport: RtspTransport::Auto,
+                    media_mode: mode,
+                },
+                output_dir: std::env::temp_dir(),
+                segment_duration_secs: 15,
+                format: AudioFormat::Wav,
+                gain_db: 0.0,
+                pipeline: crate::audio::capture::types::AudioPipeline::none(),
+                eq_chain: crate::audio::eq::EqChain::default(),
+                local_offset: LocalOffset::utc(),
+                live_audio: None,
+            };
+            let (cmd, _, _) = rtsp_command(&config).expect("command");
+            cmd.get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let audio = args(RtspMediaMode::AudioOnly);
+        let at = audio
+            .iter()
+            .position(|a| a == "-allowed_media_types")
+            .expect("audio-only asks for the audio track");
+        let input = audio.iter().position(|a| a == "-i").expect("an input");
+        assert!(
+            at < input,
+            "an input option after -i applies to nothing: {audio:?}"
+        );
+        assert_eq!(audio[at + 1], "audio");
+        assert!(
+            !args(RtspMediaMode::Full)
+                .iter()
+                .any(|a| a == "-allowed_media_types"),
+            "the full stream is what earlier releases requested"
+        );
+    }
+
     #[test]
     fn required_tool_rtsp() {
         let src = CaptureSource::Rtsp {
             url: "rtsp://cam.local/stream".into(),
             stream_id: "cam1".into(),
             transport: RtspTransport::Auto,
+            media_mode: RtspMediaMode::Full,
         };
         assert_eq!(required_tool(&src), "ffmpeg");
     }

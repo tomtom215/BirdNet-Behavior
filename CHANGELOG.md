@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Audio-only cameras.** An RTSP source can ask the camera for its audio
+  track alone (Settings → Capture, a source's edit form: *Tracks requested*).
+  By default the station sets up every track and discards the video, which
+  holds one of the camera's few video sessions for as long as it listens —
+  and another whenever someone listens live. Checked against MediaMTX: one
+  track instead of two, for capture and for the live stream. A camera with
+  no audio track then fails visibly, as a down source.
+
 - **`GET /api/v2/system/network` and `GET /api/v2/system/processes`**, behind
   the API token like the rest of `/system`. The first lists every network
   interface with its addresses, hardware address and byte counters — the
@@ -102,6 +110,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/v2/analytics/status` reports the embed's `abi`.
 
 ### Fixed
+
+- **Listening live to a camera ignored its transport.** The live stream
+  always asked for TCP, so a camera that only speaks UDP could be recorded
+  but not listened to. It now uses the source's transport (and media mode).
+  The add form also described `auto` as "TCP w/ UDP fallback"; it is TCP,
+  and nothing falls back. Transport can now be changed on the edit form.
 
 - **`GET /api/v2/system/jobs` answered an empty list when it could not read
   the job state** — which reads as "nothing is due" on exactly the station

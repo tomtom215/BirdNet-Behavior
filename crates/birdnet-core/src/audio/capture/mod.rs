@@ -60,7 +60,8 @@ pub use tmpfs::{
 };
 pub use types::{
     AudioFormat, AudioPipeline, CaptureError, CaptureSource, DC_BLOCK_CUTOFF_HZ,
-    HIGH_PASS_CUTOFF_HZ, LocalOffset, RecordingConfig, RtspTransport, recording_filename_at,
+    HIGH_PASS_CUTOFF_HZ, LocalOffset, RecordingConfig, RtspMediaMode, RtspTransport,
+    recording_filename_at,
 };
 
 // Internal re-export for detection pipeline modules (daemon.rs, pipeline.rs).

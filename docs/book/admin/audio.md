@@ -53,8 +53,9 @@ Open a source's **edit** panel to change:
 - **Quiet window** — an optional per-source pause in the **station's local time**, each end a clock time (`22:00`) or a solar anchor (`sunset`, `sunset+30`, `sunrise-15`), e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
 - **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, RTSP keepalive.
 - **Equaliser** — a filter chain of your own, when the toggles are not the right shape. See below.
+- **Camera stream** (camera sources only) — the **transport** (auto / TCP / UDP — auto is TCP, the NAT-robust choice; force UDP only for a camera that needs it) and the **tracks requested** (see [Audio-only cameras](#audio-only-cameras)).
 
-**Sample rate** (48 or 44.1 kHz) and, for camera sources, **RTSP transport** (auto / TCP / UDP — auto resolves to the NAT-robust TCP default; force UDP only for a camera that needs it) are chosen when the source is **added**. Per-source **gain**, the **channel pick** (mono / left / right / stereo — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below) and **bit depth** are stored with the source and shown in its detail line, but are **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds.
+**Sample rate** (48 or 44.1 kHz) is chosen when the source is **added**. Per-source **gain**, the **channel pick** (mono / left / right / stereo — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below) and **bit depth** are stored with the source and shown in its detail line, but are **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds.
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
@@ -188,6 +189,14 @@ control for it: set the `channels` column of the source's `audio_sources` row
 The **Add a source** wizard walks through three steps — URL (with a locked `rtsp://` prefix), optional auth, and a label — and shows a live reachability pill with the sniffed audio properties before you commit. A preview row lets you listen for ten seconds first.
 
 > RTSP capture needs **`ffmpeg`** on the host. The bare-metal installer installs it automatically when your config has an `RTSP_URL` (re-run `sudo bash install.sh repair` if you add RTSP later), and the Docker image already bundles it. Without `ffmpeg`, RTSP sources record zero detections.
+
+### Audio-only cameras
+
+A camera serves only a few video viewers at once. By default the station asks for every track the camera offers and throws the video away, which takes one of those slots for as long as it listens, and another whenever someone listens live from the dashboard. On a camera with few slots that can leave its own app unable to show the picture.
+
+Set **Tracks requested** to **audio track only** and the station sets up the audio track alone (ffmpeg's `-allowed_media_types audio`), for capture and for listening live. Checked against MediaMTX 1.21.2: the station's session took one track instead of two.
+
+The default stays **audio and video**, because a camera that sends no audio then fails visibly: the source shows as down, and the log names the camera's refusal (for example `method PLAY failed: 501 Not Implemented`). If that happens after switching to audio-only, switch back.
 
 ## Finding a USB mic
 

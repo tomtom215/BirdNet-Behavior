@@ -29,7 +29,7 @@ use serde::Deserialize;
 
 use birdnet_db::audio_sources::{
     AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, NewAudioSource,
-    PipelineFlags, RtspTransport, SourceKind,
+    PipelineFlags, RtspMediaMode, RtspTransport, SourceKind,
 };
 
 use birdnet_core::audio::eq::EqChain;
@@ -199,6 +199,9 @@ struct CreateForm {
     sample_rate: Option<u32>,
     #[serde(default)]
     rtsp_transport: Option<String>,
+    /// `full` or `audio`: which of a camera's tracks to request.
+    #[serde(default)]
+    media_mode: Option<String>,
     /// Start of the per-source quiet window, `HH:MM` in the station's **local**
     /// time. Empty (with `quiet_end` also empty) clears the window.
     #[serde(default)]
@@ -438,6 +441,12 @@ async fn create(
                 match transport.parse::<RtspTransport>() {
                     Ok(t) => new.rtsp_transport = t,
                     Err(_) => return validation_response("Unknown RTSP transport."),
+                }
+            }
+            if let Some(mode) = form.media_mode.as_deref() {
+                match mode.parse::<RtspMediaMode>() {
+                    Ok(m) => new.media_mode = m,
+                    Err(_) => return validation_response("Unknown RTSP media mode."),
                 }
             }
             if let Some(toggles) = ToggleSet::from_form(
@@ -730,6 +739,12 @@ async fn update(
                 match transport.parse::<RtspTransport>() {
                     Ok(t) => patch.rtsp_transport = Some(t),
                     Err(_) => return validation_response("Unknown RTSP transport."),
+                }
+            }
+            if let Some(mode) = form.media_mode.as_deref() {
+                match mode.parse::<RtspMediaMode>() {
+                    Ok(m) => patch.media_mode = Some(m),
+                    Err(_) => return validation_response("Unknown RTSP media mode."),
                 }
             }
             if let Some(toggles) = ToggleSet::from_form(
@@ -1098,6 +1113,11 @@ fn render_edit_form(row: &AudioSource) -> String {
         .schedule_quiet
         .as_ref()
         .map_or(("", ""), |(a, b)| (a.as_str(), b.as_str()));
+    let rtsp_fields = if matches!(row.kind, SourceKind::Rtsp) {
+        render_rtsp_fields(row)
+    } else {
+        String::new()
+    };
     format!(
         r##"<li class="audio-source" data-source-id="{id}">
   <form hx-patch="/admin/audio/sources/{id}"
@@ -1150,6 +1170,7 @@ fn render_edit_form(row: &AudioSource) -> String {
         <code>sunrise-15</code>) follows the season, which is usually what you mean.
         Leave both blank for none.</p>
     </div>
+    {rtsp_fields}
     <div class="aud-edit-pipeline">
       <input type="hidden" name="pipeline_present" value="1">
       <span class="bnb-eyebrow">Signal conditioning</span>
@@ -1210,6 +1231,44 @@ fn render_edit_form(row: &AudioSource) -> String {
     )
 }
 
+/// The camera-stream controls of an RTSP row's edit form: transport and media
+/// mode. Both were settable only when the stream was added — the update
+/// handler took them, and no form offered them afterwards.
+fn render_rtsp_fields(row: &AudioSource) -> String {
+    let sel = |on: bool| if on { " selected" } else { "" };
+    format!(
+        r#"<div class="aud-edit-rtsp">
+      <span class="bnb-eyebrow">Camera stream</span>
+      <span class="aud-edit-pair">
+        <label for="rt-transport-{id}">Transport</label>
+        <select id="rt-transport-{id}" name="rtsp_transport">
+          <option value="auto"{auto}>auto (TCP)</option>
+          <option value="tcp"{tcp}>TCP only</option>
+          <option value="udp"{udp}>UDP only</option>
+        </select>
+      </span>
+      <span class="aud-edit-pair">
+        <label for="rt-media-{id}">Tracks requested</label>
+        <select id="rt-media-{id}" name="media_mode">
+          <option value="full"{full}>audio and video (video discarded)</option>
+          <option value="audio"{audio}>audio track only</option>
+        </select>
+      </span>
+      <p class="hint">A camera allows only a few video viewers at once, and asking for
+        its video to throw it away takes one of them — for as long as the station
+        listens, and again whenever someone listens live. <em>Audio track only</em>
+        leaves them free. A camera that sends no audio then fails to connect,
+        which shows as this source being down.</p>
+    </div>"#,
+        id = escape_html(&row.id),
+        auto = sel(row.rtsp_transport == RtspTransport::Auto),
+        tcp = sel(row.rtsp_transport == RtspTransport::Tcp),
+        udp = sel(row.rtsp_transport == RtspTransport::Udp),
+        full = sel(row.media_mode == RtspMediaMode::Full),
+        audio = sel(row.media_mode == RtspMediaMode::Audio),
+    )
+}
+
 /// One-line technical summary of a source: rate, channels, depth, gain.
 ///
 /// `pub(crate)` for the same reason as [`kind_label`] — the onboarding
@@ -1242,6 +1301,9 @@ pub(crate) fn detail_for(s: &AudioSource) -> String {
     }
     if matches!(s.kind, SourceKind::Rtsp) {
         let _ = write!(out, " · {} transport", s.rtsp_transport.as_str());
+        if s.media_mode == RtspMediaMode::Audio {
+            out.push_str(" · audio track only");
+        }
     }
     // A quiet window is the one setting here that makes a source *stop*, so it
     // has to be legible without opening the edit form — a source that looks
@@ -1423,6 +1485,7 @@ mod tests {
             label: None,
             sample_rate: None,
             rtsp_transport: None,
+            media_mode: None,
             quiet_start: None,
             quiet_end: None,
         }
@@ -1492,6 +1555,74 @@ mod tests {
             StatusCode::OK
         );
         assert_eq!(stored_chain(&state, "plughw:3,0"), "");
+    }
+
+    /// The media mode chosen on the add form reaches the row, the edit form
+    /// can change it, an unknown value is refused without touching the row,
+    /// and only an RTSP row's edit form offers it. Observed failing with the
+    /// `media_mode` parse removed from `create`: the row stayed `full`.
+    #[tokio::test]
+    async fn the_media_mode_is_set_on_the_form_and_changed_on_the_edit_form() {
+        use birdnet_db::audio_sources::{AudioSourceStore, RtspMediaMode};
+        let (_d, state) = fixture();
+        let url = "rtsp://cam.local/stream1";
+        let stored = |state: &crate::state::AppState| {
+            state
+                .with_db(AudioSourceStore::list)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|s| s.device_id == url)
+                .expect("source exists")
+        };
+
+        let mut form = eq_form("rtsp", url);
+        form.media_mode = Some("audio".to_string());
+        assert_eq!(
+            create(State(state.clone()), actor(&state), Form(form))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        let row = stored(&state);
+        assert_eq!(row.media_mode, RtspMediaMode::Audio);
+        let html = render_edit_form(&row);
+        assert!(
+            html.contains(r#"<option value="audio" selected>audio track only</option>"#),
+            "{html}"
+        );
+
+        let mut bad = eq_form("rtsp", url);
+        bad.media_mode = Some("video".to_string());
+        let refused = update(
+            State(state.clone()),
+            actor(&state),
+            Path(row.id.clone()),
+            Form(bad),
+        )
+        .await;
+        assert_refused(&refused);
+        assert_eq!(stored(&state).media_mode, RtspMediaMode::Audio);
+
+        let mut back = eq_form("rtsp", url);
+        back.media_mode = Some("full".to_string());
+        assert_eq!(
+            update(
+                State(state.clone()),
+                actor(&state),
+                Path(row.id),
+                Form(back)
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(stored(&state).media_mode, RtspMediaMode::Full);
+
+        let mic = AudioSource {
+            kind: SourceKind::UsbAlsa,
+            ..stored(&state)
+        };
+        assert!(!render_edit_form(&mic).contains(r#"name="media_mode""#));
     }
 
     /// A stage above the source's Nyquist parses fine and cannot be built. It
@@ -1632,6 +1763,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: "highpass:120; notch:50:20".to_string(),
@@ -1666,6 +1798,7 @@ mod tests {
             label: None,
             sample_rate: None,
             rtsp_transport: None,
+            media_mode: None,
             quiet_start: None,
             quiet_end: None,
         };
@@ -1754,6 +1887,7 @@ mod tests {
             label: None,
             sample_rate: None,
             rtsp_transport: None,
+            media_mode: None,
             quiet_start: None,
             quiet_end: None,
         };
@@ -1807,6 +1941,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Tcp,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -1837,6 +1972,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 12.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -1891,6 +2027,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -1996,6 +2133,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -2036,6 +2174,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: Some(("22:00".to_string(), "06:00".to_string())),
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -2063,6 +2202,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -2095,6 +2235,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -2137,6 +2278,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Tcp,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -2400,6 +2542,7 @@ mod pipeline_toggle_tests {
             bit_depth: 16,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline,
             eq_chain: String::new(),
@@ -2539,6 +2682,7 @@ mod solar_quiet_form_tests {
             bit_depth: 16,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: Some(("sunset+30".to_string(), "sunrise-15".to_string())),
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),

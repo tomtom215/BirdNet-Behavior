@@ -199,14 +199,15 @@ within each group by how much they change what a station can do.
 | **Why it matters** | The cheapest way to add a second listening post is often an existing stream that is not RTSP — a neighbour's Icecast feed, an HLS wildlife cam, an OBS push from a laptop. |
 | **Plan** | `CaptureSource` gains a `Stream { url, kind, transport }` variant; the ffmpeg command builder in `capture/process.rs` already takes a URL, so most of this is URL classification, per-protocol ffmpeg flags, and the reconnect policy each protocol needs. Probing (`capture/probe.rs`) must learn to answer for them. |
 
-#### G‑8 · RTSP media mode — GAP (minor)
+#### G‑8 · RTSP media mode — SHIPPED (`full` and `audio`; `auto` not adopted, with the reason)
 
 | | |
 |---|---|
 | **Upstream** | `conf.MediaMode` — `auto` (try audio-only, fall back), `audio-only` (never fall back, fail visibly), `full-stream` (request video and discard it). Default `full-stream`, with a comment naming the cameras that complete an audio-only handshake just long enough to mislead the fallback. |
-| **Ours** | We always request the full stream. |
-| **Why it matters** | Cameras have a bounded number of concurrent video sessions. A station that opens a video slot to listen to audio can lock the owner out of their own camera. |
-| **Plan** | A per-source `media_mode` mapping onto ffmpeg's `-allowed_media_types audio`, with the upstream fallback ladder and its failure accounting. |
+| **Ours** | A per-source `media_mode` (`audio_sources`, migration 53), `full` by default or `audio`, which adds ffmpeg's `-allowed_media_types audio` — to capture (`capture/process.rs` `rtsp_command`) **and** to listening live (`routes/livestream.rs`), which opens its own session to the camera. Set on the add form and the edit form. |
+| **Verified** | Against MediaMTX 1.21.2 with a published H264 + AAC stream, running the station binary: the audio-only row's sessions — capture and live — set up "1 track (MPEG-4 Audio)", the full row's "2 tracks (H264, MPEG-4 Audio)", and both recorded audible segments. An audio-only row pointed at a video-only path failed at PLAY (`501 Not Implemented`), logged at WARN per attempt, and recorded nothing. |
+| **Why not `auto`** | Its fallback has to tell "this camera refuses audio-only" from every other reason a session fails, and upstream's own comment names cameras that pass the audio-only handshake and then misbehave — the case a fallback gets wrong. An operator who chooses `audio` and sees the source go down learns the same thing in one step, and can switch back. |
+| **Found on the way** | The live stream hard-coded `-rtsp_transport tcp`, so a UDP-only camera could not be listened to; the add form described `auto` as "TCP w/ UDP fallback", which nothing implements (it is TCP); and transport could not be changed after a stream was added. All three fixed. |
 
 #### G‑9 · Audio watchdog tuning — SHIPPED, and the row's rationale was misattributed
 
@@ -598,7 +599,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 31 | Extended capture | G‑6 | Depends on #6 |
 | 32 | Additional stream protocols | G‑7 | HTTP/Icecast first; RTMP and UDP after |
 | 33 | Silero VAD privacy gate | G‑13 | Depends on #26 Stage 1 for a second ONNX session |
-| 34 | RTSP media mode | G‑8 | Small, but only meaningful alongside #32 |
+| 34 | ~~RTSP media mode~~ — **shipped** (`full` / `audio`). See G‑8. | G‑8 | It mattered for RTSP on its own — the camera's video sessions — not only alongside #32 |
 | 35 | Profiling endpoints | G‑24 | Behind a Cargo feature |
 | 36 | Local error ring buffer (Sentry substitute) | G‑25 | |
 | 37 | Parquet export (MySQL substitute) | G‑31 | |
