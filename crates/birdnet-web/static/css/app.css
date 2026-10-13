@@ -4095,6 +4095,12 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .work2 { display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(300px, 1fr); gap: 20px; align-items: start; }
 .work2 .rail { display: flex; flex-direction: column; gap: 20px; }
 @media (max-width: 860px) { .work2 { grid-template-columns: 1fr; } }
+/* The Today layout can hide the log or every rail card (today_layout.rs); the
+   survivor takes the width. Two classes, so these win over `.work2` and its
+   media query wherever they sit. An empty rail is removed from the
+   accessibility tree with it, rather than left as an empty landmark. */
+.work2.work2--log-only, .work2.work2--rail-only { grid-template-columns: 1fr; }
+.work2.work2--log-only > .rail, .work2.work2--empty { display: none; }
 
 /* Compact best-recordings rows — rail-scaled, NOT full feed rows */
 .x-best { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 0; border-top: 0.5px solid var(--hairline); }

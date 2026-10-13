@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Arrange the Today page.** Settings → Today Page Layout shows, hides and
+  reorders the page's parts — headline, nudge, day strip, log, and the three
+  side cards — with Move up, Move down and Show/Hide buttons rather than
+  dragging, so a keyboard or a touch screen can do it. The page is rebuilt in
+  that order, so reading and tab order follow what is shown. A new station
+  shows everything until its first detection.
+
 - **What is heard just before a species.** The Analytics page's follow-on
   card now shows the species heard immediately *before* the most recent
   bird's first detection in a session as well as after it
@@ -76,6 +83,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/v2/analytics/status` reports the embed's `abi`.
 
 ### Fixed
+
+- **An RTSP camera's password reached the journal.** Starting an RTSP
+  source logged its URL at info, on every start. ffmpeg also names its input
+  in its errors (`Error opening input file rtsp://admin:…@cam/stream.`), which
+  was logged at debug. Both are now written with the password replaced; the
+  user name and host stay, because they are what makes a camera fault
+  diagnosable.
+- **A camera that refused the connection said why only at debug.** ffmpeg's
+  "Error opening input: Connection refused" matched none of the failure
+  markers, so it sat below the default log filter while the supervisor's
+  restart notices were visible. It is a warning now.
+  The support bundle's error log, and the doctor's message about a malformed
+  source URL, now redact every URL in a line rather than only the first.
+- **Six more places a credential could leave the station**, found by a sweep
+  of every log and error site:
+  - The support bundle's `journal.log` was the journal verbatim. It is now
+    scrubbed of every configured secret's value, of URL-valued settings'
+    paths and tokens, and of every URL's password — which also cleans lines an
+    older build wrote before these fixes.
+  - The Apprise address was logged at start-up as configured; an Apprise API
+    address can carry a password or, in `/notify/{key}`, the key. Now logged
+    redacted, as are a custom BirdWeather or weather endpoint.
+  - Apprise's own error text, stored in the notification log viewers can read,
+    is redacted and clipped: Apprise names the URL it failed on, and in an
+    Apprise URL the token is often the host.
+  - The BirdWeather "Test" button put the station token into its error
+    message on any network failure; reqwest's error text includes the URL.
+  - A "redacted" alert-rule export, the form offered for sharing, still
+    carried each webhook's full address — for Home Assistant, Slack or
+    Discord the address is the credential. It now keeps only the scheme and
+    host. Importing such a rule brings it in switched off, and the import
+    summary names it, rather than enabling a rule that can only fail.
 
 - **FLAC, MP3 and Ogg clips carried no tags.** The species, confidence and
   date were written into a clip only when it stayed a WAV, so every

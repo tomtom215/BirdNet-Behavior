@@ -33,7 +33,7 @@ use std::fmt::Write as _;
 /// never mentions, is not representable without the two disagreeing.
 /// `settings_index_matches_rendered_sections` asserts both directions against
 /// the real rendered HTML rather than trusting that.
-pub(crate) const SECTIONS: [(&str, &str); 8] = [
+pub(crate) const SECTIONS: [(&str, &str); 9] = [
     ("audio", "Audio Capture"),
     ("location", "Location &amp; Recording Schedule"),
     ("detection", "Detection Settings"),
@@ -42,6 +42,9 @@ pub(crate) const SECTIONS: [(&str, &str); 8] = [
     ("system", "System &amp; Display"),
     ("auth", "Web Authentication"),
     ("email", "Email Alerts"),
+    // Rendered after the form, not inside it: its buttons each save at once,
+    // and inside the form they would submit it.
+    ("today-layout", "Today Page Layout"),
 ];
 
 /// The sticky "On this page" jump list.
@@ -164,6 +167,13 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
 /// the shell owns layout and the nav now.
 fn settings_body(settings: &HashMap<String, String>) -> String {
     let form_html = render_settings_form(settings);
+    let layout = crate::routes::admin::today_layout::render_section(
+        &crate::routes::pages::today_layout::Layout::parse(
+            settings
+                .get(crate::routes::pages::today_layout::SETTING_KEY)
+                .map_or("", String::as_str),
+        ),
+    );
     let index = section_index();
     format!(
         r#"{SETTINGS_FORM_CSS}
@@ -178,6 +188,7 @@ fn settings_body(settings: &HashMap<String, String>) -> String {
   <div id="settings-feedback"></div>
 
   {form_html}
+  {layout}
   </div>
   </div>
   <script src="/static/settings-filter.js" defer></script>"#
@@ -238,6 +249,18 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
       .btn { padding: 0.5rem 1.5rem; border-radius: 0.375rem; border: none; cursor: pointer;
                font-weight: 600; font-size: 0.875rem; }
       .btn-primary { background: var(--moss); color: var(--on-moss); }
+      /* Today page layout editor. */
+      .tl-list { list-style: none; margin: 0; padding: 0; }
+      .tl-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+                gap: 0.5rem 1rem; padding: 0.6rem 0; border-top: 1px solid var(--border); }
+      .tl-row:first-child { border-top: 0; }
+      .tl-name { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+      .tl-where { font-size: 0.78rem; }
+      .tl-row--hidden .tl-name > :first-child, .tl-row--hidden .tl-name { color: var(--fg-3); }
+      .tl-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+      /* A move that would do nothing (the edge of a group) is disabled and must
+         look it. WCAG 1.4.3 exempts inactive controls from the contrast floor. */
+      .tl-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
       .btn-primary:hover { background: var(--moss-ink); }
       .alert-success { background: var(--moss-soft); border: 1px solid var(--moss-soft); color: var(--moss-ink);
                          border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }

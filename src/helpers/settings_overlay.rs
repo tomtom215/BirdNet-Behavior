@@ -150,6 +150,14 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         Wiring::OwnedBy("birdnet_behavioral::queries and the SQLite analytics reader"),
         SettingsCategory::System,
     ),
+    (
+        // `birdnet_web::routes::pages::today_layout::SETTING_KEY`: which blocks
+        // the Today page shows and in what order (G-22). Written by the editor
+        // at the foot of `/admin/settings`, read by the Today page.
+        "today_layout",
+        Wiring::OwnedBy("birdnet_web::routes::pages::today (the Today page's block layout)"),
+        SettingsCategory::General,
+    ),
     // ── Station / location ─────────────────────────────────────────────────
     (
         "latitude",
@@ -664,6 +672,9 @@ mod tests {
         // `every_settings_key_written_anywhere_is_classified`, which is the
         // gate that exists because a per-writer list keeps missing writers.
         "analytics_exclude_imports",
+        // Written by the Today layout editor, whose buttons each save at once
+        // and so sit outside the settings form.
+        "today_layout",
     ];
 
     #[test]

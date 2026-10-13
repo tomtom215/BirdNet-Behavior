@@ -54,6 +54,7 @@ pub mod station_health;
 pub mod timeseries_dash;
 pub(crate) mod toast;
 pub mod today;
+pub mod today_layout;
 pub(crate) mod today_phrase;
 pub mod viz;
 pub mod weekly_report;

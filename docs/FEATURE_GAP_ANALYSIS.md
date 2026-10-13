@@ -362,7 +362,7 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Chunked MP3 has no recovery. On mobile, a network handover ends the stream and the tab goes silent with no indication; there is no seeking and no buffer target. HLS is what mobile browsers are built around. |
 | **Plan** | Keep the MP3 endpoint (it is simple and it works on a LAN) and add an HLS variant behind a token, sharing the encode stage. This depends on the same re-encode seam as N‑2, so the two should land together. |
 
-#### G‑22 · Dashboard layout customisation — GAP
+#### G‑22 · Dashboard layout customisation — SHIPPED (order and visibility; not widths, banner or colour schemes)
 
 | | |
 |---|---|
@@ -371,6 +371,7 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Half the stations that exist are on a wall-mounted tablet in a visitor centre or a kitchen, where what needs to be on screen is not what a person debugging a microphone needs. |
 | **Plan** | Store an element list in `settings` and render from it. Our HTMX partials are *already* the element vocabulary — `/pages/hero-status`, `/pages/today-list`, `/pages/most-recent`, `/pages/hourly-chart` and the rest are exactly these components — so this is a layout table and a drag-to-reorder editor over machinery that exists, not a rewrite. |
 
+| **Resolution** | `routes/pages/today_layout.rs` and the editor in `routes/admin/today_layout.rs`, stored as one `today_layout` setting (`daystrip,hero,-nudge,…`). The Today template marks each block and the page is reassembled in that order — the DOM, not CSS `order`, so reading and tab order follow the screen. Blocks move within their area (top stack, side rail; the log can only be hidden); the survivor of log and rail takes the width. Move up / Move down / Show-Hide buttons rather than upstream's drag, which a keyboard or switch user cannot operate. A station with no detections renders the default, so the setup checklist cannot be hidden. **Not done**, and recorded rather than implied: half/full widths per element, the banner with map and weather, a video embed, and the colour schemes. |
 #### G‑23 · Detection comments — SHIPPED
 
 | | |
@@ -593,7 +594,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 27 | Inference backends (OpenVINO / XNNPACK) | G‑11 | Gated on Stage 1 of #26 |
 | 28 | OAuth2 / OIDC | G‑20 | One generic OIDC implementation; named providers are configuration |
 | 29 | HLS live streaming | G‑21 | Shares the encode seam with #10 |
-| 30 | Dashboard layout customisation | G‑22 | The HTMX partials are already the component vocabulary |
+| 30 | ~~Dashboard layout customisation~~ — **shipped** (order and visibility). See G‑22. | G‑22 | The HTMX partials are already the component vocabulary |
 | 31 | Extended capture | G‑6 | Depends on #6 |
 | 32 | Additional stream protocols | G‑7 | HTTP/Icecast first; RTMP and UDP after |
 | 33 | Silero VAD privacy gate | G‑13 | Depends on #26 Stage 1 for a second ONNX session |

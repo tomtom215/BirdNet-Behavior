@@ -86,15 +86,27 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
             Ok::<_, String>((total, sources))
         });
         let disk_pct = disk_used_percent(&state_for_query);
+        // Decoration, so a failed read is the default layout rather than an
+        // error page: every block is still the station's own data.
+        let layout = state_for_query.with_read_db(|conn| {
+            birdnet_db::settings::get_or(conn, super::today_layout::SETTING_KEY, "")
+        });
+        let layout = layout.map_or_else(
+            |e| {
+                tracing::warn!(error = %e, "today: layout setting unreadable; using the default");
+                super::today_layout::Layout::default()
+            },
+            |v| super::today_layout::Layout::parse(&v),
+        );
         // Read only for the first-run checklist, which is the only thing that
         // shows it.
         let password_set = matches!(counts, Ok((0, _)))
             && crate::auth_middleware::admin_password_configured(&state_for_query);
-        counts.map(|(total, sources)| Some((total, sources, disk_pct, password_set)))
+        counts.map(|(total, sources)| Some((total, sources, disk_pct, password_set, layout)))
     })
     .await;
 
-    let (total_ever, sources, disk_pct, password_set) = match loaded {
+    let (total_ever, sources, disk_pct, password_set, layout) = match loaded {
         Ok(Ok(Some(v))) => v,
         Ok(Ok(None)) => return Redirect::to("/onboarding").into_response(),
         Ok(Err(e)) => {
@@ -138,7 +150,22 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
 <p class="bnb-meta td-sub">Counting today's detections…</p>"#
     };
 
-    let body = TODAY_PAGE_HTML
+    // A brand-new station keeps the default: its hero is the setup checklist.
+    let layout = if firstrun {
+        super::today_layout::Layout::default()
+    } else {
+        layout
+    };
+    let arranged = layout.apply(TODAY_PAGE_HTML).unwrap_or_else(|missing| {
+        tracing::error!(
+            missing,
+            "today: the template lost a layout marker; rendering the default"
+        );
+        super::today_layout::Layout::default()
+            .apply(TODAY_PAGE_HTML)
+            .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
+    });
+    let body = arranged
         .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
         .replace("{{today_human_date}}", &human_date())
         .replace("{{hero_phrase}}", hero_phrase)
