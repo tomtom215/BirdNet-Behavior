@@ -1086,7 +1086,7 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 /// A non-finite `raw` is **0.0**, never a detection. A model that overflows
 /// emits `inf`, and both mappings send `+inf` to exactly 1.0 — a confident
 /// detection of whichever label sits at that index. The privacy gate reads
-/// the same output the opposite way; see [`human_confidence`].
+/// the same output the opposite way (`human_confidence`, private).
 #[must_use]
 pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
     if !raw.is_finite() {

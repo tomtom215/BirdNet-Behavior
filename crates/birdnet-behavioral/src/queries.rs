@@ -351,7 +351,7 @@ pub fn retention_sql(params: &RetentionParams) -> String {
 /// species sequence occurred within the time window. The step conditions are
 /// passed as variadic boolean arguments — the real signature — not as an array.
 ///
-/// Mode [`FUNNEL_MODE`]: a step counts only when it is strictly later than the
+/// Mode `FUNNEL_MODE`: a step counts only when it is strictly later than the
 /// one before it.
 ///
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
@@ -438,7 +438,7 @@ fn wall_clock_steps(per_day: &str) -> String {
 ///
 /// Same shape as [`funnel_sql`], but `window_funnel_events()` returns the
 /// `TIMESTAMP[]` of when each completed step fired rather than a step count,
-/// returned as wall-clock strings by [`wall_clock_steps`].
+/// returned as wall-clock strings by `wall_clock_steps`.
 ///
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn funnel_events_sql(params: &FunnelParams) -> String {
@@ -528,7 +528,7 @@ pub fn sequence_count_sql(params: &PatternParams) -> String {
 /// satisfied the pattern — the longest in-order prefix reached that day (the
 /// full set when the sequence completes, a partial otherwise), like
 /// `window_funnel_events`. Returned as wall-clock strings by
-/// [`wall_clock_steps`], like [`funnel_events_sql`].
+/// `wall_clock_steps`, like [`funnel_events_sql`].
 ///
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn sequence_match_events_sql(params: &PatternParams) -> String {
@@ -557,7 +557,7 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
 /// `window_minutes`; counting the follower across sessions yields a frequency
 /// distribution of what typically follows the trigger. The trigger itself can
 /// be its own follower — the same bird calling again — which the page labels
-/// rather than drops. See [`adjacent_species_sql`] for the shared shape.
+/// rather than drops. See `adjacent_species_sql` for the shared shape.
 pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
     adjacent_species_sql(Adjacent::Next, trigger_species, window_minutes, limit)
 }
@@ -568,7 +568,7 @@ pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) 
 ///
 /// Anchored on the trigger's first detection in the session, so the trigger
 /// can never be its own predecessor; a session the trigger opens has none and
-/// is not counted. See [`adjacent_species_sql`].
+/// is not counted. See `adjacent_species_sql`.
 pub fn previous_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
     adjacent_species_sql(Adjacent::Previous, trigger_species, window_minutes, limit)
 }

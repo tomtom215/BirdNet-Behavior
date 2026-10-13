@@ -61,8 +61,10 @@ pub const fn is_first_detection_today(count_after_insert: i64) -> bool {
 
 /// What an MQTT detection payload says about a species' earlier detections.
 ///
-/// A failed read is [`SpeciesHistory::Unknown`] — the keys are left out —
-/// and never [`SpeciesHistory::Never`]: `null` there states a first-ever
+/// A failed read is
+/// [`SpeciesHistory::Unknown`](birdnet_integrations::mqtt::SpeciesHistory::Unknown)
+/// — the keys are left out — and never
+/// [`SpeciesHistory::Never`](birdnet_integrations::mqtt::SpeciesHistory::Never): `null` there states a first-ever
 /// detection, and an automation keyed on "new species" would fire on a
 /// database error. The same mistake `is_first_detection_today` exists to
 /// avoid for the dashboard's "new today".
