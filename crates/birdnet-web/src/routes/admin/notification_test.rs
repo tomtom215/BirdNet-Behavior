@@ -459,12 +459,18 @@ async fn ping_birdweather(token: &str) -> Result<String, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    let url = format!("https://app.birdweather.com/api/v1/stations?token={token}");
+    // The token is a query value here: trimmed and encoded, and kept out of
+    // the error — reqwest's error text names the URL, and this message is
+    // rendered into the page and a toast.
+    let url = format!(
+        "https://app.birdweather.com/api/v1/stations?token={}",
+        crate::routes::pages::simple_url_encode(token.trim())
+    );
     let resp = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("HTTP error: {e}"))?;
+        .map_err(|e| format!("HTTP error: {}", e.without_url()))?;
 
     if resp.status().is_success() {
         Ok("BirdWeather API reachable -- token appears valid".to_string())

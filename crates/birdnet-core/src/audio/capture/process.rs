@@ -179,9 +179,23 @@ fn is_capture_failure(line: &str) -> bool {
         "unable to",
         "failed",
         "error:",
+        // ffmpeg's own account of an input it could not open — an RTSP camera
+        // refusing the connection, a wrong path — reads "Error opening input:
+        // Connection refused" and "Error opening input file rtsp://…". Neither
+        // matched anything above, so a camera that would not connect logged its
+        // reason only at debug, below the default filter.
+        "error opening",
     ];
     let lower = line.to_ascii_lowercase();
     MARKERS.iter().any(|m| lower.contains(m))
+}
+
+/// A subprocess's stderr line as it may be logged: with the password of any
+/// URL in it replaced. ffmpeg names its input in its errors —
+/// `Error opening input file rtsp://admin:hunter2@cam/stream.` — and an RTSP
+/// URL's userinfo is the camera's password.
+fn capture_log_line(line: &str) -> String {
+    crate::config::redact::redact_credentials_in_text(line)
 }
 
 /// Drain a capture subprocess's stderr into the log, line by line.
@@ -210,6 +224,7 @@ fn drain_capture_stderr(child: &mut Child, source: &str) {
             for line in BufReader::new(stderr).lines() {
                 match line {
                     Ok(line) if !line.trim().is_empty() => {
+                        let line = capture_log_line(&line);
                         // Routine chatter (ALSA xruns, RTSP reconnect notices)
                         // stays at debug so a busy station does not spam the
                         // journal. A line that reports a *failure* is promoted
@@ -712,7 +727,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
 
     tracing::info!(
         stream_id = stream_id,
-        url = url,
+        url = %crate::config::redact::redact_url_credentials(url),
         gain_db = config.gain_db,
         "started RTSP capture via ffmpeg"
     );
@@ -753,7 +768,25 @@ pub const fn required_tool(source: &CaptureSource) -> &'static str {
 
 #[cfg(test)]
 mod capture_failure_classification {
-    use super::is_capture_failure;
+    use super::{capture_log_line, is_capture_failure};
+
+    /// What ffmpeg 6.1 wrote, verbatim, for a camera URL with credentials
+    /// that it could not reach. The line is promoted to `warn`, so it reached
+    /// the journal with the camera's password in it.
+    #[test]
+    fn a_logged_ffmpeg_line_does_not_carry_the_camera_password() {
+        let line = "Error opening input file rtsp://admin:hunter2@127.0.0.1:9/stream.";
+        assert!(
+            is_capture_failure(line),
+            "logged at warn, so it reaches the journal"
+        );
+        let logged = capture_log_line(line);
+        assert!(!logged.contains("hunter2"), "{logged}");
+        assert!(
+            logged.contains("127.0.0.1:9/stream"),
+            "the host still helps: {logged}"
+        );
+    }
 
     /// The exact stderr a Raspberry Pi 4 emitted while the unit's
     /// `DeviceAllow=/dev/snd` denied every ALSA node. These two lines were
@@ -772,6 +805,8 @@ mod capture_failure_classification {
     #[test]
     fn other_common_failures_are_warnings() {
         for line in [
+            // ffmpeg 6.1, verbatim, for an RTSP camera that refused the connection.
+            "[in#0 @ 0x563de6a03e00] Error opening input: Connection refused",
             "arecord: main:830: audio open error: Device or resource busy",
             "ALSA lib pcm_hw.c:1829:(_snd_pcm_hw_open) Invalid value for card",
             "arecord: set_params:1416: Sample format non available",

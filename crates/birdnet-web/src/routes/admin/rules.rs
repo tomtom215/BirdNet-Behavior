@@ -168,6 +168,8 @@ struct ImportOutcome {
     metric_added: usize,
     /// Rules whose credential arrived redacted and was dropped.
     needs_credential: Vec<String>,
+    /// Rules whose webhook address arrived redacted; imported switched off.
+    needs_address: Vec<String>,
     /// Entries that could not be used, with the reason.
     rejected: Vec<String>,
 }
@@ -201,6 +203,7 @@ fn plan_import(
         added: 0,
         metric_added: 0,
         needs_credential: Vec::new(),
+        needs_address: Vec::new(),
         rejected: Vec::new(),
     };
     for entry in &set.rules {
@@ -208,6 +211,9 @@ fn plan_import(
             Ok(imported) => {
                 if imported.credential_was_redacted {
                     outcome.needs_credential.push(imported.rule.name.clone());
+                }
+                if imported.url_was_redacted {
+                    outcome.needs_address.push(imported.rule.name.clone());
                 }
                 ready.push(imported);
             }
@@ -306,6 +312,20 @@ fn render_import_outcome(
     } else {
         format!("<div class=\"rule-success\">Imported {inserted} rule(s).</div>")
     };
+    if !outcome.needs_address.is_empty() {
+        let names = outcome
+            .needs_address
+            .iter()
+            .map(|n| escape_html(n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(
+            html,
+            "<div class=\"rule-error\">These were exported with their webhook address \
+             redacted and were imported switched off. Enter the address and turn them \
+             on: {names}</div>"
+        );
+    }
     if !outcome.needs_credential.is_empty() {
         let names = outcome
             .needs_credential
@@ -1660,11 +1680,16 @@ mod tests {
             added: 2,
             metric_added: 0,
             needs_credential: vec!["Owls at night".into(), "Kites".into()],
+            needs_address: vec!["Herons".into()],
             rejected: vec!["rule \"x\" has unknown action \"y\"".into()],
         };
         let html = render_import_outcome(2, 0, &outcome);
         assert!(html.contains("Imported 2 rule(s)"), "{html}");
         assert!(html.contains("Owls at night"), "{html}");
+        assert!(
+            html.contains("switched off") && html.contains("Herons"),
+            "{html}"
+        );
         assert!(html.contains("Kites"), "{html}");
         assert!(html.contains("unknown action"), "{html}");
     }
@@ -1896,6 +1921,7 @@ mod metric_export_tests {
             added: 2,
             metric_added: 3,
             needs_credential: Vec::new(),
+            needs_address: Vec::new(),
             rejected: Vec::new(),
         };
         let html = render_import_outcome(2, 3, &outcome);

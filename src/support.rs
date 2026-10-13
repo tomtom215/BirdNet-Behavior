@@ -55,7 +55,7 @@ use std::path::{Path, PathBuf};
 
 use birdnet_core::config::Config;
 pub use birdnet_core::config::redact::{
-    REDACTED, is_secret_key, redact_url_credentials, redact_value,
+    REDACTED, is_secret_key, redact_credentials_in_text, redact_value,
 };
 
 use crate::cli::Cli;
@@ -84,6 +84,51 @@ pub fn redacted_config(config: &Config) -> String {
         .collect();
     lines.sort();
     lines.join("\n")
+}
+
+/// A log scrubbed for the bundle.
+///
+/// The journal is the one member nothing upstream redacts: `log_capture`
+/// cleans only the lines it captures, the stderr layer writes whatever it is
+/// given, and a persistent journal keeps lines an older build wrote before a
+/// leak was fixed. So, in this order:
+///
+/// 1. Every configured secret's literal value becomes [`REDACTED`], and every
+///    URL-valued setting its [`redact_value`] form — a token in a path, such as
+///    an Apprise `/notify/{key}` or a `tgram://` URL, has no userinfo for the
+///    next step to find. Literals first, while they still read as configured.
+/// 2. The password of every URL left in the text is replaced
+///    ([`redact_credentials_in_text`]).
+///
+/// Values shorter than four characters are not matched as literals: replacing
+/// every `1` or `on` in a log would leave nothing to read. A secret that short
+/// survives this step. Settings stored only in the database (webhook
+/// addresses, notification URLs entered on the web) are not in the
+/// configuration and are covered by step 2 alone.
+fn scrub_log(text: &str, config: Option<&Config>) -> String {
+    let mut out = text.to_owned();
+    if let Some(config) = config {
+        for (key, value) in config.iter() {
+            let value = value.trim();
+            if value.chars().count() < 4 {
+                continue;
+            }
+            if is_secret_key(key) {
+                out = out.replace(value, REDACTED);
+            } else if value.contains("://") {
+                for member in value
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|m| m.contains("://"))
+                {
+                    let shown = redact_value(member);
+                    if shown != member {
+                        out = out.replace(member, &shown);
+                    }
+                }
+            }
+        }
+    }
+    redact_credentials_in_text(&out)
 }
 
 /// Run a command and capture its output, or a note explaining why not.
@@ -239,11 +284,11 @@ pub fn build_with_recent_log(
     push(stage(
         &dir,
         crate::log_capture::ERROR_LOG_NAME,
-        &read_error_log(config),
+        &scrub_log(&read_error_log(config), config),
     ));
 
     if let Some(recent) = recent_log {
-        push(stage(&dir, RECENT_LOG_NAME, recent));
+        push(stage(&dir, RECENT_LOG_NAME, &scrub_log(recent, config)));
     }
 
     push(stage(&dir, "uname.txt", &capture("uname", &["-a"])));
@@ -251,17 +296,20 @@ pub fn build_with_recent_log(
     push(stage(
         &dir,
         "journal.log",
-        &capture(
-            "journalctl",
-            &[
-                "-u",
-                "birdnet-behavior",
-                "-n",
-                JOURNAL_LINES,
-                "--no-pager",
-                "--output",
-                "short-iso",
-            ],
+        &scrub_log(
+            &capture(
+                "journalctl",
+                &[
+                    "-u",
+                    "birdnet-behavior",
+                    "-n",
+                    JOURNAL_LINES,
+                    "--no-pager",
+                    "--output",
+                    "short-iso",
+                ],
+            ),
+            config,
         ),
     ));
 
@@ -350,6 +398,50 @@ mod tests {
     use super::*;
 
     // ── redaction: the half that matters ────────────────────────────────
+
+    /// A journal as an older build left it, with every shape of leak this
+    /// code base has had: the RTSP start line, ffmpeg's error, the Apprise
+    /// address with its key in the path, a notify URL whose token is the host,
+    /// and the SMTP password echoed in an error.
+    #[test]
+    fn a_journal_leaves_the_bundle_with_no_configured_secret_in_it() {
+        let cfg = Config::parse(
+            "RTSP_URL=rtsp://admin:camPW99@cam.lan/stream\n\
+             APPRISE_URL=http://apprise.lan:8000/notify/k3yValue\n\
+             NOTIFY_URLS=tgram://123456:BOTtoken/987\n\
+             EMAIL_SMTP_PASS=mailPW77\n\
+             LATITUDE=52.52",
+        )
+        .unwrap();
+        let journal = "\
+            started RTSP capture via ffmpeg url=rtsp://admin:camPW99@cam.lan/stream\n\
+            capture subprocess: Error opening input file rtsp://admin:camPW99@cam.lan/stream.\n\
+            Apprise notifications enabled url=http://apprise.lan:8000/notify/k3yValue\n\
+            push failed for tgram://123456:BOTtoken/987\n\
+            smtp auth failed with password mailPW77\n";
+        let out = scrub_log(journal, Some(&cfg));
+        for secret in ["camPW99", "k3yValue", "BOTtoken", "mailPW77"] {
+            assert!(!out.contains(secret), "{secret} survived:\n{out}");
+        }
+        for kept in [
+            "cam.lan/stream",
+            "apprise.lan:8000",
+            "tgram://",
+            "smtp auth failed",
+        ] {
+            assert!(out.contains(kept), "{kept} was lost:\n{out}");
+        }
+    }
+
+    /// The counterpart: a log with no secret in it is unchanged, and a
+    /// short or ordinary setting value is not hunted through the text.
+    #[test]
+    fn a_clean_journal_is_unchanged() {
+        let cfg = Config::parse("LATITUDE=52.52\nCADDY_PWD=on\nSF_THRESH=0.03").unwrap();
+        let journal = "detection on 52.52, sf 0.03, capture on\n";
+        assert_eq!(scrub_log(journal, Some(&cfg)), journal);
+        assert_eq!(scrub_log(journal, None), journal);
+    }
 
     #[test]
     fn redacted_config_masks_secrets_and_keeps_the_rest() {

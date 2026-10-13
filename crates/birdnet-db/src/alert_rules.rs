@@ -180,7 +180,11 @@ pub fn to_export(rule: &AlertRule, include_secrets: bool) -> RuleExport {
         auth,
     } = &rule.action
     {
-        out.webhook_url = Some(url.clone());
+        out.webhook_url = Some(if include_secrets {
+            url.clone()
+        } else {
+            redacted_webhook_url(url)
+        });
         out.webhook_method = Some(method.clone());
         out.webhook_body.clone_from(body_template);
         if let Some(auth) = auth {
@@ -195,6 +199,21 @@ pub fn to_export(rule: &AlertRule, include_secrets: bool) -> RuleExport {
         }
     }
     out
+}
+
+/// A webhook URL as a redacted export shows it: the scheme and host, so the
+/// reader can see where the rule sends, and [`REDACTED`] for everything that
+/// can be the credential — userinfo, path and query. A Home Assistant
+/// `/api/webhook/{id}`, a Slack or Discord hook path, an ntfy topic: whoever
+/// holds the URL can post to it.
+fn redacted_webhook_url(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return REDACTED.to_string();
+    };
+    let rest = &url[scheme_end + 3..];
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    format!("{}://{host}/{REDACTED}", &url[..scheme_end])
 }
 
 /// Why one entry of an imported rule set could not be used.
@@ -234,6 +253,9 @@ pub struct Imported {
     pub rule: NewAlertRule,
     /// Whether its credential arrived redacted and was therefore dropped.
     pub credential_was_redacted: bool,
+    /// Whether its webhook address arrived redacted. The rule is imported
+    /// switched off: an address with the placeholder in it can only fail.
+    pub url_was_redacted: bool,
 }
 
 /// Convert a portable rule back into an insertable one.
@@ -248,6 +270,7 @@ pub fn from_export(e: &RuleExport) -> Result<Imported, ImportRejection> {
     }
 
     let mut credential_was_redacted = false;
+    let mut url_was_redacted = false;
     let action = match e.action.as_str() {
         "log" => AlertAction::Log,
         "suppress" => AlertAction::Suppress,
@@ -258,6 +281,7 @@ pub fn from_export(e: &RuleExport) -> Result<Imported, ImportRejection> {
                 .map(str::trim)
                 .filter(|u| !u.is_empty())
                 .ok_or_else(|| ImportRejection::WebhookWithoutUrl(name.to_string()))?;
+            url_was_redacted = url.contains(REDACTED);
             let auth = match e.webhook_auth_value.as_deref() {
                 Some(REDACTED) => {
                     credential_was_redacted = true;
@@ -291,7 +315,7 @@ pub fn from_export(e: &RuleExport) -> Result<Imported, ImportRejection> {
     Ok(Imported {
         rule: NewAlertRule {
             name: name.to_string(),
-            enabled: e.enabled,
+            enabled: e.enabled && !url_was_redacted,
             species_pattern: e.species_pattern.clone().filter(|p| !p.trim().is_empty()),
             confidence_min: e.confidence_min.clamp(0.0, 1.0),
             confidence_max: e.confidence_max.clamp(0.0, 1.0),
@@ -301,6 +325,7 @@ pub fn from_export(e: &RuleExport) -> Result<Imported, ImportRejection> {
             action,
         },
         credential_was_redacted,
+        url_was_redacted,
     })
 }
 
@@ -1374,7 +1399,40 @@ mod tests {
             panic!("not a webhook");
         };
         assert_eq!(*auth, None, "the placeholder was imported as a credential");
-        assert_eq!(url, "https://ha.lan/api/webhook/xyz", "the URL was lost");
+        // The address went out redacted too — Home Assistant's webhook id is
+        // a credential — so the rule comes back switched off, with its
+        // conditions, and the caller is told to re-enter the address.
+        assert_eq!(url, &format!("https://ha.lan/{REDACTED}"));
+        assert!(imported.url_was_redacted, "the caller is not told");
+        assert!(
+            !imported.rule.enabled,
+            "a rule aimed at a placeholder was left on"
+        );
+    }
+
+    /// A redacted export never carries the webhook's path, query or
+    /// userinfo; with secrets included it is the address as stored.
+    #[test]
+    fn a_redacted_export_keeps_only_the_webhooks_scheme_and_host() {
+        for (url, shown) in [
+            ("https://ha.lan/api/webhook/xyz", "https://ha.lan/"),
+            (
+                "https://hooks.slack.com/services/T0/B0/secret",
+                "https://hooks.slack.com/",
+            ),
+            (
+                "http://user:pw@node-red.lan:1880/hook?k=v",
+                "http://node-red.lan:1880/",
+            ),
+        ] {
+            let mut rule = full_rule(None);
+            if let AlertAction::Webhook { url: u, .. } = &mut rule.action {
+                *u = url.to_string();
+            }
+            let e = to_export(&rule, false);
+            assert_eq!(e.webhook_url, Some(format!("{shown}{REDACTED}")), "{url}");
+            assert_eq!(to_export(&rule, true).webhook_url.as_deref(), Some(url));
+        }
     }
 
     #[test]

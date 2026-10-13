@@ -787,8 +787,9 @@ impl Client {
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 Err(AppriseError::Cli(format!(
-                    "apprise CLI exited {}: {stderr}",
-                    output.status
+                    "apprise CLI exited {}: {}",
+                    output.status,
+                    external_detail(&stderr)
                 )))
             }
         })
@@ -845,7 +846,8 @@ impl Client {
                     }
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
-                    last_error = AppriseError::Server(format!("{status}: {text}"));
+                    last_error =
+                        AppriseError::Server(format!("{status}: {}", external_detail(&text)));
                     // A 4xx (other than 429) is a deterministic client error —
                     // a malformed Apprise URL/payload won't succeed on retry, so
                     // fail fast rather than burning the backoff budget.
@@ -864,9 +866,77 @@ impl Client {
     }
 }
 
+/// Longest piece of text from Apprise kept in an error.
+const DETAIL_LIMIT: usize = 300;
+
+/// Text Apprise wrote — the CLI's stderr, the API server's error body — as it
+/// may be carried in an error.
+///
+/// That error is logged, stored in the notification log `/admin/notifications`
+/// shows, and put in the Test button's toast. Apprise names the notification
+/// URL it failed on, and in an Apprise URL the token is often the host or the
+/// path (`tgram://BOTTOKEN/CHAT`), which a userinfo rule never sees; so every
+/// whitespace-separated token holding `://` is replaced by its
+/// [`redact_value`](birdnet_core::config::redact::redact_value) form. Then
+/// clipped, so a stack trace does not become a log line.
+fn external_detail(text: &str) -> String {
+    let redacted: String = text
+        .trim()
+        .split_inclusive(char::is_whitespace)
+        .map(|piece| {
+            let word = piece.trim_end();
+            if word.contains("://") {
+                let tail = &piece[word.len()..];
+                format!("{}{tail}", birdnet_core::config::redact::redact_value(word))
+            } else {
+                piece.to_owned()
+            }
+        })
+        .collect();
+    match redacted.char_indices().nth(DETAIL_LIMIT) {
+        Some((idx, _)) => format!("{}…", &redacted[..idx]),
+        None => redacted,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What reaches the notification log from Apprise has no token in it,
+    /// in either of the places an Apprise URL keeps one.
+    #[test]
+    fn apprise_error_text_loses_its_urls_secrets() {
+        let out = external_detail(
+            "ERROR - Failed to send to tgram://123456:BOTtoken/987: 401\n\
+             posting http://apprise.lan:8000/notify/k3yValue failed",
+        );
+        assert!(
+            !out.contains("BOTtoken") && !out.contains("k3yValue"),
+            "{out}"
+        );
+        assert!(
+            out.contains("tgram://") && out.contains("apprise.lan:8000"),
+            "{out}"
+        );
+        assert!(
+            out.contains("401") && out.contains("failed"),
+            "the rest stays: {out}"
+        );
+    }
+
+    /// The counterpart: ordinary text is unchanged, and a long body is clipped.
+    #[test]
+    fn apprise_error_text_without_a_url_is_unchanged_but_bounded() {
+        assert_eq!(external_detail("  Unauthorized  "), "Unauthorized");
+        let long = "x".repeat(DETAIL_LIMIT + 50);
+        let out = external_detail(&long);
+        assert_eq!(
+            out.chars().count(),
+            DETAIL_LIMIT + 1,
+            "clipped with an ellipsis"
+        );
+    }
 
     #[test]
     fn empty_url_returns_error() {

@@ -82,7 +82,9 @@ pub fn spawn_weather_poll(
         lat,
         lon,
         provider = provider.key(),
-        base = %base.unwrap_or_else(|| provider.default_base_url().to_owned()),
+        base = %crate::support::redact_value(
+            &base.unwrap_or_else(|| provider.default_base_url().to_owned())
+        ),
         interval_secs = upstream::POLL_INTERVAL.as_secs(),
         "weather poll loop enabled ({})",
         provider.label()

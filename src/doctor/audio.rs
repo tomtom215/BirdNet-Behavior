@@ -389,7 +389,10 @@ fn probe_rtsp_url(url: &str) -> Check {
     else {
         return Check::fail(
             "RTSP URL probe",
-            format!("{url:?} does not start with rtsp:// or rtsps://"),
+            format!(
+                "{:?} does not start with rtsp:// or rtsps://",
+                crate::support::redact_credentials_in_text(url)
+            ),
             "RTSP URLs must look like rtsp://camera.local:554/stream",
         );
     };

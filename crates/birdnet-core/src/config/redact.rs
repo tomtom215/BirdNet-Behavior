@@ -87,6 +87,44 @@ pub fn redact_url_credentials(value: &str) -> String {
     )
 }
 
+/// [`redact_url_credentials`] for every URL inside free text — a log line, a
+/// subprocess's stderr.
+///
+/// The single-value form looks only at the first `://` and runs the authority
+/// to the first `/`, which is right for a setting but not for a line: ffmpeg
+/// writes `Error opening input file rtsp://admin:hunter2@cam/stream.` (seen
+/// from ffmpeg 6.1 against an unreachable camera), and a line can hold more
+/// than one URL. Here each `://` is examined, and an authority ends at `/`,
+/// `?`, `#` or whitespace.
+#[must_use]
+pub fn redact_credentials_in_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        let (head, tail) = rest.split_at(i + 3);
+        out.push_str(head);
+        let end = tail
+            .find(|c: char| matches!(c, '/' | '?' | '#') || c.is_whitespace())
+            .unwrap_or(tail.len());
+        let authority = &tail[..end];
+        match authority.rfind('@') {
+            Some(at) => {
+                let user = authority[..at]
+                    .split_once(':')
+                    .map_or(&authority[..at], |(u, _)| u);
+                out.push_str(user);
+                out.push(':');
+                out.push_str(REDACTED);
+                out.push_str(&authority[at..]);
+            }
+            None => out.push_str(authority),
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Mask the local part of a value that is a bare email address.
 ///
 /// `me@example.com` becomes `***@example.com`. The domain stays because that
@@ -185,7 +223,8 @@ pub fn redact_value(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        REDACTED, is_secret_key, redact_email_local_part, redact_url_credentials, redact_value,
+        REDACTED, is_secret_key, redact_credentials_in_text, redact_email_local_part,
+        redact_url_credentials, redact_value,
     };
 
     /// The composition this replaced mangled every RTSP URL with a dotted
@@ -330,6 +369,39 @@ mod tests {
             "not a url at all",
         ] {
             assert_eq!(redact_url_credentials(url), url);
+        }
+    }
+
+    /// The line ffmpeg 6.1 actually printed for an unreachable camera, plus
+    /// the shapes a line can take that a single-value redactor misses.
+    #[test]
+    fn credentials_are_stripped_from_every_url_in_a_line() {
+        assert_eq!(
+            redact_credentials_in_text(
+                "Error opening input file rtsp://admin:hunter2@127.0.0.1:9/stream."
+            ),
+            format!("Error opening input file rtsp://admin:{REDACTED}@127.0.0.1:9/stream.")
+        );
+        // Two URLs, the secret in the second; and an `@` before either.
+        assert_eq!(
+            redact_credentials_in_text(
+                "[tcp @ 0x5] tcp://cam:554?timeout=1 then rtsp://u:p@cam:554 failed"
+            ),
+            format!("[tcp @ 0x5] tcp://cam:554?timeout=1 then rtsp://u:{REDACTED}@cam:554 failed")
+        );
+    }
+
+    /// The counterpart: text with no credentials comes back byte for byte,
+    /// so the redactor cannot pass by mangling everything.
+    #[test]
+    fn text_without_credentials_is_untouched() {
+        for line in [
+            "[tcp @ 0x563de69c5540] Connection to tcp://127.0.0.1:9?timeout=2000000 failed: Connection refused",
+            "rtsp://camera.local:554/stream and http://example.com/path/@handle",
+            "no url here @ all",
+            "",
+        ] {
+            assert_eq!(redact_credentials_in_text(line), line);
         }
     }
 
