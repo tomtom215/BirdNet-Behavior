@@ -29,7 +29,7 @@ pub use analytics::{
 };
 pub use charts::{
     CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, confidence_histograms,
-    day_counts_between, day_onsets,
+    day_counts_between, day_onsets, slot_counts,
 };
 pub use correlation::{companion_species, top_cooccurrence_pairs};
 pub use detection_reviews::{

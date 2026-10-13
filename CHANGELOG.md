@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/analytics/time/heatmap`.** Detections by day and time of
+  day over a range, in 15-, 30- or 60-minute slots as the range widens, as
+  birdnet-go's sparse columnar payload or, with `format=csv`, a CSV file.
+  The existing hour × weekday heatmap is unchanged.
+
 - **`GET /api/v2/analytics/time/dawn-onset`.** For each day of a range,
   when the dawn chorus began against that day's civil dawn: the third
   detection of the day, so a stray or two before dawn does not move it, on

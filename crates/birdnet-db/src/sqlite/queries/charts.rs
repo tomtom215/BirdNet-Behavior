@@ -207,6 +207,45 @@ pub fn day_onsets(
     Ok(rows)
 }
 
+/// Detections in each `slot_minutes`-wide slot of each day of `start..=end`
+/// — of `species` alone when given — as `(date, slot, count)` for the slots
+/// that had any, by date and then slot.
+///
+/// The slot is the local `Time` column's minute of the day divided by the
+/// width, so each day has `1440 / slot_minutes` of them, numbered from 0 at
+/// midnight. A `Time` that is not `HH:MM…` is in no slot.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn slot_counts(
+    conn: &Connection,
+    start: &str,
+    end: &str,
+    species: Option<&str>,
+    slot_minutes: u32,
+) -> Result<Vec<(String, u32, i64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date,
+                (CAST(substr(Time, 1, 2) AS INTEGER) * 60 + CAST(substr(Time, 4, 2) AS INTEGER)) / ?4
+                    AS slot,
+                COUNT(*)
+         FROM detections_analytic
+         WHERE Date >= ?1 AND Date <= ?2
+           AND (?3 IS NULL OR lower(Sci_Name) = lower(?3) OR lower(Com_Name) = lower(?3))
+           AND Time GLOB '[0-2][0-9]:[0-5][0-9]*'
+         GROUP BY Date, slot
+         ORDER BY Date, slot",
+    )?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![start, end, species, slot_minutes.max(1)],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +447,42 @@ mod tests {
             day_onsets(&conn, "2026-05-01", "2026-05-01", Some("TURDUS MERULA"), 3).expect("query");
         assert_eq!(blackbird[0].count, 4);
         assert_eq!(blackbird[0].onset_time.as_deref(), Some("05:10:00"));
+    }
+
+    /// Each day's detections fall in the slot their local time starts in;
+    /// a slot holds its first minute and not its last.
+    #[test]
+    fn detections_are_counted_in_their_time_of_day_slot() {
+        let conn = station(&[
+            ("2026-05-01", "00:00:00", "Turdus merula", 0.9),
+            ("2026-05-01", "06:14:59", "Turdus merula", 0.9),
+            ("2026-05-01", "06:00:00", "Turdus merula", 0.9),
+            ("2026-05-01", "06:15:00", "Turdus merula", 0.9),
+            ("2026-05-01", "23:59:59", "Erithacus rubecula", 0.9),
+            ("2026-05-02", "12:30:00", "Turdus merula", 0.9),
+            ("2026-05-03", "12:30:00", "Turdus merula", 0.9),
+            ("2026-05-01", "garbled", "Turdus merula", 0.9),
+        ]);
+        assert_eq!(
+            slot_counts(&conn, "2026-05-01", "2026-05-02", None, 15).expect("query"),
+            [
+                ("2026-05-01".to_owned(), 0, 1),
+                ("2026-05-01".to_owned(), 24, 2),
+                ("2026-05-01".to_owned(), 25, 1),
+                ("2026-05-01".to_owned(), 95, 1),
+                ("2026-05-02".to_owned(), 50, 1),
+            ]
+        );
+        assert_eq!(
+            slot_counts(
+                &conn,
+                "2026-05-01",
+                "2026-05-01",
+                Some("erithacus rubecula"),
+                60
+            )
+            .expect("query"),
+            [("2026-05-01".to_owned(), 23, 1)]
+        );
     }
 }

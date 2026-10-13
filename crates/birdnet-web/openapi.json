@@ -3346,6 +3346,134 @@
         }
       }
     },
+    "/analytics/time/heatmap": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Detections by day and time of day",
+        "description": "Detection counts in each time-of-day slot of each day of start_date..=end_date, as a sparse columnar grid. The slot width is 15 minutes for a range of up to 90 days, 30 up to 180, and 60 beyond. Rejected detections are not counted. Same path, parameters and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsTimeHeatmap",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "A scientific or common name, in any case.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "`csv` (any case) for the cells as CSV: `date,slot,slot_start,count`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grid, or the CSV.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "dates",
+                    "slotResolutionMinutes",
+                    "cells"
+                  ],
+                  "properties": {
+                    "dates": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "date"
+                      },
+                      "description": "Every day of the range, oldest first."
+                    },
+                    "slotResolutionMinutes": {
+                      "type": "integer",
+                      "enum": [
+                        15,
+                        30,
+                        60
+                      ]
+                    },
+                    "cells": {
+                      "type": "object",
+                      "required": [
+                        "dateIndex",
+                        "slot",
+                        "count"
+                      ],
+                      "description": "Parallel arrays, one entry per occupied cell, by day then slot.",
+                      "properties": {
+                        "dateIndex": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          },
+                          "description": "Index into `dates`."
+                        },
+                        "slot": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          },
+                          "description": "Slot n starts n × slotResolutionMinutes after local midnight."
+                        },
+                        "count": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "date,slot,slot_start,count\n2026-05-01,24,06:00,2\n"
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [

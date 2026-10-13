@@ -42,6 +42,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/analytics/time/year-over-year", get(year_over_year))
         .route("/analytics/time/dawn-onset", get(dawn_onset))
+        .route("/analytics/time/heatmap", get(heatmap))
 }
 
 /// The `YYYY-MM-DD` `days` after a calendar date.
@@ -435,6 +436,113 @@ fn dawn_onset_rows(
         .collect()
 }
 
+/// The heatmap's slot width for a range of `days` days: upstream's
+/// `heatmapSlotResolution` — 15 minutes up to 90 days, 30 up to 180, then
+/// 60, so a year is not drawn as 35 000 mostly empty cells.
+const fn heatmap_slot_minutes(days: i64) -> u32 {
+    if days > 180 {
+        60
+    } else if days > 90 {
+        30
+    } else {
+        15
+    }
+}
+
+/// Query parameters for the heatmap.
+#[derive(Debug, Deserialize)]
+struct HeatmapQuery {
+    start_date: Option<String>,
+    end_date: Option<String>,
+    species: Option<String>,
+    format: Option<String>,
+}
+
+/// `GET /api/v2/analytics/time/heatmap?start_date=&end_date=&species=&format=`
+/// — detections by day and time of day.
+///
+/// Upstream's columnar, sparse shape: `{dates, slotResolutionMinutes,
+/// cells: {dateIndex, slot, count}}`, where `dates` is every day of the
+/// range, the three cell arrays run in parallel, and only cells with a
+/// detection are listed, by day then slot. `format=csv` (any case) answers
+/// the same cells as CSV — `date,slot,slot_start,count` — as an attachment.
+async fn heatmap(State(state): State<AppState>, Query(q): Query<HeatmapQuery>) -> Response {
+    use birdnet_core::civil::{date_string_from_days, days_from_civil, parse_civil};
+    use std::fmt::Write as _;
+    let (start, end) = match chart_range(q.start_date.as_deref(), q.end_date.as_deref()) {
+        Ok(range) => range,
+        Err(message) => return bad_request(message),
+    };
+    let day_number =
+        |d: &str| parse_civil(d, "00:00:00").map_or(0, |c| days_from_civil(c.year, c.month, c.day));
+    let (first, last) = (day_number(&start), day_number(&end));
+    let slot_minutes = heatmap_slot_minutes(last - first + 1);
+    let species = species_filter(q.species.as_deref());
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                birdnet_db::sqlite::slot_counts(
+                    conn,
+                    &start,
+                    &end,
+                    species.as_deref(),
+                    slot_minutes,
+                )
+            })
+        })
+        .await;
+    let cells = match result {
+        Ok(cells) => cells,
+        Err(e) => return read_failed("heatmap", &e),
+    };
+    let dates: Vec<String> = (first..=last).map(date_string_from_days).collect();
+    if q.format
+        .as_deref()
+        .is_some_and(|f| f.eq_ignore_ascii_case("csv"))
+    {
+        let mut csv = String::from("date,slot,slot_start,count\n");
+        for (date, slot, count) in &cells {
+            let minutes = slot * slot_minutes;
+            let _ = writeln!(
+                csv,
+                "{date},{slot},{:02}:{:02},{count}",
+                minutes / 60,
+                minutes % 60
+            );
+        }
+        return (
+            [
+                (axum::http::header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"activity-heatmap.csv\"",
+                ),
+            ],
+            csv,
+        )
+            .into_response();
+    }
+    let index: std::collections::HashMap<&str, usize> = dates
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (d.as_str(), i))
+        .collect();
+    let (mut date_index, mut slot, mut count) = (Vec::new(), Vec::new(), Vec::new());
+    for (date, s, n) in &cells {
+        if let Some(&i) = index.get(date.as_str()) {
+            date_index.push(i);
+            slot.push(*s);
+            count.push(*n);
+        }
+    }
+    Json(json!({
+        "dates": dates,
+        "slotResolutionMinutes": slot_minutes,
+        "cells": {"dateIndex": date_index, "slot": slot, "count": count},
+    }))
+    .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -617,5 +725,17 @@ mod tests {
             place_on_local_day("2026-04-04", 19 * 60, sydney),
             Some(6 * 60)
         );
+    }
+
+    /// Upstream's thresholds: up to 90 days in 15-minute slots, up to 180 in
+    /// 30, beyond that in hours.
+    #[test]
+    fn the_heatmap_coarsens_as_the_range_widens() {
+        assert_eq!(heatmap_slot_minutes(1), 15);
+        assert_eq!(heatmap_slot_minutes(90), 15);
+        assert_eq!(heatmap_slot_minutes(91), 30);
+        assert_eq!(heatmap_slot_minutes(180), 30);
+        assert_eq!(heatmap_slot_minutes(181), 60);
+        assert_eq!(heatmap_slot_minutes(366), 60);
     }
 }

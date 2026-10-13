@@ -778,3 +778,118 @@ async fn dawn_onset_answers_with_upstreams_shape() {
         "thirty days after, inclusive"
     );
 }
+
+/// Upstream's heatmap: every day of the range in `dates`, the slot width
+/// for the range, and only the occupied cells, in three parallel arrays;
+/// `format=csv` lists the same cells.
+#[tokio::test]
+async fn the_heatmap_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (date, time) in [
+            ("2026-05-01", "06:05:00"),
+            ("2026-05-01", "06:10:00"),
+            ("2026-05-03", "18:45:00"),
+            ("2026-08-15", "06:05:00"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, 'Turdus merula', 'Blackbird', 0.9)",
+                rusqlite::params![date, time],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-05-03",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "dates": ["2026-05-01", "2026-05-02", "2026-05-03"],
+            "slotResolutionMinutes": 15,
+            "cells": {"dateIndex": [0, 2], "slot": [24, 75], "count": [2, 1]},
+        })
+    );
+    // 107 days: half-hour slots.
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-08-15",
+    )
+    .await;
+    assert_eq!(body["slotResolutionMinutes"], 30);
+    assert_eq!(body["dates"].as_array().map(Vec::len), Some(107));
+    assert_eq!(body["cells"]["dateIndex"], serde_json::json!([0, 2, 106]));
+    assert_eq!(body["cells"]["slot"], serde_json::json!([12, 37, 12]));
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get(
+                "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-05-03&format=CSV",
+            )
+            .header("host", "localhost")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "text/csv; charset=utf-8");
+    assert!(
+        res.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .contains("activity-heatmap.csv")
+    );
+    let csv = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::str::from_utf8(&csv).unwrap(),
+        "date,slot,slot_start,count\n2026-05-01,24,06:00,2\n2026-05-03,75,18:45,1\n"
+    );
+
+    // Both ends count: 1 May to 30 July is 91 days, one past the 15-minute
+    // limit; and the CSV's slot start follows the range's slot width.
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-07-30",
+    )
+    .await;
+    assert_eq!(body["slotResolutionMinutes"], 30, "91 days");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-07-29",
+    )
+    .await;
+    assert_eq!(body["slotResolutionMinutes"], 15, "90 days");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get(
+                "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-08-15&format=csv",
+            )
+            .header("host", "localhost")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let csv = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::str::from_utf8(&csv).unwrap(),
+        "date,slot,slot_start,count\n2026-05-01,12,06:00,2\n2026-05-03,37,18:30,1\n2026-08-15,12,06:00,1\n"
+    );
+
+    let (_, body) = get(&app, "/api/v2/analytics/time/heatmap?start_date=2026-05-01").await;
+    assert_eq!(body["dates"].as_array().map(Vec::len), Some(31));
+    let (status, _) = get(&app, "/api/v2/analytics/time/heatmap?end_date=2026-05-01").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
