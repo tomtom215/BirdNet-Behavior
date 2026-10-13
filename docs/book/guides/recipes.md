@@ -33,7 +33,7 @@ Go to [Recordings](../guide/recordings.md), filter the **Clips** list to **Rare*
 
 ## Add a second microphone or an RTSP camera
 
-Use the [Add-a-source wizard](../admin/audio.md#adding-an-rtsp-camera) on the Audio page, or set `BIRDNET_RTSP_URLS=` with comma-separated URLs. You can run several sources at once.
+Use [Cameras and streams](../admin/audio.md#adding-a-camera-or-stream) on the Capture tab, or set `BIRDNET_RTSP_URLS=` with comma-separated URLs. You can run several sources at once.
 
 ## Expose the dashboard to the internet (safely)
 

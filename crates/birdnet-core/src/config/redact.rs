@@ -53,14 +53,15 @@ pub fn is_secret_key(key: &str) -> bool {
     NEEDLES.iter().any(|n| upper.contains(n))
 }
 
-/// Strip `user:pass@` from a URL-shaped value.
+/// Strip `user:pass@` from a URL-shaped value, and the value of any query
+/// parameter that carries a secret (see [`redact_query_secrets`]).
 ///
 /// Returns the value unchanged when it carries no credentials, so a plain
 /// `rtsp://camera.local/stream` stays readable — the hostname and path are
 /// exactly what makes an RTSP problem diagnosable.
 ///
-/// Only the authority between `://` and the first `/` (or end) is examined, so
-/// an `@` in a path or query is left alone.
+/// The authority runs from `://` to the first `/`, `?` or `#`, so an `@` in a
+/// path or query is not taken for credentials.
 #[must_use]
 pub fn redact_url_credentials(value: &str) -> String {
     let Some(scheme_end) = value.find("://") else {
@@ -68,11 +69,12 @@ pub fn redact_url_credentials(value: &str) -> String {
     };
     let authority_start = scheme_end + 3;
     let rest = &value[authority_start..];
-    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..authority_end];
+    let tail = redact_query_secrets(&rest[authority_end..]);
 
     let Some(at) = authority.rfind('@') else {
-        return value.to_owned();
+        return format!("{}{authority}{tail}", &value[..authority_start]);
     };
     // Keep the username: "which account is this camera using" is diagnostic,
     // and it is not the secret. Only the password half is replaced.
@@ -81,10 +83,99 @@ pub fn redact_url_credentials(value: &str) -> String {
     let user = userinfo.split_once(':').map_or(userinfo, |(u, _)| u);
 
     format!(
-        "{}{user}:{REDACTED}@{host}{}",
-        &value[..authority_start],
-        &rest[authority_end..]
+        "{}{user}:{REDACTED}@{host}{tail}",
+        &value[..authority_start]
     )
+}
+
+/// Mask the secrets in the path-and-query part of one URL (everything after
+/// its authority), leaving the path and every other parameter readable.
+///
+/// Two shapes carry a credential there. A parameter whose name
+/// [`is_secret_key`] — an SRT `passphrase=`, a signed HLS URL's `token=`, an
+/// Icecast `?key=` — has its value replaced. And an SRT `streamid=` in the
+/// form `MediaMTX` documents, `action:path:user:pass`, keeps its action and
+/// path and loses the rest; the path is what tells a reader which stream it
+/// is, and a two-field `read:path` is left alone.
+#[must_use]
+pub fn redact_query_secrets(after_authority: &str) -> String {
+    let Some(q) = after_authority.find('?') else {
+        return after_authority.to_owned();
+    };
+    let (path, query_and_fragment) = after_authority.split_at(q + 1);
+    let (query, fragment) = query_and_fragment
+        .find('#')
+        .map_or((query_and_fragment, ""), |f| query_and_fragment.split_at(f));
+    let masked = query
+        .split('&')
+        .map(|pair| {
+            let Some((key, value)) = pair.split_once('=') else {
+                return pair.to_owned();
+            };
+            if is_secret_key(key) {
+                return format!("{key}={REDACTED}");
+            }
+            if key.eq_ignore_ascii_case("streamid") {
+                let fields: Vec<&str> = value.splitn(3, ':').collect();
+                if let [action, stream_path, more] = fields[..]
+                    && more.contains(':')
+                {
+                    return format!("{key}={action}:{stream_path}:{REDACTED}");
+                }
+            }
+            pair.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{path}{masked}{fragment}")
+}
+
+/// [`redact_url_credentials`] for every URL inside free text — a log line, a
+/// subprocess's stderr.
+///
+/// The single-value form looks only at the first `://` and runs the authority
+/// to the first `/`, which is right for a setting but not for a line: ffmpeg
+/// writes `Error opening input file rtsp://admin:hunter2@cam/stream.` (seen
+/// from ffmpeg 6.1 against an unreachable camera), and a line can hold more
+/// than one URL. Here each `://` is examined, and an authority ends at `/`,
+/// `?`, `#` or whitespace.
+#[must_use]
+pub fn redact_credentials_in_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        let (head, tail) = rest.split_at(i + 3);
+        out.push_str(head);
+        let end = tail
+            .find(|c: char| matches!(c, '/' | '?' | '#') || c.is_whitespace())
+            .unwrap_or(tail.len());
+        let authority = &tail[..end];
+        match authority.rfind('@') {
+            Some(at) => {
+                let user = authority[..at]
+                    .split_once(':')
+                    .map_or(&authority[..at], |(u, _)| u);
+                out.push_str(user);
+                out.push(':');
+                out.push_str(REDACTED);
+                out.push_str(&authority[at..]);
+            }
+            None => out.push_str(authority),
+        }
+        // The rest of this URL, to the next whitespace. When another URL
+        // starts inside it, it is left for the next turn of the loop, which
+        // examines that one's authority.
+        let after = &tail[end..];
+        let url_end = after.find(char::is_whitespace).unwrap_or(after.len());
+        if after[..url_end].contains("://") {
+            rest = after;
+        } else {
+            out.push_str(&redact_query_secrets(&after[..url_end]));
+            rest = &after[url_end..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Mask the local part of a value that is a bare email address.
@@ -185,8 +276,59 @@ pub fn redact_value(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        REDACTED, is_secret_key, redact_email_local_part, redact_url_credentials, redact_value,
+        REDACTED, is_secret_key, redact_credentials_in_text, redact_email_local_part,
+        redact_url_credentials, redact_value,
     };
+
+    /// G-7 brought streams whose secret is in the query: an SRT passphrase,
+    /// a `MediaMTX` stream id with a user and password in it, a signed HLS
+    /// URL's token. The capture log and ffmpeg's own error lines go through
+    /// these two functions, and both passed a query through whole. Observed
+    /// failing with `redact_query_secrets` returning its input unchanged.
+    #[test]
+    fn a_secret_in_a_stream_urls_query_is_masked_in_a_value_and_in_a_line() {
+        for (url, kept) in [
+            (
+                "srt://cam.local:8890?streamid=read:garden&passphrase=S3CRETpassphrase",
+                "streamid=read:garden&passphrase=",
+            ),
+            (
+                "srt://cam.local:8890?streamid=read:garden:ada:S3CRET",
+                "streamid=read:garden:",
+            ),
+            (
+                "https://cdn.example/live/index.m3u8?token=S3CRET&lang=en#t",
+                "index.m3u8?token=",
+            ),
+            ("rtmp://ada:S3CRET@obs.local/live/garden", "rtmp://ada:"),
+        ] {
+            let value = redact_url_credentials(url);
+            assert!(!value.contains("S3CRET"), "{value}");
+            assert!(value.contains(kept), "{url} lost {kept:?}: {value}");
+            assert!(value.contains(REDACTED), "{value}");
+            let line = redact_credentials_in_text(&format!(
+                "Error opening input file {url}. and rtsp://b:S3CRET2@cam2/s"
+            ));
+            assert!(!line.contains("S3CRET"), "{line}");
+            assert!(line.contains(kept), "{url} lost {kept:?}: {line}");
+        }
+    }
+
+    /// The counterpart: a query with no secret in it, and an `@` that is
+    /// part of one, are left as they were.
+    #[test]
+    fn a_query_without_a_secret_is_untouched() {
+        for url in [
+            "http://cam.local:8888/garden/index.m3u8?lang=en",
+            "srt://cam.local:8890?streamid=read:garden",
+            "srt://cam.local:8890?streamid=read:garden:ada",
+            "rtsp://cam.local/s?owner=ada@example.com",
+            "udp://0.0.0.0:5004?fifo_size=100000",
+        ] {
+            assert_eq!(redact_url_credentials(url), url);
+            assert_eq!(redact_credentials_in_text(url), url);
+        }
+    }
 
     /// The composition this replaced mangled every RTSP URL with a dotted
     /// host into `***@host/path`. Observed failing with `redact_value`'s body
@@ -330,6 +472,39 @@ mod tests {
             "not a url at all",
         ] {
             assert_eq!(redact_url_credentials(url), url);
+        }
+    }
+
+    /// The line ffmpeg 6.1 actually printed for an unreachable camera, plus
+    /// the shapes a line can take that a single-value redactor misses.
+    #[test]
+    fn credentials_are_stripped_from_every_url_in_a_line() {
+        assert_eq!(
+            redact_credentials_in_text(
+                "Error opening input file rtsp://admin:hunter2@127.0.0.1:9/stream."
+            ),
+            format!("Error opening input file rtsp://admin:{REDACTED}@127.0.0.1:9/stream.")
+        );
+        // Two URLs, the secret in the second; and an `@` before either.
+        assert_eq!(
+            redact_credentials_in_text(
+                "[tcp @ 0x5] tcp://cam:554?timeout=1 then rtsp://u:p@cam:554 failed"
+            ),
+            format!("[tcp @ 0x5] tcp://cam:554?timeout=1 then rtsp://u:{REDACTED}@cam:554 failed")
+        );
+    }
+
+    /// The counterpart: text with no credentials comes back byte for byte,
+    /// so the redactor cannot pass by mangling everything.
+    #[test]
+    fn text_without_credentials_is_untouched() {
+        for line in [
+            "[tcp @ 0x563de69c5540] Connection to tcp://127.0.0.1:9?timeout=2000000 failed: Connection refused",
+            "rtsp://camera.local:554/stream and http://example.com/path/@handle",
+            "no url here @ all",
+            "",
+        ] {
+            assert_eq!(redact_credentials_in_text(line), line);
         }
     }
 

@@ -94,6 +94,10 @@ pub struct BirdNetModel {
     /// on every 3-second inference. `&mut self` in `predict`, so a plain bool
     /// suffices (no atomics).
     warned_label_count_mismatch: bool,
+    /// Latches once a non-finite output has been logged. Such outputs are
+    /// never detections ([`compute_confidence`]); this makes a model that
+    /// produces them visible instead of merely quiet.
+    warned_non_finite: bool,
     /// Output indices whose label names a human class, found once at load so
     /// the per-chunk human score is a lookup rather than a scan of every label.
     human_indices: Vec<usize>,
@@ -184,10 +188,7 @@ impl BirdNetModel {
             "loading ONNX model"
         );
 
-        let session = Session::builder()
-            .map_err(|e| InferenceError::Model(e.to_string()))?
-            .with_intra_threads(config.num_threads)
-            .map_err(|e| InferenceError::Model(e.to_string()))?
+        let session = classifier_session_builder(config.num_threads)?
             .commit_from_file(model_path)
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
@@ -208,6 +209,7 @@ impl BirdNetModel {
             input_shape,
             is_probability_output,
             warned_label_count_mismatch: false,
+            warned_non_finite: false,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -223,10 +225,7 @@ impl BirdNetModel {
         labels: LabelSet,
         config: ModelConfig,
     ) -> Result<Self, InferenceError> {
-        let session = Session::builder()
-            .map_err(|e| InferenceError::Model(e.to_string()))?
-            .with_intra_threads(config.num_threads)
-            .map_err(|e| InferenceError::Model(e.to_string()))?
+        let session = classifier_session_builder(config.num_threads)?
             .commit_from_memory(bytes)
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
@@ -241,6 +240,7 @@ impl BirdNetModel {
             input_shape,
             is_probability_output,
             warned_label_count_mismatch: false,
+            warned_non_finite: false,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -258,6 +258,21 @@ impl BirdNetModel {
         already_warned: bool,
     ) -> bool {
         model_output_count != label_count && !already_warned
+    }
+
+    /// How many non-finite scores to warn about, if this chunk should warn.
+    ///
+    /// Factored out of `predict_chunk` for the same reason as
+    /// [`Self::should_warn_label_count_mismatch`]: `None` once the latch is
+    /// set, and `None` for a chunk whose scores are all finite — a station
+    /// whose model is healthy must not latch the warning away on its first
+    /// clean chunk, or log it.
+    fn non_finite_to_warn(logits: &[f32], already_warned: bool) -> Option<usize> {
+        if already_warned {
+            return None;
+        }
+        let non_finite = logits.iter().filter(|v| !v.is_finite()).count();
+        (non_finite > 0).then_some(non_finite)
     }
 
     /// Run inference on raw audio samples.
@@ -419,6 +434,18 @@ impl BirdNetModel {
             );
         }
 
+        if let Some(non_finite) = Self::non_finite_to_warn(flat_logits, self.warned_non_finite) {
+            self.warned_non_finite = true;
+            tracing::warn!(
+                non_finite,
+                outputs = flat_logits.len(),
+                "the model produced non-finite scores (NaN or infinity); they are never \
+                 reported as detections, and a human-class score that is not finite \
+                 masks the clip. A model that does this is damaged or mis-quantised; \
+                 replace the model file with a fresh download"
+            );
+        }
+
         // Sort by confidence descending
         detections.sort_by(|a, b| {
             b.confidence
@@ -436,9 +463,7 @@ impl BirdNetModel {
             .human_indices
             .iter()
             .filter_map(|&i| flat_logits.get(i))
-            .map(|&raw| {
-                compute_confidence(raw, self.config.sensitivity, self.is_probability_output)
-            })
+            .map(|&raw| human_confidence(raw, self.config.sensitivity, self.is_probability_output))
             .fold(0.0_f32, f32::max);
 
         // The watched noise classes, likewise before either cut: the noise
@@ -1069,13 +1094,78 @@ const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
 ///   `flat_sigmoid` treats sensitivity as a bias shift instead. A
 ///   `SENSITIVITY` carried over from BirdNET-Pi is read as written, and
 ///   therefore does not reproduce that station's behaviour.
+///
+/// A non-finite `raw` is **0.0**, never a detection. A model that overflows
+/// emits `inf`, and both mappings send `+inf` to exactly 1.0 — a confident
+/// detection of whichever label sits at that index. The privacy gate reads
+/// the same output the opposite way (`human_confidence`, private).
 #[must_use]
 pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
+    if !raw.is_finite() {
+        return 0.0;
+    }
     if is_probability {
         raw.clamp(0.0, 1.0)
     } else {
         sigmoid(sensitivity * raw)
     }
+}
+
+/// [`compute_confidence`] for a human class, failing towards privacy: a
+/// score the model could not produce is treated as speech present (1.0), so
+/// the clip is masked rather than kept on the strength of a broken output.
+fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
+    if raw.is_finite() {
+        compute_confidence(raw, sensitivity, is_probability)
+    } else {
+        1.0
+    }
+}
+
+/// The ONNX Runtime environment every session in this process is created
+/// under: the classifiers and the geomodel alike.
+///
+/// Built once, on first use, and held for the life of the process. `ort`
+/// allows one environment per process and refuses a second even after the
+/// first is dropped (`EnvironmentBuilder::build` checks a global that is never
+/// reset), so an environment built per model load would fail the second load —
+/// the geomodel after the classifier, or a classifier hot-swap. No global
+/// thread pool: each session keeps the explicit intra-op thread count its
+/// builder sets, for the reason [`super::species_filter`]'s loader gives.
+pub(crate) fn ort_environment() -> Result<&'static ort::environment::Environment, InferenceError> {
+    static ENV: std::sync::OnceLock<Result<ort::environment::Environment, String>> =
+        std::sync::OnceLock::new();
+    ENV.get_or_init(|| {
+        ort::init()
+            .with_name("birdnet")
+            .build()
+            .map_err(|e| e.to_string())
+    })
+    .as_ref()
+    .map_err(|e| InferenceError::Model(format!("ONNX Runtime environment: {e}")))
+}
+
+/// The session settings every classifier is loaded with.
+///
+/// Intra-op spin-waiting is off. With it on, ONNX Runtime's worker threads
+/// busy-wait after each inference for more work, and a station runs one
+/// inference per three-second chunk, so the wait is almost always wasted.
+/// Measured on a 4-vCPU x86_64 host with the BirdNET v2.4 INT8 model, two
+/// intra-op threads, 40 inferences 250 ms apart, three rounds each: process
+/// CPU per inference 93–98 ms with spinning, 52–54 ms without, for 3–4 ms
+/// more wall time per inference (28–29 ms against 31–32 ms). Not measured on
+/// a Raspberry Pi, where the absolute figures differ; the trade — CPU and
+/// heat in an enclosure for milliseconds a 3-second chunk has to spare — is
+/// the same direction. tphakala/birdnet-go made the same change (50547d0).
+fn classifier_session_builder(
+    num_threads: usize,
+) -> Result<ort::session::builder::SessionBuilder, InferenceError> {
+    Session::builder(ort_environment()?)
+        .map_err(|e| InferenceError::Model(e.to_string()))?
+        .with_intra_threads(num_threads)
+        .map_err(|e| InferenceError::Model(e.to_string()))?
+        .with_intra_op_spinning(false)
+        .map_err(|e| InferenceError::Model(e.to_string()))
 }
 
 /// Output indices of every label that names a human class.
@@ -1542,6 +1632,18 @@ mod tests {
         ));
     }
 
+    /// Observed failing with `> 0` mutated to `>= 0` (an all-finite chunk
+    /// warned and latched) and to `< 0` (a NaN chunk never warned) — the two
+    /// mutants CI's cargo-mutants run found surviving in the inline branch.
+    #[test]
+    fn warns_once_only_on_a_non_finite_score() {
+        let clean = [0.1_f32, -2.0, 7.5];
+        let damaged = [0.1_f32, f32::NAN, f32::INFINITY];
+        assert_eq!(BirdNetModel::non_finite_to_warn(&clean, false), None);
+        assert_eq!(BirdNetModel::non_finite_to_warn(&damaged, false), Some(2));
+        assert_eq!(BirdNetModel::non_finite_to_warn(&damaged, true), None);
+    }
+
     /// Each chunk is stamped with the moment it was heard, not the moment its
     /// recording began.
     ///
@@ -1902,9 +2004,52 @@ mod tests {
     #[test]
     fn compute_confidence_v30_clamps_out_of_range() {
         // Numerically noisy probabilities can spike outside [0, 1]; we clamp
-        // rather than panic. (NaN is *not* clamped by clamp — separate test.)
+        // rather than panic. Non-finite values are not clamped — see
+        // `compute_confidence_non_finite_is_never_a_detection`.
         assert!((compute_confidence(-0.05, 1.0, true) - 0.0).abs() < 1e-6);
         assert!((compute_confidence(1.05, 1.0, true) - 1.0).abs() < 1e-6);
+    }
+
+    /// A model that overflows emits `inf`. `clamp(+inf)` is 1.0 and
+    /// `sigmoid(+inf)` is 1.0, so before this an overflowing output was a
+    /// detection at 100 % — of whichever label sat at that index — on both
+    /// output paths. NaN was dropped only because `NaN >= t` is false.
+    #[test]
+    fn compute_confidence_non_finite_is_never_a_detection() {
+        for raw in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            for is_probability in [true, false] {
+                let c = compute_confidence(raw, 1.0, is_probability);
+                assert!(
+                    c.to_bits() == 0.0_f32.to_bits(),
+                    "raw {raw} (probability={is_probability}) gave {c}, not 0.0"
+                );
+            }
+        }
+    }
+
+    /// The counterpart: finite extremes still saturate as before, so the
+    /// guard is on finiteness and not a cap on high scores.
+    #[test]
+    fn compute_confidence_finite_extremes_still_saturate() {
+        assert!((compute_confidence(f32::MAX, 1.0, true) - 1.0).abs() < 1e-6);
+        assert!((compute_confidence(40.0, 1.0, false) - 1.0).abs() < 1e-6);
+    }
+
+    /// The privacy gate fails the other way: a human score the model could
+    /// not produce is treated as speech present, so the clip is masked.
+    #[test]
+    fn human_confidence_non_finite_is_speech_present() {
+        for raw in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN] {
+            assert!(
+                (human_confidence(raw, 1.0, false) - 1.0).abs() < 1e-6,
+                "raw {raw}"
+            );
+            assert!(
+                (human_confidence(raw, 1.0, true) - 1.0).abs() < 1e-6,
+                "raw {raw}"
+            );
+        }
+        assert!((human_confidence(0.0, 1.0, false) - 0.5).abs() < 1e-6);
     }
 
     #[test]

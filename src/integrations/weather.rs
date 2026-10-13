@@ -82,7 +82,9 @@ pub fn spawn_weather_poll(
         lat,
         lon,
         provider = provider.key(),
-        base = %base.unwrap_or_else(|| provider.default_base_url().to_owned()),
+        base = %crate::support::redact_value(
+            &base.unwrap_or_else(|| provider.default_base_url().to_owned())
+        ),
         interval_secs = upstream::POLL_INTERVAL.as_secs(),
         "weather poll loop enabled ({})",
         provider.label()
@@ -263,6 +265,16 @@ mod tests {
                 api_key: "abc123".to_owned(),
             }
         );
+        assert_eq!(
+            resolve_provider(Some(&config_with(&[
+                ("WEATHER_PROVIDER", "pirate-weather"),
+                ("WEATHER_API_KEY", "pw-key"),
+            ])))
+            .expect("pirate-weather resolves with a key"),
+            Provider::PirateWeather {
+                api_key: "pw-key".to_owned(),
+            }
+        );
     }
 
     /// The counterpart: a misconfigured provider does not silently become the
@@ -283,6 +295,7 @@ mod tests {
                 ("WEATHER_PROVIDER", "wunderground"),
                 ("WEATHER_STATION_ID", "KMAHANOV10"),
             ],
+            vec![("WEATHER_PROVIDER", "pirate-weather")],
         ] {
             let cfg = config_with(&entries);
             assert!(

@@ -99,7 +99,7 @@ pub struct Request<'a> {
 }
 
 /// The signed request: the header value, and the headers it covers.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Signed {
     /// Value for the `Authorization` header.
     pub authorization: String,
@@ -113,6 +113,24 @@ pub struct Signed {
     /// canonical request in the error body; having ours to print beside it
     /// turns "`SignatureDoesNotMatch`" from a guess into a diff.
     pub canonical_request: String,
+}
+
+impl std::fmt::Debug for Signed {
+    /// Hand-written so the signature cannot reach a log through `{:?}`: it
+    /// authorises this exact request for as long as the service accepts its
+    /// timestamp. The credential scope and signed-header list before it are
+    /// kept, because they are what a `SignatureDoesNotMatch` is diagnosed by.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let authorization = self.authorization.find("Signature=").map_or_else(
+            || "<redacted>".to_owned(),
+            |at| format!("{}Signature=<redacted>", &self.authorization[..at]),
+        );
+        f.debug_struct("Signed")
+            .field("authorization", &authorization)
+            .field("headers", &self.headers)
+            .field("canonical_request", &self.canonical_request)
+            .finish()
+    }
 }
 
 /// Sign a request.

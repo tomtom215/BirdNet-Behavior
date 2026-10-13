@@ -33,12 +33,25 @@ impl std::error::Error for HeartbeatError {}
 ///
 /// Used with uptime monitoring services (Uptime Kuma, Healthchecks.io, etc.)
 /// to confirm that the detection pipeline is running.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HeartbeatClient {
     /// The URL to ping.
     url: String,
     /// HTTP client.
     client: reqwest::Client,
+}
+
+impl std::fmt::Debug for HeartbeatClient {
+    /// Hand-written because a heartbeat URL carries its check's key in the
+    /// path: only the scheme and host are printed.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeartbeatClient")
+            .field(
+                "url",
+                &birdnet_core::config::redact::redact_value(&self.url),
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl HeartbeatClient {

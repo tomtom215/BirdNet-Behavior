@@ -51,10 +51,11 @@ Open a source's **edit** panel to change:
 
 - **Label** and **device**,
 - **Quiet window** — an optional per-source pause in the **station's local time**, each end a clock time (`22:00`) or a solar anchor (`sunset`, `sunset+30`, `sunrise-15`), e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
-- **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, RTSP keepalive.
+- **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, and (network streams only) a 10-second read timeout that ends a stream which stops sending, so it is restarted.
 - **Equaliser** — a filter chain of your own, when the toggles are not the right shape. See below.
+- **Camera stream** (RTSP sources only) — the **transport** (auto / TCP / UDP — auto is TCP, the NAT-robust choice; force UDP only for a camera that needs it) and the **tracks requested** (see [Audio-only cameras](#audio-only-cameras)).
 
-**Sample rate** (48 or 44.1 kHz) and, for camera sources, **RTSP transport** (auto / TCP / UDP — auto resolves to the NAT-robust TCP default; force UDP only for a camera that needs it) are chosen when the source is **added**. Per-source **gain**, the **channel pick** (mono / left / right / stereo — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below) and **bit depth** are stored with the source and shown in its detail line, but are **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds.
+**Sample rate** (48 or 44.1 kHz) is chosen when the source is **added**. Per-source **gain**, the **channel pick** (mono / left / right / stereo — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below) and **bit depth** are stored with the source and shown in its detail line, but are **not yet editable from the UI**; capture honours whatever the `audio_sources` row holds.
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
@@ -130,7 +131,7 @@ microphone gets a one-pole filter (6 dB/octave); an RTSP camera gets ffmpeg's
 two-pole one (12 dB/octave). From the same tick-box, a microphone therefore
 keeps considerably more low-frequency energy:
 
-| | 20 Hz | 30 Hz | 50 Hz | 60 Hz | 80 Hz | 120 Hz |
+| Source | 20 Hz | 30 Hz | 50 Hz | 60 Hz | 80 Hz | 120 Hz |
 |---|---|---|---|---|---|---|
 | Microphone | −15.7 dB | −12.3 dB | −8.3 dB | −7.0 dB | −5.1 dB | −3.0 dB |
 | RTSP camera | −31.1 dB | −24.1 dB | −15.3 dB | −12.3 dB | −7.8 dB | −3.0 dB |
@@ -183,11 +184,38 @@ control for it: set the `channels` column of the source's `audio_sources` row
 > downmix looks completely healthy from every gauge, dashboard and alert this
 > project has.
 
-## Adding an RTSP camera
+## Adding a camera or stream
 
-The **Add a source** wizard walks through three steps — URL (with a locked `rtsp://` prefix), optional auth, and a label — and shows a live reachability pill with the sniffed audio properties before you commit. A preview row lets you listen for ten seconds first.
+Under **Cameras and streams**, **Add stream** opens a short form: the stream's URL, a friendly label, and — for an RTSP camera — its transport and the tracks to request. Saving adds the row; **restart** for capture to pick it up.
 
-> RTSP capture needs **`ffmpeg`** on the host. The bare-metal installer installs it automatically when your config has an `RTSP_URL` (re-run `sudo bash install.sh repair` if you add RTSP later), and the Docker image already bundles it. Without `ffmpeg`, RTSP sources record zero detections.
+The URL decides the protocol:
+
+| URL | What it is |
+|---|---|
+| `rtsp://host:554/stream`, `rtsps://…` | An IP camera. The only protocol with a transport and a choice of tracks. |
+| `http://…`, `https://…` | A direct or Icecast stream (MP3, AAC, Ogg), or an HLS playlist (`…/index.m3u8`). |
+| `rtmp://…`, `rtmps://…` | A stream on an RTMP server, read from it (the station does not accept a push). |
+| `udp://0.0.0.0:5004` | MPEG-TS over UDP, sent to this station on that port. Write the address out — the browser refuses `udp://@:5004`. |
+| `srt://host:8890?streamid=read:garden` | An SRT stream. |
+
+Credentials go where the protocol puts them — `user:pass@host` in the address, an SRT `passphrase=`, a `token=` in a signed URL. The station hides all three in its logs and support bundle. A URL that starts any other way is refused when you save it, with the list above, rather than saved and left to fail at every restart.
+
+`rtp://` is not on the list. A bare RTP stream does not say what it carries: ffmpeg reads one carrying G.711, but not one carrying AAC, which needs a description file it has no way to be given. Send MPEG-TS over `udp://` instead.
+
+Every protocol was checked end to end against a MediaMTX 1.21.2 server and ffmpeg 6.1 — each recorded its own test tone — and against a stalled server: a source whose server stops answering is restarted on its own, and resumes when the server does. Two things differ from a camera:
+
+- **A UDP stream has no live audio.** A UDP stream reaches one reader, and the station's capture is it, so the Live view lists it as *spectrogram only*, and `/stream` answers `503` with that reason.
+- **An HLS stream is slow to notice a stall.** Its player retries the playlist before giving up, so a server that stops answering was noticed after 52 seconds, where the others took 5 to 20.
+
+> Stream capture needs **`ffmpeg`** on the host. The bare-metal installer installs it automatically when your config has an `RTSP_URL` (re-run `sudo bash install.sh repair` if you add a stream later), and the Docker image already bundles it. Without `ffmpeg`, these sources record nothing.
+
+### Audio-only cameras
+
+A camera serves only a few video viewers at once. By default the station asks for every track the camera offers and throws the video away, which takes one of those slots for as long as it listens, and another whenever someone listens live from the dashboard. On a camera with few slots that can leave its own app unable to show the picture.
+
+Set **Tracks requested** to **audio track only** and the station sets up the audio track alone (ffmpeg's `-allowed_media_types audio`), for capture and for listening live. Checked against MediaMTX 1.21.2: the station's session took one track instead of two.
+
+The default stays **audio and video**, because a camera that sends no audio then fails visibly: the source shows as down, and the log names the camera's refusal (for example `method PLAY failed: 501 Not Implemented`). If that happens after switching to audio-only, switch back.
 
 ## Finding a USB mic
 

@@ -445,7 +445,11 @@ fn render_body(f: &DataFacts) -> String {
             r#"<div class="bkr-export-row">
   <div><div class="bkr-row-title">{name}</div><div class="bnb-meta">{detail}</div></div>
   <a class="bnb-btn ghost" href="{href}" download="{file}">Export ↓</a>
-</div>"#
+</div>"#,
+            // Escaped: the Raven row names `/api/v2/recordings/<clip>/raven.txt`,
+            // and written raw the browser took `<clip>` for an element and
+            // showed the path as `recordings//raven.txt`.
+            detail = escape_html(detail),
         );
     }
     let export_card = format!(
@@ -530,7 +534,7 @@ fn render_body(f: &DataFacts) -> String {
     format!(
         r#"<div>
   <div class="bnb-eyebrow">Operations</div>
-  <h1 class="display bkr-h1">Backups &amp; recovery</h1>
+  <h2 class="display bkr-h1">Backups &amp; recovery</h2>
   <p class="bnb-meta bkr-lede">Snapshots, exports, storage and the controls you hope you never need.</p>
   {stats}
   <div class="bkr-main">
@@ -575,6 +579,21 @@ mod tests {
             disk_available_bytes: 12_884_901_888,
             now_unix: 1_773_619_200, // one day after the newest snapshot
         }
+    }
+
+    /// Observed failing with `detail` written unescaped: the page carried
+    /// `recordings/<clip>/raven.txt`, which the browser parses as an element.
+    #[test]
+    fn an_export_rows_detail_is_text_not_markup() {
+        let html = render_body(&facts_with_snapshots());
+        assert!(
+            html.contains("/api/v2/recordings/&lt;clip&gt;/raven.txt"),
+            "the Raven row names its per-clip path"
+        );
+        assert!(
+            !html.contains("<clip>"),
+            "a raw `<clip>` tag reached the page"
+        );
     }
 
     #[test]

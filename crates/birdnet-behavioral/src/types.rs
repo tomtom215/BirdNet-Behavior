@@ -189,6 +189,21 @@ pub struct NextSpeciesPrediction {
     pub probability: f64,
 }
 
+/// Previous species prediction (output of `sequence_next_node` run
+/// `backward`): what is heard immediately before the trigger's first detection
+/// in a session.
+#[derive(Debug, Clone, Serialize)]
+pub struct PreviousSpeciesPrediction {
+    /// The trigger species.
+    pub before_species: String,
+    /// Species heard immediately before it.
+    pub predicted_species: String,
+    /// Number of sessions in which it did.
+    pub frequency: u64,
+    /// Share of the sessions with any predecessor (0.0 - 1.0).
+    pub probability: f64,
+}
+
 /// Parameters for a sessionize query.
 #[derive(Debug, Clone)]
 pub struct SessionizeParams {

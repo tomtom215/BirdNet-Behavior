@@ -13,6 +13,10 @@
 -->
 <div class="td-stack" data-screen-label="Today home" data-firstrun="{{firstrun}}">
 
+<!-- Blocks between these markers are reordered and hidden by the station's
+     Today layout (`today_layout.rs`). Anything else inside a region is
+     dropped, so every byte between them belongs to a block. -->
+<!--top--><!--block:hero-->
 <section class="hero" data-screen-label="Hero">
   <div>
     <div class="bnb-eyebrow db-eyebrow"><span>Right now · {{today_human_date}}</span>{{help_link}}</div>
@@ -36,7 +40,7 @@
     {{hero_aside}}
   </aside>
 </section>
-
+<!--/block:hero--><!--block:nudge-->
 <!-- Not a live region: it is re-fetched every minute, and as one it read the
      same "6 rare sightings are waiting" out again each time — and an outage
      banner whose minutes change on every tick. #td-nudge-status below says it
@@ -61,7 +65,7 @@
   });
 })();
 </script>
-
+<!--/block:nudge--><!--block:daystrip-->
 <!-- Day strip — the one picture of the day's shape; stats live in the header -->
 <div class="bnb-card pad" data-screen-label="Day strip">
   <div class="section-header x-dayhead">
@@ -81,8 +85,10 @@
     {{skel_daystrip}}
   </div>
 </div>
+<!--/block:daystrip--><!--/top-->
 
-<div class="work2">
+<div class="work2{{work2_solo}}">
+  <!--block:log-->
   <!-- One unified log: live feed + the full day behind a disclosure -->
   <div class="bnb-card pad" data-screen-label="Unified log">
     <div class="section-header">
@@ -155,9 +161,11 @@
     <p class="td-searchlink">Looking further back?
       <a href="/search">Search every detection →</a></p>
   </div>
+  <!--/block:log-->
 
   <!-- Right rail: support, by placement -->
   <aside class="rail td-rail" data-screen-label="Right rail">
+    <!--rail--><!--block:top-species-->
     <div class="bnb-card pad">
       <div class="section-header">
         <div><div class="bnb-eyebrow">Today</div><h2 class="sh-h">Top species</h2></div>
@@ -167,6 +175,7 @@
         <p class="bnb-meta">Loading species…</p>
       </div>
     </div>
+    <!--/block:top-species--><!--block:best-->
     <div class="bnb-card pad">
       <div class="section-header">
         <div><div class="bnb-eyebrow">Today · highest confidence</div><h3>Best recordings</h3></div>
@@ -176,6 +185,7 @@
         <p class="bnb-meta">Loading best recordings…</p>
       </div>
     </div>
+    <!--/block:best--><!--block:station-->
     <div class="bnb-card pad">
       <div class="bnb-eyebrow td-rail-eb">Your station</div>
       <div id="station-line" hx-get="/pages/station-health-line" hx-trigger="load, every 60s" hx-swap="innerHTML">
@@ -190,6 +200,7 @@
         <a href="/reports?tab=year">Your year so far <span class="arr">→</span></a>
       </div>
     </div>
+    <!--/block:station--><!--/rail-->
     {{rail_extra}}
   </aside>
 </div>

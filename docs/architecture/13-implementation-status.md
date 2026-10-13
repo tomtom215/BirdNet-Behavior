@@ -260,7 +260,7 @@ count, re-derive it rather than trusting the figure here.
 | SSE streaming | `tokio-stream` | 0.1 | Yes |
 | File streaming | `tokio-util` | 0.7 | Yes |
 | SQLite | `rusqlite` | 0.40 | No (bundled C) |
-| DuckDB | `duckdb` | 1.10505 (DuckDB 1.5.5) | No (bundled C++, optional) |
+| DuckDB | `duckdb` | 1.10506 (DuckDB 1.5.6) | No (bundled C++, optional) |
 | CLI | `clap` | 4.6 | Yes |
 | Serialization | `serde` + `serde_json` | 1 | Yes |
 | Logging | `tracing` | 0.1 | Yes |

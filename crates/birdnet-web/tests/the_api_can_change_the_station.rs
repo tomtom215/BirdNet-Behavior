@@ -1366,6 +1366,58 @@ async fn a_job_that_just_ran_is_not_reported_as_due() {
     assert_eq!(prune["due"], serde_json::json!(true), "{prune}");
 }
 
+/// A read that fails is an error, not an empty catalogue. An empty `jobs`
+/// list reads as "nothing is due" — the answer a broken station most needs
+/// not to give — and the handler used to produce it from `unwrap_or_default`.
+///
+/// Observed failing with `.unwrap_or_default()` restored on the
+/// `job_statuses` call: the status came back 200 with `{"jobs":[]}`.
+#[tokio::test]
+async fn a_job_list_that_cannot_be_read_is_an_error_not_an_empty_list() {
+    let (_dir, state) = station(true);
+    state.with_db(|conn| {
+        conn.execute_batch("DROP TABLE maintenance_runs")
+            .expect("drop the table");
+    });
+    let (status, body) = call_method(&state, "GET", "/api/v2/system/jobs", Some(TOKEN), "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(!body.contains("\"jobs\""), "{body}");
+}
+
+// ---------------------------------------------------------------------------
+// G-32: GET /api/v2/system/network and /api/v2/system/processes
+// ---------------------------------------------------------------------------
+
+/// The interfaces of the machine running the test, loopback last.
+#[tokio::test]
+async fn the_network_endpoint_lists_this_machines_interfaces() {
+    let (_dir, state) = station(true);
+    let (status, body) =
+        call_method(&state, "GET", "/api/v2/system/network", Some(TOKEN), "").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let ifaces = v["interfaces"].as_array().expect("interfaces");
+    let last = ifaces.last().expect("at least loopback");
+    assert_eq!(last["loopback"], serde_json::json!(true), "{body}");
+    assert!(last["addresses"].is_array(), "{body}");
+}
+
+/// The process view starts at the station's own process — here, the test.
+#[tokio::test]
+async fn the_process_endpoint_starts_at_the_station_itself() {
+    let (_dir, state) = station(true);
+    let (status, body) =
+        call_method(&state, "GET", "/api/v2/system/processes", Some(TOKEN), "").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(v["sample_ms"], serde_json::json!(250), "{body}");
+    assert_eq!(
+        v["processes"][0]["pid"],
+        serde_json::json!(std::process::id()),
+        "{body}"
+    );
+}
+
 /// The API writes through the same range check as the settings page. It used
 /// to skip it, so `{"confidence_threshold": 75}` — the percentage slip — was
 /// stored with a 200 and every detection was discarded from then on.

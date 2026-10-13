@@ -9,6 +9,7 @@ pub mod effort;
 pub mod heatmap;
 pub mod images;
 pub mod imports;
+pub mod insights;
 pub mod maintenance;
 pub mod quarantine;
 pub mod species;
@@ -39,12 +40,11 @@ pub use detections::{
     analytic_species_count_for_date, best_detections_for_date, com_name_for,
     concurrent_detections_from_other_sources, delete_detection, delete_detection_at,
     detected_at_utc_for, detection_at, detection_count, detection_count_for_date,
-    detection_count_for_species_date, detection_dates, detections_by_date, detections_by_date_page,
-    detections_by_species, detections_by_species_page, detections_for_clip, detections_per_day,
-    insert_detection, is_detection_locked, is_detection_locked_at, known_sources, like_contains,
-    lock_detection, lock_detection_at, locked_file_names, recent_clips, recent_clips_count,
-    recent_detections, recent_detections_page, relabel_detection, relabel_detection_at,
-    search_detection_count, search_detections, seconds_since_last_detection,
+    detection_count_for_species_date, detection_dates, detections_by_date, detections_by_species,
+    detections_for_clip, detections_per_day, insert_detection, is_detection_locked,
+    is_detection_locked_at, known_sources, like_contains, lock_detection, lock_detection_at,
+    locked_file_names, recent_clips, recent_clips_count, recent_detections, relabel_detection,
+    relabel_detection_at, search_detection_count, search_detections, seconds_since_last_detection,
     set_birdweather_soundscape, species_detection_count_between, species_for_date,
     todays_detection_count, todays_detections, todays_source_activity, unlock_detection,
     unlock_detection_at, unstamped_detection_count,
@@ -56,6 +56,11 @@ pub use images::{
     list_image_blacklist, remove_image_blacklist,
 };
 pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches};
+pub use insights::{
+    DashboardKpis, DawnFirstSong, ExpectedSpecies, FirstHeard, GoneQuiet, NewArrival,
+    PhantomSpecies, SpeciesRangeSummary, dashboard_kpis, dawn_first_songs, expected_today,
+    first_heard_between, gone_quiet, new_arrivals, phantom_species, species_range_summary,
+};
 pub use maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM,
     JOB_INTEGRITY_CHECK, JOB_SESSION_PRUNE, JOB_SPACE_RECLAIM, JOB_SPECIES_CAP, JOBS, JobSpec,

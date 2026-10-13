@@ -7,6 +7,432 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`GET /api/v2/analytics/species/detections/new`.** Species first heard
+  here within a date range (by default the last 30 days), newest first,
+  with their detections in the range, paged — birdnet-go's path,
+  defaults and fields.
+
+- **`GET /api/v2/analytics/species/summary`.** Each species' count, mean
+  and highest confidence, and first and last detection over an optional
+  date range — birdnet-go's path, parameters and fields. First and last
+  carry the UTC offset in force when they were heard, and are ordered by
+  instant, so the hour the clocks go back is placed correctly.
+
+- **`GET /api/v2/insights/phantom-species`.** Species detected at least
+  three times in the last 30 days with a mean confidence under 0.6, the
+  least confident first — birdnet-go's rule and fields. The quality page's
+  phantom report, which looks at the shape of all history, is unchanged.
+
+- **`GET /api/v2/dashboard/kpis`.** Species ever heard, detections today,
+  the busiest day since this date last year, and the run of consecutive
+  days with a detection ending today — birdnet-go's fields and empty
+  values, with the streak uncapped where upstream stops at 90 days.
+
+- **`GET /api/v2/insights/expected-today` and `…/expected-today/regional`.**
+  The first lists species heard within three days of today's date in any
+  of the last ten years, most regular first; the second, what eBird
+  observers have reported nearby that the station does not usually hear
+  now. birdnet-go's fields — except that the regional list answers an error,
+  not every eBird species, when the station's own history cannot be read.
+
+- **`GET /api/v2/insights/dawn-chorus` and `GET /api/v2/insights/migration`.**
+  The first answers who opens the dawn chorus: each species' typical and
+  earliest first song of the morning (04:00–10:00), over species heard on at
+  least `min_days` of the last `period_days` days. The second lists species
+  first heard in the last 14 days, and species heard at least five times
+  that have gone quiet for 14. Both match birdnet-go's endpoints of the same
+  names — parameters, defaults, limits and field names — and read SQLite, so
+  they answer with the analytics engine off.
+
+- **`birdnet_audio_analysed_seconds_total{source}`**, the data rate: seconds of
+  audio analysed per source. Its rate is about 1 for a source that delivers
+  continuously, and falls below that when audio goes missing inside segments
+  — which a count of files cannot show.
+
+- **Streams other than RTSP.** A network source can now be an HTTP or
+  Icecast stream, an HLS playlist (`.m3u8`), an RTMP server, MPEG-TS over
+  UDP, or SRT — the URL decides which. Each gets the ffmpeg options its
+  protocol accepts: the RTSP options every stream used to get stop ffmpeg
+  opening an HLS playlist at all, and make an RTMP reader listen instead of
+  connect. Checked end to end against MediaMTX 1.21.2 and ffmpeg 6.1,
+  recording and listening live, and through a stalled server. A URL with
+  another scheme is refused on the form; `rtp://` is not supported (a bare
+  RTP stream does not describe its payload). A UDP stream is listed in the
+  Live view as spectrogram only: capture is its one reader.
+
+- **Audio-only cameras.** An RTSP source can ask the camera for its audio
+  track alone (Settings → Capture, a source's edit form: *Tracks requested*).
+  By default the station sets up every track and discards the video, which
+  holds one of the camera's few video sessions for as long as it listens —
+  and another whenever someone listens live. Checked against MediaMTX: one
+  track instead of two, for capture and for the live stream. A camera with
+  no audio track then fails visibly, as a down source.
+
+- **`GET /api/v2/system/network` and `GET /api/v2/system/processes`**, behind
+  the API token like the rest of `/system`. The first lists every network
+  interface with its addresses, hardware address and byte counters — the
+  address to type when `birdnet.local` does not resolve. The second lists the
+  station's own process and everything it started (capture `ffmpeg`,
+  `arecord`, conversions) with CPU and memory, which is the first question
+  when a Pi sits at 100 %.
+
+- **Arrange the Today page.** Settings → Today Page Layout shows, hides and
+  reorders the page's parts — headline, nudge, day strip, log, and the three
+  side cards — with Move up, Move down and Show/Hide buttons rather than
+  dragging, so a keyboard or a touch screen can do it. The page is rebuilt in
+  that order, so reading and tab order follow what is shown. A new station
+  shows everything until its first detection.
+
+- **What is heard just before a species.** The Analytics page's follow-on
+  card now shows the species heard immediately *before* the most recent
+  bird's first detection in a session as well as after it
+  (`sequence_next_node` run backward), and
+  `GET /api/v2/analytics/previous-species?before=…` returns the same.
+- **The behavioural functions are checked, not just loaded.**
+  `--verify-extension` and `/api/v2/analytics/status` (`self_test`) run every
+  function the station uses on fixed events and compare each answer with
+  v0.10.0's, so an extension that loads but answers differently is reported
+  rather than turned into plausible wrong numbers.
+
+- **The published manual is versioned.** The site root is now the latest
+  release's manual, so existing links keep working and describe what you can
+  install; each release from v0.17.1 on stays at `/vX.Y.Z/`, rebuilt from its
+  own tag, and `main` is at `/dev/`. A version menu sits in the toolbar, with
+  a banner on any page that is not the latest release.
+  `scripts/build-versioned-docs.sh` builds it; a release tag push deploys it.
+
+- **MQTT says when a species was last heard.** Each detection payload carries
+  `species_first_detected_at` and `species_last_detected_at`: the species'
+  earliest and latest detections before this one. Both are `null` for a
+  first-ever detection, and both are left out when the history could not be
+  read, so a "new species" automation cannot fire on a database error.
+- **`/api/v2/detections?source=`** filters by audio source, and combines with
+  `date` and `species`.
+
+- **Pirate Weather** as a fourth weather provider: `WEATHER_PROVIDER=pirate-weather`
+  with `WEATHER_API_KEY`. Hourly rows from its Dark Sky-compatible API.
+  Written against its published field definitions; not checked against a
+  live response, because that needs a key.
+
+### Changed
+
+- A network source is labelled **Network stream** rather than "Network
+  camera", and the Capture tab's section is **Cameras and streams**.
+
+- **ONNX Runtime 1.31** (`ort` 2.0.0-rc.14, was rc.13 with ONNX Runtime
+  1.28). Every session is now created under one process-wide environment,
+  built on first use and kept for the life of the process — `ort` allows one
+  per process and refuses a second even after the first is dropped. Scores
+  are unchanged: the top 25 species of every 3-second chunk of the test
+  recording match the previous runtime to nine decimal places, byte for byte
+  (x86_64, the BirdNET+ V3.0 model; not measured on a Raspberry Pi).
+  `scripts/setup-onnxruntime.sh` now seeds the runtime for the `ort-sys`
+  version in `Cargo.lock`; it took the first one unpacked, which after an
+  upgrade was the old one.
+
+- **The classifier no longer spin-waits between chunks.** ONNX Runtime's
+  worker threads busy-waited after every inference. Off, measured on a 4-vCPU
+  x86_64 host with the BirdNET v2.4 INT8 model: 52–54 ms of CPU per
+  inference instead of 93–98 ms, for 3–4 ms more wall time. Not yet measured
+  on a Raspberry Pi.
+- **The analytics engine leaves the classifier its cores.** DuckDB used every
+  core whatever the process's CPU affinity; it now uses the CPUs available
+  less the classifier's two inference threads, at least one — 2 on a Pi 4.
+  `BIRDNET_DUCKDB_THREADS` overrides. Measured on a 4-core x86 host with two
+  busy loops standing in for inference: two threads halved the slowest
+  dashboard query against one without slowing the competing load more than
+  one thread did; four were ~22 % faster again but cut the competing load to
+  62–75 % and were slower on three of four write shapes.
+  `enable_optimistic_write` (DuckDB's default, on) was measured too and is
+  kept: off, a full resync spilled 86–103 MB and wrote 3.4x the bytes.
+- **DuckDB 1.5.5 → 1.5.6** (`duckdb` / `libduckdb-sys` 1.10505.0 →
+  1.10506.0), to pick up **`duckdb-behavioral` v0.10.0** and the embedded ICU
+  for 1.5.6. CI, release, upgrade and Docker fetch from the `v1.5.6` registry
+  paths. Measured before landing: the community CDN's `v1.5.6` `behavioral`
+  artifacts report `v0.10.0` for linux_amd64 and linux_arm64, and `file`
+  confirms each is built for its named architecture.
+- **The embedded-extension check understands stable-C-API extensions.**
+  v0.10.0 is built on DuckDB's stable C API: its footer carries ABI
+  `C_STRUCT` and a *C API* version (`v1.2.0`) where v0.9.1 carried the DuckDB
+  version. The build script and the runtime check compared that field to the
+  engine's version for equality, so a plain bump would have reported a
+  correct, loadable embed as a mismatch on every start, failed
+  `--verify-extension`, and failed `embedded_extension_targets_the_linked_engine`.
+  The check now applies DuckDB's own per-ABI rule
+  (`src/main/extension.cpp`): exact version for `CPP` / `C_STRUCT_UNSTABLE`,
+  same major and no newer than the engine's C API for `C_STRUCT`.
+  `/api/v2/analytics/status` reports the embed's `abi`.
+
+### Fixed
+
+- **Listening live to a camera ignored its transport.** The live stream
+  always asked for TCP, so a camera that only speaks UDP could be recorded
+  but not listened to. It now uses the source's transport (and media mode).
+  The add form also described `auto` as "TCP w/ UDP fallback"; it is TCP,
+  and nothing falls back. Transport can now be changed on the edit form.
+
+- **Two pages read a failed query as good news.** The suspect-species report
+  said "Nothing looks suspicious", and the dawn-sequence card "Not enough dawn
+  activity yet", when the detections could not be read at all. Both now say
+  the data could not be read.
+
+- **The Live view gave a visitor the camera's password.** A source with no
+  label was listed in the Live view's picker — and on the first-run Today
+  checklist — by its address, `user:pass@` included, and both pages are open
+  to anyone on a password-protected station. An unlabelled stream is now
+  named by its host. (Give each camera a label; it reads better anyway.)
+
+- **A secret in a stream URL's query reached the log.** The log redactors
+  removed `user:pass@` and passed the query through, where an SRT
+  `passphrase=`, a signed URL's `token=` and MediaMTX's
+  `streamid=read:path:user:pass` keep theirs. Parameters named like a secret,
+  and a stream id's user and password, are masked now.
+
+- **`--doctor` failed every stream URL that was not `rtsp://`**, and a
+  failed doctor stops the service starting. It now probes each protocol's
+  port, and skips UDP and SRT, which have no connection to test.
+
+- **The audio docs described an "Add-RTSP wizard"** — a locked `rtsp://`
+  prefix, a reachability pill, a preview row — that does not exist. They now
+  describe the add form.
+
+- **Station tabs restyled the whole page.** Five of the pages folded into
+  the Station tabs (settings, alert rules, notifications, species settings,
+  import) brought stylesheets written for a page of their own, with rules
+  for bare `input`, `label`, `table`, `h1` and `code`. Inside a tab those
+  rules reached the site header, the tab bar and every other section — the
+  header's search box was visibly displaced. Each is now scoped to its own
+  section.
+
+- **Two stray markup errors on Settings → Data.** The Raven export row
+  showed its per-clip path as `recordings//raven.txt`, because `<clip>` was
+  written raw and parsed as an element; and the "species that may not be
+  birds" report closed one more `<div>` than it opened, ending the page's
+  content column early (also in the report's own refreshes).
+
+- **`GET /api/v2/system/jobs` answered an empty list when it could not read
+  the job state** — which reads as "nothing is due" on exactly the station
+  that has a problem. It now answers `500`.
+
+- **A species page told the truth only about birds with recent detections.**
+  Its "Detections, last 14 days" chart drew the 14 most recent days *with* a
+  detection, so a bird heard once a week filled it with three months and no
+  gaps; it now draws the last 14 calendar days, today last, and says "Not
+  heard in the last 14 days" when there are none. Its "7-day moving average
+  overlaid" note described a line that was never drawn, and is gone. A bird
+  this station has not heard got "Species not found." — false for a real
+  species — in a bare paragraph that collapsed the stats row to a hairline
+  across the page; it now gets the four tiles, honestly empty, and its
+  hour-of-day chart no longer says "No detections today yet" about an
+  all-dates chart. When every clip of a species has been reclaimed by
+  retention, the Best detection panel says so instead of "No recording
+  captured for this species yet". The page's sections had no space between
+  them.
+
+- **The count over the tallest bar was never drawn.** Both bar charts (the
+  daily trend on the dashboard and species page, and the hour-of-day chart)
+  placed it 3 units above the top of the chart, outside what the SVG shows —
+  so the busiest day or hour was the one bar without a number.
+
+- **Station tabs had up to four `<h1>`s.** Capture, Alerts, Data and Access
+  embed the bodies of the admin pages they replaced, and each kept its own
+  page heading: Capture showed "Audio sources" twice (with an eyebrow reading
+  "primary support surface", a phrase from a design document) and a second
+  title "Species List Management". Embedded titles are now `<h2>`, or gone
+  where the tab already names the section; the standalone Test Notifications
+  page keeps its own title.
+
+- **Year in Review mixed three periods under one year.** Its masthead says
+  "Year in review · 2026", but the totals, species count, leaderboard, first
+  day and days of listening were all-time; the busiest day was the trailing
+  366 days ("the loudest the yard ever got"); and only "new to your list" was
+  the calendar year. A station with three years of records was shown all three
+  as "your year". Every figure is now 1 January to today, and a year with
+  nothing heard yet says so. Species tied on count in the leaderboard and the
+  weekly report are ordered by name rather than by however the scan returned
+  them.
+
+- **Share links reached the request log.** At `debug`, every request was
+  logged with its full URI, so `/r/{token}` — where the token is the access —
+  went to the journal and into support bundles. Requests are now logged by
+  the route they matched (`/r/{token}`, literally), and a request that
+  matched no route by its path; the query string is no longer logged.
+
+- **Credentials printed by `{:?}`.** 26 types that hold a password, token,
+  API key or a URL with one in it derived `Debug`, which prints every field
+  in full: the SMTP, MQTT and ntfy passwords, the Discord, Telegram, Slack,
+  Gotify and Pushover tokens, the BirdWeather, eBird, Weather Underground and
+  Pirate Weather keys, RTSP and webhook URLs, the S3 request signature, the
+  login, onboarding and account forms, and the command line. Each now writes
+  `Debug` by hand and prints `<redacted>`, or the URL without its credential.
+  So does the notification request body, which carried Pushover's token as a
+  form value. A source scan keeps a credential-holding type from deriving
+  `Debug` again.
+
+- **An RTSP camera's password reached the journal.** Starting an RTSP
+  source logged its URL at info, on every start. ffmpeg also names its input
+  in its errors (`Error opening input file rtsp://admin:…@cam/stream.`), which
+  was logged at debug. Both are now written with the password replaced; the
+  user name and host stay, because they are what makes a camera fault
+  diagnosable.
+- **A camera that refused the connection said why only at debug.** ffmpeg's
+  "Error opening input: Connection refused" matched none of the failure
+  markers, so it sat below the default log filter while the supervisor's
+  restart notices were visible. It is a warning now.
+  The support bundle's error log, and the doctor's message about a malformed
+  source URL, now redact every URL in a line rather than only the first.
+- **Six more places a credential could leave the station**, found by a sweep
+  of every log and error site:
+  - The support bundle's `journal.log` was the journal verbatim. It is now
+    scrubbed of every configured secret's value, of URL-valued settings'
+    paths and tokens, and of every URL's password — which also cleans lines an
+    older build wrote before these fixes.
+  - The Apprise address was logged at start-up as configured; an Apprise API
+    address can carry a password or, in `/notify/{key}`, the key. Now logged
+    redacted, as are a custom BirdWeather or weather endpoint.
+  - Apprise's own error text, stored in the notification log viewers can read,
+    is redacted and clipped: Apprise names the URL it failed on, and in an
+    Apprise URL the token is often the host.
+  - The BirdWeather "Test" button put the station token into its error
+    message on any network failure; reqwest's error text includes the URL.
+  - A "redacted" alert-rule export, the form offered for sharing, still
+    carried each webhook's full address — for Home Assistant, Slack or
+    Discord the address is the credential. It now keeps only the scheme and
+    host. Importing such a rule brings it in switched off, and the import
+    summary names it, rather than enabling a rule that can only fail.
+
+- **FLAC, MP3 and Ogg clips carried no tags.** The species, confidence and
+  date were written into a clip only when it stayed a WAV, so every
+  compressed clip — the formats a station short of disk is told to use —
+  left with nothing inside it. The WAV is now tagged before conversion and
+  ffmpeg carries the tags into the format's own (Vorbis comments, ID3). A
+  WAV is never tagged twice. The sox fallback does not carry them.
+
+- **`/api/v2/detections` ignored `date` whenever `species` was given**, so
+  `?species=X&date=Y` answered with every detection of X on every day. Every
+  filter now applies together, through the same filter the search page uses.
+  `species` now also matches a scientific name and ignores case, as its
+  documentation always said; it matched the exact common name only. An empty
+  `species=` means no filter, where it used to return nothing. `total_count`
+  is now always present and counts the filtered set.
+- **A BirdWeather token pasted with a trailing newline or space failed every
+  upload.** It is saved trimmed and trimmed again when the client is built,
+  and a token holding anything but letters and digits is refused on save with
+  a message saying why. The token is now encoded as the single path segment
+  it is, so a `/` or `?` in it cannot reach a different address.
+- **Alert-rule webhooks could be pointed at a cloud metadata address**
+  (O-11). Webhook requests, the Test button included, refuse link-local
+  addresses (`169.254.169.254` among them), the unspecified address and two
+  more metadata addresses, in every IPv4-in-IPv6 encoding, on the first
+  request, on every redirect, and for every address a host name resolves to.
+  Loopback, LAN and public addresses are unaffected. Webhook requests no
+  longer go through `HTTP(S)_PROXY`: through a proxy the guard cannot see the
+  address. The policy is birdnet-go's (`internal/httpclient/ssrf.go`).
+
+- **A model output of infinity was a 100 % detection, and a NaN from the
+  occurrence model let a species through.** Both classifier output mappings
+  turned `+inf` into exactly 1.0, a confident detection of whichever label sat
+  at that index; a non-finite score is now never a detection, a non-finite
+  human-class score masks the clip, and the first one is logged. The
+  occurrence filter skipped a species only when `score < threshold`, which a
+  NaN never is, so an all-NaN geomodel output admitted every species in
+  silence; it is now a reported run-time failure, handled like any other.
+
+- **A visitor behind some reverse-proxy setups could choose their own
+  address.** With a trusted proxy that sets only `X-Real-IP` (nginx with
+  `proxy_set_header X-Real-IP $remote_addr;` and no `X-Forwarded-For` line),
+  the visitor's own `X-Forwarded-For` reached the station and won, so each
+  request could claim a fresh address and walk past the rate limiter and the
+  sign-in throttle, and write a false identity into the audit log. It did not
+  bypass authentication. When the two headers name different visitors the
+  request is now attributed to the proxy, and the log says so once. The
+  documented nginx and Caddy configurations did not have the defect. The
+  cost, stated rather than hidden: a visitor who forges `X-Real-IP` is now
+  counted as the proxy, an identity shared with anyone browsing on the
+  station's own machine, so they can spend that identity's sign-in
+  throttle. Having a proxy overwrite or clear `X-Real-IP` closes that too.
+
+- **"Suggest an edit" was a 404 on every page of the published manual.**
+  mdBook 0.5 expands `{path}` relative to the book root, so the 0.4-era
+  template sent every link to `docs/book/docs/book/…`.
+  `scripts/check-book-links.py` now fails on an edit link that names no file
+  in the repository (46 findings — every content page — against the old
+  template, 0 after).
+- **Manual accessibility.** Links inside running text were told apart by
+  colour alone (WCAG 1.4.1) and are underlined; four tables had an empty
+  first header cell; tables and code samples that scroll sideways on a phone
+  could not be reached from the keyboard and are now focusable when they
+  overflow. axe found all three classes; the fixed pages report none.
+
+- **Birds heard together are no longer reported as heard in order.**
+  BirdNET stamps every species in one audio chunk with the same instant.
+  Measured against v0.10.0, the funnels and sequence patterns counted such a
+  pair as ordered in *both* directions, so the dawn running order and
+  `/analytics/funnel` / `patterns` / `sequence-count` credited orders nobody
+  observed. Funnels now use `'strict_increase'` and patterns require each step
+  strictly after the last (`(?t>0)`); detections 3 s apart still count. The
+  neighbour card likewise no longer reports a species heard in the same chunk
+  as the trigger as its "next" or "previous" one (which it did by alphabetical
+  order).
+- **Step times on a clock-change day.** Funnel and pattern step times were
+  converted to wall clock with one offset per day; with an hour range spanning
+  the change, one side came out an hour off (a step heard at 03:30 on
+  Europe/Berlin's spring-forward day read `02:30`). Each step now takes its own
+  detection's recorded wall clock.
+- **The follow-on card never showed a prediction.** It found the latest
+  detection with `ORDER BY rowid` on a view, which the bundled SQLite 3.53
+  rejects; the error was swallowed into "No detections yet." on every
+  station.
+- **Effort-corrected abundance divided by effort as of the last restart.**
+  Recording effort reached the analytics store only at startup, so each week
+  since then had too few listening hours, or none. The last two days are now
+  re-copied after every effort sample; the copy is one transaction (a failed
+  copy used to leave the table empty), and a row that cannot be read fails the
+  copy instead of being skipped.
+- **A request waiting on the database no longer stalls the others.** 170
+  places in the web server and the daemon's background tasks read or wrote a
+  database directly on an async worker thread — most of them through a helper
+  such as the audit-log write, which 43 admin actions call — so while the
+  detection writer held the database, every page, script and live socket
+  scheduled on that thread waited too. A Pi 4 has four. All of them now run on
+  the blocking pool (`AppState::run_blocking`); startup's ten one-off reads,
+  before the server listens, are named and left as they are. Measured with
+  one worker and the database lock held: a static script was not served
+  within 5 s before, and is served at once now. An admin change and its
+  audit-log row are now written together, so a client that disconnects
+  between them can no longer leave a change unrecorded.
+- **`AbsenceStreak` did not parse and `TumblingSpec` rejected the ISO dates
+  it documents** (both public time-series query builders with no caller).
+  Both now run, and every public query builder is executed by a test.
+- **One day without timestamps no longer takes the Analytics page's
+  Activity sessions and dawn-chorus cards down**, nor `/analytics/sessions`,
+  `/analytics/patterns` and `/analytics/sequence-count`. A detection whose `detected_at_utc` is NULL while
+  its date and time still parse in DuckDB has no `detection_instant`, and
+  forms a day group of its own. On such a group `behavioral` v0.10.0 returns
+  NULL from `sequence_match` / `sequence_count` (v0.9.1 returned `false` /
+  `0`; measured on both), and `sessionize` returns a NULL session id (both
+  versions). Each failed its whole query on decode; the dawn-chorus card
+  runs `sequence_count` first, so it failed too. The funnels reported that
+  day as "0 steps". Every builder that orders by the instant now leaves
+  such rows out.
+- **The Time series page's sessions card, and the time-series hourly,
+  accumulation and sessions endpoints, no longer fail outright on one
+  unplaceable row.** A row with a date but an unparseable time, or with no
+  parseable date, or with no instant, reached a decoder as NULL and failed the
+  query for every day. `species_peak_hours` (library only) had the same
+  defect.
+- **`/analytics/abundance` and `/analytics/phenology` no longer truncate
+  decimals.** The JSON converter tried an integer first, and duckdb-rs's
+  integer conversion accepts and truncates a DOUBLE: `detections_per_hour`
+  of 0.43 reached the JSON as `0`, a `DECIMAL` 2.5 as `3`, and a numeric
+  string as a number. FLOAT columns also now render at their own precision
+  (`0.4286`, not `0.428600013256073`).
+- **`/api/v2/analytics/status` reports an unreadable count as `null`, not
+  `0`.** A zero there is documented as "the sync has not run", which was the
+  wrong diagnosis for a store whose tables could not be read.
+
 ## [0.17.1] - 2026-10-04
 
 Measured on x86_64 under real systemd, and seen in the journal of a

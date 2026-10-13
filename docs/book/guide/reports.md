@@ -10,12 +10,17 @@ The **Weekly** tab (`/reports`) is a Sunday-paper recap of the week — total de
 
 ## Year in Review
 
-The **Year in Review** tab (`/reports?tab=year`) is a celebratory annual recap:
+The **Year in Review** tab (`/reports?tab=year`) is a celebratory recap of the
+calendar year so far — 1 January to today. Every figure on it covers that
+period and nothing earlier; on New Year's Day it starts again from nothing.
 
 ![The Year in Review page](../images/year-in-review.png)
 
-- a cinematic display headline and four big-number tiles (detections, species, days listening, busiest day),
-- a **52-week activity tape** — one moss-intensity cell per week — that shows the year's rhythm at a glance,
+- a display headline and four big-number tiles (detections, species heard,
+  species new to your list — first heard on this station this year — and the
+  busiest day),
+- an **activity tape** — one moss-intensity cell per week of the year — that
+  shows its rhythm at a glance,
 - the year's species leaderboard with banding-code avatars,
 - a milestones strip (first voice of the year, most-heard species, busiest day, newest arrival),
 - and a closing tally.

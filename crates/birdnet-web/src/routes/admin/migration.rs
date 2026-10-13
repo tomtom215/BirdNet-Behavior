@@ -464,8 +464,8 @@ async fn validate_handler(
     // The station's own coordinates, so the report can say whether this file
     // came from here. The migrate crate never opens the destination, so it
     // cannot find them itself.
-    let (lat, lon) = station_coords(&state);
     let result = tokio::task::spawn_blocking(move || {
+        let (lat, lon) = station_coords(&state);
         birdnet_migrate::birdnet_pi::validate_source_against_station(&source_path, lat, lon)
     })
     .await
@@ -564,8 +564,9 @@ async fn upload_handler(
 
     // Validate first (read-only; never modifies the temp file).
     let validate_path = tmp_path.clone();
-    let (u_lat, u_lon) = station_coords(&state);
+    let coords_state = state.clone();
     let val_result = tokio::task::spawn_blocking(move || {
+        let (u_lat, u_lon) = station_coords(&coords_state);
         birdnet_migrate::birdnet_pi::validate_source_against_station(&validate_path, u_lat, u_lon)
     })
     .await
@@ -650,13 +651,15 @@ struct ConfirmForm {
 /// imports of the same file — and only if its token matches the report the
 /// button came from, so a second upload arriving in between is not imported by
 /// someone who reviewed the first.
-#[allow(clippy::unused_async)] // required by axum Handler trait
 async fn upload_confirm_handler(
     State(state): State<AppState>,
     migration_state: MigrationState,
     staged: StagedUpload,
     Form(form): Form<ConfirmForm>,
 ) -> Result<Html<String>, StatusCode> {
+    // Before the staging is taken: a caller dropped at this await (a client
+    // that hung up) must leave the upload staged, not discard it.
+    let station = state.run_blocking(station_coords).await;
     let staged_now = {
         let mut guard = staged
             .lock()
@@ -686,8 +689,6 @@ async fn upload_confirm_handler(
 
     let tmp_path = tmp.path().to_path_buf();
     let dest_path = state.db_path().to_path_buf();
-    let station = station_coords(&state);
-
     let progress = ProgressHandle::new();
     {
         let mut guard = migration_state
@@ -742,14 +743,13 @@ async fn upload_confirm_handler(
 // POST /admin/migrate/run  (server-side path → run)
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::unused_async)] // required by axum Handler trait
 async fn run_handler(
     State(state): State<AppState>,
     Form(form): Form<MigrateForm>,
     migration_state: MigrationState,
 ) -> Result<Html<String>, StatusCode> {
     let options = import_options(&form);
-    let station = station_coords(&state);
+    let station = state.run_blocking(station_coords).await;
     let source_path = PathBuf::from(form.source_path);
     let dest_path = state.db_path().to_path_buf();
     let progress = ProgressHandle::new();

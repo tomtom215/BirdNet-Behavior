@@ -19,7 +19,7 @@
 use std::fmt;
 
 /// How to authenticate to an ntfy server.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum NtfyAuth {
     /// `ntfy://{user}:{password}@{host}/{topic}`.
     Basic {
@@ -32,8 +32,22 @@ pub enum NtfyAuth {
     Token(String),
 }
 
+impl fmt::Debug for NtfyAuth {
+    /// Hand-written so the credential cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Basic { user, .. } => f
+                .debug_struct("Basic")
+                .field("user", user)
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::Token(_) => f.write_str("Token(<redacted>)"),
+        }
+    }
+}
+
 /// Which Slack API a `slack://` URL addresses.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SlackAuth {
     /// Legacy incoming webhook: `slack://{tokenA}/{tokenB}/{tokenC}`.
     Webhook {
@@ -48,8 +62,18 @@ pub enum SlackAuth {
     Bot(String),
 }
 
+impl fmt::Debug for SlackAuth {
+    /// Hand-written so the webhook tokens cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Webhook { .. } => f.write_str("Webhook(<redacted>)"),
+            Self::Bot(_) => f.write_str("Bot(<redacted>)"),
+        }
+    }
+}
+
 /// A notification destination this crate can deliver to without Apprise.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Target {
     /// Discord incoming webhook.
     Discord {
@@ -108,6 +132,73 @@ pub enum Target {
         /// Optional HTTP basic credentials.
         basic: Option<(String, String)>,
     },
+}
+
+impl fmt::Debug for Target {
+    /// Hand-written so no token, key or password reaches a log through
+    /// `{:?}`. What is printed is what [`super::Route::label`] may show: the
+    /// service, and the parts of its address that are not the credential.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Discord {
+                webhook_id,
+                username,
+                ..
+            } => f
+                .debug_struct("Discord")
+                .field("webhook_id", webhook_id)
+                .field("webhook_token", &"<redacted>")
+                .field("username", username)
+                .finish(),
+            Self::Slack {
+                auth,
+                channel,
+                username,
+            } => f
+                .debug_struct("Slack")
+                .field("auth", auth)
+                .field("channel", channel)
+                .field("username", username)
+                .finish(),
+            Self::Telegram { chat_ids, .. } => f
+                .debug_struct("Telegram")
+                .field("bot_token", &"<redacted>")
+                .field("chat_ids", chat_ids)
+                .finish(),
+            Self::Ntfy {
+                origin,
+                topics,
+                auth,
+            } => f
+                .debug_struct("Ntfy")
+                .field("origin", origin)
+                .field("topics", topics)
+                .field("auth", auth)
+                .finish(),
+            Self::Gotify { origin, .. } => f
+                .debug_struct("Gotify")
+                .field("origin", origin)
+                .field("token", &"<redacted>")
+                .finish(),
+            Self::Pushover { devices, .. } => f
+                .debug_struct("Pushover")
+                .field("user_key", &"<redacted>")
+                .field("token", &"<redacted>")
+                .field("devices", devices)
+                .finish(),
+            Self::Json { endpoint, basic } => f
+                .debug_struct("Json")
+                .field(
+                    "endpoint",
+                    &birdnet_core::config::redact::redact_value(endpoint),
+                )
+                .field(
+                    "basic",
+                    &basic.as_ref().map(|(user, _)| (user, "<redacted>")),
+                )
+                .finish(),
+        }
+    }
 }
 
 impl Target {
@@ -170,7 +261,6 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 /// A notification URL taken apart, before any scheme-specific meaning.
-#[derive(Debug)]
 struct Parts<'a> {
     /// Lowercased scheme, `://` stripped.
     scheme: String,

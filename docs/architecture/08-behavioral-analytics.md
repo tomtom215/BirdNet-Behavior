@@ -195,6 +195,7 @@ GET /api/v2/analytics/patterns              → sequence pattern search
 GET /api/v2/analytics/sequence-count        → sequence match counts
 GET /api/v2/analytics/sequence-match-events → the events behind a match
 GET /api/v2/analytics/next-species          → "what's coming next" prediction
+GET /api/v2/analytics/previous-species      → what is heard just before a species
 GET /api/v2/analytics/abundance             → effort-corrected abundance
 GET /api/v2/analytics/phenology             → effort-corrected phenology
 GET /api/v2/analytics/status                → engine availability

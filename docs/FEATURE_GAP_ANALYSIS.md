@@ -8,7 +8,10 @@
 >   from. Compared at `88985a3` (2026‑02‑28).
 > * [`tphakala/birdnet-go`](https://github.com/tphakala/birdnet-go) — an
 >   independent Go rewrite of the same idea, an order of magnitude larger than
->   either. Compared at `1e74c82` (2026‑09‑02).
+>   either. Compared at `1e74c82` (2026‑09‑02), then re-checked at `780ce51`
+>   (2026‑10‑11): the 239 commits between are triaged in **Part 5**.
+>   `Nachtzuster/BirdNET-Pi` was re-checked the same day and is still at
+>   `88985a3`.
 
 ## How this was measured
 
@@ -187,23 +190,27 @@ within each group by how much they change what a station can do.
 | **Why it matters** | An owl calling for six minutes, a nightjar churring, a woodpecker drumming session — these produce dozens of near-identical short clips today, which is both worse listening and more disk. |
 | **Plan** | A session-merging stage in the extraction path keyed on species + source + gap: while the same species keeps being detected within the gap, extend the open clip rather than opening a new one. Bounded by `max_duration_secs` and by the segment-spanning machinery from G‑3, which this depends on. |
 
-#### G‑7 · Stream protocols beyond RTSP — GAP
+#### G‑7 · Stream protocols beyond RTSP — SHIPPED (RTSP, HTTP/Icecast, HLS, RTMP, UDP, SRT; `rtp://` declined, with the reason)
 
 | | |
 |---|---|
 | **Upstream** | `conf.StreamType` — `rtsp`, `http` (direct/Icecast), `hls` (`.m3u8`), `rtmp` (OBS push), `udp` (RTP), each with transport selection. |
-| **Ours** | ALSA (the `Microphone` variant), PipeWire and RTSP (`crates/birdnet-core/src/audio/capture/types.rs:14` `CaptureSource`). |
-| **Why it matters** | The cheapest way to add a second listening post is often an existing stream that is not RTSP — a neighbour's Icecast feed, an HLS wildlife cam, an OBS push from a laptop. |
-| **Plan** | `CaptureSource` gains a `Stream { url, kind, transport }` variant; the ffmpeg command builder in `capture/process.rs` already takes a URL, so most of this is URL classification, per-protocol ffmpeg flags, and the reconnect policy each protocol needs. Probing (`capture/probe.rs`) must learn to answer for them. |
+| **Ours** | One network source kind (stored as `rtsp`, for history) whose URL scheme decides the protocol: `birdnet_core::audio::capture::StreamProtocol`, read by `network_input_options` (`capture/process.rs`), which builds the ffmpeg input options for capture **and** for listening live (`routes/livestream.rs`). No second field, so the kind and the URL cannot disagree, and no table rebuild — `audio_sources.kind` has a `CHECK` that SQLite cannot alter in place. |
+| **Why the options had to be per protocol** | ffmpeg 6.1 refused to open an HLS playlist given `-rtsp_transport` ("Option not found"), which every stream got; RTSP refuses `-rw_timeout` the same way; and RTMP reads `-timeout` as the time to wait for an *incoming* connection, turning the reader into a listener ("Address already in use"). RTSP keeps transport, `-timeout` and media mode; the rest get `-rw_timeout`. |
+| **Verified** | The station binary against MediaMTX 1.21.2 (HLS, RTMP, SRT), an MPEG-TS UDP sender and a multi-client HTTP MP3 server, all ffmpeg 6.1: every source recorded 15 s, 48 kHz segments carrying its own fixture's tone (1500 / 2500 / 3500 Hz, by FFT of the segment). Listening live worked for HLS, RTMP, SRT and HTTP alongside capture. With MediaMTX frozen by `SIGSTOP`, RTMP and SRT capture exited and were restarted within seconds, HLS exited after 52 s (its playlist reloader retries first), and all three resumed on their own once the server did. The add form accepted all five and refused `rtp://` with the list of schemes. |
+| **Not adopted** | `rtp://`: ffmpeg read a bare RTP stream carrying G.711 (a static payload type) and refused one carrying AAC ("Invalid data found"), which needs an SDP file. MPEG-TS over `udp://` describes itself and covers the case. RTMP is read *from* a server; the station does not accept a push. |
+| **Limits** | A UDP stream has no live audio: a unicast datagram reaches one socket, and capture holds it (a second reader failed with "Address already in use", answered as an empty `200`). `/stream` now answers `503` with the reason, and the Live view lists the source as *spectrogram only*. |
+| **Found on the way** | `--doctor` failed every stream URL that was not `rtsp://`, and its `Fail` stops the unit's `ExecStartPre` — a station configured with an Icecast URL would not have started. It now probes each protocol's default port and skips the UDP-based two. The log redactors passed a URL's query through, where SRT keeps its `passphrase=` and MediaMTX its `streamid=…:user:pass`; both are masked now. The Live view's source picker and the first-run Today checklist named an unlabelled source by its URL, `user:pass@` included, on pages open to anonymous visitors; they name it by its host now (`tests/a_visitor_never_sees_a_streams_password.rs`). And the docs described an "Add-RTSP wizard" with a locked prefix and a reachability pill that the web crate does not contain; the section now describes the form. The plan's "probing must learn to answer for them" did not apply: `capture/probe.rs` probes ALSA rates only, and a stream is resampled to 48 kHz by ffmpeg. |
 
-#### G‑8 · RTSP media mode — GAP (minor)
+#### G‑8 · RTSP media mode — SHIPPED (`full` and `audio`; `auto` not adopted, with the reason)
 
 | | |
 |---|---|
 | **Upstream** | `conf.MediaMode` — `auto` (try audio-only, fall back), `audio-only` (never fall back, fail visibly), `full-stream` (request video and discard it). Default `full-stream`, with a comment naming the cameras that complete an audio-only handshake just long enough to mislead the fallback. |
-| **Ours** | We always request the full stream. |
-| **Why it matters** | Cameras have a bounded number of concurrent video sessions. A station that opens a video slot to listen to audio can lock the owner out of their own camera. |
-| **Plan** | A per-source `media_mode` mapping onto ffmpeg's `-allowed_media_types audio`, with the upstream fallback ladder and its failure accounting. |
+| **Ours** | A per-source `media_mode` (`audio_sources`, migration 53), `full` by default or `audio`, which adds ffmpeg's `-allowed_media_types audio` — to capture (`capture/process.rs` `rtsp_command`) **and** to listening live (`routes/livestream.rs`), which opens its own session to the camera. Set on the add form and the edit form. |
+| **Verified** | Against MediaMTX 1.21.2 with a published H264 + AAC stream, running the station binary: the audio-only row's sessions — capture and live — set up "1 track (MPEG-4 Audio)", the full row's "2 tracks (H264, MPEG-4 Audio)", and both recorded audible segments. An audio-only row pointed at a video-only path failed at PLAY (`501 Not Implemented`), logged at WARN per attempt, and recorded nothing. |
+| **Why not `auto`** | Its fallback has to tell "this camera refuses audio-only" from every other reason a session fails, and upstream's own comment names cameras that pass the audio-only handshake and then misbehave — the case a fallback gets wrong. An operator who chooses `audio` and sees the source go down learns the same thing in one step, and can switch back. |
+| **Found on the way** | The live stream hard-coded `-rtsp_transport tcp`, so a UDP-only camera could not be listened to; the add form described `auto` as "TCP w/ UDP fallback", which nothing implements (it is TCP); and transport could not be changed after a stream was added. All three fixed. |
 
 #### G‑9 · Audio watchdog tuning — SHIPPED, and the row's rationale was misattributed
 
@@ -276,7 +283,7 @@ within each group by how much they change what a station can do.
 | | |
 |---|---|
 | **Upstream** | `conf.VADSettings` — an embedded Silero VAD ONNX model detecting speech *presence* (not content, not speaker), opt-in, augmenting the label-based privacy filter. |
-| **Ours** | `crates/birdnet-core/src/detection/privacy.rs` — rank-based on BirdNET's own `Human` labels, with adjacent-chunk masking. Our own `noise.rs` doc comment records that at the shipped `top_n` of 10 the privacy filter's cutoff `max(10, …)` never actually excludes anything, so it is a blunt instrument. |
+| **Ours** | `crates/birdnet-core/src/detection/privacy.rs` gates on the chunk's *human score* — the highest confidence BirdNET gave any human class, read before the detection threshold and top-N cut — with adjacent-chunk masking. (This row used to say the filter was rank-based and never excluded anything at the shipped `top_n`; that described the BirdNET-Pi rule this port inherited, which `privacy.rs` replaced. `noise.rs`'s doc comment repeated it and was corrected at the same time.) It is still BirdNET's own label set, not a speech detector. |
 | **Why it matters** | A garden microphone records the neighbours. BirdNET's human classes are a by-product of its training set, not a speech detector, and they miss quiet conversation at exactly the distance where it is still intelligible. For anyone deploying where consent matters, a real VAD is the difference between a defensible privacy claim and a hopeful one. |
 | **Plan** | Optional second small ONNX session (~2 MB) run only on chunks that pass the cheap gates, gating clip *retention* rather than detection: a chunk with speech is analysed and its detection recorded, but no audio is written. Off by default, and the model shipped alongside rather than embedded so the binary size story does not change for stations that do not want it. |
 
@@ -359,7 +366,7 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Chunked MP3 has no recovery. On mobile, a network handover ends the stream and the tab goes silent with no indication; there is no seeking and no buffer target. HLS is what mobile browsers are built around. |
 | **Plan** | Keep the MP3 endpoint (it is simple and it works on a LAN) and add an HLS variant behind a token, sharing the encode stage. This depends on the same re-encode seam as N‑2, so the two should land together. |
 
-#### G‑22 · Dashboard layout customisation — GAP
+#### G‑22 · Dashboard layout customisation — SHIPPED (order and visibility; not widths, banner or colour schemes)
 
 | | |
 |---|---|
@@ -368,6 +375,7 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Half the stations that exist are on a wall-mounted tablet in a visitor centre or a kitchen, where what needs to be on screen is not what a person debugging a microphone needs. |
 | **Plan** | Store an element list in `settings` and render from it. Our HTMX partials are *already* the element vocabulary — `/pages/hero-status`, `/pages/today-list`, `/pages/most-recent`, `/pages/hourly-chart` and the rest are exactly these components — so this is a layout table and a drag-to-reorder editor over machinery that exists, not a rewrite. |
 
+| **Resolution** | `routes/pages/today_layout.rs` and the editor in `routes/admin/today_layout.rs`, stored as one `today_layout` setting (`daystrip,hero,-nudge,…`). The Today template marks each block and the page is reassembled in that order — the DOM, not CSS `order`, so reading and tab order follow the screen. Blocks move within their area (top stack, side rail; the log can only be hidden); the survivor of log and rail takes the width. Move up / Move down / Show-Hide buttons rather than upstream's drag, which a keyboard or switch user cannot operate. A station with no detections renders the default, so the setup checklist cannot be hidden. **Not done**, and recorded rather than implied: half/full widths per element, the banner with map and weather, a video embed, and the colour schemes. |
 #### G‑23 · Detection comments — SHIPPED
 
 | | |
@@ -399,7 +407,7 @@ within each group by how much they change what a station can do.
 
 ### 2.4 Integrations
 
-#### G‑26 · Weather providers — SHIPPED (three of four; OpenWeather declined)
+#### G‑26 · Weather providers — SHIPPED (Open-Meteo, MET Norway/yr.no, Wunderground, Pirate Weather; OpenWeather declined)
 
 | | |
 |---|---|
@@ -474,19 +482,19 @@ within each group by how much they change what a station can do.
 
 ### 2.5 Operations and platform
 
-#### G‑32 · System introspection APIs — PARTIAL (per-source restart and the jobs API have shipped)
+#### G‑32 · System introspection APIs — PARTIAL (per-source restart, jobs, network interfaces and the process view have shipped)
 
 | | |
 |---|---|
 | **Upstream** | `/api/v2/system/{info,resources,disks,processes,network-interfaces,jobs,temperature/cpu,external-media,inference}` plus `/api/v2/control/{restart,reload,rebuild-filter,restart-source/:id}`. |
-| **Ours** | `/api/v2/health`, `/api/v2/metrics`, `/station/*`, `/system/disk`, `/admin/system/*` and `POST /admin/system/service/restart`. **Per-source restart has landed** — see the resolution below. Still missing: per-process view, network interfaces, external media detection, a job list, and filter rebuild. |
+| **Ours** | `/api/v2/health`, `/api/v2/metrics`, `/station/*`, `/system/disk`, `/admin/system/*` and `POST /admin/system/service/restart`. **Per-source restart has landed** — see the resolution below. Still missing: external media detection and filter rebuild. `GET /api/v2/system/network` (interfaces, addresses with prefix, hardware address, byte counters) and `GET /api/v2/system/processes` (the station's process and its descendants — capture `ffmpeg`, `arecord` — with CPU over a 250 ms sample) have shipped, bearer-gated; the process view is deliberately the station's own tree, not the machine's. Our `GET /api/v2/system/jobs` is a maintenance-job catalogue; upstream's `/system/jobs` (`GetJobQueueStats`) is detection-action queue statistics — the same path for a different thing. |
 | **Why it matters** | Per-source restart is the one that matters daily — restarting the whole service to recover one wedged RTSP camera drops every other source and loses in-flight audio. |
 | **Resolution (per-source restart)** | The supervisor owns its source list privately on its own thread, so this needed a seam in the direction that did not exist: `crates/birdnet-core/src/audio/capture/control.rs` holds the set of pending restart requests the web layer writes and `run_supervisor` drains once per tick (`src/capture/runloop.rs`), the mirror of `status.rs`. A drained request stops the source and clears its fault state, so `reconcile` starts it again on that same tick rather than waiting out a backoff. It goes through the supervisor's *own* start path, so the schedule and quiet window still hold and a request for a paused source is spent rather than overriding them. Three surfaces: a **Restart** button per row on `/admin/audio`, `POST /api/v2/control/restart-source`, and `GET /api/v2/system/capture` to read the labels it takes. Audited as `audio.source.restart`. |
 | **Two things this deliberately does not do** | It does **not** reload the source's settings — `CaptureManager` is built once at supervisor start and `start()` respawns from that stored config, so an edit still needs a service restart. And an operator-requested restart is **not** counted in `restarts_last_hour`, so it never raises `flapping`: that verdict exists to spot a source that cannot stay up on its own. Both are gated, the second with its counterpart. |
 | **A divergence from upstream's URL, on purpose** | Ours takes the source in the JSON body (`POST /api/v2/control/restart-source`, `{"source_id": …}`) rather than upstream's `restart-source/:id`. `WRITE_ROUTES`/`READ_ROUTES` in `routes/api_write.rs` are literal paths read by the CSRF guard, the OpenAPI gate and four test loops that *send a request to each entry*; a `{id}` placeholder would be a path none of them could exercise, which would cost more than matching a URL shape. |
 | **Resolution (the jobs API)** | `GET /api/v2/system/jobs`, bearer-gated beside `/system/capture`. The substantive decision is that it is **not** "over the `maintenance_runs` table" as the plan worded it: that table holds a row per job that has *completed at least once*, so enumerating it omits precisely the jobs worth asking about — a station whose backup has never run would get a short, clean list with the problem absent. `JOBS` in `crates/birdnet-db/src/sqlite/queries/maintenance.rs` is the catalogue, `job_statuses` walks it and looks each row up, and a never-run job reports `last_run_unix: null` with `due_reason: "never_run"`. A unit test scans that file's own source for `pub const JOB_` declarations and fails when one is missing from the catalogue. `ok` is tri-state — never-run and no-verdict both serialise `null` — so a `reports_verdict` flag ships alongside it, because a session prune that succeeded and an integrity check that failed otherwise look identical. |
 | **A refactor the gap made necessary** | The scheduler's due-rule was three branches (never run, clock moved backwards, interval elapsed) living only in `src/maintenance.rs`, and a reporting surface would have been a second copy of them. It moved to `birdnet_db::sqlite::due_state` and `due` now calls it, keeping only what a pure function cannot do: read the timestamp off disk and apply the in-process floor that stops a full-disk station re-running a weekly VACUUM every half hour. The clock-went-backwards branch had **no test** before this; it has one now. The API cannot see the in-process floor, which is documented rather than hidden: it only ever delays a job within one process lifetime, so a job reported as due may already have run. |
-| **Plan (what remains)** | Per-process view, network interfaces, external media detection and filter rebuild. Network interfaces and external media are onboarding aids. |
+| **Plan (what remains)** | External media detection and filter rebuild. |
 
 #### G‑33 · Hardware profiling and memory policy — SHIPPED (the capability-gating half)
 
@@ -590,11 +598,11 @@ against the code it was written for, per `CLAUDE.md`.
 | 27 | Inference backends (OpenVINO / XNNPACK) | G‑11 | Gated on Stage 1 of #26 |
 | 28 | OAuth2 / OIDC | G‑20 | One generic OIDC implementation; named providers are configuration |
 | 29 | HLS live streaming | G‑21 | Shares the encode seam with #10 |
-| 30 | Dashboard layout customisation | G‑22 | The HTMX partials are already the component vocabulary |
+| 30 | ~~Dashboard layout customisation~~ — **shipped** (order and visibility). See G‑22. | G‑22 | The HTMX partials are already the component vocabulary |
 | 31 | Extended capture | G‑6 | Depends on #6 |
-| 32 | Additional stream protocols | G‑7 | HTTP/Icecast first; RTMP and UDP after |
+| 32 | ~~Additional stream protocols~~ — **shipped** (HTTP/Icecast, HLS, RTMP, UDP, SRT; `rtp://` declined). See G‑7. | G‑7 | One kind, the URL decides the protocol |
 | 33 | Silero VAD privacy gate | G‑13 | Depends on #26 Stage 1 for a second ONNX session |
-| 34 | RTSP media mode | G‑8 | Small, but only meaningful alongside #32 |
+| 34 | ~~RTSP media mode~~ — **shipped** (`full` / `audio`). See G‑8. | G‑8 | It mattered for RTSP on its own — the camera's video sessions — not only alongside #32 |
 | 35 | Profiling endpoints | G‑24 | Behind a Cargo feature |
 | 36 | Local error ring buffer (Sentry substitute) | G‑25 | |
 | 37 | Parquet export (MySQL substitute) | G‑31 | |
@@ -605,3 +613,106 @@ against the code it was written for, per `CLAUDE.md`.
 G‑25 (Sentry), G‑31 (MySQL), the script notification provider in G‑28, FTP and
 Google Drive in G‑30, and the BirdNET-Pi Adminer / file manager / web terminal.
 Each has a stated reason above and a substitute where one is warranted.
+
+---
+
+## Part 5 — birdnet-go `1e74c82` → `780ce51` (2026‑09‑02 → 2026‑10‑11)
+
+Every `feat` commit in the range was read from its diff, and the `fix`/`perf`
+commits were triaged for user-visible capability; about forty Svelte-only,
+wizard-only and Go-specific fixes were grouped rather than checked one by one.
+Our side was read at `4e8fe34`. Statuses are kept current as work lands, as in
+Part 4.
+
+### Gaps and partials
+
+| Upstream | What it does | Status | Ours (evidence) |
+|---|---|---|---|
+| `221262b`, `ef76b6f` reject non-finite scores | NaN / ±inf scores never become detections | **SHIPPED** | `compute_confidence` sent `+inf` to 1.0 on both output paths; non-finite now maps to 0.0, a non-finite human score masks the clip, and the geomodel's `prob < sf_thresh` test — which NaN never satisfies — now reports a non-finite output as a run-time failure instead of passing the species (`inference/model.rs`, `inference/species_filter.rs`). |
+| `631cdf1` forwarded client-IP headers must agree | subnet bypass decided on a strictly resolved address | **SHIPPED** (the defect it exposed here) | We have no subnet bypass, but `client_ip.rs` let a client-written `X-Forwarded-For` win behind a proxy that set only `X-Real-IP`. When the two name different clients the request is now the proxy's. |
+| `780ce51` FLAC detection tags | Vorbis comments in saved FLAC clips | **SHIPPED** (FLAC, MP3 and Ogg) | The intermediate WAV gets its RIFF INFO chunk before conversion and ffmpeg maps it to each format's tags — checked against this container's ffmpeg (libavformat 60.16) for all three. Upstream also writes the model and app version; ours carries the species, confidence, date and loudness note the WAV already had. |
+| `50547d0` ONNX Runtime spin-wait off | idle intra-op threads stop burning CPU | **SHIPPED** | `classifier_session_builder` in `inference/model.rs`. Measured here: CPU per inference 93–98 ms → 52–54 ms, wall time +3–4 ms (4-vCPU x86_64, BirdNET v2.4 INT8). The geomodel runs one intra-op thread and has no pool to spin. Not measured on a Pi. |
+| `6dfdc10` MQTT first/last detection time | `speciesFirstDetectedAt` / `speciesLastDetectedAt` in the payload | **SHIPPED** | `species_first_detected_at` / `species_last_detected_at` (`mqtt/types.rs` `SpeciesHistory`, read by `species_tracking::prior_detections`). One deliberate difference: upstream sends `null` both for a first detection and for a failed read; ours omits the keys on a failed read, so a "new species" automation cannot fire on a database error. |
+| `63e7c64` Pirate Weather | a fourth weather provider (Dark Sky-compatible) | **SHIPPED** | `Provider::PirateWeather`, reading the `hourly` block (upstream reads `currently`). Built against Pirate Weather's field definitions, not a live response; `windBearing` is taken as the direction the wind comes from, an assumption the definition does not settle. |
+| `0b51812` BirdWeather token check | refuses to save sharing-on with an empty or malformed token | **SHIPPED** (characters, not length) | Saved and used trimmed; a token with anything but letters and digits is refused on save; the client encodes it as one path segment. Upstream also requires exactly 24 characters — not adopted, because BirdWeather's own documentation was not available to confirm it, and refusing a valid token turns sharing off. |
+| `7def0cf` detections filtered by source | `source` on the detections list API | **SHIPPED** | `/api/v2/detections` now runs on the search page's `DetectionFilter`, which also fixed `?species=…&date=…` silently dropping the date. |
+| `a73db53` dawn-chorus window | `period_days` / `min_days` on the API | **SHIPPED** (the whole insight, not only its window) | This row first cited `routes/pages/dawn_chorus.rs`, which draws hourly activity ribbons — a different computation. Upstream's insight is each species' average and earliest *first* detection in 04:00–10:00, which nothing here served as an answer. `GET /api/v2/insights/dawn-chorus` now does, with upstream's parameters, limits and fields (`routes/insights.rs`, query `birdnet_db::sqlite::queries::insights::dawn_first_songs`). See Part 6. |
+| `e853776` a model failing every window | persistent notice, per-model health, a health check | PARTIAL | A failing file logs; the dead-man fires after 24 h (`src/integrations/deadman.rs`); no per-classifier condition in `station_health.rs`. |
+| `712d4c2` stream metrics | per-source errors and data rates | **SHIPPED** (data rate; wire rate and engine not applicable) | Errors, health and stalls per source were already exported (`birdnet_capture_restarts_total`, `birdnet_audio_source_up`, `birdnet_capture_stalls_total`). The data rate is `birdnet_audio_analysed_seconds_total{source}`, read from each analysed file's header: checked on a running station against a UDP and an HTTP source. Upstream's wire rate is the compressed bytes off the network, which ffmpeg does not report to this process; its engine gauge chooses between two ingest engines, and there is one here. |
+| `dee43f5` effective overlap from measured latency | caps overlap to what the device sustains, shows configured vs effective | PARTIAL | The static "needs overlap N s" per level is shown; nothing measures. Its effect cannot be judged off a Pi. |
+| `cd488cc` browser location | `navigator.geolocation` button | PARTIAL | IP-based lookup in onboarding only. Needs a secure context, which a LAN station on plain HTTP is not. |
+| `54b5545` place search | Photon geocoder in settings | GAP | Plain latitude/longitude inputs. Would add an outbound host to the egress inventory. |
+| `6d2335c`, `64aa9e2` SSRF guard on outbound probes | | **SHIPPED** for webhooks (O‑11) | `birdnet_integrations::egress_guard`, upstream's policy. Not applied to the native notification senders, which some stations reach only through a proxy. |
+| `0e7290d` location change without restart | | PARTIAL | Latitude/longitude are `Wiring::Bridged`: next restart. |
+| `92067fa` spectrograms after audio retention | | GAP | Spectrograms are rendered on demand from the clip. |
+| `aa86b38` per-source Home Assistant state topics | | GAP (minor) | Discovery publishes station-wide sensors only. |
+| `111fb34`, `121f005` host-network Compose, Portainer/Unraid templates, mDNS in the container | | PARTIAL / GAP | Bridge-network Compose only; no nss-mdns in the image. Not verifiable without a Docker daemon. |
+| `0f46189` Africa regional tiles | three more regional model variants | GAP, inside G‑10 | No regional variants in `model_catalog.rs`. |
+
+### Parity, not applicable, or declined
+
+`af617ba` settings deep links — PARITY (`#set-…` anchors; there are no tabs).
+`1b7e56c` ffmpeg stderr tail — PARITY in shape (we drain and promote stderr);
+whether ffmpeg echoes RTSP credentials into the lines we log is **unverified**.
+`812237a`, `e445493`, `ad25bd2`, `c39534a`, `9a1fb24`, `7dcae61`, `db87734` —
+PARITY. `2210354`/`c404137`/`ffd6d52` native RTSP ingest and `b4e39ca` native
+MP3 encoder — not applicable (ffmpeg is our ingest and encoder). `8f0d3ec`,
+`c04d0cd` model-catalog dependencies and optimisation offers — not applicable
+to a compiled-in two-entry catalogue. `0ee57b1`, `32e1f50` ultrasonic export and
+audible bats — wait on G‑14. `83ed7b9` running with zero acoustic models —
+declined: `inference/registry.rs` refuses an empty registry on purpose.
+`98b1c62` `lang` follows the UI language — not applicable (the UI is English).
+
+### Corrections to Part 2 this re-check found
+
+* **G‑13**'s "Ours" cell described a rank-based filter that had been replaced.
+  Corrected above. Upstream now embeds Silero in every build (`3e03da1`); our
+  plan to ship it alongside stands.
+* **G‑20** upstream now always sends PKCE (S256) (`90ebedf`).
+* **G‑22** upstream's colour schemes are five plus custom, not six.
+* **G‑26** upstream's set is now yr.no, OpenWeather, Wunderground and Pirate
+  Weather; ours is Open-Meteo, MET Norway (yr.no), Wunderground and Pirate
+  Weather.
+* **G‑32**'s "Ours" cell listed "a job list" as missing while the same row said
+  the jobs API shipped. Corrected, with the note that upstream's
+  `/system/jobs` is `GetJobQueueStats` — detection-action queue statistics,
+  not a maintenance-job catalogue — so the two share a path, not a meaning.
+
+## Part 6 — the analytics and insights surface (birdnet-go `780ce51`)
+
+Parts 2 and 5 compared capabilities; neither went endpoint by endpoint
+through upstream's analytics API, and the one row that touched it (dawn chorus,
+above) cited a chart that computes something else. This part does: each of the
+29 routes `internal/api/v2/analytics/handler.go` registers was read, and our
+counterpart found by grepping for the concept and opening the code on both
+sides. Five are client conveniences (batch variants, a thumbnail URL builder,
+a sun-times helper for chart shading) and not features; five are at parity in
+substance — diversity, accumulation, phenology, hourly and daily activity,
+hour-of-day distribution — though ours take a look-back window where upstream
+takes a date range.
+
+| Upstream | What it answers | Status here |
+|---|---|---|
+| `/insights/dawn-chorus` | Each species' typical first song of the morning | **SHIPPED** — `GET /api/v2/insights/dawn-chorus` |
+| `/insights/migration` | Recent first-ever arrivals; species gone quiet | **SHIPPED** — `GET /api/v2/insights/migration`. Gone-quiet had no counterpart; arrivals existed only as the life list's six newest. |
+| `/insights/expected-today/regional` | eBird species seen nearby, not heard here | **SHIPPED** — `GET /api/v2/insights/expected-today/regional`, from the snapshot already in memory. One deliberate difference: a failed read of the station's own history is a `500`, not the unfiltered eBird list upstream falls back to. |
+| `/insights/expected-today` | Species heard within ±3 days of today in past years | **SHIPPED** — `GET /api/v2/insights/expected-today`: ten earlier years, one window each, so a window across New Year counts once. (The Migration tab's 42-day "still expected" count answers a different question and stays.) |
+| `/dashboard/kpis` | Lifetime species, today, best day, detection streak | **SHIPPED** — `GET /api/v2/dashboard/kpis`, upstream's fields and empty values. The streak is counted in SQL over every detection date, where upstream reads the 90 most recent and so stops at 90. |
+| `/species/detections/new` | Species first seen in a date range, with counts | **SHIPPED** — `GET /api/v2/analytics/species/detections/new`, upstream's path, defaults, paging and fields. One deliberate difference: a species with an imported detection of no date is never new, as for the daemon's new-species notification; upstream ignores such rows and would list it. |
+| `/species/summary` | Per-species count, first, last, mean and max confidence over a range | **SHIPPED** — `GET /api/v2/analytics/species/summary`, upstream's path, parameters and fields (no `species_code`). First and last are by instant, so the repeated autumn hour orders correctly. |
+| `/species/daily` | One date's species with hourly counts and first/last heard | PARTIAL — today only (heatmap); other dates give counts only. |
+| `/time/distribution/species`, `/time/succession` | Top-N species' hour-of-day profile, normalised or stacked | PARTIAL — the dawn-chorus ribbons, fixed at 60 days and 8 species. |
+| `/insights/phantom-species` | Last 30 days, ≥ 3 detections, mean confidence < 0.6 | **SHIPPED** — `GET /api/v2/insights/phantom-species`, upstream's rule and fields. `/admin/quality/phantoms` answers a different question (four shape signals over all history) and stays. |
+| `/confidence/distribution` | Per-species confidence histogram | PARTIAL — station-wide, six fixed buckets. |
+| `/time/year-over-year` | Cumulative year-to-date against last year | PARTIAL — weekly comparison in JSON, on no page. |
+| `/analytics/sources` | Sources with counts over a range | PARTIAL — today only. |
+| `/time/heatmap` | Date × time-of-day density, 15–60 minute slots, CSV | PARTIAL — hour × weekday only. |
+| `/time/dawn-onset` | Each day's chorus onset against civil dawn | GAP — civil dawn is already computed (`birdnet-scheduler`). |
+| `/system/database/overview` | Table stats, latencies, slow queries | PARTIAL — size and write latency only. |
+| `/range/heatmap` | Geomodel occurrence over a lat/lon grid | GAP — the largest: grid inference in the web process and a map without a tile host. |
+
+Found on the way, both the silent-zero shape `CLAUDE.md` describes: the
+suspect-species report read a failed query as "Nothing looks suspicious", and
+the dawn-sequence card read one as "Not enough dawn activity yet". Both now say
+the data could not be read.
+

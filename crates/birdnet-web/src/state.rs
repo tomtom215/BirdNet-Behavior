@@ -898,6 +898,44 @@ impl AppState {
         f(&conn)
     }
 
+    /// Run `f` on tokio's blocking pool with a clone of this state, and wait
+    /// for it.
+    ///
+    /// # Why async code must not call [`Self::with_db`] directly
+    ///
+    /// `with_db`, [`Self::with_read_db`] and `with_analytics` block: on a
+    /// mutex the detection processor also takes, then on the query. Called
+    /// from a handler or a background loop, that wait holds one of the
+    /// runtime's worker threads — of which a Raspberry Pi 4 has four — and
+    /// every other request and live socket scheduled on that thread waits
+    /// behind it. `tests/database_work_stays_off_the_async_runtime.rs` holds
+    /// every async function in this crate and the binary to that.
+    ///
+    /// Group work that ran between two `.await`s into one call: the closure
+    /// runs to completion even if the caller is dropped (a client that hangs
+    /// up), so a write and the audit row that records it stay together, as
+    /// they did when both ran inline.
+    ///
+    /// # Panics
+    ///
+    /// Re-raises a panic from `f` in the caller, which is what the same code
+    /// did when it ran inline; and panics if the runtime is shutting down
+    /// before `f` could start, when no caller is left to answer.
+    pub async fn run_blocking<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&Self) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let state = self.clone();
+        match tokio::task::spawn_blocking(move || f(&state)).await {
+            Ok(value) => value,
+            Err(e) => match e.try_into_panic() {
+                Ok(payload) => std::panic::resume_unwind(payload),
+                Err(e) => panic!("blocking task did not run: {e}"),
+            },
+        }
+    }
+
     /// Execute a **read-only** closure against a pooled reader.
     ///
     /// # When to use this instead of [`Self::with_db`]
@@ -968,6 +1006,27 @@ impl AppState {
             let db = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             birdnet_timeseries::executor::TimeSeriesDb::new(db.conn()).and_then(f)
         })
+    }
+
+    /// Mirror the last two local days of recording effort into the analytics
+    /// store, after the effort recorder has credited a sample.
+    ///
+    /// Returns `None` when analytics is not enabled. Lock order as in
+    /// [`Self::resync_analytics_full`].
+    #[cfg(feature = "analytics")]
+    pub fn mirror_recent_recording_effort(
+        &self,
+    ) -> Option<Result<u64, birdnet_behavioral::connection::AnalyticsError>> {
+        let analytics = self.inner.analytics_db.as_ref()?;
+        let conn = self
+            .inner
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let adb = analytics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(adb.sync_recent_recording_effort(&conn))
     }
 
     /// Rebuild the `DuckDB` analytics copy from the full `SQLite` detections

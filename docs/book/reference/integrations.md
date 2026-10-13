@@ -9,13 +9,14 @@ Off by default — a fresh install contacts no weather service until
 stores hourly rows, and paints them as a signal-context band behind the
 day-strip and dawn-chorus charts.
 
-Three upstreams, chosen with the `WEATHER_PROVIDER` key in `birdnet.conf`:
+Four upstreams, chosen with the `WEATHER_PROVIDER` key in `birdnet.conf`:
 
 | `WEATHER_PROVIDER` | What it is | Needs |
 |---|---|---|
 | `open-meteo` *(default)* | Free gridded forecast, no key, and self-hostable — point `BNB_WEATHER_BASE_URL` at your own instance | nothing |
 | `met-no` | The Norwegian Meteorological Institute's Locationforecast. Keyless, and a better model over Europe | nothing |
 | `wunderground` | **Your own personal weather station's** current observations | `WEATHER_STATION_ID` and `WEATHER_API_KEY` |
+| `pirate-weather` | [Pirate Weather](https://pirateweather.net/)'s hourly forecast, a Dark Sky-compatible API blending several models | `WEATHER_API_KEY` (free tier available) |
 
 ```dotenv
 # birdnet.conf — read the anemometer in the garden, not a forecast for the county
@@ -170,9 +171,28 @@ those, which is where the ~45 s comes from.
   "confidence": 0.83,
   "confidence_pct": 83,
   "file_name": "Song_Sparrow-...wav",
-  "rtsp_id": null
+  "species_first_detected_at": "2026-03-14T06:02:11",
+  "species_last_detected_at": "2026-05-21T19:47:03"
 }
 ```
+
+`file_name` is left out when no clip was saved, and `rtsp_id` (the stream a
+detection came from) appears only for an RTSP source.
+
+`species_first_detected_at` and `species_last_detected_at` are the species'
+earliest and latest detections **before** this one, in the same local
+wall-clock form as `timestamp`; rejected detections are not counted, nor are
+imported ones when imports are excluded from analytics. The two keys say
+three different things:
+
+| The keys are | Meaning |
+|---|---|
+| timestamps | the station had heard this species before |
+| both `null` | it had not — this is the first detection ever |
+| absent | the history could not be read, so nothing is claimed |
+
+An automation for "a species never heard here before" should test for
+`null`, not for a missing key: a missing key is a read failure, not a first.
 
 ## Home Assistant
 
@@ -212,6 +232,7 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_inference_duration_seconds` | histogram | Per-chunk inference latency (decode → prediction). |
 | `birdnet_db_write_duration_seconds` | histogram | SQLite insert latency for one detection row. |
 | `birdnet_files_analysed_total` | counter | Audio files the pipeline finished analysing, labeled by `source`. **The series that separates "the model is answering nothing" from "the pipeline is not running"** — every other signal is downstream of a prediction the model made, so both states leave them flat and empty. A 15-second segment length gives about 5 760 a day per source. |
+| `birdnet_audio_analysed_seconds_total` | counter | Seconds of audio the pipeline finished analysing, labeled by `source`: the data rate. With nothing waiting (`birdnet_analysis_queue_depth`), `rate()` of it is about 1 for a source that delivers continuously, above 1 while a backlog is analysed, and below 1 when audio is missing. That last case is what `birdnet_files_analysed_total` cannot show: a camera that drops packets still yields a 15-second segment file, with less audio in it. Read from each file's header after analysis. |
 | `birdnet_segments_dropped_total` | counter | Raw segments the watcher announced that were gone before the pipeline read them, labeled by `source`: recorded audio that was never analysed. Rising means the stream directory is being drained faster than inference keeps up. A segment the pipeline is reading is claimed and never the one the purge takes. |
 | `birdnet_analysis_queue_depth` | gauge | Raw segments waiting for analysis after the daemon's last sweep. Climbing means inference is slower than real time; above 40 the daemon sheds (below). Absent until the daemon reports. |
 | `birdnet_segments_shed_total` | counter | Raw segments the shed policy chose not to analyse, labeled by `reason`: `backlog` (more than 40 waiting) or `thermal` (the board at or above 80 °C, or throttling). One segment in two is skipped while either holds, so the queue drains at twice the rate and the skipped audio is counted rather than lost. |

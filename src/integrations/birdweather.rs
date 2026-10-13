@@ -46,7 +46,7 @@ pub fn create_birdweather_client(
             let client = if let Some(url) = base_override {
                 let client = client.with_base_url(&url);
                 tracing::info!(
-                    endpoint = %client.base_url(),
+                    endpoint = %crate::support::redact_value(client.base_url()),
                     "BirdWeather uploads enabled (custom endpoint)"
                 );
                 client

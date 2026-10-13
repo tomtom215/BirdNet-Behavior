@@ -107,9 +107,8 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
     let base = resolve_base(q.base);
 
-    let sql = rare_detections_sql(rare_gap_days(&state));
-
     let result = tokio::task::spawn_blocking(move || {
+        let sql = rare_detections_sql(rare_gap_days(&state));
         state.with_db(|conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([&limit], |r| {
@@ -222,9 +221,8 @@ async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
     let base = resolve_base(q.base);
 
-    let sql = rare_detections_sql(rare_gap_days(&state));
-
     let result = tokio::task::spawn_blocking(move || {
+        let sql = rare_detections_sql(rare_gap_days(&state));
         state.with_db(|conn| {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([&limit], |r| {

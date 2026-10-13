@@ -677,10 +677,19 @@ async fn species_summary_partial(
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
+        // A species this station has not heard — reached from search, a
+        // shared link or a migration forecast — is not "not found": it is a
+        // real bird with no records here. The same four tiles, honestly
+        // empty, so the row keeps its shape. A bare `<p>` used to land in the
+        // four-column grid and collapse it to a hairline box across the page.
         Ok(Ok(None)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<p class="spp-muted">Species not found.</p>"#.to_string(),
+            r#"<div class="stat-card"><div class="value">0</div><div class="label">Detections</div></div>
+<div class="stat-card"><div class="value">—</div><div class="label">Avg Confidence</div></div>
+<div class="stat-card"><div class="value">—</div><div class="label">First Seen</div></div>
+<div class="stat-card"><div class="value">—</div><div class="label">Last Seen</div></div>"#
+                .to_string(),
         ),
         // See `error_states::failed_partial` for why this is a 200.
         Ok(Err(e)) => {
@@ -710,6 +719,13 @@ async fn species_hourly_partial(
     })
     .await;
     match result {
+        // The chart's own empty state says "today", which is the dashboard's
+        // window; this one is every date the station has.
+        Ok(Ok(hours)) if hours.iter().all(|h| h.count == 0) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p class="cht-empty">Not heard at this station yet.</p>"#.to_string(),
+        ),
         Ok(Ok(hours)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
@@ -743,6 +759,13 @@ async fn species_daily_partial(
     })
     .await;
     match result {
+        // Fourteen calendar days, zeros included: fourteen empty bars say
+        // nothing a sentence does not say better.
+        Ok(Ok(days)) if days.iter().all(|d| d.count == 0) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p class="cht-empty">Not heard in the last 14 days.</p>"#.to_string(),
+        ),
         Ok(Ok(days)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
@@ -1053,30 +1076,49 @@ async fn species_hero_partial(
                  ORDER BY Confidence DESC LIMIT 1",
                 clip = birdnet_db::sqlite::CLIP_AVAILABLE,
             );
-            conn.query_row(&sql, [&lookup_name], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, f64>(2)?,
-                    r.get::<_, String>(3)?,
-                ))
-            })
-            .ok()
+            let best = conn
+                .query_row(&sql, [&lookup_name], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, f64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                })
+                .ok();
+            // With nothing to play, whether there ever was anything: retention
+            // reclaims clips and keeps the rows, and "no recording captured"
+            // is false for a bird recorded a hundred times last spring.
+            let reclaimed = best.is_none()
+                && conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM detections_analytic \
+                         WHERE Com_Name = ?1 AND Clip_Pruned_At IS NOT NULL)",
+                        [&lookup_name],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .unwrap_or(false);
+            (best, reclaimed)
         })
     })
     .await
-    .ok()
-    .flatten();
+    .unwrap_or((None, false));
 
-    let Some((date, time, conf, file_name)) = best else {
-        let html = r#"<div class="bnb-eyebrow spp-mb8">Best detection</div>
-<div class="bnb-photo spp-photo-empty" data-caption="no clip yet"></div>
-<p class="bnb-meta spp-mt8">No recording captured for this species yet.</p>"#;
-        return (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            html.to_string(),
+    let (Some((date, time, conf, file_name)), _) = best else {
+        let (caption, note) = if best.1 {
+            (
+                "clips reclaimed",
+                "Its recordings have been reclaimed to free space; its detections are all kept.",
+            )
+        } else {
+            ("no clip yet", "No recording captured for this species yet.")
+        };
+        let html = format!(
+            r#"<div class="bnb-eyebrow spp-mb8">Best detection</div>
+<div class="bnb-photo spp-photo-empty" data-caption="{caption}"></div>
+<p class="bnb-meta spp-mt8">{note}</p>"#
         );
+        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
     };
 
     let basename = std::path::Path::new(&file_name)

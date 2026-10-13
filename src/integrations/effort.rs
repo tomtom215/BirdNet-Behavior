@@ -91,6 +91,21 @@ fn sample_once(state: &AppState, seconds: f64) -> usize {
     credited
 }
 
+/// Copy the effort just credited into the analytics store.
+///
+/// The effort-corrected abundance divides there, and it was only ever given
+/// the copy made at startup, so every week since the last restart was divided
+/// by the listening recorded before it.
+#[cfg(feature = "analytics")]
+fn mirror_to_analytics(state: &AppState) {
+    if let Some(Err(e)) = state.mirror_recent_recording_effort() {
+        tracing::warn!(error = %e, "could not copy recording effort to the analytics store");
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+const fn mirror_to_analytics(_state: &AppState) {}
+
 /// Spawn the recording-effort recorder.
 ///
 /// Skipped in web-only mode by the caller: a station that is not capturing has
@@ -111,7 +126,12 @@ pub fn spawn_effort_recorder(state: AppState) {
         loop {
             tick.tick().await;
             let probe = state.clone();
-            let _ = tokio::task::spawn_blocking(move || sample_once(&probe, seconds)).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                if sample_once(&probe, seconds) > 0 {
+                    mirror_to_analytics(&probe);
+                }
+            })
+            .await;
         }
     });
 }

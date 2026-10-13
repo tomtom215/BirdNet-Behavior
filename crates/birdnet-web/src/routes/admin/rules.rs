@@ -168,6 +168,8 @@ struct ImportOutcome {
     metric_added: usize,
     /// Rules whose credential arrived redacted and was dropped.
     needs_credential: Vec<String>,
+    /// Rules whose webhook address arrived redacted; imported switched off.
+    needs_address: Vec<String>,
     /// Entries that could not be used, with the reason.
     rejected: Vec<String>,
 }
@@ -201,6 +203,7 @@ fn plan_import(
         added: 0,
         metric_added: 0,
         needs_credential: Vec::new(),
+        needs_address: Vec::new(),
         rejected: Vec::new(),
     };
     for entry in &set.rules {
@@ -208,6 +211,9 @@ fn plan_import(
             Ok(imported) => {
                 if imported.credential_was_redacted {
                     outcome.needs_credential.push(imported.rule.name.clone());
+                }
+                if imported.url_was_redacted {
+                    outcome.needs_address.push(imported.rule.name.clone());
                 }
                 ready.push(imported);
             }
@@ -249,9 +255,8 @@ async fn import_rules(
         }
     };
 
-    let audit_state = state.clone();
     let (inserted, metric_inserted) = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        let (inserted, metric_inserted) = state.with_db(|conn| {
             let mut n = 0;
             for i in &ready {
                 if insert_rule(conn, &i.rule).is_ok() {
@@ -265,25 +270,26 @@ async fn import_rules(
                 }
             }
             (n, m)
-        })
+        });
+        // The count, because an import is a bulk change: one row saying "12
+        // rules arrived" beats twelve rows and is what an operator compares
+        // against the file they pasted. In this closure, with the write, so a
+        // client that hangs up cannot leave the rules in and the row out.
+        if inserted > 0 || metric_inserted > 0 {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.import",
+                None,
+                Some(&format!(
+                    "inserted={inserted} metric_inserted={metric_inserted}"
+                )),
+            );
+        }
+        (inserted, metric_inserted)
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // The count, because an import is a bulk change: one row saying "12 rules
-    // arrived" beats twelve rows and is what an operator compares against the
-    // file they pasted.
-    if inserted > 0 || metric_inserted > 0 {
-        crate::audit::audit(
-            &audit_state,
-            Some(&request_user),
-            "rule.import",
-            None,
-            Some(&format!(
-                "inserted={inserted} metric_inserted={metric_inserted}"
-            )),
-        );
-    }
 
     Ok(Html(render_import_outcome(
         inserted,
@@ -306,6 +312,20 @@ fn render_import_outcome(
     } else {
         format!("<div class=\"rule-success\">Imported {inserted} rule(s).</div>")
     };
+    if !outcome.needs_address.is_empty() {
+        let names = outcome
+            .needs_address
+            .iter()
+            .map(|n| escape_html(n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = write!(
+            html,
+            "<div class=\"rule-error\">These were exported with their webhook address \
+             redacted and were imported switched off. Enter the address and turn them \
+             on: {names}</div>"
+        );
+    }
     if !outcome.needs_credential.is_empty() {
         let names = outcome
             .needs_credential
@@ -345,7 +365,7 @@ fn render_import_outcome(
 /// operators) via `birdnet_core::config::locale::parse_decimal`.
 /// Receiving them as `f64` here would let serde's default parser
 /// reject any comma value with a 422.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RuleForm {
     name: String,
     species_pattern: Option<String>,
@@ -427,7 +447,7 @@ const TEST_CONFIDENCE: f64 = 0.99;
 
 /// What testing a rule did, separated from the handler so the non-network
 /// branches are assertable without a request.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 enum TestPlan {
     /// A webhook to fire, with its rendered body.
     Fire {
@@ -440,6 +460,22 @@ enum TestPlan {
     },
     /// Nothing to send: the action has no outbound side.
     NothingToSend(&'static str),
+}
+
+impl std::fmt::Debug for TestPlan {
+    /// Hand-written because the URL is the rule's webhook, which commonly
+    /// carries its token in the path.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fire { url, method, body } => f
+                .debug_struct("Fire")
+                .field("url", &birdnet_core::config::redact::redact_value(url))
+                .field("method", method)
+                .field("body", body)
+                .finish(),
+            Self::NothingToSend(why) => f.debug_tuple("NothingToSend").field(why).finish(),
+        }
+    }
 }
 
 /// Work out what testing `action` would send.
@@ -607,25 +643,30 @@ async fn create_rule(
         action,
     };
 
-    let audit_state = state.clone();
-    let inserted =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| insert_rule(conn, &new_rule)))
-            .await;
+    let audited_name = rule_name.clone();
+    let inserted = tokio::task::spawn_blocking(move || {
+        let inserted = state.with_db(|conn| insert_rule(conn, &new_rule));
+        // A rule can suppress detections or POST to a webhook, so "who added
+        // the one that has been swallowing owls since March?" is an audit
+        // question. Written with the rule, so neither outlives the other.
+        if inserted.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.create",
+                Some(&audited_name),
+                None,
+            );
+        }
+        inserted
+    })
+    .await;
     if !matches!(inserted, Ok(Ok(_))) {
         tracing::warn!(rule = %rule_name, "alert rule not created");
         return crate::routes::pages::toast::not_applied(&Toast::error(format!(
             "The rule '{rule_name}' was not created: the database refused the write."
         )));
     }
-    // A rule can suppress detections or POST to a webhook, so "who added the
-    // one that has been swallowing owls since March?" is an audit question.
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.create",
-        Some(&rule_name),
-        None,
-    );
 
     // Return a success message and a loader that re-fetches the rule list.
     let body = Html(format!(
@@ -650,24 +691,28 @@ async fn delete_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
-    let audit_state = state.clone();
-    let deleted = tokio::task::spawn_blocking(move || state.with_db(|conn| delete_rule(conn, id)))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r.map_err(|e| e.to_string()));
+    let deleted = tokio::task::spawn_blocking(move || {
+        let deleted = state.with_db(|conn| delete_rule(conn, id));
+        if deleted.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.delete",
+                Some(&format!("rule:{id}")),
+                None,
+            );
+        }
+        deleted
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()));
     if let Err(e) = deleted {
         tracing::error!(error = %e, rule = id, "delete_rule failed");
         return Ok(toast::oob_only(Toast::error(
             "That rule could not be deleted — nothing was changed.",
         )));
     }
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.delete",
-        Some(&format!("rule:{id}")),
-        None,
-    );
 
     // O-18: HTMX removes the row via outerHTML swap (response body is empty
     // after OOB extraction); the OOB toast confirms the action separately.
@@ -679,12 +724,26 @@ async fn toggle_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Result<Html<String>, StatusCode> {
-    let audit_state = state.clone();
     // Same reasoning as `delete_rule_handler`: a 5xx here is invisible.
-    let toggled = tokio::task::spawn_blocking(move || state.with_db(|conn| toggle_rule(conn, id)))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r.map_err(|e| e.to_string()));
+    let toggled = tokio::task::spawn_blocking(move || {
+        let toggled = state.with_db(|conn| toggle_rule(conn, id));
+        if let Ok(new_state) = &toggled {
+            // The new state is the content: a rule silently disabled in
+            // October explains an empty November.
+            let enabled = new_state.unwrap_or(false);
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.toggle",
+                Some(&format!("rule:{id}")),
+                Some(if enabled { "enabled" } else { "disabled" }),
+            );
+        }
+        toggled
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()));
     let new_state = match toggled {
         Ok(v) => v,
         Err(e) => {
@@ -696,15 +755,6 @@ async fn toggle_rule_handler(
     };
 
     let enabled = new_state.unwrap_or(false);
-    // The new state is the content: a rule silently disabled in October
-    // explains an empty November.
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.toggle",
-        Some(&format!("rule:{id}")),
-        Some(if enabled { "enabled" } else { "disabled" }),
-    );
     let label = if enabled { "Enabled" } else { "Disabled" };
     let cls = if enabled { "on" } else { "off" };
     let body = Html(format!(
@@ -778,9 +828,21 @@ async fn create_metric_rule(
     }
 
     let name = rule.name.clone();
-    let audit_state = state.clone();
     let stored = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::metric_rules::insert(conn, &rule))
+        let stored = state.with_db(|conn| birdnet_db::metric_rules::insert(conn, &rule));
+        // A rule that alerts on the station's own health is one an operator
+        // will later ask "who set this, and when" about — the same question
+        // the detection rules are audited for.
+        if stored.is_ok() {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.create",
+                Some(&rule.name),
+                Some("kind=metric"),
+            );
+        }
+        stored
     })
     .await;
     match stored {
@@ -788,17 +850,6 @@ async fn create_metric_rule(
         Ok(Err(e)) => return metric_form_problem(&e.to_string()),
         Err(_) => return metric_form_problem("could not store the rule"),
     }
-
-    // A rule that alerts on the station's own health is one an operator will
-    // later ask "who set this, and when" about — the same question the
-    // detection rules are audited for.
-    crate::audit::audit(
-        &audit_state,
-        Some(&request_user),
-        "rule.create",
-        Some(&name),
-        Some("kind=metric"),
-    );
 
     let body = Html(String::from(
         "<div class=\"rule-success\">Rule created.</div>\
@@ -821,20 +872,20 @@ async fn delete_metric_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Html<String> {
-    let audit_state = state.clone();
-    let removed = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::metric_rules::delete(conn, id))
+    let _removed = tokio::task::spawn_blocking(move || {
+        let removed = state.with_db(|conn| birdnet_db::metric_rules::delete(conn, id));
+        if matches!(removed, Ok(true)) {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.delete",
+                Some(&id.to_string()),
+                Some("kind=metric"),
+            );
+        }
+        removed
     })
     .await;
-    if matches!(removed, Ok(Ok(true))) {
-        crate::audit::audit(
-            &audit_state,
-            Some(&request_user),
-            "rule.delete",
-            Some(&id.to_string()),
-            Some("kind=metric"),
-        );
-    }
     let body = Html(String::from(
         "<div hx-get=\"/admin/metric-rules/list\" hx-trigger=\"load\" \
           hx-target=\"#metric-rules-table-container\" hx-swap=\"innerHTML\"></div>",
@@ -847,25 +898,25 @@ async fn toggle_metric_rule_handler(
     request_user: RequestUser,
     Path(id): Path<i64>,
 ) -> Html<String> {
-    let audit_state = state.clone();
     let now = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::metric_rules::toggle(conn, id))
+        let now = state.with_db(|conn| birdnet_db::metric_rules::toggle(conn, id));
+        if let Ok(Some(enabled)) = now {
+            crate::audit::audit(
+                &state,
+                Some(&request_user),
+                "rule.toggle",
+                Some(&id.to_string()),
+                Some(if enabled {
+                    "kind=metric enabled"
+                } else {
+                    "kind=metric disabled"
+                }),
+            );
+        }
+        now
     })
     .await;
     let enabled = matches!(now, Ok(Ok(Some(true))));
-    if matches!(now, Ok(Ok(Some(_)))) {
-        crate::audit::audit(
-            &audit_state,
-            Some(&request_user),
-            "rule.toggle",
-            Some(&id.to_string()),
-            Some(if enabled {
-                "kind=metric enabled"
-            } else {
-                "kind=metric disabled"
-            }),
-        );
-    }
     let body = Html(String::from(
         "<div hx-get=\"/admin/metric-rules/list\" hx-trigger=\"load\" \
           hx-target=\"#metric-rules-table-container\" hx-swap=\"innerHTML\"></div>",
@@ -948,15 +999,15 @@ fn render_metric_rules_table(rules: &[birdnet_db::metric_rules::MetricRule]) -> 
 /// `const`. (A `<style>` block carries no CSP nonce burden; the inline-style
 /// guard forbids `style="` attributes, not stylesheets.)
 const RULES_CSS: &str = r"<style>
-      h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
+      .ar-title { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }
       .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
       .card h2 { font-size:1.1rem; color:var(--moss-ink); margin:0 0 1rem; }
-      label { display:block; font-size:.8rem; color:var(--fg-3); margin-bottom:.25rem; margin-top:.75rem; }
-      label:first-of-type { margin-top:0; }
-      input,select,textarea { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:.375rem;
+      :where(.ar-scope) label { display:block; font-size:.8rem; color:var(--fg-3); margin-bottom:.25rem; margin-top:.75rem; }
+      :where(.ar-scope) label:first-of-type { margin-top:0; }
+      :where(.ar-scope) :is(input,select,textarea) { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:.375rem;
                                color:var(--fg); padding:.5rem .75rem; font-size:.875rem; box-sizing:border-box; }
-      input:focus,select:focus,textarea:focus { outline:none; border-color:var(--moss-ink); }
+      :where(.ar-scope) :is(input,select,textarea):focus { outline:none; border-color:var(--moss-ink); }
       .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
       .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; }
       .btn { padding:.5rem 1.25rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:.875rem; }
@@ -965,11 +1016,11 @@ const RULES_CSS: &str = r"<style>
       .btn-danger { background:var(--rare); color:var(--on-fill); }
       .btn-danger:hover { background:var(--rare); }
       .btn-sm { padding:.25rem .75rem; font-size:.8rem; }
-      table { width:100%; border-collapse:collapse; font-size:.875rem; }
-      th { text-align:left; color:var(--fg-4); font-weight:600; font-size:.75rem; text-transform:uppercase;
+      :where(.ar-scope) table { width:100%; border-collapse:collapse; font-size:.875rem; }
+      :where(.ar-scope) th { text-align:left; color:var(--fg-4); font-weight:600; font-size:.75rem; text-transform:uppercase;
              padding:.5rem .75rem; border-bottom:1px solid var(--border); }
-      td { padding:.6rem .75rem; border-bottom:1px solid var(--surface); vertical-align:middle; }
-      tr:hover td { background:var(--surface)55; }
+      :where(.ar-scope) td { padding:.6rem .75rem; border-bottom:1px solid var(--surface); vertical-align:middle; }
+      :where(.ar-scope) tr:hover td { background:var(--surface)55; }
       .badge { display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }
       .badge-green { background:var(--moss-soft); color:var(--moss-ink); }
       .badge-gray  { background:var(--surface); color:var(--fg-4); border:1px solid var(--border); }
@@ -994,9 +1045,9 @@ const RULES_CSS: &str = r"<style>
     </style>";
 
 pub(crate) fn rules_body() -> String {
-    [RULES_CSS, r##"
+    ["<div class=\"ar-scope\">", RULES_CSS, r##"
 
-  <h1>Alert Rules</h1>
+  <h2 class="ar-title">Alert Rules</h2>
   <p class="subtitle">
     Define conditional actions triggered by detections — webhooks, structured
     logs, or notification suppression.
@@ -1165,7 +1216,7 @@ pub(crate) fn rules_body() -> String {
   }
   authKind.addEventListener('change', syncHeaderNameField);
   syncHeaderNameField();
-</script>"##]
+</script>"##, "</div>"]
     .concat()
     .replace("{METRIC_RULES_CARD}", &metric_rules_card())
 }
@@ -1645,11 +1696,16 @@ mod tests {
             added: 2,
             metric_added: 0,
             needs_credential: vec!["Owls at night".into(), "Kites".into()],
+            needs_address: vec!["Herons".into()],
             rejected: vec!["rule \"x\" has unknown action \"y\"".into()],
         };
         let html = render_import_outcome(2, 0, &outcome);
         assert!(html.contains("Imported 2 rule(s)"), "{html}");
         assert!(html.contains("Owls at night"), "{html}");
+        assert!(
+            html.contains("switched off") && html.contains("Herons"),
+            "{html}"
+        );
         assert!(html.contains("Kites"), "{html}");
         assert!(html.contains("unknown action"), "{html}");
     }
@@ -1881,6 +1937,7 @@ mod metric_export_tests {
             added: 2,
             metric_added: 3,
             needs_credential: Vec::new(),
+            needs_address: Vec::new(),
             rejected: Vec::new(),
         };
         let html = render_import_outcome(2, 3, &outcome);

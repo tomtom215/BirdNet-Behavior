@@ -138,6 +138,18 @@ server {
 }
 ```
 
+> **Keep the `X-Forwarded-For` line.** It is how the station tells visitors
+> apart for its rate limit, its sign-in throttle and the audit log. A proxy that
+> sets only `X-Real-IP` passes the visitor's own `X-Forwarded-For` through, and
+> a visitor could then claim any address. When the two headers name different
+> visitors the station believes neither and counts the request as the proxy's
+> own — safe, but every visitor then shares one rate-limit bucket. The log says
+> so once: *"a trusted proxy sent X-Forwarded-For and X-Real-IP naming
+> different clients"*. For the same reason, if your proxy does not set
+> `X-Real-IP` itself, have it clear one a visitor sends (nginx:
+> `proxy_set_header X-Real-IP "";`), so nobody can spend the proxy's own
+> sign-in throttle by forging it.
+
 > **WebSocket matters here.** The live dashboard feed, the spectrogram, and kiosk mode all use WebSockets (`/api/v2/ws/detections` and `/api/v2/ws/spectrogram`). Make sure your proxy forwards the `Upgrade`/`Connection` headers (shown above) or those features will silently stall.
 
 ## Sharing one hostname: serving under a path

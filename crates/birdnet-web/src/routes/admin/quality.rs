@@ -57,16 +57,40 @@ pub fn router() -> Router<AppState> {
 async fn phantoms_partial(State(state): State<AppState>) -> Html<String> {
     // An in-memory read, taken before `state` is moved into the closure.
     let nearby = state.nearby();
-    let reports = tokio::task::spawn_blocking(move || load_phantoms(&state))
+    let loaded = tokio::task::spawn_blocking(move || load_phantoms(&state))
         .await
-        .unwrap_or_default();
-    Html(render_phantoms(&reports, nearby.as_deref()))
+        .unwrap_or_else(|e| Err(e.to_string()));
+    Html(render_phantoms_or_error(loaded, nearby.as_deref()))
 }
 
 /// Read the per-species shapes and score them.
-pub(crate) fn load_phantoms(state: &AppState) -> Vec<birdnet_db::phantoms::PhantomReport> {
-    let shapes = state.with_db(|conn| birdnet_db::sqlite::species_shapes(conn).unwrap_or_default());
-    birdnet_db::phantoms::report(&shapes)
+///
+/// `Err` when the detections could not be read. It used to default to no
+/// shapes, and an empty report renders "Nothing looks suspicious" — an
+/// all-clear about the station's records given on a read that failed.
+pub(crate) fn load_phantoms(
+    state: &AppState,
+) -> Result<Vec<birdnet_db::phantoms::PhantomReport>, String> {
+    let shapes = state
+        .with_db(birdnet_db::sqlite::species_shapes)
+        .map_err(|e| e.to_string())?;
+    Ok(birdnet_db::phantoms::report(&shapes))
+}
+
+/// The report, or what to say when it could not be read.
+pub(crate) fn render_phantoms_or_error(
+    loaded: Result<Vec<birdnet_db::phantoms::PhantomReport>, String>,
+    nearby: Option<&birdnet_integrations::ebird::Snapshot>,
+) -> String {
+    match loaded {
+        Ok(reports) => render_phantoms(&reports, nearby),
+        Err(e) => {
+            tracing::warn!(error = %e, "suspect-species report could not be read");
+            r#"<div class="section-title">Species that may not be birds</div>
+  <p class="hint">The detections could not be read, so this report could not be checked. The log has the details.</p>"#
+                .to_owned()
+        }
+    }
 }
 
 /// Form carrying the species the operator chose to exclude.
@@ -99,10 +123,10 @@ async fn exclude_phantom(
     }
     // An in-memory read, taken before `state` is moved into the closure.
     let nearby = state.nearby();
-    let reports = tokio::task::spawn_blocking(move || load_phantoms(&state))
+    let loaded = tokio::task::spawn_blocking(move || load_phantoms(&state))
         .await
-        .unwrap_or_default();
-    Html(render_phantoms(&reports, nearby.as_deref()))
+        .unwrap_or_else(|e| Err(e.to_string()));
+    Html(render_phantoms_or_error(loaded, nearby.as_deref()))
 }
 
 /// Render the suspect-species report.
@@ -126,7 +150,7 @@ pub(crate) fn render_phantoms(
 
     if reports.is_empty() {
         out.push_str(
-            r#"<p class="empty-note mb">Nothing looks suspicious. Species are only considered once they have at least 10 detections, and are only listed when two independent signals agree.</p></div>"#,
+            r#"<p class="empty-note mb">Nothing looks suspicious. Species are only considered once they have at least 10 detections, and are only listed when two independent signals agree.</p>"#,
         );
         return out;
     }
@@ -186,7 +210,7 @@ pub(crate) fn render_phantoms(
 </tr>"##
         );
     }
-    out.push_str("</tbody></table></div>");
+    out.push_str("</tbody></table>");
     out
 }
 
@@ -287,9 +311,9 @@ fn render_quality_page(data: &QualityData) -> String {
         r#"<header class="page-head q-head" data-screen-label="Data quality" data-om-validate>
   <div>
     <div class="bnb-eyebrow">Admin · data quality</div>
-    <h1 class="display q-h1">
+    <h2 class="display q-h1">
       Data quality
-    </h1>
+    </h2>
     <p class="bnb-meta q-lede">
       Detection database health — confidence distributions, trend analysis,
       and potential false positives.
@@ -755,6 +779,25 @@ fn conf_to_color(conf: f64) -> &'static str {
 }
 
 #[cfg(test)]
+mod phantom_read_failure_tests {
+    /// A station whose detections cannot be read is told so, not told that
+    /// nothing looks suspicious. Observed failing with `load_phantoms`'s old
+    /// `species_shapes(conn).unwrap_or_default()` restored (as an `Ok` of the
+    /// empty report): the page said "Nothing looks suspicious".
+    #[test]
+    fn a_report_that_cannot_be_read_says_so() {
+        // No migrations: the `detections` table does not exist.
+        let state = crate::state::AppState::from_connection(
+            rusqlite::Connection::open_in_memory().expect("db"),
+            std::path::PathBuf::from(":memory:"),
+        );
+        let html = super::render_phantoms_or_error(super::load_phantoms(&state), None);
+        assert!(html.contains("could not be read"), "{html}");
+        assert!(!html.contains("Nothing looks suspicious"), "{html}");
+    }
+}
+
+#[cfg(test)]
 mod phantom_tests {
     use super::render_phantoms;
     use birdnet_db::phantoms::{PhantomReport, PhantomSignal, SpeciesShape};
@@ -821,6 +864,31 @@ mod phantom_tests {
             html.contains("10 detections"),
             "the threshold is not explained: {html}"
         );
+    }
+
+    /// The report is swapped into `#phantoms-section`, which its callers
+    /// open and close, so it must close nothing of its own. Observed failing
+    /// with the old trailing `</div>` on both paths: one each, and on
+    /// `/station/data` it closed the page's content column early.
+    #[test]
+    fn the_report_closes_only_what_it_opens() {
+        for html in [
+            render_phantoms(&[], None),
+            render_phantoms(
+                &[report(
+                    "Phantomus fictus",
+                    "Not A Bird",
+                    vec![PhantomSignal::NeverConfirmed],
+                )],
+                None,
+            ),
+        ] {
+            assert_eq!(
+                html.matches("<div").count(),
+                html.matches("</div>").count(),
+                "{html}"
+            );
+        }
     }
 
     #[test]

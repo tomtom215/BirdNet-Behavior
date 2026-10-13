@@ -46,7 +46,9 @@ pub use live::{
     LiveAudioHub, LiveAudioHubHandle, LiveSubscription, LiveTap, PcmSpec, new_live_audio_hub,
 };
 pub use manager::CaptureManager;
-pub use process::{is_tool_available, start_microphone_capture, start_rtsp_capture};
+pub use process::{
+    is_tool_available, network_input_options, start_microphone_capture, start_rtsp_capture,
+};
 pub use status::{
     CaptureStatus, CaptureStatusHandle, FLAP_THRESHOLD, FLAP_WINDOW, SourceState, SourceStatus,
     UPTIME_SEGMENTS, UptimeSegment, new_capture_status, publish_capture_status,
@@ -60,7 +62,8 @@ pub use tmpfs::{
 };
 pub use types::{
     AudioFormat, AudioPipeline, CaptureError, CaptureSource, DC_BLOCK_CUTOFF_HZ,
-    HIGH_PASS_CUTOFF_HZ, LocalOffset, RecordingConfig, RtspTransport, recording_filename_at,
+    HIGH_PASS_CUTOFF_HZ, LocalOffset, RecordingConfig, RtspMediaMode, RtspTransport,
+    StreamProtocol, recording_filename_at,
 };
 
 // Internal re-export for detection pipeline modules (daemon.rs, pipeline.rs).

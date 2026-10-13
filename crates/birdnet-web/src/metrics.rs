@@ -203,6 +203,14 @@ pub struct MetricsRegistry {
     /// inference never started. See `docs/UNATTENDED_DEPLOYMENT_AUDIT.md`
     /// (OB-12).
     files_analysed: RwLock<HashMap<String, AtomicU64>>,
+    /// Audio the pipeline finished analysing, in milliseconds, per source.
+    ///
+    /// The data rate: a source that delivers continuously adds one second of
+    /// audio per second, so `rate()` of it is about 1 once no backlog is
+    /// waiting (draining one, it is above 1). A count of files cannot
+    /// say that — a camera that drops packets still yields a 15-second
+    /// segment file, with less audio in it.
+    audio_analysed_ms: RwLock<HashMap<String, AtomicU64>>,
     /// Segments the watcher announced that were gone before the pipeline
     /// read them, per source (PR-1 / S-3): recorded audio never analysed.
     segments_dropped: RwLock<HashMap<String, AtomicU64>>,
@@ -282,6 +290,7 @@ impl MetricsRegistry {
             mqtt_last_error: RwLock::new(None),
             detections_dropped: RwLock::new(HashMap::new()),
             files_analysed: RwLock::new(HashMap::new()),
+            audio_analysed_ms: RwLock::new(HashMap::new()),
             segments_dropped: RwLock::new(HashMap::new()),
             segments_shed: RwLock::new(HashMap::new()),
             analysis_queue_depth: AtomicU64::new(u64::MAX),
@@ -302,16 +311,21 @@ impl MetricsRegistry {
 
     /// Bump a labelled counter map, taking the write lock only to insert.
     fn bump(map: &RwLock<HashMap<String, AtomicU64>>, key: &str) {
+        Self::add(map, key, 1);
+    }
+
+    /// Add `n` to a labelled counter.
+    fn add(map: &RwLock<HashMap<String, AtomicU64>>, key: &str, n: u64) {
         if let Ok(m) = map.read()
             && let Some(c) = m.get(key)
         {
-            c.fetch_add(1, Ordering::Relaxed);
+            c.fetch_add(n, Ordering::Relaxed);
             return;
         }
         if let Ok(mut m) = map.write() {
             m.entry(key.to_owned())
                 .or_insert_with(|| AtomicU64::new(0))
-                .fetch_add(1, Ordering::Relaxed);
+                .fetch_add(n, Ordering::Relaxed);
         }
     }
 
@@ -348,6 +362,19 @@ impl MetricsRegistry {
     /// answering nothing. Neither of those was distinguishable from outside.
     pub fn inc_file_analysed(&self, source: &str) {
         Self::bump(&self.files_analysed, source);
+    }
+
+    /// Record how much audio one analysed file held. A length that is not a
+    /// finite, non-negative number of seconds is not counted.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn add_audio_analysed(&self, source: &str, secs: f64) {
+        if secs.is_finite() && secs >= 0.0 {
+            Self::add(
+                &self.audio_analysed_ms,
+                source,
+                (secs * 1000.0).round() as u64,
+            );
+        }
     }
 
     /// Record a segment that vanished before the pipeline analysed it
@@ -737,6 +764,7 @@ impl MetricsRegistry {
             mqtt_connected: self.mqtt_connected(),
             detections_dropped: Self::read_map(&self.detections_dropped),
             files_analysed: Self::read_map(&self.files_analysed),
+            audio_analysed_ms: Self::read_map(&self.audio_analysed_ms),
             segments_dropped: Self::read_map(&self.segments_dropped),
             segments_shed: Self::read_map(&self.segments_shed),
             analysis_queue_depth: self.analysis_queue_depth(),
@@ -812,6 +840,8 @@ pub struct MetricsSnapshot {
     pub detections_dropped: Vec<(String, u64)>,
     /// Audio files the pipeline finished analysing, per source.
     pub files_analysed: Vec<(String, u64)>,
+    /// Audio analysed, in milliseconds, per source.
+    pub audio_analysed_ms: Vec<(String, u64)>,
     /// Segments gone before the pipeline read them, per source.
     pub segments_dropped: Vec<(String, u64)>,
     /// Segments the shed policy skipped, by reason.
@@ -854,6 +884,18 @@ fn push_pipeline_series(out: &mut String, snap: &MetricsSnapshot) {
             out,
             "birdnet_files_analysed_total{{source=\"{}\"}} {count}",
             escape_label(source)
+        );
+    }
+
+    out.push_str("# HELP birdnet_audio_analysed_seconds_total Seconds of audio the detection pipeline finished analysing, per source. Once nothing is waiting (birdnet_analysis_queue_depth), its rate is about 1 for a source that delivers continuously; above 1 while a backlog is analysed; below 1 when audio is missing — dropouts inside segments, or segments dropped or shed (see those counters).\n");
+    out.push_str("# TYPE birdnet_audio_analysed_seconds_total counter\n");
+    for (source, ms) in &snap.audio_analysed_ms {
+        let _ = writeln!(
+            out,
+            "birdnet_audio_analysed_seconds_total{{source=\"{}\"}} {}.{:03}",
+            escape_label(source),
+            ms / 1000,
+            ms % 1000
         );
     }
 
@@ -1368,6 +1410,34 @@ mod operational_metrics_tests {
         assert!(
             out.contains("# TYPE birdnet_files_analysed_total counter"),
             "it must be declared, and as a counter: {out}"
+        );
+    }
+
+    /// The data rate (upstream birdnet-go `712d4c2`): seconds of audio per
+    /// source, which a file count cannot give — a camera that drops packets
+    /// still yields one segment file, holding less audio. Observed failing
+    /// with `add_audio_analysed` an empty body: no series at all.
+    #[test]
+    fn analysed_audio_is_counted_in_seconds_per_source() {
+        let out = rendered(|r| {
+            r.add_audio_analysed("local", 15.0);
+            r.add_audio_analysed("local", 14.25);
+            r.add_audio_analysed("cam1", 3.0005);
+            // Not a length: counted as nothing rather than as a wild value.
+            r.add_audio_analysed("cam1", f64::NAN);
+            r.add_audio_analysed("cam1", -1.0);
+        });
+        assert!(
+            out.contains(r#"birdnet_audio_analysed_seconds_total{source="local"} 29.250"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"birdnet_audio_analysed_seconds_total{source="cam1"} 3.001"#),
+            "{out}"
+        );
+        assert!(
+            out.contains("# TYPE birdnet_audio_analysed_seconds_total counter"),
+            "{out}"
         );
     }
 

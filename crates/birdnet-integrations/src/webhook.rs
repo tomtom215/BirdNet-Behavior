@@ -79,6 +79,9 @@ pub enum WebhookError {
     ClientBuild(String),
     /// The request was sent but the network or the remote rejected it.
     Send(String),
+    /// The URL, or a redirect it led to, names an address the
+    /// [`egress_guard`](crate::egress_guard) refuses. Nothing was sent there.
+    Refused(crate::egress_guard::Refused),
 }
 
 impl std::fmt::Display for WebhookError {
@@ -86,6 +89,7 @@ impl std::fmt::Display for WebhookError {
         match self {
             Self::ClientBuild(e) => write!(f, "failed to build HTTP client for webhook: {e}"),
             Self::Send(e) => write!(f, "webhook dispatch failed: {e}"),
+            Self::Refused(r) => write!(f, "webhook not sent: {r}"),
         }
     }
 }
@@ -112,7 +116,12 @@ pub async fn dispatch_webhook(
     auth: Option<&WebhookAuth>,
 ) -> Result<u16, WebhookError> {
     let spec = build_webhook_spec(method, body);
-    let client = reqwest::Client::builder()
+    // An unparseable URL is left for reqwest to report, as before; a literal
+    // host is checked here because it never reaches the guarded resolver.
+    if let Ok(parsed) = reqwest::Url::parse(url) {
+        crate::egress_guard::check_url(&parsed).map_err(WebhookError::Refused)?;
+    }
+    let client = crate::egress_guard::guarded_client_builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| WebhookError::ClientBuild(e.to_string()))?;
@@ -140,7 +149,26 @@ pub async fn dispatch_webhook(
         // is frequently the credential itself — a Slack or Discord hook, a
         // Home Assistant `?token=` — so it must not reach the log through an
         // error message.
-        .map_err(|e| WebhookError::Send(e.without_url().to_string()))
+        .map_err(|e| {
+            refusal_in(&e).map_or_else(
+                || WebhookError::Send(e.without_url().to_string()),
+                WebhookError::Refused,
+            )
+        })
+}
+
+/// The guard's refusal, if that is what stopped the request: a redirect hop
+/// the policy refused, or a name the resolver refused. Both arrive wrapped in
+/// `reqwest`'s error and are found by walking its source chain.
+fn refusal_in(error: &reqwest::Error) -> Option<crate::egress_guard::Refused> {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(e) = source {
+        if let Some(refused) = e.downcast_ref::<crate::egress_guard::Refused>() {
+            return Some(refused.clone());
+        }
+        source = e.source();
+    }
+    None
 }
 
 /// A webhook URL with everything after the host removed.
@@ -238,8 +266,52 @@ mod tests {
             Err(WebhookError::ClientBuild(e)) => {
                 panic!("expected Send error, got ClientBuild({e})")
             }
+            Err(WebhookError::Refused(r)) => {
+                panic!("TEST-NET-2 is public address space, not refused: {r}")
+            }
             Ok(s) => panic!("expected Err, got Ok({s})"),
         }
+    }
+
+    /// O-11: a rule URL naming the cloud metadata address is refused before
+    /// any connection, and says why on the Test button.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_metadata_address_is_never_contacted() {
+        let r = dispatch_webhook(
+            "http://169.254.169.254/latest/meta-data/",
+            "GET",
+            None,
+            None,
+        )
+        .await;
+        let e = r.expect_err("must not be sent").to_string();
+        assert!(e.contains("outbound-address guard"), "{e}");
+    }
+
+    /// A permitted host cannot hand the request on to a refused one: each
+    /// redirect hop is checked too. The first hop is loopback, which is
+    /// allowed — the auth tests below are the counterpart that shows it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_redirect_to_a_metadata_address_is_not_followed() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr").to_string();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = vec![0_u8; 8192];
+            let _ = sock.read(&mut buf);
+            let _ = sock.write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data/\r\n\
+                  Content-Length: 0\r\n\r\n",
+            );
+            let _ = sock.flush();
+        });
+        let r = dispatch_webhook(&format!("http://{addr}/hook"), "GET", None, None).await;
+        let e = r
+            .expect_err("the redirect must not be followed")
+            .to_string();
+        assert!(e.contains("outbound-address guard"), "{e}");
     }
 
     #[test]

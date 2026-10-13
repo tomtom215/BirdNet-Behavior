@@ -312,7 +312,7 @@ impl SpeciesFilter {
         // allows the call again now, for the binaries already shipped; this
         // keeps the session from needing it. One thread is ample: the model
         // scores one location per week.
-        let session = Session::builder()
+        let session = Session::builder(super::model::ort_environment()?)
             .map_err(|e| InferenceError::Model(e.to_string()))?
             .with_intra_threads(1)
             .map_err(|e| InferenceError::Model(e.to_string()))?
@@ -449,6 +449,19 @@ impl SpeciesFilter {
                 probabilities.len(),
                 expected,
                 self.alignment.is_some(),
+            )));
+        }
+
+        // The threshold test below skips `prob < sf_thresh`, and `NaN < x` is
+        // false, so a NaN would *pass*. A model that produces one is not
+        // answering the question; say so, and the caller turns the filter off
+        // for this file and reports it, as for any other run-time failure.
+        if let Some(bad) = probabilities.iter().position(|p| !p.is_finite()) {
+            return Err(InferenceError::Runtime(format!(
+                "metadata model produced a non-finite score ({}) at output {bad} of {}; \
+                 the model file is damaged or mis-quantised",
+                probabilities[bad],
+                probabilities.len()
             )));
         }
 
@@ -1047,6 +1060,47 @@ mod metadata_vocabulary_tests {
             HashSet::from(["Erithacus rubecula".to_owned()]),
             "only the species the metadata model scored above threshold AND the \
              classifier can emit may pass; got {passing:?}"
+        );
+    }
+
+    /// A metadata model that outputs NaN for a species must not let it pass.
+    ///
+    /// The threshold test is `prob < sf_thresh → skip`, and `NaN < x` is
+    /// false, so a NaN score *passed* the occurrence filter — an all-NaN
+    /// output admitted every species, silently. The model here is the tiny
+    /// one above with `B[4]` (Erithacus rubecula, the one species that
+    /// passes at 0.7006) replaced by NaN, so `sigmoid(NaN)` comes out of a
+    /// real ONNX Runtime session. The failure is an error, which the daemon
+    /// already reports (rate-limited) and handles by turning the occurrence
+    /// filter off for that file — visible, rather than a quiet wrong answer.
+    #[test]
+    fn a_nan_score_is_an_error_not_a_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = TINY_META_MODEL.to_vec();
+        let bias: Vec<u8> = [2.2_f32, -2.2, 1.4, -3.0, 0.85]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let at = bytes
+            .windows(bias.len())
+            .position(|w| w == bias.as_slice())
+            .expect("the fixture's bias initializer must be where this test expects it");
+        bytes[at + 16..at + 20].copy_from_slice(&f32::NAN.to_le_bytes());
+        let path = dir.path().join("nan_meta.onnx");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut filter = SpeciesFilter::load_with_vocabulary(
+            &path,
+            Some(meta_labels()),
+            &classifier_labels(),
+            &HashMap::new(),
+            config(),
+        )
+        .expect("the patched model still loads");
+        let got = filter.filter_species(Some((42.0, -71.0)), 10, &classifier_labels());
+        assert!(
+            matches!(got, Err(InferenceError::Runtime(_))),
+            "a NaN occurrence score must be reported, not passed; got {got:?}"
         );
     }
 

@@ -3026,6 +3026,8 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .bh-muted-sm     { color: var(--text-muted); font-size: 0.8rem; }
 .bh-cell-note    { color: var(--text-muted); padding-top: 0.5rem; }
 .bh-after        { font-size: 0.85rem; margin-bottom: 0.75rem; }
+/* The neighbour card stacks a "Before" and an "After" table. */
+.bh-after:not(:first-child) { margin-top: 1.5rem; }
 .bh-config-table { font-size: 0.85rem; }
 .bh-key          { font-weight: 600; }
 
@@ -3424,7 +3426,6 @@ a.login-about    { color: var(--fg-3); }
 
 /* ── Audio sources (/admin/audio) ───────────────────────────────────────── */
 .aas-head       { align-items: flex-start; }
-.aas-h1         { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
 .aas-lede       { margin-top: 6px; max-width: 580px; }
 .aas-pills      { margin: 0; }
 .aas-count      { display: inline-flex; align-items: center; gap: 12px; }
@@ -3631,6 +3632,22 @@ a.bk-download    { color: var(--moss-ink); font-size: .8rem; text-decoration: no
 /* admin/audio.rs — inline edit-source form (overrides .audio-source__* by order). */
 .aud-edit-form    { display: contents; }
 .aud-edit-id      { display: flex; flex-direction: column; gap: 6px; }
+/* The edit form used to borrow its input widths and its one-checkbox-per-line
+   layout from `label`/`input` rules that leaked out of the settings, species
+   and rules stylesheets on the same Station tab — which also put each
+   checkbox on a full-width row of its own, away from its words. Those rules
+   are scoped now, so the form says what it wants. */
+.aud-edit-id input { width: 100%; box-sizing: border-box; }
+.aud-edit-pipeline {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+}
+.aud-edit-pipeline label { display: inline-flex; align-items: center; gap: 8px; }
+.aud-edit-pipeline .hint { margin: 2px 0 0; }
 .aud-edit-right   { display: inline-flex; gap: 8px; }
 input.aud-edit-label  { font-size: 14.5px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
 input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
@@ -3648,6 +3665,19 @@ input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; b
   margin-top: 4px;
 }
 .aud-edit-quiet .hint { flex-basis: 100%; margin: 2px 0 0; }
+/* An RTSP row's transport and media mode, on a row of their own like the
+   quiet window. */
+.aud-edit-rtsp {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.aud-edit-rtsp .hint { flex-basis: 100%; margin: 2px 0 0; }
+.aud-edit-pair { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; max-width: 100%; }
+.aud-edit-pair select { max-width: 100%; min-width: 0; }
 input.aud-edit-time {
   font-size: 12.5px;
   padding: 6px 8px;
@@ -4034,6 +4064,13 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
 .pt-next-row > span:not(.arr):not(.p) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-next-row .arr { color: var(--fg-4); }
 .pt-next-row .p { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); text-align: right; white-space: nowrap; }
+/* The follow-on card's Before/After tables. Below 980px every table becomes a
+   no-wrap sideways scroller; with one-line species names these three short
+   columns came to 342px in a 304px box at 390px, and Observed sat entirely
+   behind the scroll. Letting the name wrap is enough for them to fit. On the
+   cell itself, so the inherited no-wrap loses wherever this rule sits.
+   `data-fits-phone` on the table holds it to that in tools/visual-qa/qa.mjs. */
+table.bh-neighbours td:first-child { white-space: normal; }
 table.pt-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
 table.pt-tbl th { text-align: left; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; padding: 6px 8px; border-bottom: 0.5px solid var(--border); }
 table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); font-variant-numeric: tabular-nums; }
@@ -4086,6 +4123,12 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .work2 { display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(300px, 1fr); gap: 20px; align-items: start; }
 .work2 .rail { display: flex; flex-direction: column; gap: 20px; }
 @media (max-width: 860px) { .work2 { grid-template-columns: 1fr; } }
+/* The Today layout can hide the log or every rail card (today_layout.rs); the
+   survivor takes the width. Two classes, so these win over `.work2` and its
+   media query wherever they sit. An empty rail is removed from the
+   accessibility tree with it, rather than left as an empty landmark. */
+.work2.work2--log-only, .work2.work2--rail-only { grid-template-columns: 1fr; }
+.work2.work2--log-only > .rail, .work2.work2--empty { display: none; }
 
 /* Compact best-recordings rows — rail-scaled, NOT full feed rows */
 .x-best { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 0; border-top: 0.5px solid var(--hairline); }

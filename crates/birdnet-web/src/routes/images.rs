@@ -57,7 +57,8 @@ async fn species_image_info(
         );
     }
 
-    if !has_been_heard(&state, &scientific_name) {
+    let name = scientific_name.clone();
+    if !state.run_blocking(move |s| has_been_heard(s, &name)).await {
         return (
             StatusCode::OK,
             Json(json!({
@@ -204,16 +205,18 @@ async fn species_image_file(
     // happens to populate that species, leaving species- and detection-detail
     // previews permanently broken if the gallery is never opened. `get_image`
     // is a no-op network-wise once the file is already cached.
-    let image = match cache.get_cached(&scientific_name) {
-        Some(image) => image,
-        None if !has_been_heard(&state, &scientific_name) => {
+    let image = if let Some(image) = cache.get_cached(&scientific_name) {
+        image
+    } else {
+        let name = scientific_name.clone();
+        if !state.run_blocking(move |s| has_been_heard(s, &name)).await {
             return image_error(StatusCode::NOT_FOUND, "image not available");
         }
-        None => match cache.get_image(&scientific_name).await {
+        match cache.get_image(&scientific_name).await {
             Ok(image) => image,
             // Lookup/download failed (offline, rate-limited, not found, …).
             Err(_) => return image_error(StatusCode::NOT_FOUND, "image not available"),
-        },
+        }
     };
 
     // Honour the admin image blacklist: never serve a blacklisted URL. Only
@@ -221,12 +224,17 @@ async fn species_image_file(
     // only hits carry no URL and are covered by the cache purge in
     // `add_blacklist`. A blacklisted hit also evicts the cached file so the
     // re-fetch is refused rather than re-served from disk next time.
-    if !image.url.is_empty()
-        && state.with_db(|conn| {
-            birdnet_db::sqlite::is_image_blacklisted(conn, &scientific_name, &image.url)
-                .unwrap_or(false)
-        })
-    {
+    let blacklisted = !image.url.is_empty() && {
+        let (name, url) = (scientific_name.clone(), image.url.clone());
+        state
+            .run_blocking(move |s| {
+                s.with_db(|conn| {
+                    birdnet_db::sqlite::is_image_blacklisted(conn, &name, &url).unwrap_or(false)
+                })
+            })
+            .await
+    };
+    if blacklisted {
         cache.remove(&scientific_name);
         return image_error(StatusCode::NOT_FOUND, "image blacklisted");
     }

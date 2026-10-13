@@ -167,29 +167,6 @@ pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<Detection
     Ok(rows)
 }
 
-/// [`detections_by_date`], one page at a time: `limit` rows after the first
-/// `offset`, in the same order.
-///
-/// # Errors
-///
-/// Returns `DbError` on query failure.
-pub fn detections_by_date_page(
-    conn: &Connection,
-    date: &str,
-    limit: u32,
-    offset: u32,
-) -> Result<Vec<DetectionRow>, DbError> {
-    let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections WHERE Date = ?1 \
-         ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map(params![date, limit, offset], map_detection_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
 /// Seconds elapsed since the most recent stored detection, or `None` when
 /// the station has never detected anything.
 ///
@@ -319,27 +296,6 @@ pub fn concurrent_detections_from_other_sources(
                 })
             },
         )?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
-/// Query recent detections with limit and offset for pagination.
-///
-/// # Errors
-///
-/// Returns `DbError` on query failure.
-pub fn recent_detections_page(
-    conn: &Connection,
-    limit: u32,
-    offset: u32,
-) -> Result<Vec<DetectionRow>, DbError> {
-    let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections \
-         ORDER BY Date DESC, Time DESC LIMIT ?1 OFFSET ?2"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map(params![limit, offset], map_detection_row)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -491,29 +447,6 @@ pub fn detections_by_species(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![com_name, limit], map_detection_row)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
-/// [`detections_by_species`], one page at a time: `limit` rows after the
-/// first `offset`, in the same order.
-///
-/// # Errors
-///
-/// Returns `DbError` on query failure.
-pub fn detections_by_species_page(
-    conn: &Connection,
-    com_name: &str,
-    limit: u32,
-    offset: u32,
-) -> Result<Vec<DetectionRow>, DbError> {
-    let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections \
-         WHERE Com_Name = ?1 ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
-        .query_map(params![com_name, limit, offset], map_detection_row)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -1462,18 +1395,6 @@ mod tests {
     }
 
     #[test]
-    fn pagination_pages_correctly() {
-        let (_tmp, conn) = temp_db_with_data();
-        let page1 = recent_detections_page(&conn, 2, 0).unwrap();
-        let page2 = recent_detections_page(&conn, 2, 2).unwrap();
-        let page3 = recent_detections_page(&conn, 2, 4).unwrap();
-        assert_eq!(page1.len(), 2);
-        assert_eq!(page2.len(), 2);
-        assert!(page3.is_empty());
-        assert_ne!(page1[0].time, page2[0].time);
-    }
-
-    #[test]
     fn analytic_detections_no_filter() {
         let (_tmp, conn) = temp_db_with_data();
         let (rows, truncated) = analytic_detections(&conn, None, None, 10_000).unwrap();
@@ -1837,16 +1758,6 @@ mod tests {
     }
 
     #[test]
-    fn recent_detections_page_pagination_terminates() {
-        // Pin that the page beyond the data is empty (boundary case
-        // that mutation testing on `LIMIT ?1 OFFSET ?2` would otherwise
-        // flip).
-        let (_tmp, conn) = temp_db_with_data();
-        let beyond = recent_detections_page(&conn, 10, 100).unwrap();
-        assert!(beyond.is_empty());
-    }
-
-    #[test]
     fn recent_clips_filters_and_file_gate() {
         let dir = tempfile::tempdir().unwrap();
         let conn = open_or_create(&dir.path().join("t.db")).unwrap();
@@ -2152,6 +2063,7 @@ mod tests {
     /// green. These pin what each returns, with rows the tests choose.
     mod pagers_and_window_count {
         use super::super::*;
+        use crate::sqlite::queries::detections::filter::{DetectionFilter, search_detections};
         use crate::sqlite::queries::detections::test_support::{insert_test_detection, test_conn};
 
         fn when(rows: &[DetectionRow]) -> Vec<(String, String)> {
@@ -2216,7 +2128,7 @@ mod tests {
         }
 
         #[test]
-        fn date_page_keeps_the_date_order_and_splits_it() {
+        fn a_date_filter_pages_in_time_order() {
             let conn = test_conn();
             for time in ["06:30:00", "07:00:00", "06:45:00"] {
                 insert_test_detection(
@@ -2238,25 +2150,34 @@ mod tests {
             );
 
             assert_eq!(
-                when(&detections_by_date_page(&conn, "2026-03-11", 2, 0).unwrap()),
+                when(
+                    &search_detections(&conn, &DetectionFilter::for_date("2026-03-11"), 2, 0)
+                        .unwrap()
+                ),
                 vec![
                     pair("2026-03-11", "07:00:00"),
                     pair("2026-03-11", "06:45:00")
                 ]
             );
             assert_eq!(
-                when(&detections_by_date_page(&conn, "2026-03-11", 2, 2).unwrap()),
+                when(
+                    &search_detections(&conn, &DetectionFilter::for_date("2026-03-11"), 2, 2)
+                        .unwrap()
+                ),
                 vec![pair("2026-03-11", "06:30:00")]
             );
             assert_eq!(
-                when(&detections_by_date_page(&conn, "2026-03-11", 10, 0).unwrap()),
+                when(
+                    &search_detections(&conn, &DetectionFilter::for_date("2026-03-11"), 10, 0)
+                        .unwrap()
+                ),
                 when(&detections_by_date(&conn, "2026-03-11").unwrap()),
                 "one page that holds everything is the unpaged listing"
             );
         }
 
         #[test]
-        fn species_page_orders_across_dates_and_splits_it() {
+        fn a_species_filter_pages_across_dates() {
             let conn = test_conn();
             for (date, time) in [
                 ("2026-03-10", "08:00:00"),
@@ -2275,16 +2196,31 @@ mod tests {
             );
 
             assert_eq!(
-                when(&detections_by_species_page(&conn, "Robin", 2, 0).unwrap()),
+                when(&search_detections(&conn, &robin(), 2, 0).unwrap()),
                 vec![
                     pair("2026-03-11", "09:00:00"),
                     pair("2026-03-11", "06:00:00")
                 ]
             );
             assert_eq!(
-                when(&detections_by_species_page(&conn, "Robin", 2, 2).unwrap()),
+                when(&search_detections(&conn, &robin(), 2, 2).unwrap()),
                 vec![pair("2026-03-10", "08:00:00")]
             );
+            // A page beyond the data is empty rather than wrapping or
+            // repeating — the `LIMIT ? OFFSET ?` boundary a mutant would flip.
+            assert!(
+                search_detections(&conn, &robin(), 10, 100)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+
+        /// One species, as `/api/v2/detections?species=Robin` asks for it.
+        fn robin() -> DetectionFilter {
+            DetectionFilter {
+                species: vec!["Robin".to_owned()],
+                ..DetectionFilter::default()
+            }
         }
     }
 }

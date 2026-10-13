@@ -17,7 +17,7 @@ use std::fmt;
 /// flap between `online` and `offline` for ever.
 ///
 /// [`client_id`]: Self::client_id
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MqttConfig {
     /// Broker hostname or IP address.
     pub host: String,
@@ -46,6 +46,24 @@ pub struct MqttConfig {
     pub timeout_ms: u64,
     /// TLS settings, or `None` for a plaintext connection.
     pub tls: Option<TlsConfig>,
+}
+
+impl std::fmt::Debug for MqttConfig {
+    /// Hand-written so the broker password cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MqttConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("client_id", &self.client_id)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("topic_prefix", &self.topic_prefix)
+            .field("qos", &self.qos)
+            .field("retain", &self.retain)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("tls", &self.tls)
+            .finish()
+    }
 }
 
 /// How to establish TLS to the broker.
@@ -188,6 +206,65 @@ pub struct DetectionPayload {
     /// RTSP stream identifier, if applicable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtsp_id: Option<String>,
+    /// The species' detections before this one — see [`SpeciesHistory`].
+    #[serde(flatten)]
+    pub species_history: SpeciesHistory,
+}
+
+/// What the station had heard of a species before the detection being
+/// published, as `species_first_detected_at` / `species_last_detected_at`.
+///
+/// Three states, because the payload has to tell them apart:
+///
+/// * [`Seen`](Self::Seen) — both keys, each a `YYYY-MM-DDTHH:MM:SS` local
+///   timestamp like `timestamp`.
+/// * [`Never`](Self::Never) — both keys, `null`: nothing before this one. A
+///   first-ever detection, stated as a fact.
+/// * [`Unknown`](Self::Unknown) — neither key. The history could not be read,
+///   and a `null` here would claim a first-ever detection the station never
+///   established; an automation keyed on "new species" would fire on a
+///   database error. Absent reads as absent.
+///
+/// tphakala/birdnet-go sends `null` for both of the last two cases
+/// (`speciesFirstDetectedAt`, 6dfdc10); the keys here are `snake_case` like
+/// every other field in this payload.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SpeciesHistory {
+    /// The history could not be read: both keys are omitted.
+    #[default]
+    Unknown,
+    /// No earlier detection: both keys are `null`.
+    Never,
+    /// The earliest and latest earlier detections.
+    Seen {
+        /// `species_first_detected_at`.
+        first: String,
+        /// `species_last_detected_at`.
+        last: String,
+    },
+}
+
+impl serde::Serialize for SpeciesHistory {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        const FIRST: &str = "species_first_detected_at";
+        const LAST: &str = "species_last_detected_at";
+        match self {
+            Self::Unknown => serializer.serialize_map(Some(0))?.end(),
+            Self::Never => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry(FIRST, &None::<&str>)?;
+                map.serialize_entry(LAST, &None::<&str>)?;
+                map.end()
+            }
+            Self::Seen { first, last } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry(FIRST, first)?;
+                map.serialize_entry(LAST, last)?;
+                map.end()
+            }
+        }
+    }
 }
 
 /// Errors produced by the MQTT publisher.
@@ -346,11 +423,58 @@ mod tests {
             confidence_pct: 87,
             file_name: None,
             rtsp_id: None,
+            species_history: SpeciesHistory::Unknown,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("Turdus merula"));
         assert!(json.contains("0.87"));
         // file_name and rtsp_id should be omitted when None
         assert!(!json.contains("file_name"));
+    }
+
+    fn history_json(history: SpeciesHistory) -> serde_json::Value {
+        let payload = DetectionPayload {
+            timestamp: "2026-05-22T21:10:31".into(),
+            scientific_name: "Turdus merula".into(),
+            common_name: "Eurasian Blackbird".into(),
+            confidence: 0.87,
+            confidence_pct: 87,
+            file_name: None,
+            rtsp_id: None,
+            species_history: history,
+        };
+        serde_json::to_value(&payload).unwrap()
+    }
+
+    /// Seen: both keys, as timestamps in the payload's own shape.
+    #[test]
+    fn species_history_seen_carries_both_timestamps() {
+        let v = history_json(SpeciesHistory::Seen {
+            first: "2026-03-01T05:10:00".into(),
+            last: "2026-05-22T06:00:00".into(),
+        });
+        assert_eq!(v["species_first_detected_at"], "2026-03-01T05:10:00");
+        assert_eq!(v["species_last_detected_at"], "2026-05-22T06:00:00");
+    }
+
+    /// Never and Unknown must not serialise alike: one is a first-ever
+    /// detection, the other a failed read, and an automation that fires on
+    /// "new species" can only tell them apart by key presence.
+    #[test]
+    fn species_history_never_is_null_and_unknown_is_absent() {
+        let never = history_json(SpeciesHistory::Never);
+        let obj = never.as_object().unwrap();
+        assert!(obj.contains_key("species_first_detected_at"), "{never}");
+        assert!(obj["species_first_detected_at"].is_null());
+        assert!(obj["species_last_detected_at"].is_null());
+
+        let unknown = history_json(SpeciesHistory::Unknown);
+        let obj = unknown.as_object().unwrap();
+        assert!(!obj.contains_key("species_first_detected_at"), "{unknown}");
+        assert!(!obj.contains_key("species_last_detected_at"), "{unknown}");
+        assert_eq!(
+            obj["scientific_name"], "Turdus merula",
+            "the rest is intact"
+        );
     }
 }

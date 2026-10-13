@@ -46,6 +46,24 @@ detection. The list auto-refreshes, so a page left open stays current.
 **best recordings**, a one-line **station-health** readout, and quiet
 "looking back" links into [Reports](./reports.md).
 
+## Arranging the page
+
+A station on a kitchen tablet or a visitor-centre wall rarely needs everything
+an operator debugging a microphone does. **Settings → Today Page Layout**
+(at the foot of the settings page) lists the page's parts in their current
+order, each with **Move up**, **Move down** and **Show/Hide**. Every press is
+saved at once.
+
+Parts move within their own area: the headline, the nudge and the day strip
+among themselves at the top; the top-species, best-recordings and station
+cards within the side column. The detection log keeps its place and can only
+be hidden. Hide the log and the side column takes the full width; hide every
+side card and the log does. The order is the page's real order, so a screen
+reader and the Tab key follow what is on screen.
+
+A new station shows everything until its first detection, so the setup
+checklist in the headline cannot be hidden by accident.
+
 ## First run
 
 A brand-new station — one that has never heard a bird — shows a friendly

@@ -42,7 +42,7 @@ jobs:
   fmt:
     name: Format (rustfmt)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10  # observed 14s
+    timeout-minutes: 10  # observed 18s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + rustfmt)
@@ -56,7 +56,7 @@ jobs:
   clippy:
     name: Clippy (pedantic + nursery)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 8m12s
+    timeout-minutes: 30  # observed 8m18s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + clippy)
@@ -90,7 +90,7 @@ jobs:
     runs-on: ubuntu-24.04
     # 60, not 45: the 2026-09-24 `main` run took 35.6m, 79% of 45 and over
     # the 75% headroom limit `CI config` enforces; it is 59% of 60.
-    timeout-minutes: 60  # observed 29m53s
+    timeout-minutes: 60  # observed 34m31s
     env:
       # Whether the extension-gated tests are allowed to skip.
       #
@@ -108,6 +108,13 @@ jobs:
       # Set here rather than by the fetch step on success: a flag the fetch
       # controls could not catch the fetch failing, which is the whole defect.
       BIRDNET_REQUIRE_LIVE_EXTENSION: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '' }}
+      # The clip-conversion tests (FLAC/MP3/Ogg output, the tags carried into
+      # it, the frequency shift) need ffmpeg and used to skip without it. A
+      # skip prints only into captured output, so a runner image that dropped
+      # ffmpeg would have reported them green having run none. ffmpeg is
+      # installed below and its absence is now a failure, on every event: unlike
+      # the extensions above it comes from the distribution, not a CDN.
+      BNB_REQUIRE_FFMPEG: "1"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -124,7 +131,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake g++
+          sudo apt-get install -y --no-install-recommends cmake g++ ffmpeg
       - name: Cache Cargo
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -167,7 +174,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          url="https://community-extensions.duckdb.org/v1.5.5/linux_amd64/behavioral.duckdb_extension.gz"
+          url="https://community-extensions.duckdb.org/v1.5.6/linux_amd64/behavioral.duckdb_extension.gz"
           tmp="$RUNNER_TEMP/behavioral.duckdb_extension"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o "${tmp}.gz" "$url"; then
             gunzip -f "${tmp}.gz"
@@ -196,7 +203,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          url="https://extensions.duckdb.org/v1.5.5/linux_amd64/icu.duckdb_extension.gz"
+          url="https://extensions.duckdb.org/v1.5.6/linux_amd64/icu.duckdb_extension.gz"
           tmp="$RUNNER_TEMP/icu.duckdb_extension"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o "${tmp}.gz" "$url"; then
             gunzip -f "${tmp}.gz"
@@ -238,7 +245,7 @@ jobs:
   inference:
     name: Inference against the real model
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 11m11s
+    timeout-minutes: 30  # observed 12m26s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -350,7 +357,7 @@ jobs:
   doc:
     name: Rustdoc (no broken links)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 8m30s
+    timeout-minutes: 30  # observed 8m18s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -372,7 +379,7 @@ jobs:
   build:
     name: Build (debug, all features)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 10m15s
+    timeout-minutes: 30  # observed 10m35s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -421,7 +428,7 @@ jobs:
   msrv:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 8m19s
+    timeout-minutes: 30  # observed 8m33s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -478,7 +485,7 @@ jobs:
   cross-aarch64:
     name: Cross-check (aarch64 / Raspberry Pi)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40  # observed 10m19s
+    timeout-minutes: 40  # observed 10m28s
     # Catch Pi-breaking changes (target-specific cfg, libduckdb cross-compile,
     # pointer-width assumptions) at PR time instead of only at release tagging,
     # which is the sole place aarch64 was built before. `check` keeps it cheap
@@ -513,7 +520,7 @@ jobs:
   test-aarch64:
     name: Tests (aarch64, native)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60  # observed 6m22s
+    timeout-minutes: 60  # observed 6m35s
     # The first `cargo test` this repository has ever run on the architecture
     # it ships to (ARM-1). `cross-aarch64` above compiles for the Pi and runs
     # nothing; every test result before this job was an x86_64 result, and the
@@ -565,7 +572,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          url="https://extensions.duckdb.org/v1.5.5/linux_arm64/icu.duckdb_extension.gz"
+          url="https://extensions.duckdb.org/v1.5.6/linux_arm64/icu.duckdb_extension.gz"
           tmp="$RUNNER_TEMP/icu.duckdb_extension"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o "${tmp}.gz" "$url"; then
             gunzip -f "${tmp}.gz"

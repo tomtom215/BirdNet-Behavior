@@ -138,7 +138,7 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 
 | Endpoint | Common query params |
 |---|---|
-| `GET /api/v2/detections` | `date`, `species`, `limit`, `offset` — paginated list |
+| `GET /api/v2/detections` | `date`, `species` (common or scientific name), `source`, `limit`, `offset` — paginated, newest first; the filters combine, and `total_count` counts every page of the filtered set |
 | `GET /api/v2/detections/recent` | `limit` — most recent first |
 | `GET /api/v2/detections/daily` | `days` — per-day counts over the last N days |
 
@@ -166,8 +166,18 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/timeseries/accumulation` | Life-list accumulation curve |
 | `GET /api/v2/timeseries/heatmap` · `sessions` | Hour×day heatmap, activity sessions |
 | `GET /api/v2/timeseries/status` | Whether the time-series engine is available |
-| `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `patterns` | DuckDB behavioral analytics |
+| `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `previous-species` · `patterns` | DuckDB behavioral analytics |
 | `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
+| `GET /api/v2/insights/dawn-chorus?period_days=&min_days=` | Each species' typical first song of the morning (mean and earliest first detection between 04:00 and 10:00), over species heard on at least `min_days` (default 3) of the last `period_days` (default 30, at most 365) days, earliest first. A value that is not a positive integer is a `400`; one over the limit is clamped, and both values applied are echoed. |
+| `GET /api/v2/insights/migration` | Species first heard in the last 14 days, and species with at least 5 detections and none in the last 14 days, with when and how often. |
+| `GET /api/v2/insights/phantom-species` | Species detected at least 3 times in the last 30 days with a mean confidence under 0.6, least confident first — often a noise source the model keeps mistaking for a bird. Rejected detections do not count. |
+| `GET /api/v2/insights/expected-today` | Species heard within 3 days either side of today's date in any of the last 10 years, most regular first, with `years_of_data`. |
+| `GET /api/v2/insights/expected-today/regional` | What eBird observers reported nearby that this station does not usually hear now: the eBird snapshot less the list above. `available` is `false` without a snapshot ([eBird](integrations.md)). |
+| `GET /api/v2/dashboard/kpis` | Species ever heard, detections today, the busiest day since this date last year (`best_day`), and the run of consecutive days with a detection ending today (`detection_streak`; 0 when today has none). With none, `best_day` is `{"date": "", "count": 0}`. |
+| `GET /api/v2/analytics/species/summary?start_date=&end_date=&limit=` | Each species' count, mean and highest confidence, and first and last detection (`first_heard`, `last_heard`: RFC 3339 with the offset in force at the time) over the range, most detected first, as a bare array. Either end may be left open; a date that is not a calendar day, or a reversed range, is a `400`. |
+| `GET /api/v2/analytics/species/detections/new?start_date=&end_date=&limit=&offset=` | Species first heard here within the range (default: the 30 days before today through today), newest first, with `count_in_period`, as a bare array. `limit` defaults to 100 (0 also means 100); a `limit` or `offset` that is not a non-negative integer is a `400`. |
+
+These `insights`, `dashboard` and `analytics/species` endpoints read SQLite directly, so they answer with the analytics engine off. Their parameters, defaults and field names are birdnet-go's, so a client written for either station reads both. A station whose detections cannot be read answers `500` rather than an empty list.
 
 ### Diagnosing empty analytics dashboards
 
@@ -183,14 +193,16 @@ broken. The `store` object is the part that differs:
   "analytics_configured": true,
   "store": {
     "extension_loaded": true,
+    "self_test": "ok",
     "detections": 412903,
     "unplaceable_detections": 3,
     "detections_placeable": 412900,
-    "engine_duckdb_version": "v1.5.5",
+    "engine_duckdb_version": "v1.5.6",
     "engine_platform": "linux_arm64",
     "embedded_extension": {
-      "version": "v0.9.1",
-      "duckdb_version": "v1.5.5",
+      "version": "v0.10.0",
+      "duckdb_version": "v1.2.0",
+      "abi": "C_STRUCT",
       "platform": "linux_arm64",
       "mismatch": null
     }
@@ -205,10 +217,22 @@ broken. The `store` object is the part that differs:
   station with no behavioural analytics. Its `property` says whether the
   `DuckDB version`, the `platform`, or both disagree — compare against
   `engine_duckdb_version` and `engine_platform`. An extension is locked to
-  both, and both fail the same way at `LOAD`. Rebuild against
+  both, and both fail the same way at `LOAD`. How `duckdb_version` is read
+  depends on `abi`: for `CPP` and `C_STRUCT_UNSTABLE` it is a DuckDB version
+  that must equal the engine's; for `C_STRUCT` (behavioral v0.10.0 and later)
+  it is a C API version, and any engine of the same major at or above it
+  accepts the extension — so `v1.2.0` against a `v1.5.6` engine is correct. Rebuild against
   `community-extensions.duckdb.org/<engine_duckdb_version>/<engine_platform>/`.
+- `self_test` other than `"ok"` while `extension_loaded` is `true` — the
+  extension loaded but one of its functions answered a fixed check differently
+  from the version this build's queries were written for; the message names
+  the function. The behavioural cards may show wrong numbers rather than
+  errors, so treat it as broken. `birdnet-behavior --verify-extension` runs
+  the same checks.
 - `detections: 0` against a station with history — the SQLite → DuckDB sync has
   not run or did not complete.
+- `detections: null` — the count itself could not be read from the store, which
+  is a store fault rather than a sync that has not run.
 - `unplaceable_detections` above zero — that many rows carry a `Date`/`Time`
   naming no point in time (usually from a BirdNET-Pi import). They count toward
   the station's detection total but cannot appear in any date- or time-based
@@ -253,11 +277,12 @@ They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-Five *reads* live behind the same token, because what they return is not public:
+Seven *reads* live behind the same token, because what they return is not public:
 `GET /api/v2/settings` (the configuration, credentials taken out),
 `GET /api/v2/system/capture` and `GET /api/v2/system/jobs` (operational detail
-about the station and its sources), `GET /api/v2/models/catalog`, and
-`GET /api/v2/detections/comments`.
+about the station and its sources), `GET /api/v2/system/network` and
+`GET /api/v2/system/processes` (the network it sits on, and what it is running),
+`GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
 
 ### Turning them on
 
@@ -313,6 +338,8 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `POST` | `/api/v2/control/restart-source` | Restart one audio source's capture |
 | `GET` | `/api/v2/system/capture` | Per-source capture health, as Station Health draws it |
 | `GET` | `/api/v2/system/jobs` | Every scheduled maintenance job and its state |
+| `GET` | `/api/v2/system/network` | Network interfaces: addresses with prefix, hardware address, bytes in and out; loopback last |
+| `GET` | `/api/v2/system/processes` | The station's process and everything it started (capture `ffmpeg`, `arecord`, conversions), CPU sampled over 250 ms as a percentage of one core |
 | `GET` | `/api/v2/models/catalog` | The classifiers this build can install |
 
 ```bash

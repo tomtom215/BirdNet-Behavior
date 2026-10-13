@@ -59,13 +59,17 @@ async fn apply_update(
     // Before the download. An update that bricks a station has to be
     // attributable afterwards, and "afterwards" may be a binary that never
     // starts — the row is written by the process that is still working.
-    crate::audit::audit(
-        &state,
-        Some(&request_user),
-        "system.update.apply",
-        None,
-        Some(&format!("from={current}")),
-    );
+    state
+        .run_blocking(move |state| {
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "system.update.apply",
+                None,
+                Some(&format!("from={current}")),
+            );
+        })
+        .await;
 
     // Before any network: the swap stages its files beside the running binary,
     // and under the shipped systemd unit that directory is read-only to the

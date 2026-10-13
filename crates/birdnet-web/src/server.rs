@@ -59,6 +59,29 @@ impl fmt::Display for ServerError {
 
 impl std::error::Error for ServerError {}
 
+/// The span every request is traced under: its method and the route it
+/// matched, by template.
+///
+/// `TraceLayer`'s default span records the full URI, so a station logging at
+/// `debug` wrote every live share link (`/r/{token}`, where the token *is*
+/// the access) into its journal — and from there into the support bundle that
+/// operators attach to public bug reports. The template names the route
+/// without the token. A request that matched no route has no template, and is
+/// recorded by its path; the query string is left out of both, because the
+/// route says what a request was and the query is the caller's data.
+fn request_span<B>(req: &axum::http::Request<B>) -> tracing::Span {
+    let path = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map_or_else(|| req.uri().path(), axum::extract::MatchedPath::as_str);
+    tracing::debug_span!(
+        "request",
+        method = %req.method(),
+        route = %path,
+        version = ?req.version(),
+    )
+}
+
 /// Build the axum application router with all middleware and routes,
 /// gating `/admin/*` behind the v2 cookie-session middleware.
 ///
@@ -172,7 +195,7 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
             let limiter = Arc::clone(&limiter);
             crate::rate_limit::rate_limit_middleware(limiter, req, next)
         }))
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
         .layer(build_cors_layer())
         .layer(axum::middleware::from_fn(
             crate::security::security_headers_middleware,

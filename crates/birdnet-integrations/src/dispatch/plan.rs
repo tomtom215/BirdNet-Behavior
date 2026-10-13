@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use super::parse::{NtfyAuth, SlackAuth, Target};
 
 /// Credential to attach to a request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Auth {
     /// `Authorization: Bearer <token>`.
     Bearer(String),
@@ -28,15 +28,44 @@ pub enum Auth {
     },
 }
 
+impl std::fmt::Debug for Auth {
+    /// Hand-written so the credential cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bearer(_) => f.write_str("Bearer(<redacted>)"),
+            Self::Basic { user, password } => f
+                .debug_struct("Basic")
+                .field("user", user)
+                .field("password", &password.as_ref().map(|_| "<redacted>"))
+                .finish(),
+        }
+    }
+}
+
 /// Request body encoding.
 // Not `Eq`: `serde_json::Value` holds `f64`, which is only `PartialEq`.
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Body {
     /// `application/json`.
     Json(Value),
     /// `application/x-www-form-urlencoded`.
     Form(Vec<(&'static str, String)>),
+}
+
+impl std::fmt::Debug for Body {
+    /// Hand-written because Pushover sends its user key and application token
+    /// as form fields: a form prints its field names only. A JSON body is
+    /// message content and chat ids, and prints whole.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json(value) => f.debug_tuple("Json").field(value).finish(),
+            Self::Form(fields) => f
+                .debug_tuple("Form")
+                .field(&fields.iter().map(|(name, _)| *name).collect::<Vec<_>>())
+                .finish(),
+        }
+    }
 }
 
 /// How to tell success from failure in the response.
@@ -53,7 +82,7 @@ pub enum Expect {
 /// One HTTP request to make.
 // Not `Eq`: see [`Body`].
 #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Plan {
     /// Service name, for errors and metrics. Never a credential.
     pub kind: &'static str,
@@ -68,6 +97,30 @@ pub struct Plan {
     pub headers: Vec<(&'static str, String)>,
     /// Success criterion.
     pub expect: Expect,
+}
+
+impl std::fmt::Debug for Plan {
+    /// Hand-written because the URL carries the credential for Discord, Slack
+    /// webhooks and Telegram, and a header value carries it for Gotify: the
+    /// URL prints as `redact_value` prints it and header values not at all.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers: Vec<(&str, &str)> = self
+            .headers
+            .iter()
+            .map(|(name, _)| (*name, "<redacted>"))
+            .collect();
+        f.debug_struct("Plan")
+            .field("kind", &self.kind)
+            .field(
+                "url",
+                &birdnet_core::config::redact::redact_value(&self.url),
+            )
+            .field("body", &self.body)
+            .field("auth", &self.auth)
+            .field("headers", &headers)
+            .field("expect", &self.expect)
+            .finish()
+    }
 }
 
 /// Severity, mapped onto whatever each service calls it.

@@ -5,7 +5,7 @@
 //! knobs (software gain, quiet windows). The parent module owns only the
 //! thread orchestration that consumes these.
 
-use birdnet_core::audio::capture::{CaptureSource, ChannelPick, RtspTransport};
+use birdnet_core::audio::capture::{CaptureSource, ChannelPick, RtspMediaMode, RtspTransport};
 
 use crate::cli::Cli;
 
@@ -351,7 +351,18 @@ fn audio_source_to_capture_source(
             // dropped here, so ffmpeg was always forced to TCP and a UDP-only
             // camera could never be captured.
             transport: map_rtsp_transport(row.rtsp_transport),
+            media_mode: map_media_mode(row.media_mode),
         },
+    }
+}
+
+/// Map the stored RTSP media mode to the capture enum, for the same reason
+/// as [`map_rtsp_transport`].
+const fn map_media_mode(mode: birdnet_db::audio_sources::RtspMediaMode) -> RtspMediaMode {
+    use birdnet_db::audio_sources::RtspMediaMode as DbMode;
+    match mode {
+        DbMode::Full => RtspMediaMode::Full,
+        DbMode::Audio => RtspMediaMode::AudioOnly,
     }
 }
 
@@ -405,6 +416,7 @@ pub(super) fn resolve_sources(
                     // A bare CLI/config URL carries no transport preference; the
                     // admin UI is where TCP/UDP is chosen per source.
                     transport: RtspTransport::Auto,
+                    media_mode: RtspMediaMode::Full,
                 }
             })
             .collect()
@@ -773,6 +785,7 @@ mod tests {
             bit_depth: 16,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -791,6 +804,25 @@ mod tests {
         assert_eq!(map_rtsp_transport(Db::Auto), Core::Auto);
         assert_eq!(map_rtsp_transport(Db::Tcp), Core::Tcp);
         assert_eq!(map_rtsp_transport(Db::Udp), Core::Udp);
+    }
+
+    /// The admin UI's per-source media mode reaches the capture source, and a
+    /// row that never set it keeps the full stream.
+    #[test]
+    fn translator_rtsp_carries_the_media_mode() {
+        let plain = row("cam_a", SourceKind::Rtsp, "rtsp://cam/a");
+        let mut audio = row("cam_b", SourceKind::Rtsp, "rtsp://cam/b");
+        audio.media_mode = birdnet_db::audio_sources::RtspMediaMode::Audio;
+        for (r, want) in [
+            (plain, RtspMediaMode::Full),
+            (audio, RtspMediaMode::AudioOnly),
+        ] {
+            let mut idx = 0;
+            match audio_source_to_capture_source(&r, false, &mut idx) {
+                CaptureSource::Rtsp { media_mode, .. } => assert_eq!(media_mode, want),
+                other => panic!("expected RTSP, got {other:?}"),
+            }
+        }
     }
 
     #[test]

@@ -132,7 +132,9 @@ impl From<&Notifier> for PushChannel {
 // ---------------------------------------------------------------------------
 
 async fn test_page(State(state): State<AppState>) -> Html<String> {
-    Html(render_test_page_for(&state))
+    state
+        .run_blocking(move |state| Html(render_test_page_for(state)))
+        .await
 }
 
 fn render_test_page_for(state: &AppState) -> String {
@@ -160,11 +162,17 @@ pub(crate) fn channels_test_body(state: &AppState) -> String {
 }
 
 fn render_test_page(push: &PushChannel, bw_ok: bool) -> String {
+    // The page's own title lives here, not in the body: the body is also the
+    // Station Alerts tab's "Channels" section, under that tab's heading, and
+    // a second `<h1>` there put the tab's outline out of order.
     crate::routes::admin::admin_subpage_shell(
         "Test notifications",
         "notifications",
         "Test",
-        &test_notifications_body(push, bw_ok),
+        &format!(
+            r#"<h1 class="nt-title">Test Notification Channels</h1>{}"#,
+            test_notifications_body(push, bw_ok)
+        ),
     )
 }
 
@@ -239,14 +247,13 @@ fn test_notifications_body(push: &PushChannel, bw_ok: bool) -> String {
       .btn-primary { background:var(--moss); color:var(--on-moss); }
       .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
       .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
-      h1 { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
       .hint a { color:var(--moss-ink); }
       .result-banner { border:1px solid; border-radius:0.375rem; padding:0.75rem; margin-top:0.75rem; }
       .result-banner.ok { background:var(--moss-soft); border-color:var(--moss-soft); color:var(--moss-ink); }
       .result-banner.err { background:var(--rare-soft); border-color:var(--rare-soft); color:var(--rare); }
+      .nt-title { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
     </style>
 
-  <h1>Test Notification Channels</h1>
 ");
 
     // Push card
@@ -349,13 +356,18 @@ async fn test_push(State(state): State<AppState>) -> (StatusCode, Html<String>) 
     }
 }
 
-async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<String>) {
-    let token = state.with_db(|conn| {
+/// The stored BirdWeather token, if one is set. Blocks on the database.
+fn birdweather_token(state: &AppState) -> Option<String> {
+    state.with_db(|conn| {
         ensure_settings_table(conn).ok();
         get_setting(conn, "birdweather_token")
             .ok()
             .filter(|v| !v.is_empty())
-    });
+    })
+}
+
+async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<String>) {
+    let token = state.run_blocking(birdweather_token).await;
 
     // O-18: toast the test outcome on every branch.
     match token {
@@ -400,12 +412,7 @@ async fn test_all(State(state): State<AppState>) -> (StatusCode, Html<String>) {
         lines.push("&#x26a0;&#xfe0f; Push: no destination resolved (skipped)".to_owned());
     }
 
-    let bw_token = state.with_db(|conn| {
-        ensure_settings_table(conn).ok();
-        get_setting(conn, "birdweather_token")
-            .ok()
-            .filter(|v| !v.is_empty())
-    });
+    let bw_token = state.run_blocking(birdweather_token).await;
     if let Some(tok) = bw_token {
         match ping_birdweather(&tok).await {
             Ok(msg) => lines.push(format!("&#x2705; BirdWeather: {}", escape_html(&msg))),
@@ -457,12 +464,18 @@ async fn ping_birdweather(token: &str) -> Result<String, String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    let url = format!("https://app.birdweather.com/api/v1/stations?token={token}");
+    // The token is a query value here: trimmed and encoded, and kept out of
+    // the error — reqwest's error text names the URL, and this message is
+    // rendered into the page and a toast.
+    let url = format!(
+        "https://app.birdweather.com/api/v1/stations?token={}",
+        crate::routes::pages::simple_url_encode(token.trim())
+    );
     let resp = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("HTTP error: {e}"))?;
+        .map_err(|e| format!("HTTP error: {}", e.without_url()))?;
 
     if resp.status().is_success() {
         Ok("BirdWeather API reachable -- token appears valid".to_string())

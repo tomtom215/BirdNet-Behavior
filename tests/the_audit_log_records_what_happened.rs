@@ -307,6 +307,7 @@ const ACTIONS: &[&str] = &[
     "species.threshold.set",
     "system.restart",
     "system.update.apply",
+    "today.layout.change",
 ];
 
 /// Action literals as they actually appear in the web crate's source.

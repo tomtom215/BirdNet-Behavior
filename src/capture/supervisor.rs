@@ -910,6 +910,7 @@ mod tests {
             url: "rtsp://cam.local/s".into(),
             stream_id: "RTSP_2".into(),
             transport: RtspTransport::Auto,
+            media_mode: birdnet_core::audio::capture::RtspMediaMode::Full,
         };
         assert_eq!(source_gauge_label(&src), "RTSP_2");
     }

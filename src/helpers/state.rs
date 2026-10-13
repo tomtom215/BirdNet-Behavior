@@ -420,16 +420,24 @@ pub fn run_verify_extension(
         embedded_extension = AnalyticsDb::embedded_extension_version().unwrap_or("<none embedded>"),
         embedded_for_duckdb =
             AnalyticsDb::embedded_extension_duckdb_version().unwrap_or("<none embedded>"),
+        embedded_abi = AnalyticsDb::embedded_extension_abi().unwrap_or("<none embedded>"),
         embedded_platform = AnalyticsDb::embedded_extension_platform().unwrap_or("<none embedded>"),
         "behavioral extension: build-time embedding"
     );
 
     if let Some(mismatch) = adb.embedded_extension_mismatch() {
         return Err(format!(
-            "the embedded behavioral extension targets DuckDB {} but this binary links DuckDB {}; \
-             it can never load. Rebuild with the extension published for {} \
-             (community-extensions.duckdb.org/{}/<platform>/).",
-            mismatch.embedded_for, mismatch.engine, mismatch.engine, mismatch.engine
+            "the embedded behavioral extension ({} ABI, version target {}, platform {}) cannot \
+             load into this binary's DuckDB {} ({}): the {} disagrees. Rebuild with the \
+             extension published for it (community-extensions.duckdb.org/{}/{}/).",
+            mismatch.embedded_abi.unwrap_or("unknown"),
+            mismatch.embedded_for,
+            mismatch.embedded_platform.unwrap_or("unknown"),
+            mismatch.engine,
+            mismatch.engine_platform.as_deref().unwrap_or("unknown"),
+            mismatch.kind,
+            mismatch.engine,
+            mismatch.engine_platform.as_deref().unwrap_or("<platform>"),
         )
         .into());
     }
@@ -437,11 +445,16 @@ pub fn run_verify_extension(
     adb.load_extension()
         .map_err(|e| format!("behavioral extension did not load: {e}"))?;
 
+    // Loading proves a library is present, not that it answers the way this
+    // build's queries assume. Run every function on fixed events and compare.
+    adb.verify_behavioral_functions()
+        .map_err(|e| format!("behavioral extension loaded but failed its self-test: {e}"))?;
+
     tracing::info!(
         duckdb = %engine,
         extension = adb.extension_version().as_deref().unwrap_or("unknown"),
         path = %path.display(),
-        "behavioral extension loaded"
+        "behavioral extension loaded and passed its functional self-test"
     );
 
     // ICU is the other half of an offline-capable station, and the half that

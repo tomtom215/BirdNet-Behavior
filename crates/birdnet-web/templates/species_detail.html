@@ -10,7 +10,7 @@
     /pages/species-hero?name=…    — best detection card (photo slot + scrubber)
     /pages/species-status?name=…  — residency pill + first-seen date
 -->
-<div class="bnb-rise" data-screen-label="Species · {{species_name}}" data-om-validate>
+<div class="bnb-rise bnb-col wide" data-screen-label="Species · {{species_name}}" data-om-validate>
 
   <!-- ── Hero ────────────────────────────────────────────────────────── -->
   <section class="species-hero">
@@ -98,7 +98,7 @@
             <div class="bnb-eyebrow">Trend</div>
             <h3>Detections, last 14 days</h3>
           </div>
-          <span class="bnb-meta">7-day moving average overlaid</span>
+          <span class="bnb-meta">one bar a day, today last</span>
         </div>
         <div hx-get="/pages/species-daily?name={{species_encoded}}"
              hx-trigger="load" hx-swap="innerHTML">

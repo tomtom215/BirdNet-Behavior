@@ -240,8 +240,10 @@ pub fn create_apprise_client(
     } else {
         birdnet_integrations::apprise::Client::new(&url, notify_config).map(|c| {
             if let Some(ref cfg_path) = apprise_config_file {
+                // The URL is redacted: an Apprise API address can carry a
+                // password or, in its `/notify/{key}` path, the key itself.
                 tracing::info!(
-                    url = %url,
+                    url = %crate::support::redact_value(&url),
                     path = %cfg_path.display(),
                     min_confidence = %min_confidence,
                     cooldown_secs,
@@ -250,7 +252,7 @@ pub fn create_apprise_client(
                 c.with_config_file(cfg_path.clone())
             } else {
                 tracing::info!(
-                    url = %url,
+                    url = %crate::support::redact_value(&url),
                     min_confidence = %min_confidence,
                     cooldown_secs,
                     "Apprise notifications enabled"

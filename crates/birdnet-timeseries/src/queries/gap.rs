@@ -191,6 +191,15 @@ impl AbsenceStreak {
 }
 
 impl QueryPlan for AbsenceStreak {
+    /// One row per day of the look-back: whether the species was detected,
+    /// how many days it has been detected so far, and how many consecutive
+    /// days it has now gone undetected (0 on a day it was heard).
+    ///
+    /// The streak used to be computed with a window function as a frame
+    /// bound, which DuckDB does not accept — the query did not even parse, and
+    /// with no caller and no executing test nothing noticed. It is now the
+    /// distance to the last day seen, or, before the species is seen at all,
+    /// the number of days so far.
     fn sql(&self) -> String {
         let sp = self.species.replace('\'', "''");
         let days = self.lookback_days;
@@ -210,7 +219,7 @@ seen_days AS (
 ),
 presence AS (
     SELECT
-        ds.d               AS date,
+        ds.d                          AS date,
         sd.detection_date IS NOT NULL AS seen
     FROM date_series ds
     LEFT JOIN seen_days sd ON ds.d = sd.detection_date
@@ -221,16 +230,11 @@ SELECT
     SUM(CASE WHEN seen THEN 1 ELSE 0 END) OVER (
         ORDER BY date ROWS UNBOUNDED PRECEDING
     ) AS cumulative_seen_days,
-    SUM(CASE WHEN NOT seen THEN 1 ELSE 0 END) OVER (
-        ORDER BY date
-        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-    ) -
-    SUM(CASE WHEN NOT seen THEN 1 ELSE 0 END) OVER (
-        ORDER BY date
-        ROWS BETWEEN UNBOUNDED PRECEDING AND
-            (LAST_VALUE(CASE WHEN seen THEN date END) OVER (
-                ORDER BY date ROWS UNBOUNDED PRECEDING
-            ) - INTERVAL 1 DAY)
+    COALESCE(
+        date_diff('day', MAX(CASE WHEN seen THEN date END) OVER (
+            ORDER BY date ROWS UNBOUNDED PRECEDING
+        ), date),
+        ROW_NUMBER() OVER (ORDER BY date)
     ) AS current_absence_streak
 FROM presence
 ORDER BY date"

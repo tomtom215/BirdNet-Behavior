@@ -424,6 +424,165 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The job state could not be read. Answered as an error rather than as an empty list, which would read as \"nothing is due\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/network": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The station's network interfaces",
+        "description": "Every interface with its hardware address, its addresses and prefix lengths, and byte counters since it came up; loopback last. An onboarding aid — the address to type when `.local` names do not resolve.",
+        "operationId": "systemNetwork",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The station's network interfaces.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "interfaces"
+                  ],
+                  "properties": {
+                    "interfaces": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "mac",
+                          "addresses",
+                          "loopback",
+                          "received_bytes",
+                          "transmitted_bytes"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "mac": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Hardware address; null when the interface has none."
+                          },
+                          "addresses": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Each address with its prefix length, e.g. `192.168.1.20/24`."
+                          },
+                          "loopback": {
+                            "type": "boolean"
+                          },
+                          "received_bytes": {
+                            "type": "integer"
+                          },
+                          "transmitted_bytes": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/processes": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The station's processes",
+        "description": "The station's own process first, then every process it started (capture `ffmpeg` / `arecord`, conversions), with CPU sampled over `sample_ms`. Not the whole machine: the question this answers is which of the station's own processes is busy.",
+        "operationId": "systemProcesses",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The station's processes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "sample_ms",
+                    "processes"
+                  ],
+                  "properties": {
+                    "sample_ms": {
+                      "type": "integer"
+                    },
+                    "processes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "pid",
+                          "parent",
+                          "name",
+                          "cpu_percent",
+                          "memory_bytes",
+                          "running_secs"
+                        ],
+                        "properties": {
+                          "pid": {
+                            "type": "integer"
+                          },
+                          "parent": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "cpu_percent": {
+                            "type": "number",
+                            "description": "CPU over the sample, as a percentage of one core — two busy cores read 200."
+                          },
+                          "memory_bytes": {
+                            "type": "integer",
+                            "description": "Resident memory."
+                          },
+                          "running_secs": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -532,7 +691,7 @@
           "detections"
         ],
         "summary": "List detections",
-        "description": "Paginated detection log, newest first. When `limit`/`offset` are supplied the response also carries `total_count`.",
+        "description": "Detection log, newest first, one page at a time. `date`, `species` and `source` combine: each one given narrows the list. `total_count` is the size of the filtered set.",
         "operationId": "listDetections",
         "parameters": [
           {
@@ -540,6 +699,9 @@
           },
           {
             "$ref": "#/components/parameters/Species"
+          },
+          {
+            "$ref": "#/components/parameters/Source"
           },
           {
             "$ref": "#/components/parameters/Limit"
@@ -2127,14 +2289,62 @@
           "analytics"
         ],
         "summary": "Predict the next species",
-        "description": "Given a trigger species, the species most likely to be heard next within a time window.",
+        "description": "Given a trigger species, the species most often heard immediately after its first detection in an activity session (sessions split at gaps longer than `window` minutes). A species heard in the same audio chunk as the trigger is simultaneous, not next, and is not counted. The trigger can be its own follower (the same bird calling again).",
         "operationId": "analyticsNextSpecies",
         "parameters": [
           {
             "name": "after",
             "in": "query",
             "required": true,
-            "description": "Trigger species (common or scientific name).",
+            "description": "Trigger species, by common name.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 60
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AnalyticsResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/analytics/previous-species": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Predict the previous species",
+        "description": "Given a trigger species, the species most often heard immediately before its first detection in an activity session (sessions split at gaps longer than `window` minutes). A session the trigger opens has no predecessor and is not counted; a species heard in the same audio chunk as the trigger is simultaneous, not previous.",
+        "operationId": "analyticsPreviousSpecies",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": true,
+            "description": "Trigger species, by common name.",
             "schema": {
               "type": "string"
             }
@@ -2187,6 +2397,592 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/insights/dawn-chorus": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Dawn chorus running order",
+        "description": "Each species' typical first song of the morning: the mean and earliest of its first detection between start_hour and end_hour local time, over species heard there on at least min_days of the last period_days days, earliest riser first. Same parameters, defaults and fields as birdnet-go's endpoint of the same name. Rejected detections, and imports the operator excluded, are left out.",
+        "operationId": "insightsDawnChorus",
+        "parameters": [
+          {
+            "name": "period_days",
+            "in": "query",
+            "required": false,
+            "description": "Days to look back, 1 to 365 (larger is clamped). Default 30.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30
+            }
+          },
+          {
+            "name": "min_days",
+            "in": "query",
+            "required": false,
+            "description": "Mornings a species must be heard on, 1 to period_days (larger is clamped). Default 3.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The running order, and the parameters applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "avg_first_detection": {
+                            "type": "string",
+                            "description": "HH:MM"
+                          },
+                          "earliest_detection": {
+                            "type": "string",
+                            "description": "HH:MM"
+                          },
+                          "days_observed": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "period_days": {
+                      "type": "integer"
+                    },
+                    "min_days": {
+                      "type": "integer"
+                    },
+                    "start_hour": {
+                      "type": "integer"
+                    },
+                    "end_hour": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/insights/migration": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "New arrivals and species gone quiet",
+        "description": "Species first heard in the last recent_days days, newest first; and species with at least min_total_detections detections and none in the last recent_days days, most recently heard first. Same fields as birdnet-go's endpoint of the same name.",
+        "operationId": "insightsMigration",
+        "responses": {
+          "200": {
+            "description": "Both lists, and the thresholds applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "new_arrivals": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "first_detected": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "detection_count": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "gone_quiet": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "last_detected": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "days_since": {
+                            "type": "integer"
+                          },
+                          "total_detections": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "recent_days": {
+                      "type": "integer"
+                    },
+                    "min_total_detections": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/insights/phantom-species": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Frequent, low-confidence species",
+        "description": "Species with at least min_detections detections in the last period_days days (today included) whose mean confidence is below confidence_threshold, the least confident first: a cue to look for a noise source the model keeps mistaking for a bird. Rejected detections are not counted. Same fields and thresholds as birdnet-go's endpoint of the same name.",
+        "operationId": "insightsPhantomSpecies",
+        "responses": {
+          "200": {
+            "description": "The species, and the thresholds applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          },
+                          "detection_count": {
+                            "type": "integer"
+                          },
+                          "avg_confidence": {
+                            "type": "number"
+                          },
+                          "max_confidence": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "period_days": {
+                      "type": "integer"
+                    },
+                    "confidence_threshold": {
+                      "type": "number"
+                    },
+                    "min_detections": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/insights/expected-today": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species expected around today's date",
+        "description": "Species this station heard within three days either side of today's date in any of the last ten years, the most regular first. A window that crosses New Year counts once. Same fields as birdnet-go's endpoint of the same name.",
+        "operationId": "insightsExpectedToday",
+        "responses": {
+          "200": {
+            "description": "The expected species, today's day of the year, and how many of the ten years have data in the window.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "years_seen": {
+                            "type": "integer"
+                          },
+                          "last_seen_date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "day_of_year": {
+                      "type": "integer"
+                    },
+                    "years_of_data": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/insights/expected-today/regional": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species reported nearby that this station does not usually hear now",
+        "description": "The station's eBird snapshot of recent nearby reports, less the species from /insights/expected-today. available is false when there is no snapshot (no eBird key or location, or not fetched yet). Unlike birdnet-go, a failed read of the station's own history is a 500 rather than the unfiltered eBird list.",
+        "operationId": "insightsExpectedTodayRegional",
+        "responses": {
+          "200": {
+            "description": "The regional species, and whether eBird data was available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "observation_date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "location_name": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "available": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The station's own detections could not be read."
+          }
+        }
+      }
+    },
+    "/dashboard/kpis": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "The dashboard's headline numbers",
+        "description": "Distinct species ever detected; detections today; the busiest day from this date last year to today, ties to the more recent day; and the run of consecutive days with a detection ending today (0 when today has none). Same fields and empty values as birdnet-go's endpoint of the same name.",
+        "operationId": "dashboardKpis",
+        "responses": {
+          "200": {
+            "description": "The four figures.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lifetime_species": {
+                      "type": "integer"
+                    },
+                    "today_detections": {
+                      "type": "integer"
+                    },
+                    "best_day": {
+                      "type": "object",
+                      "properties": {
+                        "date": {
+                          "type": "string",
+                          "description": "YYYY-MM-DD, or empty when there is none."
+                        },
+                        "count": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "detection_streak": {
+                      "type": "object",
+                      "properties": {
+                        "days": {
+                          "type": "integer"
+                        },
+                        "start_date": {
+                          "type": "string",
+                          "description": "YYYY-MM-DD, or empty when there is none."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/species/summary": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Each species' figures over a date range",
+        "description": "Per-species count, mean and highest confidence, and first and last detection, over start_date..=end_date, the most detected first. Rejected detections are not counted. Same path, parameters and fields as birdnet-go's endpoint; species_code is not sent.",
+        "operationId": "analyticsSpeciesSummary",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "First day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many species. A value that is not a positive integer is ignored, as upstream ignores it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "scientific_name": {
+                        "type": "string"
+                      },
+                      "common_name": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer"
+                      },
+                      "avg_confidence": {
+                        "type": "number"
+                      },
+                      "max_confidence": {
+                        "type": "number"
+                      },
+                      "first_heard": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The earliest detection in the range, RFC 3339 with the offset in force at the time. Absent when no detection of the species names an instant."
+                      },
+                      "last_heard": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The latest detection in the range, RFC 3339 with the offset in force at the time. Absent when no detection of the species names an instant."
+                      },
+                      "thumbnail_url": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A date that is not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/species/detections/new": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species first heard in a date range",
+        "description": "Species whose first-ever detection here (rejected detections aside) falls in start_date..=end_date, newest first, with their detections in the range. Same path, parameters, defaults and fields as birdnet-go's endpoint, with one difference: a species with an imported detection of no date counts as heard before any dated one, so it is never listed (upstream ignores such rows).",
+        "operationId": "analyticsNewSpecies",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "First day of the range, inclusive (YYYY-MM-DD). Default: 30 days before today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive (YYYY-MM-DD). Default: today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size, a non-negative integer. Default 100; 0 also means 100.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Species to skip, a non-negative integer. Default 0.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "scientific_name": {
+                        "type": "string"
+                      },
+                      "common_name": {
+                        "type": "string"
+                      },
+                      "first_heard_date": {
+                        "type": "string",
+                        "format": "date"
+                      },
+                      "count_in_period": {
+                        "type": "integer"
+                      },
+                      "thumbnail_url": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A date that is not a calendar day, a reversed range, or a limit or offset that is not a non-negative integer."
+          },
+          "500": {
+            "description": "The detections could not be read."
           }
         }
       }
@@ -3156,6 +3952,15 @@
           "type": "string"
         }
       },
+      "Source": {
+        "name": "source",
+        "in": "query",
+        "required": false,
+        "description": "Filter to one audio source, by the label detections carry (the `source` field). Combines with every other filter.",
+        "schema": {
+          "type": "string"
+        }
+      },
       "SpeciesList": {
         "name": "species",
         "in": "query",
@@ -3674,7 +4479,7 @@
           },
           "total_count": {
             "type": "integer",
-            "description": "Total matching rows (present on paginated responses)."
+            "description": "Rows matching the filters, all pages together (`GET /detections`)."
           },
           "limit": {
             "type": "integer"

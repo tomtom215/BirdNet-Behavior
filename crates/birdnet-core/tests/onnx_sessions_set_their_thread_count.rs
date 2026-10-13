@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// How far past `Session::builder()` the builder chain may run before its
+/// How far past `Session::builder(…)` the builder chain may run before its
 /// `commit_from_*`.
 const WINDOW: usize = 2_000;
 
@@ -41,8 +41,8 @@ fn code_of(src: &str) -> String {
         .join("\n")
 }
 
-/// `(file, builder chain)` for every `Session::builder()` call under `root`.
-fn builders(root: &Path) -> Vec<(PathBuf, String)> {
+/// Every Rust file under `root/src` and `root/crates/*/src`.
+fn sources(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
     let Ok(crates) = std::fs::read_dir(root.join("crates")) else {
@@ -51,12 +51,20 @@ fn builders(root: &Path) -> Vec<(PathBuf, String)> {
     for krate in crates.flatten() {
         rust_files(&krate.path().join("src"), &mut files);
     }
+    files
+}
 
+/// `(file, builder chain)` for every `Session::builder(…)` call under `root`.
+///
+/// Matched with its argument list open: from `ort` 2.0.0-rc.14 the builder
+/// takes the process's `Environment`, `Session::builder(env)`, and a needle
+/// that still read `Session::builder()` found no call at all.
+fn builders(root: &Path) -> Vec<(PathBuf, String)> {
     let mut found = Vec::new();
-    for file in files {
+    for file in sources(root) {
         let code = code_of(&std::fs::read_to_string(&file).unwrap_or_default());
         let mut from = 0;
-        while let Some(at) = code[from..].find("Session::builder()") {
+        while let Some(at) = code[from..].find("Session::builder(") {
             let start = from + at;
             let tail = &code[start..code.len().min(start + WINDOW)];
             let chain = tail
@@ -80,7 +88,7 @@ fn every_onnx_session_sets_its_intra_op_thread_count() {
     for expected in ["inference/model.rs", "inference/species_filter.rs"] {
         assert!(
             found.iter().any(|(f, _)| f.ends_with(expected)),
-            "found no Session::builder() in {expected}; the scan is not reading the sources"
+            "found no Session::builder(…) in {expected}; the scan is not reading the sources"
         );
     }
 
@@ -94,5 +102,34 @@ fn every_onnx_session_sets_its_intra_op_thread_count() {
         "ONNX sessions built without with_intra_threads (ORT's default pins its \
          threads with sched_setaffinity, which the systemd unit kills the service for): \
          {unpinned:#?}"
+    );
+}
+
+/// The environment-wide counterpart. `ort` 2.0.0-rc.14 can give the whole
+/// environment one thread pool (`with_global_thread_pool`), which sessions then
+/// share instead of their own — so a count set on each session would no longer
+/// be the one that runs, and the pool's defaults are ORT's. None is used; this
+/// keeps it that way until someone has checked what such a pool does under the
+/// unit's syscall filter.
+#[test]
+fn no_environment_wide_thread_pool() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let files = sources(&root);
+    assert!(
+        files.len() > 100,
+        "the scan read only {} files",
+        files.len()
+    );
+    let users: Vec<String> = files
+        .iter()
+        .filter(|f| {
+            code_of(&std::fs::read_to_string(f).unwrap_or_default())
+                .contains("with_global_thread_pool")
+        })
+        .map(|f| f.display().to_string())
+        .collect();
+    assert!(
+        users.is_empty(),
+        "an environment-wide ONNX thread pool: {users:#?}"
     );
 }

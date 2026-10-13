@@ -231,7 +231,9 @@ impl<S: Subscriber> Layer<S> for LogCapture {
         // `errors.jsonl` travels in the support bundle, and an RTSP URL with
         // `user:pass@` in its authority is the shape that gets posted to a
         // public forum by an operator who was told the bundle was redacted.
-        let message = crate::support::redact_url_credentials(&fields.render());
+        // Every URL in the line, not only the first: a captured ffmpeg line
+        // can name more than one.
+        let message = crate::support::redact_credentials_in_text(&fields.render());
 
         let line = LogLine {
             level: meta.level().to_string(),
@@ -323,6 +325,22 @@ mod tests {
         assert!(
             on_disk.contains("cam.local"),
             "the host still helps: {on_disk}"
+        );
+    }
+
+    /// The captured ffmpeg line that names two URLs, the secret in the
+    /// second. Redacting only the first `://` let it through.
+    #[test]
+    fn credentials_in_a_second_url_are_stripped_too() {
+        let lines = capture(None, || {
+            tracing::warn!(
+                "capture subprocess: tcp://cam:554?timeout=1 failed for rtsp://admin:hunter2@cam/s"
+            );
+        });
+        assert!(
+            !lines[0].message.contains("hunter2"),
+            "{}",
+            lines[0].message
         );
     }
 

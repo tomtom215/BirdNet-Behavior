@@ -49,6 +49,7 @@ pub mod settings;
 pub mod species;
 pub mod system;
 pub mod system_controls;
+pub mod today_layout;
 pub mod update;
 
 use std::fmt::Write as _;
@@ -197,6 +198,7 @@ pub fn router() -> Router<AppState> {
         .merge(images::router())
         // Software update
         .merge(update::router())
+        .merge(today_layout::router())
         // Alert rules engine
         .merge(rules::router())
         // Data quality dashboard

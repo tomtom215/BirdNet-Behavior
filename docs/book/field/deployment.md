@@ -69,7 +69,7 @@ you ever start the daemon.
 — 3 285 000 rows (3 000 detections/day), 180 species, the shipped schema and all
 sixteen shipped indexes, `ANALYZE` run:
 
-| | |
+| Measure | Size |
 | --- | --- |
 | Total file | **1.83 GB** |
 | Per detection, all in | **~557 bytes** |

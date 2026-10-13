@@ -574,3 +574,300 @@ fn live_a_one_day_vagrant_heard_often_is_listed_as_a_rarity() {
         "{ret:?}"
     );
 }
+
+/// A day whose detections carry no instant is omitted, not reported.
+///
+/// `detection_instant` is NULL when `detected_at_utc` is, and DuckDB can still
+/// read a `detection_timestamp` from the same row, so such a day survives the
+/// hour filter and forms its own group. Against `behavioral` v0.10.0 that
+/// group made `sequence_match` / `sequence_count` return NULL (they returned
+/// `false` / `0` up to v0.9.1) and `sessionize` a NULL session id (as in
+/// v0.9.1), and each of those failed its whole query on the typed decode —
+/// `InvalidColumnType(1, "matched", Null)` — taking the patterns and sessions
+/// cards down for every day, not just the unplaceable one. The funnels did not
+/// fail; they reported the day as `0` steps, which is a claim about a morning
+/// nobody could order.
+#[test]
+fn live_a_day_without_instants_is_omitted_not_reported() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed(&db);
+    db.conn()
+        .execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES
+             ('2024-05-04', '05:00:00', 'Erithacus rubecula', 'European Robin', 0.9, NULL),
+             ('2024-05-04', '05:10:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, NULL),
+             ('2024-05-04', '05:20:00', 'Troglodytes troglodytes', 'Eurasian Wren', 0.9, NULL);",
+        )
+        .unwrap();
+    // Precondition: the fixture really produced rows that land in a day group
+    // with a timestamp but no instant, or the assertions below prove nothing.
+    let stranded: i64 = db
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM detections_ts \
+             WHERE detection_timestamp IS NOT NULL AND detection_instant IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stranded, 3);
+
+    let p = types::PatternParams::default();
+    let f = types::FunnelParams::default();
+    let dates = |v: Vec<String>| {
+        assert!(!v.is_empty(), "the seeded days must still be reported");
+        assert!(!v.iter().any(|d| d == "2024-05-04"), "{v:?}");
+    };
+    dates(
+        db.sequence_match(&p)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+    dates(
+        db.sequence_count(&p)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+    dates(
+        db.sequence_match_events(&p)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+    dates(db.funnel(&f).unwrap().into_iter().map(|r| r.date).collect());
+    dates(
+        db.funnel_events(&f)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.date)
+            .collect(),
+    );
+
+    let sessions = db.sessionize(&types::SessionizeParams::default()).unwrap();
+    assert!(!sessions.is_empty());
+    assert!(
+        !sessions
+            .iter()
+            .any(|s| s.start_time.starts_with("2024-05-04")),
+        "{sessions:?}"
+    );
+    // Counterpart: the seeded mornings' answers are unchanged by the filter.
+    let preds = db.next_species("European Robin", 60, 5).unwrap();
+    assert_eq!(preds[0].predicted_species, "Eurasian Blackbird");
+    assert_eq!(preds[0].frequency, 3);
+}
+
+/// Insert `(Date, Time, Com_Name, detected_at_utc)` rows.
+fn insert<D: AsRef<str>>(db: &AnalyticsDb, rows: &[(D, &str, &str, i64)]) {
+    let values: Vec<String> = rows
+        .iter()
+        .map(|(d, t, sp, utc)| format!("('{}', '{t}', 'x', '{sp}', 0.9, {utc})", d.as_ref()))
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) \
+             VALUES {};",
+            values.join(", ")
+        ))
+        .expect("seed");
+}
+
+/// Two species heard in the same audio chunk share an instant, and that is not
+/// an order.
+///
+/// Measured against v0.10.0 before the builders changed: in the default
+/// `window_funnel` mode, and with the pattern `(?1).*(?2)`, a Robin and a
+/// Blackbird at the same instant completed Robin→Blackbird *and* Blackbird→Robin.
+/// The counterpart day, three seconds apart, must still complete.
+#[test]
+fn live_birds_heard_together_are_not_heard_in_order() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    // 2024-05-01 05:00:00 UTC; the station is on UTC here, wall == instant.
+    let t = 1_714_539_600;
+    insert(
+        &db,
+        &[
+            ("2024-05-01", "05:00:00", "European Robin", t),
+            ("2024-05-01", "05:00:00", "Eurasian Blackbird", t),
+            ("2024-05-02", "05:00:00", "European Robin", t + 86_400),
+            ("2024-05-02", "05:00:03", "Eurasian Blackbird", t + 86_403),
+        ],
+    );
+    let pair = vec![
+        "European Robin".to_string(),
+        "Eurasian Blackbird".to_string(),
+    ];
+    let funnel = types::FunnelParams {
+        species_sequence: pair.clone(),
+        ..types::FunnelParams::default()
+    };
+    let pattern = types::PatternParams {
+        species_sequence: pair,
+        ..types::PatternParams::default()
+    };
+    let by_date = |date: &str, steps: Vec<(String, u64)>| {
+        steps.into_iter().find(|(d, _)| d == date).map(|(_, n)| n)
+    };
+
+    let steps: Vec<(String, u64)> = db
+        .funnel(&funnel)
+        .unwrap()
+        .into_iter()
+        .map(|f| (f.date, u64::from(f.steps_completed)))
+        .collect();
+    assert_eq!(by_date("2024-05-01", steps.clone()), Some(1), "{steps:?}");
+    assert_eq!(by_date("2024-05-02", steps.clone()), Some(2), "{steps:?}");
+
+    let counts: Vec<(String, u64)> = db
+        .sequence_count(&pattern)
+        .unwrap()
+        .into_iter()
+        .map(|c| (c.date, c.count))
+        .collect();
+    assert_eq!(by_date("2024-05-01", counts.clone()), Some(0), "{counts:?}");
+    assert_eq!(by_date("2024-05-02", counts.clone()), Some(1), "{counts:?}");
+
+    let matched: Vec<(String, bool)> = db
+        .sequence_match(&pattern)
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.date, m.matched))
+        .collect();
+    assert!(
+        matched.contains(&("2024-05-01".into(), false)),
+        "{matched:?}"
+    );
+    assert!(
+        matched.contains(&("2024-05-02".into(), true)),
+        "{matched:?}"
+    );
+
+    let events = db.funnel_events(&funnel).unwrap();
+    let day2 = events.iter().find(|e| e.date == "2024-05-02").unwrap();
+    assert_eq!(
+        day2.step_times,
+        ["2024-05-02 05:00:00", "2024-05-02 05:00:03"],
+        "{events:?}"
+    );
+}
+
+/// Each step time is the wall clock its own detection recorded, also on the
+/// day the clock changes.
+///
+/// Europe/Berlin, 2026-03-29: 01:30 local is 00:30Z and 03:30 local is 01:30Z.
+/// One offset per day — what the builders used before — put the second step at
+/// `02:30`, a time that did not happen there that night.
+#[test]
+fn live_step_times_survive_a_clock_change() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    insert(
+        &db,
+        &[
+            ("2026-03-29", "01:30:00", "European Robin", 1_774_744_200),
+            (
+                "2026-03-29",
+                "03:30:00",
+                "Eurasian Blackbird",
+                1_774_747_800,
+            ),
+        ],
+    );
+    let pair = vec![
+        "European Robin".to_string(),
+        "Eurasian Blackbird".to_string(),
+    ];
+    let funnel = types::FunnelParams {
+        species_sequence: pair.clone(),
+        window_minutes: 300,
+        hour_start: 0,
+        hour_end: 23,
+    };
+    let pattern = types::PatternParams {
+        species_sequence: pair,
+        max_gap_minutes: None,
+        hour_start: 0,
+        hour_end: 23,
+    };
+    let want = ["2026-03-29 01:30:00", "2026-03-29 03:30:00"];
+    let f = db.funnel_events(&funnel).unwrap();
+    assert_eq!(f[0].step_times, want, "{f:?}");
+    let p = db.sequence_match_events(&pattern).unwrap();
+    assert_eq!(p[0].step_times, want, "{p:?}");
+}
+
+/// The neighbours of the trigger's first detection in a session, in both
+/// directions, never include a species heard in the same chunk as it.
+///
+/// Before the anchor was made explicit, a Song Thrush heard in the same chunk
+/// as the Robin was its "next" species (it sorts after "European Robin") and
+/// would have been its "previous" one had it sorted before.
+#[test]
+fn live_previous_and_next_species_skip_birds_heard_together() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    let base = 1_714_539_600; // 2024-05-01 05:00:00Z
+    let mut rows = Vec::new();
+    // Three mornings, each its own session: Wren, then Robin heard together
+    // with a Song Thrush (and an Alpine Swift, which sorts before "European"),
+    // then a Blackbird.
+    for day in 0..3_i64 {
+        let t = base + day * 86_400;
+        let date = format!("2024-05-0{}", day + 1);
+        rows.extend([
+            (date.clone(), "05:00:00", "Eurasian Wren", t),
+            (date.clone(), "05:01:00", "European Robin", t + 60),
+            (date.clone(), "05:01:00", "Song Thrush", t + 60),
+            (date.clone(), "05:01:00", "Alpine Swift", t + 60),
+            (date, "05:02:00", "Eurasian Blackbird", t + 120),
+        ]);
+    }
+    insert(&db, &rows);
+
+    let next = db.next_species("European Robin", 30, 5).unwrap();
+    assert_eq!(
+        next.iter()
+            .map(|p| (p.predicted_species.as_str(), p.frequency))
+            .collect::<Vec<_>>(),
+        [("Eurasian Blackbird", 3)],
+        "{next:?}"
+    );
+    let previous = db.previous_species("European Robin", 30, 5).unwrap();
+    assert_eq!(
+        previous
+            .iter()
+            .map(|p| (p.predicted_species.as_str(), p.frequency))
+            .collect::<Vec<_>>(),
+        [("Eurasian Wren", 3)],
+        "{previous:?}"
+    );
+    assert!((previous[0].probability - 1.0).abs() < 1e-9);
+    // Counterpart: a session the trigger opens has no predecessor, and is
+    // not counted in the denominator either.
+    assert!(
+        db.previous_species("Eurasian Wren", 30, 5)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// The loaded extension answers every self-test check the way v0.10.0 does.
+#[test]
+fn live_the_functional_self_test_passes_on_the_bundled_extension() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    db.verify_behavioral_functions()
+        .expect("every behavioural function answers as v0.10.0 does");
+}

@@ -67,12 +67,6 @@ const OUTAGE_DAYTIME_SECS: u64 = 2 * 3600;
 const OUTAGE_NO_LOCATION_SECS: u64 = 6 * 3600;
 
 async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    // First run: a station with no detections that hasn't completed onboarding
-    // is bounced to the setup wizard instead of an empty home.
-    if first_run_needs_onboarding(&state) {
-        return Redirect::to("/onboarding").into_response();
-    }
-
     // `total_ever` decides `firstrun`, and `firstrun` decides which page this
     // is: the setup checklist and "Let's get you listening", or the dashboard.
     // Defaulted to 0, a database that could not be read did not merely print a
@@ -80,6 +74,11 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
     // first-run experience, and told its owner to go and set up a microphone.
     let state_for_query = state.clone();
     let loaded = tokio::task::spawn_blocking(move || {
+        // First run: a station with no detections that hasn't completed
+        // onboarding is bounced to the setup wizard instead of an empty home.
+        if first_run_needs_onboarding(&state_for_query) {
+            return Ok(None);
+        }
         let counts = state_for_query.with_read_db(|conn| {
             use birdnet_db::audio_sources::AudioSourceStore;
             let total = birdnet_db::sqlite::detection_count(conn).map_err(|e| e.to_string())?;
@@ -87,12 +86,29 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
             Ok::<_, String>((total, sources))
         });
         let disk_pct = disk_used_percent(&state_for_query);
-        counts.map(|(total, sources)| (total, sources, disk_pct))
+        // Decoration, so a failed read is the default layout rather than an
+        // error page: every block is still the station's own data.
+        let layout = state_for_query.with_read_db(|conn| {
+            birdnet_db::settings::get_or(conn, super::today_layout::SETTING_KEY, "")
+        });
+        let layout = layout.map_or_else(
+            |e| {
+                tracing::warn!(error = %e, "today: layout setting unreadable; using the default");
+                super::today_layout::Layout::default()
+            },
+            |v| super::today_layout::Layout::parse(&v),
+        );
+        // Read only for the first-run checklist, which is the only thing that
+        // shows it.
+        let password_set = matches!(counts, Ok((0, _)))
+            && crate::auth_middleware::admin_password_configured(&state_for_query);
+        counts.map(|(total, sources)| Some((total, sources, disk_pct, password_set, layout)))
     })
     .await;
 
-    let (total_ever, sources, disk_pct) = match loaded {
-        Ok(Ok(v)) => v,
+    let (total_ever, sources, disk_pct, password_set, layout) = match loaded {
+        Ok(Ok(Some(v))) => v,
+        Ok(Ok(None)) => return Redirect::to("/onboarding").into_response(),
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "today: station totals could not be read");
             return today_error_page(&headers);
@@ -114,7 +130,6 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
         .and_then(|s| state.metrics().source_up(&s.id));
 
     let hero_aside = if firstrun {
-        let password_set = crate::auth_middleware::admin_password_configured(&state);
         let model_loaded = state.detection_daemon_running();
         firstrun_checklist(&enabled, disk_pct, capturing, password_set, model_loaded)
     } else {
@@ -135,7 +150,22 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
 <p class="bnb-meta td-sub">Counting today's detections…</p>"#
     };
 
-    let body = TODAY_PAGE_HTML
+    // A brand-new station keeps the default: its hero is the setup checklist.
+    let layout = if firstrun {
+        super::today_layout::Layout::default()
+    } else {
+        layout
+    };
+    let arranged = layout.apply(TODAY_PAGE_HTML).unwrap_or_else(|missing| {
+        tracing::error!(
+            missing,
+            "today: the template lost a layout marker; rendering the default"
+        );
+        super::today_layout::Layout::default()
+            .apply(TODAY_PAGE_HTML)
+            .unwrap_or_else(|_| TODAY_PAGE_HTML.replace("{{work2_solo}}", ""))
+    });
+    let body = arranged
         .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
         .replace("{{today_human_date}}", &human_date())
         .replace("{{hero_phrase}}", hero_phrase)
@@ -279,10 +309,7 @@ fn firstrun_checklist(
             )
         },
         |first| {
-            let label = first
-                .label
-                .clone()
-                .unwrap_or_else(|| first.device_id.clone());
+            let label = crate::routes::admin::audio::public_name(first);
             let more = if enabled.len() > 1 {
                 format!(" +{}", enabled.len() - 1)
             } else {
@@ -578,8 +605,8 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
     // which the pill rendered as a confident green "recording". That is exactly
     // the first-run state, so a station whose microphone never worked showed
     // "recording" indefinitely and nothing ever contradicted it.
-    let capture = live_capture_state(&state);
     let html = tokio::task::spawn_blocking(move || {
+        let capture = live_capture_state(&state);
         state.with_read_db(|conn| {
             let mut out = String::with_capacity(512);
 
@@ -1385,6 +1412,7 @@ mod tests {
             bit_depth: 24,
             gain_db: 0.0,
             rtsp_transport: birdnet_db::audio_sources::RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: birdnet_db::audio_sources::PipelineFlags::default(),
             eq_chain: String::new(),

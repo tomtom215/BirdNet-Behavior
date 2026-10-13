@@ -10,7 +10,7 @@ use super::live::LiveAudioHubHandle;
 use crate::civil::CivilTime;
 
 /// Audio capture source configuration.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum CaptureSource {
     /// Local microphone via `arecord` (ALSA).
     Microphone {
@@ -54,7 +54,57 @@ pub enum CaptureSource {
         stream_id: String,
         /// Transport ffmpeg should negotiate with the camera.
         transport: RtspTransport,
+        /// Which of the camera's tracks to set up.
+        media_mode: RtspMediaMode,
     },
+}
+
+impl std::fmt::Debug for CaptureSource {
+    /// Hand-written so a camera's password cannot reach a log through `{:?}`:
+    /// the RTSP URL is printed with its `user:pass@` removed, the host and
+    /// path kept, as the capture start log prints it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Microphone {
+                device,
+                sample_rate,
+                channels,
+                channel_pick,
+                stream_id,
+            } => f
+                .debug_struct("Microphone")
+                .field("device", device)
+                .field("sample_rate", sample_rate)
+                .field("channels", channels)
+                .field("channel_pick", channel_pick)
+                .field("stream_id", stream_id)
+                .finish(),
+            Self::PipeWire {
+                device,
+                sample_rate,
+                channels,
+                stream_id,
+            } => f
+                .debug_struct("PipeWire")
+                .field("device", device)
+                .field("sample_rate", sample_rate)
+                .field("channels", channels)
+                .field("stream_id", stream_id)
+                .finish(),
+            Self::Rtsp {
+                url,
+                stream_id,
+                transport,
+                media_mode,
+            } => f
+                .debug_struct("Rtsp")
+                .field("url", &crate::config::redact::redact_url_credentials(url))
+                .field("stream_id", stream_id)
+                .field("transport", transport)
+                .field("media_mode", media_mode)
+                .finish(),
+        }
+    }
 }
 
 impl CaptureSource {
@@ -172,6 +222,83 @@ impl RtspTransport {
         match self {
             Self::Auto | Self::Tcp => "tcp",
             Self::Udp => "udp",
+        }
+    }
+}
+
+/// Which of an RTSP camera's tracks ffmpeg sets up.
+///
+/// Mirrors the `media_mode` column of `audio_sources`. A camera serves a
+/// bounded number of concurrent video sessions; with `Full`, ffmpeg sets up
+/// the video track too and discards it, holding one of them for as long as
+/// the station listens. `AudioOnly` passes `-allowed_media_types audio`, so
+/// only the audio track is set up — checked against `MediaMTX` 1.21.2, whose
+/// reader log went from "2 tracks (H264, MPEG-4 Audio)" to "1 track
+/// (MPEG-4 Audio)". A stream with no audio track then fails at PLAY (`MediaMTX`
+/// answers 501), which the supervisor reports as a down source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RtspMediaMode {
+    /// Every track; the video is discarded. What earlier releases did.
+    #[default]
+    Full,
+    /// The audio track alone.
+    AudioOnly,
+}
+
+impl RtspMediaMode {
+    /// The ffmpeg input options this mode adds before `-i`.
+    #[must_use]
+    pub const fn ffmpeg_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Full => &[],
+            Self::AudioOnly => &["-allowed_media_types", "audio"],
+        }
+    }
+}
+
+/// The protocol a network stream's URL names, read from its scheme.
+///
+/// Every network source is stored as one kind (`rtsp`, for history): the URL
+/// already says which protocol it speaks, so a second field could only ever
+/// disagree with it. What differs between them is the ffmpeg options each
+/// accepts before `-i` — see [`super::process::network_input_options`].
+///
+/// `rtp://` is not here. A bare RTP stream does not describe its payload:
+/// ffmpeg 6.1 read one carrying G.711 (a static payload type) and refused one
+/// carrying AAC (a dynamic type) with "Invalid data found", since that needs
+/// an SDP file it has no way to be given. `udp://` — MPEG-TS over UDP, which
+/// describes itself — is what a sender should use instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamProtocol {
+    /// `rtsp://`, `rtsps://` — an IP camera.
+    Rtsp,
+    /// `http://`, `https://` — a direct or Icecast stream, or an HLS
+    /// (`.m3u8`) playlist; ffmpeg tells those apart from the response.
+    Http,
+    /// `rtmp://`, `rtmps://` — read from an RTMP server.
+    Rtmp,
+    /// `udp://` — MPEG-TS over UDP.
+    Udp,
+    /// `srt://`.
+    Srt,
+}
+
+impl StreamProtocol {
+    /// The schemes a network source may use, for a message refusing one.
+    pub const SCHEMES: &'static str = "rtsp, rtsps, http, https, rtmp, rtmps, udp or srt";
+
+    /// The protocol `url` names, or `None` when its scheme is not one of
+    /// [`Self::SCHEMES`]. Schemes are case-insensitive (RFC 3986 §3.1).
+    #[must_use]
+    pub fn of(url: &str) -> Option<Self> {
+        let (scheme, _) = url.trim().split_once("://")?;
+        match scheme.to_ascii_lowercase().as_str() {
+            "rtsp" | "rtsps" => Some(Self::Rtsp),
+            "http" | "https" => Some(Self::Http),
+            "rtmp" | "rtmps" => Some(Self::Rtmp),
+            "udp" => Some(Self::Udp),
+            "srt" => Some(Self::Srt),
+            _ => None,
         }
     }
 }
@@ -359,6 +486,20 @@ pub(crate) fn filename_matches_stream(name: &str, stream_id: Option<&str>, ext: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_keeps_the_camera_and_drops_its_password() {
+        let src = CaptureSource::Rtsp {
+            url: "rtsp://admin:hunter2@cam.local:554/stream1".into(),
+            stream_id: "RTSP_1".into(),
+            transport: RtspTransport::Auto,
+            media_mode: RtspMediaMode::AudioOnly,
+        };
+        let shown = format!("{src:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(shown.contains("cam.local:554/stream1"), "{shown}");
+        assert!(shown.contains("RTSP_1"), "{shown}");
+    }
 
     #[test]
     fn recording_filename_local_mic() {
@@ -568,6 +709,7 @@ mod tests {
             url: "rtsp://cam/feed".into(),
             stream_id: "RTSP_1".into(),
             transport: RtspTransport::Auto,
+            media_mode: RtspMediaMode::Full,
         };
         assert_eq!(rtsp.label(), "RTSP_1");
     }

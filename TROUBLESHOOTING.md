@@ -199,11 +199,14 @@ Symptom: the **Analytics** page cards (Activity Sessions, Species Retention,
 Next Species) report *"The `duckdb-behavioral` extension is required…"*, and the
 startup log warns `duckdb-behavioral extension not loaded`.
 
-Cause: the `duckdb-behavioral` community extension is compiled against a
-**specific DuckDB version** and DuckDB refuses to load an extension built for a
-different version (e.g. an extension built for DuckDB `v1.5.3` cannot load into a
-binary that bundles `v1.5.5`). The mismatch can appear after the bundled DuckDB
-is bumped.
+Cause: up to v0.9.1 the `duckdb-behavioral` community extension was compiled
+against a **specific DuckDB version** and DuckDB refuses to load such a build
+into a different version (e.g. an extension built for DuckDB `v1.5.3` cannot
+load into a binary that bundles `v1.5.5`). From v0.10.0 it targets DuckDB's
+stable C API (`abi: "C_STRUCT"` in `/api/v2/analytics/status`) and loads into
+any engine at or above the C API version it names, but the community registry
+still publishes it only under the DuckDB releases it was built for. The
+mismatch can appear after the bundled DuckDB is bumped.
 
 This is **non-fatal** — the rest of the app is unaffected, and the
 station-local analytics that read SQLite directly (Migration, the Dawn Chorus,

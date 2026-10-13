@@ -343,9 +343,229 @@ pub fn process_uptime_secs() -> Option<u64> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Network interfaces and the station's own processes (G-32)
+// ---------------------------------------------------------------------------
+
+/// One network interface, as `GET /api/v2/system/network` reports it.
+///
+/// An onboarding aid first: "what address do I type to reach my station" is
+/// the question a person asks after `birdnet.local` fails to resolve.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct NetworkInterface {
+    /// Interface name (`eth0`, `wlan0`, `lo`).
+    pub name: String,
+    /// Hardware address, or `None` when the interface has none (loopback,
+    /// most tunnels report all zeros).
+    pub mac: Option<String>,
+    /// Every address with its prefix length, `192.168.1.20/24`.
+    pub addresses: Vec<String>,
+    /// Whether every address on it is a loopback address.
+    pub loopback: bool,
+    /// Bytes received since the interface came up.
+    pub received_bytes: u64,
+    /// Bytes sent since the interface came up.
+    pub transmitted_bytes: u64,
+}
+
+/// Every network interface, loopback last.
+#[must_use]
+pub fn network_interfaces() -> Vec<NetworkInterface> {
+    let networks = sysinfo::Networks::new_with_refreshed_list();
+    let mut out: Vec<NetworkInterface> = networks
+        .list()
+        .iter()
+        .map(|(name, data)| {
+            interface(
+                name,
+                data.mac_address(),
+                data.ip_networks(),
+                data.total_received(),
+                data.total_transmitted(),
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| (a.loopback, &a.name).cmp(&(b.loopback, &b.name)));
+    out
+}
+
+fn interface(
+    name: &str,
+    mac: sysinfo::MacAddr,
+    networks: &[sysinfo::IpNetwork],
+    received_bytes: u64,
+    transmitted_bytes: u64,
+) -> NetworkInterface {
+    let mut addresses: Vec<String> = networks.iter().map(ToString::to_string).collect();
+    addresses.sort();
+    NetworkInterface {
+        name: name.to_owned(),
+        mac: (!mac.is_unspecified()).then(|| mac.to_string()),
+        loopback: name == "lo"
+            || (!networks.is_empty() && networks.iter().all(|n| n.addr.is_loopback())),
+        addresses,
+        received_bytes,
+        transmitted_bytes,
+    }
+}
+
+/// One process belonging to the station, for `GET /api/v2/system/processes`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct StationProcess {
+    /// Process id.
+    pub pid: u32,
+    /// Parent's id; `None` for the station's own process when it has none.
+    pub parent: Option<u32>,
+    /// Executable name (`birdnet-behavior`, `ffmpeg`, `arecord`).
+    pub name: String,
+    /// CPU over the sampling interval, as a percentage **of one core**: a
+    /// process busy on two cores of a Pi reads 200.
+    pub cpu_percent: f32,
+    /// Resident memory in bytes.
+    pub memory_bytes: u64,
+    /// Seconds since the process started.
+    pub running_secs: u64,
+}
+
+/// The station's own process and everything it started — capture `ffmpeg`
+/// and `arecord`, conversions — with CPU sampled over [`PROCESS_SAMPLE`].
+///
+/// Not the whole machine: "the Pi is at 100 % and I don't know why" is first a
+/// question about which of the station's own processes is busy. Blocks for
+/// the sample, so call it from a blocking context.
+#[must_use]
+pub fn station_processes() -> Vec<StationProcess> {
+    let Ok(me) = sysinfo::get_current_pid() else {
+        return Vec::new();
+    };
+    // `nothing()` still lists tasks: on Linux every thread is a task whose
+    // parent is its process, so without `without_tasks` each tokio and ONNX
+    // Runtime thread would be reported as a process the station started.
+    let kind = sysinfo::ProcessRefreshKind::nothing()
+        .with_cpu()
+        .with_memory()
+        .without_tasks();
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
+    std::thread::sleep(PROCESS_SAMPLE);
+    sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, kind);
+    let parents: Vec<(u32, Option<u32>)> = sys
+        .processes()
+        .iter()
+        .map(|(pid, p)| (pid.as_u32(), p.parent().map(sysinfo::Pid::as_u32)))
+        .collect();
+    descendants(&parents, me.as_u32())
+        .into_iter()
+        .filter_map(|pid| {
+            let p = sys.process(sysinfo::Pid::from_u32(pid))?;
+            Some(StationProcess {
+                pid,
+                parent: p.parent().map(sysinfo::Pid::as_u32),
+                name: p.name().to_string_lossy().into_owned(),
+                cpu_percent: p.cpu_usage(),
+                memory_bytes: p.memory(),
+                running_secs: p.run_time(),
+            })
+        })
+        .collect()
+}
+
+/// How long CPU use is sampled over. sysinfo needs at least
+/// `MINIMUM_CPU_UPDATE_INTERVAL` (200 ms on Linux) between two refreshes.
+pub const PROCESS_SAMPLE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// `root` and every process below it, root first, then breadth-first.
+fn descendants(parents: &[(u32, Option<u32>)], root: u32) -> Vec<u32> {
+    let mut out = vec![root];
+    let mut i = 0;
+    while i < out.len() {
+        let parent = out[i];
+        let mut children: Vec<u32> = parents
+            .iter()
+            .filter(|(pid, p)| *p == Some(parent) && *pid != parent && !out.contains(pid))
+            .map(|(pid, _)| *pid)
+            .collect();
+        children.sort_unstable();
+        out.extend(children);
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_process_tree_is_the_station_and_what_it_started() {
+        // 10 = station; 11, 12 its children; 13 a grandchild; 20 unrelated;
+        // 1 is init. A cycle (a pid naming itself) must not loop forever.
+        let parents = [
+            (1, None),
+            (10, Some(1)),
+            (12, Some(10)),
+            (11, Some(10)),
+            (13, Some(11)),
+            (20, Some(1)),
+            (30, Some(30)),
+        ];
+        assert_eq!(descendants(&parents, 10), vec![10, 11, 12, 13]);
+        assert_eq!(descendants(&parents, 30), vec![30]);
+    }
+
+    #[test]
+    fn an_interface_reports_its_addresses_and_whether_it_is_loopback() {
+        let net = |a: &str, p: u8| sysinfo::IpNetwork {
+            addr: a.parse().unwrap(),
+            prefix: p,
+        };
+        let eth = interface(
+            "eth0",
+            sysinfo::MacAddr([0xdc, 0xa6, 0x32, 0, 0, 1]),
+            &[net("192.168.1.20", 24), net("fe80::1", 64)],
+            5,
+            7,
+        );
+        assert_eq!(eth.mac.as_deref(), Some("dc:a6:32:00:00:01"));
+        assert_eq!(eth.addresses, ["192.168.1.20/24", "fe80::1/64"]);
+        assert!(!eth.loopback);
+        let lo = interface(
+            "lo0",
+            sysinfo::MacAddr::UNSPECIFIED,
+            &[net("127.0.0.1", 8), net("::1", 128)],
+            0,
+            0,
+        );
+        assert!(lo.loopback, "every address is loopback");
+        assert_eq!(lo.mac, None, "an all-zero MAC is no MAC");
+    }
+
+    /// The live reading, on whatever machine runs the tests: there is always
+    /// a loopback interface, it is listed last, and this test's own process is
+    /// first in the process view.
+    #[test]
+    fn the_live_readings_name_this_machine_and_this_process() {
+        let ifaces = network_interfaces();
+        assert!(ifaces.last().is_some_and(|i| i.loopback), "{ifaces:?}");
+        let procs = station_processes();
+        let me = sysinfo::get_current_pid().ok().map(sysinfo::Pid::as_u32);
+        assert_eq!(procs.first().map(|p| p.pid), me);
+        // The harness runs this test on a thread of its own, so a reading
+        // that counted threads would list that thread's id beside ours.
+        #[cfg(target_os = "linux")]
+        {
+            let threads: Vec<u32> = std::fs::read_dir("/proc/self/task")
+                .expect("task dir")
+                .filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
+                .filter(|tid| Some(*tid) != me)
+                .collect();
+            assert!(!threads.is_empty(), "the precondition: we have threads");
+            assert!(
+                procs.iter().all(|p| !threads.contains(&p.pid)),
+                "threads listed as processes: {procs:?} / {threads:?}"
+            );
+        }
+    }
 
     #[test]
     fn cpu_temperature_is_plausible_or_absent() {

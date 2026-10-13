@@ -16,7 +16,8 @@
 //   CONTRAST  high|"" (default "")
 //   ONLY      substring filter on route name
 //
-// Also flags duplicate element ids (see diagnose()).
+// Also flags duplicate element ids, and any `table[data-fits-phone]` that
+// still needs a sideways scroll (see diagnose()).
 //
 // Run from this directory after `npm i playwright && npx playwright install chromium`.
 import { chromium } from 'playwright';
@@ -63,16 +64,21 @@ const enc = encodeURIComponent;
 // fixture never seeds, so the page answered "Detection not found" — with a
 // 200, until that became an honest 404 — and both this sweep and axe (which
 // imports ROUTES) graded the not-found page and never the detection page.
-async function realDetectionPath() {
+async function realDetection() {
   try {
     const r = await fetch(`${BASE}/api/v2/detections?limit=1`);
-    const d = (await r.json()).detections[0];
-    return `/detections/detail?date=${d.date}&time=${d.time}&name=${enc(d.com_name)}`;
+    return (await r.json()).detections[0];
   } catch (e) {
     throw new Error(`qa: no detection to open at ${BASE}/api/v2/detections — is the fixture up? (${e})`);
   }
 }
-const DETECTION_DETAIL = await realDetectionPath();
+const REAL = await realDetection();
+const DETECTION_DETAIL = `/detections/detail?date=${REAL.date}&time=${REAL.time}&name=${enc(REAL.com_name)}`;
+// The same for a species page: this route named European Robin, which the
+// (North American) fixture has never heard, so the sweep graded the empty
+// state and never a species with data. Both are graded now — the empty state
+// had its own layout defect, which is how this was found.
+const SPECIES_DETAIL = `/species/detail?name=${enc(REAL.com_name)}`;
 
 export const ROUTES = [
   // ── The six homes of the v3 spine, by their real URLs ──────────────────
@@ -122,7 +128,8 @@ export const ROUTES = [
   ['login', '/login'],
   ['onboarding', '/onboarding'],
   ['detection-detail', DETECTION_DETAIL],
-  ['species-detail', `/species/detail?name=${enc('European Robin')}`],
+  ['species-detail', SPECIES_DETAIL],
+  ['species-detail-unheard', `/species/detail?name=${enc('European Robin')}`],
   ['detection-reviews', '/detection-reviews'],
   ['notifications', '/notifications'],
   ['quarantine', '/quarantine'],
@@ -185,8 +192,21 @@ async function diagnose(page) {
     const seen = new Map();
     document.querySelectorAll('[id]').forEach((el) => { seen.set(el.id, (seen.get(el.id) || 0) + 1); });
     const dupIds = [...seen].filter(([, c]) => c > 1).map(([id, c]) => `${id}x${c}`);
+    // Every table becomes a sideways scroller below 980px (app.css), which is
+    // right for a wide one and wrong for three short columns: the follow-on
+    // card's ran 342px into a 304px box on a 390px phone, and its Observed
+    // column sat behind a scroll nobody had reason to try. A table that is
+    // meant to be read whole on a phone says so with `data-fits-phone`, and
+    // one that still needs the scroll is reported.
+    const fitsPhone = [...document.querySelectorAll('table[data-fits-phone]')];
+    const unfit = fitsPhone
+      .filter((t) => t.scrollWidth > t.clientWidth + 1)
+      .map((t) => `${t.className || 'table'}:${t.scrollWidth}>${t.clientWidth}`);
     return {
       dupIds,
+      unfit,
+      // How many it graded: a clean result over none is not a pass.
+      fitsPhoneTables: fitsPhone.length,
       overflowX, scrollW: de.scrollWidth, clientW: de.clientWidth,
       stuck: [...new Set(stuck)].slice(0, 8),
       imgTotal: imgs.length, imgBroken: [...new Set(broken)].slice(0, 12),
@@ -306,7 +326,8 @@ async function main() {
   const probs = Object.entries(report).filter(([, v]) =>
     v.error || v.overflowX || (v.consoleErrs && v.consoleErrs.length) ||
     (v.pageErrs && v.pageErrs.length) || (v.imgBroken && v.imgBroken.length) ||
-    (v.stuck && v.stuck.length) || (v.bad && v.bad.length) || (v.dupIds && v.dupIds.length) || allPhotosFailed(v));
+    (v.stuck && v.stuck.length) || (v.bad && v.bad.length) || (v.dupIds && v.dupIds.length) || (v.unfit && v.unfit.length) ||
+    allPhotosFailed(v));
   console.log(`\nCaptured ${n} screenshots into ${OUT}/`);
   console.log(`\n=== ${probs.length} pages with issues ===`);
   for (const [k, v] of probs) {
@@ -320,6 +341,7 @@ async function main() {
     if (allPhotosFailed(v)) parts.push(`allSpeciesPhotosFailed(${v.speciesImgBroken}/${v.speciesImgTotal})`);
     if (v.stuck?.length) parts.push(`stuck=${JSON.stringify(v.stuck)}`);
     if (v.dupIds?.length) parts.push(`duplicateIds=${JSON.stringify(v.dupIds)}`);
+    if (v.unfit?.length) parts.push(`tableNeedsScroll=${JSON.stringify(v.unfit)}`);
     console.log(`  ${k}: ${parts.join(' | ')}`);
   }
 

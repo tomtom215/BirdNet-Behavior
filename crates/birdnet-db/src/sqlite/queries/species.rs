@@ -176,9 +176,13 @@ pub fn species_summary(
     }
 }
 
-/// Get daily detection counts for a specific species (most recent `days` dates).
+/// Daily detection counts for one species over the last `days` calendar days,
+/// today (station local time) included, oldest first — one row per day, with
+/// a zero for each day the species was not heard.
 ///
-/// Returns rows in chronological order.
+/// This used to return the most recent `days` dates *that had a detection*,
+/// so the species page's "last 14 days" chart of a bird heard once a week
+/// spanned three months and showed no gaps at all.
 ///
 /// # Errors
 ///
@@ -188,20 +192,29 @@ pub fn species_daily_counts(
     com_name: &str,
     days: u32,
 ) -> Result<Vec<DailyCount>, DbError> {
+    if days == 0 {
+        return Ok(Vec::new());
+    }
     let mut stmt = conn.prepare(
-        "SELECT Date, COUNT(*) as count
-         FROM detections_analytic WHERE Com_Name = ?1
-         GROUP BY Date ORDER BY Date DESC LIMIT ?2",
+        "WITH RECURSIVE day(d) AS (
+             SELECT DATE('now', 'localtime', ?2)
+             UNION ALL
+             SELECT DATE(d, '+1 day') FROM day WHERE d < DATE('now', 'localtime')
+         )
+         SELECT day.d, COUNT(x.Date)
+         FROM day LEFT JOIN detections_analytic x
+           ON x.Date = day.d AND x.Com_Name = ?1
+         GROUP BY day.d ORDER BY day.d ASC",
     )?;
-    let mut rows: Vec<DailyCount> = stmt
-        .query_map(params![com_name, days], |row| {
+    let offset = format!("-{} days", days - 1);
+    let rows = stmt
+        .query_map(params![com_name, offset], |row| {
             Ok(DailyCount {
                 date: row.get(0)?,
                 count: row.get(1)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    rows.reverse(); // chronological order
     Ok(rows)
 }
 
@@ -938,12 +951,31 @@ mod tests {
         assert!(species_summary(&conn, "Flamingo").unwrap().is_none());
     }
 
+    /// Every calendar day of the window, oldest first, zeros included —
+    /// and nothing older than the window, however recent its row.
     #[test]
-    fn species_daily_counts_chronological() {
+    fn species_daily_counts_covers_the_calendar_days() {
         let (_tmp, conn) = temp_db_with_data();
+        conn.execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) VALUES
+               (DATE('now','localtime'), '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9),
+               (DATE('now','localtime','-2 days'), '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9),
+               (DATE('now','localtime','-2 days'), '07:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9),
+               (DATE('now','localtime','-7 days'), '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9);",
+        )
+        .unwrap();
+        let today: String = conn
+            .query_row("SELECT DATE('now','localtime')", [], |r| r.get(0))
+            .unwrap();
         let days = species_daily_counts(&conn, "Eurasian Blackbird", 7).unwrap();
-        assert_eq!(days.len(), 1);
-        assert_eq!(days[0].count, 2);
+        let counts: Vec<i64> = days.iter().map(|d| d.count).collect();
+        assert_eq!(counts, [0, 0, 0, 0, 2, 0, 1], "{days:?}");
+        assert_eq!(days.last().map(|d| d.date.as_str()), Some(today.as_str()));
+        assert!(
+            species_daily_counts(&conn, "Eurasian Blackbird", 0)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

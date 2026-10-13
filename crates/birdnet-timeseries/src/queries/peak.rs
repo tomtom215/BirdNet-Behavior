@@ -133,6 +133,7 @@ impl QueryPlan for SpeciesPeak {
 FROM detections_ts
 WHERE Com_Name = '{sp}'
   AND {window}
+  AND detection_timestamp IS NOT NULL
 GROUP BY hour(detection_timestamp)
 ORDER BY detection_count DESC
 LIMIT {limit}"

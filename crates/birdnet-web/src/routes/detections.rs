@@ -3,7 +3,7 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
-use birdnet_db::sqlite::{DailyCount, DbError, DetectionRow};
+use birdnet_db::sqlite::{DailyCount, DateRange, DbError, DetectionFilter, DetectionRow};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -21,8 +21,18 @@ pub fn router() -> Router<AppState> {
 struct DetectionQuery {
     date: Option<String>,
     species: Option<String>,
+    /// Audio source label, as the `source` field of a row.
+    source: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
+}
+
+/// A filter sent empty (`?species=`, as a form with a blank field submits it)
+/// means "no filter", as it does on the search page. Before the filters were
+/// combined, an empty `species` matched `Com_Name = ''` and returned nothing.
+/// An empty `date` never reaches here: it fails the format check first.
+fn nonblank(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.trim().is_empty())
 }
 
 /// Maximum allowed limit for detection queries.
@@ -49,55 +59,39 @@ async fn list_detections(
         );
     }
 
-    // Track whether this is a paginated query (for including total_count)
-    let is_paginated = query.species.is_none() && query.date.is_none();
-
-    #[allow(clippy::type_complexity)]
-    let result: Result<Result<(Vec<DetectionRow>, Option<i64>), DbError>, _> =
-        if let Some(species) = &query.species {
-            let species = species.clone();
-            tokio::task::spawn_blocking(move || {
-                state.with_db(|conn| {
-                    birdnet_db::sqlite::detections_by_species_page(conn, &species, limit, offset)
-                        .map(|rows| (rows, None))
-                })
+    // Every filter given is applied, together. This used to branch on
+    // `species`, then `date`, so a request with both silently dropped the
+    // date — and `source` did not exist. The search page's filter already
+    // combines all three; this is that filter, so the two cannot disagree.
+    let filter = DetectionFilter {
+        species: nonblank(query.species).into_iter().collect(),
+        dates: nonblank(query.date).map_or(DateRange::Any, DateRange::On),
+        sources: nonblank(query.source).into_iter().collect(),
+        ..DetectionFilter::default()
+    };
+    let result: Result<Result<(Vec<DetectionRow>, i64), DbError>, _> =
+        tokio::task::spawn_blocking(move || {
+            state.with_db(|conn| {
+                let rows = birdnet_db::sqlite::search_detections(conn, &filter, limit, offset)?;
+                let total = birdnet_db::sqlite::search_detection_count(conn, &filter)?;
+                Ok((rows, total))
             })
-            .await
-        } else if let Some(date) = &query.date {
-            let date = date.clone();
-            tokio::task::spawn_blocking(move || {
-                state.with_db(|conn| {
-                    // Paged like the rest: this had no LIMIT, so a busy day
-                    // came back whole under a response that said `limit: 100`.
-                    birdnet_db::sqlite::detections_by_date_page(conn, &date, limit, offset)
-                        .map(|rows| (rows, None))
-                })
-            })
-            .await
-        } else {
-            tokio::task::spawn_blocking(move || {
-                state.with_db(|conn| {
-                    let rows = birdnet_db::sqlite::recent_detections_page(conn, limit, offset)?;
-                    let total = birdnet_db::sqlite::detection_count(conn)?;
-                    Ok((rows, Some(total)))
-                })
-            })
-            .await
-        };
+        })
+        .await;
 
     match result {
         Ok(Ok((detections, total_count))) => {
             let count = detections.len();
-            let mut response = json!({
-                "detections": detections,
-                "count": count,
-                "limit": limit,
-                "offset": offset,
-            });
-            if is_paginated && let Some(total) = total_count {
-                response["total_count"] = json!(total);
-            }
-            (StatusCode::OK, Json(response))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "detections": detections,
+                    "count": count,
+                    "total_count": total_count,
+                    "limit": limit,
+                    "offset": offset,
+                })),
+            )
         }
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,

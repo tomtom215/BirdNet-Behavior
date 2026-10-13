@@ -99,15 +99,17 @@ async fn exclude(State(state): State<AppState>, Form(form): Form<SpeciesForm>) -
     }
     let s = state.clone();
     let name = sci_name.clone();
-    let _ =
-        tokio::task::spawn_blocking(move || super::handler::add_to_exclude_list(&s, &name)).await;
-    crate::audit::audit(
-        &state,
-        None,
-        "species.exclude.add",
-        Some(&sci_name),
-        Some("via=species-storage"),
-    );
+    let _ = tokio::task::spawn_blocking(move || {
+        super::handler::add_to_exclude_list(&s, &name);
+        crate::audit::audit(
+            &s,
+            None,
+            "species.exclude.add",
+            Some(&name),
+            Some("via=species-storage"),
+        );
+    })
+    .await;
     let note = format!("{} will no longer be recorded.", escape_html(&sci_name));
     Html(table(&load(state).await, Some(&note)))
 }
@@ -124,22 +126,23 @@ async fn delete_detections(
     let s = state.clone();
     let name = sci_name.clone();
     let outcome = tokio::task::spawn_blocking(move || {
-        s.with_db(|conn| birdnet_db::sqlite::delete_species_detections(conn, &name))
-            .unwrap_or_default()
+        let outcome = s
+            .with_db(|conn| birdnet_db::sqlite::delete_species_detections(conn, &name))
+            .unwrap_or_default();
+        crate::audit::audit(
+            &s,
+            None,
+            "species.detections.delete",
+            Some(&name),
+            Some(&format!(
+                "deleted={} locked_kept={}",
+                outcome.affected, outcome.locked_skipped
+            )),
+        );
+        outcome
     })
     .await
     .unwrap_or_default();
-
-    crate::audit::audit(
-        &state,
-        None,
-        "species.detections.delete",
-        Some(&sci_name),
-        Some(&format!(
-            "deleted={} locked_kept={}",
-            outcome.affected, outcome.locked_skipped
-        )),
-    );
     tracing::info!(
         species = %sci_name,
         deleted = outcome.affected,
@@ -190,21 +193,20 @@ async fn delete_clips(
                 }
             }
         }
+        crate::audit::audit(
+            &s,
+            None,
+            "species.clips.delete",
+            Some(&name),
+            Some(&format!(
+                "marked={} files_removed={} failed={} locked_kept={}",
+                outcome.affected, removed, failed, outcome.locked_skipped
+            )),
+        );
         (outcome, removed, failed)
     })
     .await
     .unwrap_or_default();
-
-    crate::audit::audit(
-        &state,
-        None,
-        "species.clips.delete",
-        Some(&sci_name),
-        Some(&format!(
-            "marked={} files_removed={} failed={} locked_kept={}",
-            outcome.affected, removed, failed, outcome.locked_skipped
-        )),
-    );
     tracing::info!(
         species = %sci_name,
         marked = outcome.affected,

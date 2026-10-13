@@ -40,8 +40,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <label for="rtsp_url">Network camera address</label>
         <input id="rtsp_url" name="rtsp_url" value="{rtsp}" placeholder="rtsp://camera.local:554/stream">
         <p class="hint">The audio stream from a network camera, which its own
-        app or manual will call an RTSP address. Needs the <code>ffmpeg</code>
-        program installed on the station.</p>
+        app or manual will call an RTSP address — or an Icecast, HLS, RTMP,
+        UDP or SRT stream's URL. Needs the <code>ffmpeg</code> program
+        installed on the station.</p>
       </div>
     </div>
     <div>

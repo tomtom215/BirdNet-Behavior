@@ -46,18 +46,27 @@ FEATURE_SET="none"
 # 2.0.0-rc.10, `dist.tsv` by rc.13), so both are accepted, newest-first.
 CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 DIST_GLOB="build/download/dist"
+# The ort-sys version this checkout builds, from its own lockfile. With two
+# versions unpacked in the registry, `ls ort-sys-*` lists rc.13 before rc.14,
+# so taking the first match seeded the *older* runtime after an upgrade — and
+# ort-sys, finding no cache for its own hash, then tried the download this
+# script exists to avoid.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ORT_SYS_VER="$(awk '/^name = "ort-sys"$/ { getline; gsub(/version = |"/, ""); print; exit }' \
+  "$ROOT/Cargo.lock" 2>/dev/null || true)"
+[ -n "$ORT_SYS_VER" ] || die "could not read the ort-sys version from $ROOT/Cargo.lock"
 read_dist_table() {
   local f cr d dt
   # `|| true` on each glob: an empty glob makes `ls` exit non-zero, which would
   # otherwise trip `set -e` depending on the call site. `.tsv` is listed first
   # and wins ties because the rename went `.txt` -> `.tsv`.
-  f="$(ls -d "$CARGO_HOME"/registry/src/*/ort-sys-*/"$DIST_GLOB".tsv \
-              "$CARGO_HOME"/registry/src/*/ort-sys-*/"$DIST_GLOB".txt 2>/dev/null \
+  f="$(ls -d "$CARGO_HOME"/registry/src/*/ort-sys-"$ORT_SYS_VER"/"$DIST_GLOB".tsv \
+              "$CARGO_HOME"/registry/src/*/ort-sys-"$ORT_SYS_VER"/"$DIST_GLOB".txt 2>/dev/null \
         | head -1 || true)"
   if [ -n "$f" ] && [ -f "$f" ]; then
     cat "$f"; return 0
   fi
-  cr="$(ls "$CARGO_HOME"/registry/cache/*/ort-sys-*.crate 2>/dev/null | sort -V | tail -1 || true)"
+  cr="$(ls "$CARGO_HOME"/registry/cache/*/ort-sys-"$ORT_SYS_VER".crate 2>/dev/null | head -1 || true)"
   [ -n "$cr" ] && [ -f "$cr" ] || return 1
   d="$(mktemp -d)"
   tar -xzf "$cr" -C "$d" 2>/dev/null || { rm -rf "$d"; return 1; }
@@ -67,7 +76,7 @@ read_dist_table() {
 }
 
 DIST_TABLE="$(read_dist_table)" \
-  || die "ort-sys not found under $CARGO_HOME/registry — run 'cargo fetch' first"
+  || die "ort-sys $ORT_SYS_VER not found under $CARGO_HOME/registry — run 'cargo fetch' first"
 
 # Pick the row by *content*, not by column position: ort-sys has both reordered
 # the columns (rc.10 led with the feature set, rc.13 leads with the target) and

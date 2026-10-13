@@ -595,7 +595,7 @@ pub fn store(path: &Path, snapshot: &Snapshot) -> Result<(), EbirdError> {
 // ---------------------------------------------------------------------------
 
 /// Everything needed to run the poll, once the configuration has been read.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Settings {
     /// The operator's eBird API key.
     pub api_key: String,
@@ -603,6 +603,17 @@ pub struct Settings {
     pub scope: Scope,
     /// Days of history to ask for.
     pub back_days: u32,
+}
+
+impl std::fmt::Debug for Settings {
+    /// Hand-written so the eBird API key cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Settings")
+            .field("api_key", &"<redacted>")
+            .field("scope", &self.scope)
+            .field("back_days", &self.back_days)
+            .finish()
+    }
 }
 
 /// Resolve the eBird configuration.
@@ -692,7 +703,7 @@ fn parse_range(
 // ---------------------------------------------------------------------------
 
 /// An eBird API client.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Client {
     /// The HTTP client, with the station's identifying user agent.
     http: reqwest::Client,
@@ -700,6 +711,16 @@ pub struct Client {
     base_url: String,
     /// The operator's API key, sent as the `x-ebirdapitoken` header.
     api_key: String,
+}
+
+impl std::fmt::Debug for Client {
+    /// Hand-written so the eBird API key cannot reach a log through `{:?}`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("base_url", &self.base_url)
+            .field("api_key", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Client {

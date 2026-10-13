@@ -53,7 +53,7 @@ fn render_options(sources: &[AudioSource], selected: Option<&str>) -> String {
     // Empty value maps to "no source_id" → the first enabled row in /stream.
     out.push_str(r#"<option value="">— default audio source —</option>"#);
     for s in sources {
-        let label_display = s.label.clone().unwrap_or_else(|| s.device_id.clone());
+        let label_display = crate::routes::admin::audio::public_name(s);
         let kind_glyph = match s.kind {
             SourceKind::UsbAlsa => "🎙",
             SourceKind::PipeWire => "🔊",
@@ -71,11 +71,25 @@ fn render_options(sources: &[AudioSource], selected: Option<&str>) -> String {
                 },
                 glyph = kind_glyph,
                 label = escape_html(&label_display),
-                kind = crate::routes::admin::audio::kind_label(s.kind),
+                kind = kind_note(s),
             ),
         );
     }
     out
+}
+
+/// The words in an option's brackets: the source's kind, and for a UDP
+/// stream that it offers the spectrogram only. Its one reader is capture, so
+/// `/stream` refuses it; saying so here saves a listener pressing play to be
+/// told "Stream unavailable".
+fn kind_note(s: &AudioSource) -> String {
+    use birdnet_core::audio::capture::StreamProtocol;
+    let kind = crate::routes::admin::audio::kind_label(s.kind);
+    if s.kind == SourceKind::Rtsp && StreamProtocol::of(&s.device_id) == Some(StreamProtocol::Udp) {
+        format!("{kind} · spectrogram only")
+    } else {
+        kind.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -98,6 +112,7 @@ mod tests {
             bit_depth: 16,
             gain_db: 0.0,
             rtsp_transport: RtspTransport::Auto,
+            media_mode: birdnet_db::audio_sources::RtspMediaMode::Full,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
             eq_chain: String::new(),
@@ -138,8 +153,24 @@ mod tests {
         // Kind suffix renders for each row, in the words the Capture screen
         // uses — `usb-alsa` and friends are the storage form, not a name.
         assert!(html.contains("(USB microphone)"));
-        assert!(html.contains("(Network camera)"));
+        assert!(html.contains("(Network stream)"));
         assert!(html.contains("(PipeWire microphone)"));
+    }
+
+    /// A UDP stream's option says it has no live audio. Observed failing with
+    /// `kind_note` returning the kind alone.
+    #[test]
+    fn a_udp_streams_option_says_it_is_spectrogram_only() {
+        let mut udp = sample("src_udp", SourceKind::Rtsp, Some("Feeder"), false);
+        udp.device_id = "udp://0.0.0.0:5004".to_owned();
+        let mut cam = sample("src_cam", SourceKind::Rtsp, Some("Box"), false);
+        cam.device_id = "rtsp://cam.local/s".to_owned();
+        let html = render_source_options(&[udp, cam]);
+        assert!(
+            html.contains("Feeder (Network stream · spectrogram only)"),
+            "{html}"
+        );
+        assert!(html.contains("Box (Network stream)"), "{html}");
     }
 
     #[test]
