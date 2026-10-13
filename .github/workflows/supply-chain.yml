@@ -33,7 +33,7 @@ jobs:
   cargo-deny:
     name: cargo-deny
     runs-on: ubuntu-24.04
-    timeout-minutes: 20  # observed 47s
+    timeout-minutes: 20  # observed 59s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -51,7 +51,7 @@ jobs:
   cargo-audit:
     name: cargo-audit
     runs-on: ubuntu-24.04
-    timeout-minutes: 20  # observed 3m10s
+    timeout-minutes: 20  # observed 3m05s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -68,7 +68,7 @@ jobs:
   cargo-machete:
     name: cargo-machete (unused dependencies)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15  # observed 8s
+    timeout-minutes: 15  # observed 15s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-machete
@@ -100,7 +100,7 @@ jobs:
   shellcheck:
     name: shellcheck (bootstrap scripts)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10  # observed 11s
+    timeout-minutes: 10  # observed 12s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: install.sh is generated from installer/lib (no drift)
@@ -132,7 +132,7 @@ jobs:
   installer-tests:
     name: installer unit tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 10  # observed 6s
+    timeout-minutes: 10  # observed 8s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run the installer test suite

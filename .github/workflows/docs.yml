@@ -104,7 +104,7 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # observed 10s
+    timeout-minutes: 15  # observed 11s
     permissions:
       contents: read
       pages: write

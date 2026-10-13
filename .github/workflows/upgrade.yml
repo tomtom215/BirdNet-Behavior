@@ -59,7 +59,7 @@ jobs:
   candidate:
     name: Build the candidate tarball
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 90  # observed 14m01s
     outputs:
       version: ${{ steps.pkg.outputs.version }}
       prev: ${{ steps.sources.outputs.prev }}
