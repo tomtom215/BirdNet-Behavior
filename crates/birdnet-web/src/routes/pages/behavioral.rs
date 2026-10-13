@@ -396,7 +396,13 @@ pub(super) async fn analytics_dawn_sequence_partial(
         return analytics_unavailable_html("Dawn sequence");
     }
     let result = tokio::task::spawn_blocking(move || {
-        let sequence = state.with_db(derive_dawn_sequence);
+        // A failed read is an error on the card, not "not enough dawn
+        // activity yet" — that sentence is a claim about the station's data.
+        let sequence = state.with_db(derive_dawn_sequence).map_err(|e| {
+            birdnet_behavioral::connection::AnalyticsError::InvalidData(format!(
+                "reading the dawn detections: {e}"
+            ))
+        })?;
         // sequence_count / sequence_match_events need 2..=32 steps; fewer than
         // two prominent dawn voices means there's no order to read yet.
         if sequence.len() < 2 {
@@ -477,7 +483,7 @@ pub(super) async fn analytics_dawn_sequence_partial(
 /// song, so a bird up at 04:30 that sang on past eight was placed after one
 /// that sang only from five to twenty past.
 #[cfg(feature = "analytics")]
-fn derive_dawn_sequence(conn: &rusqlite::Connection) -> Vec<String> {
+fn derive_dawn_sequence(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<String>> {
     // Top five dawn voices by volume, then ordered by typical first-song time
     // so the sequence reads as the order the morning chorus opens in.
     const SQL: &str = "WITH dawn_rows AS (
@@ -503,13 +509,9 @@ fn derive_dawn_sequence(conn: &rusqlite::Connection) -> Vec<String> {
         SELECT Com_Name FROM (
             SELECT Com_Name, opens_secs FROM dawn ORDER BY c DESC LIMIT 5
         ) ORDER BY opens_secs ASC LIMIT 3";
-    let Ok(mut stmt) = conn.prepare(SQL) else {
-        return Vec::new();
-    };
-    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
-        return Vec::new();
-    };
-    rows.filter_map(Result::ok).collect()
+    let mut stmt = conn.prepare(SQL)?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    rows.collect()
 }
 
 /// Trim a `DuckDB` timestamp string (`2026-04-12 05:58:23`) to `HH:MM`.
@@ -1013,8 +1015,18 @@ mod tests {
             }
         }
         assert_eq!(
-            super::derive_dawn_sequence(&conn),
+            super::derive_dawn_sequence(&conn).expect("read"),
             ["European Robin", "Eurasian Wren"]
         );
+    }
+
+    /// A read that fails is an error, not an empty order: the card read
+    /// "Not enough dawn activity yet" for a station whose detections could
+    /// not be read at all. Observed failing with the old
+    /// `let Ok(..) else { return Vec::new() }` restored (as `Ok(Vec::new())`).
+    #[test]
+    fn a_dawn_sequence_that_cannot_be_read_is_an_error() {
+        let conn = rusqlite::Connection::open_in_memory().expect("db");
+        assert!(super::derive_dawn_sequence(&conn).is_err());
     }
 }

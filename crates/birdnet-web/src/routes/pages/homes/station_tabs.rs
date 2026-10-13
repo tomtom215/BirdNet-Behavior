@@ -164,8 +164,8 @@ fn build_data(state: &AppState) -> String {
         backups = crate::routes::admin::backup_recovery::backups_body(state),
         import = crate::routes::admin::migration::migration_body(state),
         quality = crate::routes::admin::quality::quality_body(state),
-        phantoms = crate::routes::admin::quality::render_phantoms(
-            &crate::routes::admin::quality::load_phantoms(state),
+        phantoms = crate::routes::admin::quality::render_phantoms_or_error(
+            crate::routes::admin::quality::load_phantoms(state),
             state.nearby().as_deref(),
         ),
     )
