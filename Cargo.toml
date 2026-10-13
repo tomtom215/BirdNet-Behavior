@@ -121,13 +121,14 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem
 # Email (SMTP) — pure Rust TLS via rustls, no OpenSSL
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
 
-# System monitoring — CPU, memory, temperature.
+# System monitoring — CPU, memory, temperature, network interfaces.
 #
 # sysinfo 0.39.x requires Rust 1.95, which is what sets the workspace MSRV
 # floor (see `rust-version` above). The API we use — `RefreshKind::nothing()`,
 # `Components::refresh(bool)`, `Component::temperature() -> Option<f32>` — is
 # stable across the 0.38/0.39 boundary, so only the version bump is needed.
-sysinfo = { version = "0.39", default-features = false, features = ["system", "component"] }
+# `network` adds only Windows dependencies; on Linux it reads `/proc/net/dev`.
+sysinfo = { version = "0.39", default-features = false, features = ["system", "component", "network"] }
 
 # `application/x-www-form-urlencoded` parsing for the one form axum's own
 # `Form` extractor cannot take: a checkbox group posts `selected=a&selected=b`,

@@ -82,6 +82,8 @@ pub const READ_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v2/settings"),
     ("GET", "/api/v2/system/capture"),
     ("GET", "/api/v2/system/jobs"),
+    ("GET", "/api/v2/system/network"),
+    ("GET", "/api/v2/system/processes"),
     ("GET", "/api/v2/models/catalog"),
     ("GET", "/api/v2/detections/comments"),
 ];
@@ -113,6 +115,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/v2/control/restart-source", post(restart_source))
         .route("/api/v2/system/capture", get(capture_status))
         .route("/api/v2/system/jobs", get(system_jobs))
+        .route("/api/v2/system/network", get(system_network))
+        .route("/api/v2/system/processes", get(system_processes))
         .route("/api/v2/models/catalog", get(models_catalog))
         .route(
             "/api/v2/detections/comments",
@@ -1120,12 +1124,27 @@ async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>)
         // worse than no answer. `routes::admin::doctor` reads the config the
         // same way, for the same reason: it is the only place the truth is.
         let schedule = read_backup_schedule(&state);
-        state.with_db(|conn| {
-            birdnet_db::sqlite::job_statuses(conn, now, schedule).unwrap_or_default()
-        })
+        state.with_db(|conn| birdnet_db::sqlite::job_statuses(conn, now, schedule))
     })
-    .await
-    .unwrap_or_default();
+    .await;
+    // A read that failed is an error, not an empty catalogue: an empty list
+    // reads as "no jobs are due", which is the answer a broken station most
+    // needs not to give.
+    let statuses = match statuses {
+        Ok(Ok(statuses)) => statuses,
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": crate::routes::log_internal("job status read failed", &e) })),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": crate::routes::log_internal("job status task failed", &e) })),
+            );
+        }
+    };
 
     let jobs: Vec<Value> = statuses
         .iter()
@@ -1153,6 +1172,38 @@ async fn system_jobs(State(state): State<AppState>) -> (StatusCode, Json<Value>)
         StatusCode::OK,
         Json(json!({ "now_unix": now, "jobs": jobs })),
     )
+}
+
+/// `GET /api/v2/system/network` — the station's network interfaces (`G-32`).
+///
+/// Bearer-gated with the rest of `/system`: addresses and hardware addresses
+/// describe the network a station sits on.
+async fn system_network() -> (StatusCode, Json<Value>) {
+    match tokio::task::spawn_blocking(crate::system_info::network_interfaces).await {
+        Ok(interfaces) => (StatusCode::OK, Json(json!({ "interfaces": interfaces }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": crate::routes::log_internal("network read failed", &e) })),
+        ),
+    }
+}
+
+/// `GET /api/v2/system/processes` — the station's process and the processes
+/// it started, with CPU sampled over a quarter of a second (`G-32`).
+async fn system_processes() -> (StatusCode, Json<Value>) {
+    match tokio::task::spawn_blocking(crate::system_info::station_processes).await {
+        Ok(processes) => (
+            StatusCode::OK,
+            Json(json!({
+                "sample_ms": crate::system_info::PROCESS_SAMPLE.as_millis(),
+                "processes": processes,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": crate::routes::log_internal("process read failed", &e) })),
+        ),
+    }
 }
 
 /// `GET /api/v2/models/catalog` — the classifiers this build can install.

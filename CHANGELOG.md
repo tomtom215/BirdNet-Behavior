@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/v2/system/network` and `GET /api/v2/system/processes`**, behind
+  the API token like the rest of `/system`. The first lists every network
+  interface with its addresses, hardware address and byte counters — the
+  address to type when `birdnet.local` does not resolve. The second lists the
+  station's own process and everything it started (capture `ffmpeg`,
+  `arecord`, conversions) with CPU and memory, which is the first question
+  when a Pi sits at 100 %.
+
 - **Arrange the Today page.** Settings → Today Page Layout shows, hides and
   reorders the page's parts — headline, nudge, day strip, log, and the three
   side cards — with Move up, Move down and Show/Hide buttons rather than
@@ -83,6 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/v2/analytics/status` reports the embed's `abi`.
 
 ### Fixed
+
+- **`GET /api/v2/system/jobs` answered an empty list when it could not read
+  the job state** — which reads as "nothing is due" on exactly the station
+  that has a problem. It now answers `500`.
 
 - **An RTSP camera's password reached the journal.** Starting an RTSP
   source logged its URL at info, on every start. ffmpeg also names its input

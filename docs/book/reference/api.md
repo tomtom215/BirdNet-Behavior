@@ -267,11 +267,12 @@ They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-Five *reads* live behind the same token, because what they return is not public:
+Seven *reads* live behind the same token, because what they return is not public:
 `GET /api/v2/settings` (the configuration, credentials taken out),
 `GET /api/v2/system/capture` and `GET /api/v2/system/jobs` (operational detail
-about the station and its sources), `GET /api/v2/models/catalog`, and
-`GET /api/v2/detections/comments`.
+about the station and its sources), `GET /api/v2/system/network` and
+`GET /api/v2/system/processes` (the network it sits on, and what it is running),
+`GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
 
 ### Turning them on
 
@@ -327,6 +328,8 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `POST` | `/api/v2/control/restart-source` | Restart one audio source's capture |
 | `GET` | `/api/v2/system/capture` | Per-source capture health, as Station Health draws it |
 | `GET` | `/api/v2/system/jobs` | Every scheduled maintenance job and its state |
+| `GET` | `/api/v2/system/network` | Network interfaces: addresses with prefix, hardware address, bytes in and out; loopback last |
+| `GET` | `/api/v2/system/processes` | The station's process and everything it started (capture `ffmpeg`, `arecord`, conversions), CPU sampled over 250 ms as a percentage of one core |
 | `GET` | `/api/v2/models/catalog` | The classifiers this build can install |
 
 ```bash

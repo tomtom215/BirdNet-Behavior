@@ -424,6 +424,165 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The job state could not be read. Answered as an error rather than as an empty list, which would read as \"nothing is due\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/network": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The station's network interfaces",
+        "description": "Every interface with its hardware address, its addresses and prefix lengths, and byte counters since it came up; loopback last. An onboarding aid — the address to type when `.local` names do not resolve.",
+        "operationId": "systemNetwork",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The station's network interfaces.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "interfaces"
+                  ],
+                  "properties": {
+                    "interfaces": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "mac",
+                          "addresses",
+                          "loopback",
+                          "received_bytes",
+                          "transmitted_bytes"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "mac": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Hardware address; null when the interface has none."
+                          },
+                          "addresses": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Each address with its prefix length, e.g. `192.168.1.20/24`."
+                          },
+                          "loopback": {
+                            "type": "boolean"
+                          },
+                          "received_bytes": {
+                            "type": "integer"
+                          },
+                          "transmitted_bytes": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/processes": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The station's processes",
+        "description": "The station's own process first, then every process it started (capture `ffmpeg` / `arecord`, conversions), with CPU sampled over `sample_ms`. Not the whole machine: the question this answers is which of the station's own processes is busy.",
+        "operationId": "systemProcesses",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The station's processes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "sample_ms",
+                    "processes"
+                  ],
+                  "properties": {
+                    "sample_ms": {
+                      "type": "integer"
+                    },
+                    "processes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "pid",
+                          "parent",
+                          "name",
+                          "cpu_percent",
+                          "memory_bytes",
+                          "running_secs"
+                        ],
+                        "properties": {
+                          "pid": {
+                            "type": "integer"
+                          },
+                          "parent": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "cpu_percent": {
+                            "type": "number",
+                            "description": "CPU over the sample, as a percentage of one core — two busy cores read 200."
+                          },
+                          "memory_bytes": {
+                            "type": "integer",
+                            "description": "Resident memory."
+                          },
+                          "running_secs": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

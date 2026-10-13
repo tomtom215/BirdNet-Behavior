@@ -126,6 +126,7 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 | `rule.` | `create`, `delete`, `toggle`, `import` |
 | `data.` | `detections.clear`, `recordings.clear`, `database.restore`, `backup.run` |
 | `system.` | `restart`, `update.apply` |
+| `today.` | `layout.change` (the block and the move, e.g. `nudge hide`) |
 
 `species.detections.delete` and `species.clips.delete` are the bulk actions on
 [Species storage](settings.md#species-storage). Each records how many rows it
