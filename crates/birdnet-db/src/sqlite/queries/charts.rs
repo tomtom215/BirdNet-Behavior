@@ -342,6 +342,133 @@ pub fn species_hours(
     Ok(out)
 }
 
+/// One species' day: what it did on the date, and when it was heard before.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeciesDay {
+    /// Scientific name.
+    pub sci_name: String,
+    /// Common name.
+    pub com_name: String,
+    /// Its detections on the date at or above the confidence floor.
+    pub count: i64,
+    /// Those detections in each local hour, midnight first.
+    pub hours: [i64; 24],
+    /// The highest confidence among them.
+    pub max_confidence: f64,
+    /// The `Time` of the first of them, by instant where one is stored.
+    pub first_time: String,
+    /// The `Time` of the last of them, likewise.
+    pub last_time: String,
+    /// The date of its first detection here, on or before the date.
+    pub first_ever: String,
+    /// The date of its first detection on or after `year_start`.
+    pub first_this_year: String,
+    /// The date of its first detection on or after `season_start`.
+    pub first_this_season: String,
+    /// The date of its last detection before the date, if any.
+    pub previous: Option<String>,
+}
+
+/// One day's species with their history: birdnet-go's daily species summary.
+///
+/// The species detected on `date` at or above `min_confidence`, the `limit`
+/// most detected (ties by scientific name), with their hourly counts and
+/// first and last times, and when each was first heard here, first heard
+/// since `year_start`, first heard since `season_start`, and last heard
+/// before `date`.
+///
+/// The history columns read every detection, whatever its confidence: a
+/// species is not new because the floor hid its earlier detections. They
+/// need no upper bound: each species was heard on `date`, so none of their
+/// minimums can fall after it. Both read `detections_analytic`.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_day(
+    conn: &Connection,
+    date: &str,
+    min_confidence: f64,
+    limit: u32,
+    year_start: &str,
+    season_start: &str,
+) -> Result<Vec<SpeciesDay>, DbError> {
+    let mut stmt = conn.prepare(
+        "WITH day AS (
+             SELECT Sci_Name, Com_Name, Time, Confidence, detected_at_utc,
+                    CAST(substr(Time, 1, 2) AS INTEGER) AS hour
+             FROM detections_analytic
+             WHERE Date = ?1 AND Confidence >= ?2 AND Time GLOB '[0-2][0-9]:*'
+         ),
+         chosen AS (
+             SELECT Sci_Name, MAX(Com_Name) AS com, COUNT(*) AS n, MAX(Confidence) AS top
+             FROM day GROUP BY Sci_Name
+             ORDER BY n DESC, Sci_Name
+             LIMIT ?3
+         ),
+         ordered AS (
+             SELECT Sci_Name, Time,
+                    ROW_NUMBER() OVER (PARTITION BY Sci_Name
+                        ORDER BY detected_at_utc IS NULL, detected_at_utc, Time) AS asc_n,
+                    ROW_NUMBER() OVER (PARTITION BY Sci_Name
+                        ORDER BY detected_at_utc IS NULL, detected_at_utc DESC, Time DESC) AS desc_n
+             FROM day
+         ),
+         history AS (
+             SELECT h.Sci_Name,
+                    MIN(h.Date) AS first_ever,
+                    MIN(CASE WHEN h.Date >= ?4 THEN h.Date END) AS first_year,
+                    MIN(CASE WHEN h.Date >= ?5 THEN h.Date END) AS first_season,
+                    MAX(CASE WHEN h.Date < ?1 THEN h.Date END) AS previous
+             FROM detections_analytic h JOIN chosen c ON c.Sci_Name = h.Sci_Name
+             GROUP BY h.Sci_Name
+         )
+         SELECT c.Sci_Name, c.com, c.n, c.top,
+                (SELECT Time FROM ordered o WHERE o.Sci_Name = c.Sci_Name AND asc_n = 1),
+                (SELECT Time FROM ordered o WHERE o.Sci_Name = c.Sci_Name AND desc_n = 1),
+                hi.first_ever, hi.first_year, hi.first_season, hi.previous,
+                d.hour, COUNT(*)
+         FROM chosen c
+         JOIN history hi ON hi.Sci_Name = c.Sci_Name
+         JOIN day d ON d.Sci_Name = c.Sci_Name
+         WHERE d.hour BETWEEN 0 AND 23
+         GROUP BY c.Sci_Name, d.hour
+         ORDER BY c.n DESC, c.Sci_Name, d.hour",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![
+        date,
+        min_confidence,
+        limit,
+        year_start,
+        season_start
+    ])?;
+    let mut out: Vec<SpeciesDay> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let sci: String = row.get(0)?;
+        if out.last().is_none_or(|s| s.sci_name != sci) {
+            out.push(SpeciesDay {
+                sci_name: sci,
+                com_name: row.get(1)?,
+                count: row.get(2)?,
+                hours: [0; 24],
+                max_confidence: row.get(3)?,
+                first_time: row.get(4)?,
+                last_time: row.get(5)?,
+                first_ever: row.get(6)?,
+                first_this_year: row.get(7)?,
+                first_this_season: row.get(8)?,
+                previous: row.get(9)?,
+            });
+        }
+        // 0..=23 by the query's own filter.
+        let hour = usize::try_from(row.get::<_, i64>(10)?).unwrap_or(0).min(23);
+        if let Some(s) = out.last_mut() {
+            s.hours[hour] = row.get(11)?;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,6 +754,85 @@ mod tests {
         assert_eq!(
             chosen[1].total, 1,
             "the garbled time and the day before are not counted"
+        );
+    }
+
+    /// A day's species, most detected first, with their hours, times and
+    /// confidence over the floor; and their history from every detection.
+    #[test]
+    fn a_day_is_summarised_with_each_species_history() {
+        let conn = station(&[
+            ("2026-05-10", "05:10:00", "Turdus merula", 0.9),
+            ("2026-05-10", "05:40:00", "Turdus merula", 0.6),
+            ("2026-05-10", "19:00:00", "Turdus merula", 0.95),
+            ("2026-05-10", "06:00:00", "Erithacus rubecula", 0.85),
+            // Exactly on the floor: counted.
+            ("2026-05-10", "06:30:00", "Erithacus rubecula", 0.5),
+            ("2026-05-10", "07:00:00", "Parus major", 0.2),
+            // History.
+            ("2025-11-01", "08:00:00", "Turdus merula", 0.1),
+            ("2026-03-02", "08:00:00", "Turdus merula", 0.9),
+            ("2026-05-07", "08:00:00", "Turdus merula", 0.9),
+            ("2026-05-11", "08:00:00", "Turdus merula", 0.9),
+        ]);
+        let got =
+            species_day(&conn, "2026-05-10", 0.5, 30, "2026-01-01", "2026-03-20").expect("query");
+        let names: Vec<&str> = got.iter().map(|s| s.sci_name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Turdus merula", "Erithacus rubecula"],
+            "the 0.2 is under the floor"
+        );
+        let b = &got[0];
+        assert_eq!(b.count, 3);
+        assert_eq!(b.hours[5], 2);
+        assert_eq!(b.hours[19], 1);
+        assert!((b.max_confidence - 0.95).abs() < 1e-12);
+        assert_eq!(
+            (b.first_time.as_str(), b.last_time.as_str()),
+            ("05:10:00", "19:00:00")
+        );
+        assert_eq!(
+            b.first_ever, "2025-11-01",
+            "a detection under the floor still counts as heard"
+        );
+        assert_eq!(b.first_this_year, "2026-03-02");
+        assert_eq!(b.first_this_season, "2026-05-07");
+        assert_eq!(
+            b.previous.as_deref(),
+            Some("2026-05-07"),
+            "not the 11th, which is after"
+        );
+        let r = &got[1];
+        assert_eq!(r.count, 2, "a detection at the floor is counted");
+        assert_eq!(r.first_ever, "2026-05-10");
+        assert_eq!(r.previous, None);
+
+        let top1 =
+            species_day(&conn, "2026-05-10", 0.0, 1, "2026-01-01", "2026-03-20").expect("query");
+        assert_eq!(top1.len(), 1);
+    }
+
+    /// First and last are by instant where one is stored, so the repeated
+    /// autumn hour orders correctly: 01:50 before the clocks went back is
+    /// earlier than 01:10 after.
+    #[test]
+    fn a_days_first_and_last_are_by_instant() {
+        let conn = station(&[
+            ("2026-10-25", "01:50:00", "Strix aluco", 0.9),
+            ("2026-10-25", "01:10:00", "Strix aluco", 0.9),
+        ]);
+        conn.execute(
+            "UPDATE detections SET detected_at_utc = CASE Time
+                 WHEN '01:50:00' THEN 1000 ELSE 2000 END",
+            [],
+        )
+        .expect("stamp");
+        let got =
+            species_day(&conn, "2026-10-25", 0.0, 30, "2026-01-01", "2026-09-22").expect("query");
+        assert_eq!(
+            (got[0].first_time.as_str(), got[0].last_time.as_str()),
+            ("01:50:00", "01:10:00")
         );
     }
 }

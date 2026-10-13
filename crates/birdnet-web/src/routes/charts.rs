@@ -35,6 +35,13 @@ const ONSET_MIN_DETECTIONS: i64 = 5;
 const RIDGELINE_SPECIES: (u32, u32) = (5, 10);
 const SUCCESSION_SPECIES: (u32, u32) = (6, 10);
 const MAX_SPECIES_SELECTION: usize = 10;
+/// The daily species summary: species listed when no `limit` is given
+/// (upstream's dashboard summary limit), the confidence that makes a species'
+/// day "high confidence", and the days a first detection stays "new" —
+/// lifetime, this year and this season alike (upstream's tracking windows).
+const DAILY_DEFAULT_SPECIES: u32 = 30;
+const DAILY_HIGH_CONFIDENCE: f64 = 0.8;
+const NEW_WINDOW_DAYS: i64 = 7;
 /// Species in a confidence distribution: upstream's default and maximum.
 const CONFIDENCE_DEFAULT_SPECIES: u32 = 5;
 const CONFIDENCE_MAX_SPECIES: u32 = 10;
@@ -54,6 +61,7 @@ pub fn router() -> Router<AppState> {
             get(species_hour_distribution),
         )
         .route("/analytics/time/succession", get(succession))
+        .route("/analytics/species/daily", get(species_daily))
 }
 
 /// The `YYYY-MM-DD` `days` after a calendar date.
@@ -683,6 +691,206 @@ async fn succession(State(state): State<AppState>, RawQuery(query): RawQuery) ->
     .await
 }
 
+/// A station's four seasons by start, in calendar order: upstream's
+/// defaults for its hemisphere (`GetDefaultSeasons`), which it reads from the
+/// latitude — northern above 10°, southern below −10°, and an equatorial
+/// set of two wet and two dry seasons between, which is also what a station
+/// with no location gets, as upstream's latitude of 0 does.
+fn seasons_for(latitude: Option<f64>) -> [(u32, u32, &'static str); 4] {
+    match latitude {
+        Some(lat) if lat > 10.0 => [
+            (3, 20, "spring"),
+            (6, 21, "summer"),
+            (9, 22, "fall"),
+            (12, 21, "winter"),
+        ],
+        Some(lat) if lat < -10.0 => [
+            (3, 20, "fall"),
+            (6, 21, "winter"),
+            (9, 22, "spring"),
+            (12, 21, "summer"),
+        ],
+        _ => [
+            (3, 1, "wet1"),
+            (6, 1, "dry1"),
+            (9, 1, "wet2"),
+            (12, 1, "dry2"),
+        ],
+    }
+}
+
+/// The season `(year, month, day)` falls in and the day it began: the
+/// latest season start on or before it, the last season of the year before
+/// for a date ahead of this year's first start.
+fn season_of(
+    year: u32,
+    month: u32,
+    day: u32,
+    seasons: [(u32, u32, &'static str); 4],
+) -> (&'static str, String) {
+    let (m, d, name) = seasons
+        .iter()
+        .rev()
+        .find(|(m, d, _)| (*m, *d) <= (month, day))
+        .copied()
+        .unwrap_or(seasons[3]);
+    let start_year = if (m, d) <= (month, day) {
+        year
+    } else {
+        year - 1
+    };
+    (name, format!("{start_year:04}-{m:02}-{d:02}"))
+}
+
+/// Calendar days from `from` to `to` (`YYYY-MM-DD`), never negative.
+fn days_between(from: &str, to: &str) -> i64 {
+    use birdnet_core::civil::{days_from_civil, parse_civil};
+    let n = |d: &str| parse_civil(d, "00:00:00").map(|c| days_from_civil(c.year, c.month, c.day));
+    match (n(from), n(to)) {
+        (Some(a), Some(b)) => (b - a).max(0),
+        _ => 0,
+    }
+}
+
+/// Query parameters for the daily species summary.
+#[derive(Debug, Deserialize)]
+struct DailyQuery {
+    date: Option<String>,
+    min_confidence: Option<String>,
+    limit: Option<String>,
+}
+
+/// `GET /api/v2/analytics/species/daily?date=&min_confidence=&limit=` —
+/// the species heard on one day, the most detected first, with their hours
+/// and how new each one is.
+///
+/// Upstream's parameters and fields: `date` defaults to today;
+/// `min_confidence` is a percentage (70 is 0.7; anything else is 0);
+/// `limit` defaults to 30. Each entry has `scientific_name`, `common_name`,
+/// `count`, 24 `hourly_counts`, `high_confidence` (some detection at 0.8 or
+/// more), and — each left out when zero, false or empty, as upstream's
+/// `omitempty` leaves them out — `max_confidence`, `first_heard`,
+/// `latest_heard`, `thumbnail_url`, `is_new_species`, `days_since_first_seen`,
+/// `days_since_last_seen`, `is_new_this_year`, `is_new_this_season`,
+/// `days_this_year`, `days_this_season` and `current_season`.
+///
+/// The tracking fields are read from the station's history as of `date`:
+/// upstream reads its live tracker, which for any other day answers for
+/// today. A species is new for 7 days from its first detection here, this
+/// year (from 1 January) and this season; `days_since_last_seen` is the gap
+/// back to its previous day of detections.
+async fn species_daily(State(state): State<AppState>, Query(q): Query<DailyQuery>) -> Response {
+    use birdnet_core::civil::parse_civil;
+    let Ok(date) = range_bound(q.date.as_deref()) else {
+        return bad_request("date must be a YYYY-MM-DD date");
+    };
+    let date = date.unwrap_or_else(crate::routes::pages::today_date_string);
+    let Some(at) = parse_civil(&date, "00:00:00").filter(|c| c.year >= 2) else {
+        return bad_request("date must be a YYYY-MM-DD date");
+    };
+    let min_confidence = q
+        .min_confidence
+        .as_deref()
+        .and_then(|c| c.parse::<f64>().ok())
+        .filter(|c| c.is_finite())
+        .map_or(0.0, |c| c / 100.0);
+    let limit = q
+        .limit
+        .as_deref()
+        .and_then(|l| l.parse::<u32>().ok())
+        .filter(|l| *l > 0)
+        .unwrap_or(DAILY_DEFAULT_SPECIES);
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                let latitude = crate::routes::pages::station_location(conn).map(|l| l.lat);
+                let (season, season_start) =
+                    season_of(at.year, at.month, at.day, seasons_for(latitude));
+                let year_start = format!("{:04}-01-01", at.year);
+                let days = birdnet_db::sqlite::species_day(
+                    conn,
+                    &date,
+                    min_confidence,
+                    limit,
+                    &year_start,
+                    &season_start,
+                )?;
+                Ok::<_, birdnet_db::sqlite::connection::DbError>((date, season, days))
+            })
+        })
+        .await;
+    let (date, season, days) = match result {
+        Ok(read) => read,
+        Err(e) => return read_failed("daily species summary", &e),
+    };
+    let mut rows: Vec<&birdnet_db::sqlite::SpeciesDay> = days.iter().collect();
+    rows.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| b.last_time.cmp(&a.last_time))
+    });
+    Json(
+        rows.iter()
+            .map(|d| species_daily_row(d, &date, season))
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+
+/// One species' entry in the daily summary, with upstream's `omitempty`.
+fn species_daily_row(
+    d: &birdnet_db::sqlite::SpeciesDay,
+    date: &str,
+    season: &str,
+) -> serde_json::Value {
+    let mut o = json!({
+        "scientific_name": d.sci_name,
+        "common_name": d.com_name,
+        "count": d.count,
+        "hourly_counts": d.hours,
+        "high_confidence": d.max_confidence >= DAILY_HIGH_CONFIDENCE,
+        "thumbnail_url": format!(
+            "/api/v2/species/image/{}",
+            crate::routes::pages::simple_url_encode(&d.sci_name)
+        ),
+        "current_season": season,
+    });
+    let mut put = |key: &str, value: serde_json::Value| {
+        o[key] = value;
+    };
+    if d.max_confidence > 0.0 {
+        put("max_confidence", json!(d.max_confidence));
+    }
+    put("first_heard", json!(d.first_time));
+    put("latest_heard", json!(d.last_time));
+    let since_first = days_between(&d.first_ever, date);
+    let this_year = days_between(&d.first_this_year, date);
+    let this_season = days_between(&d.first_this_season, date);
+    for (key, days) in [
+        ("days_since_first_seen", since_first),
+        ("days_this_year", this_year),
+        ("days_this_season", this_season),
+        (
+            "days_since_last_seen",
+            d.previous.as_deref().map_or(0, |p| days_between(p, date)),
+        ),
+    ] {
+        if days > 0 {
+            put(key, json!(days));
+        }
+    }
+    for (key, days) in [
+        ("is_new_species", since_first),
+        ("is_new_this_year", this_year),
+        ("is_new_this_season", this_season),
+    ] {
+        if days <= NEW_WINDOW_DAYS {
+            put(key, json!(true));
+        }
+    }
+    o
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -921,5 +1129,109 @@ mod tests {
             hour_chart_request(None, (5, 10)).is_err(),
             "start_date is required"
         );
+    }
+
+    /// Upstream's default seasons for each hemisphere, by latitude.
+    #[test]
+    fn a_date_falls_in_its_hemispheres_season() {
+        let north = seasons_for(Some(51.5));
+        assert_eq!(
+            season_of(2026, 3, 19, north),
+            ("winter", "2025-12-21".to_owned())
+        );
+        assert_eq!(
+            season_of(2026, 3, 20, north),
+            ("spring", "2026-03-20".to_owned())
+        );
+        assert_eq!(
+            season_of(2026, 12, 21, north),
+            ("winter", "2026-12-21".to_owned())
+        );
+        assert_eq!(
+            season_of(2026, 1, 5, north),
+            ("winter", "2025-12-21".to_owned())
+        );
+        let south = seasons_for(Some(-33.9));
+        assert_eq!(
+            season_of(2026, 10, 1, south),
+            ("spring", "2026-09-22".to_owned())
+        );
+        assert_eq!(
+            season_of(2026, 1, 5, south),
+            ("summer", "2025-12-21".to_owned())
+        );
+        for unset_or_equatorial in [None, Some(0.0), Some(10.0), Some(-10.0)] {
+            let seasons = seasons_for(unset_or_equatorial);
+            assert_eq!(
+                season_of(2026, 2, 28, seasons),
+                ("dry2", "2025-12-01".to_owned())
+            );
+            assert_eq!(
+                season_of(2026, 3, 1, seasons),
+                ("wet1", "2026-03-01".to_owned())
+            );
+        }
+    }
+
+    fn day(
+        first_ever: &str,
+        year: &str,
+        season: &str,
+        previous: Option<&str>,
+    ) -> birdnet_db::sqlite::SpeciesDay {
+        birdnet_db::sqlite::SpeciesDay {
+            sci_name: "Turdus merula".to_owned(),
+            com_name: "Blackbird".to_owned(),
+            count: 3,
+            hours: [0; 24],
+            max_confidence: 0.79,
+            first_time: "05:00:00".to_owned(),
+            last_time: "19:00:00".to_owned(),
+            first_ever: first_ever.to_owned(),
+            first_this_year: year.to_owned(),
+            first_this_season: season.to_owned(),
+            previous: previous.map(str::to_owned),
+        }
+    }
+
+    /// New for seven days and not the eighth; zeros and falses left out, as
+    /// upstream's `omitempty` leaves them out.
+    #[test]
+    fn a_species_is_new_for_seven_days_and_zeros_are_left_out() {
+        let row = species_daily_row(
+            &day("2026-05-03", "2026-05-03", "2026-05-03", Some("2026-05-03")),
+            "2026-05-10",
+            "spring",
+        );
+        assert_eq!(row["days_since_first_seen"], 7);
+        assert_eq!(row["is_new_species"], true);
+        assert_eq!(row["days_since_last_seen"], 7);
+        assert_eq!(row["high_confidence"], false, "0.79 is under 0.8");
+        let mut at_the_line = day("2026-05-03", "2026-05-03", "2026-05-03", None);
+        at_the_line.max_confidence = 0.8;
+        assert_eq!(
+            species_daily_row(&at_the_line, "2026-05-10", "spring")["high_confidence"],
+            true,
+            "0.8 is high"
+        );
+        assert_eq!(row["current_season"], "spring");
+        let old = species_daily_row(
+            &day("2026-05-02", "2026-05-10", "2026-05-02", None),
+            "2026-05-10",
+            "spring",
+        );
+        assert_eq!(old["days_since_first_seen"], 8);
+        assert!(old.get("is_new_species").is_none(), "{old}");
+        assert_eq!(old["is_new_this_year"], true);
+        assert!(
+            old.get("days_this_year").is_none(),
+            "0 days is left out: {old}"
+        );
+        assert!(
+            old.get("days_since_last_seen").is_none(),
+            "no previous day: {old}"
+        );
+        assert!(old.get("is_new_this_season").is_none());
+        assert_eq!(old["days_this_season"], 8);
     }
 }

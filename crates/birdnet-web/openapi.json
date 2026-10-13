@@ -2987,6 +2987,160 @@
         }
       }
     },
+    "/analytics/species/daily": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "One day's species, with how new each is",
+        "description": "The species detected on `date`, the most detected first (ties by the later last detection), with their hourly counts, first and last detections and novelty. The novelty fields are read from the station's history as of `date`; birdnet-go reads its live tracker, which answers for today. Seasons follow the station's hemisphere as birdnet-go's defaults do. Rejected detections are not counted. Same path, parameters and fields as birdnet-go's endpoint; species_code is not sent.",
+        "operationId": "analyticsSpeciesDaily",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "description": "The day (YYYY-MM-DD). Defaults to today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "required": false,
+            "description": "A percentage: 70 means 0.7. A value that is not a number is 0.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many species; 30 when absent or not a positive integer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "scientific_name",
+                      "common_name",
+                      "count",
+                      "hourly_counts",
+                      "high_confidence",
+                      "current_season"
+                    ],
+                    "properties": {
+                      "scientific_name": {
+                        "type": "string"
+                      },
+                      "common_name": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "description": "Detections on the date at or above min_confidence."
+                      },
+                      "hourly_counts": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "minItems": 24,
+                        "maxItems": 24,
+                        "description": "Those detections in each local hour, midnight first."
+                      },
+                      "high_confidence": {
+                        "type": "boolean",
+                        "description": "Whether one of them scored 0.8 or more."
+                      },
+                      "max_confidence": {
+                        "type": "number",
+                        "description": "Absent when 0."
+                      },
+                      "first_heard": {
+                        "type": "string",
+                        "examples": [
+                          "05:10:00"
+                        ]
+                      },
+                      "latest_heard": {
+                        "type": "string",
+                        "examples": [
+                          "19:00:00"
+                        ]
+                      },
+                      "thumbnail_url": {
+                        "type": "string"
+                      },
+                      "is_new_species": {
+                        "type": "boolean",
+                        "description": "First heard here at most 7 days before the date. Absent when false."
+                      },
+                      "is_new_this_year": {
+                        "type": "boolean",
+                        "description": "First heard since 1 January at most 7 days before the date. Absent when false."
+                      },
+                      "is_new_this_season": {
+                        "type": "boolean",
+                        "description": "First heard since the season began at most 7 days before the date. Absent when false."
+                      },
+                      "days_since_first_seen": {
+                        "type": "integer",
+                        "description": "Days since first heard here. Absent when 0."
+                      },
+                      "days_this_year": {
+                        "type": "integer",
+                        "description": "Days since first heard this year. Absent when 0."
+                      },
+                      "days_this_season": {
+                        "type": "integer",
+                        "description": "Days since first heard this season. Absent when 0."
+                      },
+                      "days_since_last_seen": {
+                        "type": "integer",
+                        "description": "Days back to the previous day it was heard. Absent when it never was."
+                      },
+                      "current_season": {
+                        "type": "string",
+                        "enum": [
+                          "spring",
+                          "summer",
+                          "fall",
+                          "winter",
+                          "wet1",
+                          "dry1",
+                          "wet2",
+                          "dry2"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "date is not a calendar day."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/analytics/sources": {
       "get": {
         "tags": [

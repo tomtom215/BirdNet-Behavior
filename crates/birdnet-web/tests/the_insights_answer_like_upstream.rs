@@ -969,3 +969,98 @@ async fn the_hour_of_day_charts_answer_with_upstreams_shape() {
         );
     }
 }
+
+/// Upstream's daily species summary: a bare array, the most detected first
+/// (ties by the later last detection), `min_confidence` as a percentage,
+/// and the tracking fields read from history as of the date.
+#[tokio::test]
+async fn the_daily_species_summary_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (date, time, sci, com, confidence) in [
+            ("2026-05-10", "05:10:00", "Turdus merula", "Blackbird", 0.9),
+            ("2026-05-10", "05:20:00", "Turdus merula", "Blackbird", 0.6),
+            ("2026-05-10", "06:00:00", "Erithacus rubecula", "Robin", 0.7),
+            ("2026-05-10", "21:00:00", "Strix aluco", "Tawny Owl", 0.95),
+            ("2026-04-01", "07:00:00", "Turdus merula", "Blackbird", 0.9),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![date, time, sci, com, confidence],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(&app, "/api/v2/analytics/species/daily?date=2026-05-10").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<&str> = body
+        .as_array()
+        .expect("a bare array")
+        .iter()
+        .filter_map(|r| r["scientific_name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["Turdus merula", "Strix aluco", "Erithacus rubecula"],
+        "two, then the tie broken by the later last detection: {body}"
+    );
+    let b = &body[0];
+    assert_eq!(b["common_name"], "Blackbird");
+    assert_eq!(b["count"], 2);
+    assert_eq!(b["hourly_counts"][5], 2);
+    assert_eq!(b["hourly_counts"].as_array().map(Vec::len), Some(24));
+    assert_eq!(b["high_confidence"], true);
+    assert_eq!(b["max_confidence"], 0.9);
+    assert_eq!(b["first_heard"], "05:10:00");
+    assert_eq!(b["latest_heard"], "05:20:00");
+    assert_eq!(b["days_since_first_seen"], 39);
+    assert_eq!(b["days_since_last_seen"], 39);
+    assert!(b.get("is_new_species").is_none(), "{b}");
+    assert_eq!(
+        b["current_season"], "wet1",
+        "no location: upstream's latitude 0"
+    );
+    let robin = &body[2];
+    assert_eq!(robin["is_new_species"], true);
+    assert_eq!(robin["high_confidence"], false);
+    assert!(
+        robin.get("days_since_first_seen").is_none(),
+        "0 is left out: {robin}"
+    );
+
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/species/daily?date=2026-05-10&min_confidence=80",
+    )
+    .await;
+    let names: Vec<&str> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["scientific_name"].as_str())
+        .collect();
+    assert_eq!(names, ["Strix aluco", "Turdus merula"], "80 is 0.8: {body}");
+    assert_eq!(body[1]["count"], 1);
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/species/daily?date=2026-05-10&limit=1",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/species/daily?date=2026-05-10&min_confidence=lots&limit=-3",
+    )
+    .await;
+    assert_eq!(
+        body.as_array().map(Vec::len),
+        Some(3),
+        "both ignored: {body}"
+    );
+    for bad in ["date=2026-02-30", "date=yesterday"] {
+        let (status, _) = get(&app, &format!("/api/v2/analytics/species/daily?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}

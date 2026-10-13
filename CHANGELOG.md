@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/analytics/species/daily`.** Any day's species, most
+  detected first, with hourly counts, first and last heard, and how new
+  each is — first heard here, this year or this season within the last
+  seven days, and how long since it was last heard — birdnet-go's
+  parameters and fields. The novelty is read from the station's history as
+  of the day asked, so a past day says what was new then.
+
 - **`GET /api/v2/analytics/time/distribution/species` and
   `GET /api/v2/analytics/time/succession`.** Each species' detections by
   hour of the day over a range — as fractions of its total, to compare when
