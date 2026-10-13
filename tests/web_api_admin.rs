@@ -143,8 +143,12 @@ async fn htmx_species_daily_partial() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    // Should render SVG chart since we have detection data
-    assert!(html.contains("<svg"));
+    // The chart is the last 14 calendar days, and this fixture's detections
+    // are from March 2026. It used to draw the 14 most recent days *with* a
+    // detection, which is why this asserted an SVG; the chart drawn from
+    // today's data is checked in birdnet-web's
+    // `the_trend_is_the_last_fourteen_calendar_days`.
+    assert!(html.contains("Not heard in the last 14 days."), "{html}");
 }
 
 #[tokio::test]
