@@ -188,10 +188,7 @@ impl BirdNetModel {
             "loading ONNX model"
         );
 
-        let session = Session::builder()
-            .map_err(|e| InferenceError::Model(e.to_string()))?
-            .with_intra_threads(config.num_threads)
-            .map_err(|e| InferenceError::Model(e.to_string()))?
+        let session = classifier_session_builder(config.num_threads)?
             .commit_from_file(model_path)
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
@@ -228,10 +225,7 @@ impl BirdNetModel {
         labels: LabelSet,
         config: ModelConfig,
     ) -> Result<Self, InferenceError> {
-        let session = Session::builder()
-            .map_err(|e| InferenceError::Model(e.to_string()))?
-            .with_intra_threads(config.num_threads)
-            .map_err(|e| InferenceError::Model(e.to_string()))?
+        let session = classifier_session_builder(config.num_threads)?
             .commit_from_memory(bytes)
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
@@ -1114,6 +1108,29 @@ fn human_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
     } else {
         1.0
     }
+}
+
+/// The session settings every classifier is loaded with.
+///
+/// Intra-op spin-waiting is off. With it on, ONNX Runtime's worker threads
+/// busy-wait after each inference for more work, and a station runs one
+/// inference per three-second chunk, so the wait is almost always wasted.
+/// Measured on a 4-vCPU x86_64 host with the BirdNET v2.4 INT8 model, two
+/// intra-op threads, 40 inferences 250 ms apart, three rounds each: process
+/// CPU per inference 93–98 ms with spinning, 52–54 ms without, for 3–4 ms
+/// more wall time per inference (28–29 ms against 31–32 ms). Not measured on
+/// a Raspberry Pi, where the absolute figures differ; the trade — CPU and
+/// heat in an enclosure for milliseconds a 3-second chunk has to spare — is
+/// the same direction. tphakala/birdnet-go made the same change (50547d0).
+fn classifier_session_builder(
+    num_threads: usize,
+) -> Result<ort::session::builder::SessionBuilder, InferenceError> {
+    Session::builder()
+        .map_err(|e| InferenceError::Model(e.to_string()))?
+        .with_intra_threads(num_threads)
+        .map_err(|e| InferenceError::Model(e.to_string()))?
+        .with_intra_op_spinning(false)
+        .map_err(|e| InferenceError::Model(e.to_string()))
 }
 
 /// Output indices of every label that names a human class.
