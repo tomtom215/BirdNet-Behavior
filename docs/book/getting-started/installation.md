@@ -157,6 +157,7 @@ cd BirdNet-Behavior
 
 cargo build --release                              # optimized build; DuckDB analytics is a default feature (~7 min first build)
 cargo build --release --no-default-features        # without analytics (~3–5 min)
+cargo build --release --features profiling         # with CPU profiles for administrators (see System)
 cross build --release --target aarch64-unknown-linux-gnu   # cross-compile for a Pi
 ```
 

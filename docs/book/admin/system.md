@@ -108,6 +108,30 @@ memory**.
 > was ever installed, so it replayed an empty backlog and then emitted
 > keep-alives for ever. The page now shows what the station logged.
 
+## CPU profiles
+
+When the station is busier than it should be and nothing above says why, a CPU
+profile does: what every thread was doing, sampled 99 times a second. It is not
+in the release binaries — build with the `profiling` feature
+(`cargo build --release --features profiling`, or `BUILD_FEATURES=analytics,profiling`
+for the Docker image) — and an administrator then asks for one:
+
+```text
+https://<station>/admin/debug/pprof/profile?seconds=30
+```
+
+The browser downloads `cpu-<date>.pb.gz`, which `go tool pprof`, `pprof` and
+[Speedscope](https://www.speedscope.app) open. Add `&format=folded` for plain
+text, one line per stack (`thread;outermost;…;innermost count`), which Speedscope
+and flame-graph tools also read. `seconds` may be 1 to 120 (default 30).
+
+Nothing samples until a profile is asked for, and one is taken at a time — a
+second request meanwhile is refused with `409`. While one runs the station
+spends a little time in the sampler, so ask for a profile when there is a
+problem to look at rather than leaving a monitor polling it. Viewer accounts are
+refused. There is no heap profile: one would need a different memory allocator
+in every build.
+
 ## Audit log
 
 `/admin/audit` records who changed what. Rows are kept for 180 days and pruned

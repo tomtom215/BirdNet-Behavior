@@ -163,6 +163,13 @@ ndarray = "0.17"
 # lockfile already vets.
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 
+# CPU profiling over HTTP (G-24), compiled in only with the `profiling`
+# feature. Default features off: they pull in a C++ demangler, and the
+# `flamegraph` feature pulls in `inferno`, which is CDDL-1.0 and not in
+# deny.toml's allow list. `prost-codec` builds from the protobuf code the crate
+# ships pre-generated, so no `protoc` is needed.
+pprof = { version = "0.15.0", default-features = false, features = ["prost-codec"] }
+
 # Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07),
 # and AWS SigV4 request signing for the S3-compatible offsite backup target.
 hmac = "0.13"
@@ -311,6 +318,9 @@ default = ["analytics"]
 ## Enable DuckDB-powered behavioral analytics (sessionize, retention, funnel, etc.).
 ## Requires ~7 min C++ compilation on first build due to bundled libduckdb.
 analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics", "birdnet-web/analytics"]
+## Serve CPU profiles at /admin/debug/pprof/profile (G-24). Off in release
+## builds; nothing samples until an admin asks for a profile.
+profiling = ["birdnet-web/profiling"]
 
 [build-dependencies]
 # Build-time dependency: renders `docs/book/**` into

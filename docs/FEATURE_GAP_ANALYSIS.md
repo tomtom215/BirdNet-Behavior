@@ -387,14 +387,14 @@ within each group by how much they change what a station can do.
 | **Why it matters** | The verification loop is where a station's data becomes usable to anyone else. "Why did I mark this wrong" is the note that makes a review defensible six months later. An overwritten, unattributed `notes` field cannot carry that: the second reviewer erases the first one's reasoning without either of them knowing. |
 | **Not shipped, and why** | **No comment count in the detection lists.** A per-day count query was written for it and then deleted unused: a public function with no caller is the shape this repository's own audit kept finding, and the lists are a separate change that can add the query back when it has a reader. **No `resolve`**, upstream's one batch operation with no analogue here: a comment thread has no resolved state to set, and inventing one would make the thread a ticket queue. |
 
-#### G‑24 · Profiling endpoints — GAP
+#### G‑24 · Profiling endpoints — SHIPPED (CPU; no heap profile)
 
 | | |
 |---|---|
 | **Upstream** | `conf.DiagnosticsConfig.Profiling` — pprof behind the auth middleware, with a generated token when no auth provider is configured, and block/mutex sampling rates whose costs are documented in unusual detail. |
 | **Ours** | `--doctor`, `--channel-report`, `--support-bundle`, Prometheus metrics — and, since `9f42652`, the doctor report and the support bundle over HTTP too (`GET /admin/doctor.json`, `GET /admin/support-bundle`, `routes/admin/doctor.rs:41‑42`; read-only, `--fix` is never implied by a GET). No live profiler. |
 | **Why it matters** | "The Pi is at 100 % CPU and I don't know why" is answerable in one command with a profiler and is a week of guessing without one. |
-| **Plan** | A `/debug/pprof`-shaped endpoint serving `pprof`-format CPU and heap profiles behind the same auth as the admin panel plus a required token, sampling off by default. Rust has `pprof`-compatible collectors; the constraint is that they must not be linked in unless the feature is enabled, so this becomes a Cargo feature and a `BUILD_FEATURES` entry. |
+| **Shipped** | `GET /admin/debug/pprof/profile?seconds=&format=` (`routes/admin/profiling.rs`), compiled only with the `profiling` feature (`pprof` 0.15, no default features: its `flamegraph` feature needs `inferno`, CDDL-1.0, outside `deny.toml`). Gzipped `pprof` protobuf or folded stacks; administrators only, behind the admin cookie gate rather than a separate token, since every account is authenticated here; one profile at a time; nothing armed until asked. No heap profile — Rust has none independent of the allocator, and swapping the global allocator for a profiling jemalloc is a change to every build. Block and mutex profiles are Go-runtime concepts with no counterpart. |
 
 #### G‑25 · Error-tracking telemetry — DECLINED, with a substitute
 
@@ -603,7 +603,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 32 | ~~Additional stream protocols~~ — **shipped** (HTTP/Icecast, HLS, RTMP, UDP, SRT; `rtp://` declined). See G‑7. | G‑7 | One kind, the URL decides the protocol |
 | 33 | Silero VAD privacy gate | G‑13 | Depends on #26 Stage 1 for a second ONNX session |
 | 34 | ~~RTSP media mode~~ — **shipped** (`full` / `audio`). See G‑8. | G‑8 | It mattered for RTSP on its own — the camera's video sessions — not only alongside #32 |
-| 35 | Profiling endpoints | G‑24 | Behind a Cargo feature |
+| 35 | ~~Profiling endpoints~~ — **shipped** (CPU, behind the `profiling` feature). See G‑24. | G‑24 | No heap profile |
 | 36 | Local error ring buffer (Sentry substitute) | G‑25 | |
 | 37 | Parquet export (MySQL substitute) | G‑31 | |
 | 38 | Bat support + ultrasonic filter | G‑14 | Depends on #26 Stage 6 and a ≥192 kHz capture path |
