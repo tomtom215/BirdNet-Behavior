@@ -699,7 +699,7 @@ takes a date range.
 | `/insights/expected-today` | Species heard within ±3 days of today in past years | **SHIPPED** — `GET /api/v2/insights/expected-today`: ten earlier years, one window each, so a window across New Year counts once. (The Migration tab's 42-day "still expected" count answers a different question and stays.) |
 | `/dashboard/kpis` | Lifetime species, today, best day, detection streak | **SHIPPED** — `GET /api/v2/dashboard/kpis`, upstream's fields and empty values. The streak is counted in SQL over every detection date, where upstream reads the 90 most recent and so stops at 90. |
 | `/species/detections/new` | Species first seen in a date range, with counts | PARTIAL — the six most recent firsts; no range or paging. |
-| `/species/summary` | Per-species count, first, last, mean and max confidence over a range | PARTIAL — all-time count and mean only. |
+| `/species/summary` | Per-species count, first, last, mean and max confidence over a range | **SHIPPED** — `GET /api/v2/analytics/species/summary`, upstream's path, parameters and fields (no `species_code`). First and last are by instant, so the repeated autumn hour orders correctly. |
 | `/species/daily` | One date's species with hourly counts and first/last heard | PARTIAL — today only (heatmap); other dates give counts only. |
 | `/time/distribution/species`, `/time/succession` | Top-N species' hour-of-day profile, normalised or stacked | PARTIAL — the dawn-chorus ribbons, fixed at 60 days and 8 species. |
 | `/insights/phantom-species` | Last 30 days, ≥ 3 detections, mean confidence < 0.6 | **SHIPPED** — `GET /api/v2/insights/phantom-species`, upstream's rule and fields. `/admin/quality/phantoms` answers a different question (four shape signals over all history) and stays. |

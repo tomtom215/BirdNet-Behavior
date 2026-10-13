@@ -382,6 +382,95 @@ pub fn phantom_species(
     Ok(rows)
 }
 
+/// One species' figures over a date range.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeciesRangeSummary {
+    /// Scientific name.
+    pub sci_name: String,
+    /// Common name.
+    pub com_name: String,
+    /// Detections in the range.
+    pub count: i64,
+    /// Their mean confidence.
+    pub avg_confidence: f64,
+    /// Their highest confidence.
+    pub max_confidence: f64,
+    /// The earliest of them: `Date`, `Time` and `detected_at_utc`. `None`
+    /// when none of them has a date and time that name an instant.
+    pub first: Option<(String, String, i64)>,
+    /// The latest of them, likewise.
+    pub last: Option<(String, String, i64)>,
+}
+
+/// Per-species count, mean and highest confidence, and first and last
+/// detection, over `start..=end` (either end open when `None`), the most
+/// detected first.
+///
+/// First and last are by instant (`detected_at_utc`), so the repeated autumn
+/// hour orders correctly. A row without one — its `Date`/`Time` name no point
+/// in time — counts, but cannot be first or last.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_range_summary(
+    conn: &Connection,
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<Vec<SpeciesRangeSummary>, DbError> {
+    // Each of `firsts` and `lasts` holds a single MIN or MAX, so SQLite takes
+    // the bare `Date`, `Time` from the row that supplied it. Both skip a NULL
+    // instant, and a species with none at all gets a NULL `utc`: no place.
+    // A `Date`, `Time`, instant triple from a LEFT JOIN: all NULL or none.
+    fn placed(
+        row: &rusqlite::Row<'_>,
+        at: usize,
+    ) -> rusqlite::Result<Option<(String, String, i64)>> {
+        let utc: Option<i64> = row.get(at + 2)?;
+        utc.map(|utc| Ok((row.get(at)?, row.get(at + 1)?, utc)))
+            .transpose()
+    }
+    let mut stmt = conn.prepare(
+        "WITH d AS (
+             SELECT * FROM detections_analytic
+             WHERE (?1 IS NULL OR Date >= ?1) AND (?2 IS NULL OR Date <= ?2)
+         ),
+         stats AS (
+             SELECT Sci_Name, MAX(Com_Name) AS com, COUNT(*) AS n,
+                    AVG(Confidence) AS mean, MAX(Confidence) AS top
+             FROM d GROUP BY Sci_Name
+         ),
+         firsts AS (
+             SELECT Sci_Name, MIN(detected_at_utc) AS utc, Date, Time
+             FROM d GROUP BY Sci_Name
+         ),
+         lasts AS (
+             SELECT Sci_Name, MAX(detected_at_utc) AS utc, Date, Time
+             FROM d GROUP BY Sci_Name
+         )
+         SELECT s.Sci_Name, s.com, s.n, s.mean, s.top,
+                f.Date, f.Time, f.utc, l.Date, l.Time, l.utc
+         FROM stats s
+         LEFT JOIN firsts f ON f.Sci_Name = s.Sci_Name
+         LEFT JOIN lasts l ON l.Sci_Name = s.Sci_Name
+         ORDER BY s.n DESC, s.Sci_Name",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![start, end], |row| {
+            Ok(SpeciesRangeSummary {
+                sci_name: row.get(0)?,
+                com_name: row.get(1)?,
+                count: row.get(2)?,
+                avg_confidence: row.get(3)?,
+                max_confidence: row.get(4)?,
+                first: placed(row, 5)?,
+                last: placed(row, 8)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,5 +722,92 @@ mod tests {
         assert_eq!(p[0].detection_count, 3);
         assert!((p[0].avg_confidence - 0.4).abs() < 1e-9, "{p:?}");
         assert!((p[0].max_confidence - 0.5).abs() < 1e-9, "{p:?}");
+    }
+
+    /// Upstream's species summary over a range: count, mean and top
+    /// confidence, first and last — by instant, which the wall clock cannot
+    /// give in the repeated autumn hour — the most detected first.
+    #[test]
+    fn a_range_summary_counts_and_places_each_species() {
+        let conn = station(&[]);
+        // 2026-10-25 01:00Z is the first 01:00 of the night the clocks go
+        // back in Europe/London: 01:45 BST is 00:45Z, before 01:15 GMT.
+        let t = 1_792_890_000; // 2026-10-25T01:00:00Z
+        let rows: &[(&str, &str, &str, f64, Option<i64>)] = &[
+            ("2026-10-25", "01:45:00", "Strix aluco", 0.5, Some(t - 900)),
+            ("2026-10-25", "01:15:00", "Strix aluco", 0.9, Some(t + 900)),
+            ("2026-10-20", "22:00:00", "Strix aluco", 0.7, None),
+            // Outside the range on either side.
+            ("2026-10-19", "22:00:00", "Strix aluco", 0.1, None),
+            ("2026-10-26", "22:00:00", "Strix aluco", 0.1, None),
+            ("2026-10-22", "07:00:00", "Turdus merula", 0.8, None),
+            // Rejected by a reviewer below: not counted.
+            ("2026-10-23", "07:00:00", "Turdus merula", 0.8, None),
+        ];
+        for (date, time, sci, conf, utc) in rows {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc)
+                 VALUES (?1, ?2, ?3, ?3 || ' common', ?4, ?5)",
+                rusqlite::params![date, time, sci, conf, utc],
+            )
+            .expect("insert");
+        }
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected' WHERE Date = '2026-10-23'",
+            [],
+        )
+        .expect("reject");
+        let s =
+            species_range_summary(&conn, Some("2026-10-20"), Some("2026-10-25")).expect("query");
+        assert_eq!(
+            s[1].count, 1,
+            "the rejected blackbird is not counted: {s:?}"
+        );
+        let names: Vec<&str> = s.iter().map(|r| r.sci_name.as_str()).collect();
+        assert_eq!(names, ["Strix aluco", "Turdus merula"]);
+        let owl = &s[0];
+        assert_eq!(owl.count, 3);
+        assert!((owl.avg_confidence - 0.7).abs() < 1e-9, "{owl:?}");
+        assert!((owl.max_confidence - 0.9).abs() < 1e-9, "{owl:?}");
+        assert_eq!(owl.first.as_ref().map(|f| f.0.as_str()), Some("2026-10-20"));
+        assert_eq!(
+            owl.last,
+            Some(("2026-10-25".to_owned(), "01:15:00".to_owned(), t + 900)),
+            "the later instant, though the earlier wall clock"
+        );
+
+        // On the night itself, the first is 01:45 summer time: the earlier
+        // instant, though the later wall clock.
+        let s =
+            species_range_summary(&conn, Some("2026-10-25"), Some("2026-10-25")).expect("query");
+        assert_eq!(
+            s[0].first,
+            Some(("2026-10-25".to_owned(), "01:45:00".to_owned(), t - 900))
+        );
+
+        // Open at either end.
+        let s = species_range_summary(&conn, None, Some("2026-10-19")).expect("query");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].count, 1);
+        let s = species_range_summary(&conn, Some("2026-10-26"), None).expect("query");
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].count, 1);
+        let s = species_range_summary(&conn, None, None).expect("query");
+        assert_eq!(s[0].count, 5);
+
+        // A row whose date names no instant counts, but is never first or
+        // last: there is nothing to place it by.
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES ('', '', 'Bubo bubo', 'Eagle-Owl', 0.4)",
+            [],
+        )
+        .expect("insert");
+        let s = species_range_summary(&conn, None, None).expect("query");
+        let bubo = s
+            .iter()
+            .find(|r| r.sci_name == "Bubo bubo")
+            .expect("listed");
+        assert_eq!((bubo.count, &bubo.first, &bubo.last), (1, &None, &None));
     }
 }

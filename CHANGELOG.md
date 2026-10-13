@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/v2/analytics/species/summary`.** Each species' count, mean
+  and highest confidence, and first and last detection over an optional
+  date range — birdnet-go's path, parameters and fields. First and last
+  carry the UTC offset in force when they were heard, and are ordered by
+  instant, so the hour the clocks go back is placed correctly.
+
 - **`GET /api/v2/insights/phantom-species`.** Species detected at least
   three times in the last 30 days with a mean confidence under 0.6, the
   least confident first — birdnet-go's rule and fields. The quality page's

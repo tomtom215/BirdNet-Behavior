@@ -221,6 +221,60 @@ async fn phantom_species_answer_with_upstreams_fields() {
     );
 }
 
+/// Upstream's species summary: a bare array, the most detected first, with
+/// an RFC 3339 first and last heard; a malformed or reversed range is a 400,
+/// and a `limit` that is not a number is ignored, as upstream ignores it.
+#[tokio::test]
+async fn the_species_summary_answers_with_upstreams_shape() {
+    let app = station(&[
+        (1, "07:00:00", "Turdus merula"),
+        (2, "06:00:00", "Turdus merula"),
+        (40, "07:00:00", "Turdus merula"),
+        (1, "08:00:00", "Parus major"),
+    ]);
+    let (status, body) = get(&app, "/api/v2/analytics/species/summary").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body.as_array().expect("a bare array");
+    assert_eq!(rows.len(), 2, "{body}");
+    assert_eq!(rows[0]["scientific_name"], "Turdus merula");
+    assert_eq!(rows[0]["count"], 3);
+    assert_eq!(rows[0]["max_confidence"], 0.9);
+    let first = rows[0]["first_heard"].as_str().expect("first_heard");
+    let last = rows[0]["last_heard"].as_str().expect("last_heard");
+    // `YYYY-MM-DDTHH:MM:SS+HH:MM`, and the 40-days-ago row first.
+    assert_eq!((first.len(), &first[10..11]), (25, "T"), "{first}");
+    assert!(first < last, "{first} {last}");
+    assert!(last.contains("T07:00:00"), "{last}");
+
+    // A range: the last week holds two of the three.
+    let since = &last[..10];
+    let (_, body) = get(
+        &app,
+        &format!(
+            "/api/v2/analytics/species/summary?start_date=2000-01-01&end_date={since}&limit=1"
+        ),
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "limit=1: {body}");
+    assert_eq!(body[0]["count"], 3);
+    let (_, body) = get(
+        &app,
+        &format!("/api/v2/analytics/species/summary?start_date={since}&limit=many"),
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(2), "{body}");
+    assert_eq!(body[0]["count"], 1, "only yesterday's: {body}");
+
+    for bad in [
+        "start_date=2026-02-30",
+        "end_date=yesterday",
+        "start_date=2026-10-13&end_date=2026-10-12",
+    ] {
+        let (status, _) = get(&app, &format!("/api/v2/analytics/species/summary?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
 /// Upstream's KPI shape, a streak counted back from today, and its empty
 /// values on a station with nothing yet.
 #[tokio::test]
@@ -284,6 +338,7 @@ async fn an_unreadable_station_is_an_error_not_an_empty_list() {
         "/api/v2/insights/expected-today",
         "/api/v2/insights/expected-today/regional",
         "/api/v2/dashboard/kpis",
+        "/api/v2/analytics/species/summary",
     ] {
         let (status, body) = get(&app, uri).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {body}");

@@ -2806,6 +2806,98 @@
         }
       }
     },
+    "/analytics/species/summary": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Each species' figures over a date range",
+        "description": "Per-species count, mean and highest confidence, and first and last detection, over start_date..=end_date, the most detected first. Rejected detections are not counted. Same path, parameters and fields as birdnet-go's endpoint; species_code is not sent.",
+        "operationId": "analyticsSpeciesSummary",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "First day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many species. A value that is not a positive integer is ignored, as upstream ignores it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "scientific_name": {
+                        "type": "string"
+                      },
+                      "common_name": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer"
+                      },
+                      "avg_confidence": {
+                        "type": "number"
+                      },
+                      "max_confidence": {
+                        "type": "number"
+                      },
+                      "first_heard": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The earliest detection in the range, RFC 3339 with the offset in force at the time. Absent when no detection of the species names an instant."
+                      },
+                      "last_heard": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "The latest detection in the range, RFC 3339 with the offset in force at the time. Absent when no detection of the species names an instant."
+                      },
+                      "thumbnail_url": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A date that is not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [

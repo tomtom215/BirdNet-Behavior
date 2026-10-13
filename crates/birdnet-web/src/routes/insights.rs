@@ -1,8 +1,9 @@
-//! `GET /api/v2/insights/*` and `GET /api/v2/dashboard/kpis`.
+//! `GET /api/v2/insights/*`, `GET /api/v2/dashboard/kpis` and
+//! `GET /api/v2/analytics/species/summary`.
 //!
 //! The dawn chorus's running order, recent arrivals, species gone quiet,
-//! likely misdetections, what is expected today, and the dashboard's headline
-//! numbers.
+//! likely misdetections, what is expected today, the dashboard's headline
+//! numbers, and each species' figures over a date range.
 //!
 //! The counterparts of birdnet-go's endpoints of the same names, with the same
 //! parameters, defaults and field names, so a client written against either
@@ -43,6 +44,7 @@ pub fn router() -> Router<AppState> {
             get(expected_today_regional),
         )
         .route("/dashboard/kpis", get(dashboard_kpis))
+        .route("/analytics/species/summary", get(species_summary))
 }
 
 /// Query parameters for the dawn chorus. Strings, so that a value that is not
@@ -214,6 +216,93 @@ async fn phantom_species(State(state): State<AppState>) -> Response {
     }
 }
 
+/// Query parameters for the species summary.
+#[derive(Debug, Deserialize)]
+struct SummaryQuery {
+    start_date: Option<String>,
+    end_date: Option<String>,
+    limit: Option<String>,
+}
+
+/// A `YYYY-MM-DD` that names a real calendar day.
+fn calendar_date(s: &str) -> bool {
+    use birdnet_core::civil::{date_string_from_days, days_from_civil, parse_civil};
+    parse_civil(s, "00:00:00")
+        .is_some_and(|c| date_string_from_days(days_from_civil(c.year, c.month, c.day)) == s)
+}
+
+/// A date-range bound: absent or empty is open, anything but a calendar date
+/// is refused.
+fn range_bound(raw: Option<&str>) -> Result<Option<String>, ()> {
+    match raw {
+        None | Some("") => Ok(None),
+        Some(s) if calendar_date(s) => Ok(Some(s.to_owned())),
+        Some(_) => Err(()),
+    }
+}
+
+/// `GET /api/v2/analytics/species/summary?start_date=&end_date=&limit=` —
+/// each species' count, mean and highest confidence, and first and last
+/// detection over the range, the most detected first.
+///
+/// Upstream's shape: a bare array; `first_heard`/`last_heard` in RFC 3339
+/// with the offset in force at the time, left out when the row names no
+/// instant. A `limit` that is not a positive integer is ignored, as upstream
+/// ignores it.
+async fn species_summary(State(state): State<AppState>, Query(q): Query<SummaryQuery>) -> Response {
+    let Ok(start) = range_bound(q.start_date.as_deref()) else {
+        return bad_request("start_date must be a YYYY-MM-DD date");
+    };
+    let Ok(end) = range_bound(q.end_date.as_deref()) else {
+        return bad_request("end_date must be a YYYY-MM-DD date");
+    };
+    if matches!((&start, &end), (Some(s), Some(e)) if s > e) {
+        return bad_request("start_date is after end_date");
+    }
+    let limit = q
+        .limit
+        .as_deref()
+        .and_then(|l| l.parse::<usize>().ok())
+        .filter(|l| *l > 0);
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                birdnet_db::sqlite::species_range_summary(conn, start.as_deref(), end.as_deref())
+            })
+        })
+        .await;
+    let rows = match result {
+        Ok(rows) => rows,
+        Err(e) => return read_failed("species summary", &e),
+    };
+    let heard = |p: &Option<(String, String, i64)>| {
+        p.as_ref()
+            .and_then(|(d, t, utc)| birdnet_core::civil::rfc3339_local(d, t, Some(*utc)))
+    };
+    let body: Vec<_> = rows
+        .iter()
+        .take(limit.unwrap_or(usize::MAX))
+        .map(|r| {
+            let mut o = json!({
+                "scientific_name": r.sci_name,
+                "common_name": r.com_name,
+                "count": r.count,
+                "avg_confidence": r.avg_confidence,
+                "max_confidence": r.max_confidence,
+                "thumbnail_url": thumbnail_url(&r.sci_name),
+            });
+            if let Some(f) = heard(&r.first) {
+                o["first_heard"] = json!(f);
+            }
+            if let Some(l) = heard(&r.last) {
+                o["last_heard"] = json!(l);
+            }
+            o
+        })
+        .collect();
+    Json(body).into_response()
+}
+
 /// A binomial written the usual way, genus capitalised: the eBird snapshot
 /// stores names lowercased, for matching.
 fn binomial_case(name: &str) -> String {
@@ -341,7 +430,7 @@ async fn dashboard_kpis(State(state): State<AppState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_days, day_of_year};
+    use super::{bounded_days, calendar_date, day_of_year, range_bound};
 
     #[test]
     fn day_of_year_counts_from_the_first_of_january() {
@@ -349,6 +438,31 @@ mod tests {
         assert_eq!(day_of_year("2026-10-13"), Some(286));
         assert_eq!(day_of_year("2024-12-31"), Some(366));
         assert_eq!(day_of_year("not-a-date"), None);
+    }
+
+    /// A range bound is a real calendar day or nothing: 30 February is
+    /// refused, as Go's `time.Parse` refuses it upstream.
+    #[test]
+    fn a_range_bound_is_a_calendar_date() {
+        assert!(calendar_date("2024-02-29"));
+        assert!(calendar_date("2026-12-31"));
+        for bad in [
+            "2026-02-29",
+            "2026-02-30",
+            "2026-13-01",
+            "2026-1-01",
+            "26-01-01",
+            "today",
+        ] {
+            assert!(!calendar_date(bad), "{bad}");
+        }
+        assert_eq!(range_bound(None), Ok(None));
+        assert_eq!(range_bound(Some("")), Ok(None));
+        assert_eq!(
+            range_bound(Some("2026-10-13")),
+            Ok(Some("2026-10-13".to_owned()))
+        );
+        assert_eq!(range_bound(Some("2026-02-30")), Err(()));
     }
 
     /// Upstream's rule: absent takes the default, anything but a positive
