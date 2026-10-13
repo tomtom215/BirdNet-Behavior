@@ -81,7 +81,8 @@ pub use queries::{
 pub use queries::{
     DashboardKpis, DawnFirstSong, ExpectedSpecies, FirstHeard, GoneQuiet, NewArrival,
     PhantomSpecies, SpeciesRangeSummary, dashboard_kpis, dawn_first_songs, expected_today,
-    first_heard_between, gone_quiet, new_arrivals, phantom_species, species_range_summary,
+    first_heard_between, gone_quiet, new_arrivals, phantom_species, source_counts,
+    species_range_summary,
 };
 pub use types::{
     ConcurrentDetection, DailyCount, DayCount, DetectionRecord, DetectionRow, HourlyCount,

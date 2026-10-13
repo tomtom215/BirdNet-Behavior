@@ -705,7 +705,7 @@ takes a date range.
 | `/insights/phantom-species` | Last 30 days, ≥ 3 detections, mean confidence < 0.6 | **SHIPPED** — `GET /api/v2/insights/phantom-species`, upstream's rule and fields. `/admin/quality/phantoms` answers a different question (four shape signals over all history) and stays. |
 | `/confidence/distribution` | Per-species confidence histogram | PARTIAL — station-wide, six fixed buckets. |
 | `/time/year-over-year` | Cumulative year-to-date against last year | PARTIAL — weekly comparison in JSON, on no page. |
-| `/analytics/sources` | Sources with counts over a range | PARTIAL — today only. |
+| `/analytics/sources` | Sources with counts over a range | **SHIPPED** — `GET /api/v2/analytics/sources`, upstream's path, parameters and fields. One deliberate difference: names are not anonymised for visitors who are not signed in, because the public Station Health tab already shows them; private mode hides both. |
 | `/time/heatmap` | Date × time-of-day density, 15–60 minute slots, CSV | PARTIAL — hour × weekday only. |
 | `/time/dawn-onset` | Each day's chorus onset against civil dawn | GAP — civil dawn is already computed (`birdnet-scheduler`). |
 | `/system/database/overview` | Table stats, latencies, slow queries | PARTIAL — size and write latency only. |

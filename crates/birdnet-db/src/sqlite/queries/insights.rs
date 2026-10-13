@@ -530,6 +530,36 @@ pub fn first_heard_between(
     Ok(rows)
 }
 
+/// Each audio source's detections over `start..=end` (either end open when
+/// `None`), the busiest first: birdnet-go's analytics source list.
+///
+/// A row recorded before sources were tracked (`Source` is NULL) belongs to
+/// no source, so it is in no count; upstream's legacy schema likewise lists
+/// nothing for it.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn source_counts(
+    conn: &Connection,
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<Vec<(String, i64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Source, COUNT(*) AS n FROM detections_analytic
+         WHERE Source IS NOT NULL
+           AND (?1 IS NULL OR Date >= ?1) AND (?2 IS NULL OR Date <= ?2)
+         GROUP BY Source
+         ORDER BY n DESC, Source",
+    )?;
+    let rows = stmt
+        .query_map(rusqlite::params![start, end], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -951,5 +981,53 @@ mod tests {
         .expect("reject");
         let f = first_heard_between(&conn, "2026-10-01", "2026-10-10", 100, 0).expect("query");
         assert_eq!(f.len(), 2, "a rejected detection is no first: {f:?}");
+    }
+
+    /// Upstream's source list: each source's detections in the range, the
+    /// busiest first; a rejected detection, a row with no source, and a
+    /// detection outside the range are in no count.
+    #[test]
+    fn sources_are_counted_over_the_range() {
+        let conn = station(&[]);
+        for (i, (date, source, verdict)) in [
+            ("2026-10-01", Some("cam1"), None),
+            ("2026-10-02", Some("cam1"), None),
+            ("2026-10-03", Some("cam1"), Some("rejected")),
+            ("2026-10-05", Some("local"), None),
+            ("2026-10-09", Some("local"), None),
+            ("2026-10-09", Some("local"), None),
+            ("2026-10-05", None, None),
+            ("2026-09-30", Some("cam2"), None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Source, review_verdict)
+                 VALUES (?1, printf('07:%02d:00', ?4), 'Turdus merula', 'Blackbird', 0.9, ?2, ?3)",
+                rusqlite::params![date, source, verdict, i64::try_from(i).unwrap()],
+            )
+            .expect("insert");
+        }
+        let all = source_counts(&conn, None, None).expect("query");
+        assert_eq!(
+            all,
+            [
+                ("local".to_owned(), 3),
+                ("cam1".to_owned(), 2),
+                ("cam2".to_owned(), 1)
+            ]
+        );
+        let ranged = source_counts(&conn, Some("2026-10-01"), Some("2026-10-05")).expect("query");
+        assert_eq!(ranged, [("cam1".to_owned(), 2), ("local".to_owned(), 1)]);
+        // Each bound alone, and inclusive.
+        assert_eq!(
+            source_counts(&conn, Some("2026-10-09"), None).expect("query"),
+            [("local".to_owned(), 2)]
+        );
+        assert_eq!(
+            source_counts(&conn, None, Some("2026-09-30")).expect("query"),
+            [("cam2".to_owned(), 1)]
+        );
     }
 }

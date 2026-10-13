@@ -2987,6 +2987,86 @@
         }
       }
     },
+    "/analytics/sources": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Audio sources with detections over a date range",
+        "description": "The audio sources that have at least one detection in start_date..=end_date (all history when both are absent), the busiest first. Rejected detections are not counted, nor detections recorded before sources were tracked. Same path, parameters and fields as birdnet-go's endpoint; `name` is the source's configured name, not anonymised for visitors who are not signed in (the Station Health tab already shows it).",
+        "operationId": "analyticsSources",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "First day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sources, never null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "sources"
+                  ],
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name",
+                          "count"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "The source's stream id, as each detection records it."
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "The name its owner gave it, or the id when it has none."
+                          },
+                          "count": {
+                            "type": "integer",
+                            "description": "Its detections in the range."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A date that is not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [

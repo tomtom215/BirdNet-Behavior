@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/analytics/sources`.** The audio sources with detections
+  over an optional date range, busiest first, with the name each was given
+  on the Capture screen — birdnet-go's path, parameters and fields. Until
+  now the per-source counts covered today only, on the Station Health tab.
+
 - **`GET /api/v2/analytics/species/detections/new`.** Species first heard
   here within a date range (by default the last 30 days), newest first,
   with their detections in the range, paged — birdnet-go's path,

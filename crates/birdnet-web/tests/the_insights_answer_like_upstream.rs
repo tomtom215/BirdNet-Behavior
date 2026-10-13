@@ -414,3 +414,55 @@ async fn an_unreadable_station_is_an_error_not_an_empty_list() {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {body}");
     }
 }
+
+/// Upstream's source list: `{"sources": [{"id", "name", "count"}]}`, the
+/// busiest first, the owner's name where the source has one and the id where
+/// it has not; a malformed or reversed range is a 400.
+#[tokio::test]
+async fn sources_are_listed_with_their_counts_and_names() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (i, (days_ago, source)) in [(1, "cam1"), (2, "cam1"), (40, "cam1"), (1, "local")]
+            .into_iter()
+            .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Source)
+                 VALUES (date('now', 'localtime', ?1), printf('07:%02d:00', ?3), 'Turdus merula', 'Blackbird', 0.9, ?2)",
+                rusqlite::params![format!("-{days_ago} days"), source, i64::try_from(i).unwrap()],
+            )
+            .expect("insert");
+        }
+        conn.execute(
+            "INSERT INTO audio_sources (id, kind, device_id, label)
+             VALUES ('cam1', 'rtsp', 'rtsp://cam', 'Pond')",
+            [],
+        )
+        .expect("insert source");
+    });
+    let app = build_router(state);
+    let (status, body) = get(&app, "/api/v2/analytics/sources").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({"sources": [
+            {"id": "cam1", "name": "Pond", "count": 3},
+            {"id": "local", "name": "local", "count": 1},
+        ]})
+    );
+
+    let (_, body) = get(&app, "/api/v2/analytics/sources?start_date=2000-01-01").await;
+    assert_eq!(body["sources"][0]["count"], 3, "{body}");
+    let (status, body) = get(&app, "/api/v2/analytics/sources?end_date=2000-01-01").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({"sources": []}), "never null");
+
+    for bad in [
+        "start_date=2026-02-30",
+        "end_date=yesterday",
+        "start_date=2026-10-13&end_date=2026-10-12",
+    ] {
+        let (status, _) = get(&app, &format!("/api/v2/analytics/sources?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
