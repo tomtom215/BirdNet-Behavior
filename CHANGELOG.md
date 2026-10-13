@@ -131,6 +131,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The add form also described `auto` as "TCP w/ UDP fallback"; it is TCP,
   and nothing falls back. Transport can now be changed on the edit form.
 
+- **The Live view gave a visitor the camera's password.** A source with no
+  label was listed in the Live view's picker — and on the first-run Today
+  checklist — by its address, `user:pass@` included, and both pages are open
+  to anyone on a password-protected station. An unlabelled stream is now
+  named by its host. (Give each camera a label; it reads better anyway.)
+
 - **A secret in a stream URL's query reached the log.** The log redactors
   removed `user:pass@` and passed the query through, where an SRT
   `passphrase=`, a signed URL's `token=` and MediaMTX's

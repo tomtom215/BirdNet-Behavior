@@ -119,6 +119,33 @@ const fn kind_css(kind: SourceKind) -> &'static str {
     }
 }
 
+/// What a page anyone may read calls a source: its label, or failing that its
+/// device — and for a stream, the URL's host alone.
+///
+/// A stream's URL carries its credentials (`user:pass@`, an SRT passphrase,
+/// a signed URL's token), and the Live view's source picker and the Today
+/// page's first-run checklist printed an unlabelled one whole: an anonymous
+/// visitor to a password-protected station was handed the camera's password.
+/// The host is enough to tell two cameras apart.
+pub(crate) fn public_name(s: &AudioSource) -> String {
+    if let Some(label) = &s.label {
+        return label.clone();
+    }
+    if s.kind != SourceKind::Rtsp {
+        return s.device_id.clone();
+    }
+    let after_scheme = s.device_id.split_once("://").map_or("", |(_, rest)| rest);
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if host.is_empty() {
+        kind_label(s.kind).to_owned()
+    } else {
+        host.to_owned()
+    }
+}
+
 /// Human-readable badge text for a source kind.
 ///
 /// `pub(crate)` so the onboarding wizard's microphone step names the operator's

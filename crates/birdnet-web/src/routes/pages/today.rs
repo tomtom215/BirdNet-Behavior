@@ -309,10 +309,7 @@ fn firstrun_checklist(
             )
         },
         |first| {
-            let label = first
-                .label
-                .clone()
-                .unwrap_or_else(|| first.device_id.clone());
+            let label = crate::routes::admin::audio::public_name(first);
             let more = if enabled.len() > 1 {
                 format!(" +{}", enabled.len() - 1)
             } else {

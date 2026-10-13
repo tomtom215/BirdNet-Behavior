@@ -53,7 +53,7 @@ fn render_options(sources: &[AudioSource], selected: Option<&str>) -> String {
     // Empty value maps to "no source_id" → the first enabled row in /stream.
     out.push_str(r#"<option value="">— default audio source —</option>"#);
     for s in sources {
-        let label_display = s.label.clone().unwrap_or_else(|| s.device_id.clone());
+        let label_display = crate::routes::admin::audio::public_name(s);
         let kind_glyph = match s.kind {
             SourceKind::UsbAlsa => "🎙",
             SourceKind::PipeWire => "🔊",
