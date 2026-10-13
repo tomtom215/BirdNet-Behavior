@@ -246,6 +246,102 @@ pub fn slot_counts(
     Ok(rows)
 }
 
+/// One species' detections in each hour of the day over a date range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeciesHours {
+    /// Scientific name.
+    pub sci_name: String,
+    /// Common name.
+    pub com_name: String,
+    /// Detections in each local hour, midnight first.
+    pub hours: [i64; 24],
+    /// Their sum.
+    pub total: i64,
+}
+
+/// Each species' detections by local hour over `start..=end`, the most
+/// detected first: birdnet-go's hour-of-day charts.
+///
+/// With `species` empty, the `limit` most detected species in the range;
+/// otherwise those named (scientific or common names, any case) that have
+/// detections, however many — upstream drops the limit for a selection, and
+/// its caller bounds the selection. Ties are broken by scientific name. A
+/// `Time` that is not `HH:…` is in no hour and no total.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_hours(
+    conn: &Connection,
+    start: &str,
+    end: &str,
+    species: &[String],
+    limit: u32,
+) -> Result<Vec<SpeciesHours>, DbError> {
+    // One placeholder per named species, after the three fixed ones.
+    let named = (0..species.len())
+        .map(|i| format!("lower(?{})", i + 4))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let filter = if species.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE lower(Sci_Name) IN ({named}) OR lower(Com_Name) IN ({named})")
+    };
+    let limit_clause = if species.is_empty() { "LIMIT ?3" } else { "" };
+    let sql = format!(
+        "WITH d AS (
+             SELECT Sci_Name, Com_Name, CAST(substr(Time, 1, 2) AS INTEGER) AS hour
+             FROM detections_analytic
+             WHERE Date >= ?1 AND Date <= ?2 AND Time GLOB '[0-2][0-9]:*'
+         ),
+         chosen AS (
+             SELECT Sci_Name, MAX(Com_Name) AS com, COUNT(*) AS n FROM d
+             {filter}
+             GROUP BY Sci_Name
+             ORDER BY n DESC, Sci_Name
+             {limit_clause}
+         )
+         SELECT c.Sci_Name, c.com, c.n, d.hour, COUNT(*)
+         FROM chosen c JOIN d ON d.Sci_Name = c.Sci_Name
+         WHERE d.hour BETWEEN 0 AND 23
+         GROUP BY c.Sci_Name, d.hour
+         ORDER BY c.n DESC, c.Sci_Name, d.hour"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(start.to_owned()),
+        Box::new(end.to_owned()),
+        Box::new(limit),
+    ];
+    params.extend(
+        species
+            .iter()
+            .map(|s| Box::new(s.clone()) as Box<dyn rusqlite::ToSql>),
+    );
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.iter()))?;
+    let mut out: Vec<SpeciesHours> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let sci: String = row.get(0)?;
+        if out.last().is_none_or(|s| s.sci_name != sci) {
+            out.push(SpeciesHours {
+                sci_name: sci,
+                com_name: row.get(1)?,
+                hours: [0; 24],
+                total: 0,
+            });
+        }
+        // 0..=23 by the query's own filter.
+        let hour = usize::try_from(row.get::<_, i64>(3)?).unwrap_or(0).min(23);
+        let count: i64 = row.get(4)?;
+        if let Some(s) = out.last_mut() {
+            s.hours[hour] = count;
+            s.total += count;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +579,54 @@ mod tests {
             )
             .expect("query"),
             [("2026-05-01".to_owned(), 23, 1)]
+        );
+    }
+
+    /// The most detected species by hour; or the named ones, however many
+    /// and in either name.
+    #[test]
+    fn species_are_profiled_by_hour() {
+        let conn = station(&[
+            ("2026-05-01", "05:10:00", "Turdus merula", 0.9),
+            ("2026-05-01", "05:50:00", "Turdus merula", 0.9),
+            ("2026-05-02", "21:00:00", "Turdus merula", 0.9),
+            ("2026-05-01", "00:30:00", "Strix aluco", 0.9),
+            ("2026-05-01", "23:59:00", "Strix aluco", 0.9),
+            ("2026-05-01", "08:00:00", "Parus major", 0.9),
+            ("2026-05-01", "nonsense", "Parus major", 0.9),
+            ("2026-04-30", "08:00:00", "Parus major", 0.9),
+        ]);
+        let top = species_hours(&conn, "2026-05-01", "2026-05-02", &[], 2).expect("query");
+        let names: Vec<&str> = top.iter().map(|s| s.sci_name.as_str()).collect();
+        assert_eq!(names, ["Turdus merula", "Strix aluco"]);
+        assert_eq!(top[0].hours[5], 2);
+        assert_eq!(top[0].hours[21], 1);
+        assert_eq!(top[0].total, 3);
+        assert_eq!(top[1].hours[0], 1);
+        assert_eq!(top[1].hours[23], 1);
+        assert_eq!(top[1].com_name, "Strix aluco common");
+
+        let chosen = species_hours(
+            &conn,
+            "2026-05-01",
+            "2026-05-02",
+            &[
+                "PARUS MAJOR common".to_owned(),
+                "strix aluco".to_owned(),
+                "Nobody".to_owned(),
+            ],
+            1,
+        )
+        .expect("query");
+        let names: Vec<&str> = chosen.iter().map(|s| s.sci_name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Strix aluco", "Parus major"],
+            "the limit does not cut a selection"
+        );
+        assert_eq!(
+            chosen[1].total, 1,
+            "the garbled time and the day before are not counted"
         );
     }
 }

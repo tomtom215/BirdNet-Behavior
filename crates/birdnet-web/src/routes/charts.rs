@@ -9,7 +9,7 @@
 //! required, `end_date` defaults to thirty days after it, both are inclusive
 //! `YYYY-MM-DD` calendar days, and a reversed range is a 400.
 
-use axum::extract::{Query, State};
+use axum::extract::{Query, RawQuery, State};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
 use serde::Deserialize;
@@ -29,6 +29,12 @@ const CONFIDENCE_MAX_BINS: i64 = 50;
 /// `onsetDetectionRank` and `minOnsetDetections`.
 const ONSET_RANK: u32 = 3;
 const ONSET_MIN_DETECTIONS: i64 = 5;
+/// Species in the hour-of-day ridgeline (default, maximum) and in the
+/// succession streamgraph, and the most a `species` selection may name:
+/// upstream's constants.
+const RIDGELINE_SPECIES: (u32, u32) = (5, 10);
+const SUCCESSION_SPECIES: (u32, u32) = (6, 10);
+const MAX_SPECIES_SELECTION: usize = 10;
 /// Species in a confidence distribution: upstream's default and maximum.
 const CONFIDENCE_DEFAULT_SPECIES: u32 = 5;
 const CONFIDENCE_MAX_SPECIES: u32 = 10;
@@ -43,6 +49,11 @@ pub fn router() -> Router<AppState> {
         .route("/analytics/time/year-over-year", get(year_over_year))
         .route("/analytics/time/dawn-onset", get(dawn_onset))
         .route("/analytics/time/heatmap", get(heatmap))
+        .route(
+            "/analytics/time/distribution/species",
+            get(species_hour_distribution),
+        )
+        .route("/analytics/time/succession", get(succession))
 }
 
 /// The `YYYY-MM-DD` `days` after a calendar date.
@@ -543,6 +554,135 @@ async fn heatmap(State(state): State<AppState>, Query(q): Query<HeatmapQuery>) -
     .into_response()
 }
 
+/// What an hour-of-day chart was asked for.
+#[derive(Debug, PartialEq, Eq)]
+struct HourChartRequest {
+    start: String,
+    end: String,
+    species: Vec<String>,
+    limit: u32,
+}
+
+/// Read an hour-of-day chart's query: upstream's range rules, its
+/// `ParsePaginationLimit` against `(default, max)`, and a repeated
+/// `species` (`?species=A&species=B`) trimmed, emptied of blanks, and
+/// de-duplicated without regard to case, keeping the first spelling.
+/// More than ten is a 400, as upstream's `validateBatchSize` answers.
+fn hour_chart_request(query: Option<&str>, limits: (u32, u32)) -> Result<HourChartRequest, String> {
+    let mut start = None;
+    let mut end = None;
+    let mut limit = None;
+    let mut species: Vec<String> = Vec::new();
+    for (key, value) in form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        match key.as_ref() {
+            "start_date" => start = Some(value.into_owned()),
+            "end_date" => end = Some(value.into_owned()),
+            "limit" => limit = Some(value.into_owned()),
+            "species" => {
+                let name = value.trim();
+                if !name.is_empty()
+                    && !species
+                        .iter()
+                        .any(|s| s.to_lowercase() == name.to_lowercase())
+                {
+                    species.push(name.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    let (start, end) = chart_range(start.as_deref(), end.as_deref()).map_err(str::to_owned)?;
+    if species.len() > MAX_SPECIES_SELECTION {
+        return Err(format!(
+            "Too many items requested. Maximum: {MAX_SPECIES_SELECTION}"
+        ));
+    }
+    let limit = limit
+        .and_then(|l| l.parse::<u32>().ok())
+        .filter(|l| (1..=limits.1).contains(l))
+        .unwrap_or(limits.0);
+    Ok(HourChartRequest {
+        start,
+        end,
+        species,
+        limit,
+    })
+}
+
+/// Answer an hour-of-day chart: read the request, the species' hourly
+/// counts, and render each species with `row`.
+async fn hour_chart(
+    state: &AppState,
+    query: Option<&str>,
+    limits: (u32, u32),
+    row: fn(&birdnet_db::sqlite::SpeciesHours) -> serde_json::Value,
+) -> Response {
+    let request = match hour_chart_request(query, limits) {
+        Ok(request) => request,
+        Err(message) => return bad_request(&message),
+    };
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                birdnet_db::sqlite::species_hours(
+                    conn,
+                    &request.start,
+                    &request.end,
+                    &request.species,
+                    request.limit,
+                )
+            })
+        })
+        .await;
+    match result {
+        Ok(rows) => Json(rows.iter().map(row).collect::<Vec<_>>()).into_response(),
+        Err(e) => read_failed("hourly activity", &e),
+    }
+}
+
+/// `GET /api/v2/analytics/time/distribution/species?start_date=&end_date=&species=&limit=`
+/// — who sings when: each species' detections by local hour as fractions
+/// of its total, so species of any volume compare by shape.
+///
+/// Upstream's shape: `[{scientificName, commonName, buckets, total}]` with
+/// 24 buckets, midnight first; the 5 most detected species by default, at
+/// most 10, or those named by a repeated `species`.
+async fn species_hour_distribution(
+    State(state): State<AppState>,
+    RawQuery(query): RawQuery,
+) -> Response {
+    hour_chart(&state, query.as_deref(), RIDGELINE_SPECIES, |r| {
+        #[allow(clippy::cast_precision_loss)]
+        let buckets: Vec<f64> = r.hours.iter().map(|&h| h as f64 / r.total as f64).collect();
+        json!({
+            "scientificName": r.sci_name,
+            "commonName": r.com_name,
+            "buckets": buckets,
+            "total": r.total,
+        })
+    })
+    .await
+}
+
+/// `GET /api/v2/analytics/time/succession?start_date=&end_date=&species=&limit=`
+/// — each species' detections by local hour, as counts, for a streamgraph
+/// whose band widths are volumes.
+///
+/// Upstream's shape: `[{scientificName, commonName, counts, total}]` with 24
+/// counts, midnight first; the 6 most detected species by default, at most
+/// 10, or those named by a repeated `species`.
+async fn succession(State(state): State<AppState>, RawQuery(query): RawQuery) -> Response {
+    hour_chart(&state, query.as_deref(), SUCCESSION_SPECIES, |r| {
+        json!({
+            "scientificName": r.sci_name,
+            "commonName": r.com_name,
+            "counts": r.hours,
+            "total": r.total,
+        })
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -737,5 +877,49 @@ mod tests {
         assert_eq!(heatmap_slot_minutes(180), 30);
         assert_eq!(heatmap_slot_minutes(181), 60);
         assert_eq!(heatmap_slot_minutes(366), 60);
+    }
+
+    /// Upstream's reading of a repeated `species`: trimmed, blanks dropped,
+    /// case-insensitive duplicates collapsed to the first spelling; more
+    /// than ten refused. And its limit: out of range is the default.
+    #[test]
+    fn an_hour_chart_reads_its_species_and_limit_like_upstream() {
+        let r = hour_chart_request(
+            Some("start_date=2026-05-01&species=%20Turdus%20merula%20&species=&species=turdus+MERULA&species=Robin&species=%C3%96&species=%C3%B6&limit=3"),
+            (5, 10),
+        )
+        .expect("valid");
+        assert_eq!(
+            r.species,
+            ["Turdus merula", "Robin", "Ö"],
+            "not ASCII alone"
+        );
+        assert_eq!(r.limit, 3);
+        assert_eq!(r.end, "2026-05-31");
+        for (limit, expected) in [("0", 5), ("10", 10), ("11", 5), ("x", 5)] {
+            let r = hour_chart_request(
+                Some(&format!("start_date=2026-05-01&limit={limit}")),
+                (5, 10),
+            )
+            .expect("valid");
+            assert_eq!(r.limit, expected, "limit={limit}");
+        }
+        let eleven = (0..11)
+            .map(|i| format!("&species=S{i}"))
+            .collect::<Vec<_>>()
+            .concat();
+        assert_eq!(
+            hour_chart_request(Some(&format!("start_date=2026-05-01{eleven}")), (5, 10)),
+            Err("Too many items requested. Maximum: 10".to_owned())
+        );
+        let ten = (0..10)
+            .map(|i| format!("&species=S{i}"))
+            .collect::<Vec<_>>()
+            .concat();
+        assert!(hour_chart_request(Some(&format!("start_date=2026-05-01{ten}")), (5, 10)).is_ok());
+        assert!(
+            hour_chart_request(None, (5, 10)).is_err(),
+            "start_date is required"
+        );
     }
 }

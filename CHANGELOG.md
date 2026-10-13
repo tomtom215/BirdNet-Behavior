@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
   and error classes. Before, it was one journal line per segment.
 
+- **`GET /api/v2/analytics/time/distribution/species` and
+  `GET /api/v2/analytics/time/succession`.** Each species' detections by
+  hour of the day over a range — as fractions of its total, to compare when
+  species sing, or as counts, to stack by volume — for the most detected
+  species or a repeated `species` selection of up to ten. birdnet-go's
+  parameters, defaults and fields.
+
 - **`GET /api/v2/analytics/time/heatmap`.** Detections by day and time of
   day over a range, in 15-, 30- or 60-minute slots as the range widens, as
   birdnet-go's sparse columnar payload or, with `format=csv`, a CSV file.

@@ -3474,6 +3474,212 @@
         }
       }
     },
+    "/analytics/time/distribution/species": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Who sings when: each species' hours as fractions",
+        "description": "Each species' detections by local hour over start_date..=end_date, as fractions of its total, so species of any volume compare by shape. Rejected detections are not counted. Same path, parameters and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsSpeciesHourDistribution",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "Repeatable (?species=A&species=B): the species to chart, by scientific or common name in any case; blanks and case-insensitive repeats are ignored. More than 10 is a 400. Without it, the `limit` most detected species.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Species without a `species` selection: 5 by default, at most 10. A value that is not a positive integer, or is above 10, is 5.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species, the most detected first; never null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "scientificName",
+                      "commonName",
+                      "buckets",
+                      "total"
+                    ],
+                    "properties": {
+                      "scientificName": {
+                        "type": "string"
+                      },
+                      "commonName": {
+                        "type": "string"
+                      },
+                      "buckets": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        },
+                        "minItems": 24,
+                        "maxItems": 24,
+                        "description": "One per local hour, midnight first."
+                      },
+                      "total": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, start_date after end_date, or more than 10 species."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/time/succession": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Each species' hours as counts",
+        "description": "Each species' detections by local hour over start_date..=end_date, as counts, for a streamgraph whose band widths are volumes. Rejected detections are not counted. Same path, parameters and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsSuccession",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "Repeatable (?species=A&species=B): the species to chart, by scientific or common name in any case; blanks and case-insensitive repeats are ignored. More than 10 is a 400. Without it, the `limit` most detected species.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Species without a `species` selection: 6 by default, at most 10. A value that is not a positive integer, or is above 10, is 6.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species, the most detected first; never null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "scientificName",
+                      "commonName",
+                      "counts",
+                      "total"
+                    ],
+                    "properties": {
+                      "scientificName": {
+                        "type": "string"
+                      },
+                      "commonName": {
+                        "type": "string"
+                      },
+                      "counts": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "minItems": 24,
+                        "maxItems": 24,
+                        "description": "One per local hour, midnight first."
+                      },
+                      "total": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, start_date after end_date, or more than 10 species."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [

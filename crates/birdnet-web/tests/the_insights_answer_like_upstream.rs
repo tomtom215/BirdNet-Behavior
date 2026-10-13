@@ -893,3 +893,79 @@ async fn the_heatmap_answers_with_upstreams_shape() {
     let (status, _) = get(&app, "/api/v2/analytics/time/heatmap?end_date=2026-05-01").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// Upstream's hour-of-day charts: the ridgeline's buckets are fractions of
+/// each species' total, the succession's counts are counts, and a repeated
+/// `species` picks the species, eleven being too many.
+#[tokio::test]
+async fn the_hour_of_day_charts_answer_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (sci, com, time) in [
+            ("Turdus merula", "Blackbird", "05:10:00"),
+            ("Turdus merula", "Blackbird", "05:20:00"),
+            ("Turdus merula", "Blackbird", "05:30:00"),
+            ("Turdus merula", "Blackbird", "20:00:00"),
+            ("Strix aluco", "Tawny Owl", "23:00:00"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES ('2026-05-01', ?1, ?2, ?3, 0.9)",
+                rusqlite::params![time, sci, com],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/time/distribution/species?start_date=2026-05-01",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["scientificName"], "Turdus merula", "{body}");
+    assert_eq!(body[0]["commonName"], "Blackbird");
+    assert_eq!(body[0]["total"], 4);
+    let buckets = body[0]["buckets"].as_array().expect("buckets");
+    assert_eq!(buckets.len(), 24);
+    assert_eq!(buckets[5], 0.75);
+    assert_eq!(buckets[20], 0.25);
+    assert_eq!(body[1]["buckets"][23], 1.0);
+
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/succession?start_date=2026-05-01&species=tawny%20owl",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(body[0]["scientificName"], "Strix aluco");
+    assert_eq!(body[0]["counts"][23], 1);
+    assert_eq!(body[0]["counts"].as_array().map(Vec::len), Some(24));
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/succession?start_date=2026-05-01&limit=1",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    assert_eq!(body[0]["counts"][5], 3);
+
+    let eleven = (0..11)
+        .map(|i| format!("&species=S{i}"))
+        .collect::<Vec<_>>()
+        .concat();
+    for path in ["distribution/species", "succession"] {
+        let (status, body) = get(
+            &app,
+            &format!("/api/v2/analytics/time/{path}?start_date=2026-05-01{eleven}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(body["error"], "Too many items requested. Maximum: 10");
+        let (status, _) = get(&app, &format!("/api/v2/analytics/time/{path}")).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{path}: start_date is required"
+        );
+    }
+}
