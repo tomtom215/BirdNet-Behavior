@@ -2904,7 +2904,7 @@
           "analytics"
         ],
         "summary": "Species first heard in a date range",
-        "description": "Species whose first-ever detection here (rejected and undated detections aside) falls in start_date..=end_date, newest first, with their detections in the range. Same path, parameters, defaults and fields as birdnet-go's endpoint.",
+        "description": "Species whose first-ever detection here (rejected detections aside) falls in start_date..=end_date, newest first, with their detections in the range. Same path, parameters, defaults and fields as birdnet-go's endpoint, with one difference: a species with an imported detection of no date counts as heard before any dated one, so it is never listed (upstream ignores such rows).",
         "operationId": "analyticsNewSpecies",
         "parameters": [
           {

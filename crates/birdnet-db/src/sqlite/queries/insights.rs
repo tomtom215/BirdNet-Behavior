@@ -105,9 +105,10 @@ pub struct NewArrival {
 /// Species whose first-ever detection falls in the `recent_days` days up to
 /// and including `today`, newest first.
 ///
-/// A row with an empty `Date` (an import whose source had none) is not a
-/// first detection: it would sort before every real date and hide the
-/// species' arrival for good.
+/// A species with a detection of no date (an import whose source had none)
+/// was heard before any dated one, so it is never a new arrival: the empty
+/// `Date` sorts first. That is the daemon's rule for a new-species
+/// notification too (`species_tracking::prior_detections`).
 ///
 /// # Errors
 ///
@@ -118,7 +119,7 @@ pub fn new_arrivals(
     recent_days: u32,
 ) -> Result<Vec<NewArrival>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT Sci_Name, MAX(Com_Name), MIN(NULLIF(Date, '')) AS first, COUNT(*)
+        "SELECT Sci_Name, MAX(Com_Name), MIN(Date) AS first, COUNT(*)
          FROM detections_analytic
          WHERE Date <= ?1
          GROUP BY Sci_Name
@@ -140,6 +141,9 @@ pub fn new_arrivals(
 }
 
 /// A species heard often enough before that its silence means something.
+///
+/// Its last detection is its last *dated* one; a species known only from
+/// undated imports has none and is not listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoneQuiet {
     /// Scientific name.
@@ -167,7 +171,7 @@ pub fn gone_quiet(
     min_total: u32,
 ) -> Result<Vec<GoneQuiet>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT Sci_Name, MAX(Com_Name), MAX(Date) AS last,
+        "SELECT Sci_Name, MAX(Com_Name), MAX(NULLIF(Date, '')) AS last,
                 CAST(julianday(?1) - julianday(MAX(Date)) AS INTEGER), COUNT(*) AS n
          FROM detections_analytic
          WHERE Date <= ?1
@@ -491,8 +495,8 @@ pub struct FirstHeard {
 /// Species whose first-ever detection falls in `start..=end`, newest first,
 /// a page of `limit` from `offset`: birdnet-go's new-species list.
 ///
-/// Rows with an empty `Date` are not first detections, as in
-/// [`new_arrivals`].
+/// A species with an undated detection is never new, as in [`new_arrivals`].
+/// Upstream ignores undated rows here and would list it.
 ///
 /// # Errors
 ///
@@ -505,7 +509,7 @@ pub fn first_heard_between(
     offset: u32,
 ) -> Result<Vec<FirstHeard>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT Sci_Name, MAX(Com_Name), MIN(NULLIF(Date, '')) AS first,
+        "SELECT Sci_Name, MAX(Com_Name), MIN(Date) AS first,
                 SUM(Date BETWEEN ?1 AND ?2)
          FROM detections_analytic
          GROUP BY Sci_Name
@@ -865,19 +869,47 @@ mod tests {
             .expect("listed");
         assert_eq!((bubo.count, &bubo.first, &bubo.last), (1, &None, &None));
     }
-    /// An import with no date is not a first detection: counted as one, it
-    /// would sort before every real date and hide the species' arrival.
+    /// A species with an undated import was heard before any dated
+    /// detection — when, the source did not say — so it is not new; and one
+    /// known only from undated rows has no last date to have gone quiet since.
     #[test]
-    fn an_undated_row_does_not_hide_an_arrival() {
-        let conn = station(&[
-            ("2026-10-10", "07:00:00", "Fringilla montifringilla"),
-            ("", "", "Fringilla montifringilla"),
-        ]);
-        let arrivals = new_arrivals(&conn, "2026-10-12", 14).expect("query");
-        assert_eq!(arrivals.len(), 1, "{arrivals:?}");
-        assert_eq!(arrivals[0].first_detected, "2026-10-10");
-        let firsts = first_heard_between(&conn, "2026-10-01", "2026-10-12", 100, 0).expect("query");
-        assert_eq!(firsts.len(), 1, "{firsts:?}");
+    fn an_undated_import_counts_as_heard_before() {
+        let conn = station(&[("2026-10-10", "07:00:00", "Fringilla montifringilla")]);
+        let undated = |sci: &str, file: &str| {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('', '', ?1, ?1, 0.9, ?2)",
+                rusqlite::params![sci, file],
+            )
+            .expect("insert");
+        };
+        // Counterpart first: without the undated row it is new.
+        assert_eq!(
+            new_arrivals(&conn, "2026-10-12", 14).expect("query").len(),
+            1
+        );
+        assert_eq!(
+            first_heard_between(&conn, "2026-10-01", "2026-10-12", 100, 0)
+                .expect("query")
+                .len(),
+            1
+        );
+        undated("Fringilla montifringilla", "a.mp3");
+        assert!(
+            new_arrivals(&conn, "2026-10-12", 14)
+                .expect("query")
+                .is_empty()
+        );
+        assert!(
+            first_heard_between(&conn, "2026-10-01", "2026-10-12", 100, 0)
+                .expect("query")
+                .is_empty()
+        );
+        for i in 0..5 {
+            undated("Luscinia megarhynchos", &format!("n{i}.mp3"));
+        }
+        let quiet = gone_quiet(&conn, "2026-12-01", 14, 5).expect("query");
+        assert!(quiet.is_empty(), "{quiet:?}");
     }
 
     /// Upstream's new-species list: first-ever detection inside the range,
