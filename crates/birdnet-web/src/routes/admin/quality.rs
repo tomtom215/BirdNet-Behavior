@@ -126,7 +126,7 @@ pub(crate) fn render_phantoms(
 
     if reports.is_empty() {
         out.push_str(
-            r#"<p class="empty-note mb">Nothing looks suspicious. Species are only considered once they have at least 10 detections, and are only listed when two independent signals agree.</p></div>"#,
+            r#"<p class="empty-note mb">Nothing looks suspicious. Species are only considered once they have at least 10 detections, and are only listed when two independent signals agree.</p>"#,
         );
         return out;
     }
@@ -186,7 +186,7 @@ pub(crate) fn render_phantoms(
 </tr>"##
         );
     }
-    out.push_str("</tbody></table></div>");
+    out.push_str("</tbody></table>");
     out
 }
 
@@ -821,6 +821,31 @@ mod phantom_tests {
             html.contains("10 detections"),
             "the threshold is not explained: {html}"
         );
+    }
+
+    /// The report is swapped into `#phantoms-section`, which its callers
+    /// open and close, so it must close nothing of its own. Observed failing
+    /// with the old trailing `</div>` on both paths: one each, and on
+    /// `/station/data` it closed the page's content column early.
+    #[test]
+    fn the_report_closes_only_what_it_opens() {
+        for html in [
+            render_phantoms(&[], None),
+            render_phantoms(
+                &[report(
+                    "Phantomus fictus",
+                    "Not A Bird",
+                    vec![PhantomSignal::NeverConfirmed],
+                )],
+                None,
+            ),
+        ] {
+            assert_eq!(
+                html.matches("<div").count(),
+                html.matches("</div>").count(),
+                "{html}"
+            );
+        }
     }
 
     #[test]

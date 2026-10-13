@@ -15,14 +15,14 @@ use crate::routes::pages::escape_html;
 #[allow(clippy::too_many_lines)]
 pub fn migration_body(dest_db_path: &str) -> String {
     format!(
-        r##"<style>
+        r##"<div class="mig-scope"><style>
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
-    label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
-    input[type=text],input[type=file] {{ width:100%; background:var(--bg); border:1px solid var(--border);
+    :where(.mig-scope) label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
+    :where(.mig-scope) input[type=text], :where(.mig-scope) input[type=file] {{ width:100%; background:var(--bg); border:1px solid var(--border);
              border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg);
              font-size:0.875rem; box-sizing:border-box; }}
-    input[type=file] {{ padding:0.35rem 0.5rem; cursor:pointer; }}
+    :where(.mig-scope) input[type=file] {{ padding:0.35rem 0.5rem; cursor:pointer; }}
     .btn {{ padding:0.5rem 1.5rem; border-radius:0.375rem; border:none;
             cursor:pointer; font-weight:600; font-size:0.875rem; }}
     .btn-primary {{ background:var(--moss); color:var(--on-moss); }}
@@ -30,7 +30,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
     .btn-secondary {{ background:var(--border); color:var(--fg); }}
     .btn-secondary:hover {{ background:var(--border-2); }}
     .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }}
-    code {{ background:var(--bg); border:1px solid var(--border); padding:0.1em 0.4em;
+    :where(.mig-scope) code {{ background:var(--bg); border:1px solid var(--border); padding:0.1em 0.4em;
             border-radius:0.2rem; font-family:monospace; font-size:0.875rem; }}
     .tabs {{ display:flex; gap:0.5rem; margin-bottom:1rem; }}
     .tab {{ padding:0.4rem 1rem; border-radius:0.375rem; border:1px solid var(--border);
@@ -262,7 +262,7 @@ document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
   var btn = e.target.closest('button[data-tab]');
   if (btn) switchTab(btn.dataset.tab);
 }});
-</script>"##,
+</script></div>"##,
         utc_options = utc_offset_options(),
     )
 }

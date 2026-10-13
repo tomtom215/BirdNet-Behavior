@@ -3632,6 +3632,22 @@ a.bk-download    { color: var(--moss-ink); font-size: .8rem; text-decoration: no
 /* admin/audio.rs — inline edit-source form (overrides .audio-source__* by order). */
 .aud-edit-form    { display: contents; }
 .aud-edit-id      { display: flex; flex-direction: column; gap: 6px; }
+/* The edit form used to borrow its input widths and its one-checkbox-per-line
+   layout from `label`/`input` rules that leaked out of the settings, species
+   and rules stylesheets on the same Station tab — which also put each
+   checkbox on a full-width row of its own, away from its words. Those rules
+   are scoped now, so the form says what it wants. */
+.aud-edit-id input { width: 100%; box-sizing: border-box; }
+.aud-edit-pipeline {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 4px;
+}
+.aud-edit-pipeline label { display: inline-flex; align-items: center; gap: 8px; }
+.aud-edit-pipeline .hint { margin: 2px 0 0; }
 .aud-edit-right   { display: inline-flex; gap: 8px; }
 input.aud-edit-label  { font-size: 14.5px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
 input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }

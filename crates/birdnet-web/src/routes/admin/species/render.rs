@@ -21,12 +21,12 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
 /// `super::species_body`.
 pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> String {
     format!(
-        r#"<style>
+        r#"<div class="spl-scope"><style>
       .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
       .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
-      label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
-      input {{ width:100%; background:var(--bg); border:1px solid var(--border); border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg); font-size:0.875rem; box-sizing:border-box; }}
-      input:focus {{ outline:none; border-color:var(--moss-ink); }}
+      :where(.spl-scope) label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
+      :where(.spl-scope) input {{ width:100%; background:var(--bg); border:1px solid var(--border); border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg); font-size:0.875rem; box-sizing:border-box; }}
+      :where(.spl-scope) input:focus {{ outline:none; border-color:var(--moss-ink); }}
       .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.85rem; }}
       .btn-primary {{ background:var(--moss); color:var(--on-moss); }}
       .btn-danger {{ background:var(--rare); color:var(--on-fill); }}
@@ -50,7 +50,7 @@ pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> Stri
 
   <div id="species-lists">
     {inner}
-  </div>"#,
+  </div></div>"#,
         inner = render_species_partial(exclude, include)
     )
 }

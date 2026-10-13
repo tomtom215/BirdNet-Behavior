@@ -138,17 +138,17 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
     });
 
     format!(
-        r#"<style>
+        r#"<div class="nh-scope"><style>
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
     .stat {{ text-align:center; }}
     .stat .value {{ font-size:2rem; font-weight:700; }}
     .stat .label {{ font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }}
-    table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
-    th {{ text-align:left; color:var(--fg-4); font-weight:600; padding:0.5rem 0.75rem;
+    :where(.nh-scope) table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
+    :where(.nh-scope) th {{ text-align:left; color:var(--fg-4); font-weight:600; padding:0.5rem 0.75rem;
           border-bottom:1px solid var(--border); }}
-    td {{ padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); }}
-    tr:hover td {{ background:var(--surface); }}
+    :where(.nh-scope) td {{ padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); }}
+    :where(.nh-scope) tr:hover td {{ background:var(--surface); }}
     .badge {{ display:inline-block; padding:0.15rem 0.5rem; border-radius:9999px;
               font-size:0.75rem; font-weight:600; }}
     .badge-sent {{ background:var(--moss-soft); color:var(--moss-ink); }}
@@ -170,7 +170,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
     .th-title {{ font-weight:600; color:var(--fg); }}
     .th-count {{ color:var(--fg-4); font-size:0.85rem; }}
     td.col-time {{ white-space:nowrap; color:var(--fg-3); }}
-    td code {{ font-size:0.8rem; }}
+    :where(.nh-scope) td code {{ font-size:0.8rem; }}
     td.col-muted {{ color:var(--fg-3); }}
     .row-error {{ color:var(--rare); font-size:0.75rem; }}
     .prune-ok {{ color:var(--moss); padding:0.5rem 0; }}
@@ -224,7 +224,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
         </tbody>
       </table>
     </div>
-  </div>"#
+  </div></div>"#
     )
 }
 

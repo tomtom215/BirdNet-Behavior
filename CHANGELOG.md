@@ -117,6 +117,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The add form also described `auto` as "TCP w/ UDP fallback"; it is TCP,
   and nothing falls back. Transport can now be changed on the edit form.
 
+- **Station tabs restyled the whole page.** Five of the pages folded into
+  the Station tabs (settings, alert rules, notifications, species settings,
+  import) brought stylesheets written for a page of their own, with rules
+  for bare `input`, `label`, `table`, `h1` and `code`. Inside a tab those
+  rules reached the site header, the tab bar and every other section — the
+  header's search box was visibly displaced. Each is now scoped to its own
+  section.
+
+- **Two stray markup errors on Settings → Data.** The Raven export row
+  showed its per-clip path as `recordings//raven.txt`, because `<clip>` was
+  written raw and parsed as an element; and the "species that may not be
+  birds" report closed one more `<div>` than it opened, ending the page's
+  content column early (also in the report's own refreshes).
+
 - **`GET /api/v2/system/jobs` answered an empty list when it could not read
   the job state** — which reads as "nothing is due" on exactly the station
   that has a problem. It now answers `500`.

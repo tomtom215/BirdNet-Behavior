@@ -1003,11 +1003,11 @@ const RULES_CSS: &str = r"<style>
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }
       .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
       .card h2 { font-size:1.1rem; color:var(--moss-ink); margin:0 0 1rem; }
-      label { display:block; font-size:.8rem; color:var(--fg-3); margin-bottom:.25rem; margin-top:.75rem; }
-      label:first-of-type { margin-top:0; }
-      input,select,textarea { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:.375rem;
+      :where(.ar-scope) label { display:block; font-size:.8rem; color:var(--fg-3); margin-bottom:.25rem; margin-top:.75rem; }
+      :where(.ar-scope) label:first-of-type { margin-top:0; }
+      :where(.ar-scope) :is(input,select,textarea) { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:.375rem;
                                color:var(--fg); padding:.5rem .75rem; font-size:.875rem; box-sizing:border-box; }
-      input:focus,select:focus,textarea:focus { outline:none; border-color:var(--moss-ink); }
+      :where(.ar-scope) :is(input,select,textarea):focus { outline:none; border-color:var(--moss-ink); }
       .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
       .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; }
       .btn { padding:.5rem 1.25rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:.875rem; }
@@ -1016,11 +1016,11 @@ const RULES_CSS: &str = r"<style>
       .btn-danger { background:var(--rare); color:var(--on-fill); }
       .btn-danger:hover { background:var(--rare); }
       .btn-sm { padding:.25rem .75rem; font-size:.8rem; }
-      table { width:100%; border-collapse:collapse; font-size:.875rem; }
-      th { text-align:left; color:var(--fg-4); font-weight:600; font-size:.75rem; text-transform:uppercase;
+      :where(.ar-scope) table { width:100%; border-collapse:collapse; font-size:.875rem; }
+      :where(.ar-scope) th { text-align:left; color:var(--fg-4); font-weight:600; font-size:.75rem; text-transform:uppercase;
              padding:.5rem .75rem; border-bottom:1px solid var(--border); }
-      td { padding:.6rem .75rem; border-bottom:1px solid var(--surface); vertical-align:middle; }
-      tr:hover td { background:var(--surface)55; }
+      :where(.ar-scope) td { padding:.6rem .75rem; border-bottom:1px solid var(--surface); vertical-align:middle; }
+      :where(.ar-scope) tr:hover td { background:var(--surface)55; }
       .badge { display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }
       .badge-green { background:var(--moss-soft); color:var(--moss-ink); }
       .badge-gray  { background:var(--surface); color:var(--fg-4); border:1px solid var(--border); }
@@ -1045,7 +1045,7 @@ const RULES_CSS: &str = r"<style>
     </style>";
 
 pub(crate) fn rules_body() -> String {
-    [RULES_CSS, r##"
+    ["<div class=\"ar-scope\">", RULES_CSS, r##"
 
   <h2 class="ar-title">Alert Rules</h2>
   <p class="subtitle">
@@ -1216,7 +1216,7 @@ pub(crate) fn rules_body() -> String {
   }
   authKind.addEventListener('change', syncHeaderNameField);
   syncHeaderNameField();
-</script>"##]
+</script>"##, "</div>"]
     .concat()
     .replace("{METRIC_RULES_CARD}", &metric_rules_card())
 }

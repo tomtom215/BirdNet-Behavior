@@ -177,7 +177,7 @@ fn settings_body(settings: &HashMap<String, String>) -> String {
     let index = section_index();
     format!(
         r#"{SETTINGS_FORM_CSS}
-
+<div class="set-scope">
   <h1>
     Admin Settings
   </h1>
@@ -191,6 +191,7 @@ fn settings_body(settings: &HashMap<String, String>) -> String {
   {layout}
   </div>
   </div>
+</div>
   <script src="/static/settings-filter.js" defer></script>"#
     )
 }
@@ -240,11 +241,16 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
         .set-index__list { display: block; }
         .set-index__list li + li { margin-top: 0.15rem; }
       }
-      label { display: block; font-size: 0.85rem; color: var(--fg-3); margin-bottom: 0.25rem; }
-      input, textarea, select { width: 100%; background: var(--bg); border: 1px solid var(--border);
+      /* Element rules are scoped with `:where()`, which adds no specificity:
+         unscoped, they restyled every label and input on a Station tab — the
+         audio-source edit form's checkboxes each took a full-width row of
+         their own — and a plain `.set-scope` prefix would have raised them
+         above the class rules they lose to here. */
+      :where(.set-scope) label { display: block; font-size: 0.85rem; color: var(--fg-3); margin-bottom: 0.25rem; }
+      :where(.set-scope) input, :where(.set-scope) textarea, :where(.set-scope) select { width: 100%; background: var(--bg); border: 1px solid var(--border);
                                   border-radius: 0.375rem; padding: 0.5rem 0.75rem; color: var(--fg);
                                   font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }
-      input:focus, textarea:focus { outline: none; border-color: var(--moss-ink); }
+      :where(.set-scope) input:focus, :where(.set-scope) textarea:focus { outline: none; border-color: var(--moss-ink); }
       .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
       .btn { padding: 0.5rem 1.5rem; border-radius: 0.375rem; border: none; cursor: pointer;
                font-weight: 600; font-size: 0.875rem; }
@@ -271,7 +277,7 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
       .save-problems li { margin-top: 0.25rem; }
       .hint { font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }
       @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
-      h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }
+      :where(.set-scope) h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }
       a.btn { text-decoration: none; }
       .btn.btn-sm { font-size: 0.8rem; padding: 0.3rem 0.8rem; }
       /* Underlined, not just tinted: axe's link-in-text-block flags a link
@@ -320,7 +326,7 @@ pub(crate) fn render_section_form(
 ) -> String {
     let mut out = String::with_capacity(8_192);
     out.push_str(
-        r##"<div id="settings-feedback"></div><form hx-post="/admin/settings" hx-target="#settings-feedback" hx-swap="innerHTML" hx-indicator="#save-spinner">"##,
+        r##"<div class="set-scope"><div id="settings-feedback"></div><form hx-post="/admin/settings" hx-target="#settings-feedback" hx-swap="innerHTML" hx-indicator="#save-spinner">"##,
     );
     for section in sections {
         match section {
@@ -338,7 +344,7 @@ pub(crate) fn render_section_form(
     <span id="save-spinner" class="htmx-indicator save-note">Saving…</span>
     <span class="save-note dim">Settings are applied when the station next starts — use <a href="/admin/system">Restart</a> to apply them now.</span>
   </div>
-</form>"#,
+</form></div>"#,
     );
     out
 }
