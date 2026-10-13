@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/v2/insights/expected-today` and `…/expected-today/regional`.**
+  The first lists species heard within three days of today's date in any
+  of the last ten years, most regular first; the second, what eBird
+  observers have reported nearby that the station does not usually hear
+  now. birdnet-go's fields — except that the regional list answers an error,
+  not every eBird species, when the station's own history cannot be read.
+
 - **`GET /api/v2/insights/dawn-chorus` and `GET /api/v2/insights/migration`.**
   The first answers who opens the dawn chorus: each species' typical and
   earliest first song of the morning (04:00–10:00), over species heard on at

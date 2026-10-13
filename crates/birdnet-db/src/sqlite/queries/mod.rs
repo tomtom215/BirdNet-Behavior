@@ -57,7 +57,8 @@ pub use images::{
 };
 pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches};
 pub use insights::{
-    DawnFirstSong, GoneQuiet, NewArrival, dawn_first_songs, gone_quiet, new_arrivals,
+    DawnFirstSong, ExpectedSpecies, GoneQuiet, NewArrival, dawn_first_songs, expected_today,
+    gone_quiet, new_arrivals,
 };
 pub use maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM,

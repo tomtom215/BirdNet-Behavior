@@ -186,6 +186,76 @@ pub fn gone_quiet(
     Ok(rows)
 }
 
+/// A species this station has heard around this date in earlier years.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedSpecies {
+    /// Scientific name.
+    pub sci_name: String,
+    /// Common name.
+    pub com_name: String,
+    /// Earlier years in which it was heard within the window of this date.
+    pub years_seen: u32,
+    /// Its latest detection inside any of those windows (`YYYY-MM-DD`).
+    pub last_seen_date: String,
+}
+
+/// Species heard within `window_days` days either side of `today`'s date in
+/// any of the `max_years` years before it, the most regular first; and how
+/// many of those years have any detection in the window at all.
+///
+/// A window is `date(today, '-N years', '∓window_days days')`, so one that
+/// crosses New Year or a month end is still one window, and a species heard
+/// on both sides of a New Year counts that year once.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn expected_today(
+    conn: &Connection,
+    today: &str,
+    window_days: u32,
+    max_years: u32,
+) -> Result<(Vec<ExpectedSpecies>, u32), DbError> {
+    const WINDOWS: &str = "WITH RECURSIVE yrs(n) AS (
+             SELECT 1 UNION ALL SELECT n + 1 FROM yrs WHERE n < ?3
+         ),
+         windows AS (
+             SELECT n,
+                    date(?1, '-' || n || ' years', '-' || ?2 || ' days') AS lo,
+                    date(?1, '-' || n || ' years', '+' || ?2 || ' days') AS hi
+             FROM yrs
+         ),
+         heard AS (
+             SELECT w.n, d.Sci_Name, d.Com_Name, d.Date
+             FROM windows w
+             JOIN detections_analytic d ON d.Date BETWEEN w.lo AND w.hi
+         )";
+    let mut stmt = conn.prepare(&format!(
+        "{WINDOWS}
+         SELECT Sci_Name, MAX(Com_Name), COUNT(DISTINCT n) AS years, MAX(Date) AS last
+         FROM heard
+         GROUP BY Sci_Name
+         ORDER BY years DESC, last DESC, Sci_Name"
+    ))?;
+    let params = rusqlite::params![today, window_days, max_years];
+    let species = stmt
+        .query_map(params, |row| {
+            Ok(ExpectedSpecies {
+                sci_name: row.get(0)?,
+                com_name: row.get(1)?,
+                years_seen: row.get(2)?,
+                last_seen_date: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let years_of_data: u32 = conn.query_row(
+        &format!("{WINDOWS} SELECT COUNT(DISTINCT n) FROM heard"),
+        params,
+        |row| row.get(0),
+    )?;
+    Ok((species, years_of_data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +358,43 @@ mod tests {
                 .expect("query")
                 .is_empty()
         );
+    }
+
+    /// Upstream's expected-today: the ±3-day window around this date in each
+    /// earlier year. A window that crosses New Year is one window, and this
+    /// year's own detections do not count — they are not "expected", they
+    /// are here.
+    #[test]
+    fn expected_species_come_from_this_date_in_earlier_years() {
+        let conn = station(&[
+            // Heard around 12 October in two earlier years.
+            ("2025-10-10", "07:00:00", "Turdus iliacus"),
+            ("2024-10-14", "07:00:00", "Turdus iliacus"),
+            // One earlier year, at the window's edge.
+            ("2023-10-15", "07:00:00", "Turdus pilaris"),
+            // Just outside the window: not expected.
+            ("2025-10-16", "07:00:00", "Hirundo rustica"),
+            // This year: here, not expected.
+            ("2026-10-11", "07:00:00", "Sturnus vulgaris"),
+            // Eleven years back: beyond max_years.
+            ("2015-10-12", "07:00:00", "Ciconia ciconia"),
+        ]);
+        let (species, years) = expected_today(&conn, "2026-10-12", 3, 10).expect("query");
+        let names: Vec<&str> = species.iter().map(|s| s.sci_name.as_str()).collect();
+        assert_eq!(names, ["Turdus iliacus", "Turdus pilaris"]);
+        assert_eq!(species[0].years_seen, 2);
+        assert_eq!(species[0].last_seen_date, "2025-10-10");
+        assert_eq!(years, 3, "2025, 2024 and 2023 have data in the window");
+
+        // Across New Year: 30 December and 2 January of the same winter are
+        // one window, counted once, for a date of 1 January.
+        let conn = station(&[
+            ("2025-12-30", "07:00:00", "Bombycilla garrulus"),
+            ("2026-01-02", "07:00:00", "Bombycilla garrulus"),
+        ]);
+        let (species, years) = expected_today(&conn, "2027-01-01", 3, 10).expect("query");
+        assert_eq!(species.len(), 1, "{species:?}");
+        assert_eq!(species[0].years_seen, 1);
+        assert_eq!(years, 1);
     }
 }

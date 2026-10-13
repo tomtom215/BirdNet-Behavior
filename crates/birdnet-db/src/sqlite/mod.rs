@@ -79,7 +79,8 @@ pub use queries::{
     weekly_new_species, weekly_top_species,
 };
 pub use queries::{
-    DawnFirstSong, GoneQuiet, NewArrival, dawn_first_songs, gone_quiet, new_arrivals,
+    DawnFirstSong, ExpectedSpecies, GoneQuiet, NewArrival, dawn_first_songs, expected_today,
+    gone_quiet, new_arrivals,
 };
 pub use types::{
     ConcurrentDetection, DailyCount, DayCount, DetectionRecord, DetectionRow, HourlyCount,

@@ -11,6 +11,10 @@ use tower::ServiceExt as _;
 
 /// A station with detections placed relative to today.
 fn station(rows: &[(i32, &str, &str)]) -> axum::Router {
+    build_router(station_state(rows))
+}
+
+fn station_state(rows: &[(i32, &str, &str)]) -> AppState {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
     for (days_ago, time, sci) in rows {
@@ -21,10 +25,7 @@ fn station(rows: &[(i32, &str, &str)]) -> axum::Router {
         )
         .expect("insert");
     }
-    build_router(AppState::from_connection(
-        conn,
-        std::path::PathBuf::from(":memory:"),
-    ))
+    AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
 }
 
 async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
@@ -116,16 +117,100 @@ async fn migration_lists_arrivals_and_silences() {
     assert_eq!(quiet["total_detections"], 5);
 }
 
+/// Upstream's expected-today: this date in earlier years, not this year.
+#[tokio::test]
+async fn expected_today_is_this_date_in_earlier_years() {
+    // 365 days ago is this date last year (or a day off across a leap day,
+    // still inside the ±3-day window); today's own detection is not
+    // "expected", it is here.
+    let app = station(&[
+        (365, "07:00:00", "Turdus iliacus"),
+        (0, "07:00:00", "Sturnus vulgaris"),
+    ]);
+    let (status, body) = get(&app, "/api/v2/insights/expected-today").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["years_of_data"], 1, "{body}");
+    assert_eq!(body["species"].as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(body["species"][0]["scientific_name"], "Turdus iliacus");
+    assert_eq!(body["species"][0]["years_seen"], 1);
+    assert!(
+        body["day_of_year"]
+            .as_i64()
+            .is_some_and(|d| (1..=366).contains(&d))
+    );
+}
+
+/// eBird's nearby reports, less what this station usually hears now. Without
+/// a snapshot the answer says it is not available rather than "nothing".
+#[tokio::test]
+async fn the_regional_list_is_ebird_less_the_stations_regulars() {
+    let state = station_state(&[(365, "07:00:00", "Turdus iliacus")]);
+    let app = build_router(state.clone());
+    let (status, body) = get(&app, "/api/v2/insights/expected-today/regional").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["available"], false, "{body}");
+
+    let nearby = |sci: &str, com: &str| birdnet_integrations::ebird::NearbySpecies {
+        sci_name: sci.to_owned(),
+        com_name: com.to_owned(),
+        last_seen: "2026-10-12".to_owned(),
+        locality: "Marsh hide".to_owned(),
+        how_many: None,
+    };
+    // Normalised and sorted, as the snapshot stores them.
+    state.set_nearby(birdnet_integrations::ebird::Snapshot {
+        fetched_at: 0,
+        scope: "test".to_owned(),
+        scope_label: "near the station".to_owned(),
+        back_days: 14,
+        species: vec![
+            nearby("bombycilla garrulus", "Bohemian Waxwing"),
+            nearby("turdus iliacus", "Redwing"),
+        ],
+    });
+    let (status, body) = get(&app, "/api/v2/insights/expected-today/regional").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["available"], true);
+    let names: Vec<&str> = body["species"]
+        .as_array()
+        .expect("species")
+        .iter()
+        .filter_map(|s| s["scientific_name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["Bombycilla garrulus"],
+        "the redwing is a regular here: {body}"
+    );
+    assert_eq!(body["species"][0]["location_name"], "Marsh hide");
+}
+
 /// The counterpart to both: an empty list would read as "nothing arrived",
 /// "nobody sang" — a claim about the station's records made on a read that
 /// failed.
 #[tokio::test]
 async fn an_unreadable_station_is_an_error_not_an_empty_list() {
-    let app = build_router(AppState::from_connection(
+    let state = AppState::from_connection(
         rusqlite::Connection::open_in_memory().expect("open"),
         std::path::PathBuf::from(":memory:"),
-    ));
-    for uri in ["/api/v2/insights/dawn-chorus", "/api/v2/insights/migration"] {
+    );
+    // With a snapshot, so the regional list reaches its read of the
+    // station's own history: unfiltered, it would pass the station's
+    // regulars off as birds it does not hear.
+    state.set_nearby(birdnet_integrations::ebird::Snapshot {
+        fetched_at: 0,
+        scope: "test".to_owned(),
+        scope_label: "near the station".to_owned(),
+        back_days: 14,
+        species: Vec::new(),
+    });
+    let app = build_router(state);
+    for uri in [
+        "/api/v2/insights/dawn-chorus",
+        "/api/v2/insights/migration",
+        "/api/v2/insights/expected-today",
+        "/api/v2/insights/expected-today/regional",
+    ] {
         let (status, body) = get(&app, uri).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {body}");
     }

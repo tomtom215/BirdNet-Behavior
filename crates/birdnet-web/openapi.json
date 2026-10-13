@@ -2579,6 +2579,114 @@
         }
       }
     },
+    "/insights/expected-today": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species expected around today's date",
+        "description": "Species this station heard within three days either side of today's date in any of the last ten years, the most regular first. A window that crosses New Year counts once. Same fields as birdnet-go's endpoint of the same name.",
+        "operationId": "insightsExpectedToday",
+        "responses": {
+          "200": {
+            "description": "The expected species, today's day of the year, and how many of the ten years have data in the window.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "years_seen": {
+                            "type": "integer"
+                          },
+                          "last_seen_date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "thumbnail_url": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "day_of_year": {
+                      "type": "integer"
+                    },
+                    "years_of_data": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/insights/expected-today/regional": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species reported nearby that this station does not usually hear now",
+        "description": "The station's eBird snapshot of recent nearby reports, less the species from /insights/expected-today. available is false when there is no snapshot (no eBird key or location, or not fetched yet). Unlike birdnet-go, a failed read of the station's own history is a 500 rather than the unfiltered eBird list.",
+        "operationId": "insightsExpectedTodayRegional",
+        "responses": {
+          "200": {
+            "description": "The regional species, and whether eBird data was available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "scientific_name": {
+                            "type": "string"
+                          },
+                          "common_name": {
+                            "type": "string"
+                          },
+                          "observation_date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "location_name": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "available": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The station's own detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [

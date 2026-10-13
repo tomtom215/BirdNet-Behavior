@@ -22,12 +22,19 @@ const DAWN_MAX_PERIOD_DAYS: u32 = 365;
 const DAWN_MIN_DAYS: u32 = 3;
 const MIGRATION_RECENT_DAYS: u32 = 14;
 const MIGRATION_MIN_TOTAL: u32 = 5;
+const EXPECTED_WINDOW_DAYS: u32 = 3;
+const EXPECTED_MAX_YEARS: u32 = 10;
 
 /// The insight routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/insights/dawn-chorus", get(dawn_chorus))
         .route("/insights/migration", get(migration))
+        .route("/insights/expected-today", get(expected_today))
+        .route(
+            "/insights/expected-today/regional",
+            get(expected_today_regional),
+        )
 }
 
 /// Query parameters for the dawn chorus. Strings, so that a value that is not
@@ -159,9 +166,112 @@ async fn migration(State(state): State<AppState>) -> Response {
     }
 }
 
+/// A binomial written the usual way, genus capitalised: the eBird snapshot
+/// stores names lowercased, for matching.
+fn binomial_case(name: &str) -> String {
+    let mut chars = name.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// Day of the year (1-based) of a `YYYY-MM-DD` date.
+fn day_of_year(date: &str) -> Option<i64> {
+    use birdnet_core::civil::days_from_civil;
+    let mut parts = date.split('-').map(str::parse::<u32>);
+    let (Some(Ok(y)), Some(Ok(m)), Some(Ok(d))) = (parts.next(), parts.next(), parts.next()) else {
+        return None;
+    };
+    Some(days_from_civil(y, m, d) - days_from_civil(y, 1, 1) + 1)
+}
+
+/// The species this station has heard around today's date in each of the
+/// last ten years, and how many of those years it has data for.
+fn read_expected(
+    state: &AppState,
+    today: &str,
+) -> Result<(Vec<birdnet_db::sqlite::ExpectedSpecies>, u32), birdnet_db::sqlite::connection::DbError>
+{
+    state.with_db(|conn| {
+        birdnet_db::sqlite::expected_today(conn, today, EXPECTED_WINDOW_DAYS, EXPECTED_MAX_YEARS)
+    })
+}
+
+/// `GET /api/v2/insights/expected-today` — species heard within three days
+/// of today's date in any of the last ten years, the most regular first.
+async fn expected_today(State(state): State<AppState>) -> Response {
+    let today = crate::routes::pages::today_date_string();
+    let doy = day_of_year(&today);
+    let result = state.run_blocking(move |s| read_expected(s, &today)).await;
+    match result {
+        Ok((species, years)) => Json(json!({
+            "species": species.iter().map(|e| json!({
+                "scientific_name": e.sci_name,
+                "common_name": e.com_name,
+                "years_seen": e.years_seen,
+                "last_seen_date": e.last_seen_date,
+                "thumbnail_url": thumbnail_url(&e.sci_name),
+            })).collect::<Vec<_>>(),
+            "day_of_year": doy,
+            "years_of_data": years,
+        }))
+        .into_response(),
+        Err(e) => read_failed("expected species", &e),
+    }
+}
+
+/// `GET /api/v2/insights/expected-today/regional` — what eBird observers have
+/// reported near the station that it does not normally hear at this time of
+/// year. `available` is false when there is no eBird snapshot (no key, no
+/// location, or not fetched yet).
+///
+/// Unlike upstream, a failed read of the station's own history is an error
+/// rather than the unfiltered eBird list: that list would include the
+/// station's regulars, presented as birds it does not hear.
+async fn expected_today_regional(State(state): State<AppState>) -> Response {
+    let Some(snapshot) = state.nearby() else {
+        return Json(json!({ "species": [], "available": false })).into_response();
+    };
+    let today = crate::routes::pages::today_date_string();
+    let result = state.run_blocking(move |s| read_expected(s, &today)).await;
+    let local = match result {
+        Ok((species, _)) => species,
+        Err(e) => return read_failed("station's own expected species", &e),
+    };
+    // eBird's spelling, for each local species eBird also reported: the same
+    // matching the rest of the station uses (`Snapshot::reported`).
+    let heard_here: std::collections::HashSet<&str> = local
+        .iter()
+        .filter_map(|e| snapshot.reported(&e.sci_name))
+        .map(|n| n.sci_name.as_str())
+        .collect();
+    let species: Vec<_> = snapshot
+        .species
+        .iter()
+        .filter(|n| !heard_here.contains(n.sci_name.as_str()))
+        .map(|n| {
+            json!({
+                "scientific_name": binomial_case(&n.sci_name),
+                "common_name": n.com_name,
+                "observation_date": n.last_seen,
+                "location_name": n.locality,
+            })
+        })
+        .collect();
+    Json(json!({ "species": species, "available": true })).into_response()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::bounded_days;
+    use super::{bounded_days, day_of_year};
+
+    #[test]
+    fn day_of_year_counts_from_the_first_of_january() {
+        assert_eq!(day_of_year("2026-01-01"), Some(1));
+        assert_eq!(day_of_year("2026-10-13"), Some(286));
+        assert_eq!(day_of_year("2024-12-31"), Some(366));
+        assert_eq!(day_of_year("not-a-date"), None);
+    }
 
     /// Upstream's rule: absent takes the default, anything but a positive
     /// integer is refused, and the result is clamped — `min_days` to the

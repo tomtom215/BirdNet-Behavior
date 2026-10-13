@@ -695,8 +695,8 @@ takes a date range.
 |---|---|---|
 | `/insights/dawn-chorus` | Each species' typical first song of the morning | **SHIPPED** — `GET /api/v2/insights/dawn-chorus` |
 | `/insights/migration` | Recent first-ever arrivals; species gone quiet | **SHIPPED** — `GET /api/v2/insights/migration`. Gone-quiet had no counterpart; arrivals existed only as the life list's six newest. |
-| `/insights/expected-today/regional` | eBird species seen nearby, not heard here | GAP — the eBird snapshot is already in memory (`state.nearby()`); only the view is missing. |
-| `/insights/expected-today` | Species heard within ±3 days of today in past years | PARTIAL — the Migration tab counts species due in the next 42 days from one prior year; there is no list. |
+| `/insights/expected-today/regional` | eBird species seen nearby, not heard here | **SHIPPED** — `GET /api/v2/insights/expected-today/regional`, from the snapshot already in memory. One deliberate difference: a failed read of the station's own history is a `500`, not the unfiltered eBird list upstream falls back to. |
+| `/insights/expected-today` | Species heard within ±3 days of today in past years | **SHIPPED** — `GET /api/v2/insights/expected-today`: ten earlier years, one window each, so a window across New Year counts once. (The Migration tab's 42-day "still expected" count answers a different question and stays.) |
 | `/dashboard/kpis` | Lifetime species, today, best day, detection streak | PARTIAL — no streak, and no single endpoint. |
 | `/species/detections/new` | Species first seen in a date range, with counts | PARTIAL — the six most recent firsts; no range or paging. |
 | `/species/summary` | Per-species count, first, last, mean and max confidence over a range | PARTIAL — all-time count and mean only. |
