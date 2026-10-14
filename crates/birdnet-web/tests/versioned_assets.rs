@@ -109,7 +109,9 @@ fn no_stylesheet_is_linked_without_a_version_query() {
 /// fix for Reduced motion and High contrast being lost on the admin pages, and
 /// every browser that had visited before the upgrade kept the old guard for a
 /// year: the admin shell, the log viewer and onboarding loaded it from a bare
-/// URL. `htmx.min.js` was bare in all four places that load it.
+/// URL. `htmx.min.js` was bare in all four places that load it. The admin shell
+/// and log viewer now render inside the shared layout, so those two copies are
+/// gone and the layout carries the tag for both.
 const IMMUTABLE_SCRIPTS: &[&str] = &[
     "/static/htmx.min.js",
     "/static/theme-guard.js",
@@ -142,10 +144,11 @@ fn no_immutable_script_is_loaded_without_a_version_query() {
             }
         }
     }
-    // Counterpart: the scan must be finding the tags — layout, admin shell, log
-    // viewer, kiosk and onboarding load at least six between them.
+    // Counterpart: the scan must be finding the tags — the layout (htmx,
+    // clip-player), the kiosk (htmx) and onboarding (theme-guard) load four
+    // between them. Dropping to three means one of those stopped being scanned.
     assert!(
-        seen >= 6,
+        seen >= 4,
         "found only {seen} immutable <script> tags; the scan is blind"
     );
     offenders.sort();

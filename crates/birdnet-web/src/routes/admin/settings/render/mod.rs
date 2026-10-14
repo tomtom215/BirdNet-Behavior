@@ -591,9 +591,23 @@ mod tests {
             "Settings tab should be active in the shell nav"
         );
         assert!(page.contains("Admin Settings"), "missing page heading");
-        // The shell wraps the body in `.admin-wrap` and emits a breadcrumb for
-        // non-overview pages — proof we render through it, not a bespoke page.
-        assert!(page.contains("admin-wrap"), "missing shared shell wrapper");
+        // The shell is the site's own layout — header, Station tab lit, tab bar —
+        // with a breadcrumb for non-overview pages: proof we render through it,
+        // not a bespoke page. (It used to be a separate `.admin-wrap` document
+        // with none of the site chrome.)
+        assert!(
+            page.contains(r#"class="topnav""#),
+            "missing the site header"
+        );
+        assert!(
+            page.contains(r#"data-home="station""#),
+            "an admin page is a page of the Station home"
+        );
+        assert!(page.contains("bnb-tabbar"), "missing the phone tab bar");
         assert!(page.contains("bnb-crumbs"), "missing shell breadcrumb");
+        assert!(
+            !page.contains("admin-wrap"),
+            "the standalone wrapper is gone"
+        );
     }
 }

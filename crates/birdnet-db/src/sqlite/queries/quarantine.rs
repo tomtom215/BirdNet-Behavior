@@ -81,8 +81,8 @@ impl QuarantineReason {
     #[must_use]
     pub const fn label(&self) -> &'static str {
         match self {
-            Self::BelowSfThresh => "Below SF threshold",
-            Self::LowConfidence => "Below species threshold",
+            Self::BelowSfThresh => "Unlikely here this time of year",
+            Self::LowConfidence => "Below the bar set for this species",
             Self::ImplausibleHour => "Night-time, not a night bird",
             Self::ImplausibleClock => "Clock not set when recorded",
             Self::Manual => "Manually flagged",

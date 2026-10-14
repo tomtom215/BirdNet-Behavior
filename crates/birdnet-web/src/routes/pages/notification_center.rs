@@ -31,7 +31,7 @@ async fn notification_page(headers: HeaderMap) -> Html<String> {
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::AdminNotifications),
     );
-    render_page_for_request("Notifications", &body, "notifications", &headers)
+    render_page_for_request("Notifications", &body, "station", &headers)
 }
 
 #[derive(Deserialize)]

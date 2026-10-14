@@ -48,6 +48,8 @@ const BASE_PATH_JS: &[u8] = include_bytes!("../../static/base-path.js");
 /// Holds `every` polls back while the tab is hidden (M13).
 const POLL_VISIBILITY_JS: &[u8] = include_bytes!("../../static/poll-visibility.js");
 const CLIP_PLAYER_JS: &[u8] = include_bytes!("../../static/clip-player.js");
+/// Keeps SVG chart labels legible at any scale (see the script's header).
+const CHART_TEXT_JS: &[u8] = include_bytes!("../../static/chart-text.js");
 
 /// Type-to-filter for the admin settings page (embedded at compile time).
 const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
@@ -156,6 +158,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/poll-visibility.js", get(poll_visibility_js))
         .route("/static/base-path.js", get(base_path_js))
         .route("/static/clip-player.js", get(clip_player_js))
+        .route("/static/chart-text.js", get(chart_text_js))
         .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/search-select.js", get(search_select_js))
         .route("/static/css/app.css", get(app_css))
@@ -278,6 +281,19 @@ async fn poll_visibility_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         POLL_VISIBILITY_JS,
+    )
+}
+
+async fn chart_text_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            // Same policy as the other app scripts: it ships with the binary and
+            // is requested with `?v=<version>`, so a day is safe.
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        CHART_TEXT_JS,
     )
 }
 
@@ -417,6 +433,24 @@ mod tests {
         assert!(css.contains("--moss"));
         assert!(css.contains("@font-face"));
         assert!(css.contains("Inter Tight"));
+    }
+
+    #[test]
+    fn chart_text_fitter_embedded_and_safe() {
+        let js = std::str::from_utf8(CHART_TEXT_JS).unwrap();
+        // The floor the legibility gate (tools/visual-qa/legibility.mjs) holds
+        // the page to is below this, with room for rounding.
+        assert!(js.contains("var FLOOR = 9.5;"));
+        // Opt-out is documented by the script and honoured.
+        assert!(js.contains("data-no-text-fit"));
+        // Chart text is data (species names); it is only ever moved with
+        // textContent, never parsed as markup.
+        assert!(!js.contains(".innerHTML"));
+        assert!(!js.contains("insertAdjacentHTML"));
+        // It reads sizes through the CSSOM, which the CSP allows; it must not
+        // write a `style` attribute (setAttribute / cssText), which it forbids.
+        assert!(!js.contains("setAttribute(\"style\""));
+        assert!(!js.contains("cssText"));
     }
 
     #[test]

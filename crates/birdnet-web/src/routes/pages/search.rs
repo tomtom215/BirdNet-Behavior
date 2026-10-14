@@ -254,7 +254,7 @@ async fn search_page(
     .unwrap_or_default();
 
     let content = render_page(&params, &sources);
-    super::render_page_for_request("Search detections", &content, "search", &headers)
+    super::render_page_for_request("Search detections", &content, "species", &headers)
 }
 
 /// HTMX partial: the matching rows, a count, and a "load more" control.

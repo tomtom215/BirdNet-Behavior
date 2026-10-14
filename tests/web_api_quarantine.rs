@@ -202,7 +202,7 @@ async fn quarantine_list_shows_pending_entries() {
 
     assert!(html.contains("Eurasian Hoopoe"));
     assert!(html.contains("42%"));
-    assert!(html.contains("Below species threshold"));
+    assert!(html.contains("Below the bar set for this species"));
     assert!(html.contains("Approve"));
     assert!(html.contains("Reject"));
 }

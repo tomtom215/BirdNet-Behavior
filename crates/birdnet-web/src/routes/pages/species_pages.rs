@@ -916,9 +916,21 @@ async fn species_info_partial(
     }
 
     if html.is_empty() {
+        // Two different reasons, and they used to share one sentence that told a
+        // station with the cache already on to "enable" it. The reader is a
+        // person with a garden, so the first thing said is what is going on; the
+        // flag, for whoever installed the station, comes second and only when it
+        // is the thing that is missing.
+        let why = if state.image_cache().is_some() {
+            "A photo and a short description appear here once the station has fetched \
+             them from Wikipedia, which needs an internet connection."
+        } else {
+            "Photos and descriptions are switched off on this station. For whoever set it \
+             up: start it with <code>--image-cache-dir</code> to turn them on."
+        };
         html = format!(
-            r#"<p class="spp-muted">No additional info for <em>{}</em>.</p>
-<p class="spp-muted-sm">Enable <code>--image-cache-dir</code> to fetch species images.</p>"#,
+            r#"<p class="spp-muted">No additional info for <em>{}</em> yet.</p>
+<p class="spp-muted-sm">{why}</p>"#,
             escape_html(&name),
         );
     }
@@ -992,13 +1004,14 @@ fn taxonomy_line(state: &AppState, scientific_name: &str) -> String {
 /// (`https://ebird.org/species/zothaw`), not on the scientific name: the link
 /// this replaced put the name in the path and every one of them 404'd. The
 /// code comes from the geomodel's label file, so a station without that file
-/// has none — and then this says so, with the flag that supplies it, rather
-/// than linking to a page that is not there.
+/// has none — and then this says so, in words for the reader with the flag that
+/// supplies it after, for whoever installed the station, rather than linking to a
+/// page that is not there.
 fn ebird_link(code: Option<&str>, shown_name: &str) -> String {
     code.map_or_else(
         || {
             format!(
-                r#"<p class="spp-muted-sm">No eBird link: this station has no eBird species code for <em>{}</em>. The geomodel's label file supplies the codes — see <code>--metadata-labels</code>.</p>"#,
+                r#"<p class="spp-muted-sm">No eBird link for <em>{}</em>: this station was set up without the range model that carries eBird's species codes. For whoever set it up: <code>--metadata-labels</code> supplies them.</p>"#,
                 escape_html(shown_name),
             )
         },

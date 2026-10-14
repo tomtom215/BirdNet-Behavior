@@ -10,7 +10,7 @@
 //! Population: every non-disabled row from `audio_sources`, preceded by a
 //! `— default audio source —` entry that maps to `/stream` with no
 //! `source_id` (resolving to the first enabled row). A station with no
-//! `audio_sources` rows gets a single disabled "no audio sources configured"
+//! `audio_sources` rows gets a single disabled "no source yet"
 //! placeholder instead.
 
 use birdnet_db::audio_sources::{AudioSource, SourceKind};
@@ -39,15 +39,14 @@ pub(super) fn source_options_for(sources: &[AudioSource], selected: Option<&str>
 /// configured `audio_sources` row, the first option is the default-source
 /// path (empty value → first enabled row) and the rows follow, labelled by
 /// `label` (or `device_id` when no label). With no rows, a single disabled
-/// "no audio sources configured" placeholder is rendered instead.
+/// "no source yet" placeholder is rendered instead (short on purpose: it sits in
+/// a narrow card, where the longer wording was clipped to "— no audio sources con").
 fn render_options(sources: &[AudioSource], selected: Option<&str>) -> String {
     let mut out = String::new();
     if sources.is_empty() {
         // No rows → /stream has no source to resolve (503). Show a disabled
         // placeholder rather than a "default" option that can't play.
-        out.push_str(
-            r#"<option value="" disabled selected>— no audio sources configured —</option>"#,
-        );
+        out.push_str(r#"<option value="" disabled selected>— no source yet —</option>"#);
         return out;
     }
     // Empty value maps to "no source_id" → the first enabled row in /stream.
@@ -130,7 +129,7 @@ mod tests {
     fn render_source_options_empty_yields_no_sources_notice() {
         let html = render_source_options(&[]);
         // No configured rows → a disabled placeholder, not a playable default.
-        assert!(html.contains("no audio sources configured"));
+        assert!(html.contains("no source yet"));
         assert!(html.contains("disabled"));
         assert!(!html.contains("— default audio source —"));
     }

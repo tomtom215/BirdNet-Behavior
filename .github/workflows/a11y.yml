@@ -98,6 +98,12 @@ jobs:
       - name: Interaction gate (controls do not undo their own work)
         working-directory: tools/visual-qa
         run: node interactions.mjs
+      - name: Legibility gate (chart labels stay readable on a phone)
+        working-directory: tools/visual-qa
+        # Measures the on-screen size of every SVG label on every route at
+        # 1440 and 390 px. Labels authored at 8 px rendered at 2.7-5 px on a
+        # phone while axe, the sweep and every screenshot called the pages clean.
+        run: node legibility.mjs
       - name: Base-path gate (served under a prefix, nothing leaves it)
         working-directory: tools/visual-qa
         run: |
