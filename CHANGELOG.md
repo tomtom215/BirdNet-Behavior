@@ -306,6 +306,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footer line below 360 px wide, which are tightened to fit a 320 px screen,
   stay under 10 px. Chart text is sized separately, above.
 
+- **CodeQL, OSV-Scanner and OpenSSF Scorecard workflows.** `codeql.yml` runs
+  CodeQL's `security-extended` queries over Rust, the workflows, the JavaScript
+  the interface serves and the Python gate scripts; `osv.yml` scans `Cargo.lock`
+  and the browser-QA lockfile against OSV and fails on a finding; `scorecard.yml`
+  publishes the repository's Scorecard. All three are adapted from the
+  maintainer's a2a-rust workflows, with action refs verified against the
+  upstream tags. Today OSV reports no record for any of the 554 registry
+  packages in `Cargo.lock` (queried through its API) and `npm audit` finds
+  nothing in the QA lockfile. None has run on GitHub.
+
 - **Eleven GitHub Actions moved to their current releases**, among them
   `actions/checkout` 6.0.3 → 7.0.1, `actions/upload-artifact` 7.0.2,
   `actions/download-artifact` 8.0.2, `docker/build-push-action` 7.4.0,

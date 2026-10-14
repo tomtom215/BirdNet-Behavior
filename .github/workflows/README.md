@@ -11,6 +11,9 @@ request.
 | `ci.yml` | every push and pull request | formatting, clippy (pedantic + nursery), tests on x86_64 and native aarch64, the real-model inference test, rustdoc, a debug build with all features, the MSRV check, the aarch64 cross-check |
 | `supply-chain.yml` | every push and pull request, and Mondays | cargo-deny, cargo-audit, unused dependencies, third-party licence notices, spelling, shellcheck, the hermetic installer tests |
 | `coverage.yml` | every push and pull request | line coverage with cargo-llvm-cov; informational |
+| `codeql.yml` | every push and pull request, and Tuesdays | CodeQL (`security-extended`) over Rust, the workflows themselves, the JavaScript the UI serves, and the Python gate scripts; results in the Security tab |
+| `osv.yml` | every push and pull request, and daily | OSV-Scanner over `Cargo.lock` and the browser-QA lockfile; any finding fails the job |
+| `scorecard.yml` | pushes, branch-protection changes, and Mondays | the OpenSSF Scorecard of the repository, published and uploaded to code scanning; a dashboard, not a gate |
 | `a11y.yml` | pull requests touching `crates/birdnet-web/**`, `tools/visual-qa/**`, or this file | axe accessibility, the interaction gate, the chart-label legibility gate, the base-path gate, the visual-QA sweep, in a real browser at desktop and phone size |
 | `docker.yml` | pull requests touching `Dockerfile`, `.dockerignore`, `docker/**`; pushes except ones that touch only `docs/**`, Markdown, `ci.yml` or `release.yml`; version tags | the multi-arch image, booted with networking off to assert the extensions load; signed on release |
 | `docs.yml` | pull requests touching `docs/book/**`, the book theme or its scripts; pushes to `main`; version tags | builds the versioned manual, link-checks every tree, deploys it to GitHub Pages |
@@ -41,6 +44,9 @@ on **every** pull request, with their names exactly as GitHub shows them.
 - `Spelling (typos)`
 - `shellcheck (bootstrap scripts)`
 - `installer unit tests`
+
+`codeql.yml` and `osv.yml` also run on every pull request and could join the
+list once they have run clean on `main`; they are new and have not been run.
 
 Two things about this list:
 

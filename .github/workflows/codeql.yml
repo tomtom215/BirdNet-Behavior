@@ -1,0 +1,70 @@
+# CodeQL static analysis, uploaded to code scanning (Security -> Code scanning).
+#
+# Four languages, each for its own reason:
+#
+# * `rust` — the workspace. `build-mode: none` extracts from source without
+#   compiling, which GitHub supports for Rust, so this does not repeat the
+#   twenty-minute DuckDB build.
+# * `actions` — this repository's own workflows. They run on pull requests, hold
+#   a release-signing identity (`release.yml`), and interpolate event data into
+#   shell; workflow injection is the attack on that, and CodeQL's `actions`
+#   queries look for it.
+# * `javascript-typescript` — the scripts the web UI serves (`crates/birdnet-web/
+#   static/*.js`), which run in every operator's browser, and the QA tooling.
+# * `python` — the gate scripts under `scripts/`, which CI runs against a pull
+#   request's own content.
+#
+# Findings appear in the Security tab. Whether a new alert blocks a merge is a
+# branch-protection setting (code scanning merge protection), not something this
+# file can impose; the workflow itself fails only when analysis cannot run.
+
+name: CodeQL
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  schedule:
+    # Tuesdays, off the hour.
+    - cron: "13 4 * * 2"
+  workflow_dispatch:
+
+# A scheduled or dispatched run has its own group and is not cancelled.
+concurrency:
+  group: "${{ github.workflow }}-${{ (github.event_name == 'push' || github.event_name == 'pull_request') && github.ref || github.event_name }}"
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, actions, javascript-typescript, python]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}

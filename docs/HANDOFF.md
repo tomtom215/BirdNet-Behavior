@@ -79,8 +79,11 @@ Not done, in the order they seem to matter:
   [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md); species-name translation
   (`DATABASE_LANG`) was left alone because its data licence and its effect on
   species identity need a decision first.
-- **Workflows that need GitHub to try them:** CodeQL, OpenSSF Scorecard, an
-  OSV/daily advisory scan, running the fuzz targets in CI.
+- **Workflows that have never run:** `codeql.yml`, `osv.yml` and `scorecard.yml`
+  were adapted from a2a-rust's, which run, and checked with actionlint; the first
+  run on GitHub is their test. Scorecard needs the repository to be public (it
+  is) and will score low on branch protection and vulnerability reporting until
+  section 1 is done. The two fuzz targets under `fuzz/` are still not run in CI.
 - **Pins that are still floating:** the `ubuntu:24.04` container that
   `install-smoke.yml` starts with `docker run` is a tag (Dependabot does not read
   `docker run` arguments, so a digest there would go stale unseen);
