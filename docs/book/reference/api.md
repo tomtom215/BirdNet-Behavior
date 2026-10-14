@@ -284,6 +284,38 @@ const ws = new WebSocket("ws://localhost:8502/api/v2/ws/detections");
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
+## Live audio
+
+`GET /stream` is the live audio as MP3 (`?source_id=`, `?freq_shift_hz=`),
+outside `/api/v2`. The HLS variant uses birdnet-go's routes and fields, so a
+client written for either station reads both:
+
+| Request | Answer |
+|---|---|
+| `POST /api/v2/streams/hls/{source_id}/start` | `{status, source, playlist_url, active_clients, playlist_ready, freq_shift_hz, stream_token}` once the playlist lists two segments, or with `status: "starting"` after 20 s |
+| `GET /api/v2/streams/hls/t/{token}/playlist.m3u8` | the live playlist; its segments are `…/t/{token}/seg<n>.ts` |
+| `POST /api/v2/streams/hls/heartbeat` | `{"status": "ok"}`; with `?disconnect=true` the session leaves |
+| `POST /api/v2/streams/hls/{source_id}/stop` | the session in the body leaves; the stream ends with its last |
+| `GET /api/v2/streams/hls/status` | `{count, streams}`, without tokens |
+
+`source_id` is a source's id or `default`. Start, stop and heartbeat take an
+optional `{"session_id": "…"}` body naming the caller — a value of its own
+choosing, up to 64 characters — and `start` and `stop` take
+`?freq_shift_hz=` as `/stream` does; each shift is a stream of its own. The
+playlist URL is relative to the station's root, so a station under a base
+path serves it beneath that path.
+
+```sh
+url=$(curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"session_id":"cli"}' \
+  http://localhost:8502/api/v2/streams/hls/default/start | jq -r .playlist_url)
+ffplay "http://localhost:8502$url"
+```
+
+The errors are `/stream`'s: `404` for an unknown source, and `503` when no
+source is configured, the source is not recording, all four live-stream slots
+are in use, or `ffmpeg` is not installed.
+
 ## Errors
 
 An unmatched path under `/api/` returns a machine-readable JSON `404` (not the

@@ -357,14 +357,14 @@ within each group by how much they change what a station can do.
 | **Why it matters** | Less about the home station and more about the shared one — a reserve, a school, a research group where several people need access, one of them leaves, and there is exactly one shared password written on the wall. |
 | **Plan** | Authorization-code + PKCE against a configured OIDC discovery document, mapping the `sub`/`email` claim onto the existing `users` table so sessions, roles and the audit log are unchanged. Named providers are then just pre-filled issuer URLs. Basic auth stays as the fallback for a headless LAN box. |
 
-#### G‑21 · HLS live streaming — GAP
+#### G‑21 · HLS live streaming — SHIPPED (upstream's API; fixed encoder settings)
 
 | | |
 |---|---|
-| **Upstream** | `GET /api/v2/streams/hls/t/:token/playlist.m3u8` with per-session tokens, `LiveStreamSettings` (bitrate, sample rate, segment length). |
-| **Ours** | `GET /api/v2/stream` — MP3 over HTTP chunked transfer (`routes/livestream.rs`), which is a genuine simplification over upstream BirdNET-Pi's Icecast. |
-| **Why it matters** | Chunked MP3 has no recovery. On mobile, a network handover ends the stream and the tab goes silent with no indication; there is no seeking and no buffer target. HLS is what mobile browsers are built around. |
-| **Plan** | Keep the MP3 endpoint (it is simple and it works on a LAN) and add an HLS variant behind a token, sharing the encode stage. This depends on the same re-encode seam as N‑2, so the two should land together. |
+| **Upstream** | `POST /api/v2/streams/hls/:sourceID/start`, `…/stop`, `/heartbeat`, `GET /status` and `GET /streams/hls/t/:token/playlist.m3u8`, with per-session tokens and `LiveStreamSettings` (bitrate 16–320 kbit/s, default 128; segment length 1–30 s, default 2). Since its native-HLS change it encodes AAC in process at a pinned 48 kHz and serves from memory (`internal/api/v2/audio/audio_hls.go`, `audio_hls_native.go` at 780ce51). |
+| **Ours** | The same five routes and response fields (`routes/hls.rs`), beside the MP3 stream at `/stream`. One `ffmpeg` per source and pitch shift, shared by everyone listening and counted against `/stream`'s four slots; AAC at 128 kbit/s and 48 kHz, 2-second segments, a six-segment playlist, ready at two segments or reported `starting` after 20 s — upstream's defaults. A stream ends when its last session leaves, when nothing has fetched it for a minute, or when `ffmpeg` exits, and its segments are deleted; a directory left by a process that died mid-stream, which nothing writes again, is removed by the next start once it is five minutes old. The Live view plays HLS where the browser declares native support (Safari, iOS, Android Chrome) and falls back to MP3 elsewhere, or when a start is refused. |
+| **Differences** | Bitrate and segment length are fixed, not settings. Segments are files under the service's temporary directory (a private `/tmp` under the installer's unit), not memory. Start and stop are open wherever `/stream` is, rather than behind sign-in: a stop ends only the caller's own session, and on a private station the routes follow the `live_audio` carve-out. A pitch shift is a stream of its own (upstream has none). |
+| **Verified** | `tests/hls_live_audio.rs` drives the real router and a real `ffmpeg` from a capture tap: the playlist is live (no end marker), its segments are whole MPEG‑TS packets, a second listener joins the same encoder, one leaving keeps it, the last stopping ends it and deletes its directory; tokens, traversal and malformed heartbeats are refused. The watchdog is tested against a real child process for idleness, exit and the counterpart (a fetched stream is kept). `interactions.mjs` checks the player takes the HLS path when the browser claims it, leaves on stop, and falls back to `/stream`. Not verified: playback in Safari or on a phone — no such browser was available — and behaviour across a real network handover. |
 
 #### G‑22 · Dashboard layout customisation — SHIPPED (order and visibility; not widths, banner or colour schemes)
 
@@ -597,7 +597,7 @@ against the code it was written for, per `CLAUDE.md`.
 | 26 | Multi-model classifier stack | G‑10 | **Stages 1–5 shipped.** Perch v2 exposed two defects (class head by position, sample rate derived not declared), both fixed against the real model; the catalogue and verified installer ship. Classifiers with different windows now run together — chunk cut to the longest, stepped by the shortest, so none loses coverage — and agreement means both judged audio from the same chunk start. Only a differing sample rate is still refused. Stage 6 (bats) follows |
 | 27 | Inference backends (OpenVINO / XNNPACK) | G‑11 | Gated on Stage 1 of #26 |
 | 28 | OAuth2 / OIDC | G‑20 | One generic OIDC implementation; named providers are configuration |
-| 29 | HLS live streaming | G‑21 | Shares the encode seam with #10 |
+| 29 | ~~HLS live streaming~~ — **shipped** (upstream's API; fixed encoder settings). See G‑21. | G‑21 | Shares the encode seam with #10 |
 | 30 | ~~Dashboard layout customisation~~ — **shipped** (order and visibility). See G‑22. | G‑22 | The HTMX partials are already the component vocabulary |
 | 31 | Extended capture | G‑6 | Depends on #6 |
 | 32 | ~~Additional stream protocols~~ — **shipped** (HTTP/Icecast, HLS, RTMP, UDP, SRT; `rtp://` declined). See G‑7. | G‑7 | One kind, the URL decides the protocol |

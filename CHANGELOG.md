@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live audio as HLS, so a phone keeps playing through a network
+  handover.** `POST /api/v2/streams/hls/{source_id}/start` answers with a
+  token and a playlist of two-second AAC segments, with `stop`,
+  `heartbeat` and `status` beside it — birdnet-go's routes and fields. One
+  `ffmpeg` per source and pitch shift serves every listener, within the
+  four live-stream slots `/stream` uses, and a stream ends with its last
+  listener or a minute after its last fetch. The Live view uses it where
+  the browser plays HLS natively (Safari, iOS, Android Chrome) and keeps
+  MP3 elsewhere. A private station's `live_audio` carve-out opens it.
+
 - **A classifier that fails every window is reported.** After ten failed
   analysis windows in a row — an error, or scores that are not numbers — a
   classifier is *failing* until it answers one: a station-health alert

@@ -57,6 +57,10 @@
     {
       "name": "control",
       "description": "Station lifecycle. Requires `BNB_API_TOKEN`."
+    },
+    {
+      "name": "live",
+      "description": "Live audio from the station's sources, as HLS. The MP3 stream is `GET /stream`, outside `/api/v2`."
     }
   ],
   "paths": {
@@ -4973,6 +4977,409 @@
           },
           "404": {
             "description": "No comment has that id."
+          }
+        }
+      }
+    },
+    "/streams/hls/{source_id}/start": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Join or start a source's HLS stream",
+        "description": "Joins the running stream for this source and shift, or starts one: one ffmpeg per source and shift, shared by every listener and counted against the same four stream slots as `/stream`. Answers once the playlist lists two 2-second segments, or after 20 s with `status: starting`. Same path and fields as birdnet-go's endpoint, which requires sign-in; here it is open wherever `/stream` is, and on a private station only with the `live_audio` carve-out.",
+        "operationId": "hlsStart",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "description": "An audio source's id, or `default` for the station's default source.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "freq_shift_hz",
+            "in": "query",
+            "required": false,
+            "description": "Pitch shift in Hz, clamped to ±24000; each shift is a stream of its own. Not in birdnet-go's API.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "The caller's own id for this tab or client; counts it in `active_clients` and lets a stop end only its own session."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "source",
+                    "playlist_url",
+                    "active_clients",
+                    "playlist_ready",
+                    "freq_shift_hz"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "`ready`, `starting` (the playlist had fewer than two segments after 20 s), or `active` in a status listing."
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "The source id as requested."
+                    },
+                    "playlist_url": {
+                      "type": "string",
+                      "description": "The playlist, relative to the station's root; a station under a base path serves it beneath that path."
+                    },
+                    "active_clients": {
+                      "type": "integer",
+                      "description": "Sessions seen in the last minute."
+                    },
+                    "playlist_ready": {
+                      "type": "boolean"
+                    },
+                    "freq_shift_hz": {
+                      "type": "integer"
+                    },
+                    "stream_token": {
+                      "type": "string",
+                      "description": "128 random bits in hex; the only way to the stream's files. Absent from the status listing."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No source configured, the source is not recording, every stream slot is in use, ffmpeg is not installed, or the stream ended before it started.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The stream's directory could not be created.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/{source_id}/stop": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Leave a source's HLS stream",
+        "description": "Removes the session named in the body from the stream for this source and shift; the stream ends when no session is left. A request without a `session_id` changes nothing, so one listener cannot end another's stream.",
+        "operationId": "hlsStop",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "description": "An audio source's id, or `default` for the station's default source.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "freq_shift_hz",
+            "in": "query",
+            "required": false,
+            "description": "Pitch shift in Hz, clamped to ±24000; each shift is a stream of its own. Not in birdnet-go's API.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "The caller's own id for this tab or client; counts it in `active_clients` and lets a stop end only its own session."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Always `{\"status\": \"stopped\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "stopped"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/heartbeat": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Keep an HLS session alive, or leave",
+        "description": "Marks the session as listening. With `disconnect=true` or `status=disconnect` the session leaves instead, and a stream with no session left ends; a disconnect without a `session_id` ends a stream that has no other session. A token that names no stream is answered `ok`, as birdnet-go answers it.",
+        "operationId": "hlsHeartbeat",
+        "parameters": [
+          {
+            "name": "disconnect",
+            "in": "query",
+            "required": false,
+            "description": "`true` to leave.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "`disconnect` to leave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "stream_token"
+                ],
+                "properties": {
+                  "stream_token": {
+                    "type": "string"
+                  },
+                  "session_id": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`{\"status\": \"ok\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not a heartbeat.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/status": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Running HLS streams",
+        "description": "Every running stream, without its token.",
+        "operationId": "hlsStatus",
+        "responses": {
+          "200": {
+            "description": "The streams.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "count",
+                    "streams"
+                  ],
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "streams": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "status",
+                          "source",
+                          "playlist_url",
+                          "active_clients",
+                          "playlist_ready",
+                          "freq_shift_hz"
+                        ],
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "description": "`ready`, `starting` (the playlist had fewer than two segments after 20 s), or `active` in a status listing."
+                          },
+                          "source": {
+                            "type": "string",
+                            "description": "The source id as requested."
+                          },
+                          "playlist_url": {
+                            "type": "string",
+                            "description": "The playlist, relative to the station's root; a station under a base path serves it beneath that path."
+                          },
+                          "active_clients": {
+                            "type": "integer",
+                            "description": "Sessions seen in the last minute."
+                          },
+                          "playlist_ready": {
+                            "type": "boolean"
+                          },
+                          "freq_shift_hz": {
+                            "type": "integer"
+                          },
+                          "stream_token": {
+                            "type": "string",
+                            "description": "128 random bits in hex; the only way to the stream's files. Absent from the status listing."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/t/{token}/{file}": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "An HLS stream's playlist or segment",
+        "description": "`playlist.m3u8` (live: six segments, no end marker, not cacheable) or a segment it names, `seg<digits>.ts` (MPEG-TS, AAC at 128 kbit/s, 48 kHz mono). Any request keeps the stream running; a minute without one ends it.",
+        "operationId": "hlsContent",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "description": "The `stream_token` a start returned.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "description": "`playlist.m3u8` or a segment name from it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The playlist or the segment.",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "video/mp2t": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No running stream has this token, or the file is not one it serves.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }

@@ -145,7 +145,7 @@ pub fn stream_router() -> Router<AppState> {
 /// ±24 kHz is far beyond anything a listener wants (it inverts the whole
 /// audible band) and still leaves every useful setting reachable, so clamping
 /// here costs nothing an operator would notice.
-const MAX_STREAM_SHIFT_HZ: i32 = 24_000;
+pub(super) const MAX_STREAM_SHIFT_HZ: i32 = 24_000;
 
 /// Build the ffmpeg filter string for an optional frequency shift.
 ///
@@ -251,171 +251,38 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 /// empty, `/stream` returns `503` until an operator adds a row through
 /// `/admin/audio` — the new row then takes over without a restart.
 async fn livestream(State(state): State<AppState>, Query(params): Query<StreamParams>) -> Response {
-    // Resolve the audio source. Two paths:
-    //   1. `?source_id=` → DB lookup by id; honour the row's kind explicitly.
-    //   2. (no param) → the first enabled `audio_sources` row, else 503.
-    let by_id = params.source_id.clone().filter(|id| !id.is_empty());
-    let asked_for_id = by_id.is_some();
-    let looked_up = state
-        .run_blocking(move |state| {
-            by_id.as_deref().map_or_else(
-                || resolve_default_source(state),
-                |id| resolve_by_source_id(state, id),
-            )
-        })
-        .await;
-    let resolved = match looked_up {
-        Some(resolved) => resolved,
-        None if asked_for_id => {
-            return (StatusCode::NOT_FOUND, "no such audio source").into_response();
-        }
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "no audio source configured",
-            )
-                .into_response();
-        }
-    };
-    let ResolvedSource {
-        id: source_id,
-        device: source,
-        kind: kind_hint,
-        rtsp_input,
-    } = resolved;
-
-    // Honour the audio_sources kind when present; otherwise fall back to
-    // the URL-prefix heuristic that the single-string path has always used.
-    let (is_rtsp, is_pulse) = kind_hint.map_or_else(
-        || {
-            (
-                source.starts_with("rtsp://") || source.starts_with("rtsps://"),
-                source.starts_with("pulse://") || source == "pulse" || source == "default",
-            )
-        },
-        |k| {
-            use birdnet_db::audio_sources::SourceKind;
-            (
-                matches!(k, SourceKind::Rtsp),
-                matches!(k, SourceKind::PipeWire),
-            )
-        },
-    );
-
-    // The reason names the schemes that work, never the URL, which can carry
-    // a camera's password.
-    let rtsp_input = match rtsp_input {
-        Ok(args) => args,
-        Err(reason) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                format!("this source's stream cannot be opened: {reason}"),
-            )
-                .into_response();
-        }
-    };
-
-    // Bound concurrent streams before spawning ffmpeg (after source resolution,
-    // so a 404/503 never consumes a slot). The owned permit is moved into the
-    // forwarding task below and released when the client disconnects.
-    let Ok(stream_permit) = STREAM_SLOTS.clone().try_acquire_owned() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "too many concurrent live streams",
-        )
-            .into_response();
-    };
-
-    let live = match resolve_live_feed(&state, &source_id).await {
-        Ok(live) => live,
+    let Encoder {
+        mut child,
+        permit: stream_permit,
+        source_id,
+    } = match start_encoder(
+        &state,
+        params.source_id.clone(),
+        params.freq_shift_hz,
+        &[
+            "-f",
+            "mp3",
+            "-b:a",
+            "128k",
+            "-ar",
+            &STREAM_SAMPLE_RATE.to_string(),
+            "-ac",
+            "1",
+            // Hand each packet to the pipe as it is encoded instead of waiting
+            // for the avio buffer to fill. Measured through this exact
+            // invocation, it halves time-to-first-audio (1.13 s -> 0.59 s), and
+            // that window is precisely when a listener is deciding whether the
+            // button worked.
+            "-flush_packets",
+            "1",
+            "pipe:1",
+        ],
+        std::process::Stdio::piped(),
+    )
+    .await
+    {
+        Ok(encoder) => encoder,
         Err(response) => return *response,
-    };
-
-    // Build the audio filter chain: optional freq shift + format conversion.
-    let audio_filter = freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz);
-
-    let mut cmd = tokio::process::Command::new("ffmpeg");
-
-    // `-loglevel error` reduces stderr to things that actually went wrong, which
-    // is what makes draining it below worth doing: every line that arrives is
-    // worth an operator's attention rather than banner noise.
-    cmd.args(["-hide_banner", "-loglevel", "error"]);
-
-    cmd.args(stream_input_args(
-        live.as_ref().map(|l| l.subscription.spec()),
-        is_rtsp,
-        is_pulse,
-        &source,
-        &rtsp_input,
-    ));
-
-    if let Some(ref filter) = audio_filter {
-        cmd.args(["-af", filter.as_str()]);
-    }
-
-    cmd.args([
-        "-f",
-        "mp3",
-        "-b:a",
-        "128k",
-        "-ar",
-        &STREAM_SAMPLE_RATE.to_string(),
-        "-ac",
-        "1",
-        // Hand each packet to the pipe as it is encoded instead of waiting for
-        // the avio buffer to fill. Measured through this exact invocation, it
-        // halves time-to-first-audio (1.13 s -> 0.59 s), and that window is
-        // precisely when a listener is deciding whether the button worked.
-        "-flush_packets",
-        "1",
-        "pipe:1",
-    ]);
-
-    let child = cmd
-        .stdin(if live.is_some() {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::null()
-        })
-        .stdout(std::process::Stdio::piped())
-        // ffmpeg's stderr is the only place a failed live stream explains
-        // itself — `Device or resource busy`, an unknown filter, a codec that
-        // isn't built in. Discarding it made every failure present identically
-        // from the outside: a 200 response carrying no audio, and a journal with
-        // nothing in it. Drained on a task below so a full pipe cannot ever
-        // block the encoder.
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn();
-
-    let mut child = match child {
-        Ok(c) => c,
-        // `NotFound` here means ffmpeg is not on PATH, which is a missing
-        // dependency rather than a server fault — and on a microphone station
-        // it is the *expected* state, because the installer only ensures
-        // ffmpeg for RTSP capture while this endpoint needs it for every
-        // source kind. Saying so is the difference between an operator running
-        // one apt command and an operator filing a bug against an opaque 500.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::error!(
-                error = %e,
-                "live audio stream needs ffmpeg, which is not installed"
-            );
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "live audio needs ffmpeg, which is not installed on this station — \
-                 install it (e.g. `sudo apt install ffmpeg`) and reload this page",
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to spawn ffmpeg for livestream");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to start audio stream",
-            )
-                .into_response();
-        }
     };
 
     let Some(stdout) = child.stdout.take() else {
@@ -427,49 +294,13 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
             .into_response();
     };
 
-    // Surface ffmpeg's own account of any failure. With `-loglevel error` this
-    // stays silent on a healthy stream, so anything logged here is a real fault
-    // an operator needs — and draining the pipe is mandatory regardless, since
-    // an unread stderr eventually blocks the encoder.
-    if let Some(stderr) = child.stderr.take() {
-        let failing_source = source_id.clone();
-        tokio::spawn(async move {
-            use tokio::io::AsyncBufReadExt as _;
-            let mut lines = tokio::io::BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                tracing::warn!(source = %failing_source, "ffmpeg: {line}");
-            }
-        });
-    }
-
-    let from_capture_tap = live.is_some();
-    if let Some(live) = live {
-        let Some(stdin) = child.stdin.take() else {
-            tracing::error!("ffmpeg process has no stdin handle");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to feed the audio stream",
-            )
-                .into_response();
-        };
-        spawn_tap_pump(live, stdin);
-    }
-
-    tracing::info!(
-        source = %source_id,
-        device = %source,
-        freq_shift_hz = params.freq_shift_hz,
-        from_capture_tap,
-        "starting live audio stream"
-    );
-
     // Forward ffmpeg's stdout to the response body through a task that owns the
     // ffmpeg child and the concurrency permit, so both are dropped — ffmpeg
     // killed via kill_on_drop, the stream slot freed — exactly when the client
     // disconnects (the receiver drops and `send` fails). Holding the child here
     // also keeps it from being killed the instant this handler returns.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
-    let streamed_source = source_id.clone();
+    let streamed_source = source_id;
     tokio::spawn(async move {
         let _permit = stream_permit;
         let _child = child;
@@ -507,6 +338,221 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     );
 
     (StatusCode::OK, headers, body).into_response()
+}
+
+/// An `ffmpeg` encoding a live source, and the stream slot it holds.
+///
+/// Dropping it kills the encoder (`kill_on_drop`) and frees the slot, which
+/// is how every consumer ends a stream: let go of this.
+pub(super) struct Encoder {
+    /// The encoder. Its stdin, if any, is already fed from the capture tap.
+    pub(super) child: tokio::process::Child,
+    /// One of the [`MAX_CONCURRENT_STREAMS`] slots, held for the encoder's life.
+    pub(super) permit: tokio::sync::OwnedSemaphorePermit,
+    /// The `audio_sources` row being encoded.
+    pub(super) source_id: String,
+}
+
+/// Start an `ffmpeg` reading a configured source, with `output_args` after
+/// its input and the optional pitch shift — the part every live listener
+/// shares, whatever it encodes to.
+///
+/// `source_id` empty or `None` is the station's default source. The `Err` is
+/// the response to give: `404` for an unknown id, `503` for no source, a
+/// stream that cannot be opened, a full set of stream slots, a source that is
+/// not recording, or a missing `ffmpeg`, and `500` for a spawn that failed
+/// otherwise. A slot is taken only once the source has resolved, so a
+/// refusal never consumes one.
+pub(super) async fn start_encoder(
+    state: &AppState,
+    source_id: Option<String>,
+    freq_shift_hz: i32,
+    output_args: &[&str],
+    stdout: std::process::Stdio,
+) -> Result<Encoder, Box<Response>> {
+    let refuse = |status: StatusCode, message: String| Box::new((status, message).into_response());
+    // Resolve the audio source. Two paths:
+    //   1. a source id → DB lookup by id; honour the row's kind explicitly.
+    //   2. none → the station's default `audio_sources` row, else 503.
+    let by_id = source_id.filter(|id| !id.is_empty());
+    let asked_for_id = by_id.is_some();
+    let looked_up = state
+        .run_blocking(move |state| {
+            by_id.as_deref().map_or_else(
+                || resolve_default_source(state),
+                |id| resolve_by_source_id(state, id),
+            )
+        })
+        .await;
+    let resolved = match looked_up {
+        Some(resolved) => resolved,
+        None if asked_for_id => {
+            return Err(refuse(
+                StatusCode::NOT_FOUND,
+                "no such audio source".to_owned(),
+            ));
+        }
+        None => {
+            return Err(refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no audio source configured".to_owned(),
+            ));
+        }
+    };
+    let ResolvedSource {
+        id: source_id,
+        device: source,
+        kind: kind_hint,
+        rtsp_input,
+    } = resolved;
+
+    // Honour the audio_sources kind when present; otherwise fall back to
+    // the URL-prefix heuristic that the single-string path has always used.
+    let (is_rtsp, is_pulse) = kind_hint.map_or_else(
+        || {
+            (
+                source.starts_with("rtsp://") || source.starts_with("rtsps://"),
+                source.starts_with("pulse://") || source == "pulse" || source == "default",
+            )
+        },
+        |k| {
+            use birdnet_db::audio_sources::SourceKind;
+            (
+                matches!(k, SourceKind::Rtsp),
+                matches!(k, SourceKind::PipeWire),
+            )
+        },
+    );
+
+    // The reason names the schemes that work, never the URL, which can carry
+    // a camera's password.
+    let rtsp_input = rtsp_input.map_err(|reason| {
+        refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("this source's stream cannot be opened: {reason}"),
+        )
+    })?;
+
+    // Bound concurrent streams before spawning ffmpeg (after source resolution,
+    // so a 404/503 never consumes a slot).
+    let Ok(permit) = STREAM_SLOTS.clone().try_acquire_owned() else {
+        return Err(refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many concurrent live streams".to_owned(),
+        ));
+    };
+
+    let live = resolve_live_feed(state, &source_id).await?;
+
+    // Build the audio filter chain: optional freq shift + format conversion.
+    let audio_filter = freq_shift_filter(STREAM_SAMPLE_RATE, freq_shift_hz);
+
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+
+    // `-loglevel error` reduces stderr to things that actually went wrong, which
+    // is what makes draining it below worth doing: every line that arrives is
+    // worth an operator's attention rather than banner noise.
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+
+    cmd.args(stream_input_args(
+        live.as_ref().map(|l| l.subscription.spec()),
+        is_rtsp,
+        is_pulse,
+        &source,
+        &rtsp_input,
+    ));
+
+    if let Some(ref filter) = audio_filter {
+        cmd.args(["-af", filter.as_str()]);
+    }
+
+    cmd.args(output_args);
+
+    let child = cmd
+        .stdin(if live.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(stdout)
+        // ffmpeg's stderr is the only place a failed live stream explains
+        // itself — `Device or resource busy`, an unknown filter, a codec that
+        // isn't built in. Discarding it made every failure present identically
+        // from the outside: a 200 response carrying no audio, and a journal with
+        // nothing in it. Drained on a task below so a full pipe cannot ever
+        // block the encoder.
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
+
+    let mut child = match child {
+        Ok(c) => c,
+        // `NotFound` here means ffmpeg is not on PATH, which is a missing
+        // dependency rather than a server fault — and on a microphone station
+        // it is the *expected* state, because the installer only ensures
+        // ffmpeg for RTSP capture while this endpoint needs it for every
+        // source kind. Saying so is the difference between an operator running
+        // one apt command and an operator filing a bug against an opaque 500.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::error!(
+                error = %e,
+                "live audio stream needs ffmpeg, which is not installed"
+            );
+            return Err(refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "live audio needs ffmpeg, which is not installed on this station — \
+                 install it (e.g. `sudo apt install ffmpeg`) and reload this page"
+                    .to_owned(),
+            ));
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to spawn ffmpeg for livestream");
+            return Err(refuse(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to start audio stream".to_owned(),
+            ));
+        }
+    };
+
+    // Surface ffmpeg's own account of any failure. With `-loglevel error` this
+    // stays silent on a healthy stream, so anything logged here is a real fault
+    // an operator needs — and draining the pipe is mandatory regardless, since
+    // an unread stderr eventually blocks the encoder.
+    if let Some(stderr) = child.stderr.take() {
+        let failing_source = source_id.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt as _;
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::warn!(source = %failing_source, "ffmpeg: {line}");
+            }
+        });
+    }
+
+    let from_capture_tap = live.is_some();
+    if let Some(live) = live {
+        let Some(stdin) = child.stdin.take() else {
+            tracing::error!("ffmpeg process has no stdin handle");
+            return Err(refuse(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to feed the audio stream".to_owned(),
+            ));
+        };
+        spawn_tap_pump(live, stdin);
+    }
+
+    tracing::info!(
+        source = %source_id,
+        device = %source,
+        freq_shift_hz,
+        from_capture_tap,
+        "starting live audio stream"
+    );
+    Ok(Encoder {
+        child,
+        permit,
+        source_id,
+    })
 }
 
 /// Decide whether this source is served from capture's in-process tap.
