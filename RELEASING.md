@@ -90,12 +90,12 @@ validate ──► ci ──► build (matrix) ──► package ──► githu
 
 | Job | Emits |
 |-----|-------|
-| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z]` section in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
+| `validate` | Confirms the tag is valid semver and that four files agree with it: `Cargo.toml` `workspace.package.version`, `CITATION.cff` `version` (the step also tells you to bump `date-released`), `crates/birdnet-web/openapi.json` `info.version`, and a non-empty `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md` (the heading must carry its date). On a tag push it also requires the tag to be **annotated** (`git tag -a`; a lightweight tag is refused) and its commit to be in the default branch's history. Detects `-pre` suffixes and marks the release as a pre-release. Also reports the `CHANGELOG` section's size and warns, without failing, when it is large enough to be truncated in the Release body. |
 | `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
 | `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in and on by default, in `<database>.duckdb` beside the SQLite file; `--analytics-db ""` turns it off). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
-| `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives and SBOMs, signed via GitHub OIDC. |
+| `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives, the SBOMs, `install.sh`, `uninstall.sh` and `SHA256SUMS`, signed via GitHub OIDC. |
 | `github-release` | Creates/updates the GitHub Release idempotently, **attaches the archives, `SHA256SUMS`, `install.sh`, `uninstall.sh` and SBOMs first**, then sets the body from the extracted `CHANGELOG` section plus appended install/Docker/verify notes. GitHub caps a release body at 125,000 characters, so an oversized section is truncated at a `###` heading boundary and linked to `CHANGELOG.md` for the remainder. The upload deliberately precedes the body edit: in v0.16.0 the order was reversed, a 270,796-character body was rejected with HTTP 422, and `bash -e` killed the step before a single binary was attached. |
-| `verify-release` | Reads the published Release back and refuses to call it done unless it is usable: not a draft, body not still the pre-upload placeholder, and every file the published `SHA256SUMS` names downloadable **unauthenticated** from the public URL and matching its checksum. Driven by the manifest, not a hard-coded list, so a new build target is covered as soon as it joins the matrix. |
+| `verify-release` | Reads the published Release back and refuses to call it done unless it is usable: not a draft, body not still the pre-upload placeholder, and every file the published `SHA256SUMS` names downloadable **unauthenticated** from the public URL and matching its checksum, and each of them (and `SHA256SUMS`) carrying a valid build-provenance attestation from this repository (`gh attestation verify`). Driven by the manifest, not a hard-coded list, so a new build target is covered as soon as it joins the matrix. |
 
 **Build targets** (three — there is no armv7 and no musl):
 
@@ -237,10 +237,12 @@ Copy-paste this into the release PR or issue and tick it off:
 # Checksums
 sha256sum -c SHA256SUMS --ignore-missing
 
-# SLSA build provenance on a binary archive
+# SLSA build provenance on a binary archive, and on the scripts and the
+# checksum manifest (releases after the one that introduced this check)
 gh attestation verify \
   --repo tomtom215/BirdNet-Behavior \
   birdnet-behavior-X.Y.Z-aarch64-unknown-linux-gnu.tar.gz
+gh attestation verify --repo tomtom215/BirdNet-Behavior install.sh
 
 # Docker image signature (keyless cosign)
 cosign verify \

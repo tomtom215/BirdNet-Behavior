@@ -306,6 +306,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footer line below 360 px wide, which are tightened to fit a 320 px screen,
   stay under 10 px. Chart text is sized separately, above.
 
+- **A release refuses a lightweight tag, a tag off the default branch, and an
+  undated changelog heading; and `install.sh`, `uninstall.sh` and `SHA256SUMS`
+  are attested like the archives.** Twenty of the repository's 23 tag refs are
+  bare commits although `RELEASING.md` prescribes `git tag -a`, and the two
+  scripts operators pipe into `sudo bash` sat beside verifiable archives with
+  nothing to verify them against (their attestation lookups answer 404 for
+  v0.17.1). The release's `validate` job now fails on a lightweight tag or on a
+  commit not in the default branch (the two API calls were checked against real
+  tags: v0.17.1 answers `tag`, v0.15.0 `commit`, both `ahead` of `main`), and on
+  a `## [X.Y.Z]` heading without `- YYYY-MM-DD` (all 24 existing headings have
+  one). `verify-release` runs `gh attestation verify` on every published asset;
+  the invocation was run against v0.17.1's published files: the SBOM verifies,
+  `install.sh` and `SHA256SUMS` do not, as expected for a release made before
+  this change. Not run on GitHub: the workflow itself.
+
 - **Release and Docker builds fail when an extension cannot be fetched.** A
   failed download used to log a warning and ship a binary or image that needs
   the network at first run — the 0.13.1 fault, in which every dashboard stayed

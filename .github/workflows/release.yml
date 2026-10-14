@@ -235,7 +235,45 @@ jobs:
             echo "Add release notes under a '## [$VERSION]' heading before tagging."
             exit 1
           fi
+          if ! grep -qE "^## \[$VERSION\] - [0-9]{4}-[0-9]{2}-[0-9]{2}\$" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::The '## [$VERSION]' heading has no release date. It must read '## [$VERSION] - YYYY-MM-DD'."
+            exit 1
+          fi
           echo "::notice::CHANGELOG.md entry found for v$VERSION"
+
+      - name: The tag is annotated and its commit is on the default branch
+        # RELEASING.md prescribes `git tag -a`, and nothing checked it: 20 of the
+        # repository's 23 tag refs are bare commits, which carry no tagger, no
+        # date and no message and cannot be signed. A release cut from a commit
+        # that never reached the default branch would ship code nobody reviewed
+        # into an in-app updater. Tag pushes only; a dry run has no tag.
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          kind="$(gh api "repos/${REPO}/git/ref/tags/${TAG}" --jq .object.type)"
+          if [[ "$kind" != "tag" ]]; then
+            echo "::error::${TAG} is a lightweight tag (a bare commit). Delete it and create it with 'git tag -a ${TAG} -m \"Release ${TAG}\"' (RELEASING.md step 4)."
+            exit 1
+          fi
+          # GITHUB_SHA is the commit the tag points at. Comparing it with the
+          # default branch says "ahead" or "identical" exactly when it is in that
+          # branch's history.
+          status="$(gh api "repos/${REPO}/compare/${SHA}...${DEFAULT_BRANCH}" --jq .status)"
+          case "$status" in
+            ahead|identical) ;;
+            *)
+              echo "::error::${TAG} points at ${SHA}, which is not in ${DEFAULT_BRANCH} (compare says '${status}'). Release from ${DEFAULT_BRANCH}."
+              exit 1
+              ;;
+          esac
+          echo "::notice::${TAG} is an annotated tag on a commit in ${DEFAULT_BRANCH} (${status})"
 
       - name: Report the CHANGELOG section size against the release-body limit
         # `github-release` caps the body at GitHub's 125,000-character limit
@@ -725,7 +763,9 @@ jobs:
       # workflow-scoped OIDC token. End users verify with:
       #   gh attestation verify --repo tomtom215/BirdNet-Behavior <archive>
       # The SBOM is also attested so consumers know the BOM came from the
-      # same workflow run as the binaries.
+      # same workflow run as the binaries, and so are the two scripts operators
+      # pipe into `sudo bash` and the checksum manifest that names every other
+      # asset: before, a verified archive sat beside an unverifiable script.
       - name: Attest build provenance (SLSA)
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
@@ -733,6 +773,9 @@ jobs:
             release/*.tar.gz
             release/*.cdx.json
             release/*.cdx.xml
+            release/install.sh
+            release/uninstall.sh
+            release/SHA256SUMS
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1187,6 +1230,21 @@ jobs:
           sha256sum -c SHA256SUMS.check
           echo "::notice::${COUNT} published assets downloaded over the public URL and checksum-verified."
 
+          # ---- 3b. Every asset carries a valid build-provenance attestation ----
+          # A checksum shows the bytes match the manifest; the attestation shows
+          # this repository's release workflow produced both. SHA256SUMS names
+          # every other asset, so it is attested and verified too.
+          ATTESTED=0
+          for name in SHA256SUMS $(awk '{print $2}' SHA256SUMS.check); do
+            if ! gh attestation verify "$name" --repo "$REPO" >/dev/null 2>attest.err; then
+              echo "::error::${name} has no valid build-provenance attestation from ${REPO}:"
+              cat attest.err
+              exit 1
+            fi
+            ATTESTED=$(( ATTESTED + 1 ))
+          done
+          echo "::notice::${ATTESTED} assets (SHA256SUMS included) verified against their build-provenance attestation."
+
           # ---- 4. Report where /releases/latest points ----
           # Reported, not gated: `latest` is the newest by date, so a backport
           # released after a higher version correctly leaves it elsewhere.
@@ -1199,5 +1257,6 @@ jobs:
             echo ""
             echo "- Tag: \`${TAG}\` (not a draft)"
             echo "- Assets downloaded unauthenticated and checksum-verified: **${COUNT}**"
+            echo "- Assets whose build-provenance attestation verified (with SHA256SUMS): **${ATTESTED}**"
             echo "- \`/releases/latest\` resolves to: \`${LATEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
