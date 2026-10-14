@@ -419,10 +419,11 @@ jobs:
       - name: Fetch behavioral DuckDB extension (matching bundled DuckDB version)
         # Embeds the community-built `behavioral` extension into the release
         # binary via build.rs, so installs work fully offline at first run.
-        # If the download fails — restricted runner or registry hiccup — we
-        # fall through silently: the runtime loader still tries the cache and
-        # the community registry before giving up. The bundled DuckDB version
-        # here must match the duckdb-rs pin in Cargo.toml.
+        # A failed download fails the job: the release either embeds the build
+        # `crates/birdnet-behavioral/extension_pins.rs` pins by sha256 or does
+        # not ship, because the alternative is a binary that quietly needs the
+        # network on a station that has none (re-run the job to retry). The
+        # bundled DuckDB version here must match the duckdb-rs pin in Cargo.toml.
         id: bundled_ext
         shell: bash
         run: |
@@ -436,12 +437,13 @@ jobs:
           if [ -n "$plat" ]; then
             url="https://community-extensions.duckdb.org/${ddb_ver}/${plat}/behavioral.duckdb_extension.gz"
             tmp="$RUNNER_TEMP/behavioral.duckdb_extension"
-            if curl -fsSL --max-time 60 -o "${tmp}.gz" "$url"; then
+            if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 -o "${tmp}.gz" "$url"; then
               gunzip -f "${tmp}.gz"
               echo "BIRDNET_BUNDLED_EXTENSION_FILE=$tmp" >> "$GITHUB_ENV"
               echo "embedded behavioral extension from $url"
             else
-              echo "could not fetch $url — release falls back to runtime INSTALL FROM community"
+              echo "::error::could not fetch $url; this release embeds the extension or does not ship"
+              exit 1
             fi
           else
             echo "no community extension for target ${{ matrix.target }} — runtime INSTALL fallback"
@@ -460,9 +462,10 @@ jobs:
         # with `Failed to create directory "/home/pi/.duckdb": Read-only file
         # system` and every dashboard stayed empty for days with a green health
         # endpoint. Embedding it removes the network and the writable $HOME from
-        # the path. This is a hard requirement for a working release, not a
-        # nice-to-have — but the download stays best-effort so a registry
-        # hiccup degrades to the old behaviour instead of failing the release.
+        # the path. This is a hard requirement for a working release, so a
+        # failed download fails the job (the download retries three times
+        # first); build.rs then refuses any build whose sha256 is not the one
+        # `crates/birdnet-behavioral/extension_pins.rs` pins.
         id: bundled_icu
         shell: bash
         run: |
@@ -483,8 +486,8 @@ jobs:
               echo "BIRDNET_BUNDLED_ICU_FILE=$tmp" >> "$GITHUB_ENV"
               echo "embedded ICU from $url"
             else
-              echo "::warning::could not fetch $url — this build has no embedded ICU; \
-          stations without a writable \$HOME will have no date-ranged analytics"
+              echo "::error::could not fetch $url; a build without embedded ICU leaves stations without a writable \$HOME with no date-ranged analytics"
+              exit 1
             fi
           else
             echo "::warning::no ICU build for target ${{ matrix.target }}"

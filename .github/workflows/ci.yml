@@ -107,6 +107,12 @@ jobs:
       # permitted — and still visible, because the skip prints a line naming
       # what was missing rather than a silent `return`.
       #
+      # What *is* fetched must be the build `crates/birdnet-behavioral/
+      # extension_pins.rs` pins by sha256: build.rs refuses anything else, on a
+      # pull request too. A registry that republishes an extension therefore
+      # turns this job red, which is the cue to verify the new build as that
+      # file describes and update the pin — not to skip the check.
+      #
       # Set here rather than by the fetch step on success: a flag the fetch
       # controls could not catch the fetch failing, which is the whole defect.
       BIRDNET_REQUIRE_LIVE_EXTENSION: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '' }}

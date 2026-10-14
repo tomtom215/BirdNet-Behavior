@@ -271,6 +271,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footer line below 360 px wide, which are tightened to fit a 320 px screen,
   stay under 10 px. Chart text is sized separately, above.
 
+- **Release and Docker builds fail when an extension cannot be fetched.** A
+  failed download used to log a warning and ship a binary or image that needs
+  the network at first run — the 0.13.1 fault, in which every dashboard stayed
+  empty for days. The release workflow now fails the job (after three retries),
+  and the Dockerfile fails an `analytics` build, with
+  `--build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1` to build without them. A lean
+  `BUILD_FEATURES=""` image embeds nothing, so it is unaffected.
+
 - **Every GitHub Actions workflow pins `dtolnay/rust-toolchain` by commit**
   and names the toolchain in a `toolchain:` input, as every other action
   already was; 110 of 110 `uses:` lines are now commit-pinned, and the
@@ -625,6 +633,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   patch each. Reachability here is limited and was read, not tested: the
   lockfile has no `brotli` crate, so -0348 has nothing to decompress with, and
   nothing in the workspace enables ECH.
+
+- **The DuckDB extensions compiled into a build are pinned by sha256.** The
+  `behavioral` and `icu` extensions are native code that the daemon loads with
+  DuckDB's signature check bypassed (an ad-hoc-path `LOAD`). Four places
+  fetched them with an unchecked `curl`, and `build.rs` checked only that the
+  footer parsed and named the right engine, so whatever the registry served
+  that day was embedded. `crates/birdnet-behavioral/extension_pins.rs` now
+  lists the five builds the project ships (`behavioral` linux_amd64 and
+  linux_arm64; `icu` linux_amd64, linux_arm64 and osx_arm64) and `build.rs`
+  refuses an extension that is not one of them, or is one with other bytes.
+  The `linux_amd64` builds were also loaded by the DuckDB 1.5.6 the workspace
+  links with unsigned extensions disallowed (genuine files load; a copy with
+  one bit changed is refused); the other three platforms could not be, so
+  those pins are the registry's bytes as served on 2026-10-14. `RELEASING.md`
+  says how to update a pin.
+
 
 ## [0.17.1] - 2026-10-04
 

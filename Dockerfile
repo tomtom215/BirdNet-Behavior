@@ -149,9 +149,10 @@ COPY . .
 # embed it into the binary via build.rs, so the released station loads the
 # extension out of the box without needing network at first run. The DuckDB
 # version is the one libduckdb-sys bundles (kept in sync with the duckdb crate
-# pin in Cargo.toml). If the download fails — restricted CI / offline build —
-# the variable stays unset and the build.rs falls through to the runtime
-# LOAD / INSTALL FROM community path.
+# pin in Cargo.toml). If the download fails the build fails, unless
+# BEHAVIORAL_EXTENSION_OPTIONAL is set (below); with it, the variable stays
+# unset and the image falls back to the runtime LOAD / INSTALL FROM community
+# path.
 # MUST equal the DuckDB version libduckdb-sys bundles — the `duckdb = "~1.10506"`
 # pin in the root Cargo.toml, where `10506` encodes DuckDB 1.5.6. Both registries
 # publish per engine version, and ICU (a C++ extension) loads only into the exact
@@ -182,6 +183,13 @@ ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.6"
 # network at first run after all. docker.yml still passes it explicitly.
 ARG TARGETARCH
 ARG BEHAVIORAL_EXTENSION_TARGET=""
+# A build that embeds the extensions (the default `analytics` feature) fails
+# when it cannot fetch them, rather than producing an image that needs the
+# network at first run — the 0.13.1 fault. Set this to 1 to build anyway, e.g.
+# where the registries are unreachable; the image then has no offline analytics.
+# Whatever *is* fetched must match the sha256 in
+# `crates/birdnet-behavioral/extension_pins.rs`, or `cargo build` refuses it.
+ARG BEHAVIORAL_EXTENSION_OPTIONAL=""
 # The final build is `--locked`: Cargo.lock is what ships (and what cargo-deny
 # graded), so a lock that disagrees with a manifest fails the build instead of
 # being rewritten. `cargo chef cook` above is not, because it builds a skeleton
@@ -201,18 +209,26 @@ RUN set -eu; \
     fi; \
     echo "embedding DuckDB extensions for ${ext_target}"; \
     url="https://community-extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${ext_target}/behavioral.duckdb_extension.gz"; \
-    if curl -fsSL --max-time 30 -o /tmp/behavioral.duckdb_extension.gz "$url"; then \
+    must_embed=""; \
+    case ",${BUILD_FEATURES}," in *,analytics,*) [ -n "${BEHAVIORAL_EXTENSION_OPTIONAL}" ] || must_embed=1 ;; esac; \
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 30 -o /tmp/behavioral.duckdb_extension.gz "$url"; then \
         gunzip -f /tmp/behavioral.duckdb_extension.gz; \
         echo "embedding behavioral extension from $url"; \
         export BIRDNET_BUNDLED_EXTENSION_FILE=/tmp/behavioral.duckdb_extension; \
+    elif [ -n "$must_embed" ]; then \
+        echo "ERROR: behavioral extension NOT fetched ($url). This image would have no offline analytics. Retry, or pass --build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1 to build without it."; \
+        exit 1; \
     else \
         echo "WARNING: behavioral extension NOT fetched ($url) — this image has no offline analytics; docker.yml asserts against exactly this"; \
     fi; \
     icu_url="https://extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${ext_target}/icu.duckdb_extension.gz"; \
-    if curl -fsSL --max-time 120 -o /tmp/icu.duckdb_extension.gz "$icu_url"; then \
+    if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o /tmp/icu.duckdb_extension.gz "$icu_url"; then \
         gunzip -f /tmp/icu.duckdb_extension.gz; \
         echo "embedding icu extension from $icu_url"; \
         export BIRDNET_BUNDLED_ICU_FILE=/tmp/icu.duckdb_extension; \
+    elif [ -n "$must_embed" ]; then \
+        echo "ERROR: icu extension NOT fetched ($icu_url). CURRENT_DATE lives in ICU, so this image's date-ranged dashboard queries would depend on a run-time install. Retry, or pass --build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1 to build without it."; \
+        exit 1; \
     else \
         echo "WARNING: icu extension NOT fetched ($icu_url) — CURRENT_DATE lives in ICU, so every date-ranged dashboard query in this image depends on DuckDB being able to autoinstall it at run time"; \
     fi; \

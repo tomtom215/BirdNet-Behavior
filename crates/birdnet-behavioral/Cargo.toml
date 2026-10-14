@@ -28,5 +28,9 @@ rusqlite.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
 
+[build-dependencies]
+# Hashes the extension binaries `build.rs` embeds, against `extension_pins.rs`.
+sha2.workspace = true
+
 [lints]
 workspace = true

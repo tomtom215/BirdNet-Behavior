@@ -92,7 +92,13 @@
 //! decides how the version target is read; an ABI this script does not know is
 //! refused, since the version rule for it would be a guess.
 
-use std::{env, fs, path::PathBuf};
+use std::{env, fmt::Write as _, fs, path::PathBuf};
+
+use sha2::{Digest, Sha256};
+
+/// Which extension builds may be embedded; shared with the crate's tests.
+#[path = "extension_pins.rs"]
+mod extension_pins;
 
 /// Total length of the metadata footer appended to every DuckDB extension.
 const FOOTER_LEN: usize = 512;
@@ -244,6 +250,51 @@ fn generate(
             target,
         );
     }
+    // Parsing the footer proves the bytes are *an* extension for this engine and
+    // platform; it does not prove they are the one intended. Refuse anything that
+    // is not a pinned build — see `extension_pins.rs` for why and for how to
+    // update a pin.
+    let digest = {
+        let mut hex = String::with_capacity(64);
+        for byte in &Sha256::digest(&bytes) {
+            // Infallible: writing to a String never errors.
+            let _ = write!(hex, "{byte:02x}");
+        }
+        hex
+    };
+    match extension_pins::check(
+        spec.name,
+        &meta.extension_version,
+        &meta.duckdb_version,
+        &meta.platform,
+        &digest,
+    ) {
+        extension_pins::Verdict::Pinned => {}
+        extension_pins::Verdict::Mismatch { expected } => panic!(
+            "{} is not the pinned {} {} build for {}.\n\
+             expected sha256 {expected}\n\
+             actual   sha256 {digest}\n\
+             Refusing to embed it: these bytes run inside the daemon. If DuckDB republished the \
+             build, verify it as `extension_pins.rs` describes and update the pin; if it did not, \
+             the download was corrupted or tampered with.",
+            src.display(),
+            spec.name,
+            meta.extension_version,
+            meta.platform,
+        ),
+        extension_pins::Verdict::Unpinned => panic!(
+            "{} is {} {} for {} (version target {}), which `extension_pins.rs` does not pin \
+             (sha256 {digest}).\n\
+             Refusing to embed an unpinned extension. After verifying it as that file \
+             describes, add it to PINS.",
+            src.display(),
+            spec.name,
+            meta.extension_version,
+            meta.platform,
+            meta.duckdb_version,
+        ),
+    }
+    println!("cargo:rerun-if-changed=extension_pins.rs");
     println!(
         "cargo:warning=embedding {} {} ({} ABI, version target {}, {})",
         spec.name, meta.extension_version, meta.abi, meta.duckdb_version, meta.platform

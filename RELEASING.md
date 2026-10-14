@@ -42,6 +42,28 @@ git push origin vX.Y.Z
 
 That single tag push drives everything else.
 
+## When DuckDB or an extension moves
+
+The `duckdb` pin in the root `Cargo.toml` decides which engine ships, and the
+`behavioral` and `icu` extensions embedded in the binary must be the builds made
+for it. The engine version `v1.5.6` is written out in four files — three fetch
+URLs in `ci.yml`, two in `upgrade.yml`, the two `ddb_ver` lines in `release.yml`
+and `BEHAVIORAL_EXTENSION_DUCKDB_VERSION` in the `Dockerfile` — and
+`crates/birdnet-behavioral/extension_pins.rs` pins the sha256 of each build
+(`build.rs` refuses to embed any other). Update them together:
+
+1. Change the version in those places.
+2. Download each build, load it into a stock DuckDB of the same version with
+   unsigned extensions disallowed (that is the signature check), and replace the
+   rows in `extension_pins.rs`; its header gives the steps and says which
+   platforms could and could not be checked that way.
+3. `cargo test -p birdnet-behavioral --all-features --lib extension_pins`, then
+   a build with `BIRDNET_BUNDLED_EXTENSION_FILE` and `BIRDNET_BUNDLED_ICU_FILE`
+   set to the new files. A file the table does not name stops the build.
+
+Release and Docker builds fail when an extension cannot be fetched; the Docker
+build takes `--build-arg BEHAVIORAL_EXTENSION_OPTIONAL=1` to build without them.
+
 ## What each workflow emits
 
 Pushing a `vX.Y.Z` tag triggers **three** workflows in parallel:
