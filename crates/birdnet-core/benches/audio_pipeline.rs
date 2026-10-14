@@ -3,7 +3,7 @@
 //! Measures performance of the hot path components:
 //! - Mel spectrogram computation (FFT + mel filterbank)
 //! - Audio quality assessment (SNR, spectral flatness, rain detection)
-//! - Audio resampling (rubato polynomial interpolation)
+//! - Audio resampling (rubato windowed-sinc interpolation)
 //!
 //! Run with:
 //! ```bash

@@ -190,6 +190,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Written against its published field definitions; not checked against a
   live response, because that needs a key.
 
+- **`STABILITY.md` (proposed), a documentation map, and a list of the checks
+  `main` should require.** `STABILITY.md` says what a release may and may not
+  change across the station's data, configuration, HTTP API, metrics and
+  messages, artefacts and platforms, and how a break is announced; every figure
+  in it was re-measured from the tree. `docs/README.md` says which of the
+  documents are current and which are records. `.github/workflows/README.md`
+  lists each workflow and the sixteen checks that run on every pull request, and
+  check 8 of `scripts/check-ci-config.py` fails when a name on that list stops
+  being a job, or when its workflow gains a path filter (seen failing against a
+  renamed job, a workflow with no row, a path filter on `ci.yml`, and an empty
+  list). `docs/HANDOFF.md` records the repository settings only the maintainer
+  can change, as read on 2026-10-14.
+
 - **Release archives and the container image carry the licence notices the
   binary's third-party code requires.** The binary statically links 389
   third-party Rust packages (twelve of them, `symphonia`, under MPL-2.0),
@@ -637,6 +650,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the default branch and cancelled in progress, so the weekly sweep — hours
   long — was killed whenever anything merged while it ran. Scheduled and
   dispatched runs now have their own group and are not cancelled.
+
+- **The guide and the OpenAPI description counted the token-gated API
+  wrongly.** The code holds ten bearer writes and eight bearer reads. The guide
+  said fifteen (ten and five) and the OpenAPI description said "the four
+  `/detections/*` write endpoints". Both now say eighteen, and a test
+  (`the_prose_counts_what_the_route_tables_hold`) reads the route tables and
+  fails when either sentence disagrees (seen failing against each file as it was
+  before). The architecture documents and a benchmark comment also described the
+  resampler as polynomial; `audio/resample.rs` is a windowed-sinc resampler
+  (its own header says the polynomial one it replaced folded a 20 kHz tone
+  down), so they now say so.
 
 - **A species card says what is actually missing.** With the image cache
   configured it no longer tells you to pass `--image-cache-dir`; with it off

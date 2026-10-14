@@ -29,7 +29,7 @@
 | Config parser | `config.rs` + `config/` | INI parsing with PHP-style quote stripping; `config/validate.rs` holds the validation rules |
 | i18n | `i18n.rs` | 36-language species-name lookup |
 | Audio decode | `audio/decode.rs` | symphonia-based WAV / FLAC / MP3 decoder with mono downmix |
-| Audio resample | `audio/resample.rs` | rubato polynomial resampler with chunked processing |
+| Audio resample | `audio/resample.rs` | rubato windowed-sinc resampler with chunked processing |
 | Mel spectrogram | `audio/spectrogram/compute.rs` | Pure Rust realfft implementation, librosa-compatible |
 | Live spectrogram | `audio/spectrogram/live.rs` | inotify watcher producing `SpectrogramFrame` broadcasts |
 | Audio capture | `audio/capture/` | `arecord` / `ffmpeg` subprocess management with restart logic (PulseAudio and PipeWire go through `ffmpeg -f pulse`) |

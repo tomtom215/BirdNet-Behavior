@@ -66,6 +66,12 @@ they get their own gate.
      a commit and names its toolchain in a `toolchain:` input, and this reads
      every workflow to keep it so — a pin that nothing reads is a comment.
 
+  8. A required check that stopped existing. Branch protection matches checks
+     by name, so renaming a job silently drops the requirement, and a workflow
+     skipped by a `paths:` filter leaves its checks pending and blocks every
+     merge. `.github/workflows/README.md` lists the names `main` should require;
+     this keeps that list true.
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
@@ -680,6 +686,57 @@ def check_msrv_runs_the_msrv(
           "the builder image's pinned Rust is the one that compiles")
 
 
+def runs_on_every_pull_request(spec: dict) -> bool:
+    """A workflow with a `pull_request` trigger and no path filter on it."""
+    on = spec.get(True, spec.get("on"))  # PyYAML reads the key `on` as boolean True
+    if not isinstance(on, dict) or "pull_request" not in on:
+        return False
+    trigger = on["pull_request"]
+    return not (isinstance(trigger, dict) and ("paths" in trigger or "paths-ignore" in trigger))
+
+
+def check_workflows_readme(
+    workflows_glob: str = ".github/workflows/*.yml",
+    readme_path: str = ".github/workflows/README.md",
+) -> None:
+    """The workflows README lists every workflow, and its required checks exist.
+
+    A required status check is matched by *name*. Renaming a job drops the
+    requirement without a word, and a workflow skipped by a `paths:` filter
+    leaves its checks pending forever, so a required name must belong to a job
+    of a workflow that runs on every pull request. This reads the README the way
+    branch protection would read the repository.
+    """
+    print("\nThe workflows README lists every workflow, and its required checks are real jobs")
+    text = open(readme_path).read()
+    files = sorted(glob.glob(workflows_glob))
+
+    listed = set(re.findall(r"^\| `([^`]+\.yml)` \|", text, re.M))
+    for path in files:
+        base = os.path.basename(path)
+        check(base in listed, f"{base} has a row in the workflows README")
+    for name in sorted(listed - {os.path.basename(p) for p in files}):
+        check(False, f"the workflows README lists {name}, which is not a workflow")
+
+    section = text.split("## Required status checks", 1)
+    check(len(section) == 2, "the README has a 'Required status checks' section")
+    required = re.findall(r"^- `([^`]+)`$", section[1], re.M) if len(section) == 2 else []
+
+    always = {}
+    for path in files:
+        spec = yaml.safe_load(open(path))
+        if runs_on_every_pull_request(spec):
+            for job in spec["jobs"].values():
+                always[str(job.get("name"))] = os.path.basename(path)
+    for name in required:
+        check(name in always,
+              f"required check {name!r} is a job of a workflow that runs on every pull request")
+    # The counterpart: a reader that found no list, or no always-on jobs, would
+    # pass every assertion above.
+    check(len(required) >= 10 and len(always) >= 10,
+          f"the reader found {len(required)} required checks and {len(always)} always-on jobs")
+
+
 PINNED = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
 
@@ -926,6 +983,7 @@ def main(argv: list[str] | None = None) -> int:
     check_embed_precedes_tests()
     check_msrv_runs_the_msrv()
     check_actions_are_pinned()
+    check_workflows_readme()
     check_headroom_arithmetic()
 
     for job in unresolved:

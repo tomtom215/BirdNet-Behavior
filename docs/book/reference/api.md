@@ -1,12 +1,12 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the fifteen token-gated endpoints — ten writes and five reads — under [Changing a station](#changing-a-station).
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the eighteen token-gated endpoints — ten writes and eight reads — under [Changing a station](#changing-a-station).
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
 > **Auth:** the built-in session sign-in gates the `/admin*` UI routes, the `/station/<tab>` management pages and the page actions that change something — none of which live under `/api/v2`. Every *read* endpoint under `/api/v2/*`, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters, or turn on [private mode](../field/hardening.md#private-mode-everything-behind-the-sign-in), after which every read endpoint and both WebSockets answer `401` without a session (the health check, and `/api/v2/metrics` when `metrics` is carved out, stay open).
 >
-> The **write** endpoints, and the settings read, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
+> The **write** endpoints, and the eight token-gated reads, are the exception and do not follow that rule: each needs `Authorization: Bearer <token>`, and a station with no `BNB_API_TOKEN` answers `404` to all of them. See [Changing a station](#changing-a-station).
 
 > **OpenAPI:** a machine-readable **OpenAPI 3.1** description of the JSON API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients. It is not yet complete: ten routed paths are absent from it — the index `/api/v2/`, `/api/v2/analytics/abundance`, `/api/v2/analytics/phenology`, `/api/v2/soundlevel`, `/api/v2/species/tracking`, the three verification exports `/api/v2/detections/export/raven`, `/api/v2/recordings/{clip}/raven.txt` and `/api/v2/recordings/{clip}/labels.txt`, and the two WebSockets `/api/v2/ws/detections` and `/api/v2/ws/spectrogram` (the live audio is at `/stream`, outside `/api/v2`) — and the test that guards it (`every_documented_path_is_routed`) checks only that every *documented* path is routed, not the reverse.
 
@@ -358,7 +358,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all fifteen answer `404`: the write surface does not exist rather
+Until you do, all eighteen answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,

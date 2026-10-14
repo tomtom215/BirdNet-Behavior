@@ -268,4 +268,83 @@ mod tests {
             );
         }
     }
+
+    /// The prose says how many routes are bearer-gated, and says what the route
+    /// tables hold.
+    ///
+    /// `openapi.json` and the routers agree by construction (the two gates
+    /// above). The sentences around them did not: the guide said "fifteen — ten
+    /// writes and five reads", the OpenAPI description said "the four
+    /// `/detections/*` write endpoints", and the code held ten writes and eight
+    /// reads. A reader following the guide would have looked for five.
+    #[test]
+    fn the_prose_counts_what_the_route_tables_hold() {
+        use crate::routes::api_write::{READ_ROUTES, WRITE_ROUTES};
+
+        const WORDS: [&str; 31] = [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+            "twenty",
+            "twenty-one",
+            "twenty-two",
+            "twenty-three",
+            "twenty-four",
+            "twenty-five",
+            "twenty-six",
+            "twenty-seven",
+            "twenty-eight",
+            "twenty-nine",
+            "thirty",
+        ];
+        let (writes, reads) = (WRITE_ROUTES.len(), READ_ROUTES.len());
+        let (total, writes_w, reads_w) = (WORDS[writes + reads], WORDS[writes], WORDS[reads]);
+
+        let guide = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/book/reference/api.md"
+        ))
+        .expect("docs/book/reference/api.md")
+        .to_lowercase();
+        for needle in [
+            format!("the {total} token-gated endpoints — {writes_w} writes and {reads_w} reads"),
+            format!("{reads_w} *reads* live behind the same token"),
+            format!("all {total} answer `404`"),
+        ] {
+            assert!(
+                guide.contains(&needle),
+                "docs/book/reference/api.md should say {needle:?}: the route tables \
+                 hold {writes} writes and {reads} reads"
+            );
+        }
+
+        let spec: serde_json::Value = serde_json::from_str(OPENAPI_JSON).unwrap();
+        let description = spec["info"]["description"]
+            .as_str()
+            .expect("description")
+            .to_lowercase();
+        let needle =
+            format!("the {total} bearer-token endpoints ({writes_w} writes and {reads_w} reads");
+        assert!(
+            description.contains(&needle),
+            "openapi.json's description should say {needle:?}"
+        );
+    }
 }
