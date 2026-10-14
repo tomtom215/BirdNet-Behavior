@@ -4,8 +4,11 @@
 # https://embarkstudios.github.io/cargo-deny/
 
 # ── Advisories ────────────────────────────────────────────────────────────────
-# Block crates with published security advisories. yanked = warn so we get
-# visibility without breaking builds for transient registry hiccups.
+# Block crates with published security advisories, and a locked version the
+# registry has yanked: a yank is the author saying "do not use this one", almost
+# always for a defect, so it fails the gate like an advisory does (it did not
+# fail once in the lock this was changed against; the check reads the index, so
+# a registry outage fails the job rather than passing it).
 #
 # `ignore` entries below are for transitive advisories that don't currently
 # have a non-transitive fix path. Each one must carry a justification.
@@ -13,7 +16,7 @@
 # resolver picks it up, the entry can be removed.
 [advisories]
 version = 2
-yanked = "warn"
+yanked = "deny"
 # Nine transitive advisories have been lifted by targeted dep refreshes
 # across the last two passes: rustls-webpki 0.103.9 → 0.103.13 (0049,
 # 0098, 0099, 0104), aws-lc-rs 1.16.1 → 1.17.0 carrying aws-lc-sys
@@ -31,6 +34,11 @@ ignore = []
 [licenses]
 version = 2
 confidence-threshold = 0.93
+# An allowance nothing in the graph uses is a standing permission for a licence
+# nobody reviewed. `OpenSSL`, `Unicode-DFS-2016` and `WTFPL` sat here unused
+# until this was turned on; add a licence when a dependency needs it, with the
+# dependency named in a comment.
+unused-allowed-license = "deny"
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -43,12 +51,9 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "CC0-1.0",
     "0BSD",
-    "OpenSSL",
     "Unlicense",
-    "WTFPL",
     "CDLA-Permissive-2.0",
     # This project's own license. cargo-deny scans every crate in the
     # graph including our workspace members, so the workspace license
@@ -72,12 +77,10 @@ ignore = true
 # stays disallowed for code crates generally.
 name = "font-awesome-as-a-crate"
 allow = ["CC-BY-4.0", "MIT"]
-# Crates whose advertised license metadata is wrong or absent get pinned
-# overrides here, with the actual upstream license repository link.
-[[licenses.clarify]]
-name = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+# Crates whose advertised licence metadata is wrong or absent get pinned
+# overrides here, with the upstream licence file's hash. None need one today:
+# `ring`'s entry was removed after checking the licence gate passes without it,
+# which made it a clarification nothing used.
 
 # ── Bans ──────────────────────────────────────────────────────────────────────
 # Forbid known-bad crates and detect duplicated versions of a single crate

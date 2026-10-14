@@ -306,6 +306,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footer line below 360 px wide, which are tightened to fit a 320 px screen,
   stay under 10 px. Chart text is sized separately, above.
 
+- **Eleven GitHub Actions moved to their current releases**, among them
+  `actions/checkout` 6.0.3 → 7.0.1, `actions/upload-artifact` 7.0.2,
+  `actions/download-artifact` 8.0.2, `docker/build-push-action` 7.4.0,
+  `docker/setup-buildx-action` 4.4.1, `taiki-e/install-action` 2.87.27,
+  `Swatinem/rust-cache` 2.9.2, `actions/attest-build-provenance` 4.2.2,
+  `codecov/codecov-action` 7.1.1 and `crate-ci/typos` 1.51.1. They are the refs
+  of Dependabot's own pull requests #255 and #200, whose head commits ran the
+  full CI on GitHub (58 and 46 checks passed, 2 skipped, none failed), and each
+  tag was checked to resolve to its commit upstream. `actions/cache` 6.1.0
+  (#199) is not included: its one failing check is a month old and unexplained.
+
 - **Every tool CI installs, and both Docker base images, are pinned.**
   `cargo install cargo-audit`, `cargo-mutants`, `cargo-llvm-cov`, `pip install
   pyyaml` and the Dockerfile's `cargo-chef` (`^0.1`) took whichever release was
