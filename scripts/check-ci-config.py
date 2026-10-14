@@ -45,6 +45,18 @@ they get their own gate.
 
          python3 scripts/check-ci-config.py --update-observed
 
+  6. A job that is not running the toolchain it is named for. The `msrv` job
+     installed Rust 1.95 with `dtolnay/rust-toolchain@1.95`, which only runs
+     `rustup default`; `rust-toolchain.toml` says `channel = "stable"`, and
+     rustup ranks a toolchain file above the default. Every `cargo` in the job
+     ran on the current stable — `rustup show active-toolchain` in the repo
+     reads "stable ... overridden by rust-toolchain.toml" — so "MSRV (Rust 1.95)"
+     was green for as long as stable compiled, whatever 1.95 would have said. The
+     Docker builder has the same exposure: `rust:1.95-slim-trixie` plus a
+     `COPY . .` that carries the toolchain file in. Found by reading rustup's
+     precedence rules and then reproducing them; the code does build on 1.95
+     (`cargo check --workspace --all-features --all-targets --locked`).
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
@@ -595,6 +607,70 @@ def check_embed_precedes_tests() -> None:
           f"the job runs its several test steps (found {len(tests)}: {tests})")
 
 
+def check_msrv_runs_the_msrv(
+    ci_path: str = CI_WORKFLOW,
+    dockerignore_path: str = ".dockerignore",
+    toolchain_path: str = "rust-toolchain.toml",
+) -> None:
+    """The `msrv` job must put the declared MSRV in charge, and prove it did.
+
+    See incident 6 in the module docstring. Three assertions, structural rather
+    than textual, because a comment explaining the fix is the shape of what this
+    script exists to distrust:
+
+      * an `msrv` step writes `RUSTUP_TOOLCHAIN` to `$GITHUB_ENV` — the only
+        thing that outranks `rust-toolchain.toml`;
+      * a *later* step asserts `rustc --version` against it, so the export is
+        read back from a fresh process rather than assumed;
+      * both come before the step that runs `cargo check`.
+
+    And the counterpart that makes them matter: while `rust-toolchain.toml`
+    names `stable`, the file does override the default, and the Docker build
+    context must not carry it into a builder pinned to the MSRV.
+    """
+    print("\nThe MSRV job runs the MSRV, not `stable` (incident 6)")
+    spec = yaml.safe_load(open(ci_path))
+    steps = spec["jobs"]["msrv"]["steps"]
+
+    def index_of(pred: "callable[[dict], bool]") -> int | None:
+        for i, st in enumerate(steps):
+            if pred(st):
+                return i
+        return None
+
+    run = lambda st: str(st.get("run", ""))  # noqa: E731
+    export = index_of(lambda st: "RUSTUP_TOOLCHAIN=" in run(st) and "GITHUB_ENV" in run(st))
+    prove = index_of(lambda st: "rustc --version" in run(st) and "RUSTUP_TOOLCHAIN" in run(st))
+    cargo = index_of(lambda st: "cargo check" in run(st))
+
+    check(export is not None,
+          "a step exports RUSTUP_TOOLCHAIN through $GITHUB_ENV (the only setting "
+          "that outranks rust-toolchain.toml)")
+    check(prove is not None,
+          "a step asserts `rustc --version` against RUSTUP_TOOLCHAIN")
+    check(cargo is not None, "the job still has the `cargo check` step")
+    if None not in (export, prove, cargo):
+        check(export < prove < cargo,
+              f"export (#{export + 1}) precedes the proof (#{prove + 1}), which "
+              f"precedes the cargo step (#{cargo + 1})")
+
+    # The counterpart: this is only a problem while the toolchain file pins
+    # `stable`. If it ever pins the MSRV itself the file is doing the job and
+    # the export is redundant, which this should say rather than fail on.
+    channel = None
+    for line in open(toolchain_path):
+        m = re.match(r'\s*channel\s*=\s*"([^"]+)"', line)
+        if m:
+            channel = m.group(1)
+    check(channel is not None, f"{toolchain_path} names a channel (found {channel!r})")
+
+    ignored = [ln.strip() for ln in open(dockerignore_path)
+               if ln.strip() and not ln.lstrip().startswith("#")]
+    check("rust-toolchain.toml" in ignored,
+          ".dockerignore keeps rust-toolchain.toml out of the build context, so "
+          "the builder image's pinned Rust is the one that compiles")
+
+
 def check_headroom_arithmetic() -> None:
     """The pure parts of check 4 and 5, against the numbers that produced them.
 
@@ -784,6 +860,7 @@ def main(argv: list[str] | None = None) -> int:
     check_timeouts()
     check_mutation_matrix()
     check_embed_precedes_tests()
+    check_msrv_runs_the_msrv()
     check_headroom_arithmetic()
 
     for job in unresolved:

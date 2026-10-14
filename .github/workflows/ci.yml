@@ -468,6 +468,36 @@ jobs:
 
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@1.95
+      # `dtolnay/rust-toolchain` only runs `rustup default 1.95`, and rustup
+      # ranks a `rust-toolchain.toml` in the working directory *above* the
+      # default: ours says `channel = "stable"`, so without this step every
+      # `cargo` below ran on whatever stable is today and this job passed while
+      # testing nothing it promised (`rustup show active-toolchain` in the repo
+      # reads "stable ... overridden by rust-toolchain.toml"). `RUSTUP_TOOLCHAIN`
+      # outranks the file. The assertion is what keeps it true: it fails the job
+      # if the compiler is not the declared MSRV, so a future change to either
+      # file cannot quietly put this back.
+      - name: Run on the MSRV
+        shell: bash
+        run: |
+          set -euo pipefail
+          declared=$(
+            awk '/^\[workspace\.package\]/{f=1; next} /^\[/{f=0}
+                 f && /^rust-version = /{gsub(/[" ]/, "", $3); print $3; exit}' Cargo.toml
+          )
+          echo "RUSTUP_TOOLCHAIN=${declared}" >> "$GITHUB_ENV"
+      # A separate step, so it reads the compiler a *later* step really gets:
+      # the export above only takes effect from the next step on.
+      - name: Prove the compiler is the MSRV
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(rustc --version)
+          echo "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-<unset>}; compiler: ${actual}"
+          if [[ "${actual}" != "rustc ${RUSTUP_TOOLCHAIN:-?}."* ]]; then
+            echo "::error::The MSRV job is running '${actual}', not the declared MSRV."
+            exit 1
+          fi
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -478,8 +508,11 @@ jobs:
           shared-key: ci-msrv
       - name: Check MSRV build (all features incl. bundled DuckDB)
         # --all-features proves the DuckDB / duckdb-rs tree also builds on the
-        # declared MSRV, not just the default feature set.
-        run: cargo check --workspace --all-features
+        # declared MSRV, not just the default feature set. --all-targets puts the
+        # tests, benches and dev-dependencies on the same footing: this job used
+        # to check the library and binary only, so a dev-dependency that needed a
+        # newer Rust was invisible to it. --locked checks the lockfile that ships.
+        run: cargo check --workspace --all-features --all-targets --locked
 
   # ── aarch64 cross-check (Raspberry Pi) ───────────────────────────────────────
   cross-aarch64:

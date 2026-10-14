@@ -241,6 +241,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The MSRV job and the Docker builder were not running the MSRV.**
+  `rust-toolchain.toml` names `stable`, and rustup ranks a toolchain file above
+  `rustup default`, which is all `dtolnay/rust-toolchain@1.95` sets — so
+  "MSRV (Rust 1.95)" compiled with the current stable (1.99.0 here), and so did
+  `docker build` through the `COPY . .` that carried the file into a
+  `rust:1.95` image. The job now exports `RUSTUP_TOOLCHAIN` from `Cargo.toml`'s
+  `rust-version` and asserts `rustc --version` in a following step, checks
+  `--all-targets --locked` (it checked the library and binary only), and
+  `.dockerignore` leaves the file out. The promise itself holds:
+  `cargo check --workspace --all-features --all-targets --locked` passes on
+  Rust 1.95.0 with no warnings. `scripts/check-ci-config.py` gains the check
+  that keeps it so (incident 6).
+
 - **One failing classifier silenced the rest.** On a station running more
   than one classifier, an error from any of them failed the whole file, so
   a broken second model stopped the primary from recording anything. A
@@ -511,6 +524,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/api/v2/analytics/status` reports an unreadable count as `null`, not
   `0`.** A zero there is documented as "the sync has not run", which was the
   wrong diagnosis for a store whose tables could not be read.
+
+### Security
+
+- **`rustls` 0.23.46, for four advisories published 2026-10-14.**
+  RUSTSEC-2026-0346 (client session values print TLS secrets through `Debug`),
+  -0347 (application data sent to the outer server after an ECH rejection),
+  -0348 (Brotli certificate decompression allocating up to 1 GiB before the
+  peer is authenticated) and -0349 (an unauthenticated ServerHello downgrading
+  later connections to classical key exchange) are all fixed from 0.23.46, and
+  `cargo deny` and `cargo audit` fail on 0.23.45. The refresh also moves
+  `rustls-native-certs`, `tokio`, `deranged`, `equivalent` and `zerocopy` by a
+  patch each. Reachability here is limited and was read, not tested: the
+  lockfile has no `brotli` crate, so -0348 has nothing to decompress with, and
+  nothing in the workspace enables ECH.
 
 ## [0.17.1] - 2026-10-04
 
