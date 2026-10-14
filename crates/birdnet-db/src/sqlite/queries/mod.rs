@@ -2,6 +2,7 @@
 
 pub mod analysis_runs;
 pub mod analytics;
+pub mod charts;
 pub mod correlation;
 pub mod detection_reviews;
 pub mod detections;
@@ -11,6 +12,7 @@ pub mod images;
 pub mod imports;
 pub mod insights;
 pub mod maintenance;
+pub mod overview;
 pub mod quarantine;
 pub mod species;
 
@@ -25,6 +27,10 @@ pub use analytics::{
     model_vs_review_by_species, quality_summary, range_daily_counts, review_verdict_trend,
     reviewed_detections_by_species, species_shapes, today_species_hour_heatmap,
     weekly_detection_count, weekly_new_species, weekly_top_species,
+};
+pub use charts::{
+    CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, SpeciesDay, SpeciesHours,
+    confidence_histograms, day_counts_between, day_onsets, slot_counts, species_day, species_hours,
 };
 pub use correlation::{companion_species, top_cooccurrence_pairs};
 pub use detection_reviews::{
@@ -59,7 +65,8 @@ pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list
 pub use insights::{
     DashboardKpis, DawnFirstSong, ExpectedSpecies, FirstHeard, GoneQuiet, NewArrival,
     PhantomSpecies, SpeciesRangeSummary, dashboard_kpis, dawn_first_songs, expected_today,
-    first_heard_between, gone_quiet, new_arrivals, phantom_species, species_range_summary,
+    first_heard_between, gone_quiet, new_arrivals, phantom_species, source_counts,
+    species_range_summary,
 };
 pub use maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, BackupSchedule, DAILY_INTERVAL_SECS, DueReason, JOB_BACKUP_VACUUM,
@@ -67,6 +74,7 @@ pub use maintenance::{
     JobStatus, due_state, job_statuses, last_run_result, last_run_unix, record_run,
     record_run_result,
 };
+pub use overview::{EngineDetails, TableSize, detection_rate_24h, engine_details, table_sizes};
 pub use quarantine::{
     ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
     QuarantineStats, approve_quarantine, count_quarantine, delete_quarantine, get_quarantine,

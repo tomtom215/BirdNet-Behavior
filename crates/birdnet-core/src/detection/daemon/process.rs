@@ -6,6 +6,7 @@ use std::time::Instant;
 use crate::detection::ChunkFilters;
 use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
 use crate::detection::types::ChunkPrediction;
+use crate::inference::health::ErrorClass;
 use crate::inference::registry::ClassifierRegistry;
 use crate::inference::species_filter::SpeciesFilter;
 
@@ -85,11 +86,50 @@ fn report_species_filter_failure(error: &crate::inference::model::InferenceError
     );
 }
 
-/// Process a single audio file and run inference.
-///
-/// Returns all detections found in the file, or an empty vec if
-/// nothing meets the confidence threshold.
-///
+/// Record one window's outcome on a classifier's health, and log the two
+/// moments worth a line: the first failure of a run (with its error, which
+/// is otherwise not logged when another classifier answered), and the window
+/// that makes the classifier failing. Recovery from failing is logged too.
+/// Nothing in between — a model failing every window would otherwise write a
+/// line every three seconds.
+fn record_window(
+    registered: &mut crate::inference::registry::RegisteredModel,
+    outcome: Result<(), (ErrorClass, Option<&crate::inference::model::InferenceError>)>,
+    now: u64,
+) {
+    let health = &mut registered.health;
+    match outcome {
+        Ok(()) => {
+            let was_failing = health.is_failing();
+            health.succeeded(now);
+            if was_failing {
+                tracing::info!(model = %registered.id, "classifier is answering again");
+            }
+        }
+        Err((class, error)) => {
+            health.failed(class, now);
+            if health.consecutive_failures == 1 {
+                tracing::warn!(
+                    model = %registered.id,
+                    error_class = class.as_str(),
+                    error = error.map(ToString::to_string),
+                    "classifier failed a window"
+                );
+            }
+            if health.consecutive_failures == crate::inference::health::FAILING_AFTER {
+                tracing::error!(
+                    model = %registered.id,
+                    error_class = class.as_str(),
+                    windows = health.consecutive_failures,
+                    "classifier has failed every window for {} in a row; it is reported as \
+                     failing until it answers one",
+                    health.consecutive_failures
+                );
+            }
+        }
+    }
+}
+
 /// Run every classifier routed to this chunk and combine what they said.
 ///
 /// One classifier is the overwhelmingly common case and costs one pass, as it
@@ -111,6 +151,10 @@ fn infer_chunk(
     let mut verdicts = Vec::with_capacity(route.len());
     let mut human_score = 0.0_f32;
     let mut loudest_noise = None;
+    // The first classifier error, returned only if no routed classifier
+    // answered: one model failing must not silence the others (`e853776`).
+    let mut first_error = None;
+    let now = crate::inference::health::unix_now();
 
     for &idx in route {
         let Some(registered) = registry.model_mut(idx) else {
@@ -120,14 +164,28 @@ fn infer_chunk(
         };
         let model_id = registered.id.clone();
         let own_threshold = registered.own_threshold;
-        let prediction = registered.model.predict_chunk(
+        let prediction = match registered.model.predict_chunk(
             &chunk.spectrogram.data,
             &chunk.recording.date,
             &chunk.recording.time,
             chunk.start_secs,
             chunk.end_secs,
             week,
-        )?;
+        ) {
+            Ok(prediction) => {
+                if registered.model.last_non_finite_scores() > 0 {
+                    record_window(registered, Err((ErrorClass::NonFiniteOutput, None)), now);
+                } else {
+                    record_window(registered, Ok(()), now);
+                }
+                prediction
+            }
+            Err(e) => {
+                record_window(registered, Err((ErrorClass::Inference, Some(&e))), now);
+                first_error.get_or_insert(e);
+                continue;
+            }
+        };
         human_score = human_score.max(prediction.human_score);
         // Likewise the loudest watched noise class across classifiers.
         if let Some(noise) = prediction.loudest_noise
@@ -144,6 +202,12 @@ fn infer_chunk(
             detections: prediction.detections,
             threshold: own_threshold,
         });
+    }
+
+    if verdicts.is_empty()
+        && let Some(e) = first_error
+    {
+        return Err(e.into());
     }
 
     Ok(ChunkPrediction {
@@ -513,5 +577,146 @@ mod tests {
                 .all(|e| e.detection.scientific_name != "Species0 bird"),
             "the operator's exclude list still applies"
         );
+    }
+    /// Two classifiers whose inputs differ, so one chunk can fail the first
+    /// and not the second: the tiny V2.4 model refuses fewer than half its
+    /// 144 000 values, and the tiny V3.0 model, declared at 48 kHz so the two
+    /// may share a station, takes 96 000.
+    fn two_classifiers(dir: &Path) -> ClassifierRegistry {
+        use crate::inference::model::ModelConfig;
+        use crate::inference::registry::ModelSpec;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        let labels = dir.join("labels.txt");
+        std::fs::write(
+            &labels,
+            (0..11)
+                .map(|i| format!("Species{i} bird_Bird {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let v24 = dir.join("v24.onnx");
+        let v30 = dir.join("v30.onnx");
+        std::fs::write(&v24, TINY_V24).unwrap();
+        std::fs::write(&v30, TINY_V30).unwrap();
+        let spec = |id: &str, path: &Path, rate| ModelSpec {
+            id: id.to_owned(),
+            model_path: path.to_path_buf(),
+            labels_path: labels.clone(),
+            threshold: None,
+            sample_rate: rate,
+        };
+        ClassifierRegistry::load(
+            &[spec("birdnet", &v24, None), spec("v3", &v30, Some(48_000))],
+            &std::collections::HashMap::new(),
+            &ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("both tiny classifiers load")
+    }
+
+    fn chunk_of(values: usize) -> PreparedChunk {
+        PreparedChunk {
+            spectrogram: crate::audio::spectrogram::MelSpectrogram {
+                data: vec![0.01; values],
+                n_mels: 1,
+                n_frames: values,
+            },
+            start_secs: 0.0,
+            end_secs: 3.0,
+            recording: crate::detection::types::RecordingFile::parse(
+                "/x/2026-05-19-birdnet-09:00:00.wav",
+            )
+            .unwrap(),
+        }
+    }
+
+    /// `e853776`: a classifier that fails a window is recorded as failing it,
+    /// and does not silence the classifiers that answered. Before, its error
+    /// was a `?` that failed the whole file — every other model's detections
+    /// with it — and was recorded nowhere but the journal.
+    #[test]
+    fn a_classifier_failing_a_window_does_not_silence_the_others() {
+        use crate::inference::health::{ErrorClass, FAILING_AFTER};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers(tmp.path());
+
+        // Precondition: this chunk is one the V2.4 model refuses and the V3.0
+        // model takes, or the test below proves nothing.
+        let half = chunk_of(60_000);
+        for _ in 0..FAILING_AFTER {
+            let prediction = infer_chunk(&mut registry, &[0, 1], &half, 20)
+                .expect("the answering classifier carries the window");
+            assert!(
+                !prediction.detections.is_empty(),
+                "threshold 0: the V3.0 model's species are reported"
+            );
+            assert!(
+                prediction
+                    .detections
+                    .iter()
+                    .all(|d| d.model_id.as_deref() == Some("v3")),
+                "only the classifier that answered: {:?}",
+                prediction.detections
+            );
+        }
+        let health = registry.health();
+        assert_eq!(health[0].0, "birdnet");
+        assert!(health[0].1.is_failing(), "{:?}", health[0].1);
+        assert_eq!(health[0].1.error_class, Some(ErrorClass::Inference));
+        assert_eq!(health[0].1.last_success_at, None);
+        assert!(!health[1].1.is_failing(), "{:?}", health[1].1);
+        assert_eq!(health[1].1.windows, u64::from(FAILING_AFTER));
+        assert!(health[1].1.last_success_at.is_some());
+
+        // A full window: both answer, and the failing one is well again.
+        infer_chunk(&mut registry, &[0, 1], &chunk_of(144_000), 20).unwrap();
+        let health = registry.health();
+        assert!(!health[0].1.is_failing());
+        assert_eq!(health[0].1.consecutive_failures, 0);
+        assert!(health[0].1.last_success_at.is_some());
+    }
+
+    /// A classifier that answers with scores that are not numbers fails the
+    /// window as `non_finite_output`, though it did not error: those scores are
+    /// never recorded, so a model doing this every window is silent, not
+    /// broken-looking. NaN audio is how the tiny model is made to do it.
+    #[test]
+    fn a_classifier_answering_nan_fails_the_window() {
+        use crate::inference::health::ErrorClass;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers(tmp.path());
+        let mut nan = chunk_of(144_000);
+        nan.spectrogram.data.fill(f32::NAN);
+        infer_chunk(&mut registry, &[0], &nan, 20).expect("it answers");
+        assert!(
+            registry.primary().model.last_non_finite_scores() > 0,
+            "precondition: NaN in, NaN out"
+        );
+        let health = registry.health();
+        assert_eq!(health[0].1.consecutive_failures, 1);
+        assert_eq!(health[0].1.error_class, Some(ErrorClass::NonFiniteOutput));
+        assert_eq!(health[0].1.last_success_at, None);
+
+        // Counterpart: finite audio is a clean window.
+        infer_chunk(&mut registry, &[0], &chunk_of(144_000), 20).unwrap();
+        assert_eq!(registry.primary().model.last_non_finite_scores(), 0);
+        assert_eq!(registry.health()[0].1.consecutive_failures, 0);
+    }
+
+    /// The counterpart: when no routed classifier answers, the window is still
+    /// an error, so the file is not reported as analysed.
+    #[test]
+    fn a_window_no_classifier_answers_is_still_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers(tmp.path());
+        assert!(infer_chunk(&mut registry, &[0, 1], &chunk_of(40_000), 20).is_err());
+        assert!(infer_chunk(&mut registry, &[0], &chunk_of(60_000), 20).is_err());
+        let health = registry.health();
+        assert_eq!(health[0].1.consecutive_failures, 2);
+        assert_eq!(health[1].1.consecutive_failures, 1, "not run on the second");
     }
 }

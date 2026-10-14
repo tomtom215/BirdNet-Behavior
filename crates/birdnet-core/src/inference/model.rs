@@ -98,6 +98,10 @@ pub struct BirdNetModel {
     /// never detections ([`compute_confidence`]); this makes a model that
     /// produces them visible instead of merely quiet.
     warned_non_finite: bool,
+    /// How many scores the most recent window produced that were not finite
+    /// numbers; read by the daemon's per-classifier health
+    /// ([`super::health`]). Zero before the first window.
+    last_non_finite: usize,
     /// Output indices whose label names a human class, found once at load so
     /// the per-chunk human score is a lookup rather than a scan of every label.
     human_indices: Vec<usize>,
@@ -210,6 +214,7 @@ impl BirdNetModel {
             is_probability_output,
             warned_label_count_mismatch: false,
             warned_non_finite: false,
+            last_non_finite: 0,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -241,6 +246,7 @@ impl BirdNetModel {
             is_probability_output,
             warned_label_count_mismatch: false,
             warned_non_finite: false,
+            last_non_finite: 0,
             human_indices,
             noise_indices: Vec::new(),
         })
@@ -273,6 +279,13 @@ impl BirdNetModel {
         }
         let non_finite = logits.iter().filter(|v| !v.is_finite()).count();
         (non_finite > 0).then_some(non_finite)
+    }
+
+    /// How many scores the most recent [`Self::predict_chunk`] produced that
+    /// were not finite numbers (NaN or infinity). Zero before the first.
+    #[must_use]
+    pub const fn last_non_finite_scores(&self) -> usize {
+        self.last_non_finite
     }
 
     /// Run inference on raw audio samples.
@@ -434,6 +447,7 @@ impl BirdNetModel {
             );
         }
 
+        self.last_non_finite = flat_logits.iter().filter(|v| !v.is_finite()).count();
         if let Some(non_finite) = Self::non_finite_to_warn(flat_logits, self.warned_non_finite) {
             self.warned_non_finite = true;
             tracing::warn!(

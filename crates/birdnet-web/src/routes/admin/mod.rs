@@ -43,6 +43,8 @@ pub mod nav;
 pub mod notification_test;
 pub mod notifications;
 pub mod overview;
+#[cfg(feature = "profiling")]
+pub mod profiling;
 pub mod quality;
 pub mod rules;
 pub mod settings;
@@ -211,6 +213,18 @@ pub fn router() -> Router<AppState> {
         // Station sub-tab row. The folded admin POST/partial endpoints above keep
         // their `/admin/...` paths.
         .merge(crate::routes::pages::homes::station_tabs::router())
+        // CPU profiles (G-24): an empty router unless built with `profiling`.
+        .merge(profiling_router())
+}
+
+#[cfg(feature = "profiling")]
+fn profiling_router() -> Router<AppState> {
+    profiling::router()
+}
+
+#[cfg(not(feature = "profiling"))]
+fn profiling_router() -> Router<AppState> {
+    Router::new()
 }
 
 /// Redirect `/admin` to the Station home (the v3-spine toolbox landing).

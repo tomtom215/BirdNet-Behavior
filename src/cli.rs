@@ -432,7 +432,7 @@ pub struct Cli {
     pub private_mode: bool,
 
     /// What stays open on a private station: a comma-separated list of
-    /// `live_audio` (the stream and the live spectrogram), `share`
+    /// `live_audio` (the live audio, MP3 and HLS, and the live spectrogram), `share`
     /// (operator-minted `/r/<token>` links) and `metrics` (`/api/v2/metrics`).
     ///
     /// No effect without `--private-mode`. An unknown name is reported and

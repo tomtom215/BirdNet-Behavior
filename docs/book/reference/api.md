@@ -27,6 +27,18 @@ curl http://localhost:8502/api/v2/health
   "detection_silence_secs": 142,
   "analysis_queue_depth": 2,
   "detection_deadman": "ok",
+  "classifiers": [
+    {
+      "model": "birdnet",
+      "state": "ok",
+      "consecutive_failures": 0,
+      "failure_threshold": 10,
+      "windows": 48210,
+      "last_window_at": 1788973195,
+      "last_success_at": 1788973195,
+      "error_class": null
+    }
+  ],
   "data_volume": {
     "writable": true,
     "mount": "intact",
@@ -67,6 +79,18 @@ never, once the station has listened that long), `ok` otherwise, `off` when
 its threshold is 0. `tripped` is degraded under `?strict=1`, so a monitor
 polling the strict endpoint goes red at the moment the notifier fires rather
 than reading `detection_silence_secs` against a threshold of its own.
+
+`classifiers` is each loaded classifier, primary first (empty until the
+daemon has analysed a file). `state` is `failing` once a classifier has failed
+`failure_threshold` analysis windows in a row and answered none since, and
+`ok` otherwise; `error_class` says why the latest failed window failed —
+`inference_error` (the model returned an error) or `non_finite_output` (it
+answered with NaN or infinite scores, which are never recorded). Times are
+seconds since the Unix epoch, `null` for never. A failing classifier is
+degraded under `?strict=1` and raises the `classifier:<id>` station-health
+condition. On a station with several classifiers the others keep recording
+while one fails, which is why the detection deadman cannot be relied on to
+notice.
 
 `boot_anomalies` is what the boot journal found this start changed since the
 last one: `db_lost` (the database held detections at the last start and holds
@@ -176,6 +200,14 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/dashboard/kpis` | Species ever heard, detections today, the busiest day since this date last year (`best_day`), and the run of consecutive days with a detection ending today (`detection_streak`; 0 when today has none). With none, `best_day` is `{"date": "", "count": 0}`. |
 | `GET /api/v2/analytics/species/summary?start_date=&end_date=&limit=` | Each species' count, mean and highest confidence, and first and last detection (`first_heard`, `last_heard`: RFC 3339 with the offset in force at the time) over the range, most detected first, as a bare array. Either end may be left open; a date that is not a calendar day, or a reversed range, is a `400`. |
 | `GET /api/v2/analytics/species/detections/new?start_date=&end_date=&limit=&offset=` | Species first heard here within the range (default: the 30 days before today through today), newest first, with `count_in_period`, as a bare array. `limit` defaults to 100 (0 also means 100); a `limit` or `offset` that is not a non-negative integer is a `400`. |
+| `GET /api/v2/analytics/species/daily?date=&min_confidence=&limit=` | One day's species (default today), most detected first and ties by the later last detection, as a bare array. Each has `scientific_name`, `common_name`, `count`, 24 `hourly_counts`, `high_confidence` (a detection at 0.8 or more), `current_season`, and — left out when zero, false or empty — `max_confidence`, `first_heard`, `latest_heard`, `thumbnail_url`, `is_new_species`, `is_new_this_year`, `is_new_this_season` (first heard here, since 1 January, or since the season began, at most 7 days before), `days_since_first_seen`, `days_this_year`, `days_this_season` and `days_since_last_seen` (back to the previous day it was heard). All read as of `date`. Seasons follow the hemisphere: north of 10° spring/summer/fall/winter from 20 March, 21 June, 22 September and 21 December; south of −10° the same names six months on; between, and with no location, `wet1`/`dry1`/`wet2`/`dry2` from the 1st of March, June, September and December. `min_confidence` is a percentage (anything that is not a number is 0); `limit` defaults to 30. |
+| `GET /api/v2/analytics/sources?start_date=&end_date=` | The audio sources with detections in the range (all history when it is open), busiest first, as `{"sources": [{"id", "name", "count"}]}`. `id` is the stream id each detection records; `name` is the name given on the Capture screen, or the id. Rejected detections, and detections from before sources were recorded, are in no count. A bad or reversed range is a `400`. |
+| `GET /api/v2/analytics/confidence/distribution?start_date=&end_date=&species=&bins=&limit=` | Each species' confidence distribution: `[{"scientificName", "commonName", "bins", "total"}]`, where `bins` is the fraction of its detections in each of `bins` equal-width bins over 0–1 (a bin holds its lower edge; 1.0 is in the last). `start_date` is required; `end_date` defaults to 30 days after it. `bins` defaults to 20 and is held to 5–50. Without `species`, the `limit` most detected species (default 5, at most 10; anything else is 5), less those with fewer than 20 detections in the range; with `species` (scientific or common name, any case), that species alone. |
+| `GET /api/v2/analytics/time/year-over-year?date=` | Detections from 1 January to `date` (default today), cumulatively, against the same span of the year before: `{"currentYear", "previousYear", "points": [{"date", "monthDay", "thisYear", "lastYear", "delta"}]}`, one point a day. Aligned by calendar date: on 29 February, last year's figure is its 28 February; last year's 29 February counts from its 1 March. A `date` that is not a calendar day is a `400`. |
+| `GET /api/v2/analytics/time/dawn-onset?start_date=&end_date=&species=` | One row per day of the range — quiet days too — as `[{"date", "onsetRelMinutes", "detectionCount"}]`. `onsetRelMinutes` is the day's third-earliest detection, in minutes after civil dawn (negative before it), and `null` on a day with fewer than five detections, a day the sun never gets 6° below the horizon, or at a station with no location set. `start_date` is required; `end_date` defaults to 30 days after it; `species` is a scientific or common name. |
+| `GET /api/v2/analytics/time/heatmap?start_date=&end_date=&species=&format=` | Detections by day and time of day: `{"dates", "slotResolutionMinutes", "cells": {"dateIndex", "slot", "count"}}`. `dates` lists every day of the range; the three cell arrays run in parallel and list only occupied cells, by day and then slot; slot `n` starts `n × slotResolutionMinutes` minutes after local midnight. Slots are 15 minutes up to 90 days, 30 up to 180, then 60. `format=csv` answers the same cells as `date,slot,slot_start,count`. Range rules as above. |
+| `GET /api/v2/analytics/time/distribution/species?start_date=&end_date=&species=&limit=` | Each species' detections by local hour as fractions of its total: `[{"scientificName", "commonName", "buckets", "total"}]`, 24 buckets from midnight. The `limit` most detected species (default 5, at most 10; anything else is 5), or those named by a repeated `species` (`?species=A&species=B`, scientific or common names, at most 10 — eleven is a `400`). Range rules as above. |
+| `GET /api/v2/analytics/time/succession?start_date=&end_date=&species=&limit=` | The same species' hourly detections as counts: `[{"scientificName", "commonName", "counts", "total"}]`. Default 6 species, at most 10. |
 
 These `insights`, `dashboard` and `analytics/species` endpoints read SQLite directly, so they answer with the analytics engine off. Their parameters, defaults and field names are birdnet-go's, so a client written for either station reads both. A station whose detections cannot be read answers `500` rather than an empty list.
 
@@ -252,6 +284,38 @@ const ws = new WebSocket("ws://localhost:8502/api/v2/ws/detections");
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
+## Live audio
+
+`GET /stream` is the live audio as MP3 (`?source_id=`, `?freq_shift_hz=`),
+outside `/api/v2`. The HLS variant uses birdnet-go's routes and fields, so a
+client written for either station reads both:
+
+| Request | Answer |
+|---|---|
+| `POST /api/v2/streams/hls/{source_id}/start` | `{status, source, playlist_url, active_clients, playlist_ready, freq_shift_hz, stream_token}` once the playlist lists two segments, or with `status: "starting"` after 20 s |
+| `GET /api/v2/streams/hls/t/{token}/playlist.m3u8` | the live playlist; its segments are `…/t/{token}/seg<n>.ts` |
+| `POST /api/v2/streams/hls/heartbeat` | `{"status": "ok"}`; with `?disconnect=true` the session leaves |
+| `POST /api/v2/streams/hls/{source_id}/stop` | the session in the body leaves; the stream ends with its last |
+| `GET /api/v2/streams/hls/status` | `{count, streams}`, without tokens |
+
+`source_id` is a source's id or `default`. Start, stop and heartbeat take an
+optional `{"session_id": "…"}` body naming the caller — a value of its own
+choosing, up to 64 characters — and `start` and `stop` take
+`?freq_shift_hz=` as `/stream` does; each shift is a stream of its own. The
+playlist URL is relative to the station's root, so a station under a base
+path serves it beneath that path.
+
+```sh
+url=$(curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"session_id":"cli"}' \
+  http://localhost:8502/api/v2/streams/hls/default/start | jq -r .playlist_url)
+ffplay "http://localhost:8502$url"
+```
+
+The errors are `/stream`'s: `404` for an unknown source, and `503` when no
+source is configured, the source is not recording, all four live-stream slots
+are in use, or `ffmpeg` is not installed.
+
 ## Errors
 
 An unmatched path under `/api/` returns a machine-readable JSON `404` (not the
@@ -277,12 +341,13 @@ They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-Seven *reads* live behind the same token, because what they return is not public:
+Eight *reads* live behind the same token, because what they return is not public:
 `GET /api/v2/settings` (the configuration, credentials taken out),
 `GET /api/v2/system/capture` and `GET /api/v2/system/jobs` (operational detail
 about the station and its sources), `GET /api/v2/system/network` and
 `GET /api/v2/system/processes` (the network it sits on, and what it is running),
-`GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
+`GET /api/v2/system/database/overview` (where its database is and what is in
+it), `GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
 
 ### Turning them on
 
@@ -339,6 +404,7 @@ A malformed key is `400`; a well-formed key matching no row is `404`.
 | `GET` | `/api/v2/system/capture` | Per-source capture health, as Station Health draws it |
 | `GET` | `/api/v2/system/jobs` | Every scheduled maintenance job and its state |
 | `GET` | `/api/v2/system/network` | Network interfaces: addresses with prefix, hardware address, bytes in and out; loopback last |
+| `GET` | `/api/v2/system/database/overview` | The database: engine settings, each table's rows and size, the last recorded integrity check and VACUUM, mean detection-write latency, and detections in each of the last 24 UTC hours |
 | `GET` | `/api/v2/system/processes` | The station's process and everything it started (capture `ffmpeg`, `arecord`, conversions), CPU sampled over 250 ms as a percentage of one core |
 | `GET` | `/api/v2/models/catalog` | The classifiers this build can install |
 
@@ -598,6 +664,31 @@ Restarts an operator asked for are deliberately **not** counted in
 `restarts_last_hour`, and so never raise `flapping`. That number exists to spot
 a source that cannot stay up on its own; clicking Restart three times while
 debugging a camera is not that.
+
+### The database overview
+
+`GET /api/v2/system/database/overview` answers with birdnet-go's fields for
+its SQLite engine: `engine`, `status`, `location`, `size_bytes` (the main
+file; the WAL is `sqlite.wal_size_bytes`), `total_detections`,
+`total_tables`, `sqlite` (version, journal mode, page size, free pages, cache
+size, `integrity_check`, `last_vacuum_at`), `tables` (each with `row_count`,
+`size_bytes` counting its indexes, and `usage_pct`), `performance` and
+`detection_rate_24h` (detections in each of the last 24 UTC hours that had
+any). It differs from upstream where upstream would report a number this
+station did not measure:
+
+- `integrity_check` is the last recorded check — `ok`, `failed` or
+  `unchecked` — where upstream always says `ok`.
+- `wal_checkpoints`, `busy_timeouts` and every `performance` figure except
+  `write_latency_avg_ms` are `null`. Nothing here counts them, and upstream's
+  checkpoint count comes from running a checkpoint, which a `GET` here does
+  not. `write_latency_avg_ms` is the mean detection write since the service
+  started.
+- Table sizes come from reading every page of the file, so they are measured
+  at most every 15 minutes; `tables_measured_at` (Unix seconds) says when.
+
+A database that cannot be read answers `200` with `status: "disconnected"` and
+empty lists, as upstream does.
 
 ### Scheduled maintenance jobs
 

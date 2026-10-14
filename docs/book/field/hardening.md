@@ -170,7 +170,7 @@ plus whatever `BIRDNET_PUBLIC_ACCESS` names, comma-separated:
 
 | Carve-out | Opens |
 |---|---|
-| `live_audio` | `/stream` and the live spectrogram WebSocket — for a station whose feed is meant to be listened to |
+| `live_audio` | `/stream`, its HLS variant under `/api/v2/streams/hls/`, and the live spectrogram WebSocket — for a station whose feed is meant to be listened to |
 | `share` | the signed `/r/<token>` links the **Share clip** button mints, with their audio and spectrogram; *not* the recordings route behind them |
 | `metrics` | `/api/v2/metrics`, for a Prometheus scraper that has no cookie |
 

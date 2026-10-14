@@ -265,6 +265,11 @@ async fn health(
     // reading of the silence here.
     let deadman = state.metrics().detection_deadman();
     let deadman_tripped = deadman == Some(true);
+    // A classifier failing every window (`e853776`): the pager's business,
+    // like the deadman, which it would otherwise wait twenty-four hours for —
+    // or never fire for, when another classifier is still answering.
+    let classifiers = state.metrics().model_health();
+    let classifier_failing = classifiers.iter().any(|(_, h)| h.is_failing());
     let degraded = !db_ok
         || ingest_halted
         || loses_writes
@@ -273,7 +278,8 @@ async fn health(
                 || volume_fault
                 || bootstrap_failed
                 || !boot_anomalies.is_empty()
-                || deadman_tripped));
+                || deadman_tripped
+                || classifier_failing));
 
     let status = if degraded {
         StatusCode::SERVICE_UNAVAILABLE
@@ -300,6 +306,21 @@ async fn health(
                 Some(false) => "ok",
                 Some(true) => "tripped",
             },
+            // Each classifier's state, primary first; empty until the
+            // daemon has analysed a file.
+            "classifiers": classifiers
+                .iter()
+                .map(|(id, h)| json!({
+                    "model": id,
+                    "state": if h.is_failing() { "failing" } else { "ok" },
+                    "consecutive_failures": h.consecutive_failures,
+                    "failure_threshold": birdnet_core::inference::health::FAILING_AFTER,
+                    "windows": h.windows,
+                    "last_window_at": h.last_window_at,
+                    "last_success_at": h.last_success_at,
+                    "error_class": h.error_class.map(birdnet_core::inference::health::ErrorClass::as_str),
+                }))
+                .collect::<Vec<_>>(),
             "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
             "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
             "boot_anomalies": boot_anomalies

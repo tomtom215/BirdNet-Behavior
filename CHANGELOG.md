@@ -9,6 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live audio as HLS, so a phone keeps playing through a network
+  handover.** `POST /api/v2/streams/hls/{source_id}/start` answers with a
+  token and a playlist of two-second AAC segments, with `stop`,
+  `heartbeat` and `status` beside it — birdnet-go's routes and fields. One
+  `ffmpeg` per source and pitch shift serves every listener, within the
+  four live-stream slots `/stream` uses, and a stream ends with its last
+  listener or a minute after its last fetch. The Live view uses it where
+  the browser plays HLS natively (Safari, iOS, Android Chrome) and keeps
+  MP3 elsewhere. A private station's `live_audio` carve-out opens it.
+
+- **A classifier that fails every window is reported.** After ten failed
+  analysis windows in a row — an error, or scores that are not numbers — a
+  classifier is *failing* until it answers one: a station-health alert
+  names it (`classifier:<id>`), `/api/v2/health` lists every classifier's
+  state and makes a failing one a `?strict=1` fault, and Prometheus gets
+  `birdnet_model_failing`, `birdnet_model_consecutive_failed_windows`,
+  `birdnet_model_windows_total` and
+  `birdnet_model_last_success_timestamp_seconds`. birdnet-go's threshold
+  and error classes. Before, it was one journal line per segment.
+
+- **CPU profiles for administrators, in builds with the `profiling`
+  feature.** `GET /admin/debug/pprof/profile?seconds=30` samples every
+  thread and answers a `pprof` profile (`go tool pprof`, Speedscope) or, with
+  `format=folded`, folded stacks. Not in release builds; nothing samples
+  until one is asked for; one at a time.
+
+- **`GET /api/v2/system/database/overview`** (bearer token). The database's
+  engine settings, each table's rows and size, the last recorded integrity
+  check and VACUUM, mean write latency and the last 24 hours' arrivals —
+  birdnet-go's fields, with `null` where it would report a figure this
+  station does not measure.
+
+- **`GET /api/v2/analytics/species/daily`.** Any day's species, most
+  detected first, with hourly counts, first and last heard, and how new
+  each is — first heard here, this year or this season within the last
+  seven days, and how long since it was last heard — birdnet-go's
+  parameters and fields. The novelty is read from the station's history as
+  of the day asked, so a past day says what was new then.
+
+- **`GET /api/v2/analytics/time/distribution/species` and
+  `GET /api/v2/analytics/time/succession`.** Each species' detections by
+  hour of the day over a range — as fractions of its total, to compare when
+  species sing, or as counts, to stack by volume — for the most detected
+  species or a repeated `species` selection of up to ten. birdnet-go's
+  parameters, defaults and fields.
+
+- **`GET /api/v2/analytics/time/heatmap`.** Detections by day and time of
+  day over a range, in 15-, 30- or 60-minute slots as the range widens, as
+  birdnet-go's sparse columnar payload or, with `format=csv`, a CSV file.
+  The existing hour × weekday heatmap is unchanged.
+
+- **`GET /api/v2/analytics/time/dawn-onset`.** For each day of a range,
+  when the dawn chorus began against that day's civil dawn: the third
+  detection of the day, so a stray or two before dawn does not move it, on
+  days with at least five. birdnet-go's rule and fields; civil dawn comes
+  from the station's location, in the local time — daylight saving
+  included — of each day rather than today.
+
+- **`GET /api/v2/analytics/time/year-over-year`.** Detections this year
+  to date against the same span of last year, cumulatively, one point a day
+  aligned by calendar date — birdnet-go's parameter, fields and handling of
+  29 February in either year.
+
+- **`GET /api/v2/analytics/confidence/distribution`.** Each species'
+  confidence distribution over a date range — the fraction of its
+  detections in each of 5 to 50 equal bins — for the most detected species
+  or for one named species, with birdnet-go's parameters, defaults and
+  fields. The quality page's station-wide six-bucket histogram is unchanged.
+
+- **`GET /api/v2/analytics/sources`.** The audio sources with detections
+  over an optional date range, busiest first, with the name each was given
+  on the Capture screen — birdnet-go's path, parameters and fields. Until
+  now the per-source counts covered today only, on the Station Health tab.
+
 - **`GET /api/v2/analytics/species/detections/new`.** Species first heard
   here within a date range (by default the last 30 days), newest first,
   with their detections in the range, paged — birdnet-go's path,
@@ -166,6 +240,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/v2/analytics/status` reports the embed's `abi`.
 
 ### Fixed
+
+- **One failing classifier silenced the rest.** On a station running more
+  than one classifier, an error from any of them failed the whole file, so
+  a broken second model stopped the primary from recording anything. A
+  window now fails only when none of its classifiers answers.
 
 - **Listening live to a camera ignored its transport.** The live stream
   always asked for TCP, so a camera that only speaks UDP could be recorded

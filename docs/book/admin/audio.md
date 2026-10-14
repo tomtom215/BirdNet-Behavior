@@ -311,7 +311,23 @@ If the chosen source is later disabled or removed, the stream falls back to the
 first working source rather than going silent; the journal says so when it does.
 
 Live audio still needs `ffmpeg` installed: the station uses it to encode the
-stream as MP3 for the browser. `--doctor` warns if it is missing.
+stream for the browser. `--doctor` warns if it is missing.
+
+**On a phone, Live uses HLS.** The MP3 stream is one long download, and a
+phone that moves from Wi-Fi to mobile data ends it for good: the tab goes
+silent and stays so. Where the browser plays HLS itself — Safari, iOS and
+Android Chrome — the Live view asks the station for an HLS stream instead: a
+short playlist of two-second AAC segments that the player keeps refetching,
+so it rides out a handover. It starts a few seconds slower than MP3, because
+the station waits for two segments before answering. Desktop browsers without
+native HLS keep the MP3 stream, and so does any browser whose HLS start the
+station refuses.
+
+Everyone listening to one source at one pitch shares one encoder, and HLS
+streams count against the same four live-stream slots as MP3. A stream stops
+when its last listener leaves, or a minute after nothing has fetched it, and
+its segments — kept in the service's private temporary directory — are
+deleted with it. The API is in the [REST API reference](../reference/api.md#live-audio).
 
 ## If you cannot hear the high notes
 

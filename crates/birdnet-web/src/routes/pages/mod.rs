@@ -361,6 +361,22 @@ pub(crate) fn local_utc_offset_secs() -> i64 {
     birdnet_db::clock::local_utc_offset_secs()
 }
 
+/// The station's configured coordinates, `None` when either is unset or not a
+/// valid latitude/longitude.
+pub(crate) fn station_location(conn: &rusqlite::Connection) -> Option<birdnet_scheduler::Location> {
+    let lat: f64 = birdnet_db::settings::get_or(conn, "latitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let lon: f64 = birdnet_db::settings::get_or(conn, "longitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    birdnet_scheduler::Location::new(lat, lon).ok()
+}
+
 /// Today's sunrise/sunset as fractional hours in **local** time, from the
 /// configured station location. `None` when no location is set or the sun never
 /// rises/sets at this latitude today.
@@ -388,17 +404,7 @@ pub(crate) fn local_utc_offset_secs() -> i64 {
 /// [`birdnet_scheduler::SolarDay`] already had a correct, leap-aware
 /// implementation. One caller, one clock, one day-of-year.
 pub(crate) fn solar_times_local(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
-    let lat: f64 = birdnet_db::settings::get_or(conn, "latitude", "")
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    let lon: f64 = birdnet_db::settings::get_or(conn, "longitude", "")
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    let location = birdnet_scheduler::Location::new(lat, lon).ok()?;
+    let location = station_location(conn)?;
     let date = today_date_string();
     let year: u32 = date.get(0..4)?.parse().ok()?;
     let month: u32 = date.get(5..7)?.parse().ok()?;

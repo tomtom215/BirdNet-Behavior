@@ -1,6 +1,7 @@
-//! `/api/v2/insights/*` and `/api/v2/dashboard/kpis` answer with birdnet-go's
-//! field names, defaults and limits, and a station whose detections cannot be read
-//! is told so rather than given an empty list.
+//! `/api/v2/insights/*`, `/api/v2/dashboard/kpis` and the `/api/v2/analytics/*`
+//! routes shared with birdnet-go answer with its field names, defaults and
+//! limits, and a station whose detections cannot be read is told so rather than
+//! given an empty list.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -412,5 +413,654 @@ async fn an_unreadable_station_is_an_error_not_an_empty_list() {
     ] {
         let (status, body) = get(&app, uri).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {body}");
+    }
+}
+
+/// Upstream's source list: `{"sources": [{"id", "name", "count"}]}`, the
+/// busiest first, the owner's name where the source has one and the id where
+/// it has not; a malformed or reversed range is a 400.
+#[tokio::test]
+async fn sources_are_listed_with_their_counts_and_names() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (i, (days_ago, source)) in [(1, "cam1"), (2, "cam1"), (40, "cam1"), (1, "local")]
+            .into_iter()
+            .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, Source)
+                 VALUES (date('now', 'localtime', ?1), printf('07:%02d:00', ?3), 'Turdus merula', 'Blackbird', 0.9, ?2)",
+                rusqlite::params![format!("-{days_ago} days"), source, i64::try_from(i).unwrap()],
+            )
+            .expect("insert");
+        }
+        conn.execute(
+            "INSERT INTO audio_sources (id, kind, device_id, label)
+             VALUES ('cam1', 'rtsp', 'rtsp://cam', 'Pond')",
+            [],
+        )
+        .expect("insert source");
+    });
+    let app = build_router(state);
+    let (status, body) = get(&app, "/api/v2/analytics/sources").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({"sources": [
+            {"id": "cam1", "name": "Pond", "count": 3},
+            {"id": "local", "name": "local", "count": 1},
+        ]})
+    );
+
+    let (_, body) = get(&app, "/api/v2/analytics/sources?start_date=2000-01-01").await;
+    assert_eq!(body["sources"][0]["count"], 3, "{body}");
+    let (status, body) = get(&app, "/api/v2/analytics/sources?end_date=2000-01-01").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({"sources": []}), "never null");
+
+    for bad in [
+        "start_date=2026-02-30",
+        "end_date=yesterday",
+        "start_date=2026-10-13&end_date=2026-10-12",
+    ] {
+        let (status, _) = get(&app, &format!("/api/v2/analytics/sources?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// Upstream's confidence distribution: camelCase, `start_date` required,
+/// `bins` and `limit` defaulted and bounded as upstream bounds them.
+#[tokio::test]
+async fn the_confidence_distribution_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for i in 0..25 {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES ('2026-10-02', printf('06:%02d:00', ?1), 'Turdus merula', 'Blackbird', ?2)",
+                rusqlite::params![i, if i < 5 { 0.97 } else { 0.51 }],
+            )
+            .expect("insert");
+        }
+        // Five more species, each less detected, for the limit: six qualify,
+        // so the default of five is told apart from the maximum of ten.
+        for (k, sci) in [
+            "Erithacus rubecula",
+            "Parus major",
+            "Sitta europaea",
+            "Pica pica",
+            "Corvus corone",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for i in 0..(24 - k) {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES ('2026-10-03', printf('06:%02d:00', ?1), ?2, ?2, 0.8)",
+                    rusqlite::params![i64::try_from(i).unwrap(), sci],
+                )
+                .expect("insert");
+            }
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-10-01",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = &body[0];
+    assert_eq!(row["scientificName"], "Turdus merula", "{body}");
+    assert_eq!(row["commonName"], "Blackbird");
+    assert_eq!(row["total"], 25);
+    let bins = row["bins"].as_array().expect("bins");
+    assert_eq!(bins.len(), 20, "the default");
+    assert_eq!(bins[19], 0.2);
+    assert_eq!(bins[10], 0.8);
+
+    for (query, expected) in [
+        ("bins=3", 5),
+        ("bins=500", 50),
+        ("bins=many", 20),
+        ("bins=7", 7),
+    ] {
+        let (_, body) = get(
+            &app,
+            &format!("/api/v2/analytics/confidence/distribution?start_date=2026-10-01&{query}"),
+        )
+        .await;
+        assert_eq!(
+            body[0]["bins"].as_array().map(Vec::len),
+            Some(expected),
+            "{query}"
+        );
+    }
+    // end_date defaults to thirty days after start_date: the 2nd is inside a
+    // range starting on 2 September, and outside one ending on 1 October.
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-09-02",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-09-01",
+    )
+    .await;
+    assert_eq!(body, serde_json::json!([]), "never null");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/confidence/distribution?start_date=2026-10-01&species=blackbird",
+    )
+    .await;
+    assert_eq!(body[0]["total"], 25, "by common name, in any case: {body}");
+    // `limit`: upstream's ParsePaginationLimit, so 0, a non-number and
+    // anything above 10 all mean the default of 5 — not the maximum.
+    for (query, expected) in [
+        ("limit=1", 1),
+        ("limit=6", 6),
+        ("limit=10", 6),
+        ("limit=0", 5),
+        ("limit=11", 5),
+        ("limit=x", 5),
+        ("limit=", 5),
+    ] {
+        let (_, body) = get(
+            &app,
+            &format!("/api/v2/analytics/confidence/distribution?start_date=2026-10-01&{query}"),
+        )
+        .await;
+        assert_eq!(
+            body.as_array().map(Vec::len),
+            Some(expected),
+            "{query}: {body}"
+        );
+    }
+
+    for bad in [
+        "",
+        "start_date=2026-02-30",
+        "start_date=2026-10-01&end_date=soon",
+        "start_date=2026-10-13&end_date=2026-10-12",
+    ] {
+        let (status, _) = get(
+            &app,
+            &format!("/api/v2/analytics/confidence/distribution?{bad}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// Upstream's year-over-year tracker: `{currentYear, previousYear, points}`,
+/// one cumulative point per day from 1 January to `date`, each year's
+/// detections counted through the same calendar day.
+#[tokio::test]
+async fn year_over_year_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (date, time) in [
+            ("2026-01-01", "06:00:00"),
+            ("2026-01-03", "06:00:00"),
+            ("2026-01-03", "07:00:00"),
+            ("2025-01-02", "06:00:00"),
+            ("2025-01-04", "06:00:00"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, 'Turdus merula', 'Blackbird', 0.9)",
+                rusqlite::params![date, time],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/time/year-over-year?date=2026-01-03",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "currentYear": 2026,
+            "previousYear": 2025,
+            "points": [
+                {"date": "2026-01-01", "monthDay": "01-01", "thisYear": 1, "lastYear": 0, "delta": 1},
+                {"date": "2026-01-02", "monthDay": "01-02", "thisYear": 1, "lastYear": 1, "delta": 0},
+                {"date": "2026-01-03", "monthDay": "01-03", "thisYear": 3, "lastYear": 1, "delta": 2},
+            ],
+        })
+    );
+    // No date is today, which is in the current year.
+    let (status, body) = get(&app, "/api/v2/analytics/time/year-over-year").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let points = body["points"].as_array().expect("points");
+    assert_eq!(
+        points.last().and_then(|p| p["date"].as_str()),
+        Some(local_today().as_str()),
+        "{body}"
+    );
+    for bad in ["date=2026-02-30", "date=today", "date=2026-1-3"] {
+        let (status, _) = get(
+            &app,
+            &format!("/api/v2/analytics/time/year-over-year?{bad}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// Today's local date, as SQLite's `localtime` names it — the same clock the
+/// station's `Date` column is written in.
+fn local_today() -> String {
+    rusqlite::Connection::open_in_memory()
+        .unwrap()
+        .query_row("SELECT date('now', 'localtime')", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// Upstream's dawn onset: every day of the range, its detection count, and
+/// its third detection's minute against civil dawn — null on a sparse day
+/// and at a station with no location.
+#[tokio::test]
+async fn dawn_onset_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        // Two days whose third detection is at 04:30, the second with its
+        // first two an hour earlier: strays before dawn that must not move
+        // the onset.
+        for (date, times) in [
+            (
+                "2026-06-01",
+                ["04:10:00", "04:20:00", "04:30:00", "06:00:00", "07:00:00"],
+            ),
+            (
+                "2026-06-04",
+                ["03:10:00", "03:20:00", "04:30:00", "06:00:00", "07:00:00"],
+            ),
+        ] {
+            for time in times {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES (?1, ?2, 'Turdus merula', 'Blackbird', 0.9)",
+                    [date, time],
+                )
+                .expect("insert");
+            }
+        }
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES ('2026-06-03', '05:00:00', 'Turdus merula', 'Blackbird', 0.9)",
+            [],
+        )
+        .expect("insert");
+    });
+    let app = build_router(state.clone());
+    let uri = "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01&end_date=2026-06-03";
+    let (status, body) = get(&app, uri).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!([
+            {"date": "2026-06-01", "onsetRelMinutes": null, "detectionCount": 5},
+            {"date": "2026-06-02", "onsetRelMinutes": null, "detectionCount": 0},
+            {"date": "2026-06-03", "onsetRelMinutes": null, "detectionCount": 1},
+        ]),
+        "no location, so no dawn to measure against"
+    );
+
+    // With a location the five-detection day has an onset. Its value depends
+    // on the zone the test runs in (civil dawn is placed in local time), so
+    // only its presence is asserted here; the arithmetic is unit-tested in
+    // routes/charts.rs.
+    state.with_db(|conn| {
+        birdnet_db::settings::set(
+            conn,
+            "latitude",
+            "51.5",
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .expect("lat");
+        birdnet_db::settings::set(
+            conn,
+            "longitude",
+            "-0.13",
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .expect("lon");
+    });
+    let (_, body) = get(&app, uri).await;
+    let rel = body[0]["onsetRelMinutes"].as_i64();
+    assert!(rel.is_some(), "{body}");
+    assert_eq!(
+        body[2]["onsetRelMinutes"],
+        serde_json::Value::Null,
+        "sparse"
+    );
+    // The third detection, not the first: civil dawn moves about a minute a
+    // day in June, so the two days' onsets agree to within a few minutes;
+    // reading the first detection would put them an hour apart.
+    let (_, both) = get(
+        &app,
+        "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01&end_date=2026-06-04",
+    )
+    .await;
+    let (a, b) = (
+        both[0]["onsetRelMinutes"].as_i64().expect("day 1"),
+        both[3]["onsetRelMinutes"].as_i64().expect("day 4"),
+    );
+    assert!((a - b).abs() <= 5, "{a} {b}: {both}");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01&end_date=2026-06-01&species=Parus%20major",
+    )
+    .await;
+    assert_eq!(
+        body,
+        serde_json::json!([{"date": "2026-06-01", "onsetRelMinutes": null, "detectionCount": 0}]),
+        "another species heard nothing"
+    );
+    let (status, _) = get(&app, "/api/v2/analytics/time/dawn-onset").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "start_date is required");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/dawn-onset?start_date=2026-06-01",
+    )
+    .await;
+    assert_eq!(
+        body.as_array().map(Vec::len),
+        Some(31),
+        "thirty days after, inclusive"
+    );
+}
+
+/// Upstream's heatmap: every day of the range in `dates`, the slot width
+/// for the range, and only the occupied cells, in three parallel arrays;
+/// `format=csv` lists the same cells.
+#[tokio::test]
+async fn the_heatmap_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (date, time) in [
+            ("2026-05-01", "06:05:00"),
+            ("2026-05-01", "06:10:00"),
+            ("2026-05-03", "18:45:00"),
+            ("2026-08-15", "06:05:00"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, 'Turdus merula', 'Blackbird', 0.9)",
+                rusqlite::params![date, time],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-05-03",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "dates": ["2026-05-01", "2026-05-02", "2026-05-03"],
+            "slotResolutionMinutes": 15,
+            "cells": {"dateIndex": [0, 2], "slot": [24, 75], "count": [2, 1]},
+        })
+    );
+    // 107 days: half-hour slots.
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-08-15",
+    )
+    .await;
+    assert_eq!(body["slotResolutionMinutes"], 30);
+    assert_eq!(body["dates"].as_array().map(Vec::len), Some(107));
+    assert_eq!(body["cells"]["dateIndex"], serde_json::json!([0, 2, 106]));
+    assert_eq!(body["cells"]["slot"], serde_json::json!([12, 37, 12]));
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get(
+                "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-05-03&format=CSV",
+            )
+            .header("host", "localhost")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "text/csv; charset=utf-8");
+    assert!(
+        res.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .contains("activity-heatmap.csv")
+    );
+    let csv = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::str::from_utf8(&csv).unwrap(),
+        "date,slot,slot_start,count\n2026-05-01,24,06:00,2\n2026-05-03,75,18:45,1\n"
+    );
+
+    // Both ends count: 1 May to 30 July is 91 days, one past the 15-minute
+    // limit; and the CSV's slot start follows the range's slot width.
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-07-30",
+    )
+    .await;
+    assert_eq!(body["slotResolutionMinutes"], 30, "91 days");
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-07-29",
+    )
+    .await;
+    assert_eq!(body["slotResolutionMinutes"], 15, "90 days");
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get(
+                "/api/v2/analytics/time/heatmap?start_date=2026-05-01&end_date=2026-08-15&format=csv",
+            )
+            .header("host", "localhost")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let csv = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::str::from_utf8(&csv).unwrap(),
+        "date,slot,slot_start,count\n2026-05-01,12,06:00,2\n2026-05-03,37,18:30,1\n2026-08-15,12,06:00,1\n"
+    );
+
+    let (_, body) = get(&app, "/api/v2/analytics/time/heatmap?start_date=2026-05-01").await;
+    assert_eq!(body["dates"].as_array().map(Vec::len), Some(31));
+    let (status, _) = get(&app, "/api/v2/analytics/time/heatmap?end_date=2026-05-01").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Upstream's hour-of-day charts: the ridgeline's buckets are fractions of
+/// each species' total, the succession's counts are counts, and a repeated
+/// `species` picks the species, eleven being too many.
+#[tokio::test]
+async fn the_hour_of_day_charts_answer_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (sci, com, time) in [
+            ("Turdus merula", "Blackbird", "05:10:00"),
+            ("Turdus merula", "Blackbird", "05:20:00"),
+            ("Turdus merula", "Blackbird", "05:30:00"),
+            ("Turdus merula", "Blackbird", "20:00:00"),
+            ("Strix aluco", "Tawny Owl", "23:00:00"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES ('2026-05-01', ?1, ?2, ?3, 0.9)",
+                rusqlite::params![time, sci, com],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(
+        &app,
+        "/api/v2/analytics/time/distribution/species?start_date=2026-05-01",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["scientificName"], "Turdus merula", "{body}");
+    assert_eq!(body[0]["commonName"], "Blackbird");
+    assert_eq!(body[0]["total"], 4);
+    let buckets = body[0]["buckets"].as_array().expect("buckets");
+    assert_eq!(buckets.len(), 24);
+    assert_eq!(buckets[5], 0.75);
+    assert_eq!(buckets[20], 0.25);
+    assert_eq!(body[1]["buckets"][23], 1.0);
+
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/succession?start_date=2026-05-01&species=tawny%20owl",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(body[0]["scientificName"], "Strix aluco");
+    assert_eq!(body[0]["counts"][23], 1);
+    assert_eq!(body[0]["counts"].as_array().map(Vec::len), Some(24));
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/time/succession?start_date=2026-05-01&limit=1",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    assert_eq!(body[0]["counts"][5], 3);
+
+    let eleven = (0..11)
+        .map(|i| format!("&species=S{i}"))
+        .collect::<Vec<_>>()
+        .concat();
+    for path in ["distribution/species", "succession"] {
+        let (status, body) = get(
+            &app,
+            &format!("/api/v2/analytics/time/{path}?start_date=2026-05-01{eleven}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+        assert_eq!(body["error"], "Too many items requested. Maximum: 10");
+        let (status, _) = get(&app, &format!("/api/v2/analytics/time/{path}")).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{path}: start_date is required"
+        );
+    }
+}
+
+/// Upstream's daily species summary: a bare array, the most detected first
+/// (ties by the later last detection), `min_confidence` as a percentage,
+/// and the tracking fields read from history as of the date.
+#[tokio::test]
+async fn the_daily_species_summary_answers_with_upstreams_shape() {
+    let state = station_state(&[]);
+    state.with_db(|conn| {
+        for (date, time, sci, com, confidence) in [
+            ("2026-05-10", "05:10:00", "Turdus merula", "Blackbird", 0.9),
+            ("2026-05-10", "05:20:00", "Turdus merula", "Blackbird", 0.6),
+            ("2026-05-10", "06:00:00", "Erithacus rubecula", "Robin", 0.7),
+            ("2026-05-10", "21:00:00", "Strix aluco", "Tawny Owl", 0.95),
+            ("2026-04-01", "07:00:00", "Turdus merula", "Blackbird", 0.9),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![date, time, sci, com, confidence],
+            )
+            .expect("insert");
+        }
+    });
+    let app = build_router(state);
+    let (status, body) = get(&app, "/api/v2/analytics/species/daily?date=2026-05-10").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<&str> = body
+        .as_array()
+        .expect("a bare array")
+        .iter()
+        .filter_map(|r| r["scientific_name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["Turdus merula", "Strix aluco", "Erithacus rubecula"],
+        "two, then the tie broken by the later last detection: {body}"
+    );
+    let b = &body[0];
+    assert_eq!(b["common_name"], "Blackbird");
+    assert_eq!(b["count"], 2);
+    assert_eq!(b["hourly_counts"][5], 2);
+    assert_eq!(b["hourly_counts"].as_array().map(Vec::len), Some(24));
+    assert_eq!(b["high_confidence"], true);
+    assert_eq!(b["max_confidence"], 0.9);
+    assert_eq!(b["first_heard"], "05:10:00");
+    assert_eq!(b["latest_heard"], "05:20:00");
+    assert_eq!(b["days_since_first_seen"], 39);
+    assert_eq!(b["days_since_last_seen"], 39);
+    assert!(b.get("is_new_species").is_none(), "{b}");
+    assert_eq!(
+        b["current_season"], "wet1",
+        "no location: upstream's latitude 0"
+    );
+    let robin = &body[2];
+    assert_eq!(robin["is_new_species"], true);
+    assert_eq!(robin["high_confidence"], false);
+    assert!(
+        robin.get("days_since_first_seen").is_none(),
+        "0 is left out: {robin}"
+    );
+
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/species/daily?date=2026-05-10&min_confidence=80",
+    )
+    .await;
+    let names: Vec<&str> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["scientific_name"].as_str())
+        .collect();
+    assert_eq!(names, ["Strix aluco", "Turdus merula"], "80 is 0.8: {body}");
+    assert_eq!(body[1]["count"], 1);
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/species/daily?date=2026-05-10&limit=1",
+    )
+    .await;
+    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    let (_, body) = get(
+        &app,
+        "/api/v2/analytics/species/daily?date=2026-05-10&min_confidence=lots&limit=-3",
+    )
+    .await;
+    assert_eq!(
+        body.as_array().map(Vec::len),
+        Some(3),
+        "both ignored: {body}"
+    );
+    for bad in ["date=2026-02-30", "date=yesterday"] {
+        let (status, _) = get(&app, &format!("/api/v2/analytics/species/daily?{bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
     }
 }

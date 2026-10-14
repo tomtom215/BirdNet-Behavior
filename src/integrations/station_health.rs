@@ -55,6 +55,11 @@
 //! * inference falling behind real time — a model too big for the board, a
 //!   board that is throttling, too many sources — which resolved to "delete
 //!   the oldest audio and say nothing" while every series stayed green;
+//! * a classifier that fails every window it is given — a model file damaged
+//!   after it was loaded, a runtime that cannot allocate, a model that answers
+//!   only NaN — which logged one line per segment while every series stayed
+//!   green and the deadman waited out its twenty-four hours (birdnet-go
+//!   `e853776`);
 //! * anything the **operator** wrote a rule for (`G-29`). Every condition above
 //!   is a threshold chosen in this repository. Those are the right defaults and
 //!   they are not everyone's: the rule that catches a dying microphone at a
@@ -263,7 +268,7 @@ type Check = fn(&AppState, &mut Vec<Condition>);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 15] = [
+const CHECKS: [(&str, Check); 16] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -278,6 +283,7 @@ const CHECKS: [(&str, Check); 15] = [
     ("purge", check_purge),
     ("flapping", check_flapping),
     ("backlog", check_backlog),
+    ("classifiers", check_classifiers),
     ("metric-rules", check_metric_rules),
 ];
 
@@ -731,6 +737,68 @@ fn backlog_condition(queue_depth: Option<u64>) -> Option<Condition> {
              does, reduce the sources or the segment rate, or move to a faster board."
         ),
     })
+}
+
+fn check_classifiers(state: &AppState, out: &mut Vec<Condition>) {
+    out.extend(classifier_conditions(
+        &state.metrics().model_health(),
+        birdnet_core::inference::health::unix_now(),
+    ));
+}
+
+/// One condition per classifier that is failing every window (`e853776`),
+/// keyed by its id so two failing models are two episodes.
+///
+/// Separated from the registry so the policy is testable. `now` is only for
+/// saying how long ago it last answered.
+fn classifier_conditions(
+    health: &[(String, birdnet_core::inference::health::ModelHealth)],
+    now: u64,
+) -> Vec<Condition> {
+    let others_answering = health.iter().filter(|(_, h)| !h.is_failing()).count();
+    health
+        .iter()
+        .filter(|(_, h)| h.is_failing())
+        .map(|(id, h)| {
+            let why = match h.error_class {
+                Some(birdnet_core::inference::health::ErrorClass::NonFiniteOutput) => {
+                    "it answers, but with scores that are not numbers (NaN or infinity), \
+                     which are never recorded — the model file is damaged or was \
+                     mis-quantised. Replace it with a fresh download"
+                }
+                _ => {
+                    "it returns an error instead of an answer — the journal line \
+                     \"classifier failed a window\" names it. A model file changed or \
+                     damaged since the station started, or memory too short to run it, \
+                     are the usual causes; restarting reloads the model"
+                }
+            };
+            let since = h.last_success_at.map_or_else(
+                || "It has not answered one window since the station started.".to_owned(),
+                |at| {
+                    format!(
+                        "It last answered {} minutes ago.",
+                        now.saturating_sub(at) / 60
+                    )
+                },
+            );
+            let effect = if others_answering > 0 {
+                "The other classifiers are still recording, so the deadman will not \
+                 notice: whatever only this model detects is going unrecorded."
+            } else {
+                "No classifier is answering, so nothing is being recorded."
+            };
+            Condition {
+                key: format!("classifier:{id}"),
+                title: format!("Classifier \"{id}\" is failing every window"),
+                body: format!(
+                    "The classifier \"{id}\" has failed the last {} analysis windows in a \
+                     row: {why}. {since} {effect}",
+                    h.consecutive_failures
+                ),
+            }
+        })
+        .collect()
 }
 
 /// The Pi's own account of its power (NP-5).
@@ -1316,6 +1384,7 @@ mod tests {
             "purge",
             "flapping",
             "backlog",
+            "classifiers",
             "metric-rules",
         ] {
             assert!(
@@ -1325,8 +1394,93 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            15,
-            "a sixteenth check needs a line in the module doc and in this gate"
+            16,
+            "a seventeenth check needs a line in the module doc and in this gate"
+        );
+    }
+
+    fn failing_for(
+        windows: u32,
+        class: birdnet_core::inference::health::ErrorClass,
+    ) -> birdnet_core::inference::health::ModelHealth {
+        let mut h = birdnet_core::inference::health::ModelHealth::default();
+        h.succeeded(1_000);
+        for i in 0..windows {
+            h.failed(class, 1_001 + u64::from(i));
+        }
+        h
+    }
+
+    /// `e853776`: a classifier failing every window is a condition of its
+    /// own, keyed by its id; one that has not failed enough windows yet, or
+    /// is answering, is not.
+    #[test]
+    fn a_failing_classifier_is_a_condition_and_a_healthy_one_is_not() {
+        use birdnet_core::inference::health::{ErrorClass, FAILING_AFTER};
+        let health = vec![
+            ("birdnet".to_owned(), failing_for(0, ErrorClass::Inference)),
+            (
+                "bats".to_owned(),
+                failing_for(FAILING_AFTER, ErrorClass::Inference),
+            ),
+            (
+                "perch".to_owned(),
+                failing_for(FAILING_AFTER - 1, ErrorClass::Inference),
+            ),
+        ];
+        let found = classifier_conditions(&health, 1_000 + 600);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].key, "classifier:bats");
+        assert!(found[0].title.contains("\"bats\""), "{}", found[0].title);
+        assert!(
+            found[0].body.contains("last 10 analysis windows"),
+            "{}",
+            found[0].body
+        );
+        assert!(
+            found[0].body.contains("10 minutes ago"),
+            "{}",
+            found[0].body
+        );
+        assert!(
+            found[0]
+                .body
+                .contains("other classifiers are still recording"),
+            "{}",
+            found[0].body
+        );
+        assert!(
+            classifier_conditions(&[], 0).is_empty(),
+            "no report, no condition"
+        );
+    }
+
+    /// The body says what kind of failure it is, and when nothing answers at
+    /// all, says that instead of claiming others still record.
+    #[test]
+    fn the_condition_says_why_and_whether_anything_still_records() {
+        use birdnet_core::inference::health::{ErrorClass, FAILING_AFTER, ModelHealth};
+        let mut never = ModelHealth::default();
+        for i in 0..FAILING_AFTER {
+            never.failed(ErrorClass::NonFiniteOutput, u64::from(i));
+        }
+        let found = classifier_conditions(&[("birdnet".to_owned(), never)], 100);
+        assert_eq!(found.len(), 1);
+        let body = &found[0].body;
+        assert!(body.contains("NaN or infinity"), "{body}");
+        assert!(body.contains("has not answered one window"), "{body}");
+        assert!(body.contains("nothing is being recorded"), "{body}");
+        let erroring = classifier_conditions(
+            &[(
+                "birdnet".to_owned(),
+                failing_for(FAILING_AFTER, ErrorClass::Inference),
+            )],
+            2_000,
+        );
+        assert!(
+            erroring[0].body.contains("returns an error"),
+            "{}",
+            erroring[0].body
         );
     }
 

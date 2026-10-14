@@ -67,6 +67,16 @@ const STUB_MEDIA = () => {
 
 async function liveAudioButton(page) {
   await page.addInitScript(STUB_MEDIA);
+  // The MP3 path, whatever the browser: Playwright's newer Chromium plays
+  // HLS natively, and on the HLS path play() is called once inside the click
+  // and once when the stream starts, so the count below would stop meaning
+  // "one stream". `liveAudioHls` holds the HLS path to the same rule.
+  await page.addInitScript(() => {
+    const real = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = function (t) {
+      return t === 'application/vnd.apple.mpegurl' ? '' : real.call(this, t);
+    };
+  });
   await page.goto(`${BASE}/recordings?view=live`, { waitUntil: 'domcontentloaded' });
 
   const btn = page.locator('#rc-listen-btn');
@@ -114,6 +124,113 @@ async function liveAudioButton(page) {
     'live: reports playing once play() resolves',
     playingLabel === 'Stop',
     `expected "Stop" after playback began, got "${playingLabel}"`,
+  );
+  // The counterpart to `liveAudioHls`: a browser without native HLS is given
+  // the MP3 stream.
+  const src = await page.evaluate(() => document.getElementById('rc-audio')?.getAttribute('src') || '');
+  check('live: without native HLS the MP3 stream plays', /\/stream(\?|$)/.test(src), `src is "${src}"`);
+}
+
+/** HLS where the browser plays it natively (`G-21`), MP3 elsewhere.
+ *
+ * Headless Chromium answers `canPlayType('application/vnd.apple.mpegurl')`
+ * with "" — so `liveAudioButton` above is the MP3 path, and asserts it is —
+ * and this gate makes the browser claim HLS the way Safari does. The station
+ * fixture has no live tap, so the start is answered from a route fixture,
+ * and the gate asserts the fixture was used.
+ */
+async function liveAudioHls(page) {
+  const calls = { starts: [], beats: [] };
+  await page.addInitScript(STUB_MEDIA);
+  await page.addInitScript(() => {
+    const real = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = function (t) {
+      return t === 'application/vnd.apple.mpegurl' ? 'maybe' : real.call(this, t);
+    };
+  });
+  let refuse = false;
+  let answer = () => {};
+  const answered = new Promise((r) => { answer = r; });
+  await page.route('**/api/v2/streams/hls/*/start*', async (route) => {
+    calls.starts.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    await answered;
+    if (refuse) return route.fulfill({ status: 503, body: 'live audio needs ffmpeg' });
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready', source: 'default', playlist_ready: true, active_clients: 1,
+        freq_shift_hz: 0, stream_token: 'tok123',
+        playlist_url: '/api/v2/streams/hls/t/tok123/playlist.m3u8',
+      }),
+    });
+  });
+  await page.route('**/api/v2/streams/hls/heartbeat*', (route) => {
+    calls.beats.push({ url: route.request().url(), body: route.request().postDataJSON() });
+    return route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"ok"}' });
+  });
+  await page.goto(`${BASE}/recordings?view=live`, { waitUntil: 'domcontentloaded' });
+  const btn = page.locator('#rc-listen-btn');
+  const src = () => page.evaluate(() => document.getElementById('rc-audio')?.getAttribute('src') || '');
+
+  await btn.click();
+  // A second click while the start is pending must not start another stream.
+  await btn.click();
+  // Safari plays outside a gesture only an element a play() inside one has
+  // unlocked, and the start answers seconds after the click.
+  const inGesture = await page.evaluate(() => window.__media.plays);
+  check(
+    'live hls: play() is called inside the click, before the start answers',
+    inGesture === 1 && calls.starts.length <= 1,
+    `${inGesture} play() call(s) before the start was answered`,
+  );
+  answer();
+  await page.waitForFunction(
+    () => (document.getElementById('rc-audio')?.getAttribute('src') || '').includes('playlist.m3u8'),
+    null, { timeout: 5000 },
+  ).catch(() => {});
+  check(
+    'live hls: one start for two clicks, and the fixture answered it',
+    calls.starts.length === 1,
+    `${calls.starts.length} start request(s)`,
+  );
+  const session = calls.starts[0]?.body?.session_id;
+  check('live hls: the start names this tab', typeof session === 'string' && session.length > 0, JSON.stringify(calls.starts[0]?.body));
+  const playing = await src();
+  check(
+    'live hls: the player is given the playlist',
+    playing.endsWith('/api/v2/streams/hls/t/tok123/playlist.m3u8') && !playing.includes('/stream?') && !/\/stream$/.test(playing),
+    `src is "${playing}"`,
+  );
+  await page.evaluate(() => window.__media.resolve());
+  await page.waitForFunction(
+    () => document.getElementById('rc-listen-label')?.textContent.trim() === 'Stop', null, { timeout: 2000 },
+  ).catch(() => {});
+
+  // Stopping leaves the stream, so the station can end it now rather than
+  // a minute after the last playlist fetch.
+  await btn.click();
+  await page.waitForTimeout(300);
+  const leave = calls.beats.find((b) => /disconnect=true/.test(b.url));
+  check(
+    'live hls: stopping leaves the stream',
+    !!leave && leave.body?.stream_token === 'tok123' && leave.body?.session_id === session,
+    `heartbeats: ${JSON.stringify(calls.beats)}`,
+  );
+
+  // A start the station refuses falls back to the MP3 stream.
+  refuse = true;
+  await btn.click();
+  await page.waitForFunction(
+    () => /\/stream(\?|$)/.test(document.getElementById('rc-audio')?.getAttribute('src') || ''),
+    null, { timeout: 5000 },
+  ).catch(() => {});
+  const fallback = await src();
+  check('live hls: the refused start was asked', calls.starts.length === 2, `${calls.starts.length} start request(s)`);
+  check(
+    'live hls: a refused start falls back to /stream',
+    /\/stream(\?|$)/.test(fallback),
+    `src is "${fallback}"`,
   );
 }
 
@@ -926,6 +1043,7 @@ async function main() {
 
   for (const [name, fn] of [
     ['live audio button', liveAudioButton],
+    ['live audio over HLS', liveAudioHls],
     ['clip player', clipPlayer],
     ['clip glyphs follow playback', clipGlyphsFollowPlayback],
     ['float dock clears the tab bar', floatDockClearsTheTabBar],

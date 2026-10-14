@@ -487,15 +487,87 @@
   }
   function showFailed(text) {
     connecting = false; clearConnectTimer();
+    leaveHls(false);
     audio.pause();
     audio.removeAttribute('src');
     if (glyph) glyph.textContent = '▶';
     if (label) label.textContent = text;
   }
+  // HLS where the browser plays it natively — Safari, iOS, Android Chrome.
+  // `/stream` is one long response, and a phone's network handover ends it
+  // for good; an HLS player refetches a short playlist and its segments and
+  // so carries on. Elsewhere, and whenever an HLS start fails, the MP3
+  // stream is used as before.
+  var useHls = !!(audio && audio.canPlayType &&
+    audio.canPlayType('application/vnd.apple.mpegurl'));
+  var session = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : String(Date.now()) + Math.random().toString(16).slice(2);
+  var hls = null;        // {token} while on an HLS stream
+  var heartbeat = null;
+  function post(path, body) {
+    return fetch(window.bnbUrl(path), {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
+  // Leave the HLS stream this tab is on, if any. The station ends a stream
+  // when its last listener leaves, or a minute after nobody fetches it.
+  function leaveHls(beacon) {
+    if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+    if (!hls) return;
+    var body = JSON.stringify({ stream_token: hls.token, session_id: session });
+    var url = window.bnbUrl('/api/v2/streams/hls/heartbeat?disconnect=true');
+    hls = null;
+    if (beacon && navigator.sendBeacon) {
+      navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
+    } else {
+      fetch(url, { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: body, keepalive: true })
+        .catch(function () {});
+    }
+  }
+  function playMp3() {
+    audio.src = srcFor(sel ? sel.value : '');
+    audio.play().then(showPlaying).catch(function () { showFailed('Audio blocked — retry'); });
+  }
+  function playHls() {
+    var source = (sel && sel.value) || 'default';
+    var hz = shiftHz();
+    var path = '/api/v2/streams/hls/' + encodeURIComponent(source) + '/start' +
+      (hz !== 0 ? '?freq_shift_hz=' + encodeURIComponent(String(hz)) : '');
+    var attempt = connectTimer;
+    // Played now, inside the click, though there is nothing to play yet: the
+    // start answers seconds later, and Safari lets an element play outside a
+    // gesture only once a play() inside one has unlocked it. Its promise is
+    // abandoned when the playlist is loaded below.
+    var unlock = audio.play();
+    if (unlock && unlock.catch) unlock.catch(function () {});
+    post(path, { session_id: session }).then(function (r) {
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    }).then(function (j) {
+      if (connectTimer !== attempt || !connecting) {
+        // Stopped, or restarted with another source, while this one started.
+        post('/api/v2/streams/hls/heartbeat?disconnect=true',
+          { stream_token: j.stream_token, session_id: session }).catch(function () {});
+        return;
+      }
+      hls = { token: j.stream_token };
+      heartbeat = setInterval(function () {
+        if (hls) post('/api/v2/streams/hls/heartbeat',
+          { stream_token: hls.token, session_id: session }).catch(function () {});
+      }, 20000);
+      audio.src = window.bnbUrl(j.playlist_url);
+      audio.play().then(showPlaying).catch(function () { showFailed('Audio blocked — retry'); });
+    }).catch(function () {
+      if (connectTimer === attempt && connecting) playMp3();
+    });
+  }
   function start() {
     connecting = true;
     if (label) label.textContent = 'Connecting…';
-    audio.src = srcFor(sel ? sel.value : '');
+    leaveHls(false);
     // A stream that connects but never buffers enough to start fires `stalled`,
     // not `error`, so play() can stay pending indefinitely. Ignoring clicks
     // while that is true would leave the button permanently dead; give up and
@@ -503,10 +575,11 @@
     clearConnectTimer();
     connectTimer = setTimeout(function () {
       if (connecting) showFailed('Stream did not start — retry');
-    }, 20000);
-    audio.play().then(showPlaying).catch(function () { showFailed('Audio blocked — retry'); });
+    }, 30000);
+    if (useHls) playHls(); else playMp3();
   }
-  function stop() { audio.pause(); audio.removeAttribute('src'); showIdle(); }
+  function stop() { leaveHls(false); audio.pause(); audio.removeAttribute('src'); showIdle(); }
+  window.addEventListener('pagehide', function () { leaveHls(true); });
 
   if (sel && audio) sel.addEventListener('change', function () {
     if (!audio.paused) start();
@@ -523,10 +596,11 @@
     if (connecting) return;   // mid-connect: ignore the click rather than cancel
     if (audio.paused) start(); else stop();
   });
-  if (audio) audio.addEventListener('ended', showIdle);
+  if (audio) audio.addEventListener('ended', function () { leaveHls(false); showIdle(); });
   // A stream that dies — ffmpeg gone, source stopped mid-listen — must not
   // strand the button on "Connecting…" with no way back to a usable state.
   if (audio) audio.addEventListener('error', function () {
+    if (!audio.getAttribute('src')) return;   // nothing loaded, nothing failed
     if (audio.paused && !connecting) return;
     showFailed('Stream unavailable — retry');
   });

@@ -549,7 +549,7 @@ pub fn run_daemon(
                     .as_ref()
                     .map(|table| std::sync::Arc::new(table.claim(&path)));
                 let route = route_for_segment(&registry, &path);
-                match process_and_infer_filtered(
+                let outcome = process_and_infer_filtered(
                     &path,
                     &pipeline_config,
                     &mut registry,
@@ -560,7 +560,14 @@ pub fn run_daemon(
                     lat,
                     lon,
                     &correlation_id,
-                ) {
+                );
+                // After every file, failed or not: a classifier that fails
+                // every window fails every file, and that is the case this
+                // report exists for.
+                if let Some(observer) = throughput.as_ref() {
+                    observer.model_health(&registry.health());
+                }
+                match outcome {
                     Ok(events) => {
                         // Counted here and not before the call: this says
                         // "analysed", and a file the pipeline failed on was
@@ -841,7 +848,7 @@ fn process_existing_files(
         let lease = in_flight.map(|table| std::sync::Arc::new(table.claim(&path)));
         let correlation_id = new_event_correlation_id();
         let route = route_for_segment(registry, &path);
-        match process_and_infer_filtered(
+        let outcome = process_and_infer_filtered(
             &path,
             pipeline_config,
             registry,
@@ -852,7 +859,13 @@ fn process_existing_files(
             lat,
             lon,
             &correlation_id,
-        ) {
+        );
+        // As in the live loop: a backlog the station restarts into is read
+        // by the same classifiers, and one failing them is no less broken.
+        if let Some(observer) = throughput {
+            observer.model_health(&registry.health());
+        }
+        match outcome {
             Ok(events) => {
                 if let Some(observer) = throughput {
                     observer.analysed(&path);
@@ -1168,6 +1181,60 @@ mod tests {
         assert_eq!(count("2026-05-19-birdnet-09:00:00.wav"), 1, "{seen:?}");
         // Counterpart: the finished backlog is still read, once.
         assert_eq!(count("2026-05-19-birdnet-08:00:00.wav"), 1, "{seen:?}");
+    }
+
+    /// `e853776`: after a file, the loop reports each classifier's health —
+    /// the report the station-health alert, `/api/v2/health` and the
+    /// `birdnet_model_*` series are built from.
+    #[test]
+    fn each_file_reports_the_classifiers_health() {
+        use crate::inference::health::ModelHealth;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.process_existing = true;
+        let reported = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let r = std::sync::Arc::clone(&reported);
+        config.on_file_analysed = Some(
+            super::super::ThroughputObserver::new(|_| {})
+                .with_model_health(move |h| r.lock().unwrap().clone_from(&h.to_vec())),
+        );
+        let old = write_noise(&config.watch_dir, "2026-05-19-birdnet-08:00:00.wav", 3);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+
+        let (event_tx, _event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        let windows = |r: &std::sync::Mutex<Vec<(String, ModelHealth)>>| {
+            r.lock().unwrap().first().map_or(0, |(_, h)| h.windows)
+        };
+        let wait_for = |n: u64| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while windows(&reported) < n && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        // The startup backlog pass, then a segment the watcher sees: the
+        // two places the loop runs inference.
+        wait_for(1);
+        let after_backlog = windows(&reported);
+        assert!(after_backlog >= 1, "the backlog pass reports");
+        write_noise(&config.watch_dir, "2026-05-19-birdnet-09:00:00.wav", 3);
+        wait_for(after_backlog + 1);
+        handle.stop();
+
+        let health = reported.lock().unwrap().clone();
+        assert_eq!(health.len(), 1, "{health:?}");
+        assert_eq!(health[0].0, "birdnet");
+        assert!(
+            health[0].1.windows > after_backlog,
+            "the live loop reports too: {health:?}"
+        );
+        assert!(health[0].1.last_success_at.is_some(), "{health:?}");
+        assert!(!health[0].1.is_failing(), "{health:?}");
     }
 
     /// A watched segment is judged by its source's route (`MODEL_ROUTES`).

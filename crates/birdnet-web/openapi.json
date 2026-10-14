@@ -57,6 +57,10 @@
     {
       "name": "control",
       "description": "Station lifecycle. Requires `BNB_API_TOKEN`."
+    },
+    {
+      "name": "live",
+      "description": "Live audio from the station's sources, as HLS. The MP3 stream is `GET /stream`, outside `/api/v2`."
     }
   ],
   "paths": {
@@ -434,6 +438,237 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/system/database/overview": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The database: engine, tables, write latency and the last day's arrivals",
+        "description": "birdnet-go's database overview for its SQLite engine, with three differences, each to avoid a number nobody measured. `integrity_check` is the last recorded integrity check (`ok`, `failed` or `unchecked`), where upstream always answers `ok`. `wal_checkpoints`, `busy_timeouts` and every performance figure but `write_latency_avg_ms` are null: nothing on this station counts them, and upstream's checkpoint count comes from running a checkpoint, which a GET here does not. Table sizes read every page of the file, so they are measured at most every 15 minutes; `tables_measured_at` says when. A database that cannot be read answers 200 with `status: disconnected` and empty lists.",
+        "operationId": "systemDatabaseOverview",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The overview.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "engine",
+                    "status",
+                    "tables",
+                    "detection_rate_24h"
+                  ],
+                  "properties": {
+                    "engine": {
+                      "type": "string",
+                      "enum": [
+                        "sqlite"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "connected",
+                        "disconnected"
+                      ]
+                    },
+                    "location": {
+                      "type": "string",
+                      "description": "The database file's path."
+                    },
+                    "size_bytes": {
+                      "type": "integer",
+                      "description": "The main file's size; the WAL is `sqlite.wal_size_bytes`."
+                    },
+                    "total_detections": {
+                      "type": "integer"
+                    },
+                    "total_tables": {
+                      "type": "integer"
+                    },
+                    "sqlite": {
+                      "type": "object",
+                      "properties": {
+                        "engine_version": {
+                          "type": "string"
+                        },
+                        "journal_mode": {
+                          "type": "string"
+                        },
+                        "page_size": {
+                          "type": "integer"
+                        },
+                        "integrity_check": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "failed",
+                            "unchecked"
+                          ]
+                        },
+                        "last_vacuum_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "When the backup-and-VACUUM job last ran (RFC 3339, UTC), or null if it never has."
+                        },
+                        "wal_size_bytes": {
+                          "type": "integer"
+                        },
+                        "wal_checkpoints": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not counted here: always null."
+                        },
+                        "freelist_pages": {
+                          "type": "integer"
+                        },
+                        "cache_size_bytes": {
+                          "type": "integer"
+                        },
+                        "busy_timeouts": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not counted here: always null."
+                        }
+                      }
+                    },
+                    "tables": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "name",
+                          "row_count",
+                          "size_bytes",
+                          "usage_pct",
+                          "engine"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "row_count": {
+                            "type": "integer"
+                          },
+                          "size_bytes": {
+                            "type": "integer",
+                            "description": "Bytes of the table's pages and its indexes'."
+                          },
+                          "usage_pct": {
+                            "type": "number",
+                            "description": "Share of all tables' bytes."
+                          },
+                          "engine": {
+                            "type": "string",
+                            "description": "Always empty for SQLite."
+                          }
+                        }
+                      }
+                    },
+                    "tables_measured_at": {
+                      "type": "integer",
+                      "description": "Unix seconds when the table sizes were measured."
+                    },
+                    "performance": {
+                      "type": "object",
+                      "properties": {
+                        "read_latency_avg_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "read_latency_max_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "write_latency_avg_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Mean detection write since the process started; null before the first."
+                        },
+                        "write_latency_max_ms": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "queries_per_sec": {
+                          "type": [
+                            "number",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "queries_last_hour": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        },
+                        "slow_query_count": {
+                          "type": [
+                            "integer",
+                            "null"
+                          ],
+                          "description": "Not measured here: always null."
+                        }
+                      }
+                    },
+                    "detection_rate_24h": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "hour",
+                          "count"
+                        ],
+                        "properties": {
+                          "hour": {
+                            "type": "string",
+                            "examples": [
+                              "2026-10-13T07:00:00Z"
+                            ],
+                            "description": "The UTC hour."
+                          },
+                          "count": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "description": "Detections stored in each UTC hour of the last 24, hours with none left out."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No bearer token, or the wrong one."
           }
         }
       }
@@ -2987,6 +3222,853 @@
         }
       }
     },
+    "/analytics/species/daily": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "One day's species, with how new each is",
+        "description": "The species detected on `date`, the most detected first (ties by the later last detection), with their hourly counts, first and last detections and novelty. The novelty fields are read from the station's history as of `date`; birdnet-go reads its live tracker, which answers for today. Seasons follow the station's hemisphere as birdnet-go's defaults do. Rejected detections are not counted. Same path, parameters and fields as birdnet-go's endpoint; species_code is not sent.",
+        "operationId": "analyticsSpeciesDaily",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "description": "The day (YYYY-MM-DD). Defaults to today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "required": false,
+            "description": "A percentage: 70 means 0.7. A value that is not a number is 0.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many species; 30 when absent or not a positive integer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "scientific_name",
+                      "common_name",
+                      "count",
+                      "hourly_counts",
+                      "high_confidence",
+                      "current_season"
+                    ],
+                    "properties": {
+                      "scientific_name": {
+                        "type": "string"
+                      },
+                      "common_name": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "description": "Detections on the date at or above min_confidence."
+                      },
+                      "hourly_counts": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "minItems": 24,
+                        "maxItems": 24,
+                        "description": "Those detections in each local hour, midnight first."
+                      },
+                      "high_confidence": {
+                        "type": "boolean",
+                        "description": "Whether one of them scored 0.8 or more."
+                      },
+                      "max_confidence": {
+                        "type": "number",
+                        "description": "Absent when 0."
+                      },
+                      "first_heard": {
+                        "type": "string",
+                        "examples": [
+                          "05:10:00"
+                        ]
+                      },
+                      "latest_heard": {
+                        "type": "string",
+                        "examples": [
+                          "19:00:00"
+                        ]
+                      },
+                      "thumbnail_url": {
+                        "type": "string"
+                      },
+                      "is_new_species": {
+                        "type": "boolean",
+                        "description": "First heard here at most 7 days before the date. Absent when false."
+                      },
+                      "is_new_this_year": {
+                        "type": "boolean",
+                        "description": "First heard since 1 January at most 7 days before the date. Absent when false."
+                      },
+                      "is_new_this_season": {
+                        "type": "boolean",
+                        "description": "First heard since the season began at most 7 days before the date. Absent when false."
+                      },
+                      "days_since_first_seen": {
+                        "type": "integer",
+                        "description": "Days since first heard here. Absent when 0."
+                      },
+                      "days_this_year": {
+                        "type": "integer",
+                        "description": "Days since first heard this year. Absent when 0."
+                      },
+                      "days_this_season": {
+                        "type": "integer",
+                        "description": "Days since first heard this season. Absent when 0."
+                      },
+                      "days_since_last_seen": {
+                        "type": "integer",
+                        "description": "Days back to the previous day it was heard. Absent when it never was."
+                      },
+                      "current_season": {
+                        "type": "string",
+                        "enum": [
+                          "spring",
+                          "summer",
+                          "fall",
+                          "winter",
+                          "wet1",
+                          "dry1",
+                          "wet2",
+                          "dry2"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "date is not a calendar day."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/sources": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Audio sources with detections over a date range",
+        "description": "The audio sources that have at least one detection in start_date..=end_date (all history when both are absent), the busiest first. Rejected detections are not counted, nor detections recorded before sources were tracked. Same path, parameters and fields as birdnet-go's endpoint; `name` is the source's configured name, not anonymised for visitors who are not signed in (the Station Health tab already shows it).",
+        "operationId": "analyticsSources",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "description": "First day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive (YYYY-MM-DD). Absent leaves that end open.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sources, never null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "sources"
+                  ],
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name",
+                          "count"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "The source's stream id, as each detection records it."
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "The name its owner gave it, or the id when it has none."
+                          },
+                          "count": {
+                            "type": "integer",
+                            "description": "Its detections in the range."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A date that is not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/confidence/distribution": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Per-species confidence distribution",
+        "description": "Each species' confidence distribution over start_date..=end_date: the fraction of its detections in each of `bins` equal-width bins over [0, 1] (a bin holds its lower edge; 1.0 falls in the last). Without `species`, the `limit` most detected species in the range, less those with fewer than 20 detections; with `species`, that species alone. Rejected detections are not counted. Same path, parameters, bounds and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsConfidenceDistribution",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "A scientific or common name, in any case.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bins",
+            "in": "query",
+            "required": false,
+            "description": "Number of bins: 20 by default, held to 5..=50; a value that is not an integer is 20.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Species to return without `species`: 5 by default, at most 10. A value that is not a positive integer, or is above 10, is 5.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species, the most detected first; never null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "scientificName",
+                      "commonName",
+                      "bins",
+                      "total"
+                    ],
+                    "properties": {
+                      "scientificName": {
+                        "type": "string"
+                      },
+                      "commonName": {
+                        "type": "string"
+                      },
+                      "bins": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        },
+                        "description": "Fractions of the species' detections, lowest bin first; they sum to 1 up to rounding."
+                      },
+                      "total": {
+                        "type": "integer",
+                        "description": "The species' detections in the range."
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/time/year-over-year": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Year to date against last year",
+        "description": "Cumulative detections from 1 January through `date` against the same calendar span one year earlier, one point per day, aligned by month and day: a current 29 February carries the previous year's 28 February total; a previous 29 February is counted from 1 March. Rejected detections are not counted. Same path, parameter and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsYearOverYear",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "required": false,
+            "description": "The last day compared (YYYY-MM-DD). Defaults to today.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The two years and one point per day.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "currentYear",
+                    "previousYear",
+                    "points"
+                  ],
+                  "properties": {
+                    "currentYear": {
+                      "type": "integer"
+                    },
+                    "previousYear": {
+                      "type": "integer"
+                    },
+                    "points": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "date",
+                          "monthDay",
+                          "thisYear",
+                          "lastYear",
+                          "delta"
+                        ],
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "The day in the current year."
+                          },
+                          "monthDay": {
+                            "type": "string",
+                            "examples": [
+                              "03-01"
+                            ]
+                          },
+                          "thisYear": {
+                            "type": "integer",
+                            "description": "Detections from 1 January of the current year through this day."
+                          },
+                          "lastYear": {
+                            "type": "integer",
+                            "description": "Detections from 1 January of the previous year through the same calendar day."
+                          },
+                          "delta": {
+                            "type": "integer",
+                            "description": "thisYear - lastYear."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "date is not a calendar day."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/time/dawn-onset": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Dawn-chorus onset against civil dawn",
+        "description": "For each day of start_date..=end_date, the minute the dawn chorus began relative to that day's civil dawn: the day's third-earliest detection (so up to two strays before dawn do not move it), read only on a day with at least five detections. Civil dawn comes from the station's location and is placed in the local time of that day. Rejected detections are not counted. Same path, parameters, rule and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsDawnOnset",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "A scientific or common name, in any case.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One row per day of the range, quiet days included, oldest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "date",
+                      "onsetRelMinutes",
+                      "detectionCount"
+                    ],
+                    "properties": {
+                      "date": {
+                        "type": "string",
+                        "format": "date"
+                      },
+                      "onsetRelMinutes": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "description": "Onset minus civil dawn, in minutes; negative is before dawn. Null on a day with fewer than five detections, with no civil dawn, or at a station with no location."
+                      },
+                      "detectionCount": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/time/heatmap": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Detections by day and time of day",
+        "description": "Detection counts in each time-of-day slot of each day of start_date..=end_date, as a sparse columnar grid. The slot width is 15 minutes for a range of up to 90 days, 30 up to 180, and 60 beyond. Rejected detections are not counted. Same path, parameters and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsTimeHeatmap",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "A scientific or common name, in any case.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "`csv` (any case) for the cells as CSV: `date,slot,slot_start,count`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grid, or the CSV.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "dates",
+                    "slotResolutionMinutes",
+                    "cells"
+                  ],
+                  "properties": {
+                    "dates": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "date"
+                      },
+                      "description": "Every day of the range, oldest first."
+                    },
+                    "slotResolutionMinutes": {
+                      "type": "integer",
+                      "enum": [
+                        15,
+                        30,
+                        60
+                      ]
+                    },
+                    "cells": {
+                      "type": "object",
+                      "required": [
+                        "dateIndex",
+                        "slot",
+                        "count"
+                      ],
+                      "description": "Parallel arrays, one entry per occupied cell, by day then slot.",
+                      "properties": {
+                        "dateIndex": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          },
+                          "description": "Index into `dates`."
+                        },
+                        "slot": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          },
+                          "description": "Slot n starts n × slotResolutionMinutes after local midnight."
+                        },
+                        "count": {
+                          "type": "array",
+                          "items": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "date,slot,slot_start,count\n2026-05-01,24,06:00,2\n"
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, or start_date after end_date."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/time/distribution/species": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Who sings when: each species' hours as fractions",
+        "description": "Each species' detections by local hour over start_date..=end_date, as fractions of its total, so species of any volume compare by shape. Rejected detections are not counted. Same path, parameters and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsSpeciesHourDistribution",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "Repeatable (?species=A&species=B): the species to chart, by scientific or common name in any case; blanks and case-insensitive repeats are ignored. More than 10 is a 400. Without it, the `limit` most detected species.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Species without a `species` selection: 5 by default, at most 10. A value that is not a positive integer, or is above 10, is 5.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species, the most detected first; never null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "scientificName",
+                      "commonName",
+                      "buckets",
+                      "total"
+                    ],
+                    "properties": {
+                      "scientificName": {
+                        "type": "string"
+                      },
+                      "commonName": {
+                        "type": "string"
+                      },
+                      "buckets": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        },
+                        "minItems": 24,
+                        "maxItems": 24,
+                        "description": "One per local hour, midnight first."
+                      },
+                      "total": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, start_date after end_date, or more than 10 species."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
+    "/analytics/time/succession": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Each species' hours as counts",
+        "description": "Each species' detections by local hour over start_date..=end_date, as counts, for a streamgraph whose band widths are volumes. Rejected detections are not counted. Same path, parameters and camelCase fields as birdnet-go's endpoint.",
+        "operationId": "analyticsSuccession",
+        "parameters": [
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": true,
+            "description": "First day of the range, inclusive (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "description": "Last day of the range, inclusive. Defaults to 30 days after start_date.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "description": "Repeatable (?species=A&species=B): the species to chart, by scientific or common name in any case; blanks and case-insensitive repeats are ignored. More than 10 is a 400. Without it, the `limit` most detected species.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 10
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Species without a `species` selection: 6 by default, at most 10. A value that is not a positive integer, or is above 10, is 6.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One entry per species, the most detected first; never null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "scientificName",
+                      "commonName",
+                      "counts",
+                      "total"
+                    ],
+                    "properties": {
+                      "scientificName": {
+                        "type": "string"
+                      },
+                      "commonName": {
+                        "type": "string"
+                      },
+                      "counts": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "minItems": 24,
+                        "maxItems": 24,
+                        "description": "One per local hour, midnight first."
+                      },
+                      "total": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "start_date missing or not a calendar day, end_date not a calendar day, start_date after end_date, or more than 10 species."
+          },
+          "500": {
+            "description": "The detections could not be read."
+          }
+        }
+      }
+    },
     "/timeseries/hourly": {
       "get": {
         "tags": [
@@ -3898,6 +4980,409 @@
           }
         }
       }
+    },
+    "/streams/hls/{source_id}/start": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Join or start a source's HLS stream",
+        "description": "Joins the running stream for this source and shift, or starts one: one ffmpeg per source and shift, shared by every listener and counted against the same four stream slots as `/stream`. Answers once the playlist lists two 2-second segments, or after 20 s with `status: starting`. Same path and fields as birdnet-go's endpoint, which requires sign-in; here it is open wherever `/stream` is, and on a private station only with the `live_audio` carve-out.",
+        "operationId": "hlsStart",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "description": "An audio source's id, or `default` for the station's default source.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "freq_shift_hz",
+            "in": "query",
+            "required": false,
+            "description": "Pitch shift in Hz, clamped to ±24000; each shift is a stream of its own. Not in birdnet-go's API.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "The caller's own id for this tab or client; counts it in `active_clients` and lets a stop end only its own session."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status",
+                    "source",
+                    "playlist_url",
+                    "active_clients",
+                    "playlist_ready",
+                    "freq_shift_hz"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "`ready`, `starting` (the playlist had fewer than two segments after 20 s), or `active` in a status listing."
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "The source id as requested."
+                    },
+                    "playlist_url": {
+                      "type": "string",
+                      "description": "The playlist, relative to the station's root; a station under a base path serves it beneath that path."
+                    },
+                    "active_clients": {
+                      "type": "integer",
+                      "description": "Sessions seen in the last minute."
+                    },
+                    "playlist_ready": {
+                      "type": "boolean"
+                    },
+                    "freq_shift_hz": {
+                      "type": "integer"
+                    },
+                    "stream_token": {
+                      "type": "string",
+                      "description": "128 random bits in hex; the only way to the stream's files. Absent from the status listing."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such source.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No source configured, the source is not recording, every stream slot is in use, ffmpeg is not installed, or the stream ended before it started.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The stream's directory could not be created.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/{source_id}/stop": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Leave a source's HLS stream",
+        "description": "Removes the session named in the body from the stream for this source and shift; the stream ends when no session is left. A request without a `session_id` changes nothing, so one listener cannot end another's stream.",
+        "operationId": "hlsStop",
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "description": "An audio source's id, or `default` for the station's default source.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "freq_shift_hz",
+            "in": "query",
+            "required": false,
+            "description": "Pitch shift in Hz, clamped to ±24000; each shift is a stream of its own. Not in birdnet-go's API.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "session_id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "The caller's own id for this tab or client; counts it in `active_clients` and lets a stop end only its own session."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Always `{\"status\": \"stopped\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "stopped"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/heartbeat": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Keep an HLS session alive, or leave",
+        "description": "Marks the session as listening. With `disconnect=true` or `status=disconnect` the session leaves instead, and a stream with no session left ends; a disconnect without a `session_id` ends a stream that has no other session. A token that names no stream is answered `ok`, as birdnet-go answers it.",
+        "operationId": "hlsHeartbeat",
+        "parameters": [
+          {
+            "name": "disconnect",
+            "in": "query",
+            "required": false,
+            "description": "`true` to leave.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "`disconnect` to leave.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "stream_token"
+                ],
+                "properties": {
+                  "stream_token": {
+                    "type": "string"
+                  },
+                  "session_id": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`{\"status\": \"ok\"}`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "const": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not a heartbeat.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/status": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Running HLS streams",
+        "description": "Every running stream, without its token.",
+        "operationId": "hlsStatus",
+        "responses": {
+          "200": {
+            "description": "The streams.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "count",
+                    "streams"
+                  ],
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "streams": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "status",
+                          "source",
+                          "playlist_url",
+                          "active_clients",
+                          "playlist_ready",
+                          "freq_shift_hz"
+                        ],
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "description": "`ready`, `starting` (the playlist had fewer than two segments after 20 s), or `active` in a status listing."
+                          },
+                          "source": {
+                            "type": "string",
+                            "description": "The source id as requested."
+                          },
+                          "playlist_url": {
+                            "type": "string",
+                            "description": "The playlist, relative to the station's root; a station under a base path serves it beneath that path."
+                          },
+                          "active_clients": {
+                            "type": "integer",
+                            "description": "Sessions seen in the last minute."
+                          },
+                          "playlist_ready": {
+                            "type": "boolean"
+                          },
+                          "freq_shift_hz": {
+                            "type": "integer"
+                          },
+                          "stream_token": {
+                            "type": "string",
+                            "description": "128 random bits in hex; the only way to the stream's files. Absent from the status listing."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/streams/hls/t/{token}/{file}": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "An HLS stream's playlist or segment",
+        "description": "`playlist.m3u8` (live: six segments, no end marker, not cacheable) or a segment it names, `seg<digits>.ts` (MPEG-TS, AAC at 128 kbit/s, 48 kHz mono). Any request keeps the stream running; a minute without one ends it.",
+        "operationId": "hlsContent",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "description": "The `stream_token` a start returned.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "description": "`playlist.m3u8` or a segment name from it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The playlist or the segment.",
+            "content": {
+              "application/vnd.apple.mpegurl": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "video/mp2t": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No running stream has this token, or the file is not one it serves.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4171,6 +5656,78 @@
               "tripped"
             ],
             "description": "The detection deadman's verdict: `tripped` while it has an open quiet episode (no detections for longer than its threshold, or never), a strict fault; `off` when its threshold is 0."
+          },
+          "classifiers": {
+            "type": "array",
+            "description": "Each loaded classifier, primary first; empty until the daemon has analysed a file. A failing classifier is degraded under `?strict=1` and raises the `classifier:<id>` condition.",
+            "items": {
+              "type": "object",
+              "required": [
+                "model",
+                "state",
+                "consecutive_failures",
+                "failure_threshold",
+                "windows",
+                "last_window_at",
+                "last_success_at",
+                "error_class"
+              ],
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "description": "The classifier's id."
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "ok",
+                    "failing"
+                  ],
+                  "description": "`failing` once `failure_threshold` windows in a row have failed and none answered since."
+                },
+                "consecutive_failures": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "failure_threshold": {
+                  "type": "integer",
+                  "examples": [
+                    10
+                  ]
+                },
+                "windows": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Analysis windows run since the classifier was loaded."
+                },
+                "last_window_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Unix seconds of the latest window, or null before the first."
+                },
+                "last_success_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Unix seconds of the latest window answered cleanly, or null for never."
+                },
+                "error_class": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "inference_error",
+                    "non_finite_output",
+                    null
+                  ],
+                  "description": "Why the latest failed window failed; null after a clean one."
+                }
+              }
+            }
           },
           "strict": {
             "type": "boolean",

@@ -1,5 +1,5 @@
-//! `GET /api/v2/insights/*`, `GET /api/v2/dashboard/kpis` and
-//! `GET /api/v2/analytics/species/summary`.
+//! `GET /api/v2/insights/*`, `GET /api/v2/dashboard/kpis` and the
+//! `GET /api/v2/analytics/*` routes birdnet-go shares with us.
 //!
 //! The dawn chorus's running order, recent arrivals, species gone quiet,
 //! likely misdetections, what is expected today, the dashboard's headline
@@ -48,6 +48,7 @@ pub fn router() -> Router<AppState> {
         .route("/dashboard/kpis", get(dashboard_kpis))
         .route("/analytics/species/summary", get(species_summary))
         .route("/analytics/species/detections/new", get(new_species))
+        .route("/analytics/sources", get(sources))
 }
 
 /// Query parameters for the dawn chorus. Strings, so that a value that is not
@@ -69,11 +70,11 @@ fn bounded_days(raw: Option<&str>, default: u32, max: u32) -> Result<u32, ()> {
     Ok(n.min(max))
 }
 
-fn bad_request(message: &str) -> Response {
+pub(super) fn bad_request(message: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
 }
 
-fn read_failed(what: &str, e: &birdnet_db::sqlite::connection::DbError) -> Response {
+pub(super) fn read_failed(what: &str, e: &birdnet_db::sqlite::connection::DbError) -> Response {
     tracing::warn!(error = %e, "insight could not be read: {what}");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -228,7 +229,7 @@ struct SummaryQuery {
 }
 
 /// A `YYYY-MM-DD` that names a real calendar day.
-fn calendar_date(s: &str) -> bool {
+pub(super) fn calendar_date(s: &str) -> bool {
     use birdnet_core::civil::{date_string_from_days, days_from_civil, parse_civil};
     parse_civil(s, "00:00:00")
         .is_some_and(|c| date_string_from_days(days_from_civil(c.year, c.month, c.day)) == s)
@@ -236,7 +237,7 @@ fn calendar_date(s: &str) -> bool {
 
 /// A date-range bound: absent or empty is open, anything but a calendar date
 /// is refused.
-fn range_bound(raw: Option<&str>) -> Result<Option<String>, ()> {
+pub(super) fn range_bound(raw: Option<&str>) -> Result<Option<String>, ()> {
     match raw {
         None | Some("") => Ok(None),
         Some(s) if calendar_date(s) => Ok(Some(s.to_owned())),
@@ -304,6 +305,75 @@ async fn species_summary(State(state): State<AppState>, Query(q): Query<SummaryQ
         })
         .collect();
     Json(body).into_response()
+}
+
+/// Query parameters for the source list.
+#[derive(Debug, Deserialize)]
+struct RangeQuery {
+    start_date: Option<String>,
+    end_date: Option<String>,
+}
+
+/// `GET /api/v2/analytics/sources?start_date=&end_date=` — the audio sources
+/// with detections in the range (all history when it is open), busiest first.
+///
+/// Upstream's shape: `{"sources": [{"id", "name", "count"}]}`, never null.
+/// The id is the source's stream id, what a detection records; the name is
+/// the one its owner gave it on the Capture screen, or the id when it has
+/// none. Upstream hides names from visitors who are not signed in; here the
+/// public Station Health tab already shows them, so this does too, and a
+/// station that wants them private turns on private mode.
+///
+/// A failed read of the counts is a 500. A failed read of the names is not:
+/// the names are decoration, so each source falls back to its id.
+async fn sources(State(state): State<AppState>, Query(q): Query<RangeQuery>) -> Response {
+    let Ok(start) = range_bound(q.start_date.as_deref()) else {
+        return bad_request("start_date must be a YYYY-MM-DD date");
+    };
+    let Ok(end) = range_bound(q.end_date.as_deref()) else {
+        return bad_request("end_date must be a YYYY-MM-DD date");
+    };
+    if matches!((&start, &end), (Some(s), Some(e)) if s > e) {
+        return bad_request("start_date is after end_date");
+    }
+    let result = state
+        .run_blocking(move |s| {
+            s.with_db(|conn| {
+                let counts =
+                    birdnet_db::sqlite::source_counts(conn, start.as_deref(), end.as_deref())?;
+                let names = birdnet_db::audio_sources::AudioSourceStore::list(conn);
+                Ok::<_, birdnet_db::sqlite::connection::DbError>((counts, names))
+            })
+        })
+        .await;
+    let (counts, names) = match result {
+        Ok(read) => read,
+        Err(e) => return read_failed("audio sources", &e),
+    };
+    let names: std::collections::HashMap<String, String> = match names {
+        Ok(listed) => listed
+            .into_iter()
+            .filter_map(|x| {
+                let label = x.label.as_deref()?.trim().to_owned();
+                (!label.is_empty()).then_some((x.id, label))
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "source names could not be read; listing ids");
+            std::collections::HashMap::new()
+        }
+    };
+    Json(json!({
+        "sources": counts
+            .iter()
+            .map(|(id, count)| json!({
+                "id": id,
+                "name": names.get(id).unwrap_or(id),
+                "count": count,
+            }))
+            .collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
 
 /// Query parameters for the new-species list.

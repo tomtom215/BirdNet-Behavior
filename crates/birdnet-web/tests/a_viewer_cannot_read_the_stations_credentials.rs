@@ -141,3 +141,40 @@ async fn a_viewer_cannot_download_the_database_or_the_support_bundle() {
     let (status, _) = get(&app, "/admin/audio/sources/cam1/probe", &viewer).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+/// A CPU profile (`G-24`) is the station's stacks, and taking one slows it:
+/// an administrator's to ask for, not a viewer's or a passer-by's.
+#[cfg(feature = "profiling")]
+#[tokio::test]
+async fn only_an_administrator_can_take_a_cpu_profile() {
+    let app = station();
+    let uri = "/admin/debug/pprof/profile?seconds=1&format=folded";
+    let (status, _) = get(&app, uri, "").await;
+    assert_ne!(status, StatusCode::OK, "signed out");
+    let viewer = sign_in(&app, "viewer", "viewer-password-1").await;
+    let (status, _) = get(&app, uri, &viewer).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a viewer");
+
+    let admin = sign_in(&app, "admin", "admin-password-1").await;
+    let (status, _) = get(&app, "/admin/debug/pprof/profile?seconds=0", &admin).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "zero seconds");
+    // Something to sample: the profile counts CPU time, so an idle test
+    // process would answer an empty (and correct) profile.
+    let busy = std::thread::spawn(|| {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut x = 0_u64;
+        while std::time::Instant::now() < until {
+            x = std::hint::black_box(x.wrapping_add(1));
+        }
+    });
+    let (status, body) = get(&app, uri, &admin).await;
+    busy.join().expect("busy thread");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body.is_empty(), "the busy thread was sampled");
+    assert!(
+        body.lines().all(|l| l
+            .rsplit_once(' ')
+            .is_some_and(|(_, n)| n.parse::<u64>().is_ok())),
+        "folded stacks, each with its count: {body}"
+    );
+}

@@ -21,6 +21,8 @@ description = "Web server: REST API, WebSocket, and HTMX pages via axum"
 default = ["analytics"]
 ## Enable DuckDB-powered behavioral analytics endpoints.
 analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics"]
+## Serve CPU profiles at /admin/debug/pprof/profile (G-24).
+profiling = ["dep:pprof"]
 
 [dependencies]
 birdnet-behavioral.workspace = true
@@ -47,6 +49,7 @@ reqwest.workspace = true
 # Real DEFLATE for the spectrogram PNG writer (it wrote store-only zlib
 # blocks) and for the HTTP compression layer.
 flate2.workspace = true
+pprof = { workspace = true, optional = true }
 
 # HTTPS for the dashboard's own listener. `axum::serve` takes a plain
 # `TcpListener` and has no seam for a TLS acceptor, so `tls.rs` runs the accept

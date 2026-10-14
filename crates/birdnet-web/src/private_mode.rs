@@ -127,7 +127,10 @@ pub fn is_open(path: &str, public: &BTreeSet<PublicAccess>) -> bool {
         return true;
     }
     public.iter().any(|access| match access {
-        PublicAccess::LiveAudio => matches!(path, "/stream" | "/api/v2/ws/spectrogram"),
+        PublicAccess::LiveAudio => {
+            matches!(path, "/stream" | "/api/v2/ws/spectrogram")
+                || path.starts_with("/api/v2/streams/hls/")
+        }
         PublicAccess::Share => path.starts_with("/r/"),
         PublicAccess::Metrics => path == "/api/v2/metrics",
     })
@@ -171,6 +174,8 @@ mod tests {
             "/api/v2/metrics",
             "/api/v2/recordings/x.wav",
             "/stream",
+            "/api/v2/streams/hls/default/start",
+            "/api/v2/streams/hls/t/abc/playlist.m3u8",
             "/r/abc",
             "/r/abc/audio.wav",
             "/feeds/rss",
@@ -189,6 +194,9 @@ mod tests {
         let live = set(&[PublicAccess::LiveAudio]);
         assert!(is_open("/stream", &live));
         assert!(is_open("/api/v2/ws/spectrogram", &live));
+        assert!(is_open("/api/v2/streams/hls/default/start", &live));
+        assert!(is_open("/api/v2/streams/hls/t/abc/seg00001.ts", &live));
+        assert!(!is_open("/api/v2/streams", &live));
         assert!(!is_open("/api/v2/ws/detections", &live));
         assert!(!is_open("/r/abc", &live));
         assert!(!is_open("/api/v2/metrics", &live));

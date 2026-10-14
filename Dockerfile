@@ -20,6 +20,8 @@
 #                     leaner image without it.
 #                     ⚠  analytics adds ~7 min of C++ compilation on first
 #                        build because libduckdb is statically bundled.
+#                     Add `profiling` (BUILD_FEATURES="analytics,profiling")
+#                     for CPU profiles at /admin/debug/pprof/profile.
 #
 # Quick start:
 #   docker build -t birdnet-behavior .                          # with analytics

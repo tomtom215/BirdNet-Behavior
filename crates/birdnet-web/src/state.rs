@@ -231,6 +231,11 @@ struct AppStateInner {
     /// An `Arc` so a page that consults it for fifty species clones a pointer
     /// rather than several hundred names.
     nearby: std::sync::RwLock<Option<Arc<birdnet_integrations::ebird::Snapshot>>>,
+    /// The database overview's table sizes and when they were measured.
+    /// Measuring reads every page of the file, so it is done at most once per
+    /// [`crate::routes::api_write::TABLE_SIZES_TTL`].
+    table_sizes:
+        std::sync::Mutex<Option<(std::time::Instant, u64, Vec<birdnet_db::sqlite::TableSize>)>>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -327,6 +332,7 @@ impl AppState {
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
                 nearby: std::sync::RwLock::new(None),
+                table_sizes: std::sync::Mutex::new(None),
             }),
         })
     }
@@ -569,6 +575,7 @@ impl AppState {
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
                 nearby: std::sync::RwLock::new(None),
+                table_sizes: std::sync::Mutex::new(None),
             }),
         })
     }
@@ -624,6 +631,7 @@ impl AppState {
                     crate::station_conditions::ConditionsSnapshot::default(),
                 ),
                 nearby: std::sync::RwLock::new(None),
+                table_sizes: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -1420,6 +1428,37 @@ impl AppState {
     /// Get the database file path.
     pub fn db_path(&self) -> &Path {
         &self.inner.db_path
+    }
+
+    /// The database's table sizes, measured at most once per `ttl`, with the
+    /// Unix time they were measured. `measure` runs only when the cached
+    /// answer is missing or older than `ttl`; a failed measurement is not
+    /// cached. The lock is held while measuring, so requests that arrive
+    /// meanwhile wait for that measurement instead of starting their own.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `measure` returns.
+    pub fn table_sizes<E>(
+        &self,
+        ttl: std::time::Duration,
+        now_unix: u64,
+        measure: impl FnOnce() -> Result<Vec<birdnet_db::sqlite::TableSize>, E>,
+    ) -> Result<(u64, Vec<birdnet_db::sqlite::TableSize>), E> {
+        let mut cache = self
+            .inner
+            .table_sizes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, measured_at, sizes)) = cache.as_ref()
+            && at.elapsed() < ttl
+        {
+            return Ok((*measured_at, sizes.clone()));
+        }
+        let sizes = measure()?;
+        *cache = Some((std::time::Instant::now(), now_unix, sizes.clone()));
+        drop(cache);
+        Ok((now_unix, sizes))
     }
 
     /// Path to the active configuration file, if threaded from the CLI.

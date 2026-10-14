@@ -1454,3 +1454,130 @@ async fn the_api_refuses_a_value_the_station_cannot_use() {
         Some("0.75")
     );
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/v2/system/database/overview
+// ---------------------------------------------------------------------------
+
+/// Upstream's database overview: engine, tables and the last day's
+/// arrivals, behind the bearer token like the rest of `/system`; and the
+/// integrity verdict and last VACUUM read from what the station recorded,
+/// where upstream always says `"ok"`.
+#[tokio::test]
+async fn the_database_overview_reports_what_was_measured() {
+    let (_dir, state) = station(true);
+    let (status, _) =
+        call_method(&state, "GET", "/api/v2/system/database/overview", None, "").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "behind the token");
+
+    let (status, body) = call_method(
+        &state,
+        "GET",
+        "/api/v2/system/database/overview",
+        Some(TOKEN),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(v["engine"], "sqlite");
+    assert_eq!(v["status"], "connected");
+    assert!(
+        v["location"]
+            .as_str()
+            .is_some_and(|l| l.ends_with("birds.db")),
+        "{v}"
+    );
+    assert!(v["size_bytes"].as_u64().is_some_and(|n| n > 0), "{v}");
+    assert_eq!(v["total_detections"], 1);
+    assert_eq!(v["sqlite"]["journal_mode"], "wal");
+    assert_eq!(
+        v["sqlite"]["integrity_check"], "unchecked",
+        "none recorded yet"
+    );
+    assert!(v["sqlite"]["last_vacuum_at"].is_null());
+    assert!(
+        v["sqlite"]["wal_checkpoints"].is_null(),
+        "not counted, not zero"
+    );
+    assert!(
+        v["performance"]["read_latency_avg_ms"].is_null(),
+        "not measured, not zero"
+    );
+    assert!(
+        v["performance"]["write_latency_avg_ms"].is_null(),
+        "no write yet"
+    );
+    let tables = v["tables"].as_array().expect("tables");
+    assert_eq!(v["total_tables"], tables.len());
+    let detections = tables
+        .iter()
+        .find(|t| t["name"] == "detections")
+        .expect("the detections table");
+    assert_eq!(detections["row_count"], 1);
+    let pct: f64 = tables.iter().filter_map(|t| t["usage_pct"].as_f64()).sum();
+    assert!((pct - 100.0).abs() < 1e-6, "shares of one total: {pct}");
+
+    state.with_db(|conn| {
+        birdnet_db::sqlite::record_run_result(
+            conn,
+            birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
+            1_000_000,
+            Some(false),
+        )
+        .expect("record");
+        birdnet_db::sqlite::record_run(conn, birdnet_db::sqlite::JOB_BACKUP_VACUUM, 1_800_000_000)
+            .expect("record");
+    });
+    state.metrics().observe_db_write_seconds(0.004);
+    let (_, body) = call_method(
+        &state,
+        "GET",
+        "/api/v2/system/database/overview",
+        Some(TOKEN),
+        "",
+    )
+    .await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(v["sqlite"]["integrity_check"], "failed");
+    assert_eq!(v["sqlite"]["last_vacuum_at"], "2027-01-15T08:00:00Z");
+    let ms = v["performance"]["write_latency_avg_ms"]
+        .as_f64()
+        .expect("a mean");
+    assert!((ms - 4.0).abs() < 1e-9, "{ms}");
+}
+
+/// Table sizes are measured once and reused until the time-to-live passes,
+/// because measuring reads the whole file; and measured again after it.
+#[test]
+fn table_sizes_are_reused_until_they_expire() {
+    let (_dir, state) = station(false);
+    let measure = || state.with_read_db(birdnet_db::sqlite::table_sizes);
+    let hour = std::time::Duration::from_secs(3600);
+    let (first_at, first) = state.table_sizes(hour, 100, measure).expect("measure");
+    assert_eq!(first_at, 100);
+    state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES ('2026-09-04', '09:00:00', 'Pica pica', 'Eurasian Magpie', 0.9)",
+            [],
+        )
+        .expect("insert");
+    });
+    let rows = |sizes: &[birdnet_db::sqlite::TableSize]| {
+        sizes
+            .iter()
+            .find(|t| t.name == "detections")
+            .map(|t| t.row_count)
+    };
+    let (again_at, again) = state.table_sizes(hour, 200, measure).expect("cached");
+    assert_eq!((again_at, rows(&again)), (100, rows(&first)), "reused");
+    let (fresh_at, fresh) = state
+        .table_sizes(std::time::Duration::ZERO, 300, measure)
+        .expect("measure");
+    assert_eq!(
+        (fresh_at, rows(&fresh)),
+        (300, Some(2)),
+        "measured again once expired"
+    );
+}

@@ -138,7 +138,8 @@ The rules below watch **detections**. A second kind, on the same page
 compared against a threshold you choose.
 
 The station alerts on a fixed set of conditions already — disk over 85 %, a
-source flapping, the clock adrift, the analytics copy falling behind. Those are
+source flapping, the clock adrift, the analytics copy falling behind, a
+classifier failing every window it is given. Those are
 good defaults and they are not everyone's. The rule that catches a dying
 microphone at a particular station is *"tell me when the hourly detection count
 drops below what it normally is here"*, and no number chosen in this project can
