@@ -190,6 +190,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Written against its published field definitions; not checked against a
   live response, because that needs a key.
 
+- **Chart labels stay readable on a phone.** The charts are fixed-canvas SVGs
+  scaled to their card, so a label authored at 8 px rendered as small as
+  2.7 px on a 390 px screen — on the dashboard, Patterns, Migration,
+  History, the life list and the species page — while axe and the visual
+  sweep called every one clean. `static/chart-text.js` raises any label that
+  would render under 9.5 px (by at most 4×), abbreviates one that then
+  collides with its neighbour and hides one that still does;
+  `data-no-text-fit` opts a chart out. A new gate,
+  `tools/visual-qa/legibility.mjs`, measures each label's on-screen size
+  (computed font size × the SVG's screen scale) at 1440 and 390 px: with the
+  fitter withheld (`NO_FITTER=1`) 17 of 78 route-and-viewport combinations
+  fail; with it, none do (631 labels graded, the smallest at least 8.5 px).
+
 ### Changed
 
 - A network source is labelled **Network stream** rather than "Network
@@ -238,6 +251,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`src/main/extension.cpp`): exact version for `CPP` / `C_STRUCT_UNSTABLE`,
   same major and no newer than the engine's C API for `C_STRUCT`.
   `/api/v2/analytics/status` reports the embed's `abi`.
+
+- **The admin pages and the live-log viewer use the site's own layout.** They
+  were standalone documents with a different header, no tab bar, no
+  breadcrumbs and no theme toggle on a phone. They now render inside the
+  shared layout, with the admin sections as a one-line strip that scrolls
+  sideways on a narrow screen. Changelog, Notification Center, Search,
+  Quarantine and Detection Reviews also have a home tab, so the navigation
+  says where you are.
+
+- **Quarantine says why in plain words.** "Unlikely here this time of year"
+  and "Below the bar set for this species", with "N% likely here this week"
+  where the range model supplied a figure, in place of the internal gate
+  names. The Live page's empty source reads "— no source yet —".
+
+- **Thirteen rules authored at 8–9.5 px were raised to 10 px** (badges,
+  pills, the year-in-review month labels, tape and day labels, three chart
+  captions). Three disclosure and help glyphs, and the tab-bar labels and
+  footer line below 360 px wide, which are tightened to fit a 320 px screen,
+  stay under 10 px. Chart text is sized separately, above.
+
+- **Every GitHub Actions workflow pins `dtolnay/rust-toolchain` by commit**
+  and names the toolchain in a `toolchain:` input, as every other action
+  already was; 110 of 110 `uses:` lines are now commit-pinned, and the
+  `CI config` job fails on one that is not or on a toolchain action with no
+  `toolchain:` input (seen failing against both). The pin is upstream
+  `6c977a6` (2026-08-04), in `release.yml` since August; upstream has since
+  merged input-handling hardening (2026-10-08, `e2a55d2`) that matters only
+  where an input is not a literal, and these are. Release and upgrade builds, and the Docker image's final
+  build, pass `--locked`; the release workflow first runs
+  `cargo update --workspace --locked`, which exits 101 on a lock that
+  disagrees with a manifest (checked against a lock with one workspace
+  version edited) and so fails in seconds rather than partway through the
+  build matrix.
 
 ### Fixed
 
@@ -555,6 +601,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/api/v2/analytics/status` reports an unreadable count as `null`, not
   `0`.** A zero there is documented as "the sync has not run", which was the
   wrong diagnosis for a store whose tables could not be read.
+
+- **The mutation and supply-chain workflows' scheduled runs are no longer
+  cancelled by a merge.** Both shared a concurrency group with every push to
+  the default branch and cancelled in progress, so the weekly sweep — hours
+  long — was killed whenever anything merged while it ran. Scheduled and
+  dispatched runs now have their own group and are not cancelled.
+
+- **A species card says what is actually missing.** With the image cache
+  configured it no longer tells you to pass `--image-cache-dir`; with it off
+  it says so and names the flag for whoever set the station up.
 
 ### Security
 
