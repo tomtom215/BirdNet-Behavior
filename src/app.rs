@@ -456,7 +456,12 @@ async fn serve(
     // about.
     let mqtt_presence_client = mqtt_client.clone();
     let notification_filter = integrations::create_notification_filter(&cli, config.as_ref());
-    let notification_template = integrations::create_notification_template(&cli, config.as_ref());
+    // How a phone reaches this station, for the links a notification carries.
+    let notification_template = integrations::create_notification_template(
+        &cli,
+        config.as_ref(),
+        integrations::station_url(addr, &tls_plan),
+    );
 
     // OB-9: give the web layer the *same* notifier the alert loops deliver
     // through, so "Test notifications" exercises the native routes, the

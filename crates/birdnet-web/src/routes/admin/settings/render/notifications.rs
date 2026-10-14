@@ -122,7 +122,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <label for="notify_title_template">Notification Title Template</label>
       <input id="notify_title_template" name="notify_title_template" value="{title_tmpl}"
              placeholder="Bird Detection: $comname">
-      <p class="hint">Variables: $comname $sciname $confidence $confidencepct $date $time $week $latitude $longitude. Leave blank for default. (BirdNET-Pi: APPRISE_TITLE_TEMPLATE)</p>
+      <p class="hint">Variables: $comname $sciname $confidence $confidencepct $date $time $week $latitude $longitude $reason $cutoff $sens $overlap $listenurl $friendlyurl $image. Leave blank for default. (BirdNET-Pi: APPRISE_TITLE_TEMPLATE)</p>
     </div>
     <div>
       <label for="notify_body_template">Notification Body Template</label>

@@ -1142,7 +1142,28 @@ pub(super) fn event_processor(
         };
         broadcast.send(&ws_event);
 
-        // Build notification context for template rendering.
+        // Does this detection notify, and why? Decided once, before the
+        // context is built, because the reason is part of what the template
+        // renders (`$reason`) and a second query for it could disagree with
+        // the first. Also respect Suppress alert rules.
+        let prior = PriorDetections {
+            state: &state,
+            date: &detection.date,
+        };
+        let notify_reason = notification_filter.notify_reason(
+            &detection.scientific_name,
+            &detection.common_name,
+            Some(&prior),
+        );
+        let filter_says_notify = notify_reason.is_some();
+        let dispatch_allowed = passes_filter(rule_suppressed, filter_says_notify);
+
+        // Build notification context for template rendering. Every field is
+        // what this station knows, and a field it does not know stays empty:
+        // this used to be built with `latitude: 0.0` and an empty reason,
+        // cutoff, sensitivity and overlap, so a template using any of them
+        // sent a position off the coast of Africa or nothing at all. The
+        // links are filled by the template from the station's address.
         let notify_ctx = NotificationContext {
             sci_name: detection.scientific_name.clone(),
             com_name: detection.common_name.clone(),
@@ -1151,26 +1172,16 @@ pub(super) fn event_processor(
             date: detection.date.clone(),
             time: detection.time.clone(),
             week: detection.week,
-            latitude: 0.0,
-            longitude: 0.0,
-            reason: String::new(),
+            latitude: provenance.lat,
+            longitude: provenance.lon,
+            reason: notify_reason.unwrap_or_default(),
+            cutoff: Some(admitted_at),
+            sensitivity: Some(provenance.sensitivity),
+            overlap: Some(provenance.overlap),
             listen_url: None,
             image_url: None,
             station_url: None,
         };
-
-        // Check notification filter (trigger mode + species filter).
-        // Also respect Suppress alert rules.
-        let prior = PriorDetections {
-            state: &state,
-            date: &detection.date,
-        };
-        let filter_says_notify = notification_filter.should_notify_detection(
-            &detection.scientific_name,
-            &detection.common_name,
-            Some(&prior),
-        );
-        let dispatch_allowed = passes_filter(rule_suppressed, filter_says_notify);
 
         // What every channel below records about this detection. Built once so a
         // channel cannot log a different species than it sent.
@@ -2415,6 +2426,140 @@ mod tests {
             !magpie_free,
             "the magpie was announced and keeps its cooldown"
         );
+    }
+
+    /// What an Apprise `json://` route is sent for one detection, when the
+    /// template uses every variable that describes the station and the run.
+    ///
+    /// `$latitude`, `$longitude`, `$reason`, `$cutoff`, `$sens`, `$overlap`,
+    /// `$listenurl` and the rest were advertised and rendered, but the context
+    /// the daemon built never filled them: the coordinates were a literal
+    /// `0.0` and the others empty. Every unit test of the template used a
+    /// hand-built context, so none of them could see it.
+    #[tokio::test]
+    async fn a_notification_carries_the_stations_own_values() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (seen_tx, seen_rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            use std::io::{Read as _, Write as _};
+            for stream in listener.incoming().flatten() {
+                let mut stream = stream;
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                    .ok();
+                let mut request = Vec::new();
+                let mut buf = [0_u8; 4096];
+                while let Ok(n) = stream.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                let _ = seen_tx.send(String::from_utf8_lossy(&request).into_owned());
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                );
+            }
+        });
+        let target = birdnet_integrations::dispatch::parse(&format!("json://{addr}/hook"))
+            .expect("a json:// route parses");
+        let client = birdnet_integrations::apprise::Client::new_cli_only(
+            std::path::PathBuf::from("/nonexistent"),
+            birdnet_integrations::apprise::NotifyConfig {
+                cooldown: std::time::Duration::ZERO,
+                ..birdnet_integrations::apprise::NotifyConfig::default()
+            },
+        )
+        .expect("client")
+        .with_native_routes(
+            vec![birdnet_integrations::dispatch::Route {
+                target,
+                label: "json".to_owned(),
+            }],
+            false,
+        );
+        let apprise = std::sync::Arc::new(tokio::sync::Mutex::new(client));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        event_tx
+            .send(make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "a",
+            ))
+            .unwrap();
+        drop(event_tx);
+        let rt_handle = tokio::runtime::Handle::current();
+        let provenance = test_provenance(&state);
+        let state_for_processor = state.clone();
+        let for_processor = std::sync::Arc::clone(&apprise);
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                Some(for_processor),
+                None,
+                None,
+                None,
+                birdnet_integrations::notification::NotificationFilter {
+                    trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+                    species_filter: birdnet_integrations::notification::SpeciesFilter::new(
+                        None, None,
+                    ),
+                },
+                birdnet_integrations::notification::NotificationTemplate::new(
+                    "$comname".to_owned(),
+                    "lat=$latitude lon=$longitude cutoff=$cutoff sens=$sens overlap=$overlap \
+                     reason=$reason page=$listenurl"
+                        .to_owned(),
+                )
+                .with_station_url(Some("http://birdnet.local:8502".to_owned())),
+                rt_handle,
+                HashMap::new(),
+                0.25,
+                Extractor::new(birdnet_core::audio::extraction::ExtractionConfig::default()),
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                None,
+            );
+        })
+        .await
+        .unwrap();
+
+        // The send is a task on this test's own (current-thread) runtime, so
+        // waiting for the stub on this thread would starve the very task being
+        // waited for. Wait on a blocking thread and keep the runtime free.
+        let request = tokio::task::spawn_blocking(move || {
+            seen_rx.recv_timeout(std::time::Duration::from_secs(10))
+        })
+        .await
+        .unwrap()
+        .expect("the stub route received the notification");
+        for expected in [
+            // test_provenance: 51.48, -0.13, sensitivity 1.25, overlap 1.5.
+            "lat=51.480000 lon=-0.130000",
+            // The global confidence the event was admitted at.
+            "cutoff=0.25",
+            "sens=1.25 overlap=1.5",
+            "reason=detection",
+            "page=http://birdnet.local:8502/detections/detail?date=2026-05-19&time=09%3A00%3A00&name=Eurasian%20Magpie",
+        ] {
+            assert!(
+                request.contains(expected),
+                "the notification should contain {expected:?}; it was sent as:\n{request}"
+            );
+        }
     }
 
     /// The watchlist the settings form asks for — common names — must let the

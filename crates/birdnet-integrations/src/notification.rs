@@ -6,6 +6,7 @@
 //! - [`TriggerMode`] controlling when notifications fire
 //! - [`DetectionCounter`] trait for querying detection counts from the database
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -13,6 +14,10 @@ use std::fmt;
 ///
 /// Contains all the variables that `BirdNET-Pi` supports for notification
 /// template substitution.
+///
+/// A value the station does not have is `None` and renders as nothing. It is
+/// never a made-up default: a station with no coordinates must not tell a
+/// phone it is at 0.000000, 0.000000.
 #[derive(Debug, Clone)]
 pub struct NotificationContext {
     /// Scientific name of the detected species.
@@ -29,18 +34,59 @@ pub struct NotificationContext {
     pub time: String,
     /// ISO week number.
     pub week: u32,
-    /// Station latitude.
-    pub latitude: f64,
-    /// Station longitude.
-    pub longitude: f64,
-    /// Detection reason / notes.
+    /// Station latitude, when the station has one.
+    pub latitude: Option<f64>,
+    /// Station longitude, when the station has one.
+    pub longitude: Option<f64>,
+    /// Why this detection produced a notification (`$reason`); see
+    /// [`NotificationFilter::notify_reason`].
     pub reason: String,
-    /// URL to listen to the detection audio.
+    /// The confidence bar this detection cleared (`$cutoff`).
+    pub cutoff: Option<f64>,
+    /// BirdNET sensitivity the run used (`$sens`).
+    pub sensitivity: Option<f64>,
+    /// Analysis-window overlap in seconds the run used (`$overlap`).
+    pub overlap: Option<f64>,
+    /// The detection's own page (`$listenurl`; `$friendlyurl` links to it).
+    /// Filled from the station's address by [`NotificationTemplate`] when it
+    /// has one and this is `None`.
     pub listen_url: Option<String>,
-    /// URL to a species image.
+    /// URL of a picture of the species (`$image`). Filled the same way.
     pub image_url: Option<String>,
-    /// URL to the station web interface.
+    /// URL of the station web interface.
     pub station_url: Option<String>,
+}
+
+impl NotificationContext {
+    /// Point the links this context does not already carry at `station_url`:
+    /// the detection's own page, and the species picture the station serves.
+    ///
+    /// `listen_url`, `image_url` and `station_url` that are already set are
+    /// left alone, so a caller that knows better wins.
+    fn fill_links(&mut self, station_url: &str) {
+        use crate::offsite::sigv4::encode_component as enc;
+        let base = station_url.trim_end_matches('/');
+        if base.is_empty() {
+            return;
+        }
+        if self.station_url.is_none() {
+            self.station_url = Some(base.to_owned());
+        }
+        if self.listen_url.is_none() {
+            self.listen_url = Some(format!(
+                "{base}/detections/detail?date={}&time={}&name={}",
+                enc(&self.date),
+                enc(&self.time),
+                enc(&self.com_name),
+            ));
+        }
+        if self.image_url.is_none() {
+            self.image_url = Some(format!(
+                "{base}/api/v2/species/image/{}/file",
+                enc(&self.sci_name)
+            ));
+        }
+    }
 }
 
 /// A notification message template with variable substitution.
@@ -55,6 +101,10 @@ pub struct NotificationTemplate {
     title_template: String,
     /// Body template string.
     body_template: String,
+    /// How the station is reached from the device that reads the
+    /// notification, when known; the source of `$listenurl`, `$friendlyurl`
+    /// and `$image`.
+    station_url: Option<String>,
 }
 
 impl Default for NotificationTemplate {
@@ -64,6 +114,7 @@ impl Default for NotificationTemplate {
             body_template:
                 "$comname ($sciname) detected ($confidencepct% confidence) at $time on $date"
                     .to_string(),
+            station_url: None,
         }
     }
 }
@@ -75,14 +126,32 @@ impl NotificationTemplate {
         Self {
             title_template,
             body_template,
+            station_url: None,
         }
+    }
+
+    /// Say how the station is reached from outside, so `$listenurl`,
+    /// `$friendlyurl` and `$image` have something to point at. Without it
+    /// they render as nothing — a link to a guessed address is worse than none.
+    #[must_use]
+    pub fn with_station_url(mut self, station_url: Option<String>) -> Self {
+        self.station_url = station_url.filter(|u| !u.trim().is_empty());
+        self
     }
 
     /// Render the template with the given context, returning `(title, body)`.
     #[must_use]
     pub fn render(&self, ctx: &NotificationContext) -> (String, String) {
-        let title = substitute(&self.title_template, ctx);
-        let body = substitute(&self.body_template, ctx);
+        let ctx = self
+            .station_url
+            .as_deref()
+            .map_or(Cow::Borrowed(ctx), |base| {
+                let mut linked = ctx.clone();
+                linked.fill_links(base);
+                Cow::Owned(linked)
+            });
+        let title = substitute(&self.title_template, &ctx);
+        let body = substitute(&self.body_template, &ctx);
         (title, body)
     }
 
@@ -99,8 +168,38 @@ impl NotificationTemplate {
     }
 }
 
+/// A setting as a short number: `1.25`, `0.7`, `1` — what `BirdNET-Pi` prints
+/// for the same value, without the binary noise of an `f32` widened to `f64`.
+fn number(value: Option<f64>) -> String {
+    value.map_or_else(String::new, |v| {
+        let fixed = format!("{v:.4}");
+        let trimmed = fixed.trim_end_matches('0').trim_end_matches('.');
+        if trimmed.is_empty() || trimmed == "-" {
+            "0".to_owned()
+        } else {
+            trimmed.to_owned()
+        }
+    })
+}
+
+/// A coordinate to the six places `BirdNET-Pi` shows, or nothing.
+fn coordinate(value: Option<f64>) -> String {
+    value.map_or_else(String::new, |v| format!("{v:.6}"))
+}
+
 /// Perform variable substitution on a template string.
+///
+/// `$friendlyurl` is `BirdNET-Pi`'s: a Markdown link to the detection, not the
+/// bare address of the station — a migrated template that says
+/// `$friendlyurl` expects the former.
 fn substitute(template: &str, ctx: &NotificationContext) -> String {
+    let listen = ctx.listen_url.as_deref().unwrap_or("");
+    let friendly = if listen.is_empty() {
+        String::new()
+    } else {
+        format!("[Listen here]({listen})")
+    };
+    let image = ctx.image_url.as_deref().unwrap_or("");
     template
         .replace("$sciname", &ctx.sci_name)
         .replace("$comname", &ctx.com_name)
@@ -109,17 +208,16 @@ fn substitute(template: &str, ctx: &NotificationContext) -> String {
         .replace("$date", &ctx.date)
         .replace("$time", &ctx.time)
         .replace("$week", &ctx.week.to_string())
-        .replace("$latitude", &format!("{:.6}", ctx.latitude))
-        .replace("$longitude", &format!("{:.6}", ctx.longitude))
+        .replace("$latitude", &coordinate(ctx.latitude))
+        .replace("$longitude", &coordinate(ctx.longitude))
         .replace("$reason", &ctx.reason)
-        .replace("$listenurl", ctx.listen_url.as_deref().unwrap_or(""))
-        .replace("$friendlyurl", ctx.station_url.as_deref().unwrap_or(""))
-        .replace("$flickrimage", ctx.image_url.as_deref().unwrap_or(""))
-        .replace("$image", ctx.image_url.as_deref().unwrap_or(""))
-        // Placeholders for settings that may not be available in context
-        .replace("$cutoff", "")
-        .replace("$sens", "")
-        .replace("$overlap", "")
+        .replace("$listenurl", listen)
+        .replace("$friendlyurl", &friendly)
+        .replace("$flickrimage", image)
+        .replace("$image", image)
+        .replace("$cutoff", &number(ctx.cutoff))
+        .replace("$sens", &number(ctx.sensitivity))
+        .replace("$overlap", &number(ctx.overlap))
 }
 
 /// Notification trigger modes controlling when notifications are sent.
@@ -270,25 +368,42 @@ impl NotificationFilter {
         com_name: &str,
         counter: Option<&dyn DetectionCounter>,
     ) -> bool {
+        self.notify_reason(sci_name, com_name, counter).is_some()
+    }
+
+    /// Why a detection should notify, or `None` when it should not.
+    ///
+    /// The one decision [`Self::should_notify_detection`] answers as a yes or
+    /// no, kept with its reason so `$reason` says what the filter actually
+    /// found rather than something it was never asked. The wording is
+    /// `BirdNET-Pi`'s: `detection`, `first time today`, and
+    /// `only seen N times in last 7d`, where N includes this detection.
+    pub fn notify_reason(
+        &self,
+        sci_name: &str,
+        com_name: &str,
+        counter: Option<&dyn DetectionCounter>,
+    ) -> Option<String> {
         // Species filter check.
         if !self.species_filter.allows(sci_name, com_name) {
-            return false;
+            return None;
         }
 
         // Trigger mode check.
         match self.trigger {
-            TriggerMode::EachDetection => true,
+            TriggerMode::EachDetection => Some("detection".to_owned()),
             TriggerMode::NewSpecies => {
                 let count = counter.map_or(0, |c| c.this_weeks_count_for(sci_name));
                 // Notify when species has fewer than 5 detections this week.
                 // The current detection has not been inserted yet, so count
                 // represents previous detections.
-                count < 5
+                (count < 5)
+                    .then(|| format!("only seen {} times in last 7d", count.saturating_add(1)))
             }
             TriggerMode::NewSpeciesDaily => {
                 let count = counter.map_or(0, |c| c.todays_count_for(sci_name));
                 // First detection of the day for this species.
-                count == 0
+                (count == 0).then(|| "first time today".to_owned())
             }
         }
     }
@@ -311,13 +426,206 @@ mod tests {
             date: "2026-03-14".to_string(),
             time: "08:30:00".to_string(),
             week: 11,
-            latitude: 51.5074,
-            longitude: -0.1278,
+            latitude: Some(51.5074),
+            longitude: Some(-0.1278),
             reason: "high confidence".to_string(),
+            cutoff: Some(0.7),
+            sensitivity: Some(1.25),
+            overlap: Some(0.0),
             listen_url: Some("http://localhost:8502/listen/123".to_string()),
             image_url: Some("http://example.com/robin.jpg".to_string()),
             station_url: Some("http://localhost:8502".to_string()),
         }
+    }
+
+    /// A context as the daemon builds it: no link of its own, so every link
+    /// has to come from the template's station address.
+    fn bare_context() -> NotificationContext {
+        NotificationContext {
+            listen_url: None,
+            image_url: None,
+            station_url: None,
+            ..sample_context()
+        }
+    }
+
+    fn render_body(template: &str, station: Option<&str>, ctx: &NotificationContext) -> String {
+        NotificationTemplate::new("t".to_owned(), template.to_owned())
+            .with_station_url(station.map(str::to_owned))
+            .render(ctx)
+            .1
+    }
+
+    /// `$latitude` and `$longitude` printed `0.000000` on every notification a
+    /// production station sent: the daemon built the context with a literal 0.0.
+    /// A station *with* coordinates prints them; one without prints nothing,
+    /// rather than a position in the Gulf of Guinea.
+    #[test]
+    fn coordinates_are_the_stations_or_nothing() {
+        let ctx = sample_context();
+        assert_eq!(
+            render_body("$latitude,$longitude", None, &ctx),
+            "51.507400,-0.127800"
+        );
+        let none = NotificationContext {
+            latitude: None,
+            longitude: None,
+            ..sample_context()
+        };
+        assert_eq!(render_body("[$latitude|$longitude]", None, &none), "[|]");
+    }
+
+    /// `$cutoff`, `$sens` and `$overlap` were replaced with nothing whatever the
+    /// station's settings were.
+    #[test]
+    fn run_settings_render_as_short_numbers() {
+        let ctx = sample_context();
+        assert_eq!(
+            render_body("$cutoff/$sens/$overlap", None, &ctx),
+            "0.7/1.25/0"
+        );
+        let other = NotificationContext {
+            cutoff: Some(0.5),
+            sensitivity: Some(1.0),
+            overlap: Some(1.5),
+            ..sample_context()
+        };
+        assert_eq!(
+            render_body("$cutoff/$sens/$overlap", None, &other),
+            "0.5/1/1.5"
+        );
+        let unknown = NotificationContext {
+            cutoff: None,
+            sensitivity: None,
+            overlap: None,
+            ..sample_context()
+        };
+        assert_eq!(render_body("$cutoff/$sens/$overlap", None, &unknown), "//");
+    }
+
+    /// The links a station can build, and the ones it must not guess.
+    #[test]
+    fn links_come_from_the_stations_address() {
+        let ctx = bare_context();
+        let body = render_body(
+            "$listenurl\n$friendlyurl\n$image\n$flickrimage",
+            Some("http://birdnet.local:8502/"),
+            &ctx,
+        );
+        let page = "http://birdnet.local:8502/detections/detail?date=2026-03-14&time=08%3A30%3A00&name=European%20Robin";
+        let image = "http://birdnet.local:8502/api/v2/species/image/Erithacus%20rubecula/file";
+        assert_eq!(
+            body,
+            format!("{page}\n[Listen here]({page})\n{image}\n{image}")
+        );
+
+        // No address, no link: nothing is better than a link to a guess.
+        assert_eq!(
+            render_body("[$listenurl][$friendlyurl][$image]", None, &ctx),
+            "[][][]"
+        );
+        // An address that is only whitespace is no address.
+        assert_eq!(render_body("[$listenurl]", Some("  "), &ctx), "[]");
+    }
+
+    /// `$friendlyurl` is `BirdNET-Pi`'s Markdown link to the detection. It was
+    /// the bare address of the station, which a migrated template cannot use.
+    #[test]
+    fn friendly_url_is_a_markdown_link_to_the_detection() {
+        let ctx = sample_context();
+        assert_eq!(
+            render_body("$friendlyurl", None, &ctx),
+            "[Listen here](http://localhost:8502/listen/123)"
+        );
+    }
+
+    /// A link the caller already set is not overwritten by the station's.
+    #[test]
+    fn an_explicit_link_wins_over_the_stations() {
+        let ctx = sample_context();
+        let body = render_body("$listenurl", Some("http://birdnet.local"), &ctx);
+        assert_eq!(body, "http://localhost:8502/listen/123");
+    }
+
+    /// Characters that are not URL-safe in a species name or a time cannot
+    /// change what the link points at.
+    #[test]
+    fn link_components_are_encoded() {
+        let ctx = NotificationContext {
+            com_name: "Bird & Co?x=1#y".to_owned(),
+            ..bare_context()
+        };
+        let body = render_body("$listenurl", Some("http://s"), &ctx);
+        assert!(
+            body.ends_with("&name=Bird%20%26%20Co%3Fx%3D1%23y"),
+            "{body}"
+        );
+    }
+
+    struct Counts(u64, u64);
+    impl DetectionCounter for Counts {
+        fn todays_count_for(&self, _: &str) -> u64 {
+            self.0
+        }
+        fn this_weeks_count_for(&self, _: &str) -> u64 {
+            self.1
+        }
+    }
+
+    fn filter(trigger: TriggerMode) -> NotificationFilter {
+        NotificationFilter {
+            trigger,
+            species_filter: SpeciesFilter::new(None, None),
+        }
+    }
+
+    /// `$reason` was always empty, so a migrated `BirdNET-Pi` body that ends in
+    /// `($reason)` rendered `()`. The wording is theirs.
+    #[test]
+    fn the_reason_names_the_trigger_that_fired() {
+        let each = filter(TriggerMode::EachDetection);
+        assert_eq!(
+            each.notify_reason("Pica pica", "Eurasian Magpie", None)
+                .as_deref(),
+            Some("detection")
+        );
+        let daily = filter(TriggerMode::NewSpeciesDaily);
+        assert_eq!(
+            daily
+                .notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(0, 9)))
+                .as_deref(),
+            Some("first time today")
+        );
+        assert_eq!(
+            daily.notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(1, 9))),
+            None,
+            "the second detection of the day has no reason to notify"
+        );
+        let weekly = filter(TriggerMode::NewSpecies);
+        // Three earlier detections plus this one: "seen 4 times", as
+        // BirdNET-Pi counts after the insert.
+        assert_eq!(
+            weekly
+                .notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(9, 3)))
+                .as_deref(),
+            Some("only seen 4 times in last 7d")
+        );
+        assert_eq!(
+            weekly.notify_reason("Pica pica", "Eurasian Magpie", Some(&Counts(9, 5))),
+            None
+        );
+    }
+
+    /// The reason is the yes/no answer's own explanation, not a second opinion:
+    /// an excluded species gets neither.
+    #[test]
+    fn an_excluded_species_has_no_reason() {
+        let f = NotificationFilter {
+            trigger: TriggerMode::EachDetection,
+            species_filter: SpeciesFilter::new(Some("Eurasian Magpie"), None),
+        };
+        assert_eq!(f.notify_reason("Pica pica", "Eurasian Magpie", None), None);
+        assert!(!f.should_notify_detection("Pica pica", "Eurasian Magpie", None));
     }
 
     #[test]

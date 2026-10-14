@@ -237,15 +237,45 @@ fn physical_ram_mib() -> Option<u64> {
 
 /// This process's cgroup memory ceiling, in MiB, if it has one.
 ///
-/// cgroup v2 first (`memory.max`, where `max` means unlimited), then v1
-/// (`memory.limit_in_bytes`, where "unlimited" is a number close to `u64::MAX`
-/// and is filtered by the sanity bound rather than by matching a magic value,
-/// which has differed between kernels).
+/// Found from `/proc/self/cgroup`, not from the top of the cgroup mount: under
+/// systemd a service's `MemoryMax=` is written on the *service's own* cgroup
+/// (`/sys/fs/cgroup/system.slice/<unit>/memory.max`), and the file at the mount
+/// root does not exist on cgroup v2 at all. Reading only the root, as this once
+/// did, reported "no limit" for exactly the deployment the shipped unit sets one
+/// for, so the ceiling was the machine's RAM and a second classifier was
+/// admitted that `MemoryMax=1G` then killed. Inside a container the cgroup is
+/// the container's, `/proc/self/cgroup` says `/`, and the root file is the
+/// right one — both cases are the same walk.
 fn cgroup_limit_mib() -> Option<u64> {
+    let proc_cgroup = std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    effective_cgroup_limit_mib(
+        &proc_cgroup,
+        std::path::Path::new("/sys/fs/cgroup"),
+        std::path::Path::new("/sys/fs/cgroup/memory"),
+    )
+}
+
+/// The tightest memory limit on the path from this process's cgroup up to the
+/// root, in MiB. [`cgroup_limit_mib`] with its three inputs supplied, so the
+/// walk can be tested against a directory tree instead of the machine.
+///
+/// A limit anywhere above the process's own cgroup binds it too — a service
+/// under a slice under a user manager is held to the smallest of the three —
+/// so every ancestor is read and the minimum wins. cgroup v2 first (`0::<path>`
+/// in `/proc/self/cgroup`, `memory.max`, where `max` means unlimited), then v1
+/// (the line naming the `memory` controller, `memory.limit_in_bytes`, where
+/// "unlimited" is a number close to `u64::MAX` and is filtered by the sanity
+/// bound rather than by matching a magic value, which has differed between
+/// kernels).
+fn effective_cgroup_limit_mib(
+    proc_self_cgroup: &str,
+    v2_root: &std::path::Path,
+    v1_memory_root: &std::path::Path,
+) -> Option<u64> {
     /// Above this a "limit" is the kernel's way of saying unlimited.
     const IMPLAUSIBLE_MIB: u64 = 1024 * 1024; // 1 TiB
 
-    let read = |path: &str| -> Option<u64> {
+    let read = |path: std::path::PathBuf| -> Option<u64> {
         let raw = std::fs::read_to_string(path).ok()?;
         let raw = raw.trim();
         if raw == "max" {
@@ -255,8 +285,55 @@ fn cgroup_limit_mib() -> Option<u64> {
         let mib = bytes / (1024 * 1024);
         (mib > 0 && mib < IMPLAUSIBLE_MIB).then_some(mib)
     };
-    read("/sys/fs/cgroup/memory.max")
-        .or_else(|| read("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+
+    // The cgroup path for each hierarchy this process is in. A path that is
+    // not absolute or climbs with `..` is not followed: it would name a file
+    // outside the mount.
+    let mut v2_path = None;
+    let mut v1_path = None;
+    for line in proc_self_cgroup.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_id), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if !path.starts_with('/') || path.split('/').any(|c| c == "..") {
+            continue;
+        }
+        if controllers.is_empty() {
+            v2_path = Some(path);
+        } else if controllers.split(',').any(|c| c == "memory") {
+            v1_path = Some(path);
+        }
+    }
+
+    // Leaf to root: `/a/b` is `/a/b`, `/a`, then the root itself.
+    let walk = |root: &std::path::Path, path: &str, file: &str| -> Option<u64> {
+        let mut dir = path.trim_end_matches('/');
+        let mut tightest: Option<u64> = None;
+        loop {
+            let candidate = root.join(dir.trim_start_matches('/')).join(file);
+            if let Some(mib) = read(candidate) {
+                tightest = Some(tightest.map_or(mib, |t| t.min(mib)));
+            }
+            match dir.rfind('/') {
+                Some(cut) => dir = &dir[..cut],
+                None => break,
+            }
+        }
+        tightest
+    };
+
+    let v2 = walk(v2_root, v2_path.unwrap_or("/"), "memory.max");
+    let v1 = walk(
+        v1_memory_root,
+        v1_path.unwrap_or("/"),
+        "memory.limit_in_bytes",
+    );
+    match (v2, v1) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
 }
 
 #[cfg(test)]
@@ -422,5 +499,107 @@ mod tests {
             mib < 1024 * 1024,
             "detected a {mib} MiB machine — over a terabyte, so a unit is wrong somewhere"
         );
+    }
+
+    /// A cgroup tree on disk: each `(path, file, contents)` is one file, laid
+    /// out the way the kernel lays it out under a mount.
+    fn tree(files: &[(&str, &str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, file, contents) in files {
+            let d = dir.path().join(path.trim_start_matches('/'));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join(file), contents).unwrap();
+        }
+        dir
+    }
+
+    fn limit(proc_cgroup: &str, v2: &tempfile::TempDir, v1: &tempfile::TempDir) -> Option<u64> {
+        super::effective_cgroup_limit_mib(proc_cgroup, v2.path(), v1.path())
+    }
+
+    const GIB: &str = "1073741824";
+
+    /// The shipped unit: `MemoryMax=1G` is written on the *service's* cgroup,
+    /// and the mount root has no `memory.max` on cgroup v2. Reading only the
+    /// root found no limit here, so the ceiling was the machine's RAM.
+    #[test]
+    fn a_systemd_services_own_memory_max_is_found() {
+        let v2 = tree(&[
+            ("/system.slice/birdnet.service", "memory.max", GIB),
+            ("/system.slice", "memory.max", "max"),
+        ]);
+        let v1 = tree(&[]);
+        assert_eq!(
+            limit("0::/system.slice/birdnet.service\n", &v2, &v1),
+            Some(1024)
+        );
+    }
+
+    /// A limit on an ancestor binds the process as much as its own does, and the
+    /// tightest of them is the one that kills it.
+    #[test]
+    fn the_tightest_limit_on_the_path_wins() {
+        let slice_tighter = tree(&[
+            ("/user.slice/app.service", "memory.max", "2147483648"),
+            ("/user.slice", "memory.max", GIB),
+        ]);
+        assert_eq!(
+            limit("0::/user.slice/app.service", &slice_tighter, &tree(&[])),
+            Some(1024)
+        );
+        // `max` on the leaf does not hide a number above it.
+        let leaf_unlimited = tree(&[
+            ("/user.slice/app.service", "memory.max", "max"),
+            ("/user.slice", "memory.max", "536870912"),
+        ]);
+        assert_eq!(
+            limit("0::/user.slice/app.service", &leaf_unlimited, &tree(&[])),
+            Some(512)
+        );
+    }
+
+    /// The case the old code was right about, and must stay right about: a
+    /// container sees its own cgroup as `/`, and the file at the mount root is
+    /// its limit.
+    #[test]
+    fn a_container_reads_the_root_of_its_own_cgroup() {
+        let v2 = tree(&[("/", "memory.max", "268435456")]);
+        assert_eq!(limit("0::/\n", &v2, &tree(&[])), Some(256));
+        // No /proc/self/cgroup at all is the same as `/`.
+        assert_eq!(limit("", &v2, &tree(&[])), Some(256));
+    }
+
+    /// cgroup v1 names the controller on the line and keeps the limit in a
+    /// differently named file, and its "unlimited" is a number, not a word.
+    #[test]
+    fn cgroup_v1_follows_the_memory_controller_line() {
+        let v1 = tree(&[
+            (
+                "/system.slice/birdnet.service",
+                "memory.limit_in_bytes",
+                GIB,
+            ),
+            ("/", "memory.limit_in_bytes", "9223372036854771712"),
+        ]);
+        let proc = "12:cpu,cpuacct:/system.slice/birdnet.service\n\
+                    4:memory:/system.slice/birdnet.service\n\
+                    1:name=systemd:/system.slice/birdnet.service\n";
+        assert_eq!(limit(proc, &tree(&[]), &v1), Some(1024));
+        // The unlimited root alone is no limit.
+        let unlimited = tree(&[("/", "memory.limit_in_bytes", "9223372036854771712")]);
+        assert_eq!(limit("4:memory:/", &tree(&[]), &unlimited), None);
+    }
+
+    /// Nothing limited anywhere, a file that is not a number, and a path that
+    /// tries to leave the mount are all "no limit", never a guess.
+    #[test]
+    fn no_limit_and_unreadable_limits_are_none() {
+        assert_eq!(limit("0::/", &tree(&[]), &tree(&[])), None);
+        let junk = tree(&[("/a", "memory.max", "lots\n")]);
+        assert_eq!(limit("0::/a", &junk, &tree(&[])), None);
+        // `/../x` would name a file outside the mount; it is not followed, so
+        // the limit that sits at the mount root is what is found.
+        let root = tree(&[("/", "memory.max", GIB)]);
+        assert_eq!(limit("0::/../../etc", &root, &tree(&[])), Some(1024));
     }
 }

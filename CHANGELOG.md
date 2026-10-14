@@ -241,6 +241,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Notification templates sent blanks and zeros for the station's own
+  values.** `$latitude` and `$longitude` printed `0.000000` on every push, and
+  `$reason`, `$cutoff`, `$sens`, `$overlap`, `$listenurl`, `$friendlyurl` and
+  `$image` were replaced with nothing — the daemon built the context with a
+  literal `0.0` and empty fields, and every unit test of the template used a
+  hand-built one. A migrated BirdNET-Pi body that ends in `($reason)` rendered
+  `()`. Each now carries what the station knows: its coordinates (nothing at
+  all for a station that has none, never `0.000000`), the confidence bar the
+  detection cleared, the sensitivity and overlap the run used, and BirdNET-Pi's
+  own `$reason` wording (`detection`, `first time today`, `only seen N times in
+  last 7d`). The three links point at the station — `BNB_PUBLIC_URL`, then
+  `BNB_BASE_URL`, then `http://<hostname>.local:<port>`, left empty when none can
+  be worked out rather than aimed at `localhost`. `$friendlyurl` is now
+  BirdNET-Pi's Markdown `[Listen here](…)` link to the detection, where it was
+  the bare address of the station. The template variables are listed in the
+  manual for the first time, and the `.env.example` comment that said
+  `BNB_PUBLIC_URL` "reuses" `BNB_BASE_URL` (it does not; the cookie reads only
+  the former) is corrected.
+
+- **A systemd `MemoryMax=` was invisible to the memory ceiling.** The ceiling
+  was read from `/sys/fs/cgroup/memory.max`, which does not exist on cgroup v2
+  outside a container: a service's limit lives on the service's own cgroup.
+  The shipped unit sets `MemoryMax=1G`, so on a bare-metal station the ceiling
+  came out as the machine's RAM, and a second classifier (`MODEL_2_PATH`) could
+  be admitted that the unit then killed. The limit is now found from
+  `/proc/self/cgroup` and the tightest limit on the path to the root wins, for
+  cgroup v1 and v2; the container case, where the process's cgroup is `/`, reads
+  the same file it did. Read from the specification and tested against a
+  directory tree laid out as the kernel lays it out; not yet confirmed on a Pi
+  running the unit under cgroup v2.
+
 - **The MSRV job and the Docker builder were not running the MSRV.**
   `rust-toolchain.toml` names `stable`, and rustup ranks a toolchain file above
   `rustup default`, which is all `dtolnay/rust-toolchain@1.95` sets — so
