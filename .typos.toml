@@ -21,6 +21,11 @@ extend-exclude = [
     "docs/design/handover/**",
     "LICENSE",
     "LICENSE-UPSTREAM",
+    # Other people's licence texts, reproduced byte for byte; the generated
+    # file is made of them, and the fonts' file is.
+    "THIRD_PARTY_LICENSES.txt",
+    "third_party/**",
+    "**/static/fonts/LICENSES.txt",
     # Vendored / minified JS (htmx, etc.) — too dense for spell-check and
     # not our code to fix.
     "**/static/htmx.min.js",

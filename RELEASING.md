@@ -42,6 +42,19 @@ git push origin vX.Y.Z
 
 That single tag push drives everything else.
 
+## When ONNX Runtime, DuckDB or htmx moves
+
+`THIRD_PARTY_LICENSES.txt` carries the licence texts the binary's third-party
+code requires, and release archives and the image ship it with `NOTICE`. It is
+generated (`python3 scripts/gen-third-party-licenses.py`, after
+`cargo fetch --locked`) from `Cargo.lock` and from the directories in
+`third_party/`, which are named for the version they belong to. The `third-party
+licence notices` job and the release `validate` job fail when the committed file
+is stale, when any package's licence text cannot be found, or when the
+ONNX Runtime, DuckDB or htmx the build links is not the version a
+`third_party/` directory is for. `third_party/README.md` says how to replace one.
+A new or removed dependency needs only a regeneration.
+
 ## When DuckDB or an extension moves
 
 The `duckdb` pin in the root `Cargo.toml` decides which engine ships, and the

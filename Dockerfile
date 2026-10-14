@@ -241,7 +241,7 @@ RUN set -eu; \
 # Stage the release binary for the runtime image.
 #
 # Despite the `copy-dylibs` feature being enabled on the `ort` crate,
-# `ort-sys` 2.0.0-rc.12 ships only `libonnxruntime.a` (a static archive)
+# `ort-sys` 2.0.0-rc.14 ships only `libonnxruntime.a` (a static archive)
 # inside its pyke-hosted dfbin tarball — there is no `libonnxruntime.so`.
 # rustc therefore static-links ONNX Runtime directly into the
 # birdnet-behavior binary, and the only dynamic runtime dependencies left
@@ -249,6 +249,14 @@ RUN set -eu; \
 # installed in the runtime stage below.  Nothing extra to carry over.
 RUN install -D -m 0755 target/release/birdnet-behavior \
         /staging/usr/local/bin/birdnet-behavior
+
+# The licence notices the binary's third-party code requires travel with it:
+# the binary statically links packages and libraries whose licences (MIT, BSD,
+# Apache-2.0, MPL-2.0, the SIL OFL for the fonts) ask for exactly that.
+# `supply-chain.yml` fails when THIRD_PARTY_LICENSES.txt is stale.
+RUN install -d /staging/usr/share/doc/birdnet-behavior \
+    && install -m 0644 LICENSE LICENSE-UPSTREAM NOTICE THIRD_PARTY_LICENSES.txt \
+        /staging/usr/share/doc/birdnet-behavior/
 
 # Stage the operator manual the binary serves at /help/*. build.rs rendered the
 # mdBook into docs/book/_generated/html during the cargo build above. Downscale

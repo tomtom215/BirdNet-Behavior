@@ -134,6 +134,18 @@ jobs:
         # stale copy: exit 101, "cannot update the lock file ... --locked".
         run: cargo update --workspace --locked
 
+      - name: Third-party notices match this release
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        # The archives and the image carry THIRD_PARTY_LICENSES.txt. Regenerated
+        # from the locked crates and compared with the committed file, so a
+        # release cannot ship a notice for last month's dependencies.
+        run: |
+          set -eu
+          cargo fetch --locked
+          python3 scripts/gen-third-party-licenses.py --check
+
       - name: Verify workspace version matches tag
         shell: bash
         run: |
@@ -529,7 +541,7 @@ jobs:
 
           mkdir -p "$STAGE"
           cp "target/${{ matrix.target }}/release/birdnet-behavior" "$STAGE/"
-          cp README.md LICENSE LICENSE-UPSTREAM CHANGELOG.md install.sh uninstall.sh "$STAGE/"
+          cp README.md LICENSE LICENSE-UPSTREAM NOTICE THIRD_PARTY_LICENSES.txt CHANGELOG.md install.sh uninstall.sh "$STAGE/"
 
           # Bundle the rendered operator manual so install.sh can serve it at
           # /help/* fully offline (build.rs rendered it into
@@ -879,8 +891,8 @@ jobs:
             echo "| \`x86_64-unknown-linux-gnu\`        | Standard 64-bit Linux                 |"
             echo ""
             echo "Archives are gzipped tarballs containing the stripped binary,"
-            echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`,'
-            echo '`install.sh`, and a `help/` directory with the rendered operator'
+            echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`, `NOTICE`,'
+            echo '`THIRD_PARTY_LICENSES.txt`, `install.sh`, and a `help/` directory with the rendered operator'
             echo 'manual (served offline at `/help`). Each binary ships the DuckDB'
             echo 'behavioral-analytics engine built in; `install.sh` enables it by'
             echo 'default (for a manual run, pass `--analytics-db`).'

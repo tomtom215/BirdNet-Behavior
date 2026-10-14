@@ -287,6 +287,8 @@ The complete, navigable documentation lives at **[tomtom215.github.io/BirdNet-Be
 
 Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), matching the upstream BirdNET and BirdNET-Pi projects. See [LICENSE](LICENSE) and [LICENSE-UPSTREAM](LICENSE-UPSTREAM) for full terms.
 
+The binary also contains other people's work — Rust packages, DuckDB, ONNX Runtime, fonts, htmx — under their own licences. [NOTICE](NOTICE) says what and under which terms, [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt) reproduces the texts, and both ship in every release archive and container image.
+
 ---
 
 ## Related Projects
