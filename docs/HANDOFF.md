@@ -81,9 +81,12 @@ Not done, in the order they seem to matter:
   species identity need a decision first.
 - **Workflows that need GitHub to try them:** CodeQL, OpenSSF Scorecard, an
   OSV/daily advisory scan, running the fuzz targets in CI.
-- **Pins that are still floating:** `cargo install --locked cargo-audit` and the
-  other tool installs name no version; the two Docker base images are tags, not
-  digests; `tools/visual-qa` installs with `npm install`, not `npm ci`.
+- **Pins that are still floating:** the `ubuntu:24.04` container that
+  `install-smoke.yml` starts with `docker run` is a tag (Dependabot does not read
+  `docker run` arguments, so a digest there would go stale unseen);
+  `taiki-e/install-action` and `EmbarkStudios/cargo-deny-action` choose their own
+  tool builds from the version named. Nothing checked whether Dependabot honours
+  the `ignore` rule for the builder's Rust tag: the first docker PR will say.
 - **Dependencies:** `argon2`, `rubato` and htmx are behind their latest releases
   (`CHANGELOG.md` and `dependabot.yml` say why each was held).
 - **The OpenAPI document is not complete** (`api.md` says so): eight REST paths

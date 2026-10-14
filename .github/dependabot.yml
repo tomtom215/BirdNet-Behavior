@@ -126,3 +126,13 @@ updates:
       prefix: "docker"
       include: "scope"
     labels: ["dependencies", "docker"]
+    # Both base images in the Dockerfile are pinned `tag@digest`, and Dependabot
+    # moves the digest when the tag is rebuilt (Debian security updates, Rust
+    # patch releases). It must not move the *tag* of the builder: that is
+    # `rust:1.95-slim-trixie` because 1.95 is the MSRV, so the image compiles with
+    # the oldest compiler the project promises to support (`rust-version` in
+    # Cargo.toml). Raising it is a deliberate change made together with the MSRV,
+    # in a minor release.
+    ignore:
+      - dependency-name: "rust"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]

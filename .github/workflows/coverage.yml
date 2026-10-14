@@ -62,7 +62,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
         with:
-          tool: cargo-llvm-cov
+          tool: cargo-llvm-cov@0.9.1
 
       - name: Run coverage (workspace lib + bins; skip integration tests)
         # `--lib --bins` only — integration tests under `tests/` link a fresh

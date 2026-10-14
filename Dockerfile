@@ -9,11 +9,14 @@
 # for release builds using LTO + codegen-units=1 (emulated linker OOMs on
 # standard GitHub-hosted runners).
 #
+# Base images are named in the two `FROM` lines below, each pinned to a manifest
+# digest (the tag says what it is for; the digest is what is fetched). They used
+# to be `ARG`s interpolated into `FROM`, which let a build-arg change the
+# compiler or the distribution but kept the pin out of Dependabot's sight and
+# off the digest. Bump a base by changing its line; Dependabot's `docker`
+# ecosystem does it weekly.
+#
 # Build arguments:
-#   RUST_VERSION      Rust toolchain version (default: 1.95 — MSRV)
-#   DEBIAN_CODENAME   Debian base image codename (default: trixie — keep this
-#                     line in step with the ARG below; it said `bookworm` for
-#                     as long as the ARG said `trixie`)
 #   BUILD_FEATURES    Comma-separated Cargo features (default: "analytics")
 #                     DuckDB behavioral analytics is built in by default, to
 #                     match the release binaries. Pass BUILD_FEATURES="" for a
@@ -28,7 +31,6 @@
 #   docker build -t birdnet-behavior --build-arg BUILD_FEATURES="" .   # lean
 # =============================================================================
 
-ARG RUST_VERSION=1.95
 # Debian 13 "trixie" is required here, not "bookworm": the pre-built
 # ONNX Runtime binaries that the `ort` crate downloads link against
 # glibc ≥ 2.38 (they use the C23 `__isoc23_strtol` / `strtoll` / `strtoull`
@@ -36,7 +38,10 @@ ARG RUST_VERSION=1.95
 # Debian bookworm ships glibc 2.36 and GCC 12, so those symbols are missing
 # and the final `cargo build` link step aborts with "undefined reference".
 # Trixie ships glibc 2.41 and GCC 14, which matches what pyke builds against.
-ARG DEBIAN_CODENAME=trixie
+#
+# The builder is Rust 1.95, the MSRV (`rust-version` in Cargo.toml), on purpose:
+# the image compiles with the oldest compiler the project promises to support.
+# Dependabot is told not to move it (see .github/dependabot.yml).
 
 # -----------------------------------------------------------------------------
 # Stage 1 — cargo-chef base
@@ -46,12 +51,12 @@ ARG DEBIAN_CODENAME=trixie
 # file is copied into the cook stage, so the dependency layer is invalidated
 # solely when Cargo.lock or manifest files change — not on every source edit.
 # -----------------------------------------------------------------------------
-FROM rust:${RUST_VERSION}-slim-${DEBIAN_CODENAME} AS chef
+FROM rust:1.95-slim-trixie@sha256:e14e87345b4d5964ddcc3491d27ee046a0f23820f340c3c1e24da6880141f7c0 AS chef
 WORKDIR /build
 # cargo-chef is pinned to the 0.1 minor series for reproducibility.  The
 # --locked flag forces cargo to honour the bundled Cargo.lock from the
 # cargo-chef crate, which prevents transitive-dependency drift between builds.
-RUN cargo install cargo-chef --locked --version "^0.1"
+RUN cargo install cargo-chef --locked --version 0.1.78
 
 # -----------------------------------------------------------------------------
 # Stage 2 — planner
@@ -295,12 +300,11 @@ RUN set -eu; \
 #   curl             — used by the entrypoint to fetch the BirdNET+ model.
 #   tini             — PID 1 init, reaps zombies and forwards signals.
 # -----------------------------------------------------------------------------
-FROM debian:${DEBIAN_CODENAME}-slim AS runtime
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS runtime
 
-# Re-declare global ARGs so they are in scope for the ENV / LABEL
+# Re-declare the global ARG so it is in scope for the ENV / LABEL
 # instructions below.  ARGs declared before the first FROM are only
 # visible inside a stage if re-declared with another ARG instruction.
-ARG DEBIAN_CODENAME
 ARG BUILD_FEATURES="analytics"
 
 # Environment knobs
@@ -427,5 +431,5 @@ LABEL org.opencontainers.image.title="BirdNet-Behavior" \
       org.opencontainers.image.description="Real-time acoustic bird classification with DuckDB behavioral analytics" \
       org.opencontainers.image.source="https://github.com/tomtom215/BirdNet-Behavior" \
       org.opencontainers.image.licenses="CC-BY-NC-SA-4.0" \
-      org.opencontainers.image.base.name="docker.io/library/debian:${DEBIAN_CODENAME}-slim" \
+      org.opencontainers.image.base.name="docker.io/library/debian:trixie-slim" \
       io.birdnet-behavior.build-features="${BUILD_FEATURES}"

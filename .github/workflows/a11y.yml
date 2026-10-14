@@ -68,7 +68,7 @@ jobs:
         working-directory: tools/visual-qa
         # ubuntu-24.04 runners ship Node 20+, so no setup-node action is needed.
         run: |
-          npm install
+          npm ci
           npx playwright install --with-deps chromium
       - name: Start screenshot server (127.0.0.1:8502)
         run: |

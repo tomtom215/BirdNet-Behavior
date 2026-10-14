@@ -306,6 +306,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footer line below 360 px wide, which are tightened to fit a 320 px screen,
   stay under 10 px. Chart text is sized separately, above.
 
+- **Every tool CI installs, and both Docker base images, are pinned.**
+  `cargo install cargo-audit`, `cargo-mutants`, `cargo-llvm-cov`, `pip install
+  pyyaml` and the Dockerfile's `cargo-chef` (`^0.1`) took whichever release was
+  newest on the day, so one commit could pass on Monday and fail on Tuesday for a
+  reason that was nowhere in the diff; they now name `27.1.0`, `0.9.1`, `0.22.2`,
+  `6.0.3` and `0.1.78` (the newest stable of each on the crates.io index and
+  PyPI today), and the browser-QA job runs `npm ci` against the committed lock,
+  which was checked to install cleanly. The Dockerfile's two `FROM` lines name
+  `rust:1.95-slim-trixie` and `debian:trixie-slim` by manifest digest instead of
+  interpolating `RUST_VERSION` and `DEBIAN_CODENAME` build-args (the digests'
+  bodies were hashed against the registry and list linux/amd64 and linux/arm64);
+  Dependabot is told to move digests but not the builder's Rust tag, which is the
+  MSRV. Check 9 of `scripts/check-ci-config.py` fails on an unpinned install, a
+  range (`^0.1`), a base image without a digest, and a builder whose Rust is not
+  `rust-version` (seen failing against each). **Breaking for anyone who built
+  the image with `--build-arg RUST_VERSION=…` or `DEBIAN_CODENAME=…`:** those
+  arguments no longer exist; change the `FROM` line.
+
 - **A release refuses a lightweight tag, a tag off the default branch, and an
   undated changelog heading; and `install.sh`, `uninstall.sh` and `SHA256SUMS`
   are attested like the archives.** Twenty of the repository's 23 tag refs are

@@ -72,6 +72,15 @@ they get their own gate.
      merge. `.github/workflows/README.md` lists the names `main` should require;
      this keeps that list true.
 
+  9. A tool installed at whatever version is current. `cargo install
+     cargo-audit`, `tool: cargo-mutants`, `tool: cargo-llvm-cov`, `pip install
+     pyyaml` and the Dockerfile's `cargo install cargo-chef --version "^0.1"`
+     each took the newest release on the day of the run, so the same commit
+     could pass on Monday and fail on Tuesday for a reason that is nowhere in the
+     diff. Every one is pinned to an exact version now, and `npm install` in the
+     browser-QA job is `npm ci`, which refuses a lockfile that disagrees with
+     `package.json`.
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
@@ -679,6 +688,24 @@ def check_msrv_runs_the_msrv(
             channel = m.group(1)
     check(channel is not None, f"{toolchain_path} names a channel (found {channel!r})")
 
+    # The Docker builder is the other place the MSRV has to be what it says: the
+    # image compiles with the oldest compiler the project promises to support.
+    declared = None
+    for line in open("Cargo.toml"):
+        m = re.match(r'\s*rust-version\s*=\s*"([^"]+)"', line)
+        if m:
+            declared = m.group(1)
+            break
+    builder = None
+    if os.path.exists("Dockerfile"):
+        for line in open("Dockerfile"):
+            m = re.match(r"^FROM\s+rust:(\d+\.\d+)\b", line)
+            if m:
+                builder = m.group(1)
+                break
+    check(declared is not None and builder == declared,
+          f"the Docker builder's Rust ({builder}) is the declared rust-version ({declared})")
+
     ignored = [ln.strip() for ln in open(dockerignore_path)
                if ln.strip() and not ln.lstrip().startswith("#")]
     check("rust-toolchain.toml" in ignored,
@@ -693,6 +720,90 @@ def runs_on_every_pull_request(spec: dict) -> bool:
         return False
     trigger = on["pull_request"]
     return not (isinstance(trigger, dict) and ("paths" in trigger or "paths-ignore" in trigger))
+
+
+def tool_installs(workflows_glob: str, dockerfile_path: str) -> list[tuple[str, str, bool]]:
+    """Every tool install in the workflows and the Dockerfile: (where, what, pinned).
+
+    Three shapes are recognised: `taiki-e/install-action`'s `tool:` list, where
+    each entry needs `@version`; `cargo install`, which needs `--version` (or
+    `crate@version`); and `pip install`, whose packages need `==`. Comment lines
+    are not installs.
+    """
+    found: list[tuple[str, str, bool]] = []
+
+    def scan_shell(where: str, text: str) -> None:
+        for raw in text.splitlines():
+            line = raw.strip()
+            if line.startswith("#"):
+                continue
+            if re.search(r"\bcargo install\b", line):
+                # An exact version: a range (`^0.1`, `~0.1`) floats within it.
+                pinned = bool(re.search(r"--version[ =]\"?=?\d+\.\d+\.\d+\"?(\s|$)|\s[\w-]+@\d+\.\d+\.\d+(\s|$)", line))
+                found.append((where, line, pinned))
+            m = re.search(r"\bpip3? install\b(.*)", line)
+            if m:
+                packages = [a for a in m.group(1).split() if not a.startswith("-")]
+                for pkg in packages:
+                    found.append((where, f"pip install {pkg}", "==" in pkg))
+
+    for path in sorted(glob.glob(workflows_glob)):
+        for node in _walk_dicts(yaml.safe_load(open(path))):
+            uses = node.get("uses")
+            if isinstance(uses, str) and uses.startswith("taiki-e/install-action@"):
+                tools = str((node.get("with") or {}).get("tool", ""))
+                # Comma-separated, and an entry may contain spaces
+                # (`mdbook@${{ env.MDBOOK_VERSION }}`).
+                for tool in (t.strip() for t in tools.split(",")):
+                    if tool:
+                        found.append((path, f"install-action {tool}", "@" in tool))
+            if isinstance(node.get("run"), str):
+                scan_shell(path, node["run"])
+    if os.path.exists(dockerfile_path):
+        scan_shell(dockerfile_path, open(dockerfile_path).read())
+    return found
+
+
+def _walk_dicts(node: object):
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _walk_dicts(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk_dicts(value)
+
+
+def check_tools_are_pinned(
+    workflows_glob: str = ".github/workflows/*.yml", dockerfile_path: str = "Dockerfile"
+) -> None:
+    """Every tool the CI installs names an exact version (incident 9)."""
+    print("\nEvery installed tool is pinned to a version (incident 9)")
+    installs = tool_installs(workflows_glob, dockerfile_path)
+    for where, what, pinned in installs:
+        check(pinned, f"{where}: {what} is pinned")
+    # The counterpart: a reader that found no installs would pass every
+    # assertion above.
+    check(len(installs) >= 6, f"the reader found the installs it is judging ({len(installs)})")
+
+    # Base images are tools too: a tag moves, a digest does not. A stage that
+    # builds `FROM` an earlier stage names no image.
+    stages: set[str] = set()
+    images = 0
+    if os.path.exists(dockerfile_path):
+        for line in open(dockerfile_path):
+            m = re.match(r"^FROM\s+(?:--\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", line, re.I)
+            if not m:
+                continue
+            image, stage = m.group(1), m.group(2)
+            if image not in stages:
+                images += 1
+                check(bool(re.search(r"@sha256:[0-9a-f]{64}$", image)),
+                      f"{dockerfile_path}: base image {image} is pinned to a digest")
+            if stage:
+                stages.add(stage)
+    if os.path.exists(dockerfile_path):
+        check(images >= 2, f"the reader found the base images it is judging ({images})")
 
 
 def check_workflows_readme(
@@ -983,6 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
     check_embed_precedes_tests()
     check_msrv_runs_the_msrv()
     check_actions_are_pinned()
+    check_tools_are_pinned()
     check_workflows_readme()
     check_headroom_arithmetic()
 
