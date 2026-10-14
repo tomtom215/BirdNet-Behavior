@@ -51,7 +51,9 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           df -h /
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update

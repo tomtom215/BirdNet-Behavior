@@ -57,6 +57,15 @@ they get their own gate.
      precedence rules and then reproducing them; the code does build on 1.95
      (`cargo check --workspace --all-features --all-targets --locked`).
 
+  7. An action reference that moves. `dtolnay/rust-toolchain` was used by
+     branch name — `@stable` thirteen times, `@1.95` once — and the *ref* was
+     also the choice of Rust, so the one thing that must not move silently (the
+     MSRV job's compiler) and the one thing that is safe to leave alone (the
+     action's own revision) were the same string. Dependabot proposed
+     `@1.95` -> `@1.100`, a Rust that did not exist. Every use is now pinned to
+     a commit and names its toolchain in a `toolchain:` input, and this reads
+     every workflow to keep it so — a pin that nothing reads is a comment.
+
 Run from the repository root. Requires PyYAML, and cargo-mutants for the
 mutant-enumeration checks (`--list` builds nothing; it costs ~0.2 s per row).
 Checks 4 and 5 additionally need `GITHUB_TOKEN` with `actions: read`; outside
@@ -671,6 +680,61 @@ def check_msrv_runs_the_msrv(
           "the builder image's pinned Rust is the one that compiles")
 
 
+PINNED = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+
+
+def action_uses(node: object, found: list[tuple[str, dict]] | None = None
+                ) -> list[tuple[str, dict]]:
+    """Every remote `uses:` in a parsed workflow, with its `with:` inputs.
+
+    Walks the whole document rather than `jobs.*.steps`, so a reusable-workflow
+    call (`uses:` on a job) and a composite action's steps are read the same
+    way. Local (`./...`) and `docker://` references are not remote refs.
+    """
+    found = [] if found is None else found
+    if isinstance(node, dict):
+        ref = node.get("uses")
+        if isinstance(ref, str) and not ref.startswith(("./", "docker://")):
+            inputs = node.get("with")
+            found.append((ref, inputs if isinstance(inputs, dict) else {}))
+        for value in node.values():
+            action_uses(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            action_uses(value, found)
+    return found
+
+
+def check_actions_are_pinned(workflows_glob: str = ".github/workflows/*.yml") -> None:
+    """Every remote action is a full commit SHA, and the toolchain is named.
+
+    See incident 7 in the module docstring. Two assertions over every workflow:
+
+      * each `uses:` ends in `@<40 hex>` — a tag or branch can be moved by
+        whoever controls the action, and these jobs build what ships;
+      * each `dtolnay/rust-toolchain` has a `toolchain:` input, because with the
+        ref no longer selecting the Rust, a use without one asks the action to
+        guess.
+
+    And the counterpart: the reader must have found the uses it is judging.
+    """
+    print("\nEvery action is pinned to a commit, and the toolchain is named (incident 7)")
+    files = sorted(glob.glob(workflows_glob))
+    seen = 0
+    toolchain_uses = 0
+    for path in files:
+        for ref, inputs in action_uses(yaml.safe_load(open(path))):
+            seen += 1
+            check(PINNED.match(ref) is not None, f"{path}: {ref} is pinned to a commit")
+            if ref.startswith("dtolnay/rust-toolchain@"):
+                toolchain_uses += 1
+                check(bool(inputs.get("toolchain")),
+                      f"{path}: {ref.split('@')[0]} names its toolchain")
+    check(seen >= 50 and toolchain_uses >= 15,
+          f"the reader found the uses it is judging ({seen} remote uses in "
+          f"{len(files)} workflows, {toolchain_uses} of them dtolnay/rust-toolchain)")
+
+
 def check_headroom_arithmetic() -> None:
     """The pure parts of check 4 and 5, against the numbers that produced them.
 
@@ -861,6 +925,7 @@ def main(argv: list[str] | None = None) -> int:
     check_mutation_matrix()
     check_embed_precedes_tests()
     check_msrv_runs_the_msrv()
+    check_actions_are_pinned()
     check_headroom_arithmetic()
 
     for job in unresolved:

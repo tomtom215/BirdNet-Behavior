@@ -47,7 +47,7 @@ x86_64 Linux, 4 cores, 15 GB RAM, rustc 1.97.1, from a cold `target/`.
 | HTTP surface | all 40 non-parameterised paths in `openapi.json` | **all 200 or 400** (400 = missing required param, by design) |
 | Auth, password set | `CADDY_PWD` set, probe `/admin/*` | **303 → `/login`**; unauthenticated `POST` → **401**; public dashboard still 200 |
 | Auth, no password | `CADDY_PWD` unset | open by design, documented, warned at startup — see **S-10** |
-| Actions pinning | 24 `uses:` refs | 21 SHA-pinned; 3 `dtolnay/rust-toolchain` by ref — see **S-08** (today 22 of 24 are SHA-pinned; only `@stable` ×13 and `@1.95` ×1 remain by ref, by intent — Slice 4) |
+| Actions pinning | 24 `uses:` refs | 21 SHA-pinned; 3 `dtolnay/rust-toolchain` by ref — see **S-08** (since then every `uses:` is SHA-pinned; `@stable` ×13 and `@1.95` ×1 became the same SHA plus a `toolchain:` input) |
 
 **CI on `main` at `e98c8a0`:** all eight push-triggered workflows green (CI,
 Coverage, Docker, Docs, Install smoke test, Supply chain, A11y & Visual QA,
@@ -343,8 +343,8 @@ carrying a PR that can never be green.
 21 of 24 distinct `uses:` refs were SHA-pinned at `e98c8a0`. Every exception was
 `dtolnay/rust-toolchain`, used 17 times across 8 workflows under three refs —
 `@stable` (13), `@1.95` (1), and `@master` (**3, all in `release.yml`**).
-(Today: 22 of 24 pinned; the `@master` three are SHA `6c977a6…`, and `@stable`
-/ `@1.95` remain by ref — see Slice 4.)
+(Since then all of them are pinned to SHA `6c977a6…` with a `toolchain:` input;
+the `@stable` / `@1.95` refs are gone.)
 
 The `@master` three sit **inside the jobs that compile the binaries that get
 SLSA-attested, cosign-signed and pulled by field stations**. A moving branch ref

@@ -120,6 +120,20 @@ jobs:
           echo "version=$VERSION"      >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$IS_PRE" >> "$GITHUB_OUTPUT"
 
+      - name: Cargo.lock is in step with the manifests
+        shell: bash
+        env:
+          # The toolchain file would install its components first; nothing here
+          # needs them.
+          RUSTUP_TOOLCHAIN: stable
+        # Every shipping build below is `--locked`: the lockfile is what ships,
+        # and it is what cargo-deny and cargo-audit graded. A lock that disagrees
+        # with a manifest — usually a version bump that skipped the lock's own
+        # workspace entries (RELEASING.md step 1) — fails here in seconds rather
+        # than in the build matrix twenty minutes in. Checked against a deliberately
+        # stale copy: exit 101, "cannot update the lock file ... --locked".
+        run: cargo update --workspace --locked
+
       - name: Verify workspace version matches tag
         shell: bash
         run: |
@@ -288,7 +302,7 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-08
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
           toolchain: ${{ matrix.toolchain }}
           components: ${{ matrix.components || '' }}
@@ -365,7 +379,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-08
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
@@ -488,6 +502,7 @@ jobs:
         run: |
           cargo build \
             --release \
+            --locked \
             --target ${{ matrix.target }} \
             --features analytics \
             --bin birdnet-behavior
@@ -588,7 +603,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-08
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
           toolchain: stable
 

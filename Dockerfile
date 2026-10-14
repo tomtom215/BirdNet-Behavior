@@ -182,6 +182,10 @@ ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.6"
 # network at first run after all. docker.yml still passes it explicitly.
 ARG TARGETARCH
 ARG BEHAVIORAL_EXTENSION_TARGET=""
+# The final build is `--locked`: Cargo.lock is what ships (and what cargo-deny
+# graded), so a lock that disagrees with a manifest fails the build instead of
+# being rewritten. `cargo chef cook` above is not, because it builds a skeleton
+# whose manifests are not the real ones.
 RUN set -eu; \
     ext_target="${BEHAVIORAL_EXTENSION_TARGET}"; \
     if [ -z "$ext_target" ]; then \
@@ -213,9 +217,9 @@ RUN set -eu; \
         echo "WARNING: icu extension NOT fetched ($icu_url) — CURRENT_DATE lives in ICU, so every date-ranged dashboard query in this image depends on DuckDB being able to autoinstall it at run time"; \
     fi; \
     if [ -n "${BUILD_FEATURES}" ]; then \
-        cargo build --release --verbose --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
+        cargo build --release --locked --verbose --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
     else \
-        cargo build --release --verbose --bin birdnet-behavior; \
+        cargo build --release --locked --verbose --bin birdnet-behavior; \
     fi
 
 # Stage the release binary for the runtime image.

@@ -109,9 +109,13 @@ on:
     - cron: "0 9 * * 1"
   workflow_dispatch:
 
+# A scheduled or manually dispatched run has its own group. The weekly sweep
+# runs on the default branch's ref, the same group as every push to `main`, and
+# `cancel-in-progress` cancelled it — a sweep that takes hours — whenever
+# anything was merged while it ran.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: "${{ github.workflow }}-${{ (github.event_name == 'push' || github.event_name == 'pull_request') && github.ref || github.event_name }}"
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -139,8 +143,9 @@ jobs:
       # listed nothing and read as "matches no source". Installing here makes
       # it its own step, which fails as itself.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
+          toolchain: stable
           components: clippy, rustfmt, rust-src
       - name: Install cargo-mutants
         uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
@@ -542,7 +547,9 @@ jobs:
           echo "diff spans $(grep -c '^+++' pr.diff) file(s)"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
 
       - name: Free disk space for the cache restore
         # The cached `target/` (a debug build whose test binaries each

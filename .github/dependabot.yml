@@ -97,22 +97,17 @@ updates:
     ignore:
       # dtolnay/rust-toolchain must never be auto-bumped, at ANY update type.
       #
-      # For this action the ref *is* configuration, not a version: `@stable`
-      # selects current stable and `@1.95` selects the MSRV, which is governed
-      # by rust-toolchain.toml + Cargo.toml `rust-version`. Bumping the ref
-      # silently changes which Rust the MSRV job tests, decoupling it from the
-      # `rust-version` we actually promise.
-      #
-      # This used to ignore `semver-major` only. That did not work: PR #188
-      # proposed `@1.95` -> `@1.100`, which dependabot classifies as a *minor*
-      # bump (1.95 -> 1.100), so the ignore never fired. It would have pointed
-      # the MSRV job at a Rust that does not exist (current stable is 1.97).
-      # The `msrv-ref-matches-cargo-toml` job in ci.yml is the belt to this
-      # braces: it fails if the ref and `rust-version` ever disagree.
-      #
-      # The `@master` uses in release.yml are SHA-pinned instead — safe there
-      # because every one of them passes an explicit `toolchain:` input, so the
-      # pin cannot change toolchain selection.
+      # Every use is SHA-pinned and names its Rust in an explicit `toolchain:`
+      # input (`stable`, or the MSRV for the `msrv` job). The action's own
+      # revision rarely matters, and a bump PR that also moved the toolchain
+      # input would silently change which Rust the MSRV job tests, decoupling it
+      # from the `rust-version` we actually promise. Before the pins this was
+      # worse: the toolchain was the action's *ref*, and PR #188 proposed
+      # `@1.95` -> `@1.100`, which dependabot classifies as a *minor* bump, so a
+      # `semver-major` ignore never fired. The `MSRV input matches Cargo.toml
+      # rust-version` step in ci.yml is the belt to this braces: it fails if the
+      # input and `rust-version` ever disagree. Re-pin by hand when wanted
+      # (`git ls-remote https://github.com/dtolnay/rust-toolchain master`).
       - dependency-name: "dtolnay/rust-toolchain"
     groups:
       actions:

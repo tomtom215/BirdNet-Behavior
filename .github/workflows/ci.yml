@@ -46,8 +46,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + rustfmt)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
+          toolchain: stable
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --check --all
@@ -60,8 +61,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + clippy)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
+          toolchain: stable
           components: clippy
       - name: Install native build dependencies
         # cmake + a host C++ compiler build the bundled libduckdb that the
@@ -127,7 +129,9 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           df -h /
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -254,7 +258,9 @@ jobs:
             /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
           df -h /
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -361,7 +367,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -383,7 +391,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -433,17 +443,18 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       # The MSRV is stated in three places that must agree: this job's
-      # toolchain ref, `workspace.package.rust-version` in Cargo.toml, and
-      # rust-toolchain.toml. For `dtolnay/rust-toolchain` the *ref is the
-      # configuration* — bumping it silently changes which Rust this job
-      # tests, so the job can keep passing while no longer testing the version
-      # we promise.
+      # `toolchain:` input, `workspace.package.rust-version` in Cargo.toml, and
+      # rust-toolchain.toml. The action is pinned to a commit and the Rust it
+      # installs is the `toolchain:` input, so editing that input silently
+      # changes which Rust this job tests — it could keep passing while no
+      # longer testing the version we promise.
       #
       # That is not hypothetical: Dependabot PR #188 proposed `@1.95` ->
-      # `@1.100`, and the `semver-major` ignore in dependabot.yml did not fire
-      # because 1.95 -> 1.100 is a *minor* bump. This check is what actually
-      # stops it — an ignore rule can be out-classified, a failing job cannot.
-      - name: MSRV ref matches Cargo.toml rust-version
+      # `@1.100` (when the toolchain was selected by the action's ref), and the
+      # `semver-major` ignore in dependabot.yml did not fire because 1.95 ->
+      # 1.100 is a *minor* bump. This check is what actually stops it — an
+      # ignore rule can be out-classified, a failing job cannot.
+      - name: MSRV input matches Cargo.toml rust-version
         shell: bash
         run: |
           set -euo pipefail
@@ -451,23 +462,24 @@ jobs:
             awk '/^\[workspace\.package\]/{f=1; next} /^\[/{f=0}
                  f && /^rust-version = /{gsub(/[" ]/, "", $3); print $3; exit}' Cargo.toml
           )
-          # The ref this job actually installs, read back out of this file so
-          # the two can never be edited apart.
-          ref=$(
-            awk '/^  msrv:/{f=1} f && /dtolnay\/rust-toolchain@/{
-                   sub(/.*dtolnay\/rust-toolchain@/, ""); sub(/[[:space:]].*/, ""); print; exit }' \
+          # The toolchain this job actually installs, read back out of this
+          # file so the two can never be edited apart.
+          installed=$(
+            awk '/^  msrv:/{f=1} f && /^ +toolchain: /{gsub(/["\047 ]/, "", $2); print $2; exit}' \
               .github/workflows/ci.yml
           )
           echo "Cargo.toml rust-version : ${declared}"
-          echo "MSRV job toolchain ref  : ${ref}"
-          if [[ "$declared" != "$ref" ]]; then
-            echo "::error file=.github/workflows/ci.yml::MSRV job installs Rust '${ref}' but Cargo.toml declares rust-version '${declared}'. They must match, or this job is not testing the MSRV we promise."
+          echo "MSRV job toolchain      : ${installed}"
+          if [[ -z "$installed" || "$declared" != "$installed" ]]; then
+            echo "::error file=.github/workflows/ci.yml::MSRV job installs Rust '${installed}' but Cargo.toml declares rust-version '${declared}'. They must match, or this job is not testing the MSRV we promise."
             exit 1
           fi
           echo "::notice::MSRV is consistently ${declared}"
 
       - name: Install MSRV toolchain
-        uses: dtolnay/rust-toolchain@1.95
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: "1.95"
       # `dtolnay/rust-toolchain` only runs `rustup default 1.95`, and rustup
       # ranks a `rust-toolchain.toml` in the working directory *above* the
       # default: ours says `channel = "stable"`, so without this step every
@@ -531,8 +543,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + aarch64 target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
         with:
+          toolchain: stable
           targets: aarch64-unknown-linux-gnu
       - name: Install native + aarch64 cross build dependencies
         run: |
@@ -586,7 +599,9 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
       - name: Install native build dependencies
         run: |
           sudo apt-get update
