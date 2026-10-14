@@ -67,6 +67,16 @@ const STUB_MEDIA = () => {
 
 async function liveAudioButton(page) {
   await page.addInitScript(STUB_MEDIA);
+  // The MP3 path, whatever the browser: Playwright's newer Chromium plays
+  // HLS natively, and on the HLS path play() is called once inside the click
+  // and once when the stream starts, so the count below would stop meaning
+  // "one stream". `liveAudioHls` holds the HLS path to the same rule.
+  await page.addInitScript(() => {
+    const real = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = function (t) {
+      return t === 'application/vnd.apple.mpegurl' ? '' : real.call(this, t);
+    };
+  });
   await page.goto(`${BASE}/recordings?view=live`, { waitUntil: 'domcontentloaded' });
 
   const btn = page.locator('#rc-listen-btn');
@@ -164,6 +174,8 @@ async function liveAudioHls(page) {
   const src = () => page.evaluate(() => document.getElementById('rc-audio')?.getAttribute('src') || '');
 
   await btn.click();
+  // A second click while the start is pending must not start another stream.
+  await btn.click();
   // Safari plays outside a gesture only an element a play() inside one has
   // unlocked, and the start answers seconds after the click.
   const inGesture = await page.evaluate(() => window.__media.plays);
@@ -177,7 +189,11 @@ async function liveAudioHls(page) {
     () => (document.getElementById('rc-audio')?.getAttribute('src') || '').includes('playlist.m3u8'),
     null, { timeout: 5000 },
   ).catch(() => {});
-  check('live hls: the start fixture answered', calls.starts.length === 1, `${calls.starts.length} start request(s)`);
+  check(
+    'live hls: one start for two clicks, and the fixture answered it',
+    calls.starts.length === 1,
+    `${calls.starts.length} start request(s)`,
+  );
   const session = calls.starts[0]?.body?.session_id;
   check('live hls: the start names this tab', typeof session === 'string' && session.length > 0, JSON.stringify(calls.starts[0]?.body));
   const playing = await src();
