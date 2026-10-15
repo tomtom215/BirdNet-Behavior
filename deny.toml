@@ -63,8 +63,9 @@ allow = [
 ]
 
 # Don't license-check our own workspace members against the dependency
-# allow list (they are not redistributable as libraries and this project
-# is not published to crates.io).
+# allow list (they are not redistributable as libraries and this project has
+# not been published to crates.io; if it is, the workspace crates are
+# publishable and cargo-deny checks them against `allow` like any other).
 [licenses.private]
 ignore = true
 
@@ -87,13 +88,11 @@ allow = ["CC-BY-4.0", "MIT"]
 # in the dependency graph (a common source of unnecessary binary bloat).
 [bans]
 multiple-versions = "warn"
-# Wildcard external deps are still rejected (`wildcards = "warn"`). For
-# our own workspace members declared with both `path = ...` and a version
-# field, cargo-deny still treats them as wildcards because it considers
-# them "publishable" — `allow-wildcard-paths = true` only catches the
-# pure-path form. We use `warn` so this surfaces noisily in the CI log
-# without failing the gate on our own intra-workspace deps.
-wildcards = "warn"
+# A dependency with no version requirement is refused. The workspace's own
+# crates used to trip this: a path with no version is what crates.io rejects
+# anyway, and `cargo package` now passes, so they carry versions and nothing
+# needs an exception.
+wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"

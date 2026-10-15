@@ -306,6 +306,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   footer line below 360 px wide, which are tightened to fit a 320 px screen,
   stay under 10 px. Chart text is sized separately, above.
 
+- **The crates package for crates.io, and a job keeps them that way.** Nothing
+  has been published and the decision is the maintainer's (the licence is CC BY-NC-SA
+  4.0). `cargo package --workspace` failed on the first crate that depends on
+  another: the eight internal path dependencies had no `version`. They have one
+  now. Running it on all nine also found two real defects, both fixed: the web
+  crate `include_str!`ed `CHANGELOG.md` from outside its own directory, so it
+  could not compile from its published package (it reads a symlink inside the
+  crate now), and the root crate's `build.rs` renders the manual into the source
+  tree, which `cargo publish` verification rejects ("Source directory was modified
+  by build.rs") and a read-only registry cache would too; it now does nothing in a
+  package. The root package is 826 KiB (it was 11.8 MiB, over crates.io's 10 MiB
+  limit, because it carried the tests, the manual and every audit), each library
+  crate has its own README saying it is internal, and the two crates whose
+  default features compile the bundled DuckDB build their docs without it on
+  docs.rs. `cargo package --workspace --no-default-features` (which also builds
+  each crate from its tarball) passes for all nine; the `crates are publishable`
+  job and the release `validate` job run the fast form on every pull request and
+  tag. `cargo-deny` now denies wildcard dependencies (seen failing when an
+  internal version is removed). RELEASING.md says how to publish and what to
+  decide first. Not done: the bundled-DuckDB build of the packaged crates, docs.rs
+  and `cargo publish` itself.
+
 - **The two fuzz targets run in CI, and the first run found something.**
   `fuzz/` held harnesses for the audio decoder and the label parser that nothing
   ever ran. `fuzz.yml` runs both weekly (10 minutes a target) and on pull

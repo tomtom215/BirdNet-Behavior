@@ -105,6 +105,39 @@ jobs:
       - name: THIRD_PARTY_LICENSES.txt is current and covers every package
         run: python3 scripts/gen-third-party-licenses.py --check
 
+  # ── publishable ──────────────────────────────────────────────────────────
+  # `cargo package` for every crate, the first step of `cargo publish`: it
+  # refuses a dependency with a path and no version, an internal dependency whose
+  # version is not the crate's, missing metadata, and an include list that leaves
+  # out a file the crate reads. It does not build (that is a ten-minute DuckDB
+  # compile; `cargo package --workspace --no-default-features` without
+  # `--no-verify` does, and was run when this job was added). The package sizes
+  # are checked against crates.io's 10 MiB upload limit with room to spare.
+  publishable:
+    name: crates are publishable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master, 2026-08-04
+        with:
+          toolchain: stable
+      - name: Package every crate
+        run: cargo package --workspace --locked --no-verify
+      - name: Every package fits crates.io's upload limit with room to spare
+        run: |
+          set -euo pipefail
+          limit=$((8 * 1024 * 1024))
+          for f in target/package/*.crate; do
+            size=$(stat -c %s "$f")
+            echo "$(basename "$f"): $size bytes"
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error::$f is $size bytes; crates.io refuses uploads over 10 MiB and this gate leaves a margin at 8 MiB. Trim the crate's include list."
+              exit 1
+            fi
+          done
+
   # ── typo scan ────────────────────────────────────────────────────────────
   # Catches misspelled identifiers, log messages, and documentation without
   # blocking on a heavyweight grammar checker. Configured to be conservative

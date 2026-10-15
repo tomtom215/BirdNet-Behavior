@@ -23,6 +23,9 @@ cargo deny check advisories        # or: cargo audit
 cargo test --workspace --all-features
 # 1. Bump the version + roll the changelog (on a branch, via PR).
 #    Cargo.toml workspace.package.version = X.Y.Z
+#    Cargo.toml [workspace.dependencies]: `version` of the eight `birdnet-*` entries
+#                (release validate runs `cargo package --workspace` and fails if
+#                they disagree with the crates' version)
 #    CITATION.cff:  version + date-released   (release validate enforces this)
 #    crates/birdnet-web/openapi.json: info.version  (release validate enforces this)
 #    CHANGELOG.md: [Unreleased] -> ## [X.Y.Z] - YYYY-MM-DD  (+ fresh [Unreleased])
@@ -41,6 +44,40 @@ git push origin vX.Y.Z
 ```
 
 That single tag push drives everything else.
+
+## Publishing to crates.io (the maintainer, not a workflow)
+
+Nothing publishes to crates.io automatically, and the project has never been
+published; the nine names (`birdnet-behavior` and the eight `birdnet-*` library
+crates) were unclaimed on 2026-10-15. What is ready: every crate packages
+(`cargo package --workspace`, run by the `crates are publishable` job and by
+`validate`), every package is under 2.1 MB, the internal dependencies carry
+versions, and `cargo package --workspace --no-default-features` also *builds* all
+nine from their tarballs (it was run once; the bundled-DuckDB build was not).
+
+To publish, after the tag is pushed and the release is verified, from the tagged
+commit, with a crates.io token in `CARGO_REGISTRY_TOKEN`:
+
+```bash
+cargo publish --workspace --locked   # dependency order is worked out by cargo
+```
+
+Publishing cannot be undone (a version can only be yanked), so look first at what
+it would do (`cargo publish --workspace --dry-run`) and at these:
+
+- **The licence is CC BY-NC-SA 4.0**, which forbids commercial use. crates.io
+  accepts the SPDX identifier; whether a non-commercial licence belongs on a
+  registry that most consumers read as open source is yours to decide.
+- **The library crates are internal.** Their READMEs say so and `STABILITY.md`
+  promises nothing about their API; they are published only so the binary can be.
+- **`cargo install birdnet-behavior` builds the bundled DuckDB** (minutes of C++)
+  and downloads ONNX Runtime. A package build does not render the in-app manual
+  (`build.rs` skips it: a build script may not write into the registry source), so
+  `/help` shows its "docs unavailable" panel until `BNB_HELP_DIR` points at a
+  rendered copy such as a release archive's `help/`.
+- **docs.rs** builds the two crates whose default features pull in the bundled
+  engine without it (`no-default-features` in their `[package.metadata.docs.rs]`);
+  that was reasoned from docs.rs's offline builds, not tried.
 
 ## When ONNX Runtime, DuckDB or htmx moves
 

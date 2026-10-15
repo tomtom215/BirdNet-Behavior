@@ -1,6 +1,9 @@
 //! Changelog viewer + post-upgrade banner. See O-21 DIFF.md.
 //!
-//! `CHANGELOG.md` is embedded at build time so the page works offline. The
+//! `CHANGELOG.md` is embedded at build time so the page works offline. It is read
+//! through `crates/birdnet-web/CHANGELOG.md`, a symlink to the repository's file:
+//! an `include_str!` that leaves the crate directory compiles in a checkout and
+//! fails in the package `cargo publish` uploads (found by `cargo package`). The
 //! parser only knows the "Keep a Changelog" shape we already use — if the
 //! file ever drifts, the page renders the raw markdown in a `<pre>` block.
 
@@ -15,7 +18,7 @@ use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
 // Embedded at build time relative to crates/birdnet-web/src/routes/pages/.
-const CHANGELOG_MD: &str = include_str!("../../../../../CHANGELOG.md");
+const CHANGELOG_MD: &str = include_str!("../../../CHANGELOG.md");
 
 pub fn router() -> Router<AppState> {
     Router::new()

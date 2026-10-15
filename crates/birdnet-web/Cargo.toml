@@ -6,10 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 description = "Web server: REST API, WebSocket, and HTMX pages via axum"
+
+[package.metadata.docs.rs]
+# docs.rs builds offline: leave out the bundled DuckDB engine (a C++ build of
+# several minutes) that the default `analytics` feature compiles.
+no-default-features = true
 
 [features]
 ## On by default: analytics ships enabled so the behavioural-analytics screens

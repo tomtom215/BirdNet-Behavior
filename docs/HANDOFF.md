@@ -26,9 +26,8 @@ default setup, secret scanning, who has write access.
   (53 migrations, 147 configuration keys, 111 option lines in `--help`, 85
   OpenAPI paths and 87 operations, 24 releases).
 - **Publishing to crates.io.** The licence is CC BY-NC-SA 4.0 because the work
-  derives from BirdNET-Pi; `deny.toml` still says the project "is not published
-  to crates.io". Whether to publish, under which crate names, and who holds the
-  account is not something the repository can decide. See section 4 for what is
+  derives from BirdNET-Pi. Whether to publish, under which crate names, and who holds the
+  account is not something the repository can decide. See section 5 for what is
   and is not ready.
 - **Release signing.** Tags and `SHA256SUMS` are unsigned; the in-app updater
   trusts the GitHub release. A signing key and a verifier in the updater would
@@ -72,9 +71,11 @@ laid out as the kernel lays it out, not against a unit under cgroup v2).
 
 Not done, in the order they seem to matter:
 
-- **crates.io readiness.** The workspace crates are not publishable as they stand
-  (path dependencies without versions, no `include` lists, no per-crate READMEs);
-  a `cargo package` dry run has not been done.
+- **crates.io.** Ready to publish, not published; the decision and the account
+  are yours (section 2). What was done and what was not is in
+  [`RELEASING.md`](../RELEASING.md#publishing-to-cratesio-the-maintainer-not-a-workflow):
+  the bundled-DuckDB build of the packaged crates, docs.rs, and `cargo publish`
+  itself were not run.
 - **Feature parity.** The gap analysis against birdnet-go and BirdNET-Pi is in
   [`FEATURE_GAP_ANALYSIS.md`](FEATURE_GAP_ANALYSIS.md); species-name translation
   (`DATABASE_LANG`) was left alone because its data licence and its effect on

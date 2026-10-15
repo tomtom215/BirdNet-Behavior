@@ -36,9 +36,12 @@ messages are **not** a stable surface: they change to be clearer. The
 accessibility and visual gates in CI are what hold them to a standard, not a
 compatibility promise.
 
-The workspace's library crates (`birdnet-core`, `birdnet-db`, …) are not
-published and carry **no** API promise today. If they are published, this section
-gains a row and `cargo-semver-checks` becomes a CI gate.
+The workspace's library crates (`birdnet-core`, `birdnet-db`, …) carry **no** API
+promise. They are packaged so that the binary can be installed from crates.io if
+the maintainer publishes it (nothing has been published; see
+[RELEASING.md](RELEASING.md)); each says so in its README, and their versions move
+in lockstep with the binary's. If a crate is ever offered as a library, this
+section gains a row and `cargo-semver-checks` becomes a CI gate.
 
 ## 3. What counts as breaking
 

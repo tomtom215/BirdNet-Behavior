@@ -134,6 +134,16 @@ jobs:
         # stale copy: exit 101, "cannot update the lock file ... --locked".
         run: cargo update --workspace --locked
 
+      - name: Every crate packages for crates.io
+        shell: bash
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        # The internal dependencies' versions must be this release's, or
+        # `cargo publish` of the binary fails after its dependencies are already
+        # on crates.io and cannot be taken back. No build: the build matrix does
+        # that.
+        run: cargo package --workspace --locked --no-verify
+
       - name: Third-party notices match this release
         shell: bash
         env:
