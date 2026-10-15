@@ -1459,9 +1459,9 @@ pub const MIGRATIONS: &[Migration] = &[
         // A row per (date, hour, source, band) is 30 rows an hour per source
         // rather than one — about 260 000 rows a year for a single-microphone
         // station. That is still small, and it is the shape that survives the
-        // band set changing: a station running at 22.05 kHz measures 27 bands
+        // band set changing: a station running at 22.05 kHz measures 26 bands
         // and one at 48 kHz measures 30, so a fixed 30-column table would carry
-        // three columns that are NULL for some stations and not others, and a
+        // four columns that are NULL for some stations and not others, and a
         // 32 kHz station added later would need a migration to widen it.
         //
         // Accumulated the same way `audio_levels` is — running sums plus a

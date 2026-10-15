@@ -72,8 +72,10 @@ and has no place in a chain of biquads.
 ### Sound-level metering
 
 A parallel consumer of the same captured audio, in
-`birdnet_core::audio::soundlevel`: ISO 266 third-octave bands from 20 Hz to
-20 kHz, each a three-biquad cascade, with IEC 61672 A-weighting evaluated at
+`birdnet_core::audio::soundlevel`: ISO 266 third-octave bands with centres from 25 Hz to
+20 kHz (30 at a 48 kHz sample rate; a band whose upper edge comes within
+5% of Nyquist is dropped, so 44.1 kHz gives 29, 32 kHz 28 and 22.05 kHz 26), each a
+three-biquad cascade, with IEC 61672 A-weighting evaluated at
 the exact band centre (`1000·10^(n/10)`) rather than the rounded label.
 `birdnet_db::sound_levels` stores per-band minimum, maximum and accumulated
 linear power, so the interval mean is an **energy** mean rather than a mean of

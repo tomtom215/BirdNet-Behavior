@@ -16,11 +16,18 @@ pub const FLOOR_DBFS: f32 = -120.0;
 
 /// Fraction of Nyquist a band's upper edge must stay below.
 ///
-/// A bandpass designed by the bilinear transform warps towards Nyquist: the
-/// band gets narrower and its gain wrong as the edge approaches it. Bands that
-/// do not fit are dropped rather than reported with a quiet error, so a 22.05
-/// kHz station reports 27 bands and a 48 kHz one reports 30, and neither of
-/// them reports a band it cannot actually measure.
+/// A bandpass designed by the bilinear transform is squeezed towards Nyquist,
+/// where its response must reach zero: the band's skirt on the high side is
+/// cut short and a neighbouring band's rejection is worse (the 20 kHz band at
+/// 48 kHz reads a tone at the 16 kHz centre only 6.4 dB down, against the
+/// 9.3 dB the design gives in mid-spectrum). [`super::ThirdOctaveBand::new`]
+/// pre-warps the band edges, so the −3 dB points still land where they are
+/// named, but a band whose edge is at Nyquist cannot be measured at all. Bands
+/// that do not fit are dropped rather than reported with a quiet error: a
+/// 48 kHz station reports 30 bands, a 44.1 kHz one 29, 32 kHz 28 and 22.05 kHz
+/// 26 (counted by `tests/soundlevel_accuracy.rs`, which also checks that the
+/// first band left out really does not fit), and none of them reports a band
+/// it cannot actually measure.
 pub const NYQUIST_MARGIN: f32 = 0.95;
 
 /// Statistics for one third-octave band over one interval.
@@ -237,8 +244,24 @@ impl SoundLevelMeter {
     /// NaN in a decode would otherwise poison every band's running sum for the
     /// rest of the interval, and every subsequent interval through the filter
     /// state.
+    ///
+    /// **If `samples` completes more than one interval, only the newest
+    /// reading is returned and the earlier ones are dropped.** A caller that
+    /// hands over at most one interval's audio at a time (the acoustic-health
+    /// poller sets the interval to the segment's length) cannot hit that; one
+    /// that feeds a long buffer to a short-interval meter must use
+    /// [`Self::push_with`], which reports every interval.
     pub fn push(&mut self, samples: &[f32]) -> Option<SoundLevelReading> {
         let mut reading = None;
+        self.push_with(samples, |r| reading = Some(r));
+        reading
+    }
+
+    /// As [`Self::push`], but calls `emit` once for every interval the samples
+    /// complete, in order, so a call spanning several intervals loses none.
+    ///
+    /// The statistics do not depend on how the samples are split across calls.
+    pub fn push_with(&mut self, samples: &[f32], mut emit: impl FnMut(SoundLevelReading)) {
         for &sample in samples {
             let sample = if sample.is_finite() { sample } else { 0.0 };
             for band in &mut self.bands {
@@ -253,11 +276,10 @@ impl SoundLevelMeter {
             if self.samples_this_second >= self.sample_rate {
                 self.close_second();
                 if self.seconds_this_interval >= self.interval_secs {
-                    reading = Some(self.close_interval());
+                    emit(self.close_interval());
                 }
             }
         }
-        reading
     }
 
     /// Fold the finished second into each band's interval statistics.

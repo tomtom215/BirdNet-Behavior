@@ -512,6 +512,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The sound-level meter's top bands did not measure the band they named.** The
+  band filter was designed with its bandwidth pre-warped for the bilinear
+  transform but its edges were not, so near Nyquist one edge landed too low and the
+  other too high: a unit sine at the 20 kHz band's two edges at 48 kHz read −4.38
+  and −8.91 dB where −6.02 is right (+1.6 / −2.9 dB), and the same shape shows at
+  every sample rate (16 kHz at 44.1 kHz ±1 dB, 12.5 kHz at 32 kHz +1.3 / −1.7 dB).
+  The edges are now taken through `tan(πf/fs)` and the band is centred on their
+  warped geometric mean; both edges measure −3.01 dB to 0.003 dB in the top bands
+  of 48, 44.1, 32 and 22.05 kHz. The price: a tone at the nominal centre of the
+  20 kHz band at 48 kHz reads 0.34 dB low (the peak sits 4 % above the label), and
+  under 0.02 dB low across the bottom fifth of the spectrum. A band whose
+  **upper** edge reaches Nyquist is now refused (`BiquadError::AboveNyquist`) where
+  only the centre was checked, so a 22.05 kHz station keeps 26 bands, not the 27 the
+  code comment said (48 kHz: 30, 44.1 kHz: 29, 32 kHz: 28; counted by
+  `tests/soundlevel_accuracy.rs`). White noise reads about 0.5 dB high across the
+  bands by the shape of the passband; that is stated in the filter's docs, not
+  changed. `SoundLevelMeter::push` returns only the newest of several completed
+  intervals, as it always did; that is now documented, and `push_with` reports every
+  interval. Stored hourly buckets from before this release keep their old
+  readings, so a top band's history steps once at the upgrade. Six of the twelve
+  checks in `tests/soundlevel_accuracy.rs` (among them
+  `a_tone_at_each_band_edge_reads_three_db_below_the_centre_level`,
+  `the_highest_bands_are_right_at_48_and_44_1_khz` and
+  `a_band_above_nyquist_cannot_be_built`) fail against the previous `filter.rs`.
 - **`SENSITIVITY` meant the opposite of BirdNET-Pi's on a V2.4 model.** It was
   applied as the sigmoid slope itself (default 1.25); BirdNET-Pi and BirdNET-Analyzer
   use `clamp(2 − S, 0.5, 1.5)` (default 0.75). A raw score of 3.12 stored 0.980 here

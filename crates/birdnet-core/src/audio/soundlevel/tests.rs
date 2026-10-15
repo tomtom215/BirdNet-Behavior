@@ -200,7 +200,10 @@ fn the_pre_warped_alpha_is_what_holds_the_edges_at_high_frequencies() {
     // Not zero, and it cannot be: the sinh form pre-warps the *bandwidth*, but
     // the bilinear transform also warps the edge frequencies themselves, and
     // nothing short of designing at pre-warped edges removes that. 0.15 dB at
-    // 10 kHz against 1.34 dB is the whole of the improvement being claimed.
+    // 10 kHz against 1.34 dB is the whole of the improvement being claimed for
+    // `Biquad::bandpass`. (`ThirdOctaveBand::new` designs at pre-warped edges,
+    // and `tests/soundlevel_accuracy.rs` holds its edges to 0.25 dB in every
+    // band at every rate; this test is about the shared biquad.)
     assert!(
         warped_high < 0.2,
         "at 10 kHz the pre-warped form is off by {warped_high:.2} dB, expected under 0.2"
